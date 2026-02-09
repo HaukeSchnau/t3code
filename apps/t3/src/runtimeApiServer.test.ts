@@ -301,6 +301,38 @@ describe("runtimeApiServer", () => {
     secondClient.socket.close();
   });
 
+  it("replaces active authorized client when another authorized client connects", async () => {
+    const server = await startRuntimeApiServer({
+      port: 0,
+      launchCwd: process.cwd(),
+      authToken: "secret-token",
+    });
+    servers.push(server);
+
+    const firstClient = await connectClient(server.wsUrl);
+    await firstClient.nextMessage();
+
+    const firstClose = new Promise<{ code: number }>((resolve) => {
+      firstClient.socket.once("close", (code) => resolve({ code }));
+    });
+
+    const secondClient = await connectClient(server.wsUrl);
+    await secondClient.nextMessage();
+
+    const closed = await withTimeout(firstClose);
+    expect(closed.code).toBe(4000);
+
+    const response = await sendRequest(
+      secondClient.socket,
+      secondClient.nextMessage,
+      "todos-auth-replace-1",
+      "todos.list",
+    );
+    expect(response.ok).toBe(true);
+
+    secondClient.socket.close();
+  });
+
   it("requires auth token when runtime is configured with one", async () => {
     const server = await startRuntimeApiServer({
       port: 0,
