@@ -383,6 +383,32 @@ describe("wsServerMessageSchema", () => {
     ).toThrow();
   });
 
+  it("rejects agent events with empty session ids", () => {
+    expect(() =>
+      wsServerMessageSchema.parse({
+        type: "event",
+        channel: WS_EVENT_CHANNELS.agentOutput,
+        payload: {
+          sessionId: "",
+          stream: "stdout",
+          data: "hello",
+        },
+      }),
+    ).toThrow();
+
+    expect(() =>
+      wsServerMessageSchema.parse({
+        type: "event",
+        channel: WS_EVENT_CHANNELS.agentExit,
+        payload: {
+          sessionId: "",
+          code: 0,
+          signal: null,
+        },
+      }),
+    ).toThrow();
+  });
+
   it("rejects unexpected event properties", () => {
     expect(() =>
       wsServerMessageSchema.parse({
