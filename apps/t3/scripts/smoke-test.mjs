@@ -2177,6 +2177,22 @@ async function main() {
       );
     }
 
+    const maxLengthHealthResponse = await sendWsRequest(ws, {
+      id: "r".repeat(WS_REQUEST_ID_MAX_CHARS),
+      method: "app.health",
+    });
+    if (
+      maxLengthHealthResponse.ok !== true ||
+      maxLengthHealthResponse.result?.status !== "ok" ||
+      maxLengthHealthResponse.result?.launchCwd !== appRoot
+    ) {
+      throw new Error(
+        `Smoke test failed: expected healthy response for max-length request id, got ${JSON.stringify(
+          maxLengthHealthResponse,
+        )}.`,
+      );
+    }
+
     const bootstrapResponse = await sendWsRequest(ws, {
       id: "smoke-bootstrap",
       method: "app.bootstrap",

@@ -52,6 +52,16 @@ describe("wsClientMessageSchema", () => {
     ).toThrow();
   });
 
+  it("accepts request ids at max length", () => {
+    const parsed = wsClientMessageSchema.parse({
+      type: "request",
+      id: "r".repeat(WS_REQUEST_ID_MAX_CHARS),
+      method: "providers.startSession",
+    });
+
+    expect(parsed.id).toHaveLength(WS_REQUEST_ID_MAX_CHARS);
+  });
+
   it("rejects overly long request methods", () => {
     expect(() =>
       wsClientMessageSchema.parse({
@@ -60,6 +70,16 @@ describe("wsClientMessageSchema", () => {
         method: "m".repeat(WS_METHOD_MAX_CHARS + 1),
       }),
     ).toThrow();
+  });
+
+  it("accepts request methods at max length", () => {
+    const parsed = wsClientMessageSchema.parse({
+      type: "request",
+      id: "req-1",
+      method: "m".repeat(WS_METHOD_MAX_CHARS),
+    });
+
+    expect(parsed.method).toHaveLength(WS_METHOD_MAX_CHARS);
   });
 
   it("rejects unexpected request properties", () => {
@@ -157,6 +177,17 @@ describe("wsServerMessageSchema", () => {
         result: {},
       }),
     ).toThrow();
+  });
+
+  it("accepts response ids at max length", () => {
+    const parsed = wsServerMessageSchema.parse({
+      type: "response",
+      id: "r".repeat(WS_REQUEST_ID_MAX_CHARS),
+      ok: true,
+      result: {},
+    });
+
+    expect(parsed.type).toBe("response");
   });
 
   it("accepts typed event channels", () => {

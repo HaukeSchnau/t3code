@@ -580,6 +580,31 @@ describe("runtimeApiServer", () => {
     client.socket.close();
   });
 
+  it("accepts request ids at max websocket length", async () => {
+    const server = await startRuntimeApiServer({
+      port: 0,
+      launchCwd: process.cwd(),
+    });
+    servers.push(server);
+
+    const client = await connectClient(server.wsUrl);
+    await client.nextMessage();
+
+    const response = await sendRequest(
+      client.socket,
+      client.nextMessage,
+      "r".repeat(WS_REQUEST_ID_MAX_CHARS),
+      "todos.list",
+    );
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      throw new Error("Expected max-length request id response to succeed.");
+    }
+    expect(response.id).toHaveLength(WS_REQUEST_ID_MAX_CHARS);
+
+    client.socket.close();
+  });
+
   it("responds to providers.listSessions over websocket RPC", async () => {
     const server = await startRuntimeApiServer({
       port: 0,
