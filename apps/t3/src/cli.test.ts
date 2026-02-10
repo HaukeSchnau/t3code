@@ -151,6 +151,12 @@ describe("parseCliOptions", () => {
     );
   });
 
+  it("throws for empty equals-style --open values", () => {
+    expect(() => parseCliOptions(["--open="], {}, "/workspace")).toThrow(
+      "Invalid value for --open",
+    );
+  });
+
   it("supports falsey equals-style --no-open values", () => {
     const options = parseCliOptions(["--no-open=0"], {}, "/workspace");
     expect(options.noOpen).toBe(false);
