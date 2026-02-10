@@ -185,6 +185,9 @@ async function main() {
     if ((missingAsset.headers.get("x-content-type-options") ?? "").toLowerCase() !== "nosniff") {
       throw new Error("Smoke test failed: expected nosniff on missing asset response.");
     }
+    if ((missingAsset.headers.get("cache-control") ?? "").toLowerCase() !== "no-store") {
+      throw new Error("Smoke test failed: expected cache-control=no-store on missing asset.");
+    }
     const postPage = await fetch(parsedAppUrl, {
       method: "POST",
       body: "noop",

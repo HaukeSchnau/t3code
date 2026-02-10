@@ -571,6 +571,7 @@ function startStaticWebServer(distRoot: string, port: number) {
       response.setHeader("Content-Type", "text/plain; charset=utf-8");
       response.setHeader("Content-Length", String(body.byteLength));
       response.setHeader("X-Content-Type-Options", "nosniff");
+      response.setHeader("Cache-Control", "no-store");
       for (const [key, value] of Object.entries(extraHeaders)) {
         response.setHeader(key, value);
       }
