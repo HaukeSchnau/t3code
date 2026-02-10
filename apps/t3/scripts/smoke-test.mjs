@@ -292,6 +292,13 @@ async function main() {
     if ((conditionalAsset.headers.get("vary") ?? "").toLowerCase() !== "range") {
       throw new Error("Smoke test failed: expected vary=range on conditional asset response.");
     }
+    if (conditionalAsset.headers.get("last-modified") !== assetLastModified) {
+      throw new Error(
+        `Smoke test failed: expected conditional asset last-modified ${assetLastModified}, got ${String(
+          conditionalAsset.headers.get("last-modified"),
+        )}.`,
+      );
+    }
     const conditionalAssetContentLength = conditionalAsset.headers.get("content-length");
     if (conditionalAssetContentLength !== null && conditionalAssetContentLength !== "0") {
       throw new Error(
@@ -372,6 +379,13 @@ async function main() {
     }
     if ((conditionalHeadAsset.headers.get("vary") ?? "").toLowerCase() !== "range") {
       throw new Error("Smoke test failed: expected vary=range on conditional HEAD asset response.");
+    }
+    if (conditionalHeadAsset.headers.get("last-modified") !== assetLastModified) {
+      throw new Error(
+        `Smoke test failed: expected conditional HEAD asset last-modified ${assetLastModified}, got ${String(
+          conditionalHeadAsset.headers.get("last-modified"),
+        )}.`,
+      );
     }
     const conditionalHeadAssetContentLength = conditionalHeadAsset.headers.get("content-length");
     if (
