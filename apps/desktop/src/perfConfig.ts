@@ -34,6 +34,12 @@ function isCiEnvironment(value: string | undefined): boolean {
   return parseBooleanLike(value) === true;
 }
 
+function resolveBooleanToggle(rawValue: string | undefined, ciValue: string | undefined): boolean {
+  const toggleOverride = parseBooleanLike(rawValue);
+  if (toggleOverride !== null) return toggleOverride;
+  return !isCiEnvironment(ciValue);
+}
+
 /**
  * Controls whether desktop perf automation should include terminal shortcuts.
  *
@@ -46,21 +52,15 @@ function isCiEnvironment(value: string | undefined): boolean {
  * flaky PTY-dependent interactions in ephemeral Linux runners.
  */
 export function shouldRunTerminalPerfInteractions(env: PerfToggleEnv): boolean {
-  const toggleOverride = parseBooleanLike(env.T3CODE_DESKTOP_PERF_RUN_TERMINAL);
-  if (toggleOverride !== null) return toggleOverride;
-  return !isCiEnvironment(env.CI);
+  return resolveBooleanToggle(env.T3CODE_DESKTOP_PERF_RUN_TERMINAL, env.CI);
 }
 
 export function shouldRunOptionalRendererPerfInteractions(env: OptionalRendererToggleEnv): boolean {
-  const toggleOverride = parseBooleanLike(env.T3CODE_DESKTOP_PERF_RUN_OPTIONAL_RENDERER);
-  if (toggleOverride !== null) return toggleOverride;
-  return !isCiEnvironment(env.CI);
+  return resolveBooleanToggle(env.T3CODE_DESKTOP_PERF_RUN_OPTIONAL_RENDERER, env.CI);
 }
 
 export function shouldRunBenchmarkThreadSweep(env: BenchmarkSweepToggleEnv): boolean {
-  const toggleOverride = parseBooleanLike(env.T3CODE_DESKTOP_PERF_RUN_BENCHMARK_SWEEP);
-  if (toggleOverride !== null) return toggleOverride;
-  return !isCiEnvironment(env.CI);
+  return resolveBooleanToggle(env.T3CODE_DESKTOP_PERF_RUN_BENCHMARK_SWEEP, env.CI);
 }
 
 export function resolveBenchmarkFollowUpPassCount(env: PerfBenchmarkEnv): number {

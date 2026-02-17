@@ -207,6 +207,21 @@ describe("shouldRunOptionalRendererPerfInteractions", () => {
       }),
     ).toBe(false);
   });
+
+  it("falls back to CI default for unknown values", () => {
+    expect(
+      shouldRunOptionalRendererPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_OPTIONAL_RENDERER: "maybe",
+        CI: "true",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRunOptionalRendererPerfInteractions({
+        T3CODE_DESKTOP_PERF_RUN_OPTIONAL_RENDERER: "maybe",
+        CI: "false",
+      }),
+    ).toBe(true);
+  });
 });
 
 describe("shouldRunBenchmarkThreadSweep", () => {
