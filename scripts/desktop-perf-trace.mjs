@@ -2,10 +2,8 @@ import { spawn, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(import.meta.dirname, "..");
 const marker = "<!-- desktop-perf-trace-summary -->";
 const defaultPerfProjects = [
   {
@@ -156,7 +154,7 @@ function summarizeTrace(tracePath) {
   };
 
   const topUserTiming = [...userTiming.entries()]
-    .sort((a, b) => b[1] - a[1])
+    .toSorted((a, b) => b[1] - a[1])
     .slice(0, 10)
     .map(([name, count]) => ({ name, count }));
 
@@ -168,7 +166,7 @@ function summarizeTrace(tracePath) {
       avgMs: round(toMs(value.dur / value.count)),
       maxMs: round(toMs(value.max)),
     }))
-    .sort((a, b) => b.totalMs - a.totalMs)
+    .toSorted((a, b) => b.totalMs - a.totalMs)
     .slice(0, 10);
 
   const heap = (() => {
@@ -224,13 +222,13 @@ function createMarkdownSummary({ tracePath, donePayload, summary, thresholds }) 
         : typeof stat.renderMs === "number"
           ? stat.renderMs
           : "n/a";
-    const followUpRenderMs = typeof stat.followUpRenderMs === "number" ? stat.followUpRenderMs : "n/a";
+    const followUpRenderMs =
+      typeof stat.followUpRenderMs === "number" ? stat.followUpRenderMs : "n/a";
     const followUpMinMs = typeof stat.followUpMinMs === "number" ? stat.followUpMinMs : "n/a";
     const followUpMaxMs = typeof stat.followUpMaxMs === "number" ? stat.followUpMaxMs : "n/a";
     const followUpSampleCount =
       typeof stat.followUpSampleCount === "number" ? stat.followUpSampleCount : "n/a";
-    const deltaMs =
-      typeof stat.deltaMs === "number" ? stat.deltaMs : "n/a";
+    const deltaMs = typeof stat.deltaMs === "number" ? stat.deltaMs : "n/a";
     const deltaPct = typeof stat.deltaPct === "number" ? stat.deltaPct : "n/a";
     const followUpRange =
       typeof followUpMinMs === "number" && typeof followUpMaxMs === "number"
@@ -241,7 +239,7 @@ function createMarkdownSummary({ tracePath, donePayload, summary, thresholds }) 
   const seedSource =
     donePayload.seed?.source === "file"
       ? `file (\`${donePayload.seed?.path ?? "unknown"}\`)`
-      : donePayload.seed?.source ?? "generated";
+      : (donePayload.seed?.source ?? "generated");
   const lines = [
     marker,
     "## Desktop Dev Perf Trace",
@@ -565,6 +563,7 @@ async function main() {
         `Run log: ${logPath}`,
         logTail.length > 0 ? `Recent log tail:\n${logTail}` : "Recent log tail: <empty>",
       ].join("\n"),
+      { cause: error },
     );
   } finally {
     await terminateProcessTree(child);

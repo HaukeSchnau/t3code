@@ -28,8 +28,8 @@ async function canConnect(host, probePort, timeoutMs = 1_000) {
 function waitForDesktopBundles(timeoutMs) {
   const startedAt = Date.now();
   const bundleFiles = [
-    { path: "dist-electron/main.js", requireFresh: true },
-    { path: "dist-electron/preload.js", requireFresh: true },
+    { path: "dist-electron/main.mjs", requireFresh: true },
+    { path: "dist-electron/preload.cjs", requireFresh: true },
     { path: "../server/dist/index.mjs", requireFresh: false },
   ];
 
@@ -143,7 +143,7 @@ if (process.platform === "linux" && !childEnv.ELECTRON_DISABLE_SANDBOX) {
   console.log("[dev-electron] enabling ELECTRON_DISABLE_SANDBOX=1 on Linux");
 }
 
-const child = spawn(command, ["dist-electron/main.js"], {
+const child = spawn(command, ["dist-electron/main.mjs"], {
   stdio: "inherit",
   env: {
     ...childEnv,

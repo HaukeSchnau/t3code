@@ -5,14 +5,7 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import {
-  app,
-  BrowserWindow,
-  dialog,
-  ipcMain,
-  Menu,
-  shell,
-} from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 
 import { showDesktopConfirmDialog } from "./confirmDialog";
 import { fixPath } from "./fixPath";
@@ -23,10 +16,11 @@ const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
 const CONFIRM_CHANNEL = "desktop:confirm";
 const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
-const ROOT_DIR = path.resolve(__dirname, "../../..");
+const ROOT_DIR = path.resolve(import.meta.dirname, "../../..");
 const BACKEND_ENTRY = path.join(ROOT_DIR, "apps/server/dist/index.mjs");
 const WEB_ENTRY = path.join(ROOT_DIR, "apps/web/dist/index.html");
-const STATE_DIR = process.env.T3CODE_STATE_DIR?.trim() || path.join(os.homedir(), ".t3", "userdata");
+const STATE_DIR =
+  process.env.T3CODE_STATE_DIR?.trim() || path.join(os.homedir(), ".t3", "userdata");
 const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const PERF_AUTOMATION_ENABLED = process.env.T3CODE_DESKTOP_PERF_AUTOMATION === "1";
 
@@ -249,7 +243,7 @@ function createWindow(): BrowserWindow {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 16, y: 18 },
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(import.meta.dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
