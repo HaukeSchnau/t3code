@@ -88,101 +88,24 @@ Provider remains the runtime execution engine. PersistenceService becomes the du
 ## Core Domain Model (SQLite)
 Use strict schema + migrations (e.g. `PRAGMA user_version` or migration table), WAL mode, and transactional writes.
 
-### Proposed tables
-1. `projects`
+### JSON-first (iteration-friendly) schema
+Use a document-style core table with a minimal indexed envelope. Put evolving entity fields in `data_json`.
+
+1. `documents`
    - `id TEXT PRIMARY KEY`
-   - `cwd TEXT NOT NULL UNIQUE` (normalized)
-   - `name TEXT NOT NULL`
-   - `model TEXT NOT NULL`
-   - `expanded INTEGER NOT NULL DEFAULT 1`
+     - examples: `project:<uuid>`, `thread:<uuid>`, `message:<uuid>`, `turn_summary:<threadId>:<turnId>`
+   - `kind TEXT NOT NULL`
+     - `project` | `thread` | `message` | `turn_summary`
+   - `project_id TEXT NULL`
+   - `thread_id TEXT NULL`
+   - `sort_key INTEGER NULL`
+     - message order, thread ordering hints, summary ordering, etc.
+   - `schema_version INTEGER NOT NULL DEFAULT 1`
    - `created_at TEXT NOT NULL`
    - `updated_at TEXT NOT NULL`
+   - `data_json TEXT NOT NULL`
 
-2. `project_scripts`
-   - `project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE`
-   - `script_id TEXT NOT NULL`
-   - `name TEXT NOT NULL`
-   - `command TEXT NOT NULL`
-   - `icon TEXT NOT NULL`
-   - `run_on_worktree_create INTEGER NOT NULL`
-   - `position INTEGER NOT NULL`
-   - `PRIMARY KEY (project_id, script_id)`
-
-3. `threads`
-   - `id TEXT PRIMARY KEY` (client thread id)
-   - `project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE`
-   - `codex_thread_id TEXT NULL` (runtime provider thread id)
-   - `title TEXT NOT NULL`
-   - `model TEXT NOT NULL`
-   - `created_at TEXT NOT NULL`
-   - `last_visited_at TEXT NULL`
-   - `branch TEXT NULL`
-   - `worktree_path TEXT NULL`
-   - `terminal_open INTEGER NOT NULL DEFAULT 0`
-   - `terminal_height INTEGER NOT NULL DEFAULT 280`
-   - `active_terminal_id TEXT NOT NULL DEFAULT 'default'`
-   - `active_terminal_group_id TEXT NOT NULL DEFAULT 'group-default'`
-   - `updated_at TEXT NOT NULL`
-
-4. `thread_terminals`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `terminal_id TEXT NOT NULL`
-   - `position INTEGER NOT NULL`
-   - `PRIMARY KEY (thread_id, terminal_id)`
-
-5. `thread_terminal_groups`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `group_id TEXT NOT NULL`
-   - `position INTEGER NOT NULL`
-   - `PRIMARY KEY (thread_id, group_id)`
-
-6. `thread_terminal_group_members`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `group_id TEXT NOT NULL`
-   - `terminal_id TEXT NOT NULL`
-   - `position INTEGER NOT NULL`
-   - `PRIMARY KEY (thread_id, group_id, terminal_id)`
-
-7. `messages`
-   - `id TEXT PRIMARY KEY`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `role TEXT NOT NULL` (`user`/`assistant`)
-   - `text TEXT NOT NULL`
-   - `created_at TEXT NOT NULL`
-   - `streaming INTEGER NOT NULL DEFAULT 0`
-   - `provider_item_id TEXT NULL`
-   - `turn_id TEXT NULL`
-   - `position INTEGER NOT NULL`
-
-8. `message_attachments`
-   - `message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE`
-   - `attachment_id TEXT NOT NULL`
-   - `type TEXT NOT NULL`
-   - `name TEXT NOT NULL`
-   - `mime_type TEXT NOT NULL`
-   - `size_bytes INTEGER NOT NULL`
-   - `position INTEGER NOT NULL`
-   - `PRIMARY KEY (message_id, attachment_id)`
-
-9. `thread_turn_summaries`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `turn_id TEXT NOT NULL`
-   - `completed_at TEXT NOT NULL`
-   - `status TEXT NULL`
-   - `assistant_message_id TEXT NULL`
-   - `checkpoint_turn_count INTEGER NULL`
-   - `PRIMARY KEY (thread_id, turn_id)`
-
-10. `thread_turn_diff_files`
-   - `thread_id TEXT NOT NULL REFERENCES threads(id) ON DELETE CASCADE`
-   - `turn_id TEXT NOT NULL`
-   - `path TEXT NOT NULL`
-   - `kind TEXT NULL`
-   - `additions INTEGER NULL`
-   - `deletions INTEGER NULL`
-   - `PRIMARY KEY (thread_id, turn_id, path)`
-
-11. `provider_events`
+2. `provider_events`
    - `seq INTEGER PRIMARY KEY AUTOINCREMENT`
    - `id TEXT NOT NULL UNIQUE`
    - `session_id TEXT NOT NULL`
@@ -199,26 +122,42 @@ Use strict schema + migrations (e.g. `PRAGMA user_version` or migration table), 
    - `payload_json TEXT NULL`
    - `created_at TEXT NOT NULL`
 
-12. `state_events`
+3. `state_events`
    - `seq INTEGER PRIMARY KEY AUTOINCREMENT`
    - `event_type TEXT NOT NULL` (e.g. `project.upsert`, `thread.delete`, `message.upsert`)
    - `entity_id TEXT NOT NULL`
    - `payload_json TEXT NOT NULL`
    - `created_at TEXT NOT NULL`
 
-13. `metadata`
+4. `metadata`
    - `key TEXT PRIMARY KEY`
    - `value_json TEXT NOT NULL`
-   - for one-time migrations and import markers
+   - for one-time migrations/import markers
 
-### Key indexes
-- `projects(cwd)`
-- `threads(project_id, created_at DESC)`
-- `messages(thread_id, position)`
+### Envelope indexes
+- `documents(kind)`
+- `documents(project_id, kind)`
+- `documents(thread_id, kind, sort_key)`
+- `documents(kind, updated_at DESC)`
 - `provider_events(session_id, seq)`
 - `provider_events(thread_id, seq)`
-- `thread_turn_summaries(thread_id, completed_at DESC)`
 - `state_events(seq)`
+
+### Document conventions
+1. Validate each `kind` with Zod before writes and after reads.
+2. Keep envelope fields stable (`kind`, `project_id`, `thread_id`, `sort_key`) for fast list/filter queries.
+3. Put fast-changing/evolving structure in `data_json`:
+   - project: name/cwd/model/expanded/scripts
+   - thread: title/model/codex thread id/terminal layout/branch/worktree
+   - message: role/text/attachments/streaming/provider ids
+   - turn_summary: completed/status/checkpoint turn count/file +/- summary
+4. Use `schema_version` per document to support incremental document migrations without global table churn.
+
+### Normalization runway (later, optional)
+When model shapes stabilize, we can materialize normalized tables from `documents` without changing the external protocol:
+1. Add typed read models (`projects_v2`, `messages_v2`, etc.).
+2. Backfill from `documents`.
+3. Switch read paths gradually.
 
 ## Streaming Protocol and Synchronization
 Keep current WS request/response envelope and push model. Extend with state snapshot + patch stream.
@@ -416,14 +355,14 @@ Optional future mode (not required for this revamp):
 2. Add migration boot in `apps/server/src/index.ts`.
 3. Update default state path to `~/.t3/state.sqlite` (with env override).
 
-### Phase 1: Projects + threads in DB
-1. Replace `ProjectRegistry` JSON backend with DB-backed repository.
+### Phase 1: Document store cut-in (projects + threads first)
+1. Replace `ProjectRegistry` JSON backend with DB-backed document repository.
 2. Add `threads.*` methods to server routes.
 3. Keep web reducer but stop writing to localStorage for these entities.
 
-### Phase 2: Message + turn persistence
+### Phase 2: Message + turn document persistence
 1. Ingest provider events into DB (`provider_events`).
-2. Project events into `messages` and `thread_turn_*`.
+2. Project events into `documents` rows for `message` and `turn_summary` kinds.
 3. Add `state.event` push and `state.catchUp`.
 
 ### Phase 3: Web client cutover
@@ -439,6 +378,7 @@ Optional future mode (not required for this revamp):
 ### Phase 5: Cleanup + compatibility
 1. Remove deprecated localStorage/persistence schema paths once migration is stable.
 2. Keep temporary migration fallback for one release window.
+3. (Optional) add a follow-up normalization milestone when schemas settle.
 
 ## Streaming/Projection Design Notes
 1. Durable append:
@@ -465,7 +405,7 @@ Backend changes require new tests and runtime validation.
 
 ### Unit tests
 1. DB schema + migrations
-2. Repository CRUD (projects/threads/messages)
+2. Document repository CRUD (`project`/`thread`/`message`/`turn_summary`)
 3. Provider event projection logic
 4. Checkpoint summary parser (`@pierre/diffs` integration and malformed diff fallback)
 5. Keybindings JSON behavior remains unchanged (read/write + malformed-file handling)
@@ -498,10 +438,12 @@ Backend changes require new tests and runtime validation.
    - Mitigation: strict schema validation + partial-row rejection + migration markers + backups.
 5. Risk: checkpoint summary parsing overhead.
    - Mitigation: parse only finalized checkpoint ranges and fallback to lightweight stat extraction.
+6. Risk: JSON shape drift across fast iterations.
+   - Mitigation: per-kind Zod schemas + `schema_version` in documents + migration tests for older payloads.
 
 ## Done Criteria
 1. No core durable app data depends on renderer localStorage.
-2. Projects/threads/messages persist in `~/.t3/state.sqlite`.
+2. Projects/threads/messages/turn summaries persist in `~/.t3/state.sqlite` via JSON-first documents.
 3. Checkpoint patch content remains Git-backed; optional summaries are in DB.
 4. Keybindings remain JSON-backed at `~/.t3/keybindings.json`.
 5. Theme/editor/last-invoked-script remain browser-scoped (or explicitly migrated in a separate opt-in feature).
@@ -513,8 +455,8 @@ Backend changes require new tests and runtime validation.
 - `apps/server/src/index.ts` (state db path + bootstrap)
 - `apps/server/src/wsServer.ts` (new state/thread routes + push channel)
 - `apps/server/src/providerManager.ts` (persist event hooks + checkpoint summary writes)
-- `apps/server/src/projectRegistry.ts` (replace or wrap with DB repo)
-- new persistence modules (`stateDb`, migrations, repositories)
+- `apps/server/src/projectRegistry.ts` (replace or wrap with document-backed repo)
+- new persistence modules (`stateDb`, migrations, document repository, persistence service)
 
 ### Web
 - `apps/web/src/store.ts` (remove localStorage core persistence)
@@ -530,7 +472,7 @@ Backend changes require new tests and runtime validation.
 
 ## Open Questions
 1. Should runtime mode (`full-access` vs `approval-required`) remain browser-scoped UX state, or be elevated to machine policy?
-2. Should terminal panel layout/state be in SQLite (cross-device consistency) or preference JSON (human-editable)?
+2. Should terminal panel layout/state be in SQLite (shared) or stay browser-scoped UX state?
 3. Do we need provider event retention limits from day one?
 4. Do we keep `.logs/threads/*.events.ndjson` as debug mirror after DB event log is live?
 5. For non-desktop/browser mode, should state still centralize to `~/.t3/state.sqlite` or support workspace-local override by default?
