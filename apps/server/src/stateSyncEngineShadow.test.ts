@@ -65,6 +65,14 @@ describe("ShadowStateSyncEngine", () => {
         threadId: thread.id,
         title: "Shadow thread updated",
       });
+      service.bindSessionToThread("shadow-session", thread.id, "runtime-thread-1");
+      service.persistUserMessageForTurn({
+        sessionId: "shadow-session",
+        clientMessageId: "msg-1",
+        clientMessageText: "hello from shadow",
+        input: "hello from shadow",
+        attachments: [],
+      });
 
       await Promise.resolve();
 
@@ -82,6 +90,8 @@ describe("ShadowStateSyncEngine", () => {
       expect(mirror.events.map((event) => event.seq)).toEqual(
         observedEvents.map((event) => event.seq),
       );
+      expect(mirror.events.some((event) => event.eventType === "message.upsert")).toBe(true);
+      expect(observedEvents.some((event) => event.eventType === "message.upsert")).toBe(true);
 
       unsubscribe();
     } finally {
