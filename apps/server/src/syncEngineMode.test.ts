@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import { assertSyncEngineModeAllowed, resolveSyncEngineMode } from "./syncEngineMode";
 
 describe("resolveSyncEngineMode", () => {
-  it("defaults to livestore-read-pilot when env var is missing", () => {
-    expect(resolveSyncEngineMode(undefined)).toBe("livestore-read-pilot");
-    expect(resolveSyncEngineMode("")).toBe("livestore-read-pilot");
-    expect(resolveSyncEngineMode("   ")).toBe("livestore-read-pilot");
+  it("defaults to livestore when env var is missing", () => {
+    expect(resolveSyncEngineMode(undefined)).toBe("livestore");
+    expect(resolveSyncEngineMode("")).toBe("livestore");
+    expect(resolveSyncEngineMode("   ")).toBe("livestore");
   });
 
   it("accepts supported mode values case-insensitively", () => {
