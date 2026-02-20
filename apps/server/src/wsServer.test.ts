@@ -44,6 +44,10 @@ import type { TerminalManager } from "./terminalManager";
 import { PersistenceService } from "./persistenceService";
 import { ProviderManager } from "./providerManager";
 import type { ApplyCheckpointRevertInput, StateSyncEngine } from "./stateSyncEngine";
+import { LegacyStateSyncEngine } from "./stateSyncEngineLegacy";
+import { ShadowStateSyncEngine } from "./stateSyncEngineShadow";
+import { LiveStoreStateMirror } from "./livestore/liveStoreEngine";
+import { diffStateSnapshots } from "./livestore/parity";
 
 interface PendingMessages {
   queue: unknown[];
@@ -381,6 +385,22 @@ async function waitForPush(ws: WebSocket, channel: string): Promise<WsPush> {
       return message;
     }
   }
+}
+
+async function waitForCondition(
+  predicate: () => boolean,
+  options: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const timeoutMs = options.timeoutMs ?? 1500;
+  const intervalMs = options.intervalMs ?? 20;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  expect(predicate()).toBe(true);
 }
 
 const DEFAULT_RESOLVED_KEYBINDINGS = compileKeybindings([...DEFAULT_KEYBINDINGS]);
@@ -968,6 +988,63 @@ describe("WebSocket Server", () => {
     shadowEngine.emitStateEvent(mirroredStateEvent);
     const pushed = await waitForPush(ws, WS_CHANNELS.stateEvent);
     expect(pushed.data).toEqual(mirroredStateEvent);
+  });
+
+  it("keeps a shadow sync engine mirror in parity for websocket mutations", async () => {
+    const stateDir = makeTempDir("t3code-ws-shadow-engine-state-");
+    const projectCwd = makeTempDir("t3code-ws-shadow-engine-project-");
+    const persistenceService = new PersistenceService({
+      dbPath: path.join(stateDir, "state.sqlite"),
+      legacyProjectsJsonPath: path.join(stateDir, "projects.json"),
+    });
+    const legacy = new LegacyStateSyncEngine({ persistenceService });
+    const mirror = new LiveStoreStateMirror({ storeId: "ws-shadow-engine-parity-test" });
+    const shadow = new ShadowStateSyncEngine({
+      delegate: legacy,
+      mirror,
+    });
+
+    try {
+      server = createTestServer({
+        cwd: "/test",
+        stateSyncEngine: shadow,
+      });
+      await server.start();
+      const addr = server.httpServer.address();
+      const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+      const ws = await connectWs(port);
+      connections.push(ws);
+      await waitForMessage(ws);
+
+      const addedProject = await sendRequest(ws, WS_METHODS.projectsAdd, { cwd: projectCwd });
+      expect(addedProject.error).toBeUndefined();
+      const projectId = (addedProject.result as { project: { id: string } }).project.id;
+
+      const createdThread = await sendRequest(ws, WS_METHODS.threadsCreate, {
+        projectId,
+        title: "Shadow parity thread",
+        model: "gpt-5.3-codex",
+      });
+      expect(createdThread.error).toBeUndefined();
+      const threadId = (createdThread.result as { thread: { id: string } }).thread.id;
+
+      const updatedThread = await sendRequest(ws, WS_METHODS.threadsUpdateTitle, {
+        threadId,
+        title: "Shadow parity thread updated",
+      });
+      expect(updatedThread.error).toBeUndefined();
+
+      await waitForCondition(() => {
+        const expected = legacy.loadSnapshot();
+        const mirrored = mirror.debugReadSnapshot();
+        return diffStateSnapshots(expected, mirrored).length === 0;
+      });
+
+      expect(diffStateSnapshots(legacy.loadSnapshot(), mirror.debugReadSnapshot())).toEqual([]);
+    } finally {
+      shadow.close();
+    }
   });
 
   it("broadcasts ordered state.event pushes", async () => {

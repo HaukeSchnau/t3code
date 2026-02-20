@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { ProviderEvent } from "@t3tools/contracts";
+import { LiveStoreStateMirror } from "./livestore/liveStoreEngine";
+import { diffStateSnapshots } from "./livestore/parity";
 import { PersistenceService } from "./persistenceService";
+import { LegacyStateSyncEngine } from "./stateSyncEngineLegacy";
+import { ShadowStateSyncEngine } from "./stateSyncEngineShadow";
 
 const tempDirs: string[] = [];
 const ISO_BASE_MS = Date.parse("2026-02-19T00:00:00.000Z");
@@ -18,6 +22,20 @@ function makeTempDir(prefix: string): string {
 
 function iso(offsetMs = 0): string {
   return new Date(ISO_BASE_MS + offsetMs).toISOString();
+}
+
+async function waitForMirrorParity(
+  readExpected: () => ReturnType<LegacyStateSyncEngine["loadSnapshot"]>,
+  readMirror: () => ReturnType<LiveStoreStateMirror["debugReadSnapshot"]>,
+): Promise<void> {
+  const maxAttempts = 40;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (diffStateSnapshots(readExpected(), readMirror()).length === 0) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  }
+  expect(diffStateSnapshots(readExpected(), readMirror())).toEqual([]);
 }
 
 afterEach(() => {
@@ -443,6 +461,80 @@ describe("PersistenceService", () => {
       expect(assistantMessage?.text).toBe("hello");
     } finally {
       service.close();
+    }
+  });
+
+  it("maintains shadow mirror parity across checkpoint revert effects", async () => {
+    const stateDir = makeTempDir("t3code-persistence-shadow-parity-state-");
+    const projectDir = makeTempDir("t3code-persistence-shadow-parity-project-");
+    const service = new PersistenceService({
+      dbPath: path.join(stateDir, "state.sqlite"),
+    });
+    const legacy = new LegacyStateSyncEngine({ persistenceService: service });
+    const mirror = new LiveStoreStateMirror({ storeId: "persistence-shadow-parity-test" });
+    const shadow = new ShadowStateSyncEngine({
+      delegate: legacy,
+      mirror,
+    });
+
+    try {
+      const project = shadow.addProject({ cwd: projectDir }).project;
+      const thread = shadow.createThread({
+        projectId: project.id,
+        title: "checkpoint parity thread",
+        model: "gpt-5.3-codex",
+      }).thread;
+      service.bindSessionToThread("sess-shadow", thread.id, "runtime-thread-shadow");
+
+      service.persistUserMessageForTurn({
+        sessionId: "sess-shadow",
+        clientMessageId: "msg-1",
+        clientMessageText: "first",
+        input: "first",
+        attachments: [],
+      });
+      service.persistUserMessageForTurn({
+        sessionId: "sess-shadow",
+        clientMessageId: "msg-2",
+        clientMessageText: "second",
+        input: "second",
+        attachments: [],
+      });
+
+      service.persistTurnDiffSummaryFromCheckpoint({
+        sessionId: "sess-shadow",
+        runtimeThreadId: "runtime-thread-shadow",
+        turnId: "turn-1",
+        checkpointTurnCount: 1,
+        completedAt: iso(100),
+        diff: "",
+      });
+      service.persistTurnDiffSummaryFromCheckpoint({
+        sessionId: "sess-shadow",
+        runtimeThreadId: "runtime-thread-shadow",
+        turnId: "turn-2",
+        checkpointTurnCount: 2,
+        completedAt: iso(200),
+        diff: "",
+      });
+
+      shadow.applyCheckpointRevert({
+        sessionId: "sess-shadow",
+        runtimeThreadId: "runtime-thread-shadow",
+        turnCount: 1,
+        messageCount: 1,
+      });
+
+      await waitForMirrorParity(() => legacy.loadSnapshot(), () => mirror.debugReadSnapshot());
+
+      const mirrored = mirror.debugReadSnapshot();
+      expect(mirrored.threads[0]?.messages.map((message) => message.id)).toEqual(["msg-1"]);
+      expect(mirrored.threads[0]?.turnDiffSummaries.map((summary) => summary.turnId)).toEqual([
+        "turn-1",
+      ]);
+      expect(diffStateSnapshots(legacy.loadSnapshot(), mirrored)).toEqual([]);
+    } finally {
+      shadow.close();
     }
   });
 
