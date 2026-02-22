@@ -24,7 +24,6 @@ import { WebSocketServer, type WebSocket } from "ws";
 
 import { createLogger } from "./logger";
 import { ProjectRegistry } from "./projectRegistry";
-import { ProviderManager } from "./providerManager";
 import { GitManager } from "./gitManager";
 import {
   checkoutGitBranch,
@@ -40,6 +39,8 @@ import { loadResolvedKeybindingsConfig, upsertKeybindingRule } from "./keybindin
 import { searchWorkspaceEntries } from "./workspaceEntries";
 import { CoreEngine } from "./effect/coreEngine";
 import { SqliteEventStore } from "./effect/eventStore";
+import { CodexProviderAdapter } from "./effect/providers/codexProviderAdapter";
+import { ProviderOrchestrator } from "./effect/providers/providerOrchestrator";
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -92,7 +93,7 @@ export function createServer(options: ServerOptions) {
     terminalManager: providedTerminalManager,
     authToken,
   } = options;
-  const providerManager = new ProviderManager();
+  const providerOrchestrator = new ProviderOrchestrator([new CodexProviderAdapter()]);
   const terminalManager = providedTerminalManager ?? new TerminalManager();
   const projectRegistry =
     providedRegistry ?? new ProjectRegistry(path.join(os.homedir(), ".t3", "userdata"));
@@ -143,7 +144,7 @@ export function createServer(options: ServerOptions) {
   }
 
   // Forward provider events to all connected WebSocket clients
-  providerManager.on("event", (event) => {
+  providerOrchestrator.on("event", (event) => {
     const push: WsPush = {
       type: "push",
       channel: WS_CHANNELS.providerEvent,
@@ -336,33 +337,33 @@ export function createServer(options: ServerOptions) {
   async function routeRequest(request: WsRequest): Promise<unknown> {
     switch (request.method) {
       case WS_METHODS.providersStartSession:
-        return providerManager.startSession(request.params as never);
+        return providerOrchestrator.startSession(request.params as never);
 
       case WS_METHODS.providersSendTurn:
-        return providerManager.sendTurn(request.params as never);
+        return providerOrchestrator.sendTurn(request.params as never);
 
       case WS_METHODS.providersInterruptTurn:
-        return providerManager.interruptTurn(request.params as never);
+        return providerOrchestrator.interruptTurn(request.params as never);
 
       case WS_METHODS.providersRespondToRequest:
-        return providerManager.respondToRequest(request.params as never);
+        return providerOrchestrator.respondToRequest(request.params as never);
 
       case WS_METHODS.providersStopSession: {
-        providerManager.stopSession(request.params as never);
+        providerOrchestrator.stopSession(request.params as never);
         return undefined;
       }
 
       case WS_METHODS.providersListSessions:
-        return providerManager.listSessions();
+        return providerOrchestrator.listSessions();
 
       case WS_METHODS.providersListCheckpoints:
-        return providerManager.listCheckpoints(request.params as never);
+        return providerOrchestrator.listCheckpoints(request.params as never);
 
       case WS_METHODS.providersGetCheckpointDiff:
-        return providerManager.getCheckpointDiff(request.params as never);
+        return providerOrchestrator.getCheckpointDiff(request.params as never);
 
       case WS_METHODS.providersRevertToCheckpoint:
-        return providerManager.revertToCheckpoint(request.params as never);
+        return providerOrchestrator.revertToCheckpoint(request.params as never);
 
       case WS_METHODS.projectsList:
         return projectRegistry.list();
@@ -651,8 +652,8 @@ export function createServer(options: ServerOptions) {
       unsubscribeCoreDelta = null;
     }
     terminalManager.off("event", onTerminalEvent);
-    providerManager.stopAll();
-    providerManager.dispose();
+    providerOrchestrator.stopAll();
+    providerOrchestrator.dispose();
     terminalManager.dispose();
     await coreEngine.stop();
     eventStore.close();
