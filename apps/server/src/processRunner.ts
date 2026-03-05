@@ -5,6 +5,8 @@ import {
   spawnSync,
   type StdioOptions,
 } from "node:child_process";
+import { statSync } from "node:fs";
+import { extname, join } from "node:path";
 
 import type { ServerRuntimeEnvironment } from "@t3tools/contracts";
 import { Effect, Exit, Scope } from "effect";
@@ -22,6 +24,11 @@ interface ProcessSpawnBaseOptions {
 interface RuntimeShellOptions {
   runtimeEnvironment?: ServerRuntimeEnvironment | undefined;
   shell?: boolean | string | undefined;
+}
+
+interface ProcessLaunchPlanOptions extends RuntimeShellOptions {
+  env?: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined;
+  inheritParentEnv?: boolean | undefined;
 }
 
 export interface ProcessSpawnOptions extends ProcessSpawnBaseOptions {
@@ -62,6 +69,20 @@ export interface ProcessRunResult {
   stderrTruncated?: boolean | undefined;
 }
 
+export interface ProcessLaunchPlan {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly shell: boolean | string;
+  readonly runtimeEnvironment: ServerRuntimeEnvironment;
+}
+
+interface ResolvedWindowsCommand {
+  readonly path: string;
+  readonly kind: "native" | "batch";
+}
+
+const WINDOWS_BATCH_EXECUTABLE_EXTENSIONS = new Set([".CMD", ".BAT"]);
+
 function commandLabel(command: string, args: readonly string[]): string {
   return [command, ...args].join(" ");
 }
@@ -72,19 +93,214 @@ function resolveRuntimeEnvironment(
   return runtimeEnvironment ?? detectServerRuntimeEnvironment();
 }
 
-function shouldUseShell(options: RuntimeShellOptions): boolean | string {
-  if (options.shell !== undefined) {
-    return options.shell;
-  }
-
-  return resolveRuntimeEnvironment(options.runtimeEnvironment).platform === "windows";
+function resolvePathEnvironmentVariable(env: NodeJS.ProcessEnv): string {
+  return env.PATH ?? env.Path ?? env.path ?? "";
 }
 
-function toSpawnOptions(options: ProcessSpawnOptions) {
+function resolveWindowsPathExtensions(env: NodeJS.ProcessEnv): ReadonlyArray<string> {
+  const rawValue = env.PATHEXT;
+  const fallback = [".COM", ".EXE", ".BAT", ".CMD"];
+  if (!rawValue) return fallback;
+
+  const parsed = rawValue
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .map((entry) => (entry.startsWith(".") ? entry.toUpperCase() : `.${entry.toUpperCase()}`));
+  return parsed.length > 0 ? Array.from(new Set(parsed)) : fallback;
+}
+
+function resolveCommandCandidates(
+  command: string,
+  windowsPathExtensions: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const extension = extname(command);
+  const normalizedExtension = extension.toUpperCase();
+
+  if (extension.length > 0 && windowsPathExtensions.includes(normalizedExtension)) {
+    const commandWithoutExtension = command.slice(0, -extension.length);
+    return Array.from(
+      new Set([
+        command,
+        `${commandWithoutExtension}${normalizedExtension}`,
+        `${commandWithoutExtension}${normalizedExtension.toLowerCase()}`,
+      ]),
+    );
+  }
+
+  const candidates: string[] = [command];
+  for (const candidateExtension of windowsPathExtensions) {
+    candidates.push(`${command}${candidateExtension}`);
+    candidates.push(`${command}${candidateExtension.toLowerCase()}`);
+  }
+  return Array.from(new Set(candidates));
+}
+
+function stripWrappingQuotes(value: string): string {
+  return value.replace(/^"+|"+$/g, "");
+}
+
+function isExecutableFile(
+  filePath: string,
+  windowsPathExtensions: ReadonlyArray<string>,
+): boolean {
+  try {
+    const stat = statSync(filePath);
+    if (!stat.isFile()) return false;
+    const extension = extname(filePath);
+    if (extension.length === 0) return false;
+    if (windowsPathExtensions.length === 0) {
+      return true;
+    }
+    return windowsPathExtensions.includes(extension.toUpperCase());
+  } catch {
+    return false;
+  }
+}
+
+function resolveEffectiveEnvironment(options: ProcessLaunchPlanOptions): NodeJS.ProcessEnv {
+  const env = (options.env ?? {}) as NodeJS.ProcessEnv;
+  if (options.inheritParentEnv === false) {
+    return { ...env };
+  }
+
+  return {
+    ...process.env,
+    ...env,
+  };
+}
+
+function resolveWindowsCommand(
+  command: string,
+  env: NodeJS.ProcessEnv,
+): ResolvedWindowsCommand | null {
+  const windowsPathExtensions = resolveWindowsPathExtensions(env);
+  const candidates = resolveCommandCandidates(command, windowsPathExtensions);
+
+  const classify = (filePath: string): ResolvedWindowsCommand => {
+    const extension = extname(filePath).toUpperCase();
+    return {
+      path: filePath,
+      kind: WINDOWS_BATCH_EXECUTABLE_EXTENSIONS.has(extension) ? "batch" : "native",
+    };
+  };
+
+  if (command.includes("/") || command.includes("\\")) {
+    for (const candidate of candidates) {
+      if (isExecutableFile(candidate, windowsPathExtensions)) {
+        return classify(candidate);
+      }
+    }
+    return null;
+  }
+
+  const pathEntries = resolvePathEnvironmentVariable(env)
+    .split(";")
+    .map((entry) => stripWrappingQuotes(entry.trim()))
+    .filter((entry) => entry.length > 0);
+
+  for (const pathEntry of pathEntries) {
+    for (const candidate of candidates) {
+      const candidatePath = join(pathEntry, candidate);
+      if (isExecutableFile(candidatePath, windowsPathExtensions)) {
+        return classify(candidatePath);
+      }
+    }
+  }
+
+  return null;
+}
+
+function quoteWindowsBatchArgument(argument: string): string {
+  if (argument.length === 0) {
+    return '""';
+  }
+
+  const escaped = argument
+    .replaceAll("^", "^^")
+    .replaceAll("%", "%%")
+    .replaceAll("!", "^!")
+    .replaceAll("&", "^&")
+    .replaceAll("|", "^|")
+    .replaceAll("<", "^<")
+    .replaceAll(">", "^>")
+    .replaceAll("(", "^(")
+    .replaceAll(")", "^)")
+    .replaceAll('"', '""');
+  return `"${escaped}"`;
+}
+
+function buildWindowsBatchCommandLine(
+  command: string,
+  args: ReadonlyArray<string>,
+): string {
+  return [quoteWindowsBatchArgument(command), ...args.map(quoteWindowsBatchArgument)].join(" ");
+}
+
+function resolveWindowsCommandShell(env: NodeJS.ProcessEnv): string {
+  return env.ComSpec ?? env.COMSPEC ?? process.env.ComSpec ?? process.env.COMSPEC ?? "cmd.exe";
+}
+
+export function resolveProcessLaunchPlan(
+  command: string,
+  args: ReadonlyArray<string>,
+  options: ProcessLaunchPlanOptions = {},
+): ProcessLaunchPlan {
+  const runtimeEnvironment = resolveRuntimeEnvironment(options.runtimeEnvironment);
+  if (options.shell !== undefined) {
+    return {
+      command,
+      args: [...args],
+      shell: options.shell,
+      runtimeEnvironment,
+    };
+  }
+
+  if (runtimeEnvironment.platform !== "windows") {
+    return {
+      command,
+      args: [...args],
+      shell: false,
+      runtimeEnvironment,
+    };
+  }
+
+  const env = resolveEffectiveEnvironment(options);
+  const resolved = resolveWindowsCommand(command, env);
+  if (!resolved) {
+    return {
+      command,
+      args: [...args],
+      shell: false,
+      runtimeEnvironment,
+    };
+  }
+
+  if (resolved.kind === "batch") {
+    return {
+      command: resolveWindowsCommandShell(env),
+      args: ["/d", "/s", "/c", buildWindowsBatchCommandLine(resolved.path, args)],
+      shell: false,
+      runtimeEnvironment,
+    };
+  }
+
+  return {
+    command: resolved.path,
+    args: [...args],
+    shell: false,
+    runtimeEnvironment,
+  };
+}
+
+function toSpawnOptions(
+  options: ProcessSpawnOptions,
+  launchPlan: ProcessLaunchPlan,
+) {
   return {
     cwd: options.cwd,
     env: options.env,
-    shell: shouldUseShell(options),
+    shell: launchPlan.shell,
     ...(options.stdio !== undefined ? { stdio: options.stdio } : {}),
     ...(options.detached !== undefined ? { detached: options.detached } : {}),
   };
@@ -93,9 +309,16 @@ function toSpawnOptions(options: ProcessSpawnOptions) {
 export function toRuntimeCommandOptions(
   options: RuntimeCommandOptions = {},
 ): ChildProcess.CommandOptions {
+  const launchPlan = resolveProcessLaunchPlan("", [], {
+    env: options.env,
+    runtimeEnvironment: options.runtimeEnvironment,
+    shell: options.shell,
+    inheritParentEnv: options.extendEnv !== false,
+  });
+
   return {
     ...options,
-    shell: options.shell ?? shouldUseShell(options),
+    shell: launchPlan.shell,
   };
 }
 
@@ -104,7 +327,16 @@ export function makeRuntimeCommand(
   args: ReadonlyArray<string>,
   options: RuntimeCommandOptions = {},
 ): ChildProcess.StandardCommand {
-  return ChildProcess.make(command, [...args], toRuntimeCommandOptions(options));
+  const launchPlan = resolveProcessLaunchPlan(command, args, {
+    env: options.env,
+    runtimeEnvironment: options.runtimeEnvironment,
+    shell: options.shell,
+    inheritParentEnv: options.extendEnv !== false,
+  });
+  return ChildProcess.make(launchPlan.command, launchPlan.args, {
+    ...toRuntimeCommandOptions(options),
+    shell: launchPlan.shell,
+  });
 }
 
 export interface ManagedChildProcess {
@@ -132,7 +364,14 @@ function spawnProcess(
   args: readonly string[],
   options: ProcessSpawnOptions = {},
 ): ChildProcessHandle {
-  return spawn(command, args, toSpawnOptions(options));
+  const launchPlan = resolveProcessLaunchPlan(command, args, {
+    env: options.env,
+    runtimeEnvironment: options.runtimeEnvironment,
+    shell: options.shell,
+    inheritParentEnv: options.env === undefined,
+  });
+
+  return spawn(launchPlan.command, launchPlan.args, toSpawnOptions(options, launchPlan));
 }
 
 export function spawnPipedProcess(
@@ -151,10 +390,17 @@ export function spawnProcessSync(
   args: readonly string[],
   options: ProcessSpawnSyncOptions = {},
 ) {
-  return spawnSync(command, args, {
+  const launchPlan = resolveProcessLaunchPlan(command, args, {
+    env: options.env,
+    runtimeEnvironment: options.runtimeEnvironment,
+    shell: options.shell,
+    inheritParentEnv: options.env === undefined,
+  });
+
+  return spawnSync(launchPlan.command, launchPlan.args, {
     cwd: options.cwd,
     env: options.env,
-    shell: shouldUseShell(options),
+    shell: launchPlan.shell,
     encoding: options.encoding ?? "utf8",
     ...(options.stdio !== undefined ? { stdio: options.stdio } : {}),
     ...(options.detached !== undefined ? { detached: options.detached } : {}),
@@ -248,9 +494,10 @@ function normalizeBufferError(
 const DEFAULT_MAX_BUFFER_BYTES = 8 * 1024 * 1024;
 
 /**
- * On Windows with `shell: true`, `child.kill()` only terminates the `cmd.exe`
- * wrapper, leaving the actual command running. Use `taskkill /T` to kill the
- * entire process tree instead.
+ * On Windows, commands may still execute through a `cmd.exe` wrapper for
+ * explicit shell usage or `.cmd` / `.bat` launchers. `child.kill()` only
+ * terminates the wrapper, leaving the actual command running. Use
+ * `taskkill /T` to kill the entire process tree instead.
  */
 export function killProcessTree(
   child: ChildProcessHandle,

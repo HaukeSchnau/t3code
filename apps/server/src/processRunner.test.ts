@@ -1,6 +1,25 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { runProcess, spawnDetachedProcess, spawnProcessSync } from "./processRunner";
+import {
+  makeRuntimeCommand,
+  resolveProcessLaunchPlan,
+  runProcess,
+  spawnDetachedProcess,
+  spawnProcessSync,
+} from "./processRunner";
+
+function withTempDir(run: (dir: string) => void): void {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-process-runner-"));
+  try {
+    run(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
 
 describe("runProcess", () => {
   it("fails when output exceeds max buffer in default mode", async () => {
@@ -35,5 +54,120 @@ describe("runProcess", () => {
     await expect(
       spawnDetachedProcess(process.execPath, ["-e", "process.exit(0)"]),
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("resolveProcessLaunchPlan", () => {
+  it("resolves native windows executables without using a shell", () => {
+    withTempDir((dir) => {
+      fs.writeFileSync(path.join(dir, "git.EXE"), "MZ");
+      const plan = resolveProcessLaunchPlan("git", ["status"], {
+        env: {
+          PATH: dir,
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+        },
+        inheritParentEnv: false,
+        runtimeEnvironment: {
+          platform: "windows",
+          pathStyle: "windows",
+          isWsl: false,
+          windowsInteropMode: "windows-native",
+          wslDistroName: null,
+        },
+      });
+
+      expect(plan.command).toBe(path.join(dir, "git.EXE"));
+      expect(plan.args).toEqual(["status"]);
+      expect(plan.shell).toBe(false);
+    });
+  });
+
+  it("wraps windows batch launchers through cmd.exe without default shell mode", () => {
+    withTempDir((dir) => {
+      const wrapperPath = path.join(dir, "code.CMD");
+      fs.writeFileSync(wrapperPath, "@echo off\r\n");
+      const plan = resolveProcessLaunchPlan("code", ["C:\\repo\\a&b.ts"], {
+        env: {
+          PATH: dir,
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+          COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+        },
+        inheritParentEnv: false,
+        runtimeEnvironment: {
+          platform: "windows",
+          pathStyle: "windows",
+          isWsl: false,
+          windowsInteropMode: "windows-native",
+          wslDistroName: null,
+        },
+      });
+
+      expect(plan.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(plan.args.slice(0, 3)).toEqual(["/d", "/s", "/c"]);
+      expect(plan.args[3]).toBe(`"${wrapperPath}" "C:\\repo\\a^&b.ts"`);
+      expect(plan.shell).toBe(false);
+    });
+  });
+
+  it("keeps wsl-hosted commands on the linux direct exec path", () => {
+    const plan = resolveProcessLaunchPlan("code", ["/home/julius/repo"], {
+      runtimeEnvironment: {
+        platform: "linux",
+        pathStyle: "posix",
+        isWsl: true,
+        windowsInteropMode: "wsl-hosted",
+        wslDistroName: "Ubuntu",
+      },
+    });
+
+    expect(plan.command).toBe("code");
+    expect(plan.args).toEqual(["/home/julius/repo"]);
+    expect(plan.shell).toBe(false);
+  });
+
+  it("preserves explicit shell configuration", () => {
+    const plan = resolveProcessLaunchPlan("git", ["status"], {
+      shell: true,
+      runtimeEnvironment: {
+        platform: "windows",
+        pathStyle: "windows",
+        isWsl: false,
+        windowsInteropMode: "windows-native",
+        wslDistroName: null,
+      },
+    });
+
+    expect(plan.command).toBe("git");
+    expect(plan.args).toEqual(["status"]);
+    expect(plan.shell).toBe(true);
+  });
+});
+
+describe("makeRuntimeCommand", () => {
+  it("uses the shared launch plan for batch commands on windows", () => {
+    withTempDir((dir) => {
+      const wrapperPath = path.join(dir, "code.CMD");
+      fs.writeFileSync(wrapperPath, "@echo off\r\n");
+
+      const command = makeRuntimeCommand("code", ["C:\\repo\\a&b.ts"], {
+        env: {
+          PATH: dir,
+          PATHEXT: ".COM;.EXE;.BAT;.CMD",
+          COMSPEC: "C:\\Windows\\System32\\cmd.exe",
+        },
+        extendEnv: false,
+        runtimeEnvironment: {
+          platform: "windows",
+          pathStyle: "windows",
+          isWsl: false,
+          windowsInteropMode: "windows-native",
+          wslDistroName: null,
+        },
+      });
+
+      expect(command.command).toBe("C:\\Windows\\System32\\cmd.exe");
+      expect(command.args).toEqual(["/d", "/s", "/c", `"${wrapperPath}" "C:\\repo\\a^&b.ts"`]);
+      expect(command.options.shell).toBe(false);
+    });
   });
 });
