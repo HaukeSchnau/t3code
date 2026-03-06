@@ -188,7 +188,7 @@ export interface OrchestrationIntegrationHarness {
 }
 
 interface MakeOrchestrationIntegrationHarnessOptions {
-  readonly provider?: "codex" | "cursor";
+  readonly provider?: "codex" | "claudeCode";
   readonly realCodex?: boolean;
 }
 

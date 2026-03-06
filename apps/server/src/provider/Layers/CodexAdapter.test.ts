@@ -162,7 +162,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       const adapter = yield* CodexAdapter;
       const result = yield* adapter
         .startSession({
-          provider: "cursor",
+          provider: "claudeCode",
           threadId: asThreadId("thread-1"),
           runtimeMode: "full-access",
         })
@@ -174,7 +174,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         new ProviderAdapterValidationError({
           provider: "codex",
           operation: "startSession",
-          issue: "Expected provider 'codex' but received 'cursor'.",
+          issue: "Expected provider 'codex' but received 'claudeCode'.",
         }),
       );
       assert.equal(validationManager.startSessionImpl.mock.calls.length, 0);

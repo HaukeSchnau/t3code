@@ -77,7 +77,6 @@ import {
   findLatestProposedPlan,
   type PendingApproval,
   type PendingUserInput,
-  type ProviderPickerKind,
   PROVIDER_OPTIONS,
   deriveWorkLogEntries,
   hasToolActivityForTurn,
@@ -5297,11 +5296,13 @@ const COMING_SOON_PROVIDER_OPTIONS = [
 
 function getCustomModelOptionsByProvider(settings: {
   customCodexModels: readonly string[];
+  customClaudeModels: readonly string[];
   customCursorModels: readonly string[];
 }): Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>> {
   const cursorFamilyOptions = getCursorModelFamilyOptions();
   return {
     codex: getAppModelOptions("codex", settings.customCodexModels),
+    claudeCode: getAppModelOptions("claudeCode", settings.customClaudeModels),
     cursor: [
       ...cursorFamilyOptions,
       ...getAppModelOptions("cursor", settings.customCursorModels).filter(
@@ -5312,7 +5313,7 @@ function getCustomModelOptionsByProvider(settings: {
   };
 }
 
-const PROVIDER_ICON_BY_PROVIDER: Record<ProviderPickerKind, Icon> = {
+const PROVIDER_ICON_BY_PROVIDER: Record<ProviderKind, Icon> = {
   codex: OpenAI,
   claudeCode: ClaudeAI,
   cursor: CursorIcon,
@@ -5393,7 +5394,10 @@ const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         <span className="flex min-w-0 items-center gap-2">
           <ProviderIcon
             aria-hidden="true"
-            className="size-4 shrink-0 text-muted-foreground/70"
+            className={cn(
+              "size-4 shrink-0",
+              props.provider === "claudeCode" ? "" : "text-muted-foreground/70",
+            )}
           />
           <span className="truncate">{selectedModelLabel}</span>
           <ChevronDownIcon aria-hidden="true" className="size-3 opacity-60" />
