@@ -112,6 +112,7 @@ export function gitCheckoutMutationOptions(input: {
 export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
+  model?: string | null;
 }) {
   return mutationOptions({
     mutationKey: gitMutationKeys.runStackedAction(input.cwd),
@@ -137,6 +138,7 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(commitFlags ? { commitFlags } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
+        ...(input.model ? { model: input.model } : {}),
       });
     },
     onSettled: async () => {
