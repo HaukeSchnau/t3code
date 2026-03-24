@@ -116,24 +116,6 @@ it.effect("decodes historical project.created payloads with a default provider",
   }),
 );
 
-it.effect("decodes legacy project.created payloads into defaultModelSelection", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeProjectCreatedPayload({
-      projectId: "project-legacy-1",
-      title: "Project Title",
-      workspaceRoot: "/tmp/workspace",
-      defaultModel: "gpt-5.4",
-      scripts: [],
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.deepStrictEqual(parsed.defaultModelSelection, {
-      provider: "codex",
-      model: "gpt-5.4",
-    });
-  }),
-);
-
 it.effect("decodes project.meta-updated payloads with explicit default provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeProjectMetaUpdatedPayload({
@@ -145,21 +127,6 @@ it.effect("decodes project.meta-updated payloads with explicit default provider"
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.defaultModelSelection?.provider, "claudeAgent");
-  }),
-);
-
-it.effect("decodes legacy project.meta-updated payloads into defaultModelSelection", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeProjectMetaUpdatedPayload({
-      projectId: "project-legacy-2",
-      defaultProvider: "claudeAgent",
-      defaultModel: "claude-opus-4-6",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.deepStrictEqual(parsed.defaultModelSelection, {
-      provider: "claudeAgent",
-      model: "claude-opus-4-6",
-    });
   }),
 );
 
@@ -246,29 +213,6 @@ it.effect("decodes thread.created runtime mode for historical events", () =>
   }),
 );
 
-it.effect("decodes legacy thread.created payloads into modelSelection", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeThreadCreatedPayload({
-      threadId: "thread-legacy-1",
-      projectId: "project-1",
-      title: "Thread title",
-      model: "claude-opus-4-6",
-      provider: "claudeAgent",
-      interactionMode: "default",
-      branch: null,
-      worktreePath: null,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-
-    assert.deepStrictEqual(parsed.modelSelection, {
-      provider: "claudeAgent",
-      model: "claude-opus-4-6",
-    });
-    assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
-  }),
-);
-
 it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadMetaUpdatedPayload({
@@ -280,20 +224,6 @@ it.effect("decodes thread.meta-updated payloads with explicit provider", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.modelSelection?.provider, "claudeAgent");
-  }),
-);
-
-it.effect("decodes legacy thread.meta-updated payloads into modelSelection", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeThreadMetaUpdatedPayload({
-      threadId: "thread-legacy-2",
-      model: "gpt-5.4",
-      updatedAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.deepStrictEqual(parsed.modelSelection, {
-      provider: "codex",
-      model: "gpt-5.4",
-    });
   }),
 );
 
@@ -380,21 +310,6 @@ it.effect("decodes thread.turn-start-requested source proposed plan metadata whe
     assert.deepStrictEqual(parsed.sourceProposedPlan, {
       threadId: "thread-1",
       planId: "plan-1",
-    });
-  }),
-);
-
-it.effect("decodes legacy thread.turn-start-requested payloads into modelSelection", () =>
-  Effect.gen(function* () {
-    const parsed = yield* decodeThreadTurnStartRequestedPayload({
-      threadId: "thread-legacy-3",
-      messageId: "msg-legacy-3",
-      model: "gpt-5.4",
-      createdAt: "2026-01-01T00:00:00.000Z",
-    });
-    assert.deepStrictEqual(parsed.modelSelection, {
-      provider: "codex",
-      model: "gpt-5.4",
     });
   }),
 );

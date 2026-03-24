@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, SchemaIssue, SchemaTransformation, Struct } from "effect";
+import { Option, Schema, SchemaIssue, Struct } from "effect";
 import { ClaudeModelOptions, CodexModelOptions } from "./model";
 import {
   ApprovalRequestId,
@@ -60,96 +60,6 @@ export type ClaudeModelSelection = typeof ClaudeModelSelection.Type;
 
 export const ModelSelection = Schema.Union([CodexModelSelection, ClaudeModelSelection]);
 export type ModelSelection = typeof ModelSelection.Type;
-const decodeModelSelectionSync = Schema.decodeUnknownSync(ModelSelection);
-
-const LegacyDefaultModelSelectionFields = {
-  defaultProvider: Schema.optional(ProviderKind),
-  defaultModel: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  defaultModelOptions: Schema.optional(Schema.NullOr(Schema.Unknown)),
-} as const;
-
-const LegacyThreadModelSelectionFields = {
-  provider: Schema.optional(ProviderKind),
-  model: Schema.optional(TrimmedNonEmptyString),
-  modelOptions: Schema.optional(Schema.NullOr(Schema.Unknown)),
-} as const;
-
-function invalidLegacyModelSelectionIssue(
-  value: unknown,
-  title: string,
-  cause: unknown,
-): SchemaIssue.InvalidValue {
-  return new SchemaIssue.InvalidValue(Option.some(value), {
-    title,
-    ...(Schema.isSchemaError(cause)
-      ? { description: SchemaIssue.makeFormatterDefault()(cause.issue) }
-      : {}),
-  });
-}
-
-type LegacyDefaultModelSelectionInput = {
-  readonly defaultModelSelection?: ModelSelection | null | undefined;
-  readonly defaultProvider?: ProviderKind | undefined;
-  readonly defaultModel?: string | null | undefined;
-  readonly defaultModelOptions?: unknown | null | undefined;
-};
-
-type LegacyThreadModelSelectionInput = {
-  readonly modelSelection?: ModelSelection | undefined;
-  readonly provider?: ProviderKind | undefined;
-  readonly model?: string | undefined;
-  readonly modelOptions?: unknown | null | undefined;
-};
-
-function normalizeLegacyDefaultModelSelection(
-  input: LegacyDefaultModelSelectionInput,
-): Effect.Effect<ModelSelection | null, SchemaIssue.InvalidValue> {
-  if (input.defaultModelSelection !== undefined) {
-    return Effect.succeed(input.defaultModelSelection);
-  }
-  if (input.defaultModel === undefined || input.defaultModel === null) {
-    return Effect.succeed(null);
-  }
-  return Effect.try({
-    try: () =>
-      decodeModelSelectionSync({
-        provider: input.defaultProvider ?? DEFAULT_PROVIDER_KIND,
-        model: input.defaultModel,
-        ...(input.defaultModelOptions != null ? { options: input.defaultModelOptions } : {}),
-      }),
-    catch: (cause) =>
-      invalidLegacyModelSelectionIssue(
-        input,
-        "Invalid legacy default model selection payload",
-        cause,
-      ),
-  });
-}
-
-function normalizeLegacyThreadModelSelection(
-  input: LegacyThreadModelSelectionInput,
-): Effect.Effect<ModelSelection | undefined, SchemaIssue.InvalidValue> {
-  if (input.modelSelection !== undefined) {
-    return Effect.succeed(input.modelSelection);
-  }
-  if (input.model === undefined) {
-    return Effect.succeed<ModelSelection | undefined>(undefined);
-  }
-  return Effect.try({
-    try: () =>
-      decodeModelSelectionSync({
-        provider: input.provider ?? DEFAULT_PROVIDER_KIND,
-        model: input.model,
-        ...(input.modelOptions != null ? { options: input.modelOptions } : {}),
-      }),
-    catch: (cause) =>
-      invalidLegacyModelSelectionIssue(
-        input,
-        "Invalid legacy thread model selection payload",
-        cause,
-      ),
-  });
-}
 
 export const CodexProviderStartOptions = Schema.Struct({
   binaryPath: Schema.optional(TrimmedNonEmptyString),
@@ -709,7 +619,7 @@ export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"])
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
-const ProjectCreatedPayloadCanonical = Schema.Struct({
+export const ProjectCreatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
@@ -718,48 +628,8 @@ const ProjectCreatedPayloadCanonical = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-const ProjectCreatedPayloadSource = Schema.Struct({
-  projectId: ProjectId,
-  title: TrimmedNonEmptyString,
-  workspaceRoot: TrimmedNonEmptyString,
-  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
-  ...LegacyDefaultModelSelectionFields,
-  scripts: Schema.Array(ProjectScript),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-type ProjectCreatedPayloadSource = typeof ProjectCreatedPayloadSource.Type;
-export const ProjectCreatedPayload = ProjectCreatedPayloadSource.pipe(
-  Schema.decodeTo(
-    Schema.toType(ProjectCreatedPayloadCanonical),
-    SchemaTransformation.transformOrFail({
-      decode: (input) =>
-        normalizeLegacyDefaultModelSelection(input).pipe(
-          Effect.map((defaultModelSelection) => ({
-            projectId: input.projectId,
-            title: input.title,
-            workspaceRoot: input.workspaceRoot,
-            defaultModelSelection,
-            scripts: input.scripts,
-            createdAt: input.createdAt,
-            updatedAt: input.updatedAt,
-          })),
-        ),
-      encode: (canonical) =>
-        Effect.succeed({
-          projectId: canonical.projectId,
-          title: canonical.title,
-          workspaceRoot: canonical.workspaceRoot,
-          defaultModelSelection: canonical.defaultModelSelection,
-          scripts: canonical.scripts,
-          createdAt: canonical.createdAt,
-          updatedAt: canonical.updatedAt,
-        } as ProjectCreatedPayloadSource),
-    }),
-  ),
-);
 
-const ProjectMetaUpdatedPayloadCanonical = Schema.Struct({
+export const ProjectMetaUpdatedPayload = Schema.Struct({
   projectId: ProjectId,
   title: Schema.optional(TrimmedNonEmptyString),
   workspaceRoot: Schema.optional(TrimmedNonEmptyString),
@@ -767,60 +637,13 @@ const ProjectMetaUpdatedPayloadCanonical = Schema.Struct({
   scripts: Schema.optional(Schema.Array(ProjectScript)),
   updatedAt: IsoDateTime,
 });
-type ProjectMetaUpdatedPayloadCanonical = typeof ProjectMetaUpdatedPayloadCanonical.Type;
-const ProjectMetaUpdatedPayloadSource = Schema.Struct({
-  projectId: ProjectId,
-  title: Schema.optional(TrimmedNonEmptyString),
-  workspaceRoot: Schema.optional(TrimmedNonEmptyString),
-  defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
-  ...LegacyDefaultModelSelectionFields,
-  scripts: Schema.optional(Schema.Array(ProjectScript)),
-  updatedAt: IsoDateTime,
-});
-type ProjectMetaUpdatedPayloadSource = typeof ProjectMetaUpdatedPayloadSource.Type;
-export const ProjectMetaUpdatedPayload = ProjectMetaUpdatedPayloadSource.pipe(
-  Schema.decodeTo(
-    Schema.toType(ProjectMetaUpdatedPayloadCanonical),
-    SchemaTransformation.transformOrFail({
-      decode: (input: ProjectMetaUpdatedPayloadSource) =>
-        normalizeLegacyDefaultModelSelection(input).pipe(
-          Effect.map((defaultModelSelection) => ({
-            projectId: input.projectId,
-            ...(input.title !== undefined ? { title: input.title } : {}),
-            ...(input.workspaceRoot !== undefined ? { workspaceRoot: input.workspaceRoot } : {}),
-            ...(input.defaultModelSelection !== undefined ||
-            input.defaultModel !== undefined ||
-            input.defaultProvider !== undefined ||
-            input.defaultModelOptions !== undefined
-              ? { defaultModelSelection }
-              : {}),
-            ...(input.scripts !== undefined ? { scripts: input.scripts } : {}),
-            updatedAt: input.updatedAt,
-          })),
-        ),
-      encode: (canonical: ProjectMetaUpdatedPayloadCanonical) =>
-        Effect.succeed({
-          projectId: canonical.projectId,
-          ...(canonical.title !== undefined ? { title: canonical.title } : {}),
-          ...(canonical.workspaceRoot !== undefined
-            ? { workspaceRoot: canonical.workspaceRoot }
-            : {}),
-          ...(canonical.defaultModelSelection !== undefined
-            ? { defaultModelSelection: canonical.defaultModelSelection }
-            : {}),
-          ...(canonical.scripts !== undefined ? { scripts: canonical.scripts } : {}),
-          updatedAt: canonical.updatedAt,
-        } as ProjectMetaUpdatedPayloadSource),
-    } as any),
-  ),
-);
 
 export const ProjectDeletedPayload = Schema.Struct({
   projectId: ProjectId,
   deletedAt: IsoDateTime,
 });
 
-const ThreadCreatedPayloadCanonical = Schema.Struct({
+export const ThreadCreatedPayload = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -834,72 +657,13 @@ const ThreadCreatedPayloadCanonical = Schema.Struct({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
-const ThreadCreatedPayloadSource = Schema.Struct({
-  threadId: ThreadId,
-  projectId: ProjectId,
-  title: TrimmedNonEmptyString,
-  modelSelection: Schema.optional(ModelSelection),
-  ...LegacyThreadModelSelectionFields,
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
-  ),
-  branch: Schema.NullOr(TrimmedNonEmptyString),
-  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
-  createdAt: IsoDateTime,
-  updatedAt: IsoDateTime,
-});
-type ThreadCreatedPayloadSource = typeof ThreadCreatedPayloadSource.Type;
-export const ThreadCreatedPayload = ThreadCreatedPayloadSource.pipe(
-  Schema.decodeTo(
-    Schema.toType(ThreadCreatedPayloadCanonical),
-    SchemaTransformation.transformOrFail({
-      decode: (input) =>
-        normalizeLegacyThreadModelSelection(input).pipe(
-          Effect.flatMap((modelSelection) =>
-            modelSelection === undefined
-              ? Effect.fail(
-                  new SchemaIssue.InvalidValue(Option.some(input), {
-                    title: "Legacy thread.created payload is missing a model selection",
-                  }),
-                )
-              : Effect.succeed({
-                  threadId: input.threadId,
-                  projectId: input.projectId,
-                  title: input.title,
-                  modelSelection,
-                  runtimeMode: input.runtimeMode,
-                  interactionMode: input.interactionMode,
-                  branch: input.branch,
-                  worktreePath: input.worktreePath,
-                  createdAt: input.createdAt,
-                  updatedAt: input.updatedAt,
-                }),
-          ),
-        ),
-      encode: (canonical) =>
-        Effect.succeed({
-          threadId: canonical.threadId,
-          projectId: canonical.projectId,
-          title: canonical.title,
-          modelSelection: canonical.modelSelection,
-          runtimeMode: canonical.runtimeMode,
-          interactionMode: canonical.interactionMode,
-          branch: canonical.branch,
-          worktreePath: canonical.worktreePath,
-          createdAt: canonical.createdAt,
-          updatedAt: canonical.updatedAt,
-        } as ThreadCreatedPayloadSource),
-    }),
-  ),
-);
 
 export const ThreadDeletedPayload = Schema.Struct({
   threadId: ThreadId,
   deletedAt: IsoDateTime,
 });
 
-const ThreadMetaUpdatedPayloadCanonical = Schema.Struct({
+export const ThreadMetaUpdatedPayload = Schema.Struct({
   threadId: ThreadId,
   title: Schema.optional(TrimmedNonEmptyString),
   modelSelection: Schema.optional(ModelSelection),
@@ -907,46 +671,6 @@ const ThreadMetaUpdatedPayloadCanonical = Schema.Struct({
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   updatedAt: IsoDateTime,
 });
-type ThreadMetaUpdatedPayloadCanonical = typeof ThreadMetaUpdatedPayloadCanonical.Type;
-const ThreadMetaUpdatedPayloadSource = Schema.Struct({
-  threadId: ThreadId,
-  title: Schema.optional(TrimmedNonEmptyString),
-  modelSelection: Schema.optional(ModelSelection),
-  ...LegacyThreadModelSelectionFields,
-  branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
-  updatedAt: IsoDateTime,
-});
-type ThreadMetaUpdatedPayloadSource = typeof ThreadMetaUpdatedPayloadSource.Type;
-export const ThreadMetaUpdatedPayload = ThreadMetaUpdatedPayloadSource.pipe(
-  Schema.decodeTo(
-    Schema.toType(ThreadMetaUpdatedPayloadCanonical),
-    SchemaTransformation.transformOrFail({
-      decode: (input: ThreadMetaUpdatedPayloadSource) =>
-        normalizeLegacyThreadModelSelection(input).pipe(
-          Effect.map((modelSelection) => ({
-            threadId: input.threadId,
-            ...(input.title !== undefined ? { title: input.title } : {}),
-            ...(modelSelection !== undefined ? { modelSelection } : {}),
-            ...(input.branch !== undefined ? { branch: input.branch } : {}),
-            ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
-            updatedAt: input.updatedAt,
-          })),
-        ),
-      encode: (canonical: ThreadMetaUpdatedPayloadCanonical) =>
-        Effect.succeed({
-          threadId: canonical.threadId,
-          ...(canonical.title !== undefined ? { title: canonical.title } : {}),
-          ...(canonical.modelSelection !== undefined
-            ? { modelSelection: canonical.modelSelection }
-            : {}),
-          ...(canonical.branch !== undefined ? { branch: canonical.branch } : {}),
-          ...(canonical.worktreePath !== undefined ? { worktreePath: canonical.worktreePath } : {}),
-          updatedAt: canonical.updatedAt,
-        } as ThreadMetaUpdatedPayloadSource),
-    } as any),
-  ),
-);
 
 export const ThreadRuntimeModeSetPayload = Schema.Struct({
   threadId: ThreadId,
@@ -974,7 +698,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
-const ThreadTurnStartRequestedPayloadCanonical = Schema.Struct({
+export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: MessageId,
   modelSelection: Schema.optional(ModelSelection),
@@ -987,70 +711,6 @@ const ThreadTurnStartRequestedPayloadCanonical = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });
-type ThreadTurnStartRequestedPayloadCanonical =
-  typeof ThreadTurnStartRequestedPayloadCanonical.Type;
-const ThreadTurnStartRequestedPayloadSource = Schema.Struct({
-  threadId: ThreadId,
-  messageId: MessageId,
-  modelSelection: Schema.optional(ModelSelection),
-  ...LegacyThreadModelSelectionFields,
-  providerOptions: Schema.optional(ProviderStartOptions),
-  assistantDeliveryMode: Schema.optional(AssistantDeliveryMode),
-  runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => DEFAULT_RUNTIME_MODE)),
-  interactionMode: ProviderInteractionMode.pipe(
-    Schema.withDecodingDefault(() => DEFAULT_PROVIDER_INTERACTION_MODE),
-  ),
-  sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
-  createdAt: IsoDateTime,
-});
-type ThreadTurnStartRequestedPayloadSource = typeof ThreadTurnStartRequestedPayloadSource.Type;
-export const ThreadTurnStartRequestedPayload = ThreadTurnStartRequestedPayloadSource.pipe(
-  Schema.decodeTo(
-    Schema.toType(ThreadTurnStartRequestedPayloadCanonical),
-    SchemaTransformation.transformOrFail({
-      decode: (input: ThreadTurnStartRequestedPayloadSource) =>
-        normalizeLegacyThreadModelSelection(input).pipe(
-          Effect.map((modelSelection) => ({
-            threadId: input.threadId,
-            messageId: input.messageId,
-            ...(modelSelection !== undefined ? { modelSelection } : {}),
-            ...(input.providerOptions !== undefined
-              ? { providerOptions: input.providerOptions }
-              : {}),
-            ...(input.assistantDeliveryMode !== undefined
-              ? { assistantDeliveryMode: input.assistantDeliveryMode }
-              : {}),
-            runtimeMode: input.runtimeMode,
-            interactionMode: input.interactionMode,
-            ...(input.sourceProposedPlan !== undefined
-              ? { sourceProposedPlan: input.sourceProposedPlan }
-              : {}),
-            createdAt: input.createdAt,
-          })),
-        ),
-      encode: (canonical: ThreadTurnStartRequestedPayloadCanonical) =>
-        Effect.succeed({
-          threadId: canonical.threadId,
-          messageId: canonical.messageId,
-          ...(canonical.modelSelection !== undefined
-            ? { modelSelection: canonical.modelSelection }
-            : {}),
-          ...(canonical.providerOptions !== undefined
-            ? { providerOptions: canonical.providerOptions }
-            : {}),
-          ...(canonical.assistantDeliveryMode !== undefined
-            ? { assistantDeliveryMode: canonical.assistantDeliveryMode }
-            : {}),
-          runtimeMode: canonical.runtimeMode,
-          interactionMode: canonical.interactionMode,
-          ...(canonical.sourceProposedPlan !== undefined
-            ? { sourceProposedPlan: canonical.sourceProposedPlan }
-            : {}),
-          createdAt: canonical.createdAt,
-        } as ThreadTurnStartRequestedPayloadSource),
-    } as any),
-  ),
-);
 
 export const ThreadTurnInterruptRequestedPayload = Schema.Struct({
   threadId: ThreadId,
