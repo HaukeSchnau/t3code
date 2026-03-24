@@ -1,6 +1,3 @@
-import { randomUUID } from "node:crypto";
-import { tmpdir } from "node:os";
-
 import {
   Cache,
   Data,
@@ -11,6 +8,8 @@ import {
   Layer,
   Option,
   Path,
+  PlatformError,
+  Result,
   Schema,
   Scope,
   Stream,
@@ -27,6 +26,7 @@ import {
   type ExecuteGitResult,
 } from "../Services/GitCore.ts";
 import { ServerConfig } from "../../config.ts";
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
@@ -278,29 +278,16 @@ function trace2ChildKey(record: Record<string, unknown>): string | null {
   return typeof hookName === "string" && hookName.trim().length > 0 ? hookName.trim() : null;
 }
 
-function parseTraceRecord(
-  line: string,
-): { ok: true; record: Record<string, unknown> } | { ok: false; message: string } {
-  try {
-    const parsed = JSON.parse(line);
-    if (!parsed || typeof parsed !== "object") {
-      return { ok: false, message: "Trace line was not an object." };
-    }
-    return { ok: true, record: parsed as Record<string, unknown> };
-  } catch (error) {
-    return {
-      ok: false,
-      message: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
+const Trace2Record = Schema.Record(Schema.String, Schema.Unknown);
 
 const createTrace2Monitor = Effect.fn(function* (
   input: Pick<ExecuteGitInput, "operation" | "cwd" | "args">,
-  fileSystem: FileSystem.FileSystem,
-  path: Path.Path,
   progress: ExecuteGitProgress | undefined,
-): Effect.fn.Return<Trace2Monitor, never, Scope.Scope> {
+): Effect.fn.Return<
+  Trace2Monitor,
+  PlatformError.PlatformError,
+  Scope.Scope | FileSystem.FileSystem | Path.Path
+> {
   if (!progress?.onHookStarted && !progress?.onHookFinished) {
     return {
       env: {},
@@ -308,9 +295,12 @@ const createTrace2Monitor = Effect.fn(function* (
     };
   }
 
-  const traceDir = tmpdir();
-  const traceFileName = `t3code-git-trace2-${process.pid}-${randomUUID()}.json`;
-  const traceFilePath = path.join(traceDir, traceFileName);
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const traceFilePath = yield* fs.makeTempFileScoped({
+    prefix: `t3code-git-trace2-${process.pid}-`,
+    suffix: ".json",
+  });
   const hookStartByChildKey = new Map<string, { hookName: string; startedAtMs: number }>();
   let processedChars = 0;
   let lineBuffer = "";
@@ -322,28 +312,29 @@ const createTrace2Monitor = Effect.fn(function* (
         return;
       }
 
-      const parsedRecord = parseTraceRecord(trimmedLine);
-      if (!parsedRecord.ok) {
+      const traceRecord = decodeJsonResult(Trace2Record)(trimmedLine);
+      if (Result.isFailure(traceRecord)) {
         yield* Effect.logDebug(
-          `GitCore.trace2: failed to parse trace line for ${quoteGitCommand(input.args)} in ${input.cwd}: ${
-            parsedRecord.message
-          }`,
+          `GitCore.trace2: failed to parse trace line for ${quoteGitCommand(input.args)} in ${input.cwd}`,
+          traceRecord.failure,
         );
         return;
       }
-      const record = parsedRecord.record;
 
-      if (record.child_class !== "hook") {
+      if (traceRecord.success.child_class !== "hook") {
         return;
       }
 
-      const event = record.event;
-      const childKey = trace2ChildKey(record);
+      const event = traceRecord.success.event;
+      const childKey = trace2ChildKey(traceRecord.success);
       if (childKey === null) {
         return;
       }
       const started = hookStartByChildKey.get(childKey);
-      const hookNameFromEvent = typeof record.hook_name === "string" ? record.hook_name.trim() : "";
+      const hookNameFromEvent =
+        typeof traceRecord.success.hook_name === "string"
+          ? traceRecord.success.hook_name.trim()
+          : "";
       const hookName = hookNameFromEvent.length > 0 ? hookNameFromEvent : (started?.hookName ?? "");
       if (hookName.length === 0) {
         return;
@@ -360,7 +351,7 @@ const createTrace2Monitor = Effect.fn(function* (
       if (event === "child_exit") {
         hookStartByChildKey.delete(childKey);
         if (progress.onHookFinished) {
-          const code = record.code;
+          const code = traceRecord.success.code;
           yield* progress.onHookFinished({
             hookName: started?.hookName ?? hookName,
             exitCode: typeof code === "number" && Number.isInteger(code) ? code : null,
@@ -370,7 +361,7 @@ const createTrace2Monitor = Effect.fn(function* (
       }
     });
 
-  const readTraceDelta = fileSystem.readFileString(traceFilePath).pipe(
+  const readTraceDelta = fs.readFileString(traceFilePath).pipe(
     Effect.catch(() => Effect.succeed("")),
     Effect.flatMap((delta) =>
       Effect.gen(function* () {
@@ -390,15 +381,11 @@ const createTrace2Monitor = Effect.fn(function* (
       }),
     ),
   );
-  const watchTraceFile = Stream.runForEach(fileSystem.watch(traceDir), (event) => {
+  const watchTraceFile = Stream.runForEach(fs.watch(traceFilePath), (event) => {
     const eventPath = event.path;
     const isTargetTraceEvent =
-      eventPath === traceFileName ||
-      eventPath === traceFilePath ||
-      path.resolve(traceDir, eventPath) === traceFilePath;
-    if (!isTargetTraceEvent) {
-      return Effect.void;
-    }
+      eventPath === traceFilePath || path.resolve(eventPath) === traceFilePath;
+    if (!isTargetTraceEvent) return Effect.void;
     return readTraceDelta;
   }).pipe(Effect.ignoreCause({ log: true }));
 
@@ -411,7 +398,6 @@ const createTrace2Monitor = Effect.fn(function* (
       if (finalLine.length > 0) {
         yield* handleTraceLine(finalLine);
       }
-      yield* fileSystem.remove(traceFilePath).pipe(Effect.catch(() => Effect.void));
     }),
   );
 
@@ -501,11 +487,10 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         const maxOutputBytes = input.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES;
 
         const commandEffect = Effect.gen(function* () {
-          const trace2Monitor = yield* createTrace2Monitor(
-            commandInput,
-            fileSystem,
-            path,
-            input.progress,
+          const trace2Monitor = yield* createTrace2Monitor(commandInput, input.progress).pipe(
+            Effect.provideService(Path.Path, path),
+            Effect.provideService(FileSystem.FileSystem, fileSystem),
+            Effect.mapError(toGitCommandError(commandInput, "failed to create trace2 monitor.")),
           );
           const child = yield* commandSpawner
             .spawn(
@@ -522,8 +507,18 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
 
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [
-              collectOutput(commandInput, child.stdout, maxOutputBytes, input.progress?.onStdoutLine),
-              collectOutput(commandInput, child.stderr, maxOutputBytes, input.progress?.onStderrLine),
+              collectOutput(
+                commandInput,
+                child.stdout,
+                maxOutputBytes,
+                input.progress?.onStdoutLine,
+              ),
+              collectOutput(
+                commandInput,
+                child.stderr,
+                maxOutputBytes,
+                input.progress?.onStderrLine,
+              ),
               child.exitCode.pipe(
                 Effect.map((value) => Number(value)),
                 Effect.mapError(toGitCommandError(commandInput, "failed to report exit code.")),
@@ -583,8 +578,7 @@ export const makeGitCore = (options?: { executeOverride?: GitCoreShape["execute"
         allowNonZeroExit: true,
         ...(options.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
         ...(options.progress ? { progress: options.progress } : {}),
-      })
-      .pipe(
+      }).pipe(
         Effect.flatMap((result) => {
           if (options.allowNonZeroExit || result.code === 0) {
             return Effect.succeed(result);
