@@ -1439,9 +1439,7 @@ export default function Sidebar() {
       const isConfirmingArchive = confirmingArchiveThreadId === thread.id && !isThreadRunning;
       const threadMetaClassName = isConfirmingArchive
         ? "pointer-events-none opacity-0"
-        : !isThreadRunning
-          ? "pointer-events-none transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0"
-          : "pointer-events-none";
+        : "pointer-events-none transition-opacity duration-150 group-hover/menu-sub-item:opacity-0 group-focus-within/menu-sub-item:opacity-0";
       const hoverActionClassName =
         "inline-flex size-5 cursor-pointer items-center justify-center text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-ring";
       const hoverActionGroupClassName =
