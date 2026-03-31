@@ -28,7 +28,6 @@ import { cn } from "../../lib/utils";
 import { useAppearance } from "../../hooks/useAppearance";
 import { useUpdateSettings } from "../../hooks/useSettings";
 import { toastManager } from "../ui/toast";
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "../ui/collapsible";
 import { Input } from "../ui/input";
@@ -115,12 +114,10 @@ const OVERRIDE_FIELDS: ReadonlyArray<{
 
 function ThemeCard({
   theme,
-  description,
   isSelected,
   onSelect,
 }: {
   theme: ThemeDocument;
-  description: string;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -129,40 +126,25 @@ function ThemeCard({
       type="button"
       onClick={onSelect}
       className={cn(
-        "group relative overflow-hidden rounded-2xl border p-4 text-left transition-all",
+        "group relative flex items-center gap-3 overflow-hidden rounded-xl border p-2.5 text-left transition-all",
         isSelected
-          ? "border-primary bg-primary/6 shadow-sm shadow-primary/10"
+          ? "border-primary bg-primary/6"
           : "border-border bg-card hover:border-primary/40 hover:bg-accent/40",
       )}
     >
       <div
-        className="h-16 rounded-xl border border-black/8"
+        className="h-9 w-12 shrink-0 rounded-lg border border-black/8"
         style={{
           background: `linear-gradient(135deg, ${theme.background}, ${theme.accent})`,
         }}
       />
-      <div className="pt-4">
-        <div className="flex items-center justify-between gap-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-foreground">{theme.name}</p>
-            <p className="mt-1 text-xs text-muted-foreground">{description}</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <Badge variant="outline" size="sm">
-              {theme.mode}
-            </Badge>
-            <Badge variant={theme.origin === "builtin" ? "outline" : "secondary"} size="sm">
-              {theme.origin === "builtin" ? "Builtin" : "Custom"}
-            </Badge>
-          </div>
-        </div>
-        <div className="mt-4 flex items-center gap-2 text-[11px] text-muted-foreground">
-          <span className="rounded-full border border-border px-2 py-0.5">{theme.contrast}</span>
-          <span className="rounded-full border border-border px-2 py-0.5">{theme.radius}</span>
-          <span className="rounded-full border border-border px-2 py-0.5">{theme.fontSize}</span>
-          {isSelected ? <Badge size="sm">Active</Badge> : null}
-        </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-xs font-medium text-foreground">{theme.name}</p>
+        <p className="mt-0.5 text-[11px] text-muted-foreground">
+          {theme.origin === "custom" ? "Custom" : "Builtin"}
+        </p>
       </div>
+      {isSelected ? <span className="size-1.5 shrink-0 rounded-full bg-primary" /> : null}
     </button>
   );
 }
@@ -177,18 +159,16 @@ function ColorField({
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="grid gap-2">
-      <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-        {label}
-      </span>
-      <div className="flex items-center gap-3 rounded-xl border border-border bg-background px-3 py-2">
-        <input
-          type="color"
-          value={value}
-          onChange={(event) => onChange(event.target.value)}
-          className="h-10 w-11 cursor-pointer rounded-md border-0 bg-transparent p-0"
-        />
-        <code className="text-xs text-foreground">{value}</code>
+    <label className="flex items-center gap-2">
+      <input
+        type="color"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-7 w-8 cursor-pointer rounded border-0 bg-transparent p-0"
+      />
+      <div className="min-w-0">
+        <span className="block text-[11px] font-medium text-muted-foreground">{label}</span>
+        <code className="block text-[11px] text-foreground/70">{value}</code>
       </div>
     </label>
   );
@@ -202,21 +182,9 @@ function ThemeEditor({
   onChange: (updater: (theme: ThemeDocument) => ThemeDocument) => void;
 }) {
   return (
-    <div className="rounded-2xl border border-border bg-card/60 p-4">
-      <div className="mb-4 flex items-center justify-between gap-3">
-        <div>
-          <h3 className="text-sm font-medium text-foreground">{MODE_COPY[theme.mode].label}</h3>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Base colors, scale, typography, and optional advanced token overrides.
-          </p>
-        </div>
-        <div
-          className="h-12 w-18 rounded-xl border border-border"
-          style={{ background: `linear-gradient(135deg, ${theme.background}, ${theme.accent})` }}
-        />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-3">
+    <div className="space-y-3">
+      {/* Colors row */}
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
         <ColorField
           label="Accent"
           value={theme.accent}
@@ -234,11 +202,10 @@ function ThemeEditor({
         />
       </div>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <label className="grid gap-2">
-          <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Radius
-          </span>
+      {/* Scale + typography */}
+      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="grid gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">Radius</span>
           <Input
             value={theme.radius}
             onChange={(event) =>
@@ -247,10 +214,8 @@ function ThemeEditor({
             placeholder="0.625rem"
           />
         </label>
-        <label className="grid gap-2">
-          <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Font size
-          </span>
+        <label className="grid gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">Font size</span>
           <Input
             value={theme.fontSize}
             onChange={(event) =>
@@ -259,60 +224,32 @@ function ThemeEditor({
             placeholder="16px"
           />
         </label>
-        <label className="grid gap-2 xl:col-span-1">
-          <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            UI font
-          </span>
+        <label className="grid gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">UI font</span>
           <Input
             value={theme.uiFontFamily}
             onChange={(event) =>
               onChange((currentTheme) => ({ ...currentTheme, uiFontFamily: event.target.value }))
             }
-            placeholder="CSS font-family stack"
+            placeholder="font-family stack"
           />
         </label>
-        <label className="grid gap-2 xl:col-span-1">
-          <span className="text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">
-            Code font
-          </span>
+        <label className="grid gap-1">
+          <span className="text-[11px] font-medium text-muted-foreground">Code font</span>
           <Input
             value={theme.codeFontFamily}
             onChange={(event) =>
               onChange((currentTheme) => ({ ...currentTheme, codeFontFamily: event.target.value }))
             }
-            placeholder="CSS font-family stack"
+            placeholder="font-family stack"
           />
         </label>
       </div>
 
-      <div className="mt-4 grid gap-4 md:grid-cols-[1fr,1.5fr]">
-        <div className="rounded-xl border border-border bg-background px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-foreground">Translucent sidebar</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Lets the sidebar pick up backdrop blur and a softer surface treatment.
-              </p>
-            </div>
-            <Switch
-              checked={theme.sidebarTranslucent}
-              onCheckedChange={(checked) =>
-                onChange((currentTheme) => ({ ...currentTheme, sidebarTranslucent: checked }))
-              }
-            />
-          </div>
-        </div>
-
-        <label className="rounded-xl border border-border bg-background px-3 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <div>
-              <p className="text-sm font-medium text-foreground">Contrast</p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Adjusts surface separation, border strength, and muted text legibility.
-              </p>
-            </div>
-            <code className="text-sm font-medium text-foreground">{theme.contrast}</code>
-          </div>
+      {/* Contrast + translucent sidebar */}
+      <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+        <label className="flex min-w-0 flex-1 items-center gap-3">
+          <span className="text-[11px] font-medium text-muted-foreground">Contrast</span>
           <input
             type="range"
             min={0}
@@ -325,29 +262,34 @@ function ThemeEditor({
                 contrast: Number.parseInt(event.target.value, 10),
               }))
             }
-            className="mt-4 h-2 w-full cursor-pointer accent-primary"
+            className="h-1.5 min-w-24 flex-1 cursor-pointer accent-primary"
           />
+          <code className="text-[11px] tabular-nums text-muted-foreground">{theme.contrast}</code>
+        </label>
+        <label className="flex items-center gap-2">
+          <Switch
+            checked={theme.sidebarTranslucent}
+            onCheckedChange={(checked) =>
+              onChange((currentTheme) => ({ ...currentTheme, sidebarTranslucent: checked }))
+            }
+          />
+          <span className="text-[11px] font-medium text-muted-foreground">Translucent sidebar</span>
         </label>
       </div>
 
-      <Collapsible
-        className="mt-4 rounded-xl border border-border bg-background"
-        defaultOpen={false}
-      >
-        <CollapsibleTrigger className="flex w-full items-center justify-between px-3 py-3 text-left">
-          <div>
-            <p className="text-sm font-medium text-foreground">Advanced token overrides</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Optional explicit values for card, border, status, diff, and sidebar tokens.
-            </p>
-          </div>
-          <ChevronDownIcon className="size-4 text-muted-foreground" />
+      {/* Advanced overrides */}
+      <Collapsible defaultOpen={false}>
+        <CollapsibleTrigger className="flex items-center gap-1.5 text-left">
+          <ChevronDownIcon className="size-3.5 text-muted-foreground" />
+          <span className="text-[11px] font-medium text-muted-foreground">
+            Advanced token overrides
+          </span>
         </CollapsibleTrigger>
-        <CollapsibleContent className="border-t border-border px-3 py-3">
-          <div className="grid gap-3 md:grid-cols-2">
+        <CollapsibleContent className="pt-2.5">
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {OVERRIDE_FIELDS.map((field) => (
-              <label key={field.key} className="grid gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">{field.label}</span>
+              <label key={field.key} className="grid gap-1">
+                <span className="text-[11px] text-muted-foreground">{field.label}</span>
                 <Input
                   value={theme.overrides?.[field.key] ?? ""}
                   placeholder={field.placeholder}
@@ -625,7 +567,7 @@ export function AppearanceSettingsPanel() {
   return (
     <SettingsPageContainer>
       <SettingsSection title="Color Mode">
-        <div className="grid gap-3 px-4 py-4 sm:px-5 md:grid-cols-3">
+        <div className="grid gap-2 px-4 py-3 sm:grid-cols-3 sm:px-5">
           {COLOR_MODE_OPTIONS.map((option) => {
             const Icon = option.icon;
             const selected = colorMode === option.value;
@@ -636,7 +578,7 @@ export function AppearanceSettingsPanel() {
                 type="button"
                 onClick={() => setColorMode(option.value)}
                 className={cn(
-                  "flex items-center gap-3 rounded-2xl border px-4 py-4 text-left transition-colors",
+                  "flex items-center gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-colors",
                   selected
                     ? "border-primary bg-primary/6 text-foreground"
                     : "border-border bg-card/60 text-muted-foreground hover:border-primary/40 hover:text-foreground",
@@ -644,20 +586,20 @@ export function AppearanceSettingsPanel() {
               >
                 <span
                   className={cn(
-                    "flex size-10 items-center justify-center rounded-2xl",
+                    "flex size-8 items-center justify-center rounded-lg",
                     selected ? "bg-primary text-primary-foreground" : "bg-accent text-foreground",
                   )}
                 >
-                  <Icon className="size-4" />
+                  <Icon className="size-3.5" />
                 </span>
                 <span>
-                  <span className="block text-sm font-medium">{option.label}</span>
-                  <span className="block text-xs text-muted-foreground">
+                  <span className="block text-xs font-medium">{option.label}</span>
+                  <span className="block text-[11px] text-muted-foreground">
                     {option.value === "system"
-                      ? "Follow the operating system appearance."
+                      ? "Follow OS preference"
                       : option.value === "light"
-                        ? "Always use light surfaces."
-                        : "Always use dark surfaces."}
+                        ? "Always light"
+                        : "Always dark"}
                   </span>
                 </span>
               </button>
@@ -675,21 +617,21 @@ export function AppearanceSettingsPanel() {
             key={mode}
             title={MODE_COPY[mode].label}
             headerAction={
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5">
                 <Button size="xs" variant="outline" onClick={() => importInputRef.current?.click()}>
-                  <UploadIcon className="size-3.5" />
+                  <UploadIcon className="size-3" />
                   Import
                 </Button>
                 <Button size="xs" variant="outline" onClick={() => handleCopyTheme(mode)}>
-                  <CopyIcon className="size-3.5" />
-                  Copy JSON
+                  <CopyIcon className="size-3" />
+                  Copy
                 </Button>
                 <Button size="xs" variant="outline" onClick={() => handleDuplicateTheme(mode)}>
                   Duplicate
                 </Button>
                 <Button size="xs" variant="outline" onClick={() => handleResetCurrent(mode)}>
-                  <RotateCcwIcon className="size-3.5" />
-                  Reset Theme
+                  <RotateCcwIcon className="size-3" />
+                  Reset
                 </Button>
                 {activeTheme.origin === "custom" ? (
                   <Button
@@ -697,33 +639,20 @@ export function AppearanceSettingsPanel() {
                     variant="destructive-outline"
                     onClick={() => handleDeleteTheme(mode)}
                   >
-                    <Trash2Icon className="size-3.5" />
+                    <Trash2Icon className="size-3" />
                     Delete
                   </Button>
                 ) : null}
               </div>
             }
           >
-            <div className="px-4 py-4 sm:px-5">
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <div>
-                  <p className="text-sm font-medium text-foreground">{activeTheme.name}</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Builtin themes stay immutable. The first edit automatically creates a custom
-                    copy.
-                  </p>
-                </div>
-                <Badge variant={activeTheme.origin === "builtin" ? "outline" : "secondary"}>
-                  {activeTheme.origin === "builtin" ? "Builtin preset" : "Custom theme"}
-                </Badge>
-              </div>
-
-              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+            <div className="px-4 py-3 sm:px-5">
+              {/* Theme grid */}
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
                 {themeLibraryByMode[mode].map((entry) => (
                   <ThemeCard
                     key={entry.theme.id}
                     theme={entry.theme}
-                    description={entry.description}
                     isSelected={activeTheme.id === entry.theme.id}
                     onSelect={() => updateModeSelection(mode, entry.theme.id)}
                   />
@@ -738,13 +667,14 @@ export function AppearanceSettingsPanel() {
                 onChange={handleImportTheme(mode)}
               />
               {importErrors[mode] ? (
-                <div className="mt-4 rounded-xl border border-destructive/30 bg-destructive/8 px-3 py-3 text-sm text-destructive-foreground">
+                <div className="mt-3 rounded-lg border border-destructive/30 bg-destructive/8 px-3 py-2 text-xs text-destructive-foreground">
                   <p className="font-medium">Import failed</p>
-                  <p className="mt-1 whitespace-pre-wrap text-xs">{importErrors[mode]}</p>
+                  <p className="mt-0.5 whitespace-pre-wrap">{importErrors[mode]}</p>
                 </div>
               ) : null}
 
-              <div className="mt-4">
+              {/* Inline editor */}
+              <div className="mt-3 border-t border-border pt-3">
                 <ThemeEditor
                   theme={activeTheme}
                   onChange={(updater) => handleThemeChange(mode, updater)}
@@ -754,45 +684,6 @@ export function AppearanceSettingsPanel() {
           </SettingsSection>
         );
       })}
-
-      <SettingsSection title="Import Format">
-        <div className="grid gap-4 px-4 py-4 sm:px-5 xl:grid-cols-[1.1fr,0.9fr]">
-          <div className="rounded-2xl border border-border bg-card/60 p-4">
-            <p className="text-sm font-medium text-foreground">Theme document</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              JSON import uses the annotated `ThemeDocumentSchema`. Each file represents exactly one
-              mode and should mostly contain simple base colors, fonts, radius, font size, and
-              contrast. Advanced overrides are optional.
-            </p>
-            <pre className="mt-4 overflow-x-auto rounded-xl border border-border bg-background p-4 text-xs leading-5">{`{
-  "id": "custom-codex-light",
-  "name": "Custom Codex Light",
-  "version": 1,
-  "origin": "custom",
-  "mode": "light",
-  "radius": "0.625rem",
-  "fontSize": "16px",
-  "accent": "#0169cc",
-  "background": "#ffffff",
-  "foreground": "#0d0d0d",
-  "uiFontFamily": "\\"IBM Plex Sans\\", sans-serif",
-  "codeFontFamily": "\\"IBM Plex Mono\\", monospace",
-  "sidebarTranslucent": true,
-  "contrast": 46
-}`}</pre>
-          </div>
-
-          <div className="rounded-2xl border border-border bg-card/60 p-4">
-            <p className="text-sm font-medium text-foreground">Current theme JSON</p>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Use Copy JSON inside each mode section to export or share the exact active document.
-            </p>
-            <pre className="mt-4 max-h-90 overflow-auto rounded-xl border border-border bg-background p-4 text-xs leading-5">
-              {serializeThemeDocument(activeLightTheme)}
-            </pre>
-          </div>
-        </div>
-      </SettingsSection>
     </SettingsPageContainer>
   );
 }
