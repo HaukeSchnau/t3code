@@ -320,6 +320,10 @@ export function resolveLiveThreadBranchUpdate(input: {
     return null;
   }
 
+  if (input.gitStatus.branch === null && input.threadBranch !== null) {
+    return null;
+  }
+
   if (input.threadBranch === input.gitStatus.branch) {
     return null;
   }

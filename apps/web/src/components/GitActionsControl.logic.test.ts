@@ -981,6 +981,15 @@ describe("resolveLiveThreadBranchUpdate", () => {
 
     assert.equal(update, null);
   });
+
+  it("returns null when git status is detached HEAD but the thread already has a branch", () => {
+    const update = resolveLiveThreadBranchUpdate({
+      threadBranch: "effect-atom",
+      gitStatus: status({ branch: null }),
+    });
+
+    assert.equal(update, null);
+  });
 });
 
 describe("resolveAutoFeatureBranchName", () => {
