@@ -220,6 +220,41 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
         ),
       );
 
+      it.effect("adds standard codex capabilities to custom codex models", () =>
+        Effect.gen(function* () {
+          yield* withTempCodexHome();
+          const serverSettingsLayer = ServerSettingsService.layerTest({
+            providers: {
+              codex: {
+                customModels: ["custom-codex-model"],
+              },
+            },
+          });
+
+          const status = yield* checkCodexProviderStatus().pipe(
+            Effect.provide(serverSettingsLayer),
+          );
+          const customModel = status.models.find((model) => model.slug === "custom-codex-model");
+
+          assert.ok(customModel);
+          assert.strictEqual(customModel.isCustom, true);
+          assert.deepStrictEqual(
+            customModel.capabilities?.reasoningEffortLevels.map((level) => level.value),
+            ["xhigh", "high", "medium", "low"],
+          );
+          assert.strictEqual(customModel.capabilities?.supportsFastMode, true);
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+              if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
       it.effect("hides spark from codex models for unsupported chatgpt plans", () =>
         Effect.gen(function* () {
           yield* withTempCodexHome();

@@ -14,6 +14,19 @@ export interface SelectableModelOption {
   name: string;
 }
 
+export const DEFAULT_CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "xhigh", label: "Extra High" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "medium", label: "Medium" },
+    { value: "low", label: "Low" },
+  ],
+  supportsFastMode: true,
+  supportsThinkingToggle: false,
+  contextWindowOptions: [],
+  promptInjectedEffortLevels: [],
+};
+
 // ── Effort helpers ────────────────────────────────────────────────────
 
 /** Check whether a capabilities object includes a given effort value. */

@@ -477,6 +477,23 @@ describe("TraitsPicker (Codex)", () => {
     });
   });
 
+  it("shows default effort options for custom codex models without capabilities", async () => {
+    await using _ = await mountCodexPicker({
+      model: "custom-codex-model",
+      options: { reasoningEffort: "low" },
+    });
+
+    await page.getByRole("button").click();
+
+    await vi.waitFor(() => {
+      const text = document.body.textContent ?? "";
+      expect(text).toContain("Extra High");
+      expect(text).toContain("High");
+      expect(text).toContain("Medium");
+      expect(text).toContain("Low");
+    });
+  });
+
   it("persists sticky codex model options when traits change", async () => {
     await using _ = await mountCodexPicker({
       options: { fastMode: false },

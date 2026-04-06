@@ -149,6 +149,36 @@ describe("getComposerProviderState", () => {
     });
   });
 
+  it("uses standard codex defaults for custom codex models without capabilities", () => {
+    const state = getComposerProviderState({
+      provider: "codex",
+      model: "custom-codex-model",
+      models: [
+        ...CODEX_MODELS,
+        {
+          slug: "custom-codex-model",
+          name: "custom-codex-model",
+          isCustom: true,
+          capabilities: null,
+        },
+      ],
+      prompt: "",
+      modelOptions: {
+        codex: {
+          reasoningEffort: "low",
+        },
+      },
+    });
+
+    expect(state).toEqual({
+      provider: "codex",
+      promptEffort: "low",
+      modelOptionsForDispatch: {
+        reasoningEffort: "low",
+      },
+    });
+  });
+
   it("preserves codex fast mode when it is the only active option", () => {
     const state = getComposerProviderState({
       provider: "codex",

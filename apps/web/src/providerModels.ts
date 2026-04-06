@@ -5,7 +5,7 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeModelSlug } from "@t3tools/shared/model";
+import { DEFAULT_CODEX_MODEL_CAPABILITIES, normalizeModelSlug } from "@t3tools/shared/model";
 
 const EMPTY_CAPABILITIES: ModelCapabilities = {
   reasoningEffortLevels: [],
@@ -53,7 +53,10 @@ export function getProviderModelCapabilities(
   provider: ProviderKind,
 ): ModelCapabilities {
   const slug = normalizeModelSlug(model, provider);
-  return models.find((candidate) => candidate.slug === slug)?.capabilities ?? EMPTY_CAPABILITIES;
+  const capabilities = models.find((candidate) => candidate.slug === slug)?.capabilities;
+  return (
+    capabilities ?? (provider === "codex" ? DEFAULT_CODEX_MODEL_CAPABILITIES : EMPTY_CAPABILITIES)
+  );
 }
 
 export function getDefaultServerModel(
