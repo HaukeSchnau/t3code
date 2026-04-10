@@ -140,7 +140,7 @@ export async function runProcess(
       cwd: options.cwd,
       env: options.env,
       stdio: "pipe",
-      shell: options.shell ?? process.platform === "win32",
+      shell: options.shell ?? (process.platform === "win32"),
     });
 
     let stdout = "";
