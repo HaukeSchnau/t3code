@@ -9,9 +9,11 @@ import { GitCoreLive } from "../../git/Layers/GitCore.ts";
 import { GitCore } from "../../git/Services/GitCore.ts";
 import { WorkspaceEntries } from "../Services/WorkspaceEntries.ts";
 import { WorkspaceEntriesLive } from "./WorkspaceEntries.ts";
+import { WorkspacePathsLive } from "./WorkspacePaths.ts";
 
 const TestLayer = Layer.empty.pipe(
-  Layer.provideMerge(WorkspaceEntriesLive),
+  Layer.provideMerge(WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive))),
+  Layer.provideMerge(WorkspacePathsLive),
   Layer.provideMerge(GitCoreLive),
   Layer.provide(
     ServerConfig.layerTest(process.cwd(), {
@@ -124,6 +126,18 @@ it.layer(TestLayer)("WorkspaceEntriesLive", (it) => {
         expect(result.entries.length).toBeGreaterThan(0);
         expect(paths).toContain("src/components");
         expect(paths).toContain("src/components/Composer.tsx");
+      }),
+    );
+
+    it.effect("prioritizes exact basename matches ahead of broader path matches", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTempDir({ prefix: "t3code-workspace-exact-ranking-" });
+        yield* writeTextFile(cwd, "src/components/Composer.tsx");
+        yield* writeTextFile(cwd, "docs/composer.tsx-notes.md");
+
+        const result = yield* searchWorkspaceEntries({ cwd, query: "Composer.tsx", limit: 5 });
+
+        expect(result.entries[0]?.path).toBe("src/components/Composer.tsx");
       }),
     );
 

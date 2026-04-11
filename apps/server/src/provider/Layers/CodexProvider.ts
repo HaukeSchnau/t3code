@@ -5,6 +5,7 @@ import type {
   ServerProvider,
   ServerProviderModel,
   ServerProviderAuth,
+  ServerProviderSkill,
   ServerProviderState,
 } from "@t3tools/contracts";
 import {
@@ -44,9 +45,23 @@ import {
   codexAuthSubType,
   type CodexAccountSnapshot,
 } from "../codexAccount";
-import { probeCodexAccount } from "../codexAppServer";
+import { probeCodexDiscovery } from "../codexAppServer";
 import { CodexProvider } from "../Services/CodexProvider";
-import { ServerSettingsError, ServerSettingsService } from "../../serverSettings";
+import { ServerSettingsService } from "../../serverSettings";
+import { ServerSettingsError } from "@t3tools/contracts";
+
+const DEFAULT_CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
+  reasoningEffortLevels: [
+    { value: "xhigh", label: "Extra High" },
+    { value: "high", label: "High", isDefault: true },
+    { value: "medium", label: "Medium" },
+    { value: "low", label: "Low" },
+  ],
+  supportsFastMode: true,
+  supportsThinkingToggle: false,
+  contextWindowOptions: [],
+  promptInjectedEffortLevels: [],
+};
 
 const PROVIDER = "codex" as const;
 const OPENAI_AUTH_PROVIDERS = new Set(["openai"]);
@@ -158,13 +173,8 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
 export function getCodexModelCapabilities(model: string | null | undefined): ModelCapabilities {
   const slug = model?.trim();
   return (
-    BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ?? {
-      reasoningEffortLevels: [],
-      supportsFastMode: false,
-      supportsThinkingToggle: false,
-      contextWindowOptions: [],
-      promptInjectedEffortLevels: [],
-    }
+    BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
+    DEFAULT_CODEX_MODEL_CAPABILITIES
   );
 }
 
@@ -295,8 +305,9 @@ const CAPABILITIES_PROBE_TIMEOUT_MS = 8_000;
 const probeCodexCapabilities = (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly cwd: string;
 }) =>
-  Effect.tryPromise((signal) => probeCodexAccount({ ...input, signal })).pipe(
+  Effect.tryPromise((signal) => probeCodexDiscovery({ ...input, signal })).pipe(
     Effect.timeoutOption(CAPABILITIES_PROBE_TIMEOUT_MS),
     Effect.result,
     Effect.map((result) => {
@@ -305,27 +316,31 @@ const probeCodexCapabilities = (input: {
     }),
   );
 
-const runCodexCommand = (args: ReadonlyArray<string>) =>
-  Effect.gen(function* () {
-    const settingsService = yield* ServerSettingsService;
-    const codexSettings = yield* settingsService.getSettings.pipe(
-      Effect.map((settings) => settings.providers.codex),
-    );
-    const command = ChildProcess.make(codexSettings.binaryPath, [...args], {
-      shell: process.platform === "win32",
-      env: {
-        ...process.env,
-        ...(codexSettings.homePath ? { CODEX_HOME: codexSettings.homePath } : {}),
-      },
-    });
-    return yield* spawnAndCollect(codexSettings.binaryPath, command);
+const runCodexCommand = Effect.fn("runCodexCommand")(function* (args: ReadonlyArray<string>) {
+  const settingsService = yield* ServerSettingsService;
+  const codexSettings = yield* settingsService.getSettings.pipe(
+    Effect.map((settings) => settings.providers.codex),
+  );
+  const command = ChildProcess.make(codexSettings.binaryPath, [...args], {
+    shell: process.platform === "win32",
+    env: {
+      ...process.env,
+      ...(codexSettings.homePath ? { CODEX_HOME: codexSettings.homePath } : {}),
+    },
   });
+  return yield* spawnAndCollect(codexSettings.binaryPath, command);
+});
 
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   resolveAccount?: (input: {
     readonly binaryPath: string;
     readonly homePath?: string;
   }) => Effect.Effect<CodexAccountSnapshot | undefined>,
+  resolveSkills?: (input: {
+    readonly binaryPath: string;
+    readonly homePath?: string;
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<ServerProviderSkill> | undefined>,
 ): Effect.fn.Return<
   ServerProvider,
   ServerSettingsError,
@@ -339,7 +354,12 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     Effect.map((settings) => settings.providers.codex),
   );
   const checkedAt = new Date().toISOString();
-  const models = providerModelsFromSettings(BUILT_IN_MODELS, PROVIDER, codexSettings.customModels);
+  const models = providerModelsFromSettings(
+    BUILT_IN_MODELS,
+    PROVIDER,
+    codexSettings.customModels,
+    DEFAULT_CODEX_MODEL_CAPABILITIES,
+  );
 
   if (!codexSettings.enabled) {
     return buildServerProvider({
@@ -376,7 +396,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
           ? "Codex CLI (`codex`) is not installed or not on PATH."
-          : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
+          : `Failed to execute Codex CLI health check: ${error.message}.`,
       },
     });
   }
@@ -436,12 +456,22 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     });
   }
 
+  const skills =
+    (resolveSkills
+      ? yield* resolveSkills({
+          binaryPath: codexSettings.binaryPath,
+          homePath: codexSettings.homePath,
+          cwd: process.cwd(),
+        }).pipe(Effect.orElseSucceed(() => undefined))
+      : undefined) ?? [];
+
   if (yield* hasCustomModelProvider) {
     return buildServerProvider({
       provider: PROVIDER,
       enabled: codexSettings.enabled,
       checkedAt,
       models,
+      skills,
       probe: {
         installed: true,
         version: parsedVersion,
@@ -471,15 +501,13 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       enabled: codexSettings.enabled,
       checkedAt,
       models: resolvedModels,
+      skills,
       probe: {
         installed: true,
         version: parsedVersion,
         status: "warning",
         auth: { status: "unknown" },
-        message:
-          error instanceof Error
-            ? `Could not verify Codex authentication status: ${error.message}.`
-            : "Could not verify Codex authentication status.",
+        message: `Could not verify Codex authentication status: ${error.message}.`,
       },
     });
   }
@@ -490,6 +518,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       enabled: codexSettings.enabled,
       checkedAt,
       models: resolvedModels,
+      skills,
       probe: {
         installed: true,
         version: parsedVersion,
@@ -508,6 +537,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     enabled: codexSettings.enabled,
     checkedAt,
     models: resolvedModels,
+    skills,
     probe: {
       installed: true,
       version: parsedVersion,
@@ -533,16 +563,29 @@ export const CodexProviderLive = Layer.effect(
       capacity: 4,
       timeToLive: Duration.minutes(5),
       lookup: (key: string) => {
-        const [binaryPath, homePath] = JSON.parse(key) as [string, string | undefined];
+        const [binaryPath, homePath, cwd] = JSON.parse(key) as [string, string | undefined, string];
         return probeCodexCapabilities({
           binaryPath,
+          cwd,
           ...(homePath ? { homePath } : {}),
         });
       },
     });
 
-    const checkProvider = checkCodexProviderStatus((input) =>
-      Cache.get(accountProbeCache, JSON.stringify([input.binaryPath, input.homePath])),
+    const getDiscovery = (input: {
+      readonly binaryPath: string;
+      readonly homePath?: string;
+      readonly cwd: string;
+    }) =>
+      Cache.get(accountProbeCache, JSON.stringify([input.binaryPath, input.homePath, input.cwd]));
+
+    const checkProvider = checkCodexProviderStatus(
+      (input) =>
+        getDiscovery({
+          ...input,
+          cwd: process.cwd(),
+        }).pipe(Effect.map((discovery) => discovery?.account)),
+      (input) => getDiscovery(input).pipe(Effect.map((discovery) => discovery?.skills)),
     ).pipe(
       Effect.provideService(ServerSettingsService, serverSettings),
       Effect.provideService(FileSystem.FileSystem, fileSystem),
