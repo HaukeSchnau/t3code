@@ -223,10 +223,11 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
         return;
       }
       setProviderModelOptions(threadTarget, provider, nextOptions, {
+        model,
         persistSticky: true,
       });
     },
-    [persistence, provider, setProviderModelOptions],
+    [model, persistence, provider, setProviderModelOptions],
   );
   const {
     caps,

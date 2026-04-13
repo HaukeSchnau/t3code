@@ -345,6 +345,7 @@ interface ComposerDraftStoreState {
     provider: ProviderKind,
     nextProviderOptions: ProviderModelOptions[ProviderKind] | null | undefined,
     options?: {
+      model?: string | null | undefined;
       persistSticky?: boolean;
     },
   ) => void;
@@ -2336,6 +2337,9 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           if (normalizedProvider === null) {
             return;
           }
+          const fallbackModel =
+            normalizeModelSlug(options?.model, normalizedProvider) ??
+            DEFAULT_MODEL_BY_PROVIDER[normalizedProvider];
           // Normalize just this provider's options
           const normalizedOpts = normalizeProviderModelOptions(
             { [normalizedProvider]: nextProviderOptions },
@@ -2353,7 +2357,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             if (providerOpts) {
               nextMap[normalizedProvider] = {
                 provider: normalizedProvider,
-                model: currentForProvider?.model ?? DEFAULT_MODEL_BY_PROVIDER[normalizedProvider],
+                model: currentForProvider?.model ?? fallbackModel,
                 options: providerOpts,
               };
             } else if (currentForProvider?.options) {
@@ -2371,7 +2375,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 base.modelSelectionByProvider[normalizedProvider] ??
                 ({
                   provider: normalizedProvider,
-                  model: DEFAULT_MODEL_BY_PROVIDER[normalizedProvider],
+                  model: fallbackModel,
                 } as ModelSelection);
               if (providerOpts) {
                 nextStickyMap[normalizedProvider] = {
