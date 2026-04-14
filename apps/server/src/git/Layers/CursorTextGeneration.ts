@@ -126,12 +126,15 @@ const makeCursorTextGeneration = Effect.gen(function* () {
       ).pipe(Effect.catch(() => Effect.undefined));
 
       const outputRef = yield* Ref.make("");
-      const runtime = yield* makeCursorAcpRuntime({
-        cursorSettings,
-        childProcessSpawner: commandSpawner,
-        cwd,
-        clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
-      });
+      const runtime = yield* Effect.acquireRelease(
+        makeCursorAcpRuntime({
+          cursorSettings,
+          childProcessSpawner: commandSpawner,
+          cwd,
+          clientInfo: { name: "t3-code-git-text", version: "0.0.0" },
+        }),
+        (rt) => rt.close,
+      );
 
       yield* runtime.handleSessionUpdate((notification) => {
         const update = notification.update;
