@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -30,7 +30,7 @@ export default function ConnectionsNewRouteScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showScanner, setShowScanner] = useState(params.mode === "scan_qr");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [scannerLocked, setScannerLocked] = useState(false);
+  const scannerLockedRef = useRef(false);
 
   const textColor = useThemeColor("--color-icon");
   const placeholderColor = useThemeColor("--color-placeholder");
@@ -60,14 +60,14 @@ export default function ConnectionsNewRouteScreen() {
 
   const openScanner = useCallback(async () => {
     if (cameraPermission?.granted) {
-      setScannerLocked(false);
+      scannerLockedRef.current = false;
       setShowScanner(true);
       return;
     }
 
     const permission = await requestCameraPermission();
     if (permission.granted) {
-      setScannerLocked(false);
+      scannerLockedRef.current = false;
       setShowScanner(true);
       return;
     }
@@ -77,16 +77,16 @@ export default function ConnectionsNewRouteScreen() {
 
   const closeScanner = useCallback(() => {
     setShowScanner(false);
-    setScannerLocked(false);
+    scannerLockedRef.current = false;
   }, []);
 
   const handleQrScan = useCallback(
     ({ data }: { readonly data: string }) => {
-      if (scannerLocked) {
+      if (scannerLockedRef.current) {
         return;
       }
 
-      setScannerLocked(true);
+      scannerLockedRef.current = true;
 
       try {
         const pairingUrl = extractPairingUrlFromQrPayload(data);
@@ -102,11 +102,11 @@ export default function ConnectionsNewRouteScreen() {
         );
       } finally {
         setTimeout(() => {
-          setScannerLocked(false);
+          scannerLockedRef.current = false;
         }, 600);
       }
     },
-    [onChangeConnectionPairingUrl, scannerLocked],
+    [onChangeConnectionPairingUrl],
   );
 
   const handleSubmit = useCallback(async () => {
