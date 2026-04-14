@@ -42,6 +42,35 @@ interface EnvironmentConnectionInput extends OrchestrationHandlers {
   readonly onShellResubscribe?: (environmentId: EnvironmentId) => void;
 }
 
+function createBootstrapGate() {
+  let resolve: (() => void) | null = null;
+  let reject: ((error: unknown) => void) | null = null;
+  let promise = new Promise<void>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+
+  return {
+    wait: () => promise,
+    resolve: () => {
+      resolve?.();
+      resolve = null;
+      reject = null;
+    },
+    reject: (error: unknown) => {
+      reject?.(error);
+      resolve = null;
+      reject = null;
+    },
+    reset: () => {
+      promise = new Promise<void>((nextResolve, nextReject) => {
+        resolve = nextResolve;
+        reject = nextReject;
+      });
+    },
+  };
+}
+
 export function createEnvironmentConnection(
   input: EnvironmentConnectionInput,
 ): EnvironmentConnection {
@@ -54,19 +83,7 @@ export function createEnvironmentConnection(
   }
 
   let disposed = false;
-  let bootstrapped = false;
-  let bootstrapResolve: (() => void) | null = null;
-  let bootstrapPromise: Promise<void> | null = null;
-
-  const resetBootstrapGate = () => {
-    bootstrapped = false;
-    bootstrapPromise = new Promise<void>((resolve) => {
-      bootstrapResolve = resolve;
-    });
-  };
-
-  // Initialize the bootstrap gate so ensureBootstrapped can await it.
-  resetBootstrapGate();
+  const bootstrapGate = createBootstrapGate();
 
   const observeEnvironmentIdentity = (nextEnvironmentId: EnvironmentId, source: string) => {
     if (environmentId !== nextEnvironmentId) {
@@ -102,9 +119,7 @@ export function createEnvironmentConnection(
 
       if (item.kind === "snapshot") {
         input.syncShellSnapshot(item.snapshot, environmentId);
-        bootstrapped = true;
-        bootstrapResolve?.();
-        bootstrapResolve = null;
+        bootstrapGate.resolve();
         return;
       }
 
@@ -116,9 +131,7 @@ export function createEnvironmentConnection(
           return;
         }
 
-        // The server will re-emit a snapshot on resubscribe, so reset the
-        // bootstrap gate so reconnect callers can await the fresh snapshot.
-        resetBootstrapGate();
+        bootstrapGate.reset();
         input.onShellResubscribe?.(environmentId);
       },
     },
@@ -141,19 +154,16 @@ export function createEnvironmentConnection(
     environmentId,
     knownEnvironment: input.knownEnvironment,
     client: input.client,
-    ensureBootstrapped: () => {
-      if (bootstrapped) {
-        return Promise.resolve();
-      }
-      return bootstrapPromise ?? Promise.resolve();
-    },
+    ensureBootstrapped: () => bootstrapGate.wait(),
     reconnect: async () => {
-      await input.client.reconnect();
-      await input.refreshMetadata?.();
-      // After reconnect the shell subscription's onResubscribe fires, which
-      // resets the bootstrap gate. Wait for the server to push a fresh snapshot.
-      if (bootstrapPromise) {
-        await bootstrapPromise;
+      bootstrapGate.reset();
+      try {
+        await input.client.reconnect();
+        await input.refreshMetadata?.();
+        await bootstrapGate.wait();
+      } catch (error) {
+        bootstrapGate.reject(error);
+        throw error;
       }
     },
     dispose: async () => {

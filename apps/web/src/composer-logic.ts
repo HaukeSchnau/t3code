@@ -36,14 +36,6 @@ function isWhitespace(char: string): boolean {
   );
 }
 
-function tokenStartForCursor(text: string, cursor: number): number {
-  let index = cursor - 1;
-  while (index >= 0 && !isWhitespace(text[index] ?? "")) {
-    index -= 1;
-  }
-  return index + 1;
-}
-
 export function expandCollapsedComposerCursor(text: string, cursorInput: number): number {
   const collapsedCursor = clampCursor(text, cursorInput);
   const segments = splitPromptIntoComposerSegments(text);

@@ -1,19 +1,13 @@
 import {
-  type GitActionProgressEvent,
-  type GitRunStackedActionInput,
   type GitRunStackedActionResult,
   type GitStatusResult,
   type GitStatusStreamEvent,
-  type LocalApi,
   ORCHESTRATION_WS_METHODS,
-  type ServerSettingsPatch,
   WS_METHODS,
 } from "@t3tools/contracts";
 import type { WsRpcClient } from "@t3tools/client-runtime";
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
-import { Effect, Stream } from "effect";
 
-import { type WsRpcProtocolClient } from "./protocol";
 import { resetWsReconnectBackoff } from "./wsConnectionState";
 import { WsTransport } from "./wsTransport";
 
