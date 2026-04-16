@@ -77,9 +77,11 @@ const config: ExpoConfig = {
     supportsTablet: true,
     bundleIdentifier: variant.iosBundleIdentifier,
     infoPlist: {
-      NSAppTransportSecurity: {
-        NSAllowsArbitraryLoads: true,
-      },
+      ...(APP_VARIANT !== "production" && {
+        NSAppTransportSecurity: {
+          NSAllowsArbitraryLoads: true,
+        },
+      }),
       ITSAppUsesNonExemptEncryption: false,
     },
   },
@@ -128,7 +130,7 @@ const config: ExpoConfig = {
     ],
     "expo-secure-store",
     "expo-router",
-    "./plugins/withAndroidCleartextTraffic.cjs",
+    ...(APP_VARIANT !== "production" ? ["./plugins/withAndroidCleartextTraffic.cjs"] : []),
   ],
   extra: {
     appVariant: APP_VARIANT,
