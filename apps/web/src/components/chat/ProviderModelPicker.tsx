@@ -50,6 +50,25 @@ function providerIconClassName(
   return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
 }
 
+function isHiddenProviderOption(
+  option: (typeof PROVIDER_OPTIONS)[number],
+  providers: ReadonlyArray<ServerProvider> | undefined,
+): boolean {
+  return (
+    option.value === "cursor" &&
+    (providers?.length ?? 0) > 0 &&
+    getProviderSnapshot(providers ?? [], option.value) === undefined
+  );
+}
+
+export function getAvailableProviderOptions(providers?: ReadonlyArray<ServerProvider>) {
+  return AVAILABLE_PROVIDER_OPTIONS.filter((option) => !isHiddenProviderOption(option, providers));
+}
+
+export function getUnavailableProviderOptions() {
+  return UNAVAILABLE_PROVIDER_OPTIONS;
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: string;
@@ -66,6 +85,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const activeProvider = props.lockedProvider ?? props.provider;
+  const availableProviderOptions = getAvailableProviderOptions(props.providers);
+  const unavailableProviderOptions = getUnavailableProviderOptions();
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelValue =
     resolveSelectableModel(activeProvider, props.model, selectedProviderOptions) ?? props.model;
@@ -149,7 +170,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           </MenuGroup>
         ) : (
           <>
-            {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
+            {availableProviderOptions.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               const liveProvider = props.providers
                 ? getProviderSnapshot(props.providers, option.value)
@@ -217,8 +238,8 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </MenuSub>
               );
             })}
-            {UNAVAILABLE_PROVIDER_OPTIONS.length > 0 && <MenuDivider />}
-            {UNAVAILABLE_PROVIDER_OPTIONS.map((option) => {
+            {unavailableProviderOptions.length > 0 && <MenuDivider />}
+            {unavailableProviderOptions.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
               return (
                 <MenuItem key={option.value} disabled>
@@ -233,7 +254,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 </MenuItem>
               );
             })}
-            {UNAVAILABLE_PROVIDER_OPTIONS.length === 0 && <MenuDivider />}
+            {unavailableProviderOptions.length === 0 && <MenuDivider />}
             {COMING_SOON_PROVIDER_OPTIONS.map((option) => {
               const OptionIcon = option.icon;
               return (

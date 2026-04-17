@@ -59,7 +59,7 @@ import {
   shouldUseCompactComposerFooter,
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
-import { AVAILABLE_PROVIDER_OPTIONS, ProviderModelPicker } from "./ProviderModelPicker";
+import { getAvailableProviderOptions, ProviderModelPicker } from "./ProviderModelPicker";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -616,20 +616,20 @@ export const ChatComposer = memo(
     }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
     const searchableModelOptions = useMemo(
       () =>
-        AVAILABLE_PROVIDER_OPTIONS.filter(
-          (option) => lockedProvider === null || option.value === lockedProvider,
-        ).flatMap((option) =>
-          modelOptionsByProvider[option.value].map(({ slug, name }) => ({
-            provider: option.value,
-            providerLabel: option.label,
-            slug,
-            name,
-            searchSlug: slug.toLowerCase(),
-            searchName: name.toLowerCase(),
-            searchProvider: option.label.toLowerCase(),
-          })),
-        ),
-      [lockedProvider, modelOptionsByProvider],
+        getAvailableProviderOptions(providerStatuses)
+          .filter((option) => lockedProvider === null || option.value === lockedProvider)
+          .flatMap((option) =>
+            modelOptionsByProvider[option.value].map(({ slug, name }) => ({
+              provider: option.value,
+              providerLabel: option.label,
+              slug,
+              name,
+              searchSlug: slug.toLowerCase(),
+              searchName: name.toLowerCase(),
+              searchProvider: option.label.toLowerCase(),
+            })),
+          ),
+      [lockedProvider, modelOptionsByProvider, providerStatuses],
     );
 
     // ------------------------------------------------------------------

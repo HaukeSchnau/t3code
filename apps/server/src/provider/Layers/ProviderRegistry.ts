@@ -7,14 +7,12 @@ import type { ProviderKind, ServerProvider } from "@t3tools/contracts";
 import { Effect, Equal, FileSystem, Layer, Path, PubSub, Ref, Stream } from "effect";
 
 import { ServerConfig } from "../../config";
+import { isCursorEnabled } from "../../cursorFeatureFlag";
 import { ClaudeProviderLive } from "./ClaudeProvider";
 import { CodexProviderLive } from "./CodexProvider";
 import { CursorProviderLive } from "./CursorProvider";
-import type { ClaudeProviderShape } from "../Services/ClaudeProvider";
 import { ClaudeProvider } from "../Services/ClaudeProvider";
-import type { CodexProviderShape } from "../Services/CodexProvider";
 import { CodexProvider } from "../Services/CodexProvider";
-import type { CursorProviderShape } from "../Services/CursorProvider";
 import { CursorProvider } from "../Services/CursorProvider";
 import { ProviderRegistry, type ProviderRegistryShape } from "../Services/ProviderRegistry";
 import {
@@ -26,12 +24,17 @@ import {
   writeProviderStatusCache,
 } from "../providerStatusCache";
 
+type ProviderSnapshotSource = {
+  readonly provider: ProviderKind;
+  readonly getSnapshot: Effect.Effect<ServerProvider>;
+  readonly refresh: Effect.Effect<ServerProvider>;
+  readonly streamChanges: Stream.Stream<ServerProvider>;
+};
+
 const loadProviders = (
-  codexProvider: CodexProviderShape,
-  claudeProvider: ClaudeProviderShape,
-  cursorProvider: CursorProviderShape,
-): Effect.Effect<readonly [ServerProvider, ServerProvider, ServerProvider]> =>
-  Effect.all([codexProvider.getSnapshot, claudeProvider.getSnapshot, cursorProvider.getSnapshot], {
+  providerSources: ReadonlyArray<ProviderSnapshotSource>,
+): Effect.Effect<ReadonlyArray<ServerProvider>> =>
+  Effect.forEach(providerSources, (providerSource) => providerSource.getSnapshot, {
     concurrency: "unbounded",
   });
 
@@ -81,22 +84,51 @@ export const haveProvidersChanged = (
   nextProviders: ReadonlyArray<ServerProvider>,
 ): boolean => !Equal.equals(previousProviders, nextProviders);
 
-export const ProviderRegistryLive = Layer.effect(
+const ProviderRegistryLiveBase = Layer.effect(
   ProviderRegistry,
   Effect.gen(function* () {
     const codexProvider = yield* CodexProvider;
     const claudeProvider = yield* ClaudeProvider;
-    const cursorProvider = yield* CursorProvider;
     const config = yield* ServerConfig;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    const cursorEnabled = isCursorEnabled();
+    const cursorProviderOption = yield* Effect.serviceOption(CursorProvider);
+    const cursorProvider =
+      cursorEnabled && cursorProviderOption._tag === "Some" ? cursorProviderOption.value : null;
+    const cursorProviderSource = cursorProvider
+      ? ({
+          provider: "cursor",
+          getSnapshot: cursorProvider.getSnapshot,
+          refresh: cursorProvider.refresh,
+          streamChanges: cursorProvider.streamChanges,
+        } satisfies ProviderSnapshotSource)
+      : null;
+    const providerSources = [
+      {
+        provider: "codex",
+        getSnapshot: codexProvider.getSnapshot,
+        refresh: codexProvider.refresh,
+        streamChanges: codexProvider.streamChanges,
+      },
+      {
+        provider: "claudeAgent",
+        getSnapshot: claudeProvider.getSnapshot,
+        refresh: claudeProvider.refresh,
+        streamChanges: claudeProvider.streamChanges,
+      },
+      ...(cursorProviderSource ? [cursorProviderSource] : []),
+    ] satisfies ReadonlyArray<ProviderSnapshotSource>;
+    const activeProviders = PROVIDER_CACHE_IDS.filter(
+      (provider) => provider !== "cursor" || cursorEnabled,
+    );
     const changesPubSub = yield* Effect.acquireRelease(
       PubSub.unbounded<ReadonlyArray<ServerProvider>>(),
       PubSub.shutdown,
     );
-    const fallbackProviders = yield* loadProviders(codexProvider, claudeProvider, cursorProvider);
+    const fallbackProviders = yield* loadProviders(providerSources);
     const cachePathByProvider = new Map(
-      PROVIDER_CACHE_IDS.map(
+      activeProviders.map(
         (provider) =>
           [
             provider,
@@ -110,8 +142,9 @@ export const ProviderRegistryLive = Layer.effect(
     const fallbackByProvider = new Map(
       fallbackProviders.map((provider) => [provider.provider, provider] as const),
     );
+
     const cachedProviders = yield* Effect.forEach(
-      PROVIDER_CACHE_IDS,
+      activeProviders,
       (provider) => {
         const filePath = cachePathByProvider.get(provider)!;
         const fallbackProvider = fallbackByProvider.get(provider)!;
@@ -196,50 +229,38 @@ export const ProviderRegistryLive = Layer.effect(
     });
 
     const refresh = Effect.fn("refresh")(function* (provider?: ProviderKind) {
-      switch (provider) {
-        case "codex":
-          return yield* codexProvider.refresh.pipe(
-            Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-          );
-        case "claudeAgent":
-          return yield* claudeProvider.refresh.pipe(
-            Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-          );
-        case "cursor":
-          return yield* cursorProvider.refresh.pipe(
-            Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-          );
-        default:
-          return yield* Effect.all(
-            [
-              codexProvider.refresh.pipe(
-                Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-              ),
-              claudeProvider.refresh.pipe(
-                Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-              ),
-              cursorProvider.refresh.pipe(
-                Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
-              ),
-            ],
-            {
-              concurrency: "unbounded",
-              discard: true,
-            },
-          ).pipe(Effect.andThen(Ref.get(providersRef)));
+      if (provider) {
+        const providerSource = providerSources.find((candidate) => candidate.provider === provider);
+        if (!providerSource) {
+          return yield* Ref.get(providersRef);
+        }
+        return yield* providerSource.refresh.pipe(
+          Effect.flatMap((nextProvider) => syncProvider(nextProvider)),
+        );
       }
+
+      return yield* Effect.forEach(
+        providerSources,
+        (providerSource) => providerSource.refresh.pipe(Effect.flatMap(syncProvider)),
+        {
+          concurrency: "unbounded",
+          discard: true,
+        },
+      ).pipe(Effect.andThen(Ref.get(providersRef)));
     });
 
-    yield* Stream.runForEach(codexProvider.streamChanges, (provider) =>
-      syncProvider(provider),
-    ).pipe(Effect.forkScoped);
-    yield* Stream.runForEach(claudeProvider.streamChanges, (provider) =>
-      syncProvider(provider),
-    ).pipe(Effect.forkScoped);
-    yield* Stream.runForEach(cursorProvider.streamChanges, (provider) =>
-      syncProvider(provider),
-    ).pipe(Effect.forkScoped);
-    yield* loadProviders(codexProvider, claudeProvider, cursorProvider).pipe(
+    yield* Effect.forEach(
+      providerSources,
+      (providerSource) =>
+        Stream.runForEach(providerSource.streamChanges, (provider) => syncProvider(provider)).pipe(
+          Effect.forkScoped,
+        ),
+      {
+        concurrency: "unbounded",
+        discard: true,
+      },
+    );
+    yield* loadProviders(providerSources).pipe(
       Effect.flatMap((providers) => upsertProviders(providers, { publish: false })),
     );
 
@@ -255,8 +276,13 @@ export const ProviderRegistryLive = Layer.effect(
       },
     } satisfies ProviderRegistryShape;
   }),
-).pipe(
-  Layer.provideMerge(CodexProviderLive),
-  Layer.provideMerge(ClaudeProviderLive),
-  Layer.provideMerge(CursorProviderLive),
+);
+
+export const ProviderRegistryLive = Layer.unwrap(
+  Effect.sync(() =>
+    (isCursorEnabled()
+      ? ProviderRegistryLiveBase.pipe(Layer.provideMerge(CursorProviderLive))
+      : ProviderRegistryLiveBase
+    ).pipe(Layer.provideMerge(CodexProviderLive), Layer.provideMerge(ClaudeProviderLive)),
+  ),
 );

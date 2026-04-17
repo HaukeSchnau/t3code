@@ -39,6 +39,8 @@ import { ServerConfig } from "../../config";
 import { ServerSettingsService, type ServerSettingsShape } from "../../serverSettings";
 import { ProviderRegistry } from "../Services/ProviderRegistry";
 
+process.env.T3CODE_CURSOR_ENABLED = "1";
+
 // ── Test helpers ────────────────────────────────────────────────────
 
 const encoder = new TextEncoder();
@@ -803,6 +805,70 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsService.layerTest()))(
               updated.find((status) => status.provider === "codex")?.status,
               "error",
             );
+          }).pipe(Effect.provide(runtimeServices));
+        }),
+      );
+
+      it.effect("omits cursor entirely when the runtime flag is disabled", () =>
+        Effect.gen(function* () {
+          const previous = process.env.T3CODE_CURSOR_ENABLED;
+          yield* Effect.addFinalizer(() =>
+            Effect.sync(() => {
+              if (previous === undefined) {
+                delete process.env.T3CODE_CURSOR_ENABLED;
+              } else {
+                process.env.T3CODE_CURSOR_ENABLED = previous;
+              }
+            }),
+          );
+          delete process.env.T3CODE_CURSOR_ENABLED;
+
+          let cursorSpawned = false;
+          const serverSettings = yield* makeMutableServerSettingsService();
+          const scope = yield* Scope.make();
+          yield* Effect.addFinalizer(() => Scope.close(scope, Exit.void));
+          const providerRegistryLayer = ProviderRegistryLive.pipe(
+            Layer.provideMerge(Layer.succeed(ServerSettingsService, serverSettings)),
+            Layer.provideMerge(
+              ServerConfig.layerTest(process.cwd(), {
+                prefix: "t3-provider-registry-",
+              }),
+            ),
+            Layer.provideMerge(
+              mockCommandSpawnerLayer((command, args) => {
+                if (command === "agent") {
+                  cursorSpawned = true;
+                }
+                const joined = args.join(" ");
+                if (joined === "--version") {
+                  return { stdout: `${command} 1.0.0\n`, stderr: "", code: 0 };
+                }
+                if (joined === "login status") {
+                  return { stdout: "Logged in\n", stderr: "", code: 0 };
+                }
+                if (joined === "auth status") {
+                  return { stdout: '{"authenticated":true}\n', stderr: "", code: 0 };
+                }
+                throw new Error(`Unexpected args: ${command} ${joined}`);
+              }),
+            ),
+          );
+          const runtimeServices = yield* Layer.build(
+            Layer.mergeAll(
+              Layer.succeed(ServerSettingsService, serverSettings),
+              providerRegistryLayer,
+            ),
+          ).pipe(Scope.provide(scope));
+
+          yield* Effect.gen(function* () {
+            const registry = yield* ProviderRegistry;
+            const providers = yield* registry.getProviders;
+
+            assert.deepStrictEqual(
+              providers.map((provider) => provider.provider),
+              ["codex", "claudeAgent"],
+            );
+            assert.strictEqual(cursorSpawned, false);
           }).pipe(Effect.provide(runtimeServices));
         }),
       );

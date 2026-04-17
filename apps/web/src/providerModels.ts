@@ -39,7 +39,10 @@ export function isProviderEnabled(
   providers: ReadonlyArray<ServerProvider>,
   provider: ProviderKind,
 ): boolean {
-  return getProviderSnapshot(providers, provider)?.enabled ?? true;
+  if (providers.length === 0) {
+    return true;
+  }
+  return getProviderSnapshot(providers, provider)?.enabled ?? false;
 }
 
 export function resolveSelectableProvider(
