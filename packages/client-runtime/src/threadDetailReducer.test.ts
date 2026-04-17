@@ -11,7 +11,7 @@ import {
 } from "@t3tools/contracts";
 import type { OrchestrationEvent, OrchestrationThread } from "@t3tools/contracts";
 
-import { applyThreadDetailEvent } from "./threadDetailReducer";
+import { applyThreadDetailEvent } from "./threadDetailReducer.ts";
 
 const baseEventFields = {
   eventId: EventId.make("event-1"),

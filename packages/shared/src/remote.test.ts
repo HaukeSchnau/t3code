@@ -7,7 +7,7 @@ import {
   issueRemoteWebSocketToken,
   resolveRemotePairingTarget,
   resolveRemoteWebSocketConnectionUrl,
-} from "./remote";
+} from "./remote.ts";
 
 const originalFetch = globalThis.fetch;
 

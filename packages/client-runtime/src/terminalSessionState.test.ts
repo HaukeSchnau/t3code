@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { TerminalSessionSnapshot } from "@t3tools/contracts";
 
-import { createTerminalSessionManager } from "./terminalSessionState";
+import { createTerminalSessionManager } from "./terminalSessionState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

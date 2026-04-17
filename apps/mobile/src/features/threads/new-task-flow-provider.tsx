@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
 import type {
-  ClaudeCodeEffort,
+  ClaudeAgentEffort,
   EnvironmentId,
   GitBranch,
   ModelSelection,
@@ -76,7 +76,7 @@ type NewTaskFlowContextValue = {
   readonly availableBranches: ReadonlyArray<GitBranch>;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly effort: ClaudeCodeEffort;
+  readonly effort: ClaudeAgentEffort;
   readonly fastMode: boolean;
   readonly contextWindow: string;
   readonly expandedProvider: string | null;
@@ -106,7 +106,7 @@ type NewTaskFlowContextValue = {
   readonly loadBranches: () => Promise<void>;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
-  readonly setEffort: (value: ClaudeCodeEffort) => void;
+  readonly setEffort: (value: ClaudeAgentEffort) => void;
   readonly setFastMode: (value: boolean) => void;
   readonly setContextWindow: (value: string) => void;
   readonly setExpandedProvider: (value: string | null) => void;
@@ -161,7 +161,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const [interactionMode, setInteractionMode] = useState<ProviderInteractionMode>(
     DEFAULT_PROVIDER_INTERACTION_MODE,
   );
-  const [effort, setEffort] = useState<ClaudeCodeEffort>("high");
+  const [effort, setEffort] = useState<ClaudeAgentEffort>("high");
   const [fastMode, setFastMode] = useState(false);
   const [contextWindow, setContextWindow] = useState("1M");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);

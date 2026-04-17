@@ -9,7 +9,6 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 
 import { EnvironmentId, type ModelSelection } from "@t3tools/contracts";
-import { CLAUDE_CODE_EFFORT_OPTIONS } from "@t3tools/contracts";
 
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
@@ -20,6 +19,7 @@ import { convertPastedImagesToAttachments, pickComposerImages } from "../../lib/
 import { buildThreadRoutePath } from "../../lib/routes";
 import { useRemoteCatalog } from "../../state/use-remote-catalog";
 import { useNativePaste } from "../../hooks/useNativePaste";
+import { CLAUDE_AGENT_EFFORT_OPTIONS } from "./claudeEffortOptions";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { useProjectActions } from "./use-project-actions";
 
@@ -131,7 +131,7 @@ export function NewTaskDraftScreen(props: {
         id: "options-effort",
         title: "Effort",
         subtitle: `${flow.effort.charAt(0).toUpperCase()}${flow.effort.slice(1)}`,
-        subactions: CLAUDE_CODE_EFFORT_OPTIONS.map((level) => ({
+        subactions: CLAUDE_AGENT_EFFORT_OPTIONS.map((level) => ({
           id: `options:effort:${level}`,
           title: `${level}${level === "high" ? " (default)" : ""}`,
           state: flow.effort === level ? ("on" as const) : undefined,

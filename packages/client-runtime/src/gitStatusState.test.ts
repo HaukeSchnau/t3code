@@ -2,7 +2,7 @@ import type { GitStatusResult } from "@t3tools/contracts";
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { type GitStatusClient, createGitStatusManager } from "./gitStatusState";
+import { type GitStatusClient, createGitStatusManager } from "./gitStatusState.ts";
 
 /* ─── Test helpers ──────────────────────────────────────────────────── */
 

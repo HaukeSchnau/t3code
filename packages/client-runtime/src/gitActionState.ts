@@ -15,8 +15,8 @@ import type {
 } from "@t3tools/contracts";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
-import { buildGitActionProgressStages } from "./gitActions";
-import type { WsRpcClient } from "./wsRpcClient";
+import { buildGitActionProgressStages } from "./gitActions.ts";
+import type { WsRpcClient } from "./wsRpcClient.ts";
 
 export type GitActionOperation =
   | "refresh_status"

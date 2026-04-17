@@ -14,7 +14,7 @@ import {
   type GitActionClient,
   createGitActionManager,
   EMPTY_GIT_ACTION_STATE,
-} from "./gitActionState";
+} from "./gitActionState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

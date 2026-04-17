@@ -7,8 +7,8 @@ import type {
   TerminalEvent,
 } from "@t3tools/contracts";
 
-import type { KnownEnvironment } from "./knownEnvironment";
-import type { WsRpcClient } from "./wsRpcClient";
+import type { KnownEnvironment } from "./knownEnvironment.ts";
+import type { WsRpcClient } from "./wsRpcClient.ts";
 
 export interface EnvironmentConnection {
   readonly kind: "primary" | "saved";

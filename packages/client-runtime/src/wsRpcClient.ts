@@ -12,8 +12,8 @@ import {
 import { applyGitStatusStreamEvent } from "@t3tools/shared/git";
 import { Effect, Stream } from "effect";
 
-import { type WsRpcProtocolClient } from "./wsRpcProtocol";
-import { WsTransport } from "./wsTransport";
+import { type WsRpcProtocolClient } from "./wsRpcProtocol.ts";
+import { WsTransport } from "./wsTransport.ts";
 
 type RpcTag = keyof WsRpcProtocolClient & string;
 type RpcMethod<TTag extends RpcTag> = WsRpcProtocolClient[TTag];

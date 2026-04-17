@@ -1,7 +1,7 @@
 import type { GitManagerServiceError, GitStatusResult } from "@t3tools/contracts";
 import type { Cause } from "effect";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
-import type { WsRpcClient } from "./wsRpcClient";
+import type { WsRpcClient } from "./wsRpcClient.ts";
 
 /* ─── Types ─────────────────────────────────────────────────────────── */
 

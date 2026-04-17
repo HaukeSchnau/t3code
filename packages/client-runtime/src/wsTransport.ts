@@ -1,14 +1,14 @@
 import { Cause, Duration, Effect, Exit, ManagedRuntime, Scope, Stream } from "effect";
 import { RpcClient } from "effect/unstable/rpc";
 
-import { isTransportConnectionErrorMessage } from "./transportError";
+import { isTransportConnectionErrorMessage } from "./transportError.ts";
 import {
   createWsRpcProtocolLayer,
   makeWsRpcProtocolClient,
   type WsProtocolLifecycleHandlers,
   type WsRpcProtocolClient,
   type WsRpcProtocolSocketUrlProvider,
-} from "./wsRpcProtocol";
+} from "./wsRpcProtocol.ts";
 
 interface SubscribeOptions {
   readonly retryDelay?: Duration.Input;

@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
-import { applyShellStreamEvent } from "./shellSnapshotReducer";
+import { applyShellStreamEvent } from "./shellSnapshotReducer.ts";
 
 const baseSnapshot: OrchestrationShellSnapshot = {
   snapshotSequence: 0,

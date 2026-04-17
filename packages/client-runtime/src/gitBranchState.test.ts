@@ -7,7 +7,7 @@ import {
   EMPTY_GIT_BRANCH_STATE,
   gitBranchStateAtom,
   type GitBranchClient,
-} from "./gitBranchState";
+} from "./gitBranchState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

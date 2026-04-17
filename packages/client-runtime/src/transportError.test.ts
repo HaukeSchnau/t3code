@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isTransportConnectionErrorMessage, sanitizeThreadErrorMessage } from "./transportError";
+import { isTransportConnectionErrorMessage, sanitizeThreadErrorMessage } from "./transportError.ts";
 
 describe("isTransportConnectionErrorMessage", () => {
   it("returns true for SocketCloseError", () => {

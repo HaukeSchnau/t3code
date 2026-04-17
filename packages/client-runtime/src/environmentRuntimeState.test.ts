@@ -1,7 +1,7 @@
 import { AtomRegistry } from "effect/unstable/reactivity";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { createEnvironmentRuntimeManager } from "./environmentRuntimeState";
+import { createEnvironmentRuntimeManager } from "./environmentRuntimeState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

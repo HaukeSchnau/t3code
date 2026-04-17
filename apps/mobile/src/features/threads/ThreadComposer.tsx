@@ -7,7 +7,6 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
-import { CLAUDE_CODE_EFFORT_OPTIONS } from "@t3tools/contracts";
 import {
   detectComposerTrigger,
   replaceTextRange,
@@ -43,6 +42,7 @@ import {
   scoreQueryMatch,
 } from "@t3tools/shared/searchRanking";
 import { getEnvironmentClient } from "../../state/use-remote-environment-registry";
+import { CLAUDE_AGENT_EFFORT_OPTIONS } from "./claudeEffortOptions";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 
 /**
@@ -494,7 +494,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         id: "options-effort",
         title: "Effort",
         subtitle: `${currentEffort.charAt(0).toUpperCase()}${currentEffort.slice(1)}`,
-        subactions: CLAUDE_CODE_EFFORT_OPTIONS.map((level) => ({
+        subactions: CLAUDE_AGENT_EFFORT_OPTIONS.map((level) => ({
           id: `options:effort:${level}`,
           title: `${level}${level === "high" ? " (default)" : ""}`,
           state: currentEffort === level ? ("on" as const) : undefined,

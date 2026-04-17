@@ -13,8 +13,8 @@ import {
   DEFAULT_THREAD_DETAIL_LIMITS,
   applyThreadDetailEvent,
   type ThreadDetailRetentionLimits,
-} from "./threadDetailReducer";
-import type { WsRpcClient } from "./wsRpcClient";
+} from "./threadDetailReducer.ts";
+import type { WsRpcClient } from "./wsRpcClient.ts";
 
 export interface ThreadDetailState {
   readonly data: OrchestrationThread | null;

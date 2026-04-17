@@ -7,7 +7,7 @@ import {
   DEFAULT_RECONNECT_BACKOFF,
   getReconnectDelayMs,
   type ReconnectBackoffConfig,
-} from "./reconnectBackoff";
+} from "./reconnectBackoff.ts";
 
 export interface WsProtocolLifecycleHandlers {
   readonly onAttempt?: (socketUrl: string) => void;

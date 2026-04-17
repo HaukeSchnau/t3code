@@ -1,7 +1,7 @@
 import type { GitBranch, GitListBranchesInput, GitListBranchesResult } from "@t3tools/contracts";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
-import type { WsRpcClient } from "./wsRpcClient";
+import type { WsRpcClient } from "./wsRpcClient.ts";
 
 export interface GitBranchTarget {
   readonly environmentId: string | null;

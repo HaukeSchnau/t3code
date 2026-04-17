@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { ProjectId, ThreadId, type OrchestrationShellSnapshot } from "@t3tools/contracts";
 
-import { createShellSnapshotManager } from "./shellSnapshotState";
+import { createShellSnapshotManager } from "./shellSnapshotState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

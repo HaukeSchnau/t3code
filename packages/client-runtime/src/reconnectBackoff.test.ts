@@ -4,7 +4,7 @@ import {
   DEFAULT_RECONNECT_BACKOFF,
   getReconnectDelayMs,
   type ReconnectBackoffConfig,
-} from "./reconnectBackoff";
+} from "./reconnectBackoff.ts";
 
 describe("getReconnectDelayMs", () => {
   it("returns exponential delays with default config", () => {

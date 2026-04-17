@@ -11,7 +11,7 @@ import {
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 
-import { createThreadDetailManager, type ThreadDetailClient } from "./threadDetailState";
+import { createThreadDetailManager, type ThreadDetailClient } from "./threadDetailState.ts";
 
 let atomRegistry = AtomRegistry.make();
 

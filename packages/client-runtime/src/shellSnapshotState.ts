@@ -1,7 +1,7 @@
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";
 
-import { applyShellStreamEvent } from "./shellSnapshotReducer";
+import { applyShellStreamEvent } from "./shellSnapshotReducer.ts";
 
 export interface ShellSnapshotState {
   readonly data: OrchestrationShellSnapshot | null;
