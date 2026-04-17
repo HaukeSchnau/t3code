@@ -18,7 +18,6 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import { it, assert, vi } from "@effect/vitest";
-import { assertFailure } from "@effect/vitest/utils";
 
 import { Effect, Fiber, Layer, Metric, Option, PubSub, Ref, Stream } from "effect";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -574,20 +573,31 @@ routing.layer("ProviderServiceLive routing", (it) => {
       });
 
       yield* provider.stopSession({ threadId: session.threadId });
-      const sendAfterStop = yield* Effect.result(
-        provider.sendTurn({
-          threadId: session.threadId,
-          input: "after-stop",
-          attachments: [],
-        }),
-      );
-      assertFailure(
-        sendAfterStop,
-        new ProviderValidationError({
-          operation: "ProviderService.sendTurn",
-          issue: `Cannot route thread '${session.threadId}' because no persisted provider binding exists.`,
-        }),
-      );
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId: session.threadId,
+        input: "after-stop",
+        attachments: [],
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof resumedStartInput === "object" && resumedStartInput !== null, true);
+      if (resumedStartInput && typeof resumedStartInput === "object") {
+        const startPayload = resumedStartInput as {
+          provider?: string;
+          cwd?: string;
+          resumeCursor?: unknown;
+          threadId?: string;
+        };
+        assert.equal(startPayload.provider, "codex");
+        assert.equal(startPayload.cwd, "/tmp/project");
+        assert.deepEqual(startPayload.resumeCursor, session.resumeCursor);
+        assert.equal(startPayload.threadId, session.threadId);
+      }
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
     }),
   );
 
@@ -631,7 +641,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
-  it.effect("preserves the persisted binding when stopping a session for idle reaping", () =>
+  it.effect("preserves the persisted binding when stopping a session", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService;
       const runtimeRepository = yield* ProviderSessionRuntimeRepository;
@@ -643,10 +653,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
         runtimeMode: "full-access",
       });
 
-      yield* provider.stopSession({
-        threadId: initial.threadId,
-        preserveBinding: true,
-      });
+      yield* provider.stopSession({ threadId: initial.threadId });
 
       const persistedAfterStop = yield* runtimeRepository.getByThreadId({
         threadId: initial.threadId,
