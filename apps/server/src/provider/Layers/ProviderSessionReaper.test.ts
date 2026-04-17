@@ -214,7 +214,10 @@ describe("ProviderSessionReaper", () => {
 
     await waitFor(() => harness.stopSession.mock.calls.length === 1);
 
-    expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({ threadId });
+    expect(harness.stopSession.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      preserveBinding: true,
+    });
     expect(harness.stoppedThreadIds.has(threadId)).toBe(true);
   });
 

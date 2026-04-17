@@ -620,7 +620,18 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         if (routed.isActive) {
           yield* routed.adapter.stopSession(routed.threadId);
         }
-        yield* directory.remove(input.threadId);
+        if (input.preserveBinding === true) {
+          yield* directory.upsert({
+            threadId: input.threadId,
+            provider: routed.adapter.provider,
+            status: "stopped",
+            runtimePayload: {
+              activeTurnId: null,
+            },
+          });
+        } else {
+          yield* directory.remove(input.threadId);
+        }
         yield* analytics.record("provider.session.stopped", {
           provider: routed.adapter.provider,
         });
