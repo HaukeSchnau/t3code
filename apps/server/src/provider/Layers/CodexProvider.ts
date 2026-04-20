@@ -63,6 +63,8 @@ function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["accoun
       return "ChatGPT Plus Subscription";
     case "pro":
       return "ChatGPT Pro Subscription";
+    case "prolite":
+      return "ChatGPT Pro Lite Subscription";
     case "team":
       return "ChatGPT Team Subscription";
     case "self_serve_business_usage_based":
