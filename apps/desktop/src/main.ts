@@ -23,6 +23,7 @@ import type {
   ClientSettings,
   DesktopTheme,
   DesktopAppBranding,
+  DesktopOpenWorkspaceRequest,
   DesktopServerExposureMode,
   DesktopServerExposureState,
   DesktopUpdateChannel,
@@ -75,6 +76,7 @@ import {
 } from "./updateMachine.ts";
 import { isArm64HostRunningIntelBuild, resolveDesktopRuntimeInfo } from "./runtimeArch.ts";
 import { resolveDesktopAppBranding } from "./appBranding.ts";
+import { parseDesktopDeepLink } from "./deepLink.ts";
 
 syncShellEnvironment();
 
@@ -101,6 +103,9 @@ const SET_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:set-saved-environment-secr
 const REMOVE_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:remove-saved-environment-secret";
 const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-state";
 const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
+const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
+  "desktop:consume-pending-open-workspace-requests";
+const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";
 const BASE_DIR = process.env.T3CODE_HOME?.trim() || Path.join(OS.homedir(), ".t3");
 const STATE_DIR = Path.join(BASE_DIR, "userdata");
 const DESKTOP_SETTINGS_PATH = Path.join(STATE_DIR, "desktop-settings.json");
@@ -220,6 +225,8 @@ let aboutCommitHashCache: string | null | undefined;
 let desktopLogSink: RotatingFileSink | null = null;
 let backendLogSink: RotatingFileSink | null = null;
 let restoreStdIoCapture: (() => void) | null = null;
+let openWorkspaceBridgeReady = false;
+let pendingOpenWorkspaceRequests: DesktopOpenWorkspaceRequest[] = [];
 let backendObservabilitySettings = readPersistedBackendObservabilitySettings();
 let desktopSettings = readDesktopSettings(DESKTOP_SETTINGS_PATH, app.getVersion());
 let desktopServerExposureMode: DesktopServerExposureMode = desktopSettings.serverExposureMode;
@@ -858,6 +865,58 @@ function dispatchMenuAction(action: string): void {
   }
 
   send();
+}
+
+function consumePendingOpenWorkspaceRequests(): DesktopOpenWorkspaceRequest[] {
+  const pendingRequests = pendingOpenWorkspaceRequests;
+  pendingOpenWorkspaceRequests = [];
+  return pendingRequests;
+}
+
+function queueOpenWorkspaceRequest(request: DesktopOpenWorkspaceRequest): void {
+  pendingOpenWorkspaceRequests = [...pendingOpenWorkspaceRequests, request];
+}
+
+function ensureDesktopWindowForExternalOpen(): void {
+  if (!app.isReady()) {
+    return;
+  }
+
+  const existingWindow = mainWindow ?? BrowserWindow.getAllWindows()[0] ?? null;
+  const targetWindow = existingWindow ?? createWindow();
+  if (!existingWindow) {
+    mainWindow = targetWindow;
+  }
+
+  revealWindow(targetWindow);
+}
+
+function broadcastOpenWorkspaceRequest(request: DesktopOpenWorkspaceRequest): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed() || window.webContents.isLoadingMainFrame()) {
+      continue;
+    }
+
+    window.webContents.send(OPEN_WORKSPACE_REQUEST_CHANNEL, request);
+  }
+}
+
+function handleDesktopDeepLink(rawUrl: string): boolean {
+  const request = parseDesktopDeepLink(rawUrl);
+  if (!request) {
+    return false;
+  }
+
+  const queued = !openWorkspaceBridgeReady;
+  if (queued) {
+    queueOpenWorkspaceRequest(request);
+  }
+  writeDesktopLogHeader(
+    `desktop deeplink received queued=${queued ? "true" : "false"} cwd=${sanitizeLogValue(request.cwd)}`,
+  );
+  ensureDesktopWindowForExternalOpen();
+  broadcastOpenWorkspaceRequest(request);
+  return true;
 }
 
 function handleCheckForUpdatesMenuClick(): void {
@@ -1783,6 +1842,12 @@ function registerIpcHandlers(): void {
     }
   });
 
+  ipcMain.removeHandler(CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL);
+  ipcMain.handle(CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL, async () => {
+    openWorkspaceBridgeReady = true;
+    return consumePendingOpenWorkspaceRequests();
+  });
+
   ipcMain.removeHandler(UPDATE_GET_STATE_CHANNEL);
   ipcMain.handle(UPDATE_GET_STATE_CHANNEL, async () => updateState);
 
@@ -1918,6 +1983,7 @@ function syncAllWindowAppearance(): void {
 nativeTheme.on("updated", syncAllWindowAppearance);
 
 function createWindow(): BrowserWindow {
+  openWorkspaceBridgeReady = false;
   const window = new BrowserWindow({
     width: 1100,
     height: 780,
@@ -2031,6 +2097,13 @@ function createWindow(): BrowserWindow {
 app.setPath("userData", resolveUserDataPath());
 
 configureAppIdentity();
+
+app.on("open-url", (event, rawUrl) => {
+  event.preventDefault();
+  if (!handleDesktopDeepLink(rawUrl)) {
+    writeDesktopLogHeader(`desktop deeplink ignored url=${sanitizeLogValue(rawUrl)}`);
+  }
+});
 
 async function bootstrap(): Promise<void> {
   writeDesktopLogHeader("bootstrap start");

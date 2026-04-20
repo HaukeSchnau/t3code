@@ -24,6 +24,9 @@ const SET_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:set-saved-environment-secr
 const REMOVE_SAVED_ENVIRONMENT_SECRET_CHANNEL = "desktop:remove-saved-environment-secret";
 const GET_SERVER_EXPOSURE_STATE_CHANNEL = "desktop:get-server-exposure-state";
 const SET_SERVER_EXPOSURE_MODE_CHANNEL = "desktop:set-server-exposure-mode";
+const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
+  "desktop:consume-pending-open-workspace-requests";
+const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
@@ -58,6 +61,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setTheme: (theme) => ipcRenderer.invoke(SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) => ipcRenderer.invoke(CONTEXT_MENU_CHANNEL, items, position),
   openExternal: (url: string) => ipcRenderer.invoke(OPEN_EXTERNAL_CHANNEL, url),
+  consumePendingOpenWorkspaceRequests: () =>
+    ipcRenderer.invoke(CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL),
+  onOpenWorkspaceRequest: (listener) => {
+    const wrappedListener = (
+      _event: Electron.IpcRendererEvent,
+      request: { cwd?: unknown } | null | undefined,
+    ) => {
+      if (typeof request?.cwd !== "string") return;
+      listener({ cwd: request.cwd });
+    };
+
+    ipcRenderer.on(OPEN_WORKSPACE_REQUEST_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(OPEN_WORKSPACE_REQUEST_CHANNEL, wrappedListener);
+    };
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

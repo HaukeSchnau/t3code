@@ -146,6 +146,10 @@ export interface PickFolderOptions {
   initialPath?: string | null;
 }
 
+export interface DesktopOpenWorkspaceRequest {
+  cwd: string;
+}
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -168,6 +172,8 @@ export interface DesktopBridge {
     position?: { x: number; y: number },
   ) => Promise<T | null>;
   openExternal: (url: string) => Promise<boolean>;
+  consumePendingOpenWorkspaceRequests: () => Promise<readonly DesktopOpenWorkspaceRequest[]>;
+  onOpenWorkspaceRequest: (listener: (request: DesktopOpenWorkspaceRequest) => void) => () => void;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;

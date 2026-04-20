@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
+import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
 import ThreadSidebar from "./Sidebar";
 import { Sidebar, SidebarProvider, SidebarRail } from "./ui/sidebar";
 import {
@@ -55,6 +56,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
 
   return (
     <SidebarProvider defaultOpen>
+      <DesktopOpenWorkspaceEffect />
       <Sidebar
         side="left"
         collapsible="offcanvas"
