@@ -49,12 +49,14 @@ import {
   appendBrowsePathSegment,
   canNavigateUp,
   ensureBrowseDirectoryPath,
+  findProjectByPath,
   getBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
+  isUnsupportedWindowsProjectPath,
   resolveProjectPathForDispatch,
 } from "../lib/projectPaths";
 import { isTerminalFocused } from "../lib/terminalFocus";
@@ -100,7 +102,7 @@ import {
 } from "./ui/command";
 import { Button } from "./ui/button";
 import { Kbd, KbdGroup } from "./ui/kbd";
-import { toastManager } from "./ui/toast";
+import { stackedThreadToast, toastManager } from "./ui/toast";
 import { ComposerHandleContext, useComposerHandleContext } from "../composerHandleContext";
 import type { ChatComposerHandle } from "./chat/ChatComposer";
 
@@ -603,11 +605,13 @@ function OpenCommandPaletteDialog() {
 
     const environmentId = defaultAddProjectEnvironmentId;
     if (!environmentId) {
-      toastManager.add({
-        type: "error",
-        title: "Unable to browse projects",
-        description: "No environment is available.",
-      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to browse projects",
+          description: "No environment is available.",
+        }),
+      );
       return;
     }
 
@@ -721,6 +725,57 @@ function OpenCommandPaletteDialog() {
       const api = readEnvironmentApi(browseEnvironmentId);
       if (!api) return;
 
+      if (isUnsupportedWindowsProjectPath(rawCwd.trim(), browseEnvironmentPlatform)) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to add project",
+            description: "Windows-style paths are only supported on Windows.",
+          }),
+        );
+        return;
+      }
+
+      if (isExplicitRelativeProjectPath(rawCwd.trim()) && !currentProjectCwdForBrowse) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to add project",
+            description: "Relative paths require an active project.",
+          }),
+        );
+        return;
+      }
+
+      const cwd = resolveProjectPathForDispatch(rawCwd, currentProjectCwdForBrowse);
+      if (cwd.length === 0) return;
+
+      const existing = findProjectByPath(
+        projects.filter((project) => project.environmentId === browseEnvironmentId),
+        cwd,
+      );
+      if (existing) {
+        const latestThread = getLatestThreadForProject(
+          threads.filter((thread) => thread.environmentId === existing.environmentId),
+          existing.id,
+          settings.sidebarThreadSortOrder,
+        );
+        if (latestThread) {
+          await navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(
+              scopeThreadRef(latestThread.environmentId, latestThread.id),
+            ),
+          });
+        } else {
+          await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
+            envMode: settings.defaultThreadEnvMode,
+          }).catch(() => undefined);
+        }
+        setOpen(false);
+        return;
+      }
+
       try {
         await openWorkspaceInApp({
           environmentId: browseEnvironmentId,
@@ -758,11 +813,13 @@ function OpenCommandPaletteDialog() {
         });
         setOpen(false);
       } catch (error) {
-        toastManager.add({
-          type: "error",
-          title: "Failed to add project",
-          description: error instanceof Error ? error.message : "An error occurred.",
-        });
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Failed to add project",
+            description: error instanceof Error ? error.message : "An error occurred.",
+          }),
+        );
       }
     },
     [
@@ -902,11 +959,13 @@ function OpenCommandPaletteDialog() {
     }
 
     void item.run().catch((error: unknown) => {
-      toastManager.add({
-        type: "error",
-        title: "Unable to run command",
-        description: error instanceof Error ? error.message : "An unexpected error occurred.",
-      });
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Unable to run command",
+          description: error instanceof Error ? error.message : "An unexpected error occurred.",
+        }),
+      );
     });
   }
 

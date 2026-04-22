@@ -6,7 +6,7 @@ import { make as makeJsonSchemaGenerator } from "@effect/openapi-generator/JsonS
 import { Effect, FileSystem, Layer, Logger, Path, Schema } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-const UPSTREAM_REF = "3b948d9dd8d2e13a36e95a05efb6bb2288b801c4";
+const UPSTREAM_REF = "be75785504ff152fa6333e380a2d50642f42fba0";
 const USER_AGENT = "effect-codex-app-server-generator";
 const GITHUB_API_BASE =
   "https://api.github.com/repos/openai/codex/contents/codex-rs/app-server-protocol";
