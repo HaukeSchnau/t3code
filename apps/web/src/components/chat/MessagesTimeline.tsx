@@ -1,4 +1,5 @@
 import { type EnvironmentId, type MessageId, type TurnId } from "@t3tools/contracts";
+import { FileDiff } from "@pierre/diffs/react";
 import {
   createContext,
   memo,
@@ -68,6 +69,8 @@ import {
   type ToolContextField,
   type ToolContextPresentation,
 } from "../../lib/codexToolContext";
+import { resolveDiffThemeName } from "../../lib/diffRendering";
+import { getRenderablePatch, resolveFileDiffPath } from "../../lib/renderablePatch";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via useContext.
@@ -536,7 +539,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot, onOpenTurnDiff } = use(TimelineRowCtx);
+  const { workspaceRoot, resolvedTheme, onOpenTurnDiff } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
   const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries =
@@ -572,6 +575,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
             key={`work-row:${workEntry.id}`}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
+            resolvedTheme={resolvedTheme}
             onOpenTurnDiff={onOpenTurnDiff}
           />
         ))}
@@ -976,19 +980,45 @@ function truncateToolBlock(
   };
 }
 
+function buildCodeFence(value: string, language: string): string {
+  const maxBacktickRun = Math.max(
+    ...Array.from(value.matchAll(/`+/g), (match) => match[0].length),
+    0,
+  );
+  const fence = "`".repeat(Math.max(3, maxBacktickRun + 1));
+  return `${fence}${language}\n${value}\n${fence}`;
+}
+
+function toolContextFieldLanguage(field: ToolContextField): string {
+  if (field.format === "json") {
+    return "json";
+  }
+  const normalizedLabel = field.label.toLowerCase();
+  if (normalizedLabel.includes("command")) {
+    return "bash";
+  }
+  if (normalizedLabel.includes("argument")) {
+    return "json";
+  }
+  return "text";
+}
+
 function ToolContextCodeBlock(props: {
   value: string;
   format: ToolContextField["format"];
   maxLength?: number;
+  language?: string;
+  workspaceRoot: string | undefined;
 }) {
   const truncated = props.maxLength ? truncateToolBlock(props.value, props.maxLength) : null;
   const displayedValue = truncated?.value ?? props.value;
+  const language = props.language ?? (props.format === "json" ? "json" : "text");
 
   return (
-    <div className="overflow-hidden rounded-md border border-border/50 bg-background/80">
-      <pre className="max-h-56 overflow-auto px-3 py-2 font-mono text-[11px] leading-5 whitespace-pre-wrap">
-        {displayedValue}
-      </pre>
+    <div className="overflow-hidden rounded-md border border-border/50 bg-muted/25">
+      <div className="[&_.chat-markdown]:text-[11px] [&_.chat-markdown_.chat-markdown-codeblock]:my-0 [&_.chat-markdown_.chat-markdown-shiki_.shiki]:rounded-none [&_.chat-markdown_pre]:max-h-56 [&_.chat-markdown_pre]:overflow-auto">
+        <ChatMarkdown text={buildCodeFence(displayedValue, language)} cwd={props.workspaceRoot} />
+      </div>
       {truncated?.truncated ? (
         <div className="border-t border-border/45 px-3 py-1.5 text-[10px] text-muted-foreground/65">
           Showing the first {props.maxLength?.toLocaleString()} characters.
@@ -1002,6 +1032,7 @@ function ToolContextFieldsSection(props: {
   title: string;
   fields: ReadonlyArray<ToolContextField>;
   maxValueLength?: number;
+  workspaceRoot: string | undefined;
 }) {
   if (props.fields.length === 0) {
     return null;
@@ -1012,14 +1043,16 @@ function ToolContextFieldsSection(props: {
       <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
         {props.title}
       </p>
-      <div className="space-y-2">
+      <div className="space-y-3">
         {props.fields.map((field) => (
-          <div key={`${props.title}:${field.label}`} className="space-y-1">
+          <div key={`${props.title}:${field.label}`} className="space-y-1.5">
             <p className="text-[11px] font-medium text-muted-foreground/80">{field.label}</p>
             {field.format === "code" || field.format === "json" ? (
               <ToolContextCodeBlock
                 value={field.value}
                 format={field.format}
+                language={toolContextFieldLanguage(field)}
+                workspaceRoot={props.workspaceRoot}
                 {...(props.maxValueLength !== undefined ? { maxLength: props.maxValueLength } : {})}
               />
             ) : (
@@ -1032,10 +1065,98 @@ function ToolContextFieldsSection(props: {
   );
 }
 
+function buildToolFileChangePatch(
+  fileChange: ToolContextPresentation["fileChanges"][number],
+): string | undefined {
+  const rawDiff = fileChange.diff?.trim();
+  if (!rawDiff) {
+    return undefined;
+  }
+  if (rawDiff.startsWith("diff --git")) {
+    return rawDiff;
+  }
+
+  const normalizedPath = fileChange.path.replaceAll("\\", "/");
+  const kind = fileChange.kind?.toLowerCase();
+  const previousFile = kind === "create" || kind === "add" ? "/dev/null" : `a/${normalizedPath}`;
+  const nextFile = kind === "delete" || kind === "remove" ? "/dev/null" : `b/${normalizedPath}`;
+
+  return [
+    `diff --git a/${normalizedPath} b/${normalizedPath}`,
+    `--- ${previousFile}`,
+    `+++ ${nextFile}`,
+    rawDiff,
+  ].join("\n");
+}
+
+function ToolContextDiffPreview(props: {
+  fileChange: ToolContextPresentation["fileChanges"][number];
+  resolvedTheme: "light" | "dark";
+  workspaceRoot: string | undefined;
+}) {
+  const synthesizedPatch = buildToolFileChangePatch(props.fileChange);
+  const renderablePatch = useMemo(
+    () =>
+      getRenderablePatch(
+        synthesizedPatch,
+        `tool-file-change:${props.resolvedTheme}:${props.fileChange.path}`,
+      ),
+    [props.fileChange.path, props.resolvedTheme, synthesizedPatch],
+  );
+
+  if (!renderablePatch) {
+    return null;
+  }
+
+  if (renderablePatch.kind === "raw") {
+    return (
+      <div className="space-y-1.5">
+        <p className="text-[10px] text-muted-foreground/65">{renderablePatch.reason}</p>
+        <ToolContextCodeBlock
+          value={renderablePatch.text}
+          format="code"
+          language="diff"
+          maxLength={8_000}
+          workspaceRoot={props.workspaceRoot}
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="diff-panel-viewport overflow-hidden rounded-md border border-border/50 bg-muted/20">
+      <div className="max-h-80 overflow-auto">
+        {renderablePatch.files.map((fileDiff) => (
+          <div
+            key={
+              fileDiff.cacheKey ??
+              `${fileDiff.prevName ?? "none"}:${fileDiff.name ?? props.fileChange.path}`
+            }
+            className="diff-render-file rounded-none border-0 border-b border-border/40 last:border-b-0"
+            data-diff-file-path={resolveFileDiffPath(fileDiff)}
+          >
+            <FileDiff
+              fileDiff={fileDiff}
+              options={{
+                diffStyle: "unified",
+                lineDiffType: "none",
+                overflow: "wrap",
+                theme: resolveDiffThemeName(props.resolvedTheme),
+                themeType: props.resolvedTheme,
+              }}
+            />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ToolContextFileChangesSection(props: {
   turnId: TimelineWorkEntry["turnId"];
   fileChanges: ReadonlyArray<ToolContextPresentation["fileChanges"][number]>;
   workspaceRoot: string | undefined;
+  resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
 }) {
   if (props.fileChanges.length === 0) {
@@ -1047,18 +1168,18 @@ function ToolContextFileChangesSection(props: {
       <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
         File changes
       </p>
-      <div className="space-y-2">
+      <div className="divide-y divide-border/40">
         {props.fileChanges.map((fileChange) => {
           const displayPath = formatWorkspaceRelativePath(fileChange.path, props.workspaceRoot);
           return (
             <div
               key={`${fileChange.path}:${fileChange.kind ?? "change"}`}
-              className="space-y-2 rounded-md border border-border/50 bg-background/70 p-2"
+              className="space-y-2 py-3 first:pt-0 last:pb-0"
             >
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-mono text-[11px] text-foreground/85">{displayPath}</span>
                 {fileChange.kind ? (
-                  <span className="rounded-full border border-border/55 bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
+                  <span className="rounded-full border border-border/55 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
                     {fileChange.kind}
                   </span>
                 ) : null}
@@ -1074,7 +1195,11 @@ function ToolContextFileChangesSection(props: {
                 ) : null}
               </div>
               {fileChange.diff ? (
-                <ToolContextCodeBlock value={fileChange.diff} format="code" maxLength={8_000} />
+                <ToolContextDiffPreview
+                  fileChange={fileChange}
+                  resolvedTheme={props.resolvedTheme}
+                  workspaceRoot={props.workspaceRoot}
+                />
               ) : null}
             </div>
           );
@@ -1088,6 +1213,7 @@ function ToolContextDetailsPanel(props: {
   toolContext: ToolContextPresentation;
   turnId: TimelineWorkEntry["turnId"];
   workspaceRoot: string | undefined;
+  resolvedTheme: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   defaultRawPayloadExpanded?: boolean;
 }) {
@@ -1100,17 +1226,23 @@ function ToolContextDetailsPanel(props: {
       : null;
 
   return (
-    <div className="mt-2 space-y-3 rounded-md border border-border/50 bg-card/35 p-3">
-      <ToolContextFieldsSection title="Parameters" fields={props.toolContext.parameters} />
+    <div className="mt-2 space-y-4 border-l border-border/45 pl-4">
+      <ToolContextFieldsSection
+        title="Parameters"
+        fields={props.toolContext.parameters}
+        workspaceRoot={props.workspaceRoot}
+      />
       <ToolContextFieldsSection
         title="Output"
         fields={props.toolContext.outputs}
         maxValueLength={12_000}
+        workspaceRoot={props.workspaceRoot}
       />
       <ToolContextFileChangesSection
         turnId={props.turnId}
         fileChanges={props.toolContext.fileChanges}
         workspaceRoot={props.workspaceRoot}
+        resolvedTheme={props.resolvedTheme}
         onOpenTurnDiff={props.onOpenTurnDiff}
       />
       {rawPayload ? (
@@ -1127,7 +1259,14 @@ function ToolContextDetailsPanel(props: {
             )}
             {rawPayloadExpanded ? "Hide raw payload" : "Show raw payload"}
           </button>
-          {rawPayloadExpanded ? <ToolContextCodeBlock value={rawPayload} format="json" /> : null}
+          {rawPayloadExpanded ? (
+            <ToolContextCodeBlock
+              value={rawPayload}
+              format="json"
+              language="json"
+              workspaceRoot={props.workspaceRoot}
+            />
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -1137,6 +1276,7 @@ function ToolContextDetailsPanel(props: {
 export const WorkEntryRow = memo(function WorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
+  resolvedTheme?: "light" | "dark";
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   defaultExpanded?: boolean;
   defaultRawPayloadExpanded?: boolean;
@@ -1144,6 +1284,7 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
   const {
     workEntry,
     workspaceRoot,
+    resolvedTheme = "light",
     onOpenTurnDiff,
     defaultExpanded = false,
     defaultRawPayloadExpanded = false,
@@ -1303,6 +1444,7 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
             toolContext={workEntry.toolContext}
             turnId={workEntry.turnId}
             workspaceRoot={workspaceRoot}
+            resolvedTheme={resolvedTheme}
             onOpenTurnDiff={onOpenTurnDiff}
             defaultRawPayloadExpanded={defaultRawPayloadExpanded}
           />

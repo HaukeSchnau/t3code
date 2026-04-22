@@ -283,7 +283,10 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("File changes");
     expect(markup).toContain("t3code/apps/web/src/session-logic.ts");
     expect(markup).toContain("Open full diff");
-    expect(markup).toContain("@@ -1,2 +1,3 @@");
+    expect(markup).toContain("diff-render-file");
+    expect(markup).toContain(
+      'data-diff-file-path="/Users/haukeschnau/OSS/t3code/apps/web/src/session-logic.ts"',
+    );
   });
 
   it("shows raw payload only after the secondary disclosure is opened", async () => {
