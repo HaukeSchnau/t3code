@@ -1522,6 +1522,45 @@ describe("deriveTimelineEntries", () => {
     });
   });
 
+  it("keeps work entries between assistant message segments when timestamps tie", () => {
+    const sameMoment = "2026-02-23T00:00:02.000Z";
+    const entries = deriveTimelineEntries(
+      [
+        {
+          id: MessageId.make("assistant-before-tool"),
+          role: "assistant",
+          text: "Need to inspect the workspace first.",
+          createdAt: "2026-02-23T00:00:01.000Z",
+          streaming: false,
+        },
+        {
+          id: MessageId.make("assistant-after-tool"),
+          role: "assistant",
+          text: "I found the issue.",
+          createdAt: sameMoment,
+          streaming: false,
+        },
+      ],
+      [],
+      [
+        {
+          id: "work-1",
+          createdAt: sameMoment,
+          label: "Ran command",
+          tone: "tool",
+        },
+      ],
+    );
+
+    expect(
+      entries.map((entry) =>
+        entry.kind === "message"
+          ? `${entry.kind}:${entry.message.id}`
+          : `${entry.kind}:${entry.id}`,
+      ),
+    ).toEqual(["message:assistant-before-tool", "work:work-1", "message:assistant-after-tool"]);
+  });
+
   it("anchors the completion divider to latestTurn.assistantMessageId before timestamp fallback", () => {
     const entries = deriveTimelineEntries(
       [

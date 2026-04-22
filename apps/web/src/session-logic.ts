@@ -1224,9 +1224,37 @@ export function deriveTimelineEntries(
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
-    a.createdAt.localeCompare(b.createdAt),
-  );
+  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted(compareTimelineEntriesByOrder);
+}
+
+function compareTimelineEntriesByOrder(left: TimelineEntry, right: TimelineEntry): number {
+  const createdAtComparison = left.createdAt.localeCompare(right.createdAt);
+  if (createdAtComparison !== 0) {
+    return createdAtComparison;
+  }
+
+  const kindRankComparison = timelineEntrySortRank(left) - timelineEntrySortRank(right);
+  if (kindRankComparison !== 0) {
+    return kindRankComparison;
+  }
+
+  return left.id.localeCompare(right.id);
+}
+
+function timelineEntrySortRank(entry: TimelineEntry): number {
+  if (entry.kind === "message") {
+    if (entry.message.role === "user") {
+      return 0;
+    }
+    if (entry.message.role === "assistant") {
+      return 3;
+    }
+    return 2;
+  }
+  if (entry.kind === "proposed-plan") {
+    return 1;
+  }
+  return 2;
 }
 
 export function deriveCompletionDividerBeforeEntryId(
