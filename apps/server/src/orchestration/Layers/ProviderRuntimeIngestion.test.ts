@@ -2700,6 +2700,74 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects account rate limits into normalized thread activities", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits-updated"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          limitId: "codex",
+          limitName: "Codex",
+          planType: "plus",
+          rateLimitReachedType: "rate_limit_reached",
+          credits: {
+            balance: "$12.34",
+            hasCredits: true,
+            unlimited: false,
+          },
+          primary: {
+            usedPercent: 72,
+            resetsAt: 1_746_052_800,
+            windowDurationMins: 300,
+          },
+          secondary: {
+            usedPercent: 18,
+            resetsAt: 1_746_052_800_000,
+            windowDurationMins: 10_080,
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+    );
+    expect(usageActivity?.summary).toBe("Usage limits updated");
+    expect(usageActivity?.payload).toEqual({
+      limitId: "codex",
+      limitName: "Codex",
+      planType: "plus",
+      rateLimitReachedType: "rate_limit_reached",
+      credits: {
+        balance: "$12.34",
+        hasCredits: true,
+        unlimited: false,
+      },
+      primary: {
+        usedPercent: 72,
+        resetsAt: "2025-04-30T22:40:00.000Z",
+        windowDurationMins: 300,
+      },
+      secondary: {
+        usedPercent: 18,
+        resetsAt: "2025-04-30T22:40:00.000Z",
+        windowDurationMins: 10080,
+      },
+    });
+  });
+
   it("projects compacted thread state into context compaction activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

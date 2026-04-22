@@ -1,0 +1,265 @@
+import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+
+import { formatRelativeTimeUntilLabel } from "../timestampFormat";
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeResetAt(value: unknown): string | null {
+  const text = asString(value);
+  if (text) {
+    return Number.isNaN(new Date(text).getTime()) ? null : text;
+  }
+
+  const numeric = asFiniteNumber(value);
+  if (numeric === null || numeric <= 0) {
+    return null;
+  }
+
+  const epochMs = numeric >= 1_000_000_000_000 ? numeric : numeric * 1000;
+  const parsed = new Date(epochMs);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+export interface UsageLimitWindowSnapshot {
+  usedPercent: number;
+  resetsAt: string | null;
+  windowDurationMins: number | null;
+}
+
+export interface UsageLimitsSnapshot {
+  limitId: string | null;
+  limitName: string | null;
+  planType: string | null;
+  rateLimitReachedType: string | null;
+  credits: {
+    balance: string | null;
+    hasCredits: boolean;
+    unlimited: boolean;
+  } | null;
+  primary: UsageLimitWindowSnapshot | null;
+  secondary: UsageLimitWindowSnapshot | null;
+  updatedAt: string;
+}
+
+export type UsageLimitWindowStatus = "ok" | "atRisk" | "reached" | "unknown";
+
+export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapshot {
+  durationLabel: string | null;
+  resetRelativeLabel: string | null;
+  resetAbsoluteLabel: string | null;
+  elapsedPercent: number | null;
+  projectedPercentAtReset: number | null;
+  status: UsageLimitWindowStatus;
+}
+
+export interface DerivedUsageLimitsSnapshot extends Omit<
+  UsageLimitsSnapshot,
+  "primary" | "secondary"
+> {
+  primary: DerivedUsageLimitWindowSnapshot | null;
+  secondary: DerivedUsageLimitWindowSnapshot | null;
+  compactWindow: "primary" | "secondary" | null;
+  compactWindowStatus: UsageLimitWindowStatus | null;
+}
+
+function normalizeWindow(value: unknown): UsageLimitWindowSnapshot | null {
+  const record = asRecord(value);
+  const usedPercent = asFiniteNumber(record?.usedPercent);
+  if (usedPercent === null) {
+    return null;
+  }
+
+  return {
+    usedPercent,
+    resetsAt: normalizeResetAt(record?.resetsAt),
+    windowDurationMins: asFiniteNumber(record?.windowDurationMins),
+  };
+}
+
+function formatWindowDurationLabel(windowDurationMins: number | null): string | null {
+  if (windowDurationMins === null || windowDurationMins <= 0) {
+    return null;
+  }
+  if (windowDurationMins % (60 * 24 * 7) === 0) {
+    return `${windowDurationMins / (60 * 24 * 7)}w`;
+  }
+  if (windowDurationMins % (60 * 24) === 0) {
+    return `${windowDurationMins / (60 * 24)}d`;
+  }
+  if (windowDurationMins % 60 === 0) {
+    return `${windowDurationMins / 60}h`;
+  }
+
+  const hours = Math.floor(windowDurationMins / 60);
+  const minutes = windowDurationMins % 60;
+  if (hours <= 0) {
+    return `${minutes}m`;
+  }
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+}
+
+function formatAbsoluteResetLabel(isoDate: string | null): string | null {
+  if (!isoDate) {
+    return null;
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(isoDate));
+}
+
+function deriveElapsedPercent(window: UsageLimitWindowSnapshot, nowMs: number): number | null {
+  if (!window.resetsAt || !window.windowDurationMins || window.windowDurationMins <= 0) {
+    return null;
+  }
+
+  const resetMs = new Date(window.resetsAt).getTime();
+  if (Number.isNaN(resetMs)) {
+    return null;
+  }
+
+  const durationMs = window.windowDurationMins * 60 * 1000;
+  const elapsedMs = durationMs - Math.max(0, resetMs - nowMs);
+  const elapsedPercent = (elapsedMs / durationMs) * 100;
+  return Math.max(0, Math.min(100, elapsedPercent));
+}
+
+function deriveProjectedPercentAtReset(
+  usedPercent: number,
+  elapsedPercent: number | null,
+): number | null {
+  if (elapsedPercent === null || elapsedPercent <= 0) {
+    return null;
+  }
+  return (usedPercent / elapsedPercent) * 100;
+}
+
+function deriveWindowStatus(input: {
+  usedPercent: number;
+  projectedPercentAtReset: number | null;
+  rateLimitReachedType: string | null;
+}): UsageLimitWindowStatus {
+  if (input.rateLimitReachedType !== null || input.usedPercent >= 100) {
+    return "reached";
+  }
+  if (input.projectedPercentAtReset === null) {
+    return "unknown";
+  }
+  return input.projectedPercentAtReset >= 100 ? "atRisk" : "ok";
+}
+
+function deriveWindowDisplay(
+  window: UsageLimitWindowSnapshot | null,
+  rateLimitReachedType: string | null,
+  nowMs: number,
+): DerivedUsageLimitWindowSnapshot | null {
+  if (!window) {
+    return null;
+  }
+
+  const elapsedPercent = deriveElapsedPercent(window, nowMs);
+  const projectedPercentAtReset = deriveProjectedPercentAtReset(window.usedPercent, elapsedPercent);
+
+  return {
+    ...window,
+    durationLabel: formatWindowDurationLabel(window.windowDurationMins),
+    resetRelativeLabel: window.resetsAt ? formatRelativeTimeUntilLabel(window.resetsAt) : null,
+    resetAbsoluteLabel: formatAbsoluteResetLabel(window.resetsAt),
+    elapsedPercent,
+    projectedPercentAtReset,
+    status: deriveWindowStatus({
+      usedPercent: window.usedPercent,
+      projectedPercentAtReset,
+      rateLimitReachedType,
+    }),
+  };
+}
+
+export function deriveLatestUsageLimitsSnapshot(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): UsageLimitsSnapshot | null {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity || activity.kind !== "account.rate-limits.updated") {
+      continue;
+    }
+
+    const payload = asRecord(activity.payload);
+    const primary = normalizeWindow(payload?.primary);
+    const secondary = normalizeWindow(payload?.secondary);
+    if (primary === null && secondary === null) {
+      continue;
+    }
+
+    const creditsRecord = asRecord(payload?.credits);
+    const hasCredits = asBoolean(creditsRecord?.hasCredits);
+    const unlimited = asBoolean(creditsRecord?.unlimited);
+
+    return {
+      limitId: asString(payload?.limitId),
+      limitName: asString(payload?.limitName),
+      planType: asString(payload?.planType),
+      rateLimitReachedType: asString(payload?.rateLimitReachedType),
+      credits:
+        hasCredits !== null && unlimited !== null
+          ? {
+              balance: asString(creditsRecord?.balance),
+              hasCredits,
+              unlimited,
+            }
+          : null,
+      primary,
+      secondary,
+      updatedAt: activity.createdAt,
+    };
+  }
+
+  return null;
+}
+
+export function deriveDisplayedUsageLimitsSnapshot(
+  snapshot: UsageLimitsSnapshot | null,
+  nowMs: number = Date.now(),
+): DerivedUsageLimitsSnapshot | null {
+  if (!snapshot) {
+    return null;
+  }
+
+  const primary = deriveWindowDisplay(snapshot.primary, snapshot.rateLimitReachedType, nowMs);
+  const secondary = deriveWindowDisplay(snapshot.secondary, snapshot.rateLimitReachedType, nowMs);
+  const compactWindow = primary ? "primary" : secondary ? "secondary" : null;
+  const compactWindowStatus =
+    compactWindow === "primary"
+      ? (primary?.status ?? null)
+      : compactWindow === "secondary"
+        ? (secondary?.status ?? null)
+        : null;
+
+  if (compactWindow === null) {
+    return null;
+  }
+
+  return {
+    ...snapshot,
+    primary,
+    secondary,
+    compactWindow,
+    compactWindowStatus,
+  };
+}

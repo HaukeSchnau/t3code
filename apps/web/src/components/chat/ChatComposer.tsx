@@ -78,6 +78,7 @@ import {
 } from "./composerProviderRegistry";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { UsageLimitsMeter } from "./UsageLimitsMeter";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
@@ -102,6 +103,7 @@ import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
+import { deriveLatestUsageLimitsSnapshot } from "../../lib/usageLimits";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 
@@ -268,7 +270,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  selectedProvider: ProviderKind;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -290,6 +294,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   return (
     <>
       {props.activeContextWindow ? <ContextWindowMeter usage={props.activeContextWindow} /> : null}
+      {props.selectedProvider === "codex" && props.activeUsageLimits ? (
+        <UsageLimitsMeter usageLimits={props.activeUsageLimits} />
+      ) : null}
       {props.isPreparingWorktree ? (
         <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
       ) : null}
@@ -636,6 +643,10 @@ export const ChatComposer = memo(
     // ------------------------------------------------------------------
     const activeContextWindow = useMemo(
       () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
+      [activeThreadActivities],
+    );
+    const activeUsageLimits = useMemo(
+      () => deriveLatestUsageLimitsSnapshot(activeThreadActivities ?? []),
       [activeThreadActivities],
     );
 
@@ -1952,7 +1963,9 @@ export const ChatComposer = memo(
                 >
                   <ComposerFooterPrimaryActions
                     compact={isComposerPrimaryActionsCompact}
+                    selectedProvider={selectedProvider}
                     activeContextWindow={activeContextWindow}
+                    activeUsageLimits={activeUsageLimits}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
                     showPlanFollowUpPrompt={

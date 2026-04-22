@@ -441,6 +441,34 @@ export const openCodexThread = (input: {
     );
 };
 
+function hasRateLimitSnapshotContent(
+  snapshot: EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] | undefined | null,
+): snapshot is EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] {
+  return snapshot !== null && snapshot !== undefined && Object.keys(snapshot).length > 0;
+}
+
+export function selectInitialCodexRateLimitSnapshot(
+  response: Pick<
+    EffectCodexSchema.V2GetAccountRateLimitsResponse,
+    "rateLimits" | "rateLimitsByLimitId"
+  >,
+): EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] | undefined {
+  const codexLimit = response.rateLimitsByLimitId?.codex;
+  if (hasRateLimitSnapshotContent(codexLimit)) {
+    return codexLimit;
+  }
+
+  const legacyRateLimits = response.rateLimits;
+  if (hasRateLimitSnapshotContent(legacyRateLimits)) {
+    return legacyRateLimits;
+  }
+
+  const entries = Object.values(response.rateLimitsByLimitId ?? {}).filter(
+    hasRateLimitSnapshotContent,
+  );
+  return entries.length === 1 ? entries[0] : undefined;
+}
+
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {
   switch (notification.method) {
     case "thread/started":
@@ -1160,6 +1188,24 @@ export const makeCodexSessionRuntime = (
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
+      yield* client.request("account/rateLimits/read", undefined).pipe(
+        Effect.flatMap((response) => {
+          const rateLimits = selectInitialCodexRateLimitSnapshot(response);
+          if (!rateLimits) {
+            return Effect.void;
+          }
+          return emitEvent({
+            kind: "notification",
+            threadId: options.threadId,
+            method: "account/rateLimits/updated",
+            payload: {
+              rateLimits,
+            } satisfies EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+          });
+        }),
+        Effect.catch(() => Effect.void),
+        Effect.forkIn(runtimeScope),
+      );
       return session;
     });
 

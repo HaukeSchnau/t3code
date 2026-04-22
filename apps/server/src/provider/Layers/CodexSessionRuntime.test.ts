@@ -14,6 +14,7 @@ import {
   buildTurnStartParams,
   isRecoverableThreadResumeError,
   openCodexThread,
+  selectInitialCodexRateLimitSnapshot,
 } from "./CodexSessionRuntime.ts";
 
 function makeThreadOpenResponse(
@@ -271,5 +272,85 @@ describe("openCodexThread", () => {
         Schema.is(CodexErrors.CodexAppServerRequestError)(error) &&
         error.errorMessage === "timed out waiting for server",
     );
+  });
+});
+
+describe("selectInitialCodexRateLimitSnapshot", () => {
+  it("prefers the codex bucket when present", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {
+        primary: { usedPercent: 10 },
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: { usedPercent: 42 },
+        },
+        other: {
+          limitId: "other",
+          primary: { usedPercent: 99 },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(snapshot, {
+      limitId: "codex",
+      primary: { usedPercent: 42 },
+    });
+  });
+
+  it("falls back to the backward-compatible rateLimits payload", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {
+        limitName: "Codex",
+        primary: { usedPercent: 55 },
+      },
+      rateLimitsByLimitId: {
+        other: {
+          limitId: "other",
+          primary: { usedPercent: 80 },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(snapshot, {
+      limitName: "Codex",
+      primary: { usedPercent: 55 },
+    });
+  });
+
+  it("uses the sole named bucket when the fallback payload is empty", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {},
+      rateLimitsByLimitId: {
+        weekly: {
+          limitId: "weekly",
+          secondary: { usedPercent: 65 },
+        },
+      },
+    });
+
+    assert.deepStrictEqual(snapshot, {
+      limitId: "weekly",
+      secondary: { usedPercent: 65 },
+    });
+  });
+
+  it("returns undefined when multiple non-codex buckets exist without a usable fallback", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {},
+      rateLimitsByLimitId: {
+        fiveHour: {
+          limitId: "fiveHour",
+          primary: { usedPercent: 65 },
+        },
+        weekly: {
+          limitId: "weekly",
+          secondary: { usedPercent: 35 },
+        },
+      },
+    });
+
+    assert.equal(snapshot, undefined);
   });
 });
