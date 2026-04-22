@@ -31,6 +31,13 @@ function formatProjectedUsage(value: number | null): string | null {
   return `${Math.round(value)}%`;
 }
 
+function formatResetCountdownLabel(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+  return value.replace(/\s+left$/i, "");
+}
+
 function formatWindowBadgeLabel(durationLabel: string | null, fallback: "5h" | "1w"): string {
   return durationLabel ?? fallback;
 }
@@ -66,43 +73,42 @@ function windowStatusTone(status: "ok" | "atRisk" | "reached" | "unknown"): stri
   }
 }
 
-function windowSurfaceTone(status: UsageLimitWindowStatus): string {
+function windowStatusAccent(status: UsageLimitWindowStatus): string {
   switch (status) {
     case "reached":
-      return "border-red-500/20 bg-red-500/6";
+      return "bg-red-500";
     case "atRisk":
-      return "border-amber-500/20 bg-amber-500/8";
+      return "bg-amber-500";
     default:
-      return "border-border/60 bg-muted/30";
+      return "bg-muted-foreground/45";
   }
 }
 
-function buildWindowAtAGlanceSummary(windowSnapshot: DerivedUsageLimitWindowSnapshot): string {
-  if (windowSnapshot.status === "reached") {
-    return "Limit reached";
-  }
-
+function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot): {
+  readonly resetLabel: string | null;
+  readonly paceLabel: string | null;
+} {
+  const resetLabel = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
   const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
+
+  if (windowSnapshot.status === "reached") {
+    return {
+      resetLabel,
+      paceLabel: "hit",
+    };
+  }
+
   if (windowSnapshot.status === "unknown") {
-    return windowSnapshot.resetRelativeLabel ?? "Pace unavailable";
+    return {
+      resetLabel,
+      paceLabel: projectedUsage ? `${projectedUsage} pace` : null,
+    };
   }
 
-  if (windowSnapshot.resetRelativeLabel && projectedUsage) {
-    return `${windowSnapshot.resetRelativeLabel} | ${projectedUsage} pace`;
-  }
-
-  if (projectedUsage) {
-    return `${projectedUsage} pace`;
-  }
-
-  return windowSnapshot.resetRelativeLabel ?? "Pace unavailable";
-}
-
-function buildCompactWindowSummary(
-  label: string,
-  windowSnapshot: DerivedUsageLimitWindowSnapshot,
-): string {
-  return `${label} ${formatPercent(windowSnapshot.usedPercent)} | ${buildWindowAtAGlanceSummary(windowSnapshot)}`;
+  return {
+    resetLabel,
+    paceLabel: projectedUsage ? `${projectedUsage} pace` : null,
+  };
 }
 
 export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; compact?: boolean }) {
@@ -140,12 +146,6 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
   const secondaryLabel = usage.secondary
     ? formatWindowBadgeLabel(usage.secondary.durationLabel, "1w")
     : null;
-  const compactSummary = compactWindow
-    ? buildCompactWindowSummary(
-        usage.compactWindow === "primary" ? (primaryLabel ?? "Usage") : (secondaryLabel ?? "Usage"),
-        compactWindow,
-      )
-    : null;
   const visibleWindows = [
     usage.primary
       ? {
@@ -168,7 +168,12 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
   const inlineAriaLabel =
     visibleWindows.length > 0
       ? `${usage.limitName ?? "Codex usage"}. ${visibleWindows
-          .map(({ label, snapshot }) => buildCompactWindowSummary(label, snapshot))
+          .map(({ label, snapshot }) => {
+            const stats = buildInlineWindowStats(snapshot);
+            return [label, formatPercent(snapshot.usedPercent), stats.resetLabel, stats.paceLabel]
+              .filter((part) => part && part.length > 0)
+              .join(" ");
+          })
           .join(". ")}`
       : `${usage.limitName ?? "Codex usage"} ${formatPercent(compactWindow.usedPercent)} used`;
 
@@ -182,9 +187,8 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
           <button
             type="button"
             className={cn(
-              "group inline-flex min-h-10 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left shadow-[0_1px_0_0_--theme(--color-black/4%)] transition-[border-color,background-color,opacity,transform] duration-150 ease-out hover:opacity-92 active:scale-[0.96]",
-              props.compact ? "max-w-44" : "max-w-72",
-              windowSurfaceTone(compactWindow.status),
+              "group inline-flex min-h-10 max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-[background-color,opacity,transform] duration-150 ease-out hover:bg-muted/35 hover:opacity-95 active:scale-[0.96]",
+              props.compact ? "max-w-48" : "max-w-[26rem]",
             )}
             aria-label={inlineAriaLabel}
           >
@@ -229,47 +233,69 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             </span>
 
             {props.compact ? (
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {usage.limitName ?? "Usage"}
+              <span className="min-w-0 flex items-center gap-1.5 overflow-hidden text-[11px] leading-none tabular-nums">
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Usage
                 </span>
-                <span className="block truncate text-[11px] leading-tight text-foreground tabular-nums">
-                  {compactSummary}
+                <span className="h-3.5 w-px shrink-0 bg-border/70" aria-hidden="true" />
+                <span className="min-w-0 truncate text-foreground">
+                  {visibleWindows
+                    .map(({ label, snapshot }) => {
+                      const stats = buildInlineWindowStats(snapshot);
+                      return [
+                        label.toUpperCase(),
+                        formatPercent(snapshot.usedPercent),
+                        stats.resetLabel,
+                        stats.paceLabel,
+                      ]
+                        .filter((part) => part && part.length > 0)
+                        .join(" ");
+                    })
+                    .join("  |  ")}
                 </span>
               </span>
             ) : (
-              <span className="min-w-0 flex-1">
-                <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  {usage.limitName ?? "Codex usage"}
+              <span className="min-w-0 flex items-center gap-2 overflow-hidden text-[11px] leading-none tabular-nums">
+                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  Usage
                 </span>
-                <span className="mt-1 flex min-w-0 items-stretch gap-1.5">
-                  {visibleWindows.map(({ key, label, snapshot }) => (
-                    <span
-                      key={key}
-                      className={cn(
-                        "min-w-0 flex-1 rounded-lg border px-2 py-1 shadow-[0_1px_0_0_--theme(--color-black/3%)]",
-                        windowSurfaceTone(snapshot.status),
-                      )}
-                    >
-                      <span className="flex items-center justify-between gap-2">
-                        <span className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                <span className="h-4 w-px shrink-0 bg-border/70" aria-hidden="true" />
+                {visibleWindows.map(({ key, label, snapshot }, index) => {
+                  const stats = buildInlineWindowStats(snapshot);
+                  return (
+                    <span key={key} className="contents">
+                      {index > 0 ? (
+                        <span className="h-4 w-px shrink-0 bg-border/70" aria-hidden="true" />
+                      ) : null}
+                      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                        <span
+                          className={cn(
+                            "h-1.5 w-1.5 shrink-0 rounded-[2px]",
+                            windowStatusAccent(snapshot.status),
+                          )}
+                          aria-hidden="true"
+                        />
+                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                           {label}
                         </span>
                         <span
                           className={cn(
-                            "shrink-0 text-[11px] font-semibold tabular-nums",
+                            "shrink-0 text-[12px] font-semibold",
                             windowStatusTone(snapshot.status),
                           )}
                         >
                           {formatPercent(snapshot.usedPercent)}
                         </span>
-                      </span>
-                      <span className="mt-0.5 block truncate text-[10px] leading-tight text-muted-foreground tabular-nums">
-                        {buildWindowAtAGlanceSummary(snapshot)}
+                        {stats.resetLabel ? (
+                          <span className="shrink-0 text-muted-foreground">{stats.resetLabel}</span>
+                        ) : null}
+                        {stats.paceLabel ? (
+                          <span className="shrink-0 text-muted-foreground">{stats.paceLabel}</span>
+                        ) : null}
                       </span>
                     </span>
-                  ))}
-                </span>
+                  );
+                })}
               </span>
             )}
           </button>
