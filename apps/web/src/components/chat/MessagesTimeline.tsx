@@ -1028,28 +1028,6 @@ function ToolContextCodeBlock(props: {
   );
 }
 
-function ToolContextFieldValue(props: {
-  field: ToolContextField;
-  maxValueLength: number | undefined;
-  workspaceRoot: string | undefined;
-}) {
-  const { field } = props;
-
-  if (field.format === "code" || field.format === "json") {
-    return (
-      <ToolContextCodeBlock
-        value={field.value}
-        format={field.format}
-        language={toolContextFieldLanguage(field)}
-        workspaceRoot={props.workspaceRoot}
-        {...(props.maxValueLength !== undefined ? { maxLength: props.maxValueLength } : {})}
-      />
-    );
-  }
-
-  return <p className="text-xs leading-5 text-foreground/85">{field.value}</p>;
-}
-
 function ToolContextFieldsSection(props: {
   title: string;
   fields: ReadonlyArray<ToolContextField>;
@@ -1067,16 +1045,19 @@ function ToolContextFieldsSection(props: {
       </p>
       <div className="space-y-3">
         {props.fields.map((field) => (
-          <div
-            key={`${props.title}:${field.label}`}
-            className="grid gap-1.5 md:grid-cols-[140px_minmax(0,1fr)] md:items-start"
-          >
-            <p className="pt-1 text-[11px] font-medium text-muted-foreground/75">{field.label}</p>
-            <ToolContextFieldValue
-              field={field}
-              maxValueLength={props.maxValueLength}
-              workspaceRoot={props.workspaceRoot}
-            />
+          <div key={`${props.title}:${field.label}`} className="space-y-1.5">
+            <p className="text-[11px] font-medium text-muted-foreground/80">{field.label}</p>
+            {field.format === "code" || field.format === "json" ? (
+              <ToolContextCodeBlock
+                value={field.value}
+                format={field.format}
+                language={toolContextFieldLanguage(field)}
+                workspaceRoot={props.workspaceRoot}
+                {...(props.maxValueLength !== undefined ? { maxLength: props.maxValueLength } : {})}
+              />
+            ) : (
+              <p className="text-xs leading-5 text-foreground/85">{field.value}</p>
+            )}
           </div>
         ))}
       </div>
@@ -1169,54 +1150,6 @@ function ToolContextDiffPreview(props: {
   );
 }
 
-function ToolContextSectionLabel(props: { children: ReactNode }) {
-  return (
-    <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
-      {props.children}
-    </p>
-  );
-}
-
-function ToolContextFileChangeRow(props: {
-  fileChange: ToolContextPresentation["fileChanges"][number];
-  turnId: TimelineWorkEntry["turnId"];
-  workspaceRoot: string | undefined;
-  resolvedTheme: "light" | "dark";
-  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
-}) {
-  const displayPath = formatWorkspaceRelativePath(props.fileChange.path, props.workspaceRoot);
-
-  return (
-    <div className="grid gap-2.5 md:grid-cols-[140px_minmax(0,1fr)] md:items-start">
-      <div className="flex flex-wrap items-center gap-2 pt-1">
-        <span className="font-mono text-[11px] text-foreground/85">{displayPath}</span>
-        {props.fileChange.kind ? (
-          <span className="rounded-full border border-border/55 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
-            {props.fileChange.kind}
-          </span>
-        ) : null}
-        {props.turnId ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            className="h-6 px-2 text-[10px]"
-            onClick={() => props.onOpenTurnDiff(props.turnId!, props.fileChange.path)}
-          >
-            Open full diff
-          </Button>
-        ) : null}
-      </div>
-      {props.fileChange.diff ? (
-        <ToolContextDiffPreview
-          fileChange={props.fileChange}
-          resolvedTheme={props.resolvedTheme}
-          workspaceRoot={props.workspaceRoot}
-        />
-      ) : null}
-    </div>
-  );
-}
-
 function ToolContextFileChangesSection(props: {
   turnId: TimelineWorkEntry["turnId"];
   fileChanges: ReadonlyArray<ToolContextPresentation["fileChanges"][number]>;
@@ -1229,19 +1162,46 @@ function ToolContextFileChangesSection(props: {
   }
 
   return (
-    <div className="space-y-2.5">
-      <ToolContextSectionLabel>File changes</ToolContextSectionLabel>
-      <div className="space-y-4">
-        {props.fileChanges.map((fileChange) => (
-          <ToolContextFileChangeRow
-            key={`${fileChange.path}:${fileChange.kind ?? "change"}`}
-            fileChange={fileChange}
-            turnId={props.turnId}
-            workspaceRoot={props.workspaceRoot}
-            resolvedTheme={props.resolvedTheme}
-            onOpenTurnDiff={props.onOpenTurnDiff}
-          />
-        ))}
+    <div className="space-y-2">
+      <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
+        File changes
+      </p>
+      <div className="divide-y divide-border/40">
+        {props.fileChanges.map((fileChange) => {
+          const displayPath = formatWorkspaceRelativePath(fileChange.path, props.workspaceRoot);
+          return (
+            <div
+              key={`${fileChange.path}:${fileChange.kind ?? "change"}`}
+              className="space-y-2 py-3 first:pt-0 last:pb-0"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[11px] text-foreground/85">{displayPath}</span>
+                {fileChange.kind ? (
+                  <span className="rounded-full border border-border/55 bg-background/70 px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
+                    {fileChange.kind}
+                  </span>
+                ) : null}
+                {props.turnId ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => props.onOpenTurnDiff(props.turnId!, fileChange.path)}
+                  >
+                    Open full diff
+                  </Button>
+                ) : null}
+              </div>
+              {fileChange.diff ? (
+                <ToolContextDiffPreview
+                  fileChange={fileChange}
+                  resolvedTheme={props.resolvedTheme}
+                  workspaceRoot={props.workspaceRoot}
+                />
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
