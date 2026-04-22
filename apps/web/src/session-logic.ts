@@ -21,6 +21,10 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
+import {
+  deriveCodexToolContextPresentation,
+  type ToolContextPresentation,
+} from "./lib/codexToolContext";
 
 export type ProviderPickerKind = ProviderKind;
 
@@ -49,6 +53,9 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  turnId?: TurnId;
+  toolStatus?: "running" | "completed" | "failed";
+  toolContext?: ToolContextPresentation;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -505,9 +512,13 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
     activity.payload && typeof activity.payload === "object"
       ? (activity.payload as Record<string, unknown>)
       : null;
+  const codexToolContext = deriveCodexToolContextPresentation({
+    payload,
+    activityKind: activity.kind,
+  });
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
-  const title = extractToolTitle(payload);
+  const title = codexToolContext?.heading ?? extractToolTitle(payload);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
   const taskSummary =
     isTaskActivity && typeof payload?.summary === "string" && payload.summary.length > 0
@@ -528,12 +539,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
       payload.detail.length > 0
       ? stripTrailingExitCode(payload.detail).output
       : null
-    : extractToolDetail(payload, title ?? activity.summary);
+    : (codexToolContext?.preview ?? extractToolDetail(payload, title ?? activity.summary));
   const toolCallId = isTaskActivity ? null : extractToolCallId(payload);
   const entry: DerivedWorkLogEntry = {
     id: activity.id,
     createdAt: activity.createdAt,
-    label: taskLabel || activity.summary,
+    label: taskLabel || codexToolContext?.heading || activity.summary,
     tone:
       activity.kind === "task.progress"
         ? "thinking"
@@ -564,6 +575,16 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (requestKind) {
     entry.requestKind = requestKind;
+  }
+  if (activity.turnId) {
+    entry.turnId = activity.turnId;
+  }
+  if (codexToolContext) {
+    entry.toolContext = codexToolContext;
+  }
+  const toolStatus = codexToolContext?.status ?? extractToolStatus(payload, activity.kind);
+  if (toolStatus) {
+    entry.toolStatus = toolStatus;
   }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
@@ -628,6 +649,9 @@ function mergeDerivedWorkLogEntries(
   const requestKind = next.requestKind ?? previous.requestKind;
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const turnId = next.turnId ?? previous.turnId;
+  const toolStatus = next.toolStatus ?? previous.toolStatus;
+  const toolContext = next.toolContext ?? previous.toolContext;
   return {
     ...previous,
     ...next,
@@ -640,6 +664,9 @@ function mergeDerivedWorkLogEntries(
     ...(requestKind ? { requestKind } : {}),
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolCallId ? { toolCallId } : {}),
+    ...(turnId ? { turnId } : {}),
+    ...(toolStatus ? { toolStatus } : {}),
+    ...(toolContext ? { toolContext } : {}),
   };
 }
 
@@ -887,7 +914,8 @@ function extractToolTitle(payload: Record<string, unknown> | null): string | nul
 
 function extractToolCallId(payload: Record<string, unknown> | null): string | null {
   const data = asRecord(payload?.data);
-  return asTrimmedString(data?.toolCallId);
+  const item = asRecord(data?.item);
+  return asTrimmedString(data?.toolCallId) ?? asTrimmedString(item?.id);
 }
 
 function normalizeInlinePreview(value: string): string {
@@ -1031,6 +1059,33 @@ function extractWorkLogRequestKind(
     return payload.requestKind;
   }
   return requestKindFromRequestType(payload?.requestType) ?? undefined;
+}
+
+function extractToolStatus(
+  payload: Record<string, unknown> | null,
+  activityKind: string,
+): WorkLogEntry["toolStatus"] | undefined {
+  const statusSource = asTrimmedString(payload?.status)?.toLowerCase();
+  if (statusSource?.includes("fail") || statusSource?.includes("error")) {
+    return "failed";
+  }
+  if (
+    statusSource?.includes("progress") ||
+    statusSource === "pending" ||
+    statusSource === "running"
+  ) {
+    return "running";
+  }
+  if (statusSource?.includes("complete") || statusSource?.includes("success")) {
+    return "completed";
+  }
+  if (activityKind === "tool.updated") {
+    return "running";
+  }
+  if (activityKind === "tool.completed") {
+    return "completed";
+  }
+  return undefined;
 }
 
 function pushChangedFile(target: string[], seen: Set<string>, value: unknown) {

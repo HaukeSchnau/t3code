@@ -17,6 +17,8 @@ import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CheckIcon,
   CircleAlertIcon,
   EyeIcon,
@@ -61,6 +63,11 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
+import {
+  hasToolContextDetails,
+  type ToolContextField,
+  type ToolContextPresentation,
+} from "../../lib/codexToolContext";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via useContext.
@@ -529,7 +536,7 @@ const WorkGroupSection = memo(function WorkGroupSection({
 }: {
   groupedEntries: Extract<MessagesTimelineRow, { kind: "work" }>["groupedEntries"];
 }) {
-  const { workspaceRoot } = use(TimelineRowCtx);
+  const { workspaceRoot, onOpenTurnDiff } = use(TimelineRowCtx);
   const [isExpanded, setIsExpanded] = useState(false);
   const hasOverflow = groupedEntries.length > MAX_VISIBLE_WORK_LOG_ENTRIES;
   const visibleEntries =
@@ -561,10 +568,11 @@ const WorkGroupSection = memo(function WorkGroupSection({
       )}
       <div className="space-y-0.5">
         {visibleEntries.map((workEntry) => (
-          <SimpleWorkEntryRow
+          <WorkEntryRow
             key={`work-row:${workEntry.id}`}
             workEntry={workEntry}
             workspaceRoot={workspaceRoot}
+            onOpenTurnDiff={onOpenTurnDiff}
           />
         ))}
       </div>
@@ -930,14 +938,220 @@ function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
   return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
 }
 
-const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
+function toolStatusChipLabel(
+  toolStatus: TimelineWorkEntry["toolStatus"],
+): "Running" | "Failed" | null {
+  if (toolStatus === "running") {
+    return "Running";
+  }
+  if (toolStatus === "failed") {
+    return "Failed";
+  }
+  return null;
+}
+
+function toolStatusChipClassName(toolStatus: TimelineWorkEntry["toolStatus"]): string {
+  if (toolStatus === "failed") {
+    return "border-rose-500/25 bg-rose-500/10 text-rose-200/90";
+  }
+  return "border-border/55 bg-background/75 text-muted-foreground/75";
+}
+
+function truncateToolBlock(
+  value: string,
+  maxLength: number,
+): {
+  value: string;
+  truncated: boolean;
+} {
+  if (value.length <= maxLength) {
+    return {
+      value,
+      truncated: false,
+    };
+  }
+  return {
+    value: `${value.slice(0, maxLength).trimEnd()}\n\n[truncated]`,
+    truncated: true,
+  };
+}
+
+function ToolContextCodeBlock(props: {
+  value: string;
+  format: ToolContextField["format"];
+  maxLength?: number;
+}) {
+  const truncated = props.maxLength ? truncateToolBlock(props.value, props.maxLength) : null;
+  const displayedValue = truncated?.value ?? props.value;
+
+  return (
+    <div className="overflow-hidden rounded-md border border-border/50 bg-background/80">
+      <pre className="max-h-56 overflow-auto px-3 py-2 font-mono text-[11px] leading-5 whitespace-pre-wrap">
+        {displayedValue}
+      </pre>
+      {truncated?.truncated ? (
+        <div className="border-t border-border/45 px-3 py-1.5 text-[10px] text-muted-foreground/65">
+          Showing the first {props.maxLength?.toLocaleString()} characters.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ToolContextFieldsSection(props: {
+  title: string;
+  fields: ReadonlyArray<ToolContextField>;
+  maxValueLength?: number;
+}) {
+  if (props.fields.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
+        {props.title}
+      </p>
+      <div className="space-y-2">
+        {props.fields.map((field) => (
+          <div key={`${props.title}:${field.label}`} className="space-y-1">
+            <p className="text-[11px] font-medium text-muted-foreground/80">{field.label}</p>
+            {field.format === "code" || field.format === "json" ? (
+              <ToolContextCodeBlock
+                value={field.value}
+                format={field.format}
+                {...(props.maxValueLength !== undefined ? { maxLength: props.maxValueLength } : {})}
+              />
+            ) : (
+              <p className="text-xs leading-5 text-foreground/85">{field.value}</p>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ToolContextFileChangesSection(props: {
+  turnId: TimelineWorkEntry["turnId"];
+  fileChanges: ReadonlyArray<ToolContextPresentation["fileChanges"][number]>;
+  workspaceRoot: string | undefined;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+}) {
+  if (props.fileChanges.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-2">
+      <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
+        File changes
+      </p>
+      <div className="space-y-2">
+        {props.fileChanges.map((fileChange) => {
+          const displayPath = formatWorkspaceRelativePath(fileChange.path, props.workspaceRoot);
+          return (
+            <div
+              key={`${fileChange.path}:${fileChange.kind ?? "change"}`}
+              className="space-y-2 rounded-md border border-border/50 bg-background/70 p-2"
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-[11px] text-foreground/85">{displayPath}</span>
+                {fileChange.kind ? (
+                  <span className="rounded-full border border-border/55 bg-background/80 px-1.5 py-0.5 text-[10px] text-muted-foreground/70">
+                    {fileChange.kind}
+                  </span>
+                ) : null}
+                {props.turnId ? (
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    className="h-6 px-2 text-[10px]"
+                    onClick={() => props.onOpenTurnDiff(props.turnId!, fileChange.path)}
+                  >
+                    Open full diff
+                  </Button>
+                ) : null}
+              </div>
+              {fileChange.diff ? (
+                <ToolContextCodeBlock value={fileChange.diff} format="code" maxLength={8_000} />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ToolContextDetailsPanel(props: {
+  toolContext: ToolContextPresentation;
+  turnId: TimelineWorkEntry["turnId"];
+  workspaceRoot: string | undefined;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  defaultRawPayloadExpanded?: boolean;
+}) {
+  const [rawPayloadExpanded, setRawPayloadExpanded] = useState(
+    props.defaultRawPayloadExpanded ?? false,
+  );
+  const rawPayload =
+    props.toolContext.rawPayload !== undefined
+      ? JSON.stringify(props.toolContext.rawPayload, null, 2)
+      : null;
+
+  return (
+    <div className="mt-2 space-y-3 rounded-md border border-border/50 bg-card/35 p-3">
+      <ToolContextFieldsSection title="Parameters" fields={props.toolContext.parameters} />
+      <ToolContextFieldsSection
+        title="Output"
+        fields={props.toolContext.outputs}
+        maxValueLength={12_000}
+      />
+      <ToolContextFileChangesSection
+        turnId={props.turnId}
+        fileChanges={props.toolContext.fileChanges}
+        workspaceRoot={props.workspaceRoot}
+        onOpenTurnDiff={props.onOpenTurnDiff}
+      />
+      {rawPayload ? (
+        <div className="space-y-2">
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/65 transition-colors hover:text-foreground/80"
+            onClick={() => setRawPayloadExpanded((value) => !value)}
+          >
+            {rawPayloadExpanded ? (
+              <ChevronDownIcon className="size-3" />
+            ) : (
+              <ChevronRightIcon className="size-3" />
+            )}
+            {rawPayloadExpanded ? "Hide raw payload" : "Show raw payload"}
+          </button>
+          {rawPayloadExpanded ? <ToolContextCodeBlock value={rawPayload} format="json" /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export const WorkEntryRow = memo(function WorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
+  onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  defaultExpanded?: boolean;
+  defaultRawPayloadExpanded?: boolean;
 }) {
-  const { workEntry, workspaceRoot } = props;
+  const {
+    workEntry,
+    workspaceRoot,
+    onOpenTurnDiff,
+    defaultExpanded = false,
+    defaultRawPayloadExpanded = false,
+  } = props;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
+  const statusChipLabel = toolStatusChipLabel(workEntry.toolStatus);
   const rawPreview = workEntryPreview(workEntry, workspaceRoot);
   const preview =
     rawPreview &&
@@ -949,10 +1163,12 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const expandable = hasToolContextDetails(workEntry.toolContext);
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   return (
     <div className="rounded-lg px-1 py-1">
-      <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
+      <div className="flex items-start gap-2 transition-[opacity,translate] duration-200">
         <span
           className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
         >
@@ -972,6 +1188,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                 <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                   {heading}
                 </span>
+                {statusChipLabel ? (
+                  <span
+                    className={cn(
+                      "ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 align-middle text-[9px] uppercase tracking-[0.12em]",
+                      toolStatusChipClassName(workEntry.toolStatus),
+                    )}
+                  >
+                    {statusChipLabel}
+                  </span>
+                ) : null}
                 {preview && (
                   <Tooltip>
                     <TooltipTrigger
@@ -1014,6 +1240,16 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                     {heading}
                   </span>
+                  {statusChipLabel ? (
+                    <span
+                      className={cn(
+                        "ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 align-middle text-[9px] uppercase tracking-[0.12em]",
+                        toolStatusChipClassName(workEntry.toolStatus),
+                      )}
+                    >
+                      {statusChipLabel}
+                    </span>
+                  ) : null}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
@@ -1025,6 +1261,20 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             </Tooltip>
           )}
         </div>
+        {expandable ? (
+          <button
+            type="button"
+            className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 transition-colors hover:bg-background/80 hover:text-foreground/80"
+            aria-label={expanded ? "Hide tool details" : "Show tool details"}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? (
+              <ChevronDownIcon className="size-3.5" />
+            ) : (
+              <ChevronRightIcon className="size-3.5" />
+            )}
+          </button>
+        ) : null}
       </div>
       {hasChangedFiles && !previewIsChangedFiles && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
@@ -1047,6 +1297,17 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           )}
         </div>
       )}
+      {expanded && workEntry.toolContext ? (
+        <div className="pl-6">
+          <ToolContextDetailsPanel
+            toolContext={workEntry.toolContext}
+            turnId={workEntry.turnId}
+            workspaceRoot={workspaceRoot}
+            onOpenTurnDiff={onOpenTurnDiff}
+            defaultRawPayloadExpanded={defaultRawPayloadExpanded}
+          />
+        </div>
+      ) : null}
     </div>
   );
 });

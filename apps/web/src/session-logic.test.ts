@@ -920,6 +920,218 @@ describe("deriveWorkLogEntries", () => {
     ]);
   });
 
+  it("derives Codex command tool context with parameters and output", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command",
+        kind: "tool.completed",
+        summary: "Tool updated",
+        turnId: "turn-command-context",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          data: {
+            item: {
+              id: "item-command-context",
+              type: "commandExecution",
+              status: "completed",
+              command: "bun run lint",
+              cwd: "/Users/haukeschnau/OSS/t3code",
+              aggregatedOutput: "Checked 120 files\nAll good",
+              exitCode: 0,
+              durationMs: 1_532,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Ran command",
+      command: "bun run lint",
+      turnId: "turn-command-context",
+      toolStatus: "completed",
+    });
+    expect(entry?.toolContext).toMatchObject({
+      heading: "Ran command",
+      preview: "Checked 120 files",
+      parameters: [
+        { label: "Command", value: "bun run lint", format: "code" },
+        { label: "Working directory", value: "/Users/haukeschnau/OSS/t3code", format: "code" },
+      ],
+    });
+    expect(entry?.toolContext?.outputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ label: "Output", value: "Checked 120 files\nAll good" }),
+        expect.objectContaining({ label: "Exit code", value: "0" }),
+      ]),
+    );
+  });
+
+  it("derives Codex file-change tool context with inline diffs", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-file-change",
+        kind: "tool.completed",
+        summary: "Tool updated",
+        turnId: "turn-file-change-context",
+        payload: {
+          itemType: "file_change",
+          status: "completed",
+          data: {
+            item: {
+              id: "item-file-change-context",
+              type: "fileChange",
+              status: "completed",
+              changes: [
+                {
+                  path: "apps/web/src/session-logic.ts",
+                  kind: "update",
+                  diff: "@@ -1,2 +1,3 @@\n old\n+new\n",
+                },
+              ],
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Edited files",
+      turnId: "turn-file-change-context",
+      toolStatus: "completed",
+    });
+    expect(entry?.toolContext?.fileChanges).toEqual([
+      {
+        path: "apps/web/src/session-logic.ts",
+        kind: "update",
+        diff: "@@ -1,2 +1,3 @@\n old\n+new",
+      },
+    ]);
+  });
+
+  it("uses the actual Codex dynamic tool name instead of a generic tool label", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-dynamic-tool",
+        kind: "tool.completed",
+        summary: "Tool updated",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "completed",
+          data: {
+            item: {
+              id: "item-dynamic-tool-context",
+              type: "dynamicToolCall",
+              status: "completed",
+              tool: "Read",
+              arguments: {
+                file_path: "apps/web/src/session-logic.ts",
+              },
+              contentItems: [
+                {
+                  type: "text",
+                  text: "Found session logic helpers",
+                },
+              ],
+              success: true,
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Read",
+      toolStatus: "completed",
+    });
+    expect(entry?.toolContext).toMatchObject({
+      heading: "Read",
+      preview: "Found session logic helpers",
+      parameters: [
+        { label: "Tool", value: "Read", format: "text" },
+        {
+          label: "Arguments",
+          value: '{\n  "file_path": "apps/web/src/session-logic.ts"\n}',
+          format: "json",
+        },
+      ],
+    });
+  });
+
+  it("derives Codex MCP tool context with server, tool, and result", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-mcp-tool",
+        kind: "tool.completed",
+        summary: "Tool updated",
+        payload: {
+          itemType: "mcp_tool_call",
+          status: "completed",
+          data: {
+            item: {
+              id: "item-mcp-tool-context",
+              type: "mcpToolCall",
+              status: "completed",
+              server: "github",
+              tool: "list_pull_requests",
+              arguments: {
+                owner: "t3tools",
+                repo: "t3code",
+              },
+              result: {
+                pullRequests: [{ number: 42 }],
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.label).toBe("github/list_pull_requests");
+    expect(entry?.toolContext?.outputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: "Result",
+          value: '{\n  "pullRequests": [\n    {\n      "number": 42\n    }\n  ]\n}',
+        }),
+      ]),
+    );
+  });
+
+  it("replaces ambiguous generic updated labels when Codex item identity is available", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-generic-update",
+        kind: "tool.updated",
+        summary: "Tool updated",
+        payload: {
+          itemType: "dynamic_tool_call",
+          status: "inProgress",
+          data: {
+            item: {
+              id: "item-generic-update-context",
+              type: "dynamicToolCall",
+              status: "inProgress",
+              tool: "search_code",
+              arguments: {
+                query: "deriveWorkLogEntries",
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry?.label).toBe("search_code");
+    expect(entry?.toolStatus).toBe("running");
+  });
+
   it("drops duplicated tool detail when it only repeats the title", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
