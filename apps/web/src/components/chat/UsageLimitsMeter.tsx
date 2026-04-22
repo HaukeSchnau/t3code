@@ -146,13 +146,8 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
     return null;
   }
 
-  const normalizedPercentage = Math.max(0, Math.min(100, compactWindow.usedPercent));
-  const radius = 9.75;
-  const circumference = 2 * Math.PI * radius;
-  const dashOffset = circumference - (normalizedPercentage / 100) * circumference;
   const creditsLine = formatCreditsLine(usage.credits);
   const planLabel = formatPlanType(usage.planType);
-  const compactToneClass = windowStatusTone(compactWindow.status);
   const primaryLabel = usage.primary
     ? formatWindowBadgeLabel(usage.primary.durationLabel, "5h")
     : null;
@@ -199,65 +194,31 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
           <button
             type="button"
             className={cn(
-              "group inline-flex min-h-10 max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-[background-color,opacity,transform] duration-150 ease-out hover:bg-muted/35 hover:opacity-95 active:scale-[0.96]",
+              "group inline-flex min-h-10 max-w-full items-center rounded-md px-1.5 py-1 text-left transition-[background-color,opacity,transform] duration-150 ease-out hover:bg-muted/35 hover:opacity-95 active:scale-[0.96]",
               props.compact ? "max-w-36" : "max-w-44",
             )}
             aria-label={inlineAriaLabel}
           >
-            <span className="relative flex h-7 w-7 shrink-0 items-center justify-center">
-              <svg
-                viewBox="0 0 24 24"
-                className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
-                aria-hidden="true"
-              >
-                <circle
-                  cx="12"
-                  cy="12"
-                  r={radius}
-                  fill="none"
-                  stroke="color-mix(in oklab, var(--color-muted) 70%, transparent)"
-                  strokeWidth="3"
-                />
-                <circle
-                  cx="12"
-                  cy="12"
-                  r={radius}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="3"
-                  strokeLinecap="round"
-                  strokeDasharray={circumference}
-                  strokeDashoffset={dashOffset}
-                  className={cn(
-                    "transition-[stroke-dashoffset] duration-500 ease-out motion-reduce:transition-none",
-                    compactToneClass,
-                  )}
-                />
-              </svg>
-              <span
-                className={cn(
-                  "relative flex h-4 w-4 items-center justify-center rounded-full bg-background text-[8px] font-medium tabular-nums",
-                  compactToneClass,
-                )}
-              >
-                {Math.round(compactWindow.usedPercent)}
-              </span>
-            </span>
-
             <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
               {visibleWindows.map(({ key, label, snapshot }) => {
                 const stats = buildInlineWindowStats(snapshot);
+                const normalizedPercentage = Math.max(0, Math.min(100, snapshot.usedPercent));
                 return (
                   <span key={key} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                    <span
-                      className={cn(
-                        "h-1.5 w-1.5 shrink-0 rounded-[2px]",
-                        windowStatusAccent(snapshot.status),
-                      )}
-                      aria-hidden="true"
-                    />
                     <span className="w-5 shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
                       {label}
+                    </span>
+                    <span
+                      className="relative h-1.5 w-6 shrink-0 overflow-hidden rounded-full bg-muted/70"
+                      aria-hidden="true"
+                    >
+                      <span
+                        className={cn(
+                          "absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-out",
+                          windowStatusAccent(snapshot.status),
+                        )}
+                        style={{ width: `${normalizedPercentage}%` }}
+                      />
                     </span>
                     <span
                       className={cn(
