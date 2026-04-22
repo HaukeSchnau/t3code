@@ -73,15 +73,30 @@ function windowStatusTone(status: "ok" | "atRisk" | "reached" | "unknown"): stri
   }
 }
 
-function windowStatusAccent(status: UsageLimitWindowStatus): string {
-  switch (status) {
-    case "reached":
-      return "bg-red-500";
-    case "atRisk":
-      return "bg-amber-500";
-    default:
-      return "bg-muted-foreground/45";
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function projectedSeverityColor(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
+  if (windowSnapshot.status === "unknown") {
+    return null;
   }
+  if (windowSnapshot.status === "reached") {
+    return "hsl(4 78% 56%)";
+  }
+
+  const projected = windowSnapshot.projectedPercentAtReset;
+  if (projected === null || !Number.isFinite(projected)) {
+    return null;
+  }
+
+  // 40% projected usage reads comfortably safe, 100% is right on the edge,
+  // and 160%+ is firmly over the line.
+  const normalized = clamp((projected - 40) / 120, 0, 1);
+  const hue = 135 - normalized * 135;
+  const saturation = 72;
+  const lightness = 48;
+  return `hsl(${hue} ${saturation}% ${lightness}%)`;
 }
 
 function windowStatusLabel(status: UsageLimitWindowStatus): string {
@@ -203,6 +218,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
               {visibleWindows.map(({ key, label, snapshot }) => {
                 const stats = buildInlineWindowStats(snapshot);
                 const normalizedPercentage = Math.max(0, Math.min(100, snapshot.usedPercent));
+                const severityColor = projectedSeverityColor(snapshot);
                 return (
                   <span key={key} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
                     <span className="w-5 shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
@@ -213,11 +229,11 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                       aria-hidden="true"
                     >
                       <span
-                        className={cn(
-                          "absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-out",
-                          windowStatusAccent(snapshot.status),
-                        )}
-                        style={{ width: `${normalizedPercentage}%` }}
+                        className="absolute inset-y-0 left-0 rounded-full transition-[width] duration-300 ease-out"
+                        style={{
+                          width: `${normalizedPercentage}%`,
+                          ...(severityColor ? { backgroundColor: severityColor } : {}),
+                        }}
                       />
                     </span>
                     <span
@@ -225,6 +241,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                         "w-9 shrink-0 text-[12px] font-semibold",
                         windowStatusTone(snapshot.status),
                       )}
+                      style={severityColor ? { color: severityColor } : undefined}
                     >
                       {formatPercent(snapshot.usedPercent)}
                     </span>
