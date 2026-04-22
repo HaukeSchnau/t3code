@@ -84,6 +84,19 @@ function windowStatusAccent(status: UsageLimitWindowStatus): string {
   }
 }
 
+function windowStatusLabel(status: UsageLimitWindowStatus): string {
+  switch (status) {
+    case "reached":
+      return "Hit";
+    case "atRisk":
+      return "Risk";
+    case "ok":
+      return "Safe";
+    default:
+      return "Unclear";
+  }
+}
+
 function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot): {
   readonly resetLabel: string | null;
   readonly paceLabel: string | null;
@@ -169,8 +182,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
     visibleWindows.length > 0
       ? `${usage.limitName ?? "Codex usage"}. ${visibleWindows
           .map(({ label, snapshot }) => {
-            const stats = buildInlineWindowStats(snapshot);
-            return [label, formatPercent(snapshot.usedPercent), stats.resetLabel, stats.paceLabel]
+            return [label, formatPercent(snapshot.usedPercent), windowStatusLabel(snapshot.status)]
               .filter((part) => part && part.length > 0)
               .join(" ");
           })
@@ -188,7 +200,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             type="button"
             className={cn(
               "group inline-flex min-h-10 max-w-full items-center gap-2 rounded-md px-1.5 py-1 text-left transition-[background-color,opacity,transform] duration-150 ease-out hover:bg-muted/35 hover:opacity-95 active:scale-[0.96]",
-              props.compact ? "max-w-48" : "max-w-[26rem]",
+              props.compact ? "max-w-36" : "max-w-44",
             )}
             aria-label={inlineAriaLabel}
           >
@@ -232,72 +244,36 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
               </span>
             </span>
 
-            {props.compact ? (
-              <span className="min-w-0 flex items-center gap-1.5 overflow-hidden text-[11px] leading-none tabular-nums">
-                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Usage
-                </span>
-                <span className="h-3.5 w-px shrink-0 bg-border/70" aria-hidden="true" />
-                <span className="min-w-0 truncate text-foreground">
-                  {visibleWindows
-                    .map(({ label, snapshot }) => {
-                      const stats = buildInlineWindowStats(snapshot);
-                      return [
-                        label.toUpperCase(),
-                        formatPercent(snapshot.usedPercent),
-                        stats.resetLabel,
-                        stats.paceLabel,
-                      ]
-                        .filter((part) => part && part.length > 0)
-                        .join(" ");
-                    })
-                    .join("  |  ")}
-                </span>
-              </span>
-            ) : (
-              <span className="min-w-0 flex items-center gap-2 overflow-hidden text-[11px] leading-none tabular-nums">
-                <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                  Usage
-                </span>
-                <span className="h-4 w-px shrink-0 bg-border/70" aria-hidden="true" />
-                {visibleWindows.map(({ key, label, snapshot }, index) => {
-                  const stats = buildInlineWindowStats(snapshot);
-                  return (
-                    <span key={key} className="contents">
-                      {index > 0 ? (
-                        <span className="h-4 w-px shrink-0 bg-border/70" aria-hidden="true" />
-                      ) : null}
-                      <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
-                        <span
-                          className={cn(
-                            "h-1.5 w-1.5 shrink-0 rounded-[2px]",
-                            windowStatusAccent(snapshot.status),
-                          )}
-                          aria-hidden="true"
-                        />
-                        <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-                          {label}
-                        </span>
-                        <span
-                          className={cn(
-                            "shrink-0 text-[12px] font-semibold",
-                            windowStatusTone(snapshot.status),
-                          )}
-                        >
-                          {formatPercent(snapshot.usedPercent)}
-                        </span>
-                        {stats.resetLabel ? (
-                          <span className="shrink-0 text-muted-foreground">{stats.resetLabel}</span>
-                        ) : null}
-                        {stats.paceLabel ? (
-                          <span className="shrink-0 text-muted-foreground">{stats.paceLabel}</span>
-                        ) : null}
-                      </span>
+            <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
+              {visibleWindows.map(({ key, label, snapshot }) => {
+                const stats = buildInlineWindowStats(snapshot);
+                return (
+                  <span key={key} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+                    <span
+                      className={cn(
+                        "h-1.5 w-1.5 shrink-0 rounded-[2px]",
+                        windowStatusAccent(snapshot.status),
+                      )}
+                      aria-hidden="true"
+                    />
+                    <span className="w-5 shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                      {label}
                     </span>
-                  );
-                })}
-              </span>
-            )}
+                    <span
+                      className={cn(
+                        "w-9 shrink-0 text-[12px] font-semibold",
+                        windowStatusTone(snapshot.status),
+                      )}
+                    >
+                      {formatPercent(snapshot.usedPercent)}
+                    </span>
+                    <span className="min-w-0 truncate text-muted-foreground">
+                      {stats.resetLabel ?? windowStatusLabel(snapshot.status)}
+                    </span>
+                  </span>
+                );
+              })}
+            </span>
           </button>
         }
       />
