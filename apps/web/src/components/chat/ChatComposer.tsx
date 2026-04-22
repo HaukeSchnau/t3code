@@ -295,7 +295,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     <>
       {props.activeContextWindow ? <ContextWindowMeter usage={props.activeContextWindow} /> : null}
       {props.selectedProvider === "codex" && props.activeUsageLimits ? (
-        <UsageLimitsMeter usageLimits={props.activeUsageLimits} />
+        <UsageLimitsMeter usageLimits={props.activeUsageLimits} compact={props.compact} />
       ) : null}
       {props.isPreparingWorktree ? (
         <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>

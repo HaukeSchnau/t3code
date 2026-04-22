@@ -3,7 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { cn } from "~/lib/utils";
 import {
   deriveDisplayedUsageLimitsSnapshot,
+  type DerivedUsageLimitWindowSnapshot,
   type UsageLimitsSnapshot,
+  type UsageLimitWindowStatus,
 } from "../../lib/usageLimits";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
@@ -27,6 +29,10 @@ function formatProjectedUsage(value: number | null): string | null {
     return null;
   }
   return `${Math.round(value)}%`;
+}
+
+function formatWindowBadgeLabel(durationLabel: string | null, fallback: "5h" | "1w"): string {
+  return durationLabel ?? fallback;
 }
 
 function formatCreditsLine(credits: UsageLimitsSnapshot["credits"]): string | null {
@@ -60,7 +66,46 @@ function windowStatusTone(status: "ok" | "atRisk" | "reached" | "unknown"): stri
   }
 }
 
-export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot }) {
+function windowSurfaceTone(status: UsageLimitWindowStatus): string {
+  switch (status) {
+    case "reached":
+      return "border-red-500/20 bg-red-500/6";
+    case "atRisk":
+      return "border-amber-500/20 bg-amber-500/8";
+    default:
+      return "border-border/60 bg-muted/30";
+  }
+}
+
+function buildWindowAtAGlanceSummary(windowSnapshot: DerivedUsageLimitWindowSnapshot): string {
+  if (windowSnapshot.status === "reached") {
+    return "Limit reached";
+  }
+
+  const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
+  if (windowSnapshot.status === "unknown") {
+    return windowSnapshot.resetRelativeLabel ?? "Pace unavailable";
+  }
+
+  if (windowSnapshot.resetRelativeLabel && projectedUsage) {
+    return `${windowSnapshot.resetRelativeLabel} | ${projectedUsage} pace`;
+  }
+
+  if (projectedUsage) {
+    return `${projectedUsage} pace`;
+  }
+
+  return windowSnapshot.resetRelativeLabel ?? "Pace unavailable";
+}
+
+function buildCompactWindowSummary(
+  label: string,
+  windowSnapshot: DerivedUsageLimitWindowSnapshot,
+): string {
+  return `${label} ${formatPercent(windowSnapshot.usedPercent)} | ${buildWindowAtAGlanceSummary(windowSnapshot)}`;
+}
+
+export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; compact?: boolean }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   useEffect(() => {
@@ -89,6 +134,43 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot }) {
   const creditsLine = formatCreditsLine(usage.credits);
   const planLabel = formatPlanType(usage.planType);
   const compactToneClass = windowStatusTone(compactWindow.status);
+  const primaryLabel = usage.primary
+    ? formatWindowBadgeLabel(usage.primary.durationLabel, "5h")
+    : null;
+  const secondaryLabel = usage.secondary
+    ? formatWindowBadgeLabel(usage.secondary.durationLabel, "1w")
+    : null;
+  const compactSummary = compactWindow
+    ? buildCompactWindowSummary(
+        usage.compactWindow === "primary" ? (primaryLabel ?? "Usage") : (secondaryLabel ?? "Usage"),
+        compactWindow,
+      )
+    : null;
+  const visibleWindows = [
+    usage.primary
+      ? {
+          key: "primary",
+          label: primaryLabel ?? "5h",
+          snapshot: usage.primary,
+        }
+      : null,
+    usage.secondary
+      ? {
+          key: "secondary",
+          label: secondaryLabel ?? "1w",
+          snapshot: usage.secondary,
+        }
+      : null,
+  ].filter(
+    (entry): entry is { key: string; label: string; snapshot: DerivedUsageLimitWindowSnapshot } =>
+      entry !== null,
+  );
+  const inlineAriaLabel =
+    visibleWindows.length > 0
+      ? `${usage.limitName ?? "Codex usage"}. ${visibleWindows
+          .map(({ label, snapshot }) => buildCompactWindowSummary(label, snapshot))
+          .join(". ")}`
+      : `${usage.limitName ?? "Codex usage"} ${formatPercent(compactWindow.usedPercent)} used`;
 
   return (
     <Popover>
@@ -99,14 +181,14 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot }) {
         render={
           <button
             type="button"
-            className="group inline-flex items-center justify-center rounded-full transition-opacity hover:opacity-85"
-            aria-label={
-              compactWindow.resetRelativeLabel
-                ? `${usage.limitName ?? "Codex usage"} ${formatPercent(compactWindow.usedPercent)} used, resets ${compactWindow.resetRelativeLabel}`
-                : `${usage.limitName ?? "Codex usage"} ${formatPercent(compactWindow.usedPercent)} used`
-            }
+            className={cn(
+              "group inline-flex min-h-10 items-center gap-2 rounded-xl border px-2.5 py-1.5 text-left shadow-[0_1px_0_0_--theme(--color-black/4%)] transition-[border-color,background-color,opacity,transform] duration-150 ease-out hover:opacity-92 active:scale-[0.96]",
+              props.compact ? "max-w-44" : "max-w-72",
+              windowSurfaceTone(compactWindow.status),
+            )}
+            aria-label={inlineAriaLabel}
           >
-            <span className="relative flex h-6 w-6 items-center justify-center">
+            <span className="relative flex h-7 w-7 shrink-0 items-center justify-center">
               <svg
                 viewBox="0 0 24 24"
                 className="-rotate-90 absolute inset-0 h-full w-full transform-gpu"
@@ -138,13 +220,58 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot }) {
               </svg>
               <span
                 className={cn(
-                  "relative flex h-[15px] w-[15px] items-center justify-center rounded-full bg-background text-[8px] font-medium",
+                  "relative flex h-4 w-4 items-center justify-center rounded-full bg-background text-[8px] font-medium tabular-nums",
                   compactToneClass,
                 )}
               >
                 {Math.round(compactWindow.usedPercent)}
               </span>
             </span>
+
+            {props.compact ? (
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  {usage.limitName ?? "Usage"}
+                </span>
+                <span className="block truncate text-[11px] leading-tight text-foreground tabular-nums">
+                  {compactSummary}
+                </span>
+              </span>
+            ) : (
+              <span className="min-w-0 flex-1">
+                <span className="block text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                  {usage.limitName ?? "Codex usage"}
+                </span>
+                <span className="mt-1 flex min-w-0 items-stretch gap-1.5">
+                  {visibleWindows.map(({ key, label, snapshot }) => (
+                    <span
+                      key={key}
+                      className={cn(
+                        "min-w-0 flex-1 rounded-lg border px-2 py-1 shadow-[0_1px_0_0_--theme(--color-black/3%)]",
+                        windowSurfaceTone(snapshot.status),
+                      )}
+                    >
+                      <span className="flex items-center justify-between gap-2">
+                        <span className="truncate text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                          {label}
+                        </span>
+                        <span
+                          className={cn(
+                            "shrink-0 text-[11px] font-semibold tabular-nums",
+                            windowStatusTone(snapshot.status),
+                          )}
+                        >
+                          {formatPercent(snapshot.usedPercent)}
+                        </span>
+                      </span>
+                      <span className="mt-0.5 block truncate text-[10px] leading-tight text-muted-foreground tabular-nums">
+                        {buildWindowAtAGlanceSummary(snapshot)}
+                      </span>
+                    </span>
+                  ))}
+                </span>
+              </span>
+            )}
           </button>
         }
       />
