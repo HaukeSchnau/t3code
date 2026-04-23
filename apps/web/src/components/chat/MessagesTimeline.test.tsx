@@ -374,6 +374,20 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("tabular-nums");
   });
 
+  it("includes command output in the command hover popover", async () => {
+    const { CommandHoverTooltipContent } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <CommandHoverTooltipContent
+        command="/bin/zsh -lc 'jj status'"
+        output={"The working copy has no changes.\nWorking copy  (@) : qp test"}
+      />,
+    );
+
+    expect(markup).toContain("/bin/zsh -lc");
+    expect(markup).toContain("Working copy  (@) : qp test");
+    expect(markup).toContain("data-live-terminal-output");
+  });
+
   it("renders failed tool status with stronger contrast styling", async () => {
     const { WorkEntryRow } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

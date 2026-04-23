@@ -1038,6 +1038,13 @@ function inlineRunningCommandOutput(workEntry: TimelineWorkEntry): ToolContextFi
   return findToolContextField(workEntry.toolContext?.outputs, "Output") ?? null;
 }
 
+function commandOutputField(workEntry: TimelineWorkEntry): ToolContextField | null {
+  if (!isCommandWorkEntry(workEntry)) {
+    return null;
+  }
+  return findToolContextField(workEntry.toolContext?.outputs, "Output") ?? null;
+}
+
 function truncateToolBlock(
   value: string,
   maxLength: number,
@@ -1170,6 +1177,33 @@ function TerminalTranscriptBlock(props: {
       {truncated?.truncated ? (
         <div className="px-1 text-[10px] text-muted-foreground/65">
           Showing the first {props.maxLength?.toLocaleString()} characters.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+export function CommandHoverTooltipContent(props: { command: string; output: string | null }) {
+  return (
+    <div className="w-[min(56rem,calc(100vw-2rem))] space-y-2 px-2 py-2">
+      <div className="space-y-1">
+        <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
+          Command
+        </p>
+        <div className="overflow-x-auto rounded-lg border border-border/50 bg-muted/25 px-3 py-2 font-mono text-[11px] leading-4 whitespace-nowrap text-foreground/88">
+          {props.command}
+        </div>
+      </div>
+      {props.output ? (
+        <div className="space-y-1">
+          <p className="text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground/65">
+            Output
+          </p>
+          <TerminalTranscriptBlock
+            value={props.output}
+            maxLength={4_000}
+            viewportClassName="max-h-52"
+          />
         </div>
       ) : null}
     </div>
@@ -1468,6 +1502,7 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
   const rawCommand = workEntryRawCommand(workEntry);
   const isCommandEntry = isCommandWorkEntry(workEntry);
   const runningCommandOutput = inlineRunningCommandOutput(workEntry);
+  const hoverCommandOutput = commandOutputField(workEntry);
   const inlineDuration = inlineCommandDurationText(workEntry);
   const commandDurationContent =
     inlineDuration ??
@@ -1481,6 +1516,14 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
     workEntry.itemType === "file_change" || (workEntry.toolContext?.fileChanges.length ?? 0) > 0;
   const expandable = hasToolContextDetails(workEntry.toolContext);
   const [expanded, setExpanded] = useState(defaultExpanded);
+  const hoverCommand = rawCommand ?? workEntry.command ?? null;
+  const commandHoverTooltip =
+    hoverCommand || hoverCommandOutput?.value
+      ? {
+          command: hoverCommand ?? workEntry.command ?? "",
+          output: hoverCommandOutput?.value ?? null,
+        }
+      : null;
 
   return (
     <div className="rounded-lg px-1 py-1">
@@ -1491,44 +1534,37 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
           <EntryIcon className="size-3" />
         </span>
         <div className="min-w-0 flex-1 overflow-hidden">
-          {rawCommand ? (
-            <div className="max-w-full">
-              <p
-                className={cn(
-                  "truncate text-xs leading-5",
-                  workToneClass(workEntry.tone),
-                  preview ? "text-muted-foreground/70" : "",
-                )}
+          {isCommandEntry && commandHoverTooltip ? (
+            <Tooltip>
+              <TooltipTrigger
+                className="block min-w-0 w-full cursor-default text-left"
                 title={displayText}
+                aria-label={displayText}
               >
-                <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
-                  {heading}
-                </span>
-                {preview && (
-                  <Tooltip>
-                    <TooltipTrigger
-                      closeDelay={0}
-                      delay={75}
-                      render={
-                        <span className="max-w-full cursor-default text-muted-foreground/55 transition-colors hover:text-muted-foreground/75 focus-visible:text-muted-foreground/75">
-                          {" "}
-                          - {preview}
-                        </span>
-                      }
-                    />
-                    <TooltipPopup
-                      align="start"
-                      className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
-                      side="top"
-                    >
-                      <div className="max-w-[min(56rem,calc(100vw-2rem))] overflow-x-auto px-1.5 py-1 font-mono text-[11px] leading-4 whitespace-nowrap">
-                        {rawCommand}
-                      </div>
-                    </TooltipPopup>
-                  </Tooltip>
-                )}
-              </p>
-            </div>
+                <p
+                  className={cn(
+                    "truncate text-xs leading-5",
+                    workToneClass(workEntry.tone),
+                    preview ? "text-muted-foreground/70" : "",
+                  )}
+                >
+                  <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
+                    {heading}
+                  </span>
+                  {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
+                </p>
+              </TooltipTrigger>
+              <TooltipPopup
+                align="start"
+                className="max-w-[min(56rem,calc(100vw-2rem))] px-0 py-0"
+                side="top"
+              >
+                <CommandHoverTooltipContent
+                  command={commandHoverTooltip.command}
+                  output={commandHoverTooltip.output}
+                />
+              </TooltipPopup>
+            </Tooltip>
           ) : (
             <Tooltip>
               <TooltipTrigger
