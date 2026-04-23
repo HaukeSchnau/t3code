@@ -436,6 +436,7 @@ export interface ChatComposerProps {
 
   // Context window
   activeThreadActivities: Thread["activities"] | undefined;
+  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -527,6 +528,7 @@ export const ChatComposer = memo(
       activeProjectDefaultModelSelection,
       activeThreadModelSelection,
       activeThreadActivities,
+      activeUsageLimits,
       resolvedTheme,
       settings,
       keybindings,
@@ -662,10 +664,6 @@ export const ChatComposer = memo(
     // ------------------------------------------------------------------
     const activeContextWindow = useMemo(
       () => deriveLatestContextWindowSnapshot(activeThreadActivities ?? []),
-      [activeThreadActivities],
-    );
-    const activeUsageLimits = useMemo(
-      () => deriveLatestUsageLimitsSnapshot(activeThreadActivities ?? []),
       [activeThreadActivities],
     );
 

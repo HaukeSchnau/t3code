@@ -1,4 +1,4 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type { OrchestrationThreadActivity, ProviderKind } from "@t3tools/contracts";
 
 import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 
@@ -53,6 +53,11 @@ export interface UsageLimitsSnapshot {
   primary: UsageLimitWindowSnapshot | null;
   secondary: UsageLimitWindowSnapshot | null;
   updatedAt: string;
+}
+
+export interface UsageLimitsActivitySource {
+  provider: ProviderKind | null;
+  activities: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
 }
 
 export type UsageLimitWindowStatus = "ok" | "atRisk" | "reached" | "unknown";
@@ -231,6 +236,37 @@ export function deriveLatestUsageLimitsSnapshot(
   }
 
   return null;
+}
+
+export function deriveLatestUsageLimitsSnapshotForSources(
+  sources: ReadonlyArray<UsageLimitsActivitySource>,
+  provider: ProviderKind | null | undefined = null,
+): UsageLimitsSnapshot | null {
+  let latestSnapshot: UsageLimitsSnapshot | null = null;
+  let latestUpdatedAtMs = Number.NEGATIVE_INFINITY;
+
+  for (const source of sources) {
+    if (provider && source.provider !== provider) {
+      continue;
+    }
+
+    const snapshot = deriveLatestUsageLimitsSnapshot(source.activities ?? []);
+    if (!snapshot) {
+      continue;
+    }
+
+    const updatedAtMs = Date.parse(snapshot.updatedAt);
+    if (!Number.isFinite(updatedAtMs)) {
+      continue;
+    }
+
+    if (latestSnapshot === null || updatedAtMs >= latestUpdatedAtMs) {
+      latestSnapshot = snapshot;
+      latestUpdatedAtMs = updatedAtMs;
+    }
+  }
+
+  return latestSnapshot;
 }
 
 export function deriveDisplayedUsageLimitsSnapshot(

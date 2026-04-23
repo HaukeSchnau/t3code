@@ -1,9 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import { EventId, type OrchestrationThreadActivity, TurnId } from "@t3tools/contracts";
 
-import { deriveDisplayedUsageLimitsSnapshot, deriveLatestUsageLimitsSnapshot } from "./usageLimits";
+import {
+  deriveDisplayedUsageLimitsSnapshot,
+  deriveLatestUsageLimitsSnapshot,
+  deriveLatestUsageLimitsSnapshotForSources,
+} from "./usageLimits";
 
-function makeActivity(id: string, kind: string, payload: unknown): OrchestrationThreadActivity {
+function makeActivity(
+  id: string,
+  kind: string,
+  payload: unknown,
+  createdAt: string = "2026-03-23T00:00:00.000Z",
+): OrchestrationThreadActivity {
   return {
     id: EventId.make(id),
     tone: "info",
@@ -11,7 +20,7 @@ function makeActivity(id: string, kind: string, payload: unknown): Orchestration
     summary: kind,
     payload,
     turnId: TurnId.make("turn-1"),
-    createdAt: "2026-03-23T00:00:00.000Z",
+    createdAt,
   };
 }
 
@@ -122,5 +131,67 @@ describe("usageLimits", () => {
 
     expect(displayed?.primary?.status).toBe("reached");
     expect(displayed?.compactWindow).toBe("primary");
+  });
+
+  it("prefers the newest valid snapshot across matching provider threads", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-1",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 12,
+                  resetsAt: "2026-03-23T05:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+              },
+              "2026-03-23T01:00:00.000Z",
+            ),
+          ],
+        },
+        {
+          provider: "claudeAgent",
+          activities: [
+            makeActivity(
+              "activity-2",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 99,
+                  resetsAt: "2026-03-23T05:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+              },
+              "2026-03-23T03:00:00.000Z",
+            ),
+          ],
+        },
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-3",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 37,
+                  resetsAt: "2026-03-23T05:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+              },
+              "2026-03-23T02:00:00.000Z",
+            ),
+          ],
+        },
+      ],
+      "codex",
+    );
+
+    expect(snapshot?.primary?.usedPercent).toBe(37);
+    expect(snapshot?.updatedAt).toBe("2026-03-23T02:00:00.000Z");
   });
 });

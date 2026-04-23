@@ -68,6 +68,7 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import {
+  selectThreadsForEnvironment,
   selectProjectsAcrossEnvironments,
   selectThreadsAcrossEnvironments,
   useStore,
@@ -138,6 +139,7 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -793,6 +795,22 @@ export default function ChatView(props: ChatViewProps) {
   );
   const isServerThread = routeKind === "server" && serverThread !== undefined;
   const activeThread = isServerThread ? serverThread : localDraftThread;
+  const environmentThreads = useStore(
+    useShallow((state) => selectThreadsForEnvironment(state, environmentId)),
+  );
+  // Usage limits are account-wide for Codex, so prefer the freshest Codex
+  // snapshot we have in this environment instead of the active thread's stale history.
+  const activeUsageLimits = useMemo(
+    () =>
+      deriveLatestUsageLimitsSnapshotForSources(
+        environmentThreads.map((thread) => ({
+          provider: thread.modelSelection.provider,
+          activities: thread.activities,
+        })),
+        "codex",
+      ),
+    [environmentThreads],
+  );
   const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
     composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
@@ -3396,6 +3414,7 @@ export default function ChatView(props: ChatViewProps) {
               activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
               activeThreadModelSelection={activeThread?.modelSelection}
               activeThreadActivities={activeThread?.activities}
+              activeUsageLimits={activeUsageLimits}
               resolvedTheme={resolvedTheme}
               settings={settings}
               keybindings={keybindings}
