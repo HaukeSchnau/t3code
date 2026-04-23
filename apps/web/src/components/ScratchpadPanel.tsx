@@ -1,9 +1,15 @@
 import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { EyeIcon, PanelRightCloseIcon, PencilIcon } from "lucide-react";
+import {
+  ArrowDownToLineIcon,
+  EyeIcon,
+  NotebookPenIcon,
+  PanelRightCloseIcon,
+  PencilIcon,
+  ScissorsLineDashedIcon,
+} from "lucide-react";
 import ChatMarkdown from "./ChatMarkdown";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
-import { Kbd, KbdGroup } from "./ui/kbd";
 import { Textarea } from "./ui/textarea";
 import { Toggle, ToggleGroup } from "./ui/toggle-group";
 import { cn } from "~/lib/utils";
@@ -97,101 +103,116 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
   return (
     <div
       className={cn(
-        "flex min-h-0 flex-col bg-card/50",
+        "flex min-h-0 flex-col bg-card/35",
         mode === "sidebar"
           ? "h-full w-[340px] shrink-0 border-l border-border/70"
           : "h-full w-full",
       )}
       data-testid="scratchpad-panel"
     >
-      <div className="flex h-12 shrink-0 items-center justify-between border-b border-border/60 px-3">
-        <div className="flex items-center gap-2">
-          <Badge
-            variant="secondary"
-            className="rounded-md bg-muted/60 px-1.5 py-0 text-[10px] font-semibold tracking-wide uppercase"
-          >
-            Scratchpad
-          </Badge>
-          <span className="text-[11px] text-muted-foreground/60">Private to this thread</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={appendSelection}
-            disabled={scratchpadEmpty}
-            data-testid="scratchpad-append-selection"
-            aria-label="Append selected scratchpad text to composer"
-          >
-            Selection
-          </Button>
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={appendAll}
-            disabled={scratchpadEmpty}
-            data-testid="scratchpad-append-all"
-            aria-label="Append scratchpad to composer"
-          >
-            All
-          </Button>
+      <div className="shrink-0 border-b border-border/60 px-3 py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background/80 text-muted-foreground shadow-xs/5">
+                <NotebookPenIcon className="size-3.5" />
+              </span>
+              <div className="min-w-0">
+                <h2 className="truncate font-medium text-[13px] leading-5">Scratchpad</h2>
+                <p className="text-[11px] text-muted-foreground/70">Private to this thread</p>
+              </div>
+            </div>
+          </div>
           <Button
             size="icon-xs"
             variant="ghost"
             onClick={onClose}
             aria-label="Close scratchpad"
-            className="text-muted-foreground/50 hover:text-foreground/70"
+            className="mt-0.5 shrink-0 text-muted-foreground/50 hover:text-foreground/70"
           >
             <PanelRightCloseIcon className="size-3.5" />
           </Button>
         </div>
-      </div>
-
-      <div className="flex min-h-0 shrink-0 items-center justify-between border-b border-border/50 px-3 py-2">
-        <ToggleGroup
-          size="xs"
-          variant="outline"
-          value={[viewMode]}
-          onValueChange={(value) => {
-            const nextValue = value[0];
-            if (nextValue === "write" || nextValue === "preview") {
-              setViewMode(nextValue);
-            }
-          }}
-        >
-          <Toggle
-            value="write"
-            aria-label="Show scratchpad editor"
-            data-testid="scratchpad-write-toggle"
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <ToggleGroup
+            size="xs"
+            variant="outline"
+            value={[viewMode]}
+            onValueChange={(value) => {
+              const nextValue = value[0];
+              if (nextValue === "write" || nextValue === "preview") {
+                setViewMode(nextValue);
+              }
+            }}
           >
-            <PencilIcon className="size-3" />
-            <span>Write</span>
-          </Toggle>
-          <Toggle
-            value="preview"
-            aria-label="Show scratchpad markdown preview"
-            data-testid="scratchpad-preview-toggle"
-          >
-            <EyeIcon className="size-3" />
-            <span>Preview</span>
-          </Toggle>
-        </ToggleGroup>
+            <Toggle
+              value="write"
+              aria-label="Show scratchpad editor"
+              data-testid="scratchpad-write-toggle"
+            >
+              <PencilIcon className="size-3" />
+              <span>Write</span>
+            </Toggle>
+            <Toggle
+              value="preview"
+              aria-label="Show scratchpad markdown preview"
+              data-testid="scratchpad-preview-toggle"
+            >
+              <EyeIcon className="size-3" />
+              <span>Preview</span>
+            </Toggle>
+          </ToggleGroup>
 
-        <div className="flex items-center gap-2 text-[11px] text-muted-foreground/70">
-          {selectedTextEmpty ? (
-            <span>Select text to append part of the note.</span>
-          ) : (
-            <span data-testid="scratchpad-selection-status">
-              {selectedText.trim().length} selected
-            </span>
-          )}
-          <KbdGroup className="hidden sm:inline-flex">
-            <Kbd>Mod</Kbd>
-            <Kbd>Shift</Kbd>
-            <Kbd>Enter</Kbd>
-          </KbdGroup>
+          <div className="ml-auto flex items-center gap-1.5">
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              onClick={appendSelection}
+              disabled={scratchpadEmpty}
+              data-testid="scratchpad-append-selection"
+              aria-label="Append selected scratchpad text to composer"
+            >
+              <ScissorsLineDashedIcon className="size-3" />
+              <span>Selection</span>
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              onClick={appendAll}
+              disabled={scratchpadEmpty}
+              data-testid="scratchpad-append-all"
+              aria-label="Append scratchpad to composer"
+            >
+              <ArrowDownToLineIcon className="size-3" />
+              <span>All</span>
+            </Button>
+          </div>
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
+          <Badge
+            variant={selectedTextEmpty ? "outline" : "secondary"}
+            size="sm"
+            className={cn(
+              "rounded-md px-1.5 normal-case",
+              selectedTextEmpty ? "bg-transparent" : "bg-secondary/80",
+            )}
+            data-testid="scratchpad-selection-status"
+          >
+            {selectedTextEmpty
+              ? "Highlight text to append a selection"
+              : `${selectedText.trim().length} selected`}
+          </Badge>
+          <span>Shortcut</span>
+          <Badge
+            variant="outline"
+            size="sm"
+            className="rounded-md border-border/70 bg-background/70 px-1.5 font-mono text-[10px]"
+          >
+            Mod+Shift+Enter
+          </Badge>
         </div>
       </div>
 
@@ -209,12 +230,12 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
             onMouseUp={(event) => updateSelection(event.currentTarget)}
             onKeyDown={handleShortcut}
             placeholder="Jot notes, ideas, or reminders. Markdown is supported in preview. Nothing here is sent unless you append it to the composer."
-            className="flex min-h-0 flex-1"
+            className="flex min-h-0 flex-1 rounded-lg border-border/70 bg-background/80 shadow-none"
             data-testid="scratchpad-textarea"
           />
         ) : (
           <div
-            className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/60 bg-background/70 px-3 py-2"
+            className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/70 bg-background/80 px-3 py-2"
             data-testid="scratchpad-preview"
           >
             {scratchpad.trim().length > 0 ? (
