@@ -58,8 +58,8 @@ function formatCreditsLine(credits: UsageLimitsSnapshot["credits"]): string | nu
   return null;
 }
 
-function buildWindowLabel(name: "Primary" | "Secondary", durationLabel: string | null): string {
-  return durationLabel ? `${name} ${durationLabel} window` : `${name} window`;
+function buildWindowLabel(durationLabel: string | null, fallback: "5h" | "1w"): string {
+  return `${formatWindowBadgeLabel(durationLabel, fallback)} window`;
 }
 
 function windowStatusTone(status: "ok" | "atRisk" | "reached" | "unknown"): string {
@@ -137,6 +137,22 @@ function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot)
     resetLabel,
     paceLabel: projectedUsage ? `${projectedUsage} pace` : null,
   };
+}
+
+function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): string {
+  const relative = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
+  const absolute = windowSnapshot.resetAbsoluteLabel;
+
+  if (relative && absolute) {
+    return `Resets in ${relative} at ${absolute}`;
+  }
+  if (relative) {
+    return `Resets in ${relative}`;
+  }
+  if (absolute) {
+    return `Resets at ${absolute}`;
+  }
+  return "Reset time unavailable";
 }
 
 export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; compact?: boolean }) {
@@ -272,10 +288,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
               return null;
             }
 
-            const label = buildWindowLabel(
-              index === 0 ? "Primary" : "Secondary",
-              windowSnapshot.durationLabel,
-            );
+            const label = buildWindowLabel(windowSnapshot.durationLabel, index === 0 ? "5h" : "1w");
             const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
             const assessment =
               windowSnapshot.status === "reached"
@@ -287,7 +300,10 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                     : "Pace estimate unavailable.";
 
             return (
-              <div key={label} className="space-y-1 rounded-md border border-border/60 px-2.5 py-2">
+              <div
+                key={label}
+                className="space-y-1.5 border-t border-border/50 pt-2 first:border-t-0 first:pt-0"
+              >
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-xs font-medium text-foreground">{label}</div>
                   <div
@@ -297,13 +313,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                   </div>
                 </div>
                 <div className="text-xs text-muted-foreground">
-                  {windowSnapshot.resetRelativeLabel && windowSnapshot.resetAbsoluteLabel
-                    ? `Resets ${windowSnapshot.resetRelativeLabel} at ${windowSnapshot.resetAbsoluteLabel}`
-                    : windowSnapshot.resetRelativeLabel
-                      ? `Resets ${windowSnapshot.resetRelativeLabel}`
-                      : windowSnapshot.resetAbsoluteLabel
-                        ? `Resets at ${windowSnapshot.resetAbsoluteLabel}`
-                        : "Reset time unavailable"}
+                  {formatResetLine(windowSnapshot)}
                 </div>
                 <div className="text-xs text-muted-foreground">{assessment}</div>
               </div>
