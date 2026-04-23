@@ -821,6 +821,76 @@ describe("ProviderRuntimeIngestion", () => {
     expect(payload?.detail).toBe("bun run lint");
   });
 
+  it("merges live command output deltas into the running command activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-command-started"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-live"),
+      itemId: asItemId("item-command-live"),
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        title: "Ran command",
+        data: {
+          item: {
+            id: "item-command-live",
+            type: "commandExecution",
+            status: "inProgress",
+            command: "jj status",
+          },
+        },
+      },
+    });
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-command-output-delta"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-live"),
+      itemId: asItemId("item-command-live"),
+      payload: {
+        streamKind: "command_output",
+        delta: "The working copy has no changes.\n",
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-command-started" && activity.kind === "tool.updated",
+      ),
+    );
+
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-command-started",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    const data =
+      payload?.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const item =
+      data?.item && typeof data.item === "object"
+        ? (data.item as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.updated");
+    expect(payload?.status).toBe("inProgress");
+    expect(item?.command).toBe("jj status");
+    expect(item?.aggregatedOutput).toBe("The working copy has no changes.\n");
+  });
+
   it("uses structured read-file paths when available", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

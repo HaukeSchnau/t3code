@@ -142,6 +142,81 @@ function asBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
+function activityPayloadItemId(activity: OrchestrationThreadActivity): string | null {
+  const payload = asRecord(activity.payload);
+  const data = asRecord(payload?.data);
+  const item = asRecord(data?.item);
+  return asString(item?.id) ?? null;
+}
+
+function findLiveCommandActivity(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  input: {
+    readonly itemId: string | undefined;
+    readonly turnId: TurnId | undefined;
+  },
+): OrchestrationThreadActivity | undefined {
+  return activities.toReversed().find((activity) => {
+    if (
+      activity.kind !== "tool.started" &&
+      activity.kind !== "tool.updated" &&
+      activity.kind !== "tool.completed"
+    ) {
+      return false;
+    }
+
+    const payload = asRecord(activity.payload);
+    if (payload?.itemType !== "command_execution") {
+      return false;
+    }
+
+    if (input.itemId && sameId(activityPayloadItemId(activity), input.itemId)) {
+      return true;
+    }
+
+    return input.turnId !== undefined && activity.turnId === input.turnId;
+  });
+}
+
+function mergeCommandOutputActivity(
+  existing: OrchestrationThreadActivity | undefined,
+  event: Extract<ProviderRuntimeEvent, { type: "content.delta" }>,
+): OrchestrationThreadActivity | null {
+  if (event.payload.streamKind !== "command_output" || event.payload.delta.length === 0) {
+    return null;
+  }
+
+  const existingPayload = asRecord(existing?.payload);
+  const existingData = asRecord(existingPayload?.data);
+  const existingItem = asRecord(existingData?.item);
+  const aggregatedOutput = `${asString(existingItem?.aggregatedOutput) ?? ""}${event.payload.delta}`;
+  const itemId = asString(existingItem?.id) ?? event.itemId ?? null;
+
+  return {
+    id: existing?.id ?? event.eventId,
+    tone: "tool",
+    kind: "tool.updated",
+    summary: existing?.summary ?? "Ran command",
+    payload: {
+      ...existingPayload,
+      itemType: "command_execution",
+      status: "inProgress",
+      data: {
+        ...existingData,
+        item: {
+          ...existingItem,
+          ...(itemId ? { id: itemId } : {}),
+          type: "commandExecution",
+          status: "inProgress",
+          aggregatedOutput,
+        },
+      },
+    },
+    turnId: existing?.turnId ?? toTurnId(event.turnId) ?? null,
+    createdAt: existing?.createdAt ?? event.createdAt,
+  };
+}
+
 function normalizeRateLimitResetTimestamp(value: unknown): string | null {
   const raw = asFiniteNumber(value);
   if (raw === null || raw <= 0) {
@@ -638,7 +713,10 @@ function runtimeEventToActivities(
           summary: `${event.payload.title ?? "Tool"} started`,
           payload: {
             itemType: event.payload.itemType,
+            ...(event.payload.status ? { status: event.payload.status } : {}),
+            ...(event.payload.title ? { title: event.payload.title } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1643,7 +1721,21 @@ const make = Effect.gen(function* () {
       }
 
       const activities = runtimeEventToActivities(event);
-      yield* Effect.forEach(activities, (activity) =>
+      const liveCommandOutputActivity =
+        event.type === "content.delta" && event.payload.streamKind === "command_output"
+          ? mergeCommandOutputActivity(
+              findLiveCommandActivity(thread.activities, {
+                itemId: event.itemId,
+                turnId: toTurnId(event.turnId),
+              }),
+              event,
+            )
+          : null;
+      const projectedActivities =
+        liveCommandOutputActivity === null
+          ? activities
+          : [...activities, liveCommandOutputActivity];
+      yield* Effect.forEach(projectedActivities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",
           commandId: providerCommandId(event, "thread-activity-append"),

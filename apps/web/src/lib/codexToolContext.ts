@@ -241,6 +241,9 @@ function normalizeStatus(input: {
   if (input.success === true) {
     return "completed";
   }
+  if (input.activityKind === "tool.started") {
+    return "running";
+  }
   if (input.activityKind === "tool.updated") {
     return "running";
   }

@@ -1002,6 +1002,37 @@ describe("deriveWorkLogEntries", () => {
     });
   });
 
+  it("keeps running command rows from tool.started activities", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-started",
+        kind: "tool.started",
+        summary: "Ran command started",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              id: "item-command-started",
+              type: "commandExecution",
+              status: "inProgress",
+              command: "jj status",
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Ran command",
+      command: "jj status",
+      toolStatus: "running",
+      itemType: "command_execution",
+    });
+  });
+
   it("derives Codex file-change tool context with inline diffs", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
