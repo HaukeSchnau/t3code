@@ -5312,6 +5312,190 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("opens the scratchpad in the existing right-panel lane", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-open" as MessageId,
+        targetText: "scratchpad lane target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+
+      await waitForElement(
+        () => document.querySelector('[data-testid="scratchpad-panel"]'),
+        "Scratchpad panel should open.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders the scratchpad in the right sheet on narrow layouts", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-sheet" as MessageId,
+        targetText: "scratchpad sheet target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+
+      await waitForElement(
+        () => document.querySelector('[data-slot="sheet-popup"] [data-testid="scratchpad-panel"]'),
+        "Scratchpad panel should render inside the right sheet.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("persists scratchpad text across remounts", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-persist" as MessageId,
+        targetText: "scratchpad persistence target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("reload this note");
+
+      await mounted.cleanup();
+
+      const remounted = await mountChatView({
+        viewport: WIDE_FOOTER_VIEWPORT,
+        snapshot: createSnapshotForTargetUser({
+          targetMessageId: "msg-user-scratchpad-persist" as MessageId,
+          targetText: "scratchpad persistence target",
+        }),
+      });
+
+      try {
+        await page.getByTestId("scratchpad-toggle").click();
+        await vi.waitFor(
+          () => {
+            const textarea = document.querySelector<HTMLTextAreaElement>(
+              '[data-testid="scratchpad-textarea"]',
+            );
+            expect(textarea?.value).toBe("reload this note");
+          },
+          { timeout: 8_000, interval: 16 },
+        );
+      } finally {
+        await remounted.cleanup();
+      }
+      return;
+    } finally {
+      await mounted.cleanup().catch(() => undefined);
+    }
+  });
+
+  it("appends scratchpad text into the composer without sending a message", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-append" as MessageId,
+        targetText: "scratchpad append target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("follow-up notes");
+      const dispatchCountBefore = wsRequests.filter(
+        (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
+      ).length;
+
+      await page.getByTestId("scratchpad-append").click();
+
+      await waitForComposerText("follow-up notes");
+      expect(
+        wsRequests.filter((request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand)
+          .length,
+      ).toBe(dispatchCountBefore);
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("appends scratchpad text with paragraph spacing after existing composer content", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-spacing" as MessageId,
+        targetText: "scratchpad spacing target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("composer-editor").fill("Existing context");
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("Later notes");
+
+      await page.getByTestId("scratchpad-append").click();
+
+      await waitForComposerText("Existing context\n\nLater notes");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("opens the scratchpad even when a plan panel is already available", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+    });
+
+    try {
+      await waitForElement(
+        () => document.querySelector('button[aria-label="Plan actions"]'),
+        "Plan sidebar should auto-open for the proposed plan snapshot.",
+      );
+
+      await page.getByTestId("scratchpad-toggle").click();
+
+      await waitForElement(
+        () => document.querySelector('[data-testid="scratchpad-panel"]'),
+        "Scratchpad should open from the shared right-panel lane.",
+      );
+      await expect.element(page.getByTestId("scratchpad-toggle")).toHaveAttribute("data-pressed");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("reopens the plan panel and closes the scratchpad when the plan toggle is used", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotWithLongProposedPlan(),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await waitForElement(
+        () => document.querySelector('[data-testid="scratchpad-panel"]'),
+        "Scratchpad should open before toggling back to the plan panel.",
+      );
+
+      await page.getByTestId("plan-sidebar-toggle").click();
+
+      await waitForElement(
+        () => document.querySelector('button[aria-label="Plan actions"]'),
+        "Plan sidebar should reopen after using the plan toggle.",
+      );
+      expect(document.querySelector('[data-testid="scratchpad-panel"]')).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps pending-question footer actions inside the composer after a real resize", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,

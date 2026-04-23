@@ -162,6 +162,23 @@ const terminalContextIdListsEqual = (
 ): boolean =>
   contexts.length === ids.length && contexts.every((context, index) => context.id === ids[index]);
 
+function appendTextToPrompt(prompt: string, appendedText: string): string {
+  const trimmedText = appendedText.trim();
+  if (trimmedText.length === 0) {
+    return prompt;
+  }
+  if (prompt.trim().length === 0) {
+    return trimmedText;
+  }
+  if (prompt.endsWith("\n\n")) {
+    return `${prompt}${trimmedText}`;
+  }
+  if (prompt.endsWith("\n")) {
+    return `${prompt}\n${trimmedText}`;
+  }
+  return `${prompt}\n\n${trimmedText}`;
+}
+
 const ComposerFooterModeControls = memo(function ComposerFooterModeControls(props: {
   showInteractionModeToggle: boolean;
   interactionMode: ProviderInteractionMode;
@@ -253,6 +270,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
             size="sm"
             type="button"
             onClick={props.onTogglePlanSidebar}
+            data-testid="plan-sidebar-toggle"
             title={
               props.planSidebarOpen
                 ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
@@ -325,6 +343,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
+  appendText: (text: string) => void;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
@@ -1596,6 +1615,21 @@ export const ChatComposer = memo(
         focusAt: (cursor: number) => {
           composerEditorRef.current?.focusAt(cursor);
         },
+        appendText: (text: string) => {
+          const nextPrompt = appendTextToPrompt(promptRef.current, text);
+          if (nextPrompt === promptRef.current) {
+            return;
+          }
+          const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
+          promptRef.current = nextPrompt;
+          setPrompt(nextPrompt);
+          setComposerHighlightedItemId(null);
+          setComposerCursor(nextCursor);
+          setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+          window.requestAnimationFrame(() => {
+            composerEditorRef.current?.focusAt(nextCursor);
+          });
+        },
         openModelPicker: () => {
           setIsComposerModelPickerOpen(true);
         },
@@ -1688,6 +1722,7 @@ export const ChatComposer = memo(
         selectedPromptEffort,
         selectedProvider,
         selectedProviderModels,
+        setPrompt,
       ],
     );
 

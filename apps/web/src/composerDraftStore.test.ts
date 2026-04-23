@@ -245,6 +245,83 @@ describe("composerDraftStore clearComposerContent", () => {
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
   });
+
+  it("preserves scratchpad notes when clearing composer content", () => {
+    const store = useComposerDraftStore.getState();
+    store.setPrompt(threadRef, "draft prompt");
+    store.setScratchpad(threadRef, "keep these notes");
+
+    store.clearComposerContent(threadRef);
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      prompt: "",
+      scratchpad: "keep these notes",
+    });
+  });
+});
+
+describe("composerDraftStore scratchpad", () => {
+  const threadId = ThreadId.make("thread-scratchpad");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists and hydrates scratchpad text", () => {
+    useComposerDraftStore.getState().setScratchpad(threadRef, "capture this later");
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadKey?: Record<string, { scratchpad?: string }>;
+    };
+
+    expect(persistedState.draftsByThreadKey?.[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]).toEqual(
+      expect.objectContaining({
+        scratchpad: "capture this later",
+      }),
+    );
+
+    const mergedState = persistApi.getOptions().merge(
+      {
+        draftsByThreadKey: {
+          [threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]: {
+            prompt: "",
+            scratchpad: "hydrated notes",
+            attachments: [],
+          },
+        },
+        draftThreadsByThreadKey: {},
+        logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+      },
+      useComposerDraftStore.getInitialState(),
+    );
+
+    expect(
+      mergedState.draftsByThreadKey[threadKeyFor(threadId, TEST_ENVIRONMENT_ID)]?.scratchpad,
+    ).toBe("hydrated notes");
+  });
+
+  it("retains scratchpad-only drafts and removes them once cleared", () => {
+    const store = useComposerDraftStore.getState();
+    store.setScratchpad(threadRef, "only notes");
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toMatchObject({
+      scratchpad: "only notes",
+    });
+
+    store.setScratchpad(threadRef, "");
+
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)).toBeUndefined();
+  });
 });
 
 describe("composerDraftStore syncPersistedAttachments", () => {
@@ -766,6 +843,33 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(useComposerDraftStore.getState().getDraftThreadByProjectRef(projectRef)).toBeNull();
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
     expect(draftByKey(draftId)).toBeUndefined();
+  });
+
+  it("moves scratchpad notes onto the canonical server thread when a promoted draft finalizes", () => {
+    const store = useComposerDraftStore.getState();
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setScratchpad(draftId, "promoted notes");
+    markPromotedDraftThread(threadId);
+
+    finalizePromotedDraftThreadByRef(threadRef);
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toBeNull();
+    expect(store.getComposerDraft(threadRef)?.scratchpad).toBe("promoted notes");
+  });
+
+  it("keeps an existing server-thread scratchpad when a promoted draft also has notes", () => {
+    const store = useComposerDraftStore.getState();
+    const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    store.setProjectDraftThreadId(projectRef, draftId, { threadId });
+    store.setScratchpad(draftId, "draft notes");
+    store.setScratchpad(threadRef, "server notes");
+    markPromotedDraftThread(threadId);
+
+    finalizePromotedDraftThreadByRef(threadRef);
+
+    expect(store.getComposerDraft(threadRef)?.scratchpad).toBe("server notes");
+    expect(store.getDraftThread(draftId)).toBeNull();
   });
 
   it("updates branch context on an existing draft thread", () => {

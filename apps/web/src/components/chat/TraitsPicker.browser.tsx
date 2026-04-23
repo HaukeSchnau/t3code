@@ -224,6 +224,7 @@ async function mountClaudePicker(props?: {
   const draftsByThreadKey: Record<string, ComposerThreadDraftState> = {
     [CLAUDE_THREAD_KEY]: {
       prompt: props?.prompt ?? "",
+      scratchpad: "",
       images: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
@@ -426,6 +427,7 @@ async function mountCodexPicker(props: { model?: string; options?: CodexModelOpt
   const draftsByThreadKey: Record<string, ComposerThreadDraftState> = {
     [CODEX_THREAD_KEY]: {
       prompt: "",
+      scratchpad: "",
       images: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],
@@ -488,6 +490,7 @@ async function mountCursorPicker(props: { model?: string; options?: CursorModelO
     draftsByThreadKey: {
       [cursorThreadKey]: {
         prompt: "",
+        scratchpad: "",
         images: [],
         nonPersistedImageIds: [],
         persistedAttachments: [],
@@ -642,6 +645,7 @@ async function mountOpenCodePicker(props: {
   const draftsByThreadKey: Record<string, ComposerThreadDraftState> = {
     [threadKey]: {
       prompt: "",
+      scratchpad: "",
       images: [],
       nonPersistedImageIds: [],
       persistedAttachments: [],

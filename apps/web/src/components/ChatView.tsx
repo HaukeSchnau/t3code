@@ -98,6 +98,7 @@ import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
+import ScratchpadPanel from "./ScratchpadPanel";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { ChevronDownIcon } from "lucide-react";
 import { cn, randomUUID } from "~/lib/utils";
@@ -182,6 +183,7 @@ const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+type ActiveRightPanel = "plan" | "scratchpad" | null;
 
 type ThreadPlanCatalogEntry = Pick<Thread, "id" | "proposedPlans">;
 
@@ -631,7 +633,11 @@ export default function ChatView(props: ChatViewProps) {
   const composerActiveProvider = useComposerDraftStore(
     (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
   );
+  const composerScratchpad = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.scratchpad ?? "",
+  );
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setComposerDraftScratchpad = useComposerDraftStore((store) => store.setScratchpad);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const setComposerDraftTerminalContexts = useComposerDraftStore(
     (store) => store.setTerminalContexts,
@@ -681,13 +687,15 @@ export default function ChatView(props: ChatViewProps) {
   >({});
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
-  const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
-  const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
+  const [activeRightPanel, setActiveRightPanel] = useState<ActiveRightPanel>(null);
+  const shouldUseRightPanelSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
   // When set, the thread-change reset effect will open the sidebar instead of closing it.
   // Used by "Implement in a new thread" to carry the sidebar-open intent across navigation.
   const planSidebarOpenOnNextThreadRef = useRef(false);
+  const planSidebarOpen = activeRightPanel === "plan";
+  const scratchpadOpen = activeRightPanel === "scratchpad";
   const [terminalFocusRequestId, setTerminalFocusRequestId] = useState(0);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
@@ -1563,6 +1571,18 @@ export default function ChatView(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+  const handleScratchpadChange = useCallback(
+    (value: string) => {
+      setComposerDraftScratchpad(composerDraftTarget, value);
+    },
+    [composerDraftTarget, setComposerDraftScratchpad],
+  );
+  const appendScratchpadToComposer = useCallback(() => {
+    if (composerScratchpad.trim().length === 0) {
+      return;
+    }
+    composerRef.current?.appendText(composerScratchpad);
+  }, [composerScratchpad, composerRef]);
   const addTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
   }, []);
@@ -1908,21 +1928,38 @@ export default function ChatView(props: ChatViewProps) {
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
   }, [handleInteractionModeChange, interactionMode]);
   const togglePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen((open) => {
-      if (open) {
+    setActiveRightPanel((current) => {
+      if (current === "plan") {
         planSidebarDismissedForTurnRef.current =
           activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
-      } else {
-        planSidebarDismissedForTurnRef.current = null;
+        return null;
       }
-      return !open;
+      planSidebarDismissedForTurnRef.current = null;
+      return "plan";
     });
   }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
   const closePlanSidebar = useCallback(() => {
-    setPlanSidebarOpen(false);
-    planSidebarDismissedForTurnRef.current =
-      activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+    setActiveRightPanel((current) => {
+      if (current !== "plan") {
+        return current;
+      }
+      planSidebarDismissedForTurnRef.current =
+        activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
+      return null;
+    });
   }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  const toggleScratchpad = useCallback(() => {
+    setActiveRightPanel((current) => {
+      if (current === "scratchpad") {
+        return null;
+      } else {
+        return "scratchpad";
+      }
+    });
+  }, []);
+  const closeScratchpad = useCallback(() => {
+    setActiveRightPanel((current) => (current === "scratchpad" ? null : current));
+  }, []);
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -2007,9 +2044,9 @@ export default function ChatView(props: ChatViewProps) {
     setShowScrollToBottom(false);
     if (planSidebarOpenOnNextThreadRef.current) {
       planSidebarOpenOnNextThreadRef.current = false;
-      setPlanSidebarOpen(true);
+      setActiveRightPanel("plan");
     } else {
-      setPlanSidebarOpen(false);
+      setActiveRightPanel((current) => (current === "scratchpad" ? current : null));
     }
     planSidebarDismissedForTurnRef.current = null;
   }, [activeThread?.id]);
@@ -2018,13 +2055,13 @@ export default function ChatView(props: ChatViewProps) {
   // Don't auto-open for plans carried over from a previous turn (the user can open manually).
   useEffect(() => {
     if (!activePlan) return;
-    if (planSidebarOpen) return;
+    if (activeRightPanel !== null) return;
     const latestTurnId = activeLatestTurn?.turnId ?? null;
     if (latestTurnId && activePlan.turnId !== latestTurnId) return;
     const turnKey = activePlan.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
     if (planSidebarDismissedForTurnRef.current === turnKey) return;
-    setPlanSidebarOpen(true);
-  }, [activePlan, activeLatestTurn?.turnId, planSidebarOpen, sidebarProposedPlan?.turnId]);
+    setActiveRightPanel("plan");
+  }, [activePlan, activeLatestTurn?.turnId, activeRightPanel, sidebarProposedPlan?.turnId]);
 
   useEffect(() => {
     setIsRevertingCheckpoint(false);
@@ -2951,7 +2988,7 @@ export default function ChatView(props: ChatViewProps) {
         // step-tracking activities that the sidebar will display.
         if (nextInteractionMode === "default") {
           planSidebarDismissedForTurnRef.current = null;
-          setPlanSidebarOpen(true);
+          setActiveRightPanel("plan");
         }
         sendInFlightRef.current = false;
       } catch (err) {
@@ -3255,12 +3292,14 @@ export default function ChatView(props: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          scratchpadOpen={scratchpadOpen}
           onRunProjectScript={runProjectScript}
           onAddProjectScript={saveProjectScript}
           onUpdateProjectScript={updateProjectScript}
           onDeleteProjectScript={deleteProjectScript}
           onToggleTerminal={toggleTerminalVisibility}
           onToggleDiff={onToggleDiff}
+          onToggleScratchpad={toggleScratchpad}
         />
       </header>
 
@@ -3434,8 +3473,7 @@ export default function ChatView(props: ChatViewProps) {
         </div>
         {/* end chat column */}
 
-        {/* Plan sidebar */}
-        {planSidebarOpen && !shouldUsePlanSidebarSheet ? (
+        {planSidebarOpen && !shouldUseRightPanelSheet ? (
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={sidebarProposedPlan}
@@ -3446,6 +3484,15 @@ export default function ChatView(props: ChatViewProps) {
             timestampFormat={timestampFormat}
             mode="sidebar"
             onClose={closePlanSidebar}
+          />
+        ) : null}
+        {scratchpadOpen && !shouldUseRightPanelSheet ? (
+          <ScratchpadPanel
+            scratchpad={composerScratchpad}
+            mode="sidebar"
+            onScratchpadChange={handleScratchpadChange}
+            onAppendToComposer={appendScratchpadToComposer}
+            onClose={closeScratchpad}
           />
         ) : null}
       </div>
@@ -3468,19 +3515,32 @@ export default function ChatView(props: ChatViewProps) {
           onAddTerminalContext={addTerminalContextToDraft}
         />
       ))}
-      {shouldUsePlanSidebarSheet ? (
-        <RightPanelSheet open={planSidebarOpen} onClose={closePlanSidebar}>
-          <PlanSidebar
-            activePlan={activePlan}
-            activeProposedPlan={sidebarProposedPlan}
-            label={planSidebarLabel}
-            environmentId={environmentId}
-            markdownCwd={gitCwd ?? undefined}
-            workspaceRoot={activeWorkspaceRoot}
-            timestampFormat={timestampFormat}
-            mode="sheet"
-            onClose={closePlanSidebar}
-          />
+      {shouldUseRightPanelSheet ? (
+        <RightPanelSheet
+          open={activeRightPanel !== null}
+          onClose={activeRightPanel === "scratchpad" ? closeScratchpad : closePlanSidebar}
+        >
+          {activeRightPanel === "plan" ? (
+            <PlanSidebar
+              activePlan={activePlan}
+              activeProposedPlan={sidebarProposedPlan}
+              label={planSidebarLabel}
+              environmentId={environmentId}
+              markdownCwd={gitCwd ?? undefined}
+              workspaceRoot={activeWorkspaceRoot}
+              timestampFormat={timestampFormat}
+              mode="sheet"
+              onClose={closePlanSidebar}
+            />
+          ) : activeRightPanel === "scratchpad" ? (
+            <ScratchpadPanel
+              scratchpad={composerScratchpad}
+              mode="sheet"
+              onScratchpadChange={handleScratchpadChange}
+              onAppendToComposer={appendScratchpadToComposer}
+              onClose={closeScratchpad}
+            />
+          ) : null}
         </RightPanelSheet>
       ) : null}
 
