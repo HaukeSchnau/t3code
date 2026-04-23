@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useRef, useState, type KeyboardEvent } from "react";
 import {
   ArrowDownToLineIcon,
   EyeIcon,
@@ -8,7 +8,6 @@ import {
   ScissorsLineDashedIcon,
 } from "lucide-react";
 import ChatMarkdown from "./ChatMarkdown";
-import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { Toggle, ToggleGroup } from "./ui/toggle-group";
@@ -32,28 +31,8 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
   onClose,
 }: ScratchpadPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [viewMode, setViewMode] = useState<"write" | "preview">("write");
   const scratchpadEmpty = scratchpad.trim().length === 0;
-  const selectionStart = Math.max(0, Math.min(selection.start, scratchpad.length));
-  const selectionEnd = Math.max(0, Math.min(selection.end, scratchpad.length));
-  const selectedText = useMemo(() => {
-    if (selectionStart === selectionEnd) {
-      return "";
-    }
-    return scratchpad.slice(
-      Math.min(selectionStart, selectionEnd),
-      Math.max(selectionStart, selectionEnd),
-    );
-  }, [scratchpad, selectionEnd, selectionStart]);
-  const selectedTextEmpty = selectedText.trim().length === 0;
-
-  const updateSelection = useCallback((target: HTMLTextAreaElement) => {
-    setSelection({
-      start: target.selectionStart ?? 0,
-      end: target.selectionEnd ?? 0,
-    });
-  }, []);
 
   const appendAll = useCallback(() => {
     if (scratchpadEmpty) {
@@ -190,30 +169,6 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
             </Button>
           </div>
         </div>
-
-        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground/70">
-          <Badge
-            variant={selectedTextEmpty ? "outline" : "secondary"}
-            size="sm"
-            className={cn(
-              "rounded-md px-1.5 normal-case",
-              selectedTextEmpty ? "bg-transparent" : "bg-secondary/80",
-            )}
-            data-testid="scratchpad-selection-status"
-          >
-            {selectedTextEmpty
-              ? "Highlight text to append a selection"
-              : `${selectedText.trim().length} selected`}
-          </Badge>
-          <span>Shortcut</span>
-          <Badge
-            variant="outline"
-            size="sm"
-            className="rounded-md border-border/70 bg-background/70 px-1.5 font-mono text-[10px]"
-          >
-            Mod+Shift+Enter
-          </Badge>
-        </div>
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col p-3">
@@ -221,13 +176,7 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
           <Textarea
             ref={textareaRef}
             value={scratchpad}
-            onChange={(event) => {
-              onScratchpadChange(event.target.value);
-              updateSelection(event.target);
-            }}
-            onSelect={(event) => updateSelection(event.currentTarget)}
-            onKeyUp={(event) => updateSelection(event.currentTarget)}
-            onMouseUp={(event) => updateSelection(event.currentTarget)}
+            onChange={(event) => onScratchpadChange(event.target.value)}
             onKeyDown={handleShortcut}
             placeholder="Jot notes, ideas, or reminders. Markdown is supported in preview. Nothing here is sent unless you append it to the composer."
             className="flex min-h-0 flex-1 rounded-lg border-border/70 bg-background/80 shadow-none"
