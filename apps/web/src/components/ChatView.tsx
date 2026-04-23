@@ -1577,12 +1577,12 @@ export default function ChatView(props: ChatViewProps) {
     },
     [composerDraftTarget, setComposerDraftScratchpad],
   );
-  const appendScratchpadToComposer = useCallback(() => {
-    if (composerScratchpad.trim().length === 0) {
+  const appendScratchpadToComposer = useCallback((text: string) => {
+    if (text.trim().length === 0) {
       return;
     }
-    composerRef.current?.appendText(composerScratchpad);
-  }, [composerScratchpad, composerRef]);
+    composerRef.current?.appendText(text);
+  }, []);
   const addTerminalContextToDraft = useCallback((selection: TerminalContextSelection) => {
     composerRef.current?.addTerminalContext(selection);
   }, []);
@@ -3489,6 +3489,7 @@ export default function ChatView(props: ChatViewProps) {
         {scratchpadOpen && !shouldUseRightPanelSheet ? (
           <ScratchpadPanel
             scratchpad={composerScratchpad}
+            markdownCwd={gitCwd ?? undefined}
             mode="sidebar"
             onScratchpadChange={handleScratchpadChange}
             onAppendToComposer={appendScratchpadToComposer}
@@ -3535,6 +3536,7 @@ export default function ChatView(props: ChatViewProps) {
           ) : activeRightPanel === "scratchpad" ? (
             <ScratchpadPanel
               scratchpad={composerScratchpad}
+              markdownCwd={gitCwd ?? undefined}
               mode="sheet"
               onScratchpadChange={handleScratchpadChange}
               onAppendToComposer={appendScratchpadToComposer}

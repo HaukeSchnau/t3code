@@ -5397,7 +5397,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("appends scratchpad text into the composer without sending a message", async () => {
+  it("appends all scratchpad text into the composer without sending a message", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
       snapshot: createSnapshotForTargetUser({
@@ -5413,7 +5413,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
         (request) => request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand,
       ).length;
 
-      await page.getByTestId("scratchpad-append").click();
+      await page.getByTestId("scratchpad-append-all").click();
 
       await waitForComposerText("follow-up notes");
       expect(
@@ -5439,9 +5439,108 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await page.getByTestId("scratchpad-toggle").click();
       await page.getByTestId("scratchpad-textarea").fill("Later notes");
 
-      await page.getByTestId("scratchpad-append").click();
+      await page.getByTestId("scratchpad-append-all").click();
 
       await waitForComposerText("Existing context\n\nLater notes");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("renders a markdown preview for scratchpad notes", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-preview" as MessageId,
+        targetText: "scratchpad preview target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("# Heading\n\n- first item");
+
+      await page.getByTestId("scratchpad-preview-toggle").click();
+
+      await vi.waitFor(
+        () => {
+          const preview = document.querySelector('[data-testid="scratchpad-preview"]');
+          expect(preview?.textContent ?? "").toContain("Heading");
+          expect(preview?.textContent ?? "").toContain("first item");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("appends only the selected scratchpad text into the composer", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-selection" as MessageId,
+        targetText: "scratchpad selection target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("alpha\nbeta\ngamma");
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        '[data-testid="scratchpad-textarea"]',
+      );
+      if (!textarea) {
+        throw new Error("Scratchpad textarea not found.");
+      }
+      const start = textarea.value.indexOf("beta");
+      textarea.focus();
+      textarea.setSelectionRange(start, start + "beta".length);
+      textarea.dispatchEvent(new Event("select", { bubbles: true }));
+
+      await page.getByTestId("scratchpad-append-selection").click();
+
+      await waitForComposerText("beta");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("supports the scratchpad selection append shortcut", async () => {
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-scratchpad-shortcut" as MessageId,
+        targetText: "scratchpad shortcut target",
+      }),
+    });
+
+    try {
+      await page.getByTestId("scratchpad-toggle").click();
+      await page.getByTestId("scratchpad-textarea").fill("keep this\nsend this");
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        '[data-testid="scratchpad-textarea"]',
+      );
+      if (!textarea) {
+        throw new Error("Scratchpad textarea not found.");
+      }
+      const start = textarea.value.indexOf("send this");
+      const useMeta = isMacPlatform(navigator.platform);
+      textarea.focus();
+      textarea.setSelectionRange(start, start + "send this".length);
+      textarea.dispatchEvent(new Event("select", { bubbles: true }));
+      textarea.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          bubbles: true,
+          cancelable: true,
+          key: "Enter",
+          ctrlKey: !useMeta,
+          metaKey: useMeta,
+          shiftKey: true,
+        }),
+      );
+
+      await waitForComposerText("send this");
     } finally {
       await mounted.cleanup();
     }
