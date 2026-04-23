@@ -1428,11 +1428,6 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                     {statusChipLabel}
                   </span>
                 ) : null}
-                {commandDurationContent ? (
-                  <span className="ml-1.5 align-middle text-[10px] text-muted-foreground/55">
-                    {commandDurationContent}
-                  </span>
-                ) : null}
                 {preview && (
                   <Tooltip>
                     <TooltipTrigger
@@ -1485,11 +1480,6 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                       {statusChipLabel}
                     </span>
                   ) : null}
-                  {commandDurationContent ? (
-                    <span className="ml-1.5 align-middle text-[10px] text-muted-foreground/55">
-                      {commandDurationContent}
-                    </span>
-                  ) : null}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
@@ -1501,19 +1491,26 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
             </Tooltip>
           )}
         </div>
-        {expandable ? (
-          <button
-            type="button"
-            className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 transition-colors hover:bg-background/80 hover:text-foreground/80"
-            aria-label={expanded ? "Hide tool details" : "Show tool details"}
-            onClick={() => setExpanded((value) => !value)}
-          >
-            {expanded ? (
-              <ChevronDownIcon className="size-3.5" />
-            ) : (
-              <ChevronRightIcon className="size-3.5" />
-            )}
-          </button>
+        {commandDurationContent || expandable ? (
+          <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+            {commandDurationContent ? (
+              <span className="text-[10px] text-muted-foreground/55">{commandDurationContent}</span>
+            ) : null}
+            {expandable ? (
+              <button
+                type="button"
+                className="inline-flex size-5 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 transition-colors hover:bg-background/80 hover:text-foreground/80"
+                aria-label={expanded ? "Hide tool details" : "Show tool details"}
+                onClick={() => setExpanded((value) => !value)}
+              >
+                {expanded ? (
+                  <ChevronDownIcon className="size-3.5" />
+                ) : (
+                  <ChevronRightIcon className="size-3.5" />
+                )}
+              </button>
+            ) : null}
+          </div>
         ) : null}
       </div>
       {runningCommandOutput ? (
