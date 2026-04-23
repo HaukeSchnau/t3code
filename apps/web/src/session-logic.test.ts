@@ -571,7 +571,7 @@ describe("findSidebarProposedPlan", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
-  it("omits tool started entries and keeps completed entries", () => {
+  it("collapses a started tool lifecycle entry into its completed result", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
         id: "tool-complete",
@@ -587,7 +587,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
@@ -616,7 +616,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["task-progress", "task-complete"]);
   });
 
@@ -632,7 +632,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries[0]?.label).toBe("Searching for API endpoints");
   });
 
@@ -648,12 +648,12 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries[0]?.label).toBe("Failed to deploy changes");
     expect(entries[0]?.tone).toBe("error");
   });
 
-  it("filters by turn id when provided", () => {
+  it("keeps work entries from multiple turns instead of narrowing to the latest turn", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "Tool call", kind: "tool.started" }),
       makeActivity({
@@ -665,8 +665,8 @@ describe("deriveWorkLogEntries", () => {
       makeActivity({ id: "no-turn", summary: "Checkpoint captured", tone: "info" }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, TurnId.make("turn-2"));
-    expect(entries.map((entry) => entry.id)).toEqual(["turn-2"]);
+    const entries = deriveWorkLogEntries(activities);
+    expect(entries.map((entry) => entry.id)).toEqual(["turn-1", "turn-2"]);
   });
 
   it("omits checkpoint captured info entries", () => {
@@ -686,7 +686,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
@@ -722,7 +722,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["real-work-log"]);
   });
 
@@ -744,7 +744,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries.map((entry) => entry.id)).toEqual(["first", "second"]);
   });
 
@@ -765,7 +765,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe("bun run lint");
   });
 
@@ -786,7 +786,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe("bun run lint");
     expect(entry?.rawCommand).toBe(
       "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -Command 'bun run lint'",
@@ -810,7 +810,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe("rg -n foo .");
     expect(entry?.rawCommand).toBe(
       '"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -Command "rg -n foo ."',
@@ -831,7 +831,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe('rg -n -F "new Date()" .');
     expect(entry?.rawCommand).toBe(
       `"C:\\Program Files\\PowerShell\\7\\pwsh.exe" -NoLogo -NoProfile -Command 'rg -n -F "new Date()" .'`,
@@ -855,7 +855,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.command).toBe("bash script.sh");
     expect(entry?.rawCommand).toBeUndefined();
   });
@@ -884,7 +884,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       command: "bun run dev",
       detail: '{ "dev": "vite dev --port 3000" }',
@@ -913,7 +913,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.changedFiles).toEqual([
       "apps/web/src/components/ChatView.tsx",
       "apps/web/src/session-logic.ts",
@@ -946,7 +946,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       label: "Ran command",
       command: "bun run lint",
@@ -990,7 +990,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       label: "Ran command",
       command: "jj status",
@@ -1024,7 +1024,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       label: "Ran command",
       command: "jj status",
@@ -1061,7 +1061,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       label: "Edited files",
       turnId: "turn-file-change-context",
@@ -1107,7 +1107,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       label: "Read",
       toolStatus: "completed",
@@ -1155,7 +1155,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.label).toBe("github/list_pull_requests");
     expect(entry?.toolContext?.outputs).toEqual(
       expect.arrayContaining([
@@ -1191,7 +1191,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.label).toBe("search_code");
     expect(entry?.toolStatus).toBe("running");
   });
@@ -1210,7 +1210,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry?.toolTitle).toBe("Read File");
     expect(entry?.detail).toBeUndefined();
   });
@@ -1254,7 +1254,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       id: "grep-complete",
@@ -1303,7 +1303,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       id: "read-complete",
@@ -1337,7 +1337,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const [entry] = deriveWorkLogEntries(activities, undefined);
+    const [entry] = deriveWorkLogEntries(activities);
     expect(entry).toMatchObject({
       id: "cursor-command-complete",
       label: "Ran command",
@@ -1379,7 +1379,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
       id: "legacy-read-complete",
@@ -1431,7 +1431,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
@@ -1493,7 +1493,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
 
     expect(entries.map((entry) => entry.id)).toEqual(["tool-1-complete", "tool-2-complete"]);
   });
@@ -1535,7 +1535,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
@@ -1602,7 +1602,7 @@ describe("deriveWorkLogEntries", () => {
       }),
     ];
 
-    const entries = deriveWorkLogEntries(activities, undefined);
+    const entries = deriveWorkLogEntries(activities);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({
@@ -1731,68 +1731,59 @@ describe("deriveTimelineEntries", () => {
 
 describe("deriveWorkLogEntries context window handling", () => {
   it("excludes context window updates from the work log", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "context-1",
-          turnId: "turn-1",
-          kind: "context-window.updated",
-          summary: "Context window updated",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "tool-1",
-          turnId: "turn-1",
-          kind: "tool.completed",
-          summary: "Ran command",
-          tone: "tool",
-        }),
-      ],
-      TurnId.make("turn-1"),
-    );
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "context-1",
+        turnId: "turn-1",
+        kind: "context-window.updated",
+        summary: "Context window updated",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "tool-1",
+        turnId: "turn-1",
+        kind: "tool.completed",
+        summary: "Ran command",
+        tone: "tool",
+      }),
+    ]);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Ran command");
   });
 
   it("excludes usage limit updates from the work log", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "limits-1",
-          turnId: "turn-1",
-          kind: "account.rate-limits.updated",
-          summary: "Usage limits updated",
-          tone: "info",
-        }),
-        makeActivity({
-          id: "tool-1",
-          turnId: "turn-1",
-          kind: "tool.completed",
-          summary: "Ran command",
-          tone: "tool",
-        }),
-      ],
-      TurnId.make("turn-1"),
-    );
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "limits-1",
+        turnId: "turn-1",
+        kind: "account.rate-limits.updated",
+        summary: "Usage limits updated",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "tool-1",
+        turnId: "turn-1",
+        kind: "tool.completed",
+        summary: "Ran command",
+        tone: "tool",
+      }),
+    ]);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Ran command");
   });
 
   it("keeps context compaction activities as normal work log entries", () => {
-    const entries = deriveWorkLogEntries(
-      [
-        makeActivity({
-          id: "compaction-1",
-          turnId: "turn-1",
-          kind: "context-compaction",
-          summary: "Context compacted",
-          tone: "info",
-        }),
-      ],
-      TurnId.make("turn-1"),
-    );
+    const entries = deriveWorkLogEntries([
+      makeActivity({
+        id: "compaction-1",
+        turnId: "turn-1",
+        kind: "context-compaction",
+        summary: "Context compacted",
+        tone: "info",
+      }),
+    ]);
 
     expect(entries).toHaveLength(1);
     expect(entries[0]?.label).toBe("Context compacted");

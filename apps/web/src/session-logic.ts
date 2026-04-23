@@ -478,11 +478,9 @@ export function hasActionableProposedPlan(
 
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
-  latestTurnId: TurnId | undefined,
 ): WorkLogEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries = ordered
-    .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
     .filter((activity) => activity.kind !== "task.started")
     .filter((activity) => activity.kind !== "context-window.updated")
     .filter((activity) => activity.kind !== "account.rate-limits.updated")
@@ -753,10 +751,16 @@ function deriveToolLifecycleCollapseKey(entry: DerivedWorkLogEntry): string | un
   const normalizedLabel = normalizeCompactToolLabel(entry.toolTitle ?? entry.label);
   const detail = entry.detail?.trim() ?? "";
   const itemType = entry.itemType ?? "";
-  if (normalizedLabel.length === 0 && detail.length === 0 && itemType.length === 0) {
+  const turnId = entry.turnId ?? "";
+  if (
+    turnId.length === 0 &&
+    normalizedLabel.length === 0 &&
+    detail.length === 0 &&
+    itemType.length === 0
+  ) {
     return undefined;
   }
-  return [itemType, normalizedLabel, detail].join("\u001f");
+  return [turnId, itemType, normalizedLabel, detail].join("\u001f");
 }
 
 function normalizeCompactToolLabel(value: string): string {
