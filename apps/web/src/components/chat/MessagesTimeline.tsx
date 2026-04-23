@@ -878,11 +878,20 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
+  workEntry: Pick<
+    TimelineWorkEntry,
+    "detail" | "command" | "changedFiles" | "toolContext" | "toolStatus" | "itemType"
+  >,
   workspaceRoot: string | undefined,
 ) {
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
+  if (workEntry.toolStatus === "running" && workEntry.toolContext?.preview) {
+    return workEntry.toolContext.preview;
+  }
+  if (workEntry.toolContext?.preview) {
+    return workEntry.toolContext.preview;
+  }
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
   const [firstPath] = workEntry.changedFiles ?? [];
   if (!firstPath) return null;
@@ -935,11 +944,48 @@ function capitalizePhrase(value: string): string {
   return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;
 }
 
-function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
-  if (!workEntry.toolTitle) {
-    return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
+function isGenericToolHeading(value: string | undefined): boolean {
+  if (!value) {
+    return true;
   }
-  return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+  const normalized = normalizeCompactToolLabel(value).trim().toLowerCase();
+  return (
+    normalized.length === 0 ||
+    normalized === "tool updated" ||
+    normalized === "tool" ||
+    normalized === "tool call"
+  );
+}
+
+function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  if (workEntry.toolTitle && !isGenericToolHeading(workEntry.toolTitle)) {
+    return capitalizePhrase(normalizeCompactToolLabel(workEntry.toolTitle));
+  }
+
+  if (workEntry.itemType === "command_execution" || workEntry.command) {
+    return "Ran command";
+  }
+  if (
+    workEntry.itemType === "file_change" ||
+    workEntry.requestKind === "file-change" ||
+    (workEntry.toolContext?.fileChanges.length ?? 0) > 0
+  ) {
+    return "Edited files";
+  }
+  if (workEntry.requestKind === "file-read") {
+    return "Read file";
+  }
+  if (workEntry.itemType === "web_search") {
+    return "Web search";
+  }
+  if (workEntry.itemType === "mcp_tool_call") {
+    return "MCP tool";
+  }
+  if (workEntry.itemType === "collab_agent_tool_call") {
+    return "Agent tool";
+  }
+
+  return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
 }
 
 function toolStatusChipLabel(
@@ -959,6 +1005,31 @@ function toolStatusChipClassName(toolStatus: TimelineWorkEntry["toolStatus"]): s
     return "border-rose-500/25 bg-rose-500/10 text-rose-200/90";
   }
   return "border-border/55 bg-background/75 text-muted-foreground/75";
+}
+
+function findToolContextField(
+  fields: ReadonlyArray<ToolContextField> | undefined,
+  label: string,
+): ToolContextField | undefined {
+  return fields?.find((field) => field.label.toLowerCase() === label.toLowerCase());
+}
+
+function isCommandWorkEntry(workEntry: TimelineWorkEntry): boolean {
+  return workEntry.itemType === "command_execution" || Boolean(workEntry.command);
+}
+
+function inlineCommandDurationText(workEntry: TimelineWorkEntry): string | null {
+  if (!isCommandWorkEntry(workEntry)) {
+    return null;
+  }
+  return findToolContextField(workEntry.toolContext?.outputs, "Duration")?.value ?? null;
+}
+
+function inlineRunningCommandOutput(workEntry: TimelineWorkEntry): ToolContextField | null {
+  if (!isCommandWorkEntry(workEntry) || workEntry.toolStatus !== "running") {
+    return null;
+  }
+  return findToolContextField(workEntry.toolContext?.outputs, "Output") ?? null;
 }
 
 function truncateToolBlock(
@@ -1026,6 +1097,16 @@ function ToolContextCodeBlock(props: {
       ) : null}
     </div>
   );
+}
+
+function LiveCommandDuration({ createdAt }: { createdAt: string }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [createdAt]);
+  const elapsed = formatElapsed(createdAt, new Date(nowMs).toISOString());
+  return <>{elapsed ?? "0s"}</>;
 }
 
 function ToolContextFieldsSection(props: {
@@ -1299,9 +1380,19 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
       ? null
       : rawPreview;
   const rawCommand = workEntryRawCommand(workEntry);
+  const isCommandEntry = isCommandWorkEntry(workEntry);
+  const runningCommandOutput = inlineRunningCommandOutput(workEntry);
+  const inlineDuration = inlineCommandDurationText(workEntry);
+  const commandDurationContent =
+    inlineDuration ??
+    (isCommandEntry && workEntry.toolStatus === "running" ? (
+      <LiveCommandDuration createdAt={workEntry.createdAt} />
+    ) : null);
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const hideChangedFilePills =
+    workEntry.itemType === "file_change" || (workEntry.toolContext?.fileChanges.length ?? 0) > 0;
   const expandable = hasToolContextDetails(workEntry.toolContext);
   const [expanded, setExpanded] = useState(defaultExpanded);
 
@@ -1335,6 +1426,11 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                     )}
                   >
                     {statusChipLabel}
+                  </span>
+                ) : null}
+                {commandDurationContent ? (
+                  <span className="ml-1.5 align-middle text-[10px] text-muted-foreground/55">
+                    {commandDurationContent}
                   </span>
                 ) : null}
                 {preview && (
@@ -1389,6 +1485,11 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                       {statusChipLabel}
                     </span>
                   ) : null}
+                  {commandDurationContent ? (
+                    <span className="ml-1.5 align-middle text-[10px] text-muted-foreground/55">
+                      {commandDurationContent}
+                    </span>
+                  ) : null}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
@@ -1415,7 +1516,20 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
           </button>
         ) : null}
       </div>
-      {hasChangedFiles && !previewIsChangedFiles && (
+      {runningCommandOutput ? (
+        <div className="mt-1 pl-6">
+          <div className="max-w-full [&_.chat-markdown]:text-[11px] [&_.chat-markdown_.chat-markdown-codeblock]:my-0 [&_.chat-markdown_.chat-markdown-shiki_.shiki]:rounded-lg [&_.chat-markdown_pre]:max-h-40 [&_.chat-markdown_pre]:overflow-auto">
+            <ChatMarkdown
+              text={buildCodeFence(
+                truncateToolBlock(runningCommandOutput.value, 4_000).value,
+                "text",
+              )}
+              cwd={workspaceRoot}
+            />
+          </div>
+        </div>
+      ) : null}
+      {hasChangedFiles && !previewIsChangedFiles && !hideChangedFilePills && (
         <div className="mt-1 flex flex-wrap gap-1 pl-6">
           {workEntry.changedFiles?.slice(0, 4).map((filePath) => {
             const displayPath = formatWorkspaceRelativePath(filePath, workspaceRoot);

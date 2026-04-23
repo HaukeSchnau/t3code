@@ -29,6 +29,15 @@ const KNOWN_CODEX_ITEM_TYPES = new Set([
   "collabAgentToolCall",
 ]);
 
+const PAYLOAD_ITEM_TYPE_TO_CODEX_ITEM_TYPE = {
+  command_execution: "commandExecution",
+  file_change: "fileChange",
+  dynamic_tool_call: "dynamicToolCall",
+  mcp_tool_call: "mcpToolCall",
+  web_search: "webSearch",
+  collab_agent_tool_call: "collabAgentToolCall",
+} as const;
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -53,6 +62,52 @@ function asBoolean(value: unknown): boolean | null {
 
 function trimInlineWhitespace(value: string): string {
   return value.replace(/\s+/gu, " ").trim();
+}
+
+function hasInferredCodexItemShape(
+  item: Record<string, unknown>,
+  itemType: (typeof PAYLOAD_ITEM_TYPE_TO_CODEX_ITEM_TYPE)[keyof typeof PAYLOAD_ITEM_TYPE_TO_CODEX_ITEM_TYPE],
+): boolean {
+  switch (itemType) {
+    case "commandExecution":
+      return (
+        asTrimmedString(item.command) !== null ||
+        asTrimmedString(asRecord(item.input)?.command) !== null ||
+        asTrimmedString(asRecord(item.result)?.command) !== null ||
+        asTrimmedString(item.aggregatedOutput) !== null ||
+        asNumber(item.exitCode) !== null ||
+        asNumber(item.durationMs) !== null
+      );
+    case "fileChange":
+      return Array.isArray(item.changes);
+    case "dynamicToolCall":
+      return (
+        asTrimmedString(item.tool) !== null ||
+        asTrimmedString(item.namespace) !== null ||
+        item.arguments !== undefined ||
+        item.contentItems !== undefined ||
+        asBoolean(item.success) !== null
+      );
+    case "mcpToolCall":
+      return (
+        asTrimmedString(item.server) !== null ||
+        asTrimmedString(item.tool) !== null ||
+        item.arguments !== undefined ||
+        item.result !== undefined ||
+        item.error !== undefined
+      );
+    case "webSearch":
+      return asTrimmedString(item.query) !== null || item.action !== undefined;
+    case "collabAgentToolCall":
+      return (
+        asTrimmedString(item.tool) !== null ||
+        asTrimmedString(item.prompt) !== null ||
+        asTrimmedString(item.model) !== null ||
+        asTrimmedString(item.reasoningEffort) !== null ||
+        Array.isArray(item.receiverThreadIds) ||
+        item.agentsStates !== undefined
+      );
+  }
 }
 
 function truncateInline(value: string, maxLength = 160): string {
@@ -440,7 +495,17 @@ export function deriveCodexToolContextPresentation(input: {
 }): ToolContextPresentation | null {
   const data = asRecord(input.payload?.data);
   const item = asRecord(data?.item);
-  const itemType = asTrimmedString(item?.type);
+  const inferredItemType =
+    typeof input.payload?.itemType === "string"
+      ? (PAYLOAD_ITEM_TYPE_TO_CODEX_ITEM_TYPE[
+          input.payload.itemType as keyof typeof PAYLOAD_ITEM_TYPE_TO_CODEX_ITEM_TYPE
+        ] ?? null)
+      : null;
+  const itemType =
+    asTrimmedString(item?.type) ??
+    (item && inferredItemType && hasInferredCodexItemShape(item, inferredItemType)
+      ? inferredItemType
+      : null);
   if (!item || !itemType || !KNOWN_CODEX_ITEM_TYPES.has(itemType)) {
     return null;
   }

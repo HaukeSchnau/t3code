@@ -518,7 +518,10 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   });
   const commandPreview = extractToolCommand(payload);
   const changedFiles = extractChangedFiles(payload);
-  const title = codexToolContext?.heading ?? extractToolTitle(payload);
+  const explicitTitle = extractToolTitle(payload);
+  const title = !isGenericToolLifecycleTitle(explicitTitle)
+    ? explicitTitle
+    : (codexToolContext?.heading ?? explicitTitle);
   const isTaskActivity = activity.kind === "task.progress" || activity.kind === "task.completed";
   const taskSummary =
     isTaskActivity && typeof payload?.summary === "string" && payload.summary.length > 0
@@ -609,6 +612,20 @@ function collapseDerivedWorkLogEntries(
     collapsed.push(entry);
   }
   return collapsed;
+}
+
+function isGenericToolLifecycleTitle(value: string | null): boolean {
+  if (!value) {
+    return true;
+  }
+  const normalized = normalizeCompactToolLabel(value).trim().toLowerCase();
+  return (
+    normalized.length === 0 ||
+    normalized === "tool updated" ||
+    normalized === "tool completed" ||
+    normalized === "tool" ||
+    normalized === "tool call"
+  );
 }
 
 function shouldCollapseToolLifecycleEntries(

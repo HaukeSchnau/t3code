@@ -243,6 +243,91 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('"type": "commandExecution"');
   });
 
+  it("shows running commands inline with live duration and current output", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-17T19:12:38.000Z"));
+
+    try {
+      const { WorkEntryRow } = await import("./MessagesTimeline");
+      const markup = renderToStaticMarkup(
+        <WorkEntryRow
+          workEntry={{
+            id: "work-command-running",
+            createdAt: "2026-03-17T19:12:28.000Z",
+            label: "Tool updated",
+            tone: "tool",
+            itemType: "command_execution",
+            command: "jj status",
+            toolStatus: "running",
+            toolContext: {
+              heading: "Ran command",
+              preview: "The working copy has no changes.",
+              parameters: [
+                {
+                  label: "Command",
+                  value: "jj status",
+                  format: "code",
+                },
+              ],
+              outputs: [
+                {
+                  label: "Output",
+                  value: "The working copy has no changes.\nWorking copy  (@) : qp test",
+                  format: "code",
+                },
+              ],
+              fileChanges: [],
+            },
+          }}
+          workspaceRoot="/Users/haukeschnau/OSS/t3code"
+          onOpenTurnDiff={() => {}}
+        />,
+      );
+
+      expect(markup).toContain("Ran command");
+      expect(markup).toContain("Running");
+      expect(markup).toContain("jj status");
+      expect(markup).toContain("10s");
+      expect(markup).toContain("The working copy has no changes.");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows completed command duration without expanding", async () => {
+    const { WorkEntryRow } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <WorkEntryRow
+        workEntry={{
+          id: "work-command-complete",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Ran command",
+          tone: "tool",
+          itemType: "command_execution",
+          command: "bun run lint",
+          toolStatus: "completed",
+          toolContext: {
+            heading: "Ran command",
+            parameters: [],
+            outputs: [
+              {
+                label: "Duration",
+                value: "1.5s",
+                format: "text",
+              },
+            ],
+            fileChanges: [],
+          },
+        }}
+        workspaceRoot="/Users/haukeschnau/OSS/t3code"
+        onOpenTurnDiff={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Ran command");
+    expect(markup).toContain("1.5s");
+  });
+
   it("renders Codex file-change detail rows with diff previews and full diff handoff", async () => {
     const { WorkEntryRow } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
@@ -286,6 +371,39 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("diff-render-file");
     expect(markup).toContain(
       'data-diff-file-path="/Users/haukeschnau/OSS/t3code/apps/web/src/session-logic.ts"',
+    );
+  });
+
+  it("does not render duplicate file pills for edited-file rows", async () => {
+    const { WorkEntryRow } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <WorkEntryRow
+        workEntry={{
+          id: "work-file-row",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Edited files",
+          tone: "tool",
+          itemType: "file_change",
+          changedFiles: ["/Users/haukeschnau/OSS/t3code/apps/web/src/session-logic.test.ts"],
+          toolContext: {
+            heading: "Edited files",
+            preview: "/Users/haukeschnau/OSS/t3code/apps/web/src/session-logic.test.ts",
+            parameters: [],
+            outputs: [],
+            fileChanges: [
+              {
+                path: "/Users/haukeschnau/OSS/t3code/apps/web/src/session-logic.test.ts",
+              },
+            ],
+          },
+        }}
+        workspaceRoot="/Users/haukeschnau/OSS/t3code"
+        onOpenTurnDiff={() => {}}
+      />,
+    );
+
+    expect(markup).not.toContain(
+      "rounded-md border border-border/55 bg-background/75 px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground/75",
     );
   });
 

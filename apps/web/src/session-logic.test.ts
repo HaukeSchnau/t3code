@@ -969,6 +969,39 @@ describe("deriveWorkLogEntries", () => {
     );
   });
 
+  it("infers Codex command context from payload itemType while a command is still running", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "codex-command-running",
+        kind: "tool.updated",
+        summary: "Tool updated",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          data: {
+            item: {
+              id: "item-command-running",
+              status: "inProgress",
+              command: "jj status",
+              aggregatedOutput: "The working copy has no changes.",
+            },
+          },
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities, undefined);
+    expect(entry).toMatchObject({
+      label: "Ran command",
+      command: "jj status",
+      toolStatus: "running",
+    });
+    expect(entry?.toolContext).toMatchObject({
+      heading: "Ran command",
+      preview: "The working copy has no changes.",
+    });
+  });
+
   it("derives Codex file-change tool context with inline diffs", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
