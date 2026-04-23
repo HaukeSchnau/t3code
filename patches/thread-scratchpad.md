@@ -13,7 +13,6 @@ Add a lightweight thread scratchpad so users can keep side notes without interru
 - Scratchpad and plan share one lane; only one can be open at a time
 - Reuse inline sidebar vs sheet behavior based on existing right-panel media query
 - Append action adds notes to the composer without sending
-- Scratchpad supports markdown preview without introducing server-side note handling
 - Users can append a selected portion of the scratchpad without appending the whole note
 - Scratchpad survives reloads
 - Scratchpad follows draft-thread promotion into the real server thread
@@ -24,7 +23,6 @@ Add a lightweight thread scratchpad so users can keep side notes without interru
 - shared right panel
 - per-thread persistence
 - explicit append action
-- markdown preview rather than a full rich-text editor
 - selected-text append with a keyboard shortcut
 - no auto-clear after append
 - no export/share/save-to-workspace behavior

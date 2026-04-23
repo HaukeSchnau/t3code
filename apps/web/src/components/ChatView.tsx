@@ -3508,7 +3508,6 @@ export default function ChatView(props: ChatViewProps) {
         {scratchpadOpen && !shouldUseRightPanelSheet ? (
           <ScratchpadPanel
             scratchpad={composerScratchpad}
-            markdownCwd={gitCwd ?? undefined}
             mode="sidebar"
             onScratchpadChange={handleScratchpadChange}
             onAppendToComposer={appendScratchpadToComposer}
@@ -3555,7 +3554,6 @@ export default function ChatView(props: ChatViewProps) {
           ) : activeRightPanel === "scratchpad" ? (
             <ScratchpadPanel
               scratchpad={composerScratchpad}
-              markdownCwd={gitCwd ?? undefined}
               mode="sheet"
               onScratchpadChange={handleScratchpadChange}
               onAppendToComposer={appendScratchpadToComposer}

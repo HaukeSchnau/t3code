@@ -1,21 +1,16 @@
-import { memo, useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { memo, useCallback, useRef, type KeyboardEvent } from "react";
 import {
   ArrowDownToLineIcon,
-  EyeIcon,
   NotebookPenIcon,
   PanelRightCloseIcon,
-  PencilIcon,
   ScissorsLineDashedIcon,
 } from "lucide-react";
-import ChatMarkdown from "./ChatMarkdown";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
-import { Toggle, ToggleGroup } from "./ui/toggle-group";
 import { cn } from "~/lib/utils";
 
 interface ScratchpadPanelProps {
   scratchpad: string;
-  markdownCwd: string | undefined;
   mode?: "sheet" | "sidebar";
   onScratchpadChange: (value: string) => void;
   onAppendToComposer: (text: string) => void;
@@ -24,14 +19,12 @@ interface ScratchpadPanelProps {
 
 const ScratchpadPanel = memo(function ScratchpadPanel({
   scratchpad,
-  markdownCwd,
   mode = "sidebar",
   onScratchpadChange,
   onAppendToComposer,
   onClose,
 }: ScratchpadPanelProps) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const [viewMode, setViewMode] = useState<"write" | "preview">("write");
   const scratchpadEmpty = scratchpad.trim().length === 0;
 
   const appendAll = useCallback(() => {
@@ -113,35 +106,6 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
           </Button>
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
-          <ToggleGroup
-            size="xs"
-            variant="outline"
-            value={[viewMode]}
-            onValueChange={(value) => {
-              const nextValue = value[0];
-              if (nextValue === "write" || nextValue === "preview") {
-                setViewMode(nextValue);
-              }
-            }}
-          >
-            <Toggle
-              value="write"
-              aria-label="Show scratchpad editor"
-              data-testid="scratchpad-write-toggle"
-            >
-              <PencilIcon className="size-3" />
-              <span>Write</span>
-            </Toggle>
-            <Toggle
-              value="preview"
-              aria-label="Show scratchpad markdown preview"
-              data-testid="scratchpad-preview-toggle"
-            >
-              <EyeIcon className="size-3" />
-              <span>Preview</span>
-            </Toggle>
-          </ToggleGroup>
-
           <div className="ml-auto flex items-center gap-1.5">
             <Button
               type="button"
@@ -172,30 +136,15 @@ const ScratchpadPanel = memo(function ScratchpadPanel({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col p-3">
-        {viewMode === "write" ? (
-          <Textarea
-            ref={textareaRef}
-            value={scratchpad}
-            onChange={(event) => onScratchpadChange(event.target.value)}
-            onKeyDown={handleShortcut}
-            placeholder="Jot notes, ideas, or reminders. Markdown is supported in preview. Nothing here is sent unless you append it to the composer."
-            className="flex min-h-0 flex-1 rounded-lg border-border/70 bg-background/80 shadow-none"
-            data-testid="scratchpad-textarea"
-          />
-        ) : (
-          <div
-            className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-border/70 bg-background/80 px-3 py-2"
-            data-testid="scratchpad-preview"
-          >
-            {scratchpad.trim().length > 0 ? (
-              <ChatMarkdown text={scratchpad} cwd={markdownCwd} />
-            ) : (
-              <p className="text-sm text-muted-foreground/70">
-                Markdown preview appears here once you start writing.
-              </p>
-            )}
-          </div>
-        )}
+        <Textarea
+          ref={textareaRef}
+          value={scratchpad}
+          onChange={(event) => onScratchpadChange(event.target.value)}
+          onKeyDown={handleShortcut}
+          placeholder="Jot notes, ideas, or reminders. Nothing here is sent unless you append it to the composer."
+          className="flex min-h-0 flex-1 rounded-lg border-border/70 bg-background/80 shadow-none"
+          data-testid="scratchpad-textarea"
+        />
       </div>
     </div>
   );

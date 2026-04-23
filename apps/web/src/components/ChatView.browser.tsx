@@ -5447,34 +5447,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("renders a markdown preview for scratchpad notes", async () => {
-    const mounted = await mountChatView({
-      viewport: WIDE_FOOTER_VIEWPORT,
-      snapshot: createSnapshotForTargetUser({
-        targetMessageId: "msg-user-scratchpad-preview" as MessageId,
-        targetText: "scratchpad preview target",
-      }),
-    });
-
-    try {
-      await page.getByTestId("scratchpad-toggle").click();
-      await page.getByTestId("scratchpad-textarea").fill("# Heading\n\n- first item");
-
-      await page.getByTestId("scratchpad-preview-toggle").click();
-
-      await vi.waitFor(
-        () => {
-          const preview = document.querySelector('[data-testid="scratchpad-preview"]');
-          expect(preview?.textContent ?? "").toContain("Heading");
-          expect(preview?.textContent ?? "").toContain("first item");
-        },
-        { timeout: 8_000, interval: 16 },
-      );
-    } finally {
-      await mounted.cleanup();
-    }
-  });
-
   it("appends only the selected scratchpad text into the composer", async () => {
     const mounted = await mountChatView({
       viewport: WIDE_FOOTER_VIEWPORT,
