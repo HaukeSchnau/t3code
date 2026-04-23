@@ -1,3 +1,5 @@
+import { renderTerminalOutput } from "./terminalOutput";
+
 export interface ToolContextField {
   label: string;
   value: string;
@@ -261,7 +263,8 @@ function deriveCommandExecutionContext(
 ): ToolContextPresentation {
   const parameters: ToolContextField[] = [];
   const outputs: ToolContextField[] = [];
-  const aggregatedOutput = stringifyPretty(item.aggregatedOutput);
+  const rawAggregatedOutput = stringifyPretty(item.aggregatedOutput);
+  const aggregatedOutput = rawAggregatedOutput ? renderTerminalOutput(rawAggregatedOutput) : null;
   const preview = firstTextLine(aggregatedOutput);
   const status = normalizeStatus({
     activityKind,

@@ -6,6 +6,7 @@ import {
   use,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -71,6 +72,11 @@ import {
 } from "../../lib/codexToolContext";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { getRenderablePatch, resolveFileDiffPath } from "../../lib/renderablePatch";
+import {
+  captureTerminalViewportSnapshot,
+  renderTerminalOutput,
+  resolveTerminalViewportScrollTop,
+} from "../../lib/terminalOutput";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via useContext.
@@ -1099,6 +1105,77 @@ function ToolContextCodeBlock(props: {
   );
 }
 
+function TerminalTranscriptBlock(props: {
+  value: string;
+  maxLength?: number;
+  viewportClassName?: string;
+}) {
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const snapshotRef = useRef<ReturnType<typeof captureTerminalViewportSnapshot> | null>(null);
+  const normalizedValue = useMemo(() => renderTerminalOutput(props.value), [props.value]);
+  const truncated = props.maxLength ? truncateToolBlock(normalizedValue, props.maxLength) : null;
+  const displayedValue = truncated?.value ?? normalizedValue;
+
+  const handleScroll = useCallback(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+    snapshotRef.current = captureTerminalViewportSnapshot({
+      scrollTop: viewport.scrollTop,
+      scrollHeight: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight,
+    });
+  }, []);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    const previous =
+      snapshotRef.current ??
+      ({
+        scrollTop: 0,
+        atBottom: true,
+      } satisfies ReturnType<typeof captureTerminalViewportSnapshot>);
+    viewport.scrollTop = resolveTerminalViewportScrollTop({
+      previous,
+      nextScrollHeight: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight,
+    });
+    snapshotRef.current = captureTerminalViewportSnapshot({
+      scrollTop: viewport.scrollTop,
+      scrollHeight: viewport.scrollHeight,
+      clientHeight: viewport.clientHeight,
+    });
+  }, [displayedValue]);
+
+  return (
+    <div className="space-y-1.5">
+      <div
+        ref={viewportRef}
+        className={cn(
+          "overflow-auto rounded-lg border border-border/50 bg-muted/25",
+          props.viewportClassName,
+        )}
+        data-live-terminal-output="true"
+        onScroll={handleScroll}
+      >
+        <pre className="min-w-full px-3 py-2.5 font-mono text-[11px] leading-4 whitespace-pre-wrap break-words text-foreground/88 tabular-nums">
+          {displayedValue}
+        </pre>
+      </div>
+      {truncated?.truncated ? (
+        <div className="px-1 text-[10px] text-muted-foreground/65">
+          Showing the first {props.maxLength?.toLocaleString()} characters.
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function LiveCommandDuration({ createdAt }: { createdAt: string }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
   useEffect(() => {
@@ -1114,6 +1191,7 @@ function ToolContextFieldsSection(props: {
   fields: ReadonlyArray<ToolContextField>;
   maxValueLength?: number;
   workspaceRoot: string | undefined;
+  terminalFieldLabels?: ReadonlySet<string>;
 }) {
   if (props.fields.length === 0) {
     return null;
@@ -1128,7 +1206,12 @@ function ToolContextFieldsSection(props: {
         {props.fields.map((field) => (
           <div key={`${props.title}:${field.label}`} className="space-y-1.5">
             <p className="text-[11px] font-medium text-muted-foreground/80">{field.label}</p>
-            {field.format === "code" || field.format === "json" ? (
+            {props.terminalFieldLabels?.has(field.label) ? (
+              <TerminalTranscriptBlock
+                value={field.value}
+                {...(props.maxValueLength !== undefined ? { maxLength: props.maxValueLength } : {})}
+              />
+            ) : field.format === "code" || field.format === "json" ? (
               <ToolContextCodeBlock
                 value={field.value}
                 format={field.format}
@@ -1303,6 +1386,8 @@ function ToolContextDetailsPanel(props: {
     props.toolContext.rawPayload !== undefined
       ? JSON.stringify(props.toolContext.rawPayload, null, 2)
       : null;
+  const terminalOutputFieldLabels =
+    props.toolContext.heading === "Ran command" ? new Set(["Output"]) : undefined;
 
   return (
     <div className="mt-2 space-y-4 border-l border-border/45 pl-4">
@@ -1316,6 +1401,7 @@ function ToolContextDetailsPanel(props: {
         fields={props.toolContext.outputs}
         maxValueLength={12_000}
         workspaceRoot={props.workspaceRoot}
+        {...(terminalOutputFieldLabels ? { terminalFieldLabels: terminalOutputFieldLabels } : {})}
       />
       <ToolContextFileChangesSection
         turnId={props.turnId}
@@ -1507,15 +1593,11 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
       </div>
       {runningCommandOutput ? (
         <div className="mt-1 pl-6">
-          <div className="max-w-full [&_.chat-markdown]:text-[11px] [&_.chat-markdown_.chat-markdown-codeblock]:my-0 [&_.chat-markdown_.chat-markdown-shiki_.shiki]:rounded-lg [&_.chat-markdown_pre]:max-h-40 [&_.chat-markdown_pre]:overflow-auto">
-            <ChatMarkdown
-              text={buildCodeFence(
-                truncateToolBlock(runningCommandOutput.value, 4_000).value,
-                "text",
-              )}
-              cwd={workspaceRoot}
-            />
-          </div>
+          <TerminalTranscriptBlock
+            value={runningCommandOutput.value}
+            maxLength={4_000}
+            viewportClassName="max-h-40"
+          />
         </div>
       ) : null}
       {hasChangedFiles && !previewIsChangedFiles && !hideChangedFilePills && (

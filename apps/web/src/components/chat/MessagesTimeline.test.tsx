@@ -289,9 +289,54 @@ describe("MessagesTimeline", () => {
       expect(markup).toContain("jj status");
       expect(markup).toContain("10s");
       expect(markup).toContain("The working copy has no changes.");
+      expect(markup).toContain('data-live-terminal-output="true"');
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("normalizes carriage-return command output rewrites into a stable transcript", async () => {
+    const { WorkEntryRow } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <WorkEntryRow
+        workEntry={{
+          id: "work-command-progress",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Tool updated",
+          tone: "tool",
+          itemType: "command_execution",
+          command: "sleep 30",
+          toolStatus: "running",
+          toolContext: {
+            heading: "Ran command",
+            preview: "Progress 100%",
+            parameters: [
+              {
+                label: "Command",
+                value: "sleep 30",
+                format: "code",
+              },
+            ],
+            outputs: [
+              {
+                label: "Output",
+                value: "Progress 10%\rProgress 50%\rProgress 100%\nDone",
+                format: "code",
+              },
+            ],
+            fileChanges: [],
+          },
+        }}
+        workspaceRoot="/Users/haukeschnau/OSS/t3code"
+        onOpenTurnDiff={() => {}}
+        defaultExpanded
+      />,
+    );
+
+    expect(markup).toContain("Progress 100%");
+    expect(markup).toContain("Done");
+    expect(markup).not.toContain("Progress 10%");
+    expect(markup).toContain('data-live-terminal-output="true"');
   });
 
   it("shows completed command duration without expanding", async () => {
