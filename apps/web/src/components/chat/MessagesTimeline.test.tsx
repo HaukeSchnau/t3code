@@ -326,6 +326,36 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Ran command");
     expect(markup).toContain("1.5s");
+    expect(markup).toContain("tabular-nums");
+  });
+
+  it("renders failed tool status with stronger contrast styling", async () => {
+    const { WorkEntryRow } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <WorkEntryRow
+        workEntry={{
+          id: "work-command-failed",
+          createdAt: "2026-03-17T19:12:28.000Z",
+          label: "Ran command",
+          tone: "error",
+          itemType: "command_execution",
+          command: "playwriter execute",
+          toolStatus: "failed",
+          detail: "No Playwright pages are available.",
+          toolContext: {
+            heading: "Ran command",
+            parameters: [],
+            outputs: [],
+            fileChanges: [],
+          },
+        }}
+        workspaceRoot="/Users/haukeschnau/OSS/t3code"
+        onOpenTurnDiff={() => {}}
+      />,
+    );
+
+    expect(markup).toContain("Failed");
+    expect(markup).toContain("text-rose-700");
   });
 
   it("renders Codex file-change detail rows with diff previews and full diff handoff", async () => {

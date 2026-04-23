@@ -1002,9 +1002,9 @@ function toolStatusChipLabel(
 
 function toolStatusChipClassName(toolStatus: TimelineWorkEntry["toolStatus"]): string {
   if (toolStatus === "failed") {
-    return "border-rose-500/25 bg-rose-500/10 text-rose-200/90";
+    return "border-rose-500/40 bg-rose-500/12 text-rose-700 dark:text-rose-300";
   }
-  return "border-border/55 bg-background/75 text-muted-foreground/75";
+  return "border-border/70 bg-muted/70 text-foreground/75";
 }
 
 function findToolContextField(
@@ -1418,16 +1418,6 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                 <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                   {heading}
                 </span>
-                {statusChipLabel ? (
-                  <span
-                    className={cn(
-                      "ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 align-middle text-[9px] uppercase tracking-[0.12em]",
-                      toolStatusChipClassName(workEntry.toolStatus),
-                    )}
-                  >
-                    {statusChipLabel}
-                  </span>
-                ) : null}
                 {preview && (
                   <Tooltip>
                     <TooltipTrigger
@@ -1470,16 +1460,6 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
                   <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                     {heading}
                   </span>
-                  {statusChipLabel ? (
-                    <span
-                      className={cn(
-                        "ml-1.5 inline-flex items-center rounded-full border px-1.5 py-0.5 align-middle text-[9px] uppercase tracking-[0.12em]",
-                        toolStatusChipClassName(workEntry.toolStatus),
-                      )}
-                    >
-                      {statusChipLabel}
-                    </span>
-                  ) : null}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
@@ -1491,10 +1471,22 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
             </Tooltip>
           )}
         </div>
-        {commandDurationContent || expandable ? (
+        {statusChipLabel || commandDurationContent || expandable ? (
           <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+            {statusChipLabel ? (
+              <span
+                className={cn(
+                  "inline-flex min-h-5 items-center rounded-full border px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em]",
+                  toolStatusChipClassName(workEntry.toolStatus),
+                )}
+              >
+                {statusChipLabel}
+              </span>
+            ) : null}
             {commandDurationContent ? (
-              <span className="text-[10px] text-muted-foreground/55">{commandDurationContent}</span>
+              <span className="text-[10px] text-muted-foreground/65 tabular-nums">
+                {commandDurationContent}
+              </span>
             ) : null}
             {expandable ? (
               <button
