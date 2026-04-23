@@ -1540,6 +1540,78 @@ describe("deriveWorkLogEntries", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0]?.id).toBe("a-complete-same-timestamp");
   });
+
+  it("collapses sparse running command updates into the original command lifecycle entry", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "command-started",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.started",
+        summary: "Ran command started",
+        turnId: "turn-command-sparse",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          title: "Ran command",
+          data: {
+            item: {
+              id: "item-command-sparse",
+              type: "commandExecution",
+              status: "inProgress",
+              command: "sleep 30",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "command-updated-sparse",
+        createdAt: "2026-02-23T00:00:05.000Z",
+        kind: "tool.updated",
+        summary: "Tool updated",
+        turnId: "turn-command-sparse",
+        payload: {
+          itemType: "command_execution",
+          status: "inProgress",
+          data: {
+            interaction: {
+              type: "noop",
+            },
+          },
+        },
+      }),
+      makeActivity({
+        id: "command-completed",
+        createdAt: "2026-02-23T00:00:30.000Z",
+        kind: "tool.completed",
+        summary: "Ran command completed",
+        turnId: "turn-command-sparse",
+        payload: {
+          itemType: "command_execution",
+          status: "completed",
+          title: "Ran command",
+          data: {
+            item: {
+              id: "item-command-sparse",
+              type: "commandExecution",
+              status: "completed",
+              command: "sleep 30",
+              durationMs: 30_000,
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      id: "command-completed",
+      command: "sleep 30",
+      toolStatus: "completed",
+      itemType: "command_execution",
+    });
+  });
 });
 
 describe("deriveTimelineEntries", () => {

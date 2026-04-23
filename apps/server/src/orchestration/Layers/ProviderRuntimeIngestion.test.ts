@@ -891,6 +891,86 @@ describe("ProviderRuntimeIngestion", () => {
     expect(item?.aggregatedOutput).toBe("The working copy has no changes.\n");
   });
 
+  it("merges sparse running command lifecycle updates into the original command activity", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-command-started-sparse"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-sparse"),
+      itemId: asItemId("item-command-sparse"),
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        title: "Ran command",
+        data: {
+          item: {
+            id: "item-command-sparse",
+            type: "commandExecution",
+            status: "inProgress",
+            command: "sleep 30",
+          },
+        },
+      },
+    });
+
+    harness.emit({
+      type: "item.updated",
+      eventId: asEventId("evt-command-updated-sparse"),
+      provider: "codex",
+      createdAt: "2026-04-23T15:22:05.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-command-sparse"),
+      itemId: asItemId("item-command-sparse"),
+      payload: {
+        itemType: "command_execution",
+        status: "inProgress",
+        data: {
+          interaction: {
+            type: "noop",
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.engine, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) =>
+          activity.id === "evt-command-started-sparse" && activity.kind === "tool.updated",
+      ),
+    );
+
+    expect(
+      thread.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-command-updated-sparse",
+      ),
+    ).toBe(false);
+
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-command-started-sparse",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    const data =
+      payload?.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const item =
+      data?.item && typeof data.item === "object"
+        ? (data.item as Record<string, unknown>)
+        : undefined;
+
+    expect(activity?.kind).toBe("tool.updated");
+    expect(payload?.status).toBe("inProgress");
+    expect(item?.command).toBe("sleep 30");
+  });
+
   it("uses structured read-file paths when available", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

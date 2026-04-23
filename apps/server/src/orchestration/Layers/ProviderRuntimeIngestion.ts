@@ -217,6 +217,47 @@ function mergeCommandOutputActivity(
   };
 }
 
+function mergeCommandLifecycleActivity(
+  existing: OrchestrationThreadActivity | undefined,
+  incoming: OrchestrationThreadActivity,
+): OrchestrationThreadActivity | null {
+  if (incoming.kind !== "tool.updated" && incoming.kind !== "tool.completed") {
+    return null;
+  }
+
+  const incomingPayload = asRecord(incoming.payload);
+  if (incomingPayload?.itemType !== "command_execution" || !existing) {
+    return null;
+  }
+
+  const existingPayload = asRecord(existing.payload);
+  const existingData = asRecord(existingPayload?.data);
+  const incomingData = asRecord(incomingPayload?.data);
+  const existingItem = asRecord(existingData?.item);
+  const incomingItem = asRecord(incomingData?.item);
+
+  return {
+    ...incoming,
+    id: existing.id,
+    createdAt: existing.createdAt,
+    summary: existing.summary,
+    turnId: existing.turnId,
+    payload: {
+      ...existingPayload,
+      ...incomingPayload,
+      itemType: "command_execution",
+      data: {
+        ...existingData,
+        ...incomingData,
+        item: {
+          ...existingItem,
+          ...incomingItem,
+        },
+      },
+    },
+  };
+}
+
 function normalizeRateLimitResetTimestamp(value: unknown): string | null {
   const raw = asFiniteNumber(value);
   if (raw === null || raw <= 0) {
@@ -1721,20 +1762,22 @@ const make = Effect.gen(function* () {
       }
 
       const activities = runtimeEventToActivities(event);
+      const liveCommandActivity = findLiveCommandActivity(thread.activities, {
+        itemId: event.itemId,
+        turnId: toTurnId(event.turnId),
+      });
+      const mergedCommandLifecycleActivities = activities.map((activity) => {
+        const mergedActivity = mergeCommandLifecycleActivity(liveCommandActivity, activity);
+        return mergedActivity ?? activity;
+      });
       const liveCommandOutputActivity =
         event.type === "content.delta" && event.payload.streamKind === "command_output"
-          ? mergeCommandOutputActivity(
-              findLiveCommandActivity(thread.activities, {
-                itemId: event.itemId,
-                turnId: toTurnId(event.turnId),
-              }),
-              event,
-            )
+          ? mergeCommandOutputActivity(liveCommandActivity, event)
           : null;
       const projectedActivities =
         liveCommandOutputActivity === null
-          ? activities
-          : [...activities, liveCommandOutputActivity];
+          ? mergedCommandLifecycleActivities
+          : [...mergedCommandLifecycleActivities, liveCommandOutputActivity];
       yield* Effect.forEach(projectedActivities, (activity) =>
         orchestrationEngine.dispatch({
           type: "thread.activity.append",

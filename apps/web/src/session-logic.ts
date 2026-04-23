@@ -655,12 +655,40 @@ function shouldCollapseToolLifecycleEntries(
   if (previous.collapseKey !== undefined && previous.collapseKey === next.collapseKey) {
     return true;
   }
+  if (shouldCollapseSparseCommandLifecycleEntry(previous, next)) {
+    return true;
+  }
   return (
     previous.toolCallId !== undefined &&
     next.toolCallId === undefined &&
     previous.itemType === next.itemType &&
     normalizeCompactToolLabel(previous.toolTitle ?? previous.label) ===
       normalizeCompactToolLabel(next.toolTitle ?? next.label)
+  );
+}
+
+function shouldCollapseSparseCommandLifecycleEntry(
+  previous: DerivedWorkLogEntry,
+  next: DerivedWorkLogEntry,
+): boolean {
+  if (
+    previous.itemType !== "command_execution" ||
+    next.itemType !== "command_execution" ||
+    previous.turnId === undefined ||
+    previous.turnId !== next.turnId
+  ) {
+    return false;
+  }
+
+  return isSparseCommandLifecycleEntry(previous) || isSparseCommandLifecycleEntry(next);
+}
+
+function isSparseCommandLifecycleEntry(entry: DerivedWorkLogEntry): boolean {
+  return (
+    entry.toolCallId === undefined &&
+    entry.command === undefined &&
+    (entry.detail?.trim().length ?? 0) === 0 &&
+    (entry.toolContext?.preview?.trim().length ?? 0) === 0
   );
 }
 
@@ -675,8 +703,10 @@ function mergeDerivedWorkLogEntries(
   const toolTitle = next.toolTitle ?? previous.toolTitle;
   const itemType = next.itemType ?? previous.itemType;
   const requestKind = next.requestKind ?? previous.requestKind;
-  const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
+  const collapseKey = toolCallId
+    ? `tool:${toolCallId}`
+    : (next.collapseKey ?? previous.collapseKey);
   const turnId = next.turnId ?? previous.turnId;
   const toolStatus = next.toolStatus ?? previous.toolStatus;
   const toolContext = next.toolContext ?? previous.toolContext;
