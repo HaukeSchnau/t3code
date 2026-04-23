@@ -1538,6 +1538,8 @@ export const WorkEntryRow = memo(function WorkEntryRow(props: {
             <Tooltip>
               <TooltipTrigger
                 className="block min-w-0 w-full cursor-default text-left"
+                closeDelay={0}
+                delay={75}
                 title={displayText}
                 aria-label={displayText}
               >
