@@ -48,6 +48,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "unknown thread",
   "does not exist",
 ];
+const CODEX_RATE_LIMIT_REFRESH_INTERVAL = "5 minutes";
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
@@ -467,6 +468,31 @@ export function selectInitialCodexRateLimitSnapshot(
     hasRateLimitSnapshotContent,
   );
   return entries.length === 1 ? entries[0] : undefined;
+}
+
+export function buildCodexRateLimitsUpdatedNotification(
+  threadId: ThreadId,
+  response: Pick<
+    EffectCodexSchema.V2GetAccountRateLimitsResponse,
+    "rateLimits" | "rateLimitsByLimitId"
+  >,
+): ProviderEvent | null {
+  const rateLimits = selectInitialCodexRateLimitSnapshot(response);
+  if (!rateLimits) {
+    return null;
+  }
+
+  return {
+    id: EventId.make(randomUUID()),
+    provider: PROVIDER,
+    createdAt: new Date().toISOString(),
+    kind: "notification",
+    threadId,
+    method: "account/rateLimits/updated",
+    payload: {
+      rateLimits,
+    } satisfies EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+  };
 }
 
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {
@@ -1160,6 +1186,15 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
+    const refreshRateLimits = Effect.fn("CodexSessionRuntime.refreshRateLimits")(function* () {
+      const response = yield* client.request("account/rateLimits/read", undefined);
+      const notification = buildCodexRateLimitsUpdatedNotification(options.threadId, response);
+      if (!notification) {
+        return;
+      }
+      yield* offerEvent(notification);
+    });
+
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
@@ -1188,24 +1223,16 @@ export const makeCodexSessionRuntime = (
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
-      yield* client.request("account/rateLimits/read", undefined).pipe(
-        Effect.flatMap((response) => {
-          const rateLimits = selectInitialCodexRateLimitSnapshot(response);
-          if (!rateLimits) {
-            return Effect.void;
-          }
-          return emitEvent({
-            kind: "notification",
-            threadId: options.threadId,
-            method: "account/rateLimits/updated",
-            payload: {
-              rateLimits,
-            } satisfies EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
-          });
-        }),
+      yield* refreshRateLimits().pipe(
         Effect.catch(() => Effect.void),
         Effect.forkIn(runtimeScope),
       );
+      yield* Effect.forever(
+        Effect.sleep(CODEX_RATE_LIMIT_REFRESH_INTERVAL).pipe(
+          Effect.andThen(refreshRateLimits()),
+          Effect.catch(() => Effect.void),
+        ),
+      ).pipe(Effect.forkIn(runtimeScope));
       return session;
     });
 

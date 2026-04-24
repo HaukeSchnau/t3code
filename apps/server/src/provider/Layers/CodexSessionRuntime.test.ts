@@ -11,6 +11,7 @@ import {
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
 import {
+  buildCodexRateLimitsUpdatedNotification,
   buildTurnStartParams,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -352,5 +353,50 @@ describe("selectInitialCodexRateLimitSnapshot", () => {
     });
 
     assert.equal(snapshot, undefined);
+  });
+});
+
+describe("buildCodexRateLimitsUpdatedNotification", () => {
+  it("builds a provider notification from the selected snapshot", () => {
+    const notification = buildCodexRateLimitsUpdatedNotification(ThreadId.make("thread-1"), {
+      rateLimits: {},
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: { usedPercent: 42 },
+        },
+      },
+    });
+
+    assert.equal(notification?.kind, "notification");
+    assert.equal(notification?.threadId, "thread-1");
+    if (!notification || notification.kind !== "notification") {
+      assert.fail("Expected a notification event");
+    }
+    assert.equal(notification.method, "account/rateLimits/updated");
+    assert.deepStrictEqual(notification.payload, {
+      rateLimits: {
+        limitId: "codex",
+        primary: { usedPercent: 42 },
+      },
+    });
+  });
+
+  it("returns null when there is no usable snapshot", () => {
+    const notification = buildCodexRateLimitsUpdatedNotification(ThreadId.make("thread-1"), {
+      rateLimits: {},
+      rateLimitsByLimitId: {
+        first: {
+          limitId: "first",
+          primary: { usedPercent: 10 },
+        },
+        second: {
+          limitId: "second",
+          secondary: { usedPercent: 20 },
+        },
+      },
+    });
+
+    assert.equal(notification, null);
   });
 });
