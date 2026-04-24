@@ -122,6 +122,19 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("includes the default voice toggle binding", () =>
+    Effect.sync(() => {
+      assert.isTrue(
+        DEFAULT_KEYBINDINGS.some(
+          (binding) =>
+            binding.command === "voice.toggle" &&
+            binding.key === "ctrl+m" &&
+            binding.when === "!terminalFocus",
+        ),
+      );
+    }),
+  );
+
   it.effect("rejects invalid rules", () =>
     Effect.sync(() => {
       assert.isNull(

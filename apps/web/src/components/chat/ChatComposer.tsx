@@ -40,6 +40,7 @@ import {
   expandCollapsedComposerCursor,
   replaceTextRange,
 } from "../../composer-logic";
+import { shortcutLabelForCommand } from "../../keybindings";
 import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
@@ -85,14 +86,17 @@ import { Button } from "../ui/button";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { chooseVoiceMimeType, transcribeVoiceBlob } from "../../voiceTranscription";
 import {
   BotIcon,
   CircleAlertIcon,
   ListTodoIcon,
+  MicIcon,
   type LucideIcon,
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  SquareIcon,
   XIcon,
 } from "lucide-react";
 import { proposedPlanTitle } from "../../proposedPlan";
@@ -136,6 +140,7 @@ const runtimeModeConfig: Record<
 const runtimeModeOptions = Object.keys(runtimeModeConfig) as RuntimeMode[];
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
+const MIN_VOICE_RECORDING_MS = 120;
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -289,6 +294,70 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   );
 });
 
+const ComposerVoiceInputButton = memo(function ComposerVoiceInputButton(props: {
+  disabled: boolean;
+  shortcutLabel: string | null;
+  state: "idle" | "recording" | "transcribing";
+  onToggle: () => void;
+}) {
+  const tooltip =
+    props.state === "recording"
+      ? "Stop and transcribe"
+      : props.state === "transcribing"
+        ? "Transcribing..."
+        : "Start voice input";
+  const label = props.shortcutLabel ? `${tooltip} (${props.shortcutLabel})` : tooltip;
+  const disabled =
+    props.state === "transcribing" || (props.disabled && props.state !== "recording");
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="icon-sm"
+            variant={props.state === "recording" ? "destructive" : "ghost"}
+            className={cn(
+              "rounded-full text-muted-foreground/80 hover:text-foreground",
+              props.state === "recording" && "text-white hover:text-white",
+            )}
+            disabled={disabled}
+            aria-label={label}
+            onClick={props.onToggle}
+          >
+            {props.state === "transcribing" ? (
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 14 14"
+                fill="none"
+                className="animate-spin"
+                aria-hidden="true"
+              >
+                <circle
+                  cx="7"
+                  cy="7"
+                  r="5.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeDasharray="20 12"
+                />
+              </svg>
+            ) : props.state === "recording" ? (
+              <SquareIcon className="size-3.5 fill-current" />
+            ) : (
+              <MicIcon className="size-4" />
+            )}
+          </Button>
+        }
+      />
+      <TooltipPopup>{label}</TooltipPopup>
+    </Tooltip>
+  );
+});
+
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   selectedProvider: ProviderKind;
@@ -308,9 +377,13 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   isSendBusy: boolean;
   isConnecting: boolean;
   hasSendableContent: boolean;
+  voiceInputDisabled: boolean;
+  voiceInputShortcutLabel: string | null;
+  voiceInputState: "idle" | "recording" | "transcribing";
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
+  onToggleVoiceInput: () => void;
 }) {
   return (
     <>
@@ -321,6 +394,12 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       {props.isPreparingWorktree ? (
         <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
       ) : null}
+      <ComposerVoiceInputButton
+        disabled={props.voiceInputDisabled}
+        shortcutLabel={props.voiceInputShortcutLabel}
+        state={props.voiceInputState}
+        onToggle={props.onToggleVoiceInput}
+      />
       <ComposerPrimaryActions
         compact={props.compact}
         pendingAction={props.pendingAction}
@@ -347,6 +426,7 @@ export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
   appendText: (text: string) => void;
+  toggleVoiceInput: () => void;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
   isModelPickerOpen: () => boolean;
@@ -692,6 +772,9 @@ export const ChatComposer = memo(
     const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
     const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
     const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
+    const [voiceInputState, setVoiceInputState] = useState<"idle" | "recording" | "transcribing">(
+      "idle",
+    );
 
     // ------------------------------------------------------------------
     // Refs
@@ -704,6 +787,10 @@ export const ChatComposer = memo(
     const composerMenuItemsRef = useRef<ComposerCommandItem[]>([]);
     const activeComposerMenuItemRef = useRef<ComposerCommandItem | null>(null);
     const dragDepthRef = useRef(0);
+    const voiceRecorderRef = useRef<MediaRecorder | null>(null);
+    const voiceStreamRef = useRef<MediaStream | null>(null);
+    const voiceChunksRef = useRef<Blob[]>([]);
+    const voiceRecordingStartedAtRef = useRef<number | null>(null);
 
     // ------------------------------------------------------------------
     // Derived: composer send state
@@ -847,6 +934,24 @@ export const ChatComposer = memo(
       isComposerApprovalState ||
       pendingUserInputs.length > 0 ||
       (showPlanFollowUpPrompt && activeProposedPlan !== null);
+    const voiceInputSupported =
+      typeof navigator !== "undefined" &&
+      Boolean(navigator.mediaDevices?.getUserMedia) &&
+      typeof MediaRecorder !== "undefined";
+    const voiceInputDisabled =
+      !voiceInputSupported ||
+      isConnecting ||
+      isSendBusy ||
+      phase === "running" ||
+      isComposerApprovalState ||
+      pendingUserInputs.length > 0;
+    const voiceInputShortcutLabel = useMemo(
+      () =>
+        shortcutLabelForCommand(keybindings, "voice.toggle", {
+          context: { terminalFocus: false, terminalOpen },
+        }),
+      [keybindings, terminalOpen],
+    );
 
     const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
     const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
@@ -1609,6 +1714,149 @@ export const ChatComposer = memo(
       void onImplementPlanInNewThread();
     }, [onImplementPlanInNewThread]);
 
+    const appendTextToComposerDraft = useCallback(
+      (text: string) => {
+        const nextPrompt = appendTextToPrompt(promptRef.current, text);
+        if (nextPrompt === promptRef.current) {
+          return;
+        }
+        const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
+        promptRef.current = nextPrompt;
+        setPrompt(nextPrompt);
+        setComposerHighlightedItemId(null);
+        setComposerCursor(nextCursor);
+        setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
+        window.requestAnimationFrame(() => {
+          composerEditorRef.current?.focusAt(nextCursor);
+        });
+      },
+      [promptRef, setPrompt],
+    );
+
+    const stopVoiceInputTracks = useCallback(() => {
+      voiceStreamRef.current?.getTracks().forEach((track) => track.stop());
+      voiceStreamRef.current = null;
+    }, []);
+
+    const resetVoiceInputRecorder = useCallback(() => {
+      voiceRecorderRef.current = null;
+      voiceChunksRef.current = [];
+      voiceRecordingStartedAtRef.current = null;
+      stopVoiceInputTracks();
+    }, [stopVoiceInputTracks]);
+
+    const beginVoiceInputRecording = useCallback(async () => {
+      if (voiceInputDisabled) {
+        if (!voiceInputSupported) {
+          toastManager.add({
+            type: "error",
+            title: "Voice input is unavailable in this browser.",
+          });
+        }
+        return;
+      }
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const mimeType = chooseVoiceMimeType();
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        voiceStreamRef.current = stream;
+        voiceChunksRef.current = [];
+        voiceRecorderRef.current = recorder;
+        voiceRecordingStartedAtRef.current = Date.now();
+
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            voiceChunksRef.current.push(event.data);
+          }
+        };
+        recorder.addEventListener("error", () => {
+          resetVoiceInputRecorder();
+          setVoiceInputState("idle");
+          toastManager.add({
+            type: "error",
+            title: "Voice recording failed.",
+          });
+        });
+        recorder.addEventListener("stop", () => {
+          const chunks = voiceChunksRef.current;
+          const startedAt = voiceRecordingStartedAtRef.current ?? Date.now();
+          const durationMs = Date.now() - startedAt;
+          const recordingType = recorder.mimeType || mimeType || "audio/webm";
+          resetVoiceInputRecorder();
+          if (durationMs < MIN_VOICE_RECORDING_MS || chunks.length === 0) {
+            setVoiceInputState("idle");
+            return;
+          }
+
+          setVoiceInputState("transcribing");
+          void transcribeVoiceBlob(new Blob(chunks, { type: recordingType }))
+            .then((transcript) => {
+              appendTextToComposerDraft(transcript);
+            })
+            .catch((error) => {
+              toastManager.add({
+                type: "error",
+                title: error instanceof Error ? error.message : "Voice transcription failed.",
+              });
+            })
+            .finally(() => {
+              setVoiceInputState("idle");
+            });
+        });
+
+        recorder.start();
+        setVoiceInputState("recording");
+      } catch (error) {
+        resetVoiceInputRecorder();
+        setVoiceInputState("idle");
+        toastManager.add({
+          type: "error",
+          title:
+            error instanceof DOMException && error.name === "NotAllowedError"
+              ? "Microphone permission was denied."
+              : "Unable to start voice input.",
+        });
+      }
+    }, [
+      appendTextToComposerDraft,
+      resetVoiceInputRecorder,
+      voiceInputDisabled,
+      voiceInputSupported,
+    ]);
+
+    const stopVoiceInputRecording = useCallback(() => {
+      const recorder = voiceRecorderRef.current;
+      if (!recorder || recorder.state === "inactive") {
+        resetVoiceInputRecorder();
+        setVoiceInputState("idle");
+        return;
+      }
+      recorder.stop();
+    }, [resetVoiceInputRecorder]);
+
+    const toggleVoiceInput = useCallback(() => {
+      if (voiceInputState === "recording") {
+        stopVoiceInputRecording();
+        return;
+      }
+      if (voiceInputState === "transcribing") {
+        return;
+      }
+      void beginVoiceInputRecording();
+    }, [beginVoiceInputRecording, stopVoiceInputRecording, voiceInputState]);
+
+    useEffect(
+      () => () => {
+        const recorder = voiceRecorderRef.current;
+        if (recorder && recorder.state !== "inactive") {
+          recorder.stop();
+        }
+        resetVoiceInputRecorder();
+      },
+      [resetVoiceInputRecorder],
+    );
+
     // ------------------------------------------------------------------
     // Imperative handle
     // ------------------------------------------------------------------
@@ -1622,20 +1870,9 @@ export const ChatComposer = memo(
           composerEditorRef.current?.focusAt(cursor);
         },
         appendText: (text: string) => {
-          const nextPrompt = appendTextToPrompt(promptRef.current, text);
-          if (nextPrompt === promptRef.current) {
-            return;
-          }
-          const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
-          promptRef.current = nextPrompt;
-          setPrompt(nextPrompt);
-          setComposerHighlightedItemId(null);
-          setComposerCursor(nextCursor);
-          setComposerTrigger(detectComposerTrigger(nextPrompt, nextPrompt.length));
-          window.requestAnimationFrame(() => {
-            composerEditorRef.current?.focusAt(nextCursor);
-          });
+          appendTextToComposerDraft(text);
         },
+        toggleVoiceInput,
         openModelPicker: () => {
           setIsComposerModelPickerOpen(true);
         },
@@ -1713,6 +1950,7 @@ export const ChatComposer = memo(
       }),
       [
         activeThread,
+        appendTextToComposerDraft,
         composerDraftTarget,
         composerCursor,
         composerTerminalContexts,
@@ -1728,7 +1966,7 @@ export const ChatComposer = memo(
         selectedPromptEffort,
         selectedProvider,
         selectedProviderModels,
-        setPrompt,
+        toggleVoiceInput,
       ],
     );
 
@@ -2017,9 +2255,13 @@ export const ChatComposer = memo(
                     isConnecting={isConnecting}
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
+                    voiceInputDisabled={voiceInputDisabled}
+                    voiceInputShortcutLabel={voiceInputShortcutLabel}
+                    voiceInputState={voiceInputState}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
+                    onToggleVoiceInput={toggleVoiceInput}
                   />
                 </div>
               </div>
