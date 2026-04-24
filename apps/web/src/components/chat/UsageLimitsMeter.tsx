@@ -139,6 +139,13 @@ function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot)
   };
 }
 
+function readInlineProjectedPercent(windowSnapshot: DerivedUsageLimitWindowSnapshot): number {
+  return windowSnapshot.projectedPercentAtReset !== null &&
+    Number.isFinite(windowSnapshot.projectedPercentAtReset)
+    ? windowSnapshot.projectedPercentAtReset
+    : windowSnapshot.usedPercent;
+}
+
 function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): string {
   const relative = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
   const absolute = windowSnapshot.resetAbsoluteLabel;
@@ -233,7 +240,8 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
               {visibleWindows.map(({ key, label, snapshot }) => {
                 const stats = buildInlineWindowStats(snapshot);
-                const normalizedPercentage = Math.max(0, Math.min(100, snapshot.usedPercent));
+                const projectedPercent = readInlineProjectedPercent(snapshot);
+                const normalizedPercentage = Math.max(0, Math.min(100, projectedPercent));
                 const severityColor = projectedSeverityColor(snapshot);
                 return (
                   <span key={key} className="flex min-w-0 items-center gap-1.5 overflow-hidden">
@@ -259,7 +267,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                       )}
                       style={severityColor ? { color: severityColor } : undefined}
                     >
-                      {formatPercent(snapshot.usedPercent)}
+                      {formatPercent(projectedPercent)}
                     </span>
                     <span className="min-w-0 truncate text-muted-foreground">
                       {stats.resetLabel ?? windowStatusLabel(snapshot.status)}
