@@ -21,6 +21,7 @@ Show Codex usage limits for the active thread in the composer footer so the curr
 - The footer popover shows reset timing using both relative and absolute labels when possible.
 - The footer popover includes a pace heuristic based on projected percentage at reset.
 - The pace heuristic is a forecast derived from percentage usage, not a guarantee of remaining quota.
+- Weekly usage projection weights Saturday and Sunday at 25% of weekday usage so the forecast reflects lighter weekend usage.
 - The implementation stays narrowly scoped and avoids introducing a new global dashboard or account-level cache.
 
 ## Non-Goals

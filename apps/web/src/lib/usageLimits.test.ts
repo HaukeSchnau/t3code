@@ -24,6 +24,16 @@ function makeActivity(
   };
 }
 
+function localIso(
+  year: number,
+  monthIndex: number,
+  day: number,
+  hour: number = 0,
+  minute: number = 0,
+): string {
+  return new Date(year, monthIndex, day, hour, minute).toISOString();
+}
+
 describe("usageLimits", () => {
   it("derives the latest valid usage limits snapshot", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
@@ -131,6 +141,46 @@ describe("usageLimits", () => {
 
     expect(displayed?.primary?.status).toBe("reached");
     expect(displayed?.compactWindow).toBe("primary");
+  });
+
+  it("discounts remaining weekend time in weekly projections", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        secondary: {
+          usedPercent: 40,
+          resetsAt: localIso(2026, 3, 27),
+          windowDurationMins: 10080,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, new Date(2026, 3, 24).getTime());
+
+    expect(displayed?.secondary?.elapsedPercent).toBeCloseTo((4 / 5.5) * 100);
+    expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(40 / (4 / 5.5));
+    expect(displayed?.secondary?.projectedPercentAtReset).not.toBeCloseTo(70);
+  });
+
+  it("partially weights elapsed weekend segments in weekly projections", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        secondary: {
+          usedPercent: 50,
+          resetsAt: localIso(2026, 3, 27),
+          windowDurationMins: 10080,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 3, 25, 12).getTime(),
+    );
+
+    expect(displayed?.secondary?.elapsedPercent).toBeCloseTo((5.125 / 5.5) * 100);
+    expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(50 / (5.125 / 5.5));
   });
 
   it("prefers the newest valid snapshot across matching provider threads", () => {

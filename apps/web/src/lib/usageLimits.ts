@@ -2,6 +2,10 @@ import type { OrchestrationThreadActivity, ProviderKind } from "@t3tools/contrac
 
 import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 
+const WEEKLY_WINDOW_DURATION_MINS = 7 * 24 * 60;
+const WEEKDAY_USAGE_WEIGHT = 1;
+const WEEKEND_USAGE_WEIGHT = 0.25;
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
 }
@@ -129,7 +133,64 @@ function formatAbsoluteResetLabel(isoDate: string | null): string | null {
   }).format(new Date(isoDate));
 }
 
-function deriveElapsedPercent(window: UsageLimitWindowSnapshot, nowMs: number): number | null {
+function isWeekendLocal(date: Date): boolean {
+  const day = date.getDay();
+  return day === 0 || day === 6;
+}
+
+function startOfNextLocalDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0).getTime();
+}
+
+function deriveWeightedDurationMs(startMs: number, endMs: number): number {
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+    return 0;
+  }
+
+  let cursorMs = startMs;
+  let weightedMs = 0;
+
+  while (cursorMs < endMs) {
+    const cursorDate = new Date(cursorMs);
+    const nextBoundaryMs = Math.min(startOfNextLocalDay(cursorDate), endMs);
+    const weight = isWeekendLocal(cursorDate) ? WEEKEND_USAGE_WEIGHT : WEEKDAY_USAGE_WEIGHT;
+    weightedMs += (nextBoundaryMs - cursorMs) * weight;
+    cursorMs = nextBoundaryMs;
+  }
+
+  return weightedMs;
+}
+
+function deriveWallClockElapsedPercent(
+  resetMs: number,
+  durationMs: number,
+  nowMs: number,
+): number | null {
+  const elapsedMs = durationMs - Math.max(0, resetMs - nowMs);
+  const elapsedPercent = (elapsedMs / durationMs) * 100;
+  return Math.max(0, Math.min(100, elapsedPercent));
+}
+
+function deriveWeeklyWeightedElapsedPercent(
+  resetMs: number,
+  durationMs: number,
+  nowMs: number,
+): number | null {
+  const windowStartMs = resetMs - durationMs;
+  const effectiveNowMs = Math.min(Math.max(nowMs, windowStartMs), resetMs);
+  const weightedTotalMs = deriveWeightedDurationMs(windowStartMs, resetMs);
+  if (weightedTotalMs <= 0) {
+    return null;
+  }
+
+  const weightedElapsedMs = deriveWeightedDurationMs(windowStartMs, effectiveNowMs);
+  return Math.max(0, Math.min(100, (weightedElapsedMs / weightedTotalMs) * 100));
+}
+
+function deriveProjectionElapsedPercent(
+  window: UsageLimitWindowSnapshot,
+  nowMs: number,
+): number | null {
   if (!window.resetsAt || !window.windowDurationMins || window.windowDurationMins <= 0) {
     return null;
   }
@@ -140,9 +201,11 @@ function deriveElapsedPercent(window: UsageLimitWindowSnapshot, nowMs: number): 
   }
 
   const durationMs = window.windowDurationMins * 60 * 1000;
-  const elapsedMs = durationMs - Math.max(0, resetMs - nowMs);
-  const elapsedPercent = (elapsedMs / durationMs) * 100;
-  return Math.max(0, Math.min(100, elapsedPercent));
+  if (window.windowDurationMins === WEEKLY_WINDOW_DURATION_MINS) {
+    return deriveWeeklyWeightedElapsedPercent(resetMs, durationMs, nowMs);
+  }
+
+  return deriveWallClockElapsedPercent(resetMs, durationMs, nowMs);
 }
 
 function deriveProjectedPercentAtReset(
@@ -178,7 +241,7 @@ function deriveWindowDisplay(
     return null;
   }
 
-  const elapsedPercent = deriveElapsedPercent(window, nowMs);
+  const elapsedPercent = deriveProjectionElapsedPercent(window, nowMs);
   const projectedPercentAtReset = deriveProjectedPercentAtReset(window.usedPercent, elapsedPercent);
 
   return {
