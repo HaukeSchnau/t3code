@@ -388,6 +388,20 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("data-live-terminal-output");
   });
 
+  it("tail-truncates command output in the command hover popover", async () => {
+    const { CommandHoverTooltipContent } = await import("./MessagesTimeline");
+    const earlyLine = "EARLY-LINE-KEEP-OUT";
+    const lateLine = "LATE-LINE-KEEP-ME";
+    const longOutput = `${earlyLine}\n${"middle-output-padding\n".repeat(400)}${lateLine}\n`;
+    const markup = renderToStaticMarkup(
+      <CommandHoverTooltipContent command="/bin/zsh -lc 'long-task'" output={longOutput} />,
+    );
+
+    expect(markup).toContain("Showing the last 4,000 characters.");
+    expect(markup).toContain(lateLine);
+    expect(markup).not.toContain(earlyLine);
+  });
+
   it("renders failed tool status with stronger contrast styling", async () => {
     const { WorkEntryRow } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(

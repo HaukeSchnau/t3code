@@ -1048,19 +1048,30 @@ function commandOutputField(workEntry: TimelineWorkEntry): ToolContextField | nu
 function truncateToolBlock(
   value: string,
   maxLength: number,
+  side: "head" | "tail" = "head",
 ): {
   value: string;
   truncated: boolean;
+  side: "head" | "tail";
 } {
   if (value.length <= maxLength) {
     return {
       value,
       truncated: false,
+      side,
+    };
+  }
+  if (side === "tail") {
+    return {
+      value: `[truncated]\n\n${value.slice(-maxLength).trimStart()}`,
+      truncated: true,
+      side,
     };
   }
   return {
     value: `${value.slice(0, maxLength).trimEnd()}\n\n[truncated]`,
     truncated: true,
+    side,
   };
 }
 
@@ -1105,7 +1116,8 @@ function ToolContextCodeBlock(props: {
       </div>
       {truncated?.truncated ? (
         <div className="px-1 text-[10px] text-muted-foreground/65">
-          Showing the first {props.maxLength?.toLocaleString()} characters.
+          Showing the {truncated.side === "tail" ? "last" : "first"}{" "}
+          {props.maxLength?.toLocaleString()} characters.
         </div>
       ) : null}
     </div>
@@ -1120,7 +1132,9 @@ function TerminalTranscriptBlock(props: {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const snapshotRef = useRef<ReturnType<typeof captureTerminalViewportSnapshot> | null>(null);
   const normalizedValue = useMemo(() => renderTerminalOutput(props.value), [props.value]);
-  const truncated = props.maxLength ? truncateToolBlock(normalizedValue, props.maxLength) : null;
+  const truncated = props.maxLength
+    ? truncateToolBlock(normalizedValue, props.maxLength, "tail")
+    : null;
   const displayedValue = truncated?.value ?? normalizedValue;
 
   const handleScroll = useCallback(() => {
@@ -1176,7 +1190,7 @@ function TerminalTranscriptBlock(props: {
       </div>
       {truncated?.truncated ? (
         <div className="px-1 text-[10px] text-muted-foreground/65">
-          Showing the first {props.maxLength?.toLocaleString()} characters.
+          Showing the last {props.maxLength?.toLocaleString()} characters.
         </div>
       ) : null}
     </div>
