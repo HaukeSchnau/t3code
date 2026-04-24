@@ -135,7 +135,6 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
       interactionMode="default"
       planSidebarLabel="Plan"
       planSidebarOpen={false}
-      runtimeMode="approval-required"
       showInteractionModeToggle
       traitsMenuContent={
         <TraitsMenuContent
@@ -150,7 +149,6 @@ async function mountMenu(props?: { modelSelection?: ModelSelection; prompt?: str
       }
       onToggleInteractionMode={vi.fn()}
       onTogglePlanSidebar={vi.fn()}
-      onRuntimeModeChange={vi.fn()}
     />,
     { container: host },
   );
@@ -177,7 +175,7 @@ describe("CompactComposerControlsMenu", () => {
     });
   });
 
-  it("shows fast mode controls for Opus", async () => {
+  it("hides fast mode controls even when the provider advertises fastMode", async () => {
     await using _ = await mountMenu({
       modelSelection: createModelSelection("claudeAgent", "claude-opus-4-6"),
     });
@@ -186,9 +184,10 @@ describe("CompactComposerControlsMenu", () => {
 
     await vi.waitFor(() => {
       const text = document.body.textContent ?? "";
-      expect(text).toContain("Fast Mode");
-      expect(text).toContain("On");
-      expect(text).toContain("Off");
+      expect(text).toContain("Reasoning");
+      expect(text).not.toContain("Fast Mode");
+      expect(text).not.toContain("On");
+      expect(text).not.toContain("Off");
     });
   });
 
@@ -282,11 +281,9 @@ describe("CompactComposerControlsMenu", () => {
         interactionMode="default"
         planSidebarLabel="Plan"
         planSidebarOpen={false}
-        runtimeMode="approval-required"
         showInteractionModeToggle={false}
         onToggleInteractionMode={vi.fn()}
         onTogglePlanSidebar={vi.fn()}
-        onRuntimeModeChange={vi.fn()}
       />,
       { container: host },
     );
@@ -298,9 +295,9 @@ describe("CompactComposerControlsMenu", () => {
       expect(text).not.toContain("Mode");
       expect(text).not.toContain("Chat");
       expect(text).not.toContain("Plan");
-      expect(text).toContain("Access");
-      expect(text).toContain("Supervised");
-      expect(text).toContain("Full access");
+      expect(text).not.toContain("Access");
+      expect(text).not.toContain("Supervised");
+      expect(text).not.toContain("Full access");
     });
 
     await screen.unmount();

@@ -82,7 +82,7 @@ describe("getComposerProviderState", () => {
     });
   });
 
-  it("lets selections override defaults and propagates them through dispatch", () => {
+  it("lets visible selections override defaults and omits fastMode from dispatch", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
       model: MODEL,
@@ -100,11 +100,11 @@ describe("getComposerProviderState", () => {
     expect(state).toEqual({
       provider: PROVIDER,
       promptEffort: "low",
-      modelOptionsForDispatch: selections(["effort", "low"], ["fastMode", true]),
+      modelOptionsForDispatch: selections(["effort", "low"]),
     });
   });
 
-  it("preserves selections that match defaults so deepMerge can overwrite prior state", () => {
+  it("preserves visible selections that match defaults so deepMerge can overwrite prior state", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
       model: MODEL,
@@ -116,9 +116,7 @@ describe("getComposerProviderState", () => {
       modelOptions: selections(["effort", "high"], ["fastMode", false]),
     });
 
-    expect(state.modelOptionsForDispatch).toEqual(
-      selections(["effort", "high"], ["fastMode", false]),
-    );
+    expect(state.modelOptionsForDispatch).toEqual(selections(["effort", "high"]));
   });
 
   it("drops selections for descriptors the model does not declare", () => {

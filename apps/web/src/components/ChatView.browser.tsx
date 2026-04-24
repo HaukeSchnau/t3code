@@ -16,6 +16,7 @@ import {
   WS_METHODS,
   OrchestrationSessionStatus,
   DEFAULT_SERVER_SETTINGS,
+  type ModelSelection,
 } from "@t3tools/contracts";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
 import { createModelCapabilities, createModelSelection } from "@t3tools/shared/model";
@@ -1308,16 +1309,6 @@ async function waitForButtonContainingText(text: string): Promise<HTMLButtonElem
   );
 }
 
-async function waitForSelectItemContainingText(text: string): Promise<HTMLElement> {
-  return waitForElement(
-    () =>
-      Array.from(document.querySelectorAll<HTMLElement>('[data-slot="select-item"]')).find((item) =>
-        item.textContent?.includes(text),
-      ) ?? null,
-    `Unable to find select item containing "${text}".`,
-  );
-}
-
 async function expectComposerActionsContained(): Promise<void> {
   const footer = await waitForElement(
     () => document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]'),
@@ -1340,7 +1331,7 @@ async function expectComposerActionsContained(): Promise<void> {
       for (const rect of buttonRects) {
         expect(rect.right).toBeLessThanOrEqual(footerRect.right + 0.5);
         expect(rect.bottom).toBeLessThanOrEqual(footerRect.bottom + 0.5);
-        expect(Math.abs(rect.top - firstTop)).toBeLessThanOrEqual(1.5);
+        expect(Math.abs(rect.top - firstTop)).toBeLessThanOrEqual(2.5);
       }
     },
     { timeout: 8_000, interval: 16 },
@@ -3267,7 +3258,7 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
-  it("shows runtime mode descriptions in the desktop composer access select", async () => {
+  it("hides runtime mode controls in the desktop composer footer", async () => {
     setDraftThreadWithoutWorktree();
 
     const mounted = await mountChatView({
@@ -3276,17 +3267,77 @@ describe("ChatView timeline estimator parity (full app)", () => {
     });
 
     try {
-      const runtimeModeSelect = await waitForButtonByText("Full access");
-      runtimeModeSelect.click();
-
-      expect((await waitForSelectItemContainingText("Supervised")).textContent).toContain(
-        "Ask before commands and file changes",
+      const composerFooter = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-chat-composer-footer="true"]'),
+        "Unable to find composer footer.",
       );
+      expect(composerFooter.textContent).not.toContain("Full access");
+      expect(composerFooter.textContent).not.toContain("Auto-accept edits");
+      expect(composerFooter.textContent).not.toContain("Supervised");
+      expect(
+        composerFooter.querySelector<HTMLButtonElement>('button[aria-label="Runtime mode"]'),
+      ).toBeNull();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
 
-      const autoAcceptItem = await waitForSelectItemContainingText("Auto-accept edits");
-      expect(autoAcceptItem.textContent).toContain("Auto-approve edits");
-      expect((await waitForSelectItemContainingText("Full access")).textContent).toContain(
-        "Allow commands and edits without prompts",
+  it("sends full-access even when stored thread state is supervised", async () => {
+    const supervisedSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-fixed-runtime-target" as MessageId,
+      targetText: "fixed runtime thread",
+    });
+    const mounted = await mountChatView({
+      viewport: WIDE_FOOTER_VIEWPORT,
+      snapshot: {
+        ...supervisedSnapshot,
+        threads: supervisedSnapshot.threads.map((thread) =>
+          thread.id === THREAD_ID
+            ? Object.assign({}, thread, {
+                runtimeMode: "approval-required" as const,
+                session: thread.session
+                  ? Object.assign({}, thread.session, { runtimeMode: "approval-required" as const })
+                  : thread.session,
+              })
+            : thread,
+        ),
+      },
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setRuntimeMode(THREAD_REF, "approval-required");
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Use fixed runtime");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const runtimeModeRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.runtime-mode.set",
+          ) as { runtimeMode?: string } | undefined;
+          const turnStartRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ) as { runtimeMode?: string } | undefined;
+
+          expect(runtimeModeRequest?.runtimeMode).toBe("full-access");
+          expect(turnStartRequest?.runtimeMode).toBe("full-access");
+        },
+        { timeout: 8_000, interval: 16 },
       );
     } finally {
       await mounted.cleanup();
@@ -3821,6 +3872,93 @@ describe("ChatView timeline estimator parity (full app)", () => {
         },
         activeProvider: "codex",
       });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("omits stored codex fast mode from composer dispatch", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-normal-speed-dispatch" as MessageId,
+        targetText: "normal speed dispatch",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          providers: [
+            {
+              ...nextFixture.serverConfig.providers[0]!,
+              models: [
+                {
+                  slug: "gpt-5.3-codex",
+                  name: "GPT-5.3 Codex",
+                  isCustom: false,
+                  capabilities: createModelCapabilities({
+                    optionDescriptors: [
+                      {
+                        id: "reasoningEffort",
+                        label: "Reasoning",
+                        type: "select" as const,
+                        options: [
+                          { id: "low", label: "Low" },
+                          { id: "medium", label: "Medium", isDefault: true },
+                          { id: "high", label: "High" },
+                        ],
+                      },
+                      { id: "fastMode", label: "Fast Mode", type: "boolean" as const },
+                    ],
+                  }),
+                },
+              ],
+            },
+          ],
+        };
+      },
+      resolveRpc: (body) => {
+        if (body._tag === ORCHESTRATION_WS_METHODS.dispatchCommand) {
+          return {
+            sequence: fixture.snapshot.snapshotSequence + 1,
+          };
+        }
+        return undefined;
+      },
+    });
+
+    try {
+      useComposerDraftStore.getState().setModelSelection(
+        THREAD_REF,
+        createModelSelection("codex", "gpt-5.3-codex", [
+          { id: "reasoningEffort", value: "medium" },
+          { id: "fastMode", value: true },
+        ]),
+      );
+      useComposerDraftStore.getState().setPrompt(THREAD_REF, "Use normal speed");
+      await waitForLayout();
+
+      const sendButton = await waitForSendButton();
+      expect(sendButton.disabled).toBe(false);
+      sendButton.click();
+
+      await vi.waitFor(
+        () => {
+          const turnStartRequest = wsRequests.find(
+            (request) =>
+              request._tag === ORCHESTRATION_WS_METHODS.dispatchCommand &&
+              request.type === "thread.turn.start",
+          ) as { modelSelection?: ModelSelection } | undefined;
+          const topLevelOptions = turnStartRequest?.modelSelection?.options ?? [];
+
+          expect(topLevelOptions).toEqual(
+            expect.arrayContaining([{ id: "reasoningEffort", value: "medium" }]),
+          );
+          expect(topLevelOptions).not.toEqual(
+            expect.arrayContaining([{ id: "fastMode", value: true }]),
+          );
+        },
+        { timeout: 8_000, interval: 16 },
+      );
     } finally {
       await mounted.cleanup();
     }

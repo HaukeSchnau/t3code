@@ -44,6 +44,13 @@ type TraitsPersistence =
     };
 
 const ULTRATHINK_PROMPT_PREFIX = "Ultrathink:\n";
+const HIDDEN_COMPOSER_TRAIT_IDS = new Set(["fastMode"]);
+
+export function filterComposerVisibleProviderOptionDescriptors(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  return descriptors.filter((descriptor) => !HIDDEN_COMPOSER_TRAIT_IDS.has(descriptor.id));
+}
 
 function replaceDescriptorCurrentValue(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
@@ -84,10 +91,12 @@ function getSelectedTraits(
   allowPromptInjectedEffort: boolean,
 ) {
   const caps = getProviderModelCapabilities(models, model, provider);
-  const descriptors = getProviderOptionDescriptors({
-    caps,
-    selections: modelOptions,
-  });
+  const descriptors = filterComposerVisibleProviderOptionDescriptors(
+    getProviderOptionDescriptors({
+      caps,
+      selections: modelOptions,
+    }),
+  );
   const selectDescriptors = descriptors.filter(
     (descriptor): descriptor is Extract<ProviderOptionDescriptor, { type: "select" }> =>
       descriptor.type === "select",
@@ -100,8 +109,6 @@ function getSelectedTraits(
   const contextWindowDescriptor =
     selectDescriptors.find((descriptor) => descriptor.id === "contextWindow") ?? null;
   const agentDescriptor = selectDescriptors.find((descriptor) => descriptor.id === "agent") ?? null;
-  const fastModeDescriptor =
-    booleanDescriptors.find((descriptor) => descriptor.id === "fastMode") ?? null;
   const thinkingDescriptor =
     booleanDescriptors.find((descriptor) => descriptor.id === "thinking") ?? null;
 
@@ -120,8 +127,6 @@ function getSelectedTraits(
       : getDescriptorStringValue(primarySelectDescriptor)) ?? null;
   const thinkingEnabled =
     typeof thinkingDescriptor?.currentValue === "boolean" ? thinkingDescriptor.currentValue : null;
-  const fastModeEnabled =
-    typeof fastModeDescriptor?.currentValue === "boolean" ? fastModeDescriptor.currentValue : false;
   const contextWindow = getDescriptorStringValue(contextWindowDescriptor);
   const selectedAgent = getDescriptorStringValue(agentDescriptor);
   const selectedAgentLabel = agentDescriptor
@@ -136,11 +141,9 @@ function getSelectedTraits(
     primarySelectDescriptor,
     contextWindowDescriptor,
     agentDescriptor,
-    fastModeDescriptor,
     thinkingDescriptor,
     effort,
     thinkingEnabled,
-    fastModeEnabled,
     contextWindow,
     ultrathinkPromptControlled,
     ultrathinkInBodyText,
@@ -168,7 +171,6 @@ function getTraitsSectionVisibility(input: {
 
   const showEffort = selected.primarySelectDescriptor !== null;
   const showThinking = selected.thinkingDescriptor !== null;
-  const showFastMode = selected.fastModeDescriptor !== null;
   const showContextWindow = selected.contextWindowDescriptor !== null;
   const showAgent = selected.agentDescriptor !== null;
 
@@ -176,10 +178,9 @@ function getTraitsSectionVisibility(input: {
     ...selected,
     showEffort,
     showThinking,
-    showFastMode,
     showContextWindow,
     showAgent,
-    hasAnyControls: showEffort || showThinking || showFastMode || showContextWindow || showAgent,
+    hasAnyControls: showEffort || showThinking || showContextWindow || showAgent,
   };
 }
 
@@ -383,9 +384,6 @@ export const TraitsPicker = memo(function TraitsPicker({
           return "Ultrathink";
         }
         if (descriptor.type === "boolean") {
-          if (descriptor.id === "fastMode") {
-            return descriptor.currentValue === true ? "Fast" : "Normal";
-          }
           return `${descriptor.label} ${descriptor.currentValue === true ? "On" : "Off"}`;
         }
         return getProviderOptionCurrentLabel(descriptor);
