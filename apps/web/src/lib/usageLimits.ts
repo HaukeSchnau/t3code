@@ -5,6 +5,7 @@ import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 const WEEKLY_WINDOW_DURATION_MINS = 7 * 24 * 60;
 const WEEKDAY_USAGE_WEIGHT = 1;
 const WEEKEND_USAGE_WEIGHT = 0.25;
+const RESET_WINDOW_TOLERANCE_MS = 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -85,6 +86,17 @@ export interface DerivedUsageLimitsSnapshot extends Omit<
   compactWindowStatus: UsageLimitWindowStatus | null;
 }
 
+interface UsageLimitsSnapshotCandidate {
+  snapshot: UsageLimitsSnapshot;
+  updatedAtMs: number;
+}
+
+interface UsageLimitWindowCandidate {
+  window: UsageLimitWindowSnapshot;
+  updatedAtMs: number;
+  resetMs: number | null;
+}
+
 function normalizeWindow(value: unknown): UsageLimitWindowSnapshot | null {
   const record = asRecord(value);
   const usedPercent = asFiniteNumber(record?.usedPercent);
@@ -97,6 +109,15 @@ function normalizeWindow(value: unknown): UsageLimitWindowSnapshot | null {
     resetsAt: normalizeResetAt(record?.resetsAt),
     windowDurationMins: asFiniteNumber(record?.windowDurationMins),
   };
+}
+
+function parseTimestampMs(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function formatWindowDurationLabel(windowDurationMins: number | null): string | null {
@@ -259,77 +280,206 @@ function deriveWindowDisplay(
   };
 }
 
-export function deriveLatestUsageLimitsSnapshot(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
+function activityToUsageLimitsSnapshot(
+  activity: OrchestrationThreadActivity,
 ): UsageLimitsSnapshot | null {
-  for (let index = activities.length - 1; index >= 0; index -= 1) {
-    const activity = activities[index];
+  if (!activity || activity.kind !== "account.rate-limits.updated") {
+    return null;
+  }
+
+  const payload = asRecord(activity.payload);
+  const primary = normalizeWindow(payload?.primary);
+  const secondary = normalizeWindow(payload?.secondary);
+  if (primary === null && secondary === null) {
+    return null;
+  }
+
+  const creditsRecord = asRecord(payload?.credits);
+  const hasCredits = asBoolean(creditsRecord?.hasCredits);
+  const unlimited = asBoolean(creditsRecord?.unlimited);
+
+  return {
+    limitId: asString(payload?.limitId),
+    limitName: asString(payload?.limitName),
+    planType: asString(payload?.planType),
+    rateLimitReachedType: asString(payload?.rateLimitReachedType),
+    credits:
+      hasCredits !== null && unlimited !== null
+        ? {
+            balance: asString(creditsRecord?.balance),
+            hasCredits,
+            unlimited,
+          }
+        : null,
+    primary,
+    secondary,
+    updatedAt: activity.createdAt,
+  };
+}
+
+function collectUsageLimitsSnapshotCandidates(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): Array<UsageLimitsSnapshotCandidate> {
+  const candidates: Array<UsageLimitsSnapshotCandidate> = [];
+
+  for (const activity of activities) {
     if (!activity || activity.kind !== "account.rate-limits.updated") {
       continue;
     }
 
-    const payload = asRecord(activity.payload);
-    const primary = normalizeWindow(payload?.primary);
-    const secondary = normalizeWindow(payload?.secondary);
-    if (primary === null && secondary === null) {
+    const updatedAtMs = Date.parse(activity.createdAt);
+    if (!Number.isFinite(updatedAtMs)) {
       continue;
     }
 
-    const creditsRecord = asRecord(payload?.credits);
-    const hasCredits = asBoolean(creditsRecord?.hasCredits);
-    const unlimited = asBoolean(creditsRecord?.unlimited);
+    const snapshot = activityToUsageLimitsSnapshot(activity);
+    if (!snapshot) {
+      continue;
+    }
 
-    return {
-      limitId: asString(payload?.limitId),
-      limitName: asString(payload?.limitName),
-      planType: asString(payload?.planType),
-      rateLimitReachedType: asString(payload?.rateLimitReachedType),
-      credits:
-        hasCredits !== null && unlimited !== null
-          ? {
-              balance: asString(creditsRecord?.balance),
-              hasCredits,
-              unlimited,
-            }
-          : null,
-      primary,
-      secondary,
-      updatedAt: activity.createdAt,
-    };
+    candidates.push({ snapshot, updatedAtMs });
   }
 
-  return null;
+  return candidates;
+}
+
+function makeWindowCandidate(
+  candidate: UsageLimitsSnapshotCandidate,
+  window: UsageLimitWindowSnapshot | null,
+): UsageLimitWindowCandidate | null {
+  if (!window) {
+    return null;
+  }
+
+  return {
+    window,
+    updatedAtMs: candidate.updatedAtMs,
+    resetMs: parseTimestampMs(window.resetsAt),
+  };
+}
+
+function isWindowCandidateBetter(
+  candidate: UsageLimitWindowCandidate,
+  current: UsageLimitWindowCandidate,
+): boolean {
+  if (candidate.resetMs !== null && current.resetMs !== null) {
+    if (candidate.resetMs > current.resetMs + RESET_WINDOW_TOLERANCE_MS) {
+      return true;
+    }
+    if (current.resetMs > candidate.resetMs + RESET_WINDOW_TOLERANCE_MS) {
+      return false;
+    }
+
+    if (candidate.window.usedPercent !== current.window.usedPercent) {
+      return candidate.window.usedPercent > current.window.usedPercent;
+    }
+
+    return candidate.updatedAtMs >= current.updatedAtMs;
+  }
+
+  if (candidate.resetMs !== null && current.resetMs === null) {
+    return true;
+  }
+
+  if (candidate.resetMs === null && current.resetMs !== null) {
+    return false;
+  }
+
+  return candidate.updatedAtMs >= current.updatedAtMs;
+}
+
+function selectBestWindowCandidate(
+  candidates: ReadonlyArray<UsageLimitWindowCandidate>,
+): UsageLimitWindowCandidate | null {
+  let bestCandidate: UsageLimitWindowCandidate | null = null;
+
+  for (const candidate of candidates) {
+    if (!bestCandidate || isWindowCandidateBetter(candidate, bestCandidate)) {
+      bestCandidate = candidate;
+    }
+  }
+
+  return bestCandidate;
+}
+
+function deriveLatestMetadataCandidate(
+  candidates: ReadonlyArray<UsageLimitsSnapshotCandidate>,
+): UsageLimitsSnapshotCandidate | null {
+  let latestCandidate: UsageLimitsSnapshotCandidate | null = null;
+
+  for (const candidate of candidates) {
+    if (!latestCandidate || candidate.updatedAtMs >= latestCandidate.updatedAtMs) {
+      latestCandidate = candidate;
+    }
+  }
+
+  return latestCandidate;
+}
+
+function aggregateUsageLimitsSnapshots(
+  candidates: ReadonlyArray<UsageLimitsSnapshotCandidate>,
+): UsageLimitsSnapshot | null {
+  const metadataCandidate = deriveLatestMetadataCandidate(candidates);
+  if (!metadataCandidate) {
+    return null;
+  }
+
+  const primaryCandidates: Array<UsageLimitWindowCandidate> = [];
+  const secondaryCandidates: Array<UsageLimitWindowCandidate> = [];
+
+  for (const candidate of candidates) {
+    const primary = makeWindowCandidate(candidate, candidate.snapshot.primary);
+    if (primary) {
+      primaryCandidates.push(primary);
+    }
+
+    const secondary = makeWindowCandidate(candidate, candidate.snapshot.secondary);
+    if (secondary) {
+      secondaryCandidates.push(secondary);
+    }
+  }
+
+  const primary = selectBestWindowCandidate(primaryCandidates);
+  const secondary = selectBestWindowCandidate(secondaryCandidates);
+  if (!primary && !secondary) {
+    return null;
+  }
+
+  return {
+    ...metadataCandidate.snapshot,
+    primary: primary?.window ?? null,
+    secondary: secondary?.window ?? null,
+    updatedAt: new Date(
+      Math.max(
+        metadataCandidate.updatedAtMs,
+        primary?.updatedAtMs ?? Number.NEGATIVE_INFINITY,
+        secondary?.updatedAtMs ?? Number.NEGATIVE_INFINITY,
+      ),
+    ).toISOString(),
+  };
+}
+
+export function deriveLatestUsageLimitsSnapshot(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): UsageLimitsSnapshot | null {
+  return aggregateUsageLimitsSnapshots(collectUsageLimitsSnapshotCandidates(activities));
 }
 
 export function deriveLatestUsageLimitsSnapshotForSources(
   sources: ReadonlyArray<UsageLimitsActivitySource>,
   provider: ProviderKind | null | undefined = null,
 ): UsageLimitsSnapshot | null {
-  let latestSnapshot: UsageLimitsSnapshot | null = null;
-  let latestUpdatedAtMs = Number.NEGATIVE_INFINITY;
+  const candidates: Array<UsageLimitsSnapshotCandidate> = [];
 
   for (const source of sources) {
     if (provider && source.provider !== provider) {
       continue;
     }
 
-    const snapshot = deriveLatestUsageLimitsSnapshot(source.activities ?? []);
-    if (!snapshot) {
-      continue;
-    }
-
-    const updatedAtMs = Date.parse(snapshot.updatedAt);
-    if (!Number.isFinite(updatedAtMs)) {
-      continue;
-    }
-
-    if (latestSnapshot === null || updatedAtMs >= latestUpdatedAtMs) {
-      latestSnapshot = snapshot;
-      latestUpdatedAtMs = updatedAtMs;
-    }
+    candidates.push(...collectUsageLimitsSnapshotCandidates(source.activities ?? []));
   }
 
-  return latestSnapshot;
+  return aggregateUsageLimitsSnapshots(candidates);
 }
 
 export function deriveDisplayedUsageLimitsSnapshot(

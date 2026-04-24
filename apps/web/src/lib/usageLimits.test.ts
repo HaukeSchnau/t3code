@@ -244,4 +244,142 @@ describe("usageLimits", () => {
     expect(snapshot?.primary?.usedPercent).toBe(37);
     expect(snapshot?.updatedAt).toBe("2026-03-23T02:00:00.000Z");
   });
+
+  it("does not let a newer stale snapshot lower usage within the same reset window", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-1",
+              "account.rate-limits.updated",
+              {
+                secondary: {
+                  usedPercent: 50,
+                  resetsAt: "2026-03-30T00:00:00.000Z",
+                  windowDurationMins: 10080,
+                },
+              },
+              "2026-03-23T01:00:00.000Z",
+            ),
+          ],
+        },
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-2",
+              "account.rate-limits.updated",
+              {
+                secondary: {
+                  usedPercent: 20,
+                  resetsAt: "2026-03-30T00:00:01.000Z",
+                  windowDurationMins: 10080,
+                },
+              },
+              "2026-03-23T01:00:01.000Z",
+            ),
+          ],
+        },
+      ],
+      "codex",
+    );
+
+    expect(snapshot?.secondary?.usedPercent).toBe(50);
+  });
+
+  it("allows usage to drop when the reset window genuinely advances", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-1",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 92,
+                  resetsAt: "2026-03-23T05:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+              },
+              "2026-03-23T04:55:00.000Z",
+            ),
+            makeActivity(
+              "activity-2",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 3,
+                  resetsAt: "2026-03-23T10:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+              },
+              "2026-03-23T05:01:00.000Z",
+            ),
+          ],
+        },
+      ],
+      "codex",
+    );
+
+    expect(snapshot?.primary?.usedPercent).toBe(3);
+  });
+
+  it("selects primary and weekly windows independently across matching threads", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-1",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 88,
+                  resetsAt: "2026-03-23T05:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+                secondary: {
+                  usedPercent: 27,
+                  resetsAt: "2026-03-30T00:00:00.000Z",
+                  windowDurationMins: 10080,
+                },
+              },
+              "2026-03-23T04:55:00.000Z",
+            ),
+          ],
+        },
+        {
+          provider: "codex",
+          activities: [
+            makeActivity(
+              "activity-2",
+              "account.rate-limits.updated",
+              {
+                primary: {
+                  usedPercent: 6,
+                  resetsAt: "2026-03-23T10:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+                secondary: {
+                  usedPercent: 17,
+                  resetsAt: "2026-03-30T00:00:01.000Z",
+                  windowDurationMins: 10080,
+                },
+              },
+              "2026-03-23T05:01:00.000Z",
+            ),
+          ],
+        },
+      ],
+      "codex",
+    );
+
+    expect(snapshot?.primary?.usedPercent).toBe(6);
+    expect(snapshot?.secondary?.usedPercent).toBe(27);
+  });
 });
