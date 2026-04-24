@@ -4,8 +4,8 @@ import { assert, it } from "@effect/vitest";
 import { Effect, FileSystem, Path, Result } from "effect";
 
 import {
-  type CodexVoiceFetch,
   CodexVoiceTranscriptionError,
+  type CodexVoiceTranscriptionPost,
   makeTranscribeCodexVoiceAudio,
   readCodexVoiceCredentials,
 } from "./codexVoiceTranscription.ts";
@@ -40,11 +40,11 @@ it.layer(NodeServices.layer)("codex voice transcription", (it) => {
       const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "t3-voice-auth-" });
       yield* writeAuthJson(homePath, "secret-token", "account-1");
 
-      const seenHeaders: Array<Record<string, string>> = [];
+      const seenRequests: Parameters<CodexVoiceTranscriptionPost>[0][] = [];
       const transcribe = makeTranscribeCodexVoiceAudio({
-        fetch: async (_url, init) => {
-          seenHeaders.push((init?.headers ?? {}) as Record<string, string>);
-          return new Response(JSON.stringify({ text: " hello world " }), { status: 200 });
+        postTranscription: async (request) => {
+          seenRequests.push(request);
+          return { bodyText: JSON.stringify({ text: " hello world " }), status: 200 };
         },
         refreshAuth: () => Effect.void,
       });
@@ -59,8 +59,9 @@ it.layer(NodeServices.layer)("codex voice transcription", (it) => {
       );
 
       assert.deepEqual(result, { text: "hello world" });
-      assert.equal(seenHeaders[0]?.authorization, "Bearer secret-token");
-      assert.equal(seenHeaders[0]?.["chatgpt-account-id"], "account-1");
+      assert.equal(seenRequests[0]?.credentials.accessToken, "secret-token");
+      assert.equal(seenRequests[0]?.credentials.accountId, "account-1");
+      assert.match(seenRequests[0]?.userAgent ?? "", /^Codex Desktop\//);
     }),
   );
 
@@ -90,14 +91,11 @@ it.layer(NodeServices.layer)("codex voice transcription", (it) => {
       const seenAuthorizations: string[] = [];
       let refreshCount = 0;
       const transcribe = makeTranscribeCodexVoiceAudio({
-        fetch: async (_url, init) => {
-          const headers = (init?.headers ?? {}) as Record<string, string>;
-          if (headers.authorization) {
-            seenAuthorizations.push(headers.authorization);
-          }
+        postTranscription: async ({ credentials }) => {
+          seenAuthorizations.push(`Bearer ${credentials.accessToken}`);
           return seenAuthorizations.length === 1
-            ? new Response("expired", { status: 401 })
-            : new Response(JSON.stringify({ text: " refreshed transcript " }), { status: 200 });
+            ? { bodyText: "expired", status: 401 }
+            : { bodyText: JSON.stringify({ text: " refreshed transcript " }), status: 200 };
         },
         refreshAuth: () =>
           Effect.gen(function* () {
@@ -136,8 +134,10 @@ it.layer(NodeServices.layer)("codex voice transcription", (it) => {
       const homePath = yield* fs.makeTempDirectoryScoped({ prefix: "t3-voice-upstream-auth-" });
       yield* writeAuthJson(homePath, "secret-token", "account-1");
       const transcribe = makeTranscribeCodexVoiceAudio({
-        fetch: (async () =>
-          new Response("upstream saw secret-token", { status: 500 })) satisfies CodexVoiceFetch,
+        postTranscription: (async () => ({
+          bodyText: "upstream saw secret-token",
+          status: 500,
+        })) satisfies CodexVoiceTranscriptionPost,
         refreshAuth: () => Effect.void,
       });
 

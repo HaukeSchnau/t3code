@@ -18,6 +18,7 @@ Add minimal composer voice dictation to this fork using the user's existing loca
 - Send recorded audio only to the authenticated primary T3 server.
 - Keep Codex access tokens server-side only.
 - Proxy transcription through the server with the local Codex auth file from configured Codex home, falling back to `~/.codex/auth.json`.
+- Use a pure TypeScript server transport. The ChatGPT endpoint rejects Node/Bun `fetch` with a Cloudflare 403 in local testing, so the server posts the multipart request through Node's built-in HTTP/2 client instead of using Swift or another native helper.
 - Insert the transcript into the current composer draft for review.
 - Never auto-send a transcribed prompt.
 - Keep errors short and user-safe; never log or surface raw tokens, account ids, audio bytes, or transcript text.

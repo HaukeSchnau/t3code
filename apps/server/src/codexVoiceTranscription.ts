@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { connect, constants as http2Constants } from "node:http2";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -23,12 +25,22 @@ export interface CodexVoiceAudioInput {
   readonly contentType: string;
 }
 
-export type CodexVoiceFetch = (
-  input: string | URL | Request,
-  init?: RequestInit,
-) => Promise<Response>;
+export interface CodexVoiceTranscriptionPostRequest {
+  readonly audio: CodexVoiceAudioInput;
+  readonly credentials: CodexVoiceCredentials;
+  readonly userAgent: string;
+}
 
-interface CodexVoiceCredentials {
+export interface CodexVoiceTranscriptionPostResponse {
+  readonly bodyText: string;
+  readonly status: number;
+}
+
+export type CodexVoiceTranscriptionPost = (
+  request: CodexVoiceTranscriptionPostRequest,
+) => Promise<CodexVoiceTranscriptionPostResponse>;
+
+export interface CodexVoiceCredentials {
   readonly accessToken: string;
   readonly accountId: string;
 }
@@ -141,7 +153,7 @@ export const refreshCodexVoiceAuth = (
   );
 
 export interface CodexVoiceTranscriptionDependencies<R> {
-  readonly fetch: CodexVoiceFetch;
+  readonly postTranscription: CodexVoiceTranscriptionPost;
   readonly refreshAuth: (
     codexSettings: CodexSettings,
   ) => Effect.Effect<void, CodexVoiceTranscriptionError, R>;
@@ -181,33 +193,106 @@ const responseError = (status: number, cause?: unknown) =>
     cause,
   });
 
+function escapeMultipartQuotedValue(value: string): string {
+  return value.replace(/[\r\n"]/g, "_");
+}
+
+function escapeMultipartHeaderValue(value: string): string {
+  return value.replace(/[\r\n]/g, "_");
+}
+
+function makeMultipartBody(audio: CodexVoiceAudioInput, boundary: string): Buffer {
+  const contentType = escapeMultipartHeaderValue(audio.contentType || "application/octet-stream");
+  const filename = escapeMultipartQuotedValue(audio.filename || "voice.webm");
+  const prefix = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+  );
+  const suffix = Buffer.from(`\r\n--${boundary}--\r\n`);
+  return Buffer.concat([prefix, Buffer.from(audio.bytes), suffix]);
+}
+
+export const postCodexVoiceTranscriptionHttp2: CodexVoiceTranscriptionPost = ({
+  audio,
+  credentials,
+  userAgent,
+}) =>
+  new Promise((resolve, reject) => {
+    const endpoint = new URL(CODEX_VOICE_TRANSCRIPTION_ENDPOINT);
+    const boundary = `----t3-codex-voice-${randomUUID()}`;
+    const body = makeMultipartBody(audio, boundary);
+    const client = connect(endpoint.origin, {
+      ALPNProtocols: ["h2"],
+    });
+
+    let settled = false;
+    const finish = (result: CodexVoiceTranscriptionPostResponse) => {
+      if (settled) return;
+      settled = true;
+      client.close();
+      resolve(result);
+    };
+    const fail = (cause: unknown) => {
+      if (settled) return;
+      settled = true;
+      client.destroy();
+      reject(cause);
+    };
+
+    client.once("error", fail);
+
+    const request = client.request({
+      ":method": "POST",
+      ":path": `${endpoint.pathname}${endpoint.search}`,
+      ":scheme": endpoint.protocol.slice(0, -1),
+      ":authority": endpoint.host,
+      accept: "application/json",
+      authorization: `Bearer ${credentials.accessToken}`,
+      "chatgpt-account-id": credentials.accountId,
+      "content-length": String(body.byteLength),
+      "content-type": `multipart/form-data; boundary=${boundary}`,
+      originator: "Codex Desktop",
+      "user-agent": userAgent,
+    });
+
+    const chunks: Buffer[] = [];
+    let status = 0;
+
+    request.once("response", (headers) => {
+      const rawStatus = headers[":status"];
+      status = typeof rawStatus === "number" ? rawStatus : Number(rawStatus) || 0;
+    });
+    request.on("data", (chunk: Buffer | string) => {
+      chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+    });
+    request.once("error", fail);
+    request.setTimeout(60_000, () => {
+      request.close(http2Constants.NGHTTP2_CANCEL);
+      fail(new Error("Codex transcription timed out."));
+    });
+    request.once("end", () => {
+      finish({
+        bodyText: Buffer.concat(chunks).toString("utf8"),
+        status,
+      });
+    });
+    request.end(body);
+  });
+
 const postTranscription = (
-  fetchImpl: CodexVoiceFetch,
+  postTranscriptionImpl: CodexVoiceTranscriptionPost,
   audio: CodexVoiceAudioInput,
   credentials: CodexVoiceCredentials,
 ): Effect.Effect<CodexVoiceTranscriptionResponse, CodexVoiceTranscriptionError> =>
   Effect.tryPromise({
     try: async () => {
-      const formData = new FormData();
-      const blob = new Blob([new Uint8Array(audio.bytes)], {
-        type: audio.contentType || "application/octet-stream",
-      });
-      formData.append("file", blob, audio.filename || "voice.webm");
-
-      const response = await fetchImpl(CODEX_VOICE_TRANSCRIPTION_ENDPOINT, {
-        body: formData,
-        headers: {
-          accept: "application/json",
-          authorization: `Bearer ${credentials.accessToken}`,
-          "chatgpt-account-id": credentials.accountId,
-          originator: "Codex Desktop",
-          "user-agent": codexDesktopUserAgent(),
-        },
-        method: "POST",
+      const response = await postTranscriptionImpl({
+        audio,
+        credentials,
+        userAgent: codexDesktopUserAgent(),
       });
 
-      const bodyText = await response.text();
-      if (!response.ok) {
+      const bodyText = response.bodyText;
+      if (response.status < 200 || response.status >= 300) {
         throw responseError(response.status, bodyText);
       }
 
@@ -243,7 +328,7 @@ export function makeTranscribeCodexVoiceAudio<R>(
 
       const initialCredentials = yield* readCodexVoiceCredentials(codexSettings);
       const firstAttempt = yield* Effect.result(
-        postTranscription(dependencies.fetch, audio, initialCredentials),
+        postTranscription(dependencies.postTranscription, audio, initialCredentials),
       );
       if (Result.isSuccess(firstAttempt)) {
         return firstAttempt.success;
@@ -255,11 +340,11 @@ export function makeTranscribeCodexVoiceAudio<R>(
 
       yield* dependencies.refreshAuth(codexSettings);
       const refreshedCredentials = yield* readCodexVoiceCredentials(codexSettings);
-      return yield* postTranscription(dependencies.fetch, audio, refreshedCredentials);
+      return yield* postTranscription(dependencies.postTranscription, audio, refreshedCredentials);
     });
 }
 
 export const transcribeCodexVoiceAudio = makeTranscribeCodexVoiceAudio({
-  fetch: (input, init) => globalThis.fetch(input, init),
+  postTranscription: postCodexVoiceTranscriptionHttp2,
   refreshAuth: refreshCodexVoiceAuth,
 });
