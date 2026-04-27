@@ -93,14 +93,14 @@ describe("usageLimits", () => {
 
   it("derives duration labels and pace status", () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-23T02:30:00.000Z"));
+    vi.setSystemTime(new Date(2026, 2, 23, 12, 30));
 
     const snapshot = deriveLatestUsageLimitsSnapshot([
       makeActivity("activity-1", "account.rate-limits.updated", {
         rateLimitReachedType: null,
         primary: {
           usedPercent: 60,
-          resetsAt: "2026-03-23T05:00:00.000Z",
+          resetsAt: localIso(2026, 2, 23, 15),
           windowDurationMins: 300,
         },
         secondary: {
@@ -120,6 +120,70 @@ describe("usageLimits", () => {
     expect(displayed?.secondary?.durationLabel).toBe("1w");
 
     vi.useRealTimers();
+  });
+
+  it("keeps daytime 5h projections equivalent to wall-clock elapsed time", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        primary: {
+          usedPercent: 60,
+          resetsAt: localIso(2026, 2, 23, 15),
+          windowDurationMins: 300,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 2, 23, 12, 30).getTime(),
+    );
+
+    expect(displayed?.primary?.elapsedPercent).toBe(50);
+    expect(displayed?.primary?.projectedPercentAtReset).toBe(120);
+  });
+
+  it("discounts sleep hours in 5h projections", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        primary: {
+          usedPercent: 40,
+          resetsAt: localIso(2026, 2, 23, 8),
+          windowDurationMins: 300,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 2, 23, 7, 30).getTime(),
+    );
+
+    expect(displayed?.primary?.elapsedPercent).toBe(50);
+    expect(displayed?.primary?.projectedPercentAtReset).toBe(80);
+  });
+
+  it("returns unknown projection for 5h windows entirely inside sleep", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        primary: {
+          usedPercent: 40,
+          resetsAt: localIso(2026, 2, 23, 7),
+          windowDurationMins: 300,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 2, 23, 4).getTime(),
+    );
+
+    expect(displayed?.primary?.elapsedPercent).toBeNull();
+    expect(displayed?.primary?.projectedPercentAtReset).toBeNull();
+    expect(displayed?.primary?.status).toBe("unknown");
   });
 
   it("marks reached limits when the provider reports a reached type", () => {
@@ -179,8 +243,29 @@ describe("usageLimits", () => {
       new Date(2026, 3, 25, 12).getTime(),
     );
 
-    expect(displayed?.secondary?.elapsedPercent).toBeCloseTo((5.125 / 5.5) * 100);
-    expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(50 / (5.125 / 5.5));
+    expect(displayed?.secondary?.elapsedPercent).toBeCloseTo((96.75 / 104.5) * 100);
+    expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(50 / (96.75 / 104.5));
+  });
+
+  it("combines sleep and weekend weighting in weekly projections", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        secondary: {
+          usedPercent: 50,
+          resetsAt: localIso(2026, 3, 27),
+          windowDurationMins: 10080,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 3, 25, 8).getTime(),
+    );
+
+    expect(displayed?.secondary?.elapsedPercent).toBeCloseTo((95.75 / 104.5) * 100);
+    expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(50 / (95.75 / 104.5));
   });
 
   it("prefers the newest valid snapshot across matching provider threads", () => {

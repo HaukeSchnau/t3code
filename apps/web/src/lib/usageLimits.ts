@@ -5,6 +5,9 @@ import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 const WEEKLY_WINDOW_DURATION_MINS = 7 * 24 * 60;
 const WEEKDAY_USAGE_WEIGHT = 1;
 const WEEKEND_USAGE_WEIGHT = 0.25;
+const SLEEP_START_HOUR_LOCAL = 2;
+const SLEEP_END_HOUR_LOCAL = 7;
+const SLEEP_USAGE_WEIGHT = 0;
 const RESET_WINDOW_TOLERANCE_MS = 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -71,6 +74,8 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
   durationLabel: string | null;
   resetRelativeLabel: string | null;
   resetAbsoluteLabel: string | null;
+  // Projection elapsed time can differ from wall-clock time because local sleep
+  // hours and low-usage weekend hours are discounted.
   elapsedPercent: number | null;
   projectedPercentAtReset: number | null;
   status: UsageLimitWindowStatus;
@@ -159,53 +164,102 @@ function isWeekendLocal(date: Date): boolean {
   return day === 0 || day === 6;
 }
 
-function startOfNextLocalDay(date: Date): number {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1, 0, 0, 0, 0).getTime();
+function isSleepTimeLocal(date: Date): boolean {
+  const hour = date.getHours();
+  if (SLEEP_START_HOUR_LOCAL < SLEEP_END_HOUR_LOCAL) {
+    return hour >= SLEEP_START_HOUR_LOCAL && hour < SLEEP_END_HOUR_LOCAL;
+  }
+  return hour >= SLEEP_START_HOUR_LOCAL || hour < SLEEP_END_HOUR_LOCAL;
 }
 
-function deriveWeightedDurationMs(startMs: number, endMs: number): number {
-  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) {
+function localBoundaryMs(date: Date, dayOffset: number, hour: number): number {
+  return new Date(
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate() + dayOffset,
+    hour,
+    0,
+    0,
+    0,
+  ).getTime();
+}
+
+function nextLocalBoundaryMs(date: Date): number {
+  const cursorMs = date.getTime();
+  return Math.min(
+    ...[
+      localBoundaryMs(date, 0, 0),
+      localBoundaryMs(date, 0, SLEEP_START_HOUR_LOCAL),
+      localBoundaryMs(date, 0, SLEEP_END_HOUR_LOCAL),
+      localBoundaryMs(date, 1, 0),
+    ].filter((boundaryMs) => boundaryMs > cursorMs),
+  );
+}
+
+function deriveUsageWeight(date: Date, windowDurationMins: number): number {
+  if (isSleepTimeLocal(date)) {
+    return SLEEP_USAGE_WEIGHT;
+  }
+
+  if (windowDurationMins === WEEKLY_WINDOW_DURATION_MINS && isWeekendLocal(date)) {
+    return WEEKEND_USAGE_WEIGHT;
+  }
+
+  return WEEKDAY_USAGE_WEIGHT;
+}
+
+function deriveExpectedUsageDurationMs(
+  startMs: number,
+  endMs: number,
+  windowDurationMins: number,
+): number {
+  if (
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(endMs) ||
+    endMs <= startMs ||
+    !Number.isFinite(windowDurationMins) ||
+    windowDurationMins <= 0
+  ) {
     return 0;
   }
 
   let cursorMs = startMs;
-  let weightedMs = 0;
+  let expectedUsageMs = 0;
 
   while (cursorMs < endMs) {
     const cursorDate = new Date(cursorMs);
-    const nextBoundaryMs = Math.min(startOfNextLocalDay(cursorDate), endMs);
-    const weight = isWeekendLocal(cursorDate) ? WEEKEND_USAGE_WEIGHT : WEEKDAY_USAGE_WEIGHT;
-    weightedMs += (nextBoundaryMs - cursorMs) * weight;
+    const nextBoundaryMs = Math.min(nextLocalBoundaryMs(cursorDate), endMs);
+    const weight = deriveUsageWeight(cursorDate, windowDurationMins);
+    expectedUsageMs += (nextBoundaryMs - cursorMs) * weight;
     cursorMs = nextBoundaryMs;
   }
 
-  return weightedMs;
+  return expectedUsageMs;
 }
 
-function deriveWallClockElapsedPercent(
+function deriveExpectedUsageElapsedPercent(
   resetMs: number,
   durationMs: number,
-  nowMs: number,
-): number | null {
-  const elapsedMs = durationMs - Math.max(0, resetMs - nowMs);
-  const elapsedPercent = (elapsedMs / durationMs) * 100;
-  return Math.max(0, Math.min(100, elapsedPercent));
-}
-
-function deriveWeeklyWeightedElapsedPercent(
-  resetMs: number,
-  durationMs: number,
+  windowDurationMins: number,
   nowMs: number,
 ): number | null {
   const windowStartMs = resetMs - durationMs;
   const effectiveNowMs = Math.min(Math.max(nowMs, windowStartMs), resetMs);
-  const weightedTotalMs = deriveWeightedDurationMs(windowStartMs, resetMs);
-  if (weightedTotalMs <= 0) {
+  const expectedTotalMs = deriveExpectedUsageDurationMs(windowStartMs, resetMs, windowDurationMins);
+  if (expectedTotalMs <= 0) {
     return null;
   }
 
-  const weightedElapsedMs = deriveWeightedDurationMs(windowStartMs, effectiveNowMs);
-  return Math.max(0, Math.min(100, (weightedElapsedMs / weightedTotalMs) * 100));
+  const expectedElapsedMs = deriveExpectedUsageDurationMs(
+    windowStartMs,
+    effectiveNowMs,
+    windowDurationMins,
+  );
+  if (expectedElapsedMs < 0) {
+    return null;
+  }
+
+  return Math.max(0, Math.min(100, (expectedElapsedMs / expectedTotalMs) * 100));
 }
 
 function deriveProjectionElapsedPercent(
@@ -222,11 +276,11 @@ function deriveProjectionElapsedPercent(
   }
 
   const durationMs = window.windowDurationMins * 60 * 1000;
-  if (window.windowDurationMins === WEEKLY_WINDOW_DURATION_MINS) {
-    return deriveWeeklyWeightedElapsedPercent(resetMs, durationMs, nowMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
   }
 
-  return deriveWallClockElapsedPercent(resetMs, durationMs, nowMs);
+  return deriveExpectedUsageElapsedPercent(resetMs, durationMs, window.windowDurationMins, nowMs);
 }
 
 function deriveProjectedPercentAtReset(
