@@ -1,8 +1,10 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { memo, useMemo } from "react";
+import { GitForkIcon } from "lucide-react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
+import { useGitStatus } from "../lib/gitStatusState";
 import { useStore } from "../store";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import {
@@ -13,7 +15,9 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { Button } from "./ui/button";
 import { Separator } from "./ui/separator";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 interface BranchToolbarProps {
   environmentId: EnvironmentId;
@@ -26,6 +30,7 @@ interface BranchToolbarProps {
   envLocked: boolean;
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
+  onCommitGraphOpen?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
 }
@@ -41,6 +46,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   envLocked,
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
+  onCommitGraphOpen,
   availableEnvironments,
   onEnvironmentChange,
 }: BranchToolbarProps) {
@@ -65,6 +71,8 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProject = useStore(activeProjectSelector);
   const hasActiveThread = serverThread !== undefined || draftThread !== null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const activeCwd = activeWorktreePath ?? activeProject?.cwd ?? null;
+  const gitStatus = useGitStatus({ environmentId, cwd: activeCwd });
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
@@ -112,6 +120,23 @@ export const BranchToolbar = memo(function BranchToolbar({
         {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
         {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
       />
+      {gitStatus.data?.vcs === "jj" && onCommitGraphOpen ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                aria-label="Open JJ graph"
+                size="icon-xs"
+                variant="outline"
+                onClick={onCommitGraphOpen}
+              >
+                <GitForkIcon />
+              </Button>
+            }
+          />
+          <TooltipPopup side="top">Open JJ graph</TooltipPopup>
+        </Tooltip>
+      ) : null}
     </div>
   );
 });

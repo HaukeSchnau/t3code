@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type GitCommitGraphActionInput,
   type GitActionProgressEvent,
   type GitStackedAction,
   type ThreadId,
@@ -16,6 +17,8 @@ import { requireEnvironmentConnection } from "../environments/runtime";
 const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
 const GIT_BRANCHES_PAGE_SIZE = 100;
+const GIT_COMMIT_GRAPH_STALE_TIME_MS = 5_000;
+export const GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 150;
 
 export const gitQueryKeys = {
   all: ["git"] as const,
@@ -23,6 +26,17 @@ export const gitQueryKeys = {
     ["git", "branches", environmentId ?? null, cwd] as const,
   branchSearch: (environmentId: EnvironmentId | null, cwd: string | null, query: string) =>
     ["git", "branches", environmentId ?? null, cwd, "search", query] as const,
+  commitGraph: (
+    environmentId: EnvironmentId | null,
+    cwd: string | null,
+    revset: string | null,
+    limit: number,
+  ) => ["git", "commit-graph", environmentId ?? null, cwd, revset ?? null, limit] as const,
+  commitGraphDetails: (
+    environmentId: EnvironmentId | null,
+    cwd: string | null,
+    changeId: string | null,
+  ) => ["git", "commit-graph-details", environmentId ?? null, cwd, changeId] as const,
 };
 
 export const gitMutationKeys = {
@@ -36,6 +50,8 @@ export const gitMutationKeys = {
     ["git", "mutation", "pull", environmentId ?? null, cwd] as const,
   preparePullRequestThread: (environmentId: EnvironmentId | null, cwd: string | null) =>
     ["git", "mutation", "prepare-pull-request-thread", environmentId ?? null, cwd] as const,
+  runCommitGraphAction: (environmentId: EnvironmentId | null, cwd: string | null) =>
+    ["git", "mutation", "commit-graph-action", environmentId ?? null, cwd] as const,
 };
 
 export function invalidateGitQueries(
@@ -45,10 +61,93 @@ export function invalidateGitQueries(
   const environmentId = input?.environmentId ?? null;
   const cwd = input?.cwd ?? null;
   if (cwd !== null) {
-    return queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(environmentId, cwd) });
+    return Promise.all([
+      queryClient.invalidateQueries({ queryKey: gitQueryKeys.branches(environmentId, cwd) }),
+      queryClient.invalidateQueries({
+        queryKey: ["git", "commit-graph", environmentId, cwd] as const,
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["git", "commit-graph-details", environmentId, cwd] as const,
+      }),
+    ]);
   }
 
   return queryClient.invalidateQueries({ queryKey: gitQueryKeys.all });
+}
+
+export function gitCommitGraphQueryOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  revset?: string | null;
+  limit?: number;
+  enabled?: boolean;
+}) {
+  const limit = input.limit ?? GIT_COMMIT_GRAPH_DEFAULT_LIMIT;
+  const normalizedRevset = input.revset?.trim() || null;
+  return queryOptions({
+    queryKey: gitQueryKeys.commitGraph(input.environmentId, input.cwd, normalizedRevset, limit),
+    queryFn: async () => {
+      if (!input.cwd) throw new Error("JJ graph is unavailable.");
+      if (!input.environmentId) throw new Error("JJ graph is unavailable.");
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.commitGraph({
+        cwd: input.cwd,
+        ...(normalizedRevset ? { revset: normalizedRevset } : {}),
+        limit,
+      });
+    },
+    enabled: input.environmentId !== null && input.cwd !== null && (input.enabled ?? true),
+    staleTime: GIT_COMMIT_GRAPH_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+  });
+}
+
+export function gitCommitGraphDetailsQueryOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  changeId: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.commitGraphDetails(input.environmentId, input.cwd, input.changeId),
+    queryFn: async () => {
+      if (!input.cwd || !input.changeId || !input.environmentId) {
+        throw new Error("JJ graph details are unavailable.");
+      }
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.commitGraphChangeDetails({ cwd: input.cwd, changeId: input.changeId });
+    },
+    enabled:
+      input.environmentId !== null &&
+      input.cwd !== null &&
+      input.changeId !== null &&
+      (input.enabled ?? true),
+    staleTime: GIT_COMMIT_GRAPH_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
+  });
+}
+
+export function gitCommitGraphActionMutationOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  queryClient: QueryClient;
+}) {
+  return mutationOptions({
+    mutationKey: gitMutationKeys.runCommitGraphAction(input.environmentId, input.cwd),
+    mutationFn: async (actionInput: Omit<GitCommitGraphActionInput, "cwd">) => {
+      if (!input.cwd || !input.environmentId) throw new Error("JJ graph action is unavailable.");
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.runCommitGraphAction({ ...actionInput, cwd: input.cwd });
+    },
+    onSuccess: async () => {
+      await invalidateGitQueries(input.queryClient, {
+        environmentId: input.environmentId,
+        cwd: input.cwd,
+      });
+    },
+  });
 }
 
 function invalidateGitBranchQueries(

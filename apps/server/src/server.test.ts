@@ -397,6 +397,35 @@ const buildAppUnderTest = (options?: {
           pullCurrentBranch: gitCore.pullCurrentBranch,
           readRangeContext: gitCore.readRangeContext,
           listBranches: gitCore.listBranches,
+          commitGraph: (input) =>
+            Effect.succeed({
+              isRepo: false,
+              supported: false,
+              revset: input.revset ?? "",
+              limit: input.limit ?? 150,
+              hasMore: false,
+              currentOperationId: null,
+              nodes: [],
+              edges: [],
+            }),
+          commitGraphChangeDetails: (input) =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "server.test.commitGraphChangeDetails",
+                command: "git.commitGraphChangeDetails",
+                cwd: input.cwd,
+                detail: "Unsupported in server tests.",
+              }),
+            ),
+          runCommitGraphAction: (input) =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "server.test.runCommitGraphAction",
+                command: "git.runCommitGraphAction",
+                cwd: input.cwd,
+                detail: "Unsupported in server tests.",
+              }),
+            ),
           createWorktree: gitCore.createWorktree,
           removeWorktree: gitCore.removeWorktree,
           createBranch: gitCore.createBranch,

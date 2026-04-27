@@ -658,6 +658,36 @@ function makeManager(input?: {
         pullCurrentBranch: gitCore.pullCurrentBranch,
         readRangeContext: gitCore.readRangeContext,
         listBranches: gitCore.listBranches,
+        commitGraph: (input) =>
+          Effect.succeed({
+            isRepo: true,
+            vcs: "git" as const,
+            supported: false,
+            revset: input.revset ?? "",
+            limit: input.limit ?? 150,
+            hasMore: false,
+            currentOperationId: null,
+            nodes: [],
+            edges: [],
+          }),
+        commitGraphChangeDetails: (input) =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitManager.test.commitGraphChangeDetails",
+              command: "git.commitGraphChangeDetails",
+              cwd: input.cwd,
+              detail: "Unsupported in GitManager tests.",
+            }),
+          ),
+        runCommitGraphAction: (input) =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitManager.test.runCommitGraphAction",
+              command: "git.runCommitGraphAction",
+              cwd: input.cwd,
+              detail: "Unsupported in GitManager tests.",
+            }),
+          ),
         createWorktree: gitCore.createWorktree,
         removeWorktree: gitCore.removeWorktree,
         createBranch: gitCore.createBranch,

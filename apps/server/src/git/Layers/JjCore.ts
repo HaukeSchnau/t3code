@@ -1,7 +1,12 @@
 import { basename, join } from "node:path";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
-import type { GitBranch } from "@t3tools/contracts";
+import type {
+  GitBranch,
+  GitCommitGraphAction,
+  GitCommitGraphEdge,
+  GitCommitGraphNode,
+} from "@t3tools/contracts";
 import { GitCommandError } from "@t3tools/contracts";
 
 import { runProcess } from "../../processRunner.ts";
@@ -12,13 +17,22 @@ import { dedupeRemoteBranchesWithLocalMatches } from "@t3tools/shared/git";
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 1_000_000;
-const JJ_GLOBAL_ARGS = ["--no-pager", "--config", "revsets.short-prefixes=none()"] as const;
+const JJ_GLOBAL_ARGS = [
+  "--no-pager",
+  "--config",
+  "revsets.short-prefixes=none()",
+  "--config",
+  "ui.log-word-wrap=false",
+] as const;
 const DEFAULT_BASE_BRANCH_CANDIDATES = ["main", "master"] as const;
 const LIST_BRANCHES_DEFAULT_LIMIT = 100;
 const PREPARED_COMMIT_PATCH_MAX_OUTPUT_BYTES = 49_000;
 const RANGE_COMMIT_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
+const COMMIT_GRAPH_DEFAULT_LIMIT = 150;
+const COMMIT_GRAPH_MAX_LIMIT = 500;
+const COMMIT_GRAPH_DIFF_PREVIEW_MAX_OUTPUT_BYTES = 80_000;
 
 interface ExecuteJjOptions {
   readonly allowNonZeroExit?: boolean;
@@ -155,6 +169,107 @@ function paginateBranches(input: {
     totalCount: filtered.length,
     nextCursor: cursor + branches.length < filtered.length ? cursor + branches.length : null,
   };
+}
+
+const COMMIT_GRAPH_NODE_TEMPLATE = `
+change_id ++ "\t" ++
+change_id.short() ++ "\t" ++
+commit_id ++ "\t" ++
+commit_id.short() ++ "\t" ++
+parents.map(|p| p.change_id()).join(" ") ++ "\t" ++
+(description.first_line().replace("\\n", " ").replace("\\t", " ")) ++ "\t" ++
+(author.name().replace("\\n", " ").replace("\\t", " ")) ++ "\t" ++
+author.email() ++ "\t" ++
+committer.timestamp().format("%Y-%m-%dT%H:%M:%S%z") ++ "\t" ++
+local_bookmarks.map(|b| b.name()).join(" ") ++ "\t" ++
+remote_bookmarks.map(|b| b.name()).join(" ") ++ "\t" ++
+current_working_copy ++ "\t" ++
+empty ++ "\t" ++
+conflict ++ "\t" ++
+immutable ++ "\t" ++
+divergent ++ "\n"
+`.trim();
+
+function splitCommitGraphList(value: string): string[] {
+  return value
+    .split(" ")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
+function defaultCommitGraphRevset(limit: number): string {
+  return `ancestors(visible_heads() | bookmarks() | tracked_remote_bookmarks() | @, ${limit})`;
+}
+
+function parseCommitGraphNode(line: string): GitCommitGraphNode {
+  const [
+    changeId = "",
+    displayChangeId = "",
+    commitId = "",
+    shortCommitId = "",
+    parentChangeIds = "",
+    description = "",
+    authorName = "",
+    authorEmail = "",
+    committerTimestamp = "",
+    localBookmarks = "",
+    remoteBookmarks = "",
+    currentWorkingCopy = "false",
+    empty = "false",
+    conflict = "false",
+    immutable = "false",
+    divergent = "false",
+  ] = line.split("\t");
+  return {
+    changeId,
+    displayChangeId,
+    commitId,
+    shortCommitId,
+    parentChangeIds: splitCommitGraphList(parentChangeIds),
+    description,
+    authorName,
+    authorEmail,
+    committerTimestamp,
+    localBookmarks: splitCommitGraphList(localBookmarks),
+    remoteBookmarks: splitCommitGraphList(remoteBookmarks),
+    currentWorkingCopy: currentWorkingCopy === "true",
+    empty: empty === "true",
+    conflict: conflict === "true",
+    immutable: immutable === "true",
+    divergent: divergent === "true",
+  };
+}
+
+function deriveCommitGraphEdges(nodes: ReadonlyArray<GitCommitGraphNode>): GitCommitGraphEdge[] {
+  const loadedChangeIds = new Set(nodes.map((node) => node.changeId));
+  const edges: GitCommitGraphEdge[] = [];
+  for (const node of nodes) {
+    for (const parentChangeId of node.parentChangeIds) {
+      edges.push({
+        fromChangeId: node.changeId,
+        toChangeId: parentChangeId,
+        elidedParent: !loadedChangeIds.has(parentChangeId),
+      });
+    }
+  }
+  return edges;
+}
+
+function requireConfirmed(
+  operation: string,
+  cwd: string,
+  args: readonly string[],
+  action: Extract<GitCommitGraphAction, { confirmed: boolean }>,
+): Effect.Effect<void, GitCommandError> {
+  if (action.confirmed) return Effect.void;
+  return Effect.fail(
+    createJjCommandError(
+      operation,
+      cwd,
+      args,
+      "This JJ graph action must be confirmed before it can run.",
+    ),
+  );
 }
 
 export const makeJjCore = Effect.fn("makeJjCore")(function* () {
@@ -668,6 +783,284 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       };
     });
 
+  const resolveCurrentOperationId = (cwd: string) =>
+    runJjStdout("JjCore.resolveCurrentOperationId", cwd, [
+      "op",
+      "log",
+      "--limit",
+      "1",
+      "-T",
+      'id.short() ++ "\n"',
+    ]).pipe(Effect.map((stdout) => stdout.trim()));
+
+  const readCommitGraphNode = (cwd: string, changeId: string) =>
+    runJjStdout("JjCore.commitGraph.node", cwd, [
+      "log",
+      "--no-graph",
+      "--limit",
+      "1",
+      "-r",
+      changeId,
+      "-T",
+      COMMIT_GRAPH_NODE_TEMPLATE,
+    ]).pipe(
+      Effect.flatMap((stdout) =>
+        Effect.try({
+          try: () => parseCommitGraphNode(splitLines(stdout)[0] ?? ""),
+          catch: (cause) =>
+            createJjCommandError(
+              "JjCore.commitGraph.node",
+              cwd,
+              ["log", "--no-graph", "--limit", "1", "-r", changeId],
+              cause instanceof Error ? cause.message : "Failed to parse JJ graph node.",
+              cause,
+            ),
+        }),
+      ),
+    );
+
+  const commitGraph: JjCoreShape["commitGraph"] = (input) =>
+    Effect.gen(function* () {
+      const limit = Math.min(input.limit ?? COMMIT_GRAPH_DEFAULT_LIMIT, COMMIT_GRAPH_MAX_LIMIT);
+      const revset = input.revset?.trim() || defaultCommitGraphRevset(limit + 1);
+      const [currentOperationId, stdout] = yield* Effect.all(
+        [
+          resolveCurrentOperationId(input.cwd),
+          runJjStdout("JjCore.commitGraph", input.cwd, [
+            "log",
+            "--no-graph",
+            "--color",
+            "never",
+            "--limit",
+            String(limit + 1),
+            "-r",
+            revset,
+            "-T",
+            COMMIT_GRAPH_NODE_TEMPLATE,
+          ]),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const nodes = yield* Effect.try({
+        try: () => splitLines(stdout).map(parseCommitGraphNode),
+        catch: (cause) =>
+          createJjCommandError(
+            "JjCore.commitGraph",
+            input.cwd,
+            ["log", "--no-graph", "--limit", String(limit + 1), "-r", revset],
+            cause instanceof Error ? cause.message : "Failed to parse JJ commit graph.",
+            cause,
+          ),
+      });
+      const visibleNodes = nodes.slice(0, limit);
+      return {
+        isRepo: true,
+        vcs: "jj" as const,
+        supported: true,
+        revset,
+        limit,
+        hasMore: nodes.length > limit,
+        currentOperationId,
+        nodes: visibleNodes,
+        edges: deriveCommitGraphEdges(visibleNodes),
+      };
+    });
+
+  const commitGraphChangeDetails: JjCoreShape["commitGraphChangeDetails"] = (input) =>
+    Effect.gen(function* () {
+      const [node, changedFilesSummary, diffStat, diffPreviewResult] = yield* Effect.all(
+        [
+          readCommitGraphNode(input.cwd, input.changeId),
+          runJjStdout("JjCore.commitGraph.details.summary", input.cwd, [
+            "show",
+            "--summary",
+            "--no-patch",
+            "-r",
+            input.changeId,
+          ]),
+          runJjStdout("JjCore.commitGraph.details.stat", input.cwd, [
+            "show",
+            "--stat",
+            "--no-patch",
+            "-r",
+            input.changeId,
+          ]),
+          executeJj(
+            "JjCore.commitGraph.details.diff",
+            input.cwd,
+            ["show", "--git", "--context", "3", "-r", input.changeId],
+            {
+              maxOutputBytes: COMMIT_GRAPH_DIFF_PREVIEW_MAX_OUTPUT_BYTES,
+              truncateOutputAtMaxBytes: true,
+            },
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      return {
+        node,
+        changedFilesSummary,
+        diffStat,
+        diffPreview: diffPreviewResult.stdout,
+        diffPreviewTruncated: diffPreviewResult.stdoutTruncated,
+      };
+    });
+
+  const runGraphActionCommand = (
+    cwd: string,
+    action: GitCommitGraphAction,
+  ): Effect.Effect<void, GitCommandError> => {
+    switch (action.kind) {
+      case "edit":
+        return runJj("JjCore.commitGraph.action.edit", cwd, ["edit", action.changeId]);
+      case "describe":
+        return runJj("JjCore.commitGraph.action.describe", cwd, [
+          "describe",
+          "-r",
+          action.changeId,
+          "-m",
+          action.message,
+        ]);
+      case "new": {
+        const args = [
+          "new",
+          ...action.parentChangeIds,
+          ...(action.message !== undefined ? ["-m", action.message] : []),
+          ...(action.edit === false ? ["--no-edit"] : []),
+        ];
+        return runJj("JjCore.commitGraph.action.new", cwd, args);
+      }
+      case "insert_new": {
+        const insertFlag = action.position === "after" ? "-A" : "-B";
+        return runJj("JjCore.commitGraph.action.insertNew", cwd, [
+          "new",
+          insertFlag,
+          action.changeId,
+          ...(action.message !== undefined ? ["-m", action.message] : []),
+        ]);
+      }
+      case "abandon": {
+        const args = ["abandon", ...action.changeIds];
+        return requireConfirmed("JjCore.commitGraph.action.abandon", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.abandon", cwd, args)),
+        );
+      }
+      case "duplicate": {
+        const destinationFlags =
+          action.destinationMode === "onto"
+            ? action.destinationChangeIds?.flatMap((changeId) => ["-o", changeId])
+            : action.destinationMode === "after"
+              ? action.destinationChangeIds?.flatMap((changeId) => ["-A", changeId])
+              : action.destinationMode === "before"
+                ? action.destinationChangeIds?.flatMap((changeId) => ["-B", changeId])
+                : [];
+        const args = ["duplicate", ...action.changeIds, ...(destinationFlags ?? [])];
+        return requireConfirmed("JjCore.commitGraph.action.duplicate", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.duplicate", cwd, args)),
+        );
+      }
+      case "rebase": {
+        const modeFlag = action.mode === "source" ? "-s" : action.mode === "branch" ? "-b" : "-r";
+        const destinationFlag =
+          action.destinationMode === "onto"
+            ? "-o"
+            : action.destinationMode === "after"
+              ? "-A"
+              : "-B";
+        const args = [
+          "rebase",
+          modeFlag,
+          action.revset,
+          ...action.destinationChangeIds.flatMap((changeId) => [destinationFlag, changeId]),
+        ];
+        return requireConfirmed("JjCore.commitGraph.action.rebase", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.rebase", cwd, args)),
+        );
+      }
+      case "squash": {
+        const args = ["squash", "--from", action.fromChangeId, "--into", action.intoChangeId];
+        return requireConfirmed("JjCore.commitGraph.action.squash", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.squash", cwd, args)),
+        );
+      }
+      case "split": {
+        const args = [
+          "split",
+          "-r",
+          action.changeId,
+          ...(action.message !== undefined ? ["-m", action.message] : []),
+          ...action.filesets,
+        ];
+        return requireConfirmed("JjCore.commitGraph.action.split", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.split", cwd, args)),
+        );
+      }
+      case "bookmark_set":
+        return runJj("JjCore.commitGraph.action.bookmarkSet", cwd, [
+          "bookmark",
+          "set",
+          action.name,
+          "-r",
+          action.changeId,
+        ]);
+      case "bookmark_move": {
+        const args = ["bookmark", "move", action.name, "--to", action.changeId];
+        return requireConfirmed("JjCore.commitGraph.action.bookmarkMove", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.bookmarkMove", cwd, args)),
+        );
+      }
+      case "bookmark_rename": {
+        const args = ["bookmark", "rename", action.oldName, action.newName];
+        return requireConfirmed("JjCore.commitGraph.action.bookmarkRename", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.bookmarkRename", cwd, args)),
+        );
+      }
+      case "bookmark_delete": {
+        const args = ["bookmark", "delete", action.name];
+        return requireConfirmed("JjCore.commitGraph.action.bookmarkDelete", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.bookmarkDelete", cwd, args)),
+        );
+      }
+      case "bookmark_track": {
+        const args = ["bookmark", "track", `${action.name}@${action.remote}`];
+        return requireConfirmed("JjCore.commitGraph.action.bookmarkTrack", cwd, args, action).pipe(
+          Effect.flatMap(() => runJj("JjCore.commitGraph.action.bookmarkTrack", cwd, args)),
+        );
+      }
+      case "bookmark_untrack": {
+        const args = ["bookmark", "untrack", `${action.name}@${action.remote}`];
+        return requireConfirmed(
+          "JjCore.commitGraph.action.bookmarkUntrack",
+          cwd,
+          args,
+          action,
+        ).pipe(Effect.flatMap(() => runJj("JjCore.commitGraph.action.bookmarkUntrack", cwd, args)));
+      }
+    }
+  };
+
+  const runCommitGraphAction: JjCoreShape["runCommitGraphAction"] = (input) =>
+    Effect.gen(function* () {
+      const currentOperationId = yield* resolveCurrentOperationId(input.cwd);
+      if (currentOperationId !== input.expectedOperationId) {
+        return yield* createJjCommandError(
+          "JjCore.commitGraph.action.stale",
+          input.cwd,
+          ["op", "log", "--limit", "1"],
+          "The JJ repository changed since this graph was loaded. Refresh the graph and try again.",
+        );
+      }
+      yield* runGraphActionCommand(input.cwd, input.action);
+      const operationId = yield* resolveCurrentOperationId(input.cwd);
+      return {
+        action: input.action,
+        status: "applied" as const,
+        operationId,
+        ...("changeId" in input.action ? { targetChangeId: input.action.changeId } : {}),
+        ...("name" in input.action ? { branch: input.action.name } : {}),
+      };
+    });
+
   const createWorktree: JjCoreShape["createWorktree"] = (input) =>
     Effect.gen(function* () {
       const targetBranch = input.newBranch ?? input.branch;
@@ -791,6 +1184,9 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
     pullCurrentBranch,
     readRangeContext,
     listBranches,
+    commitGraph,
+    commitGraphChangeDetails,
+    runCommitGraphAction,
     createWorktree,
     removeWorktree,
     createBranch,

@@ -250,4 +250,84 @@ it.layer(TestLayer)("JjCore", (it) => {
       }),
     );
   });
+
+  describe("commit graph", () => {
+    it.effect("loads current JJ history with current change metadata", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initJjRepo(cwd);
+        yield* writeTextFile(path.join(cwd, "note.txt"), "hello\n");
+        yield* (yield* JjCore).commit(cwd, "add note", "");
+        yield* jj(cwd, ["bookmark", "set", "feature/graph", "-r", "@-"]);
+
+        const graph = yield* (yield* JjCore).commitGraph({ cwd, limit: 10 });
+
+        expect(graph.vcs).toBe("jj");
+        expect(graph.supported).toBe(true);
+        expect(graph.currentOperationId?.length).toBeGreaterThan(0);
+        expect(graph.nodes.some((node) => node.currentWorkingCopy)).toBe(true);
+        expect(graph.nodes).toContainEqual(
+          expect.objectContaining({
+            description: "add note",
+            localBookmarks: expect.arrayContaining(["feature/graph"]),
+          }),
+        );
+        expect(graph.edges.length).toBeGreaterThan(0);
+      }),
+    );
+
+    it.effect("sets hasMore when graph results exceed the requested limit", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initJjRepo(cwd);
+        yield* writeTextFile(path.join(cwd, "one.txt"), "one\n");
+        yield* (yield* JjCore).commit(cwd, "one", "");
+        yield* writeTextFile(path.join(cwd, "two.txt"), "two\n");
+        yield* (yield* JjCore).commit(cwd, "two", "");
+
+        const graph = yield* (yield* JjCore).commitGraph({ cwd, limit: 1 });
+
+        expect(graph.nodes).toHaveLength(1);
+        expect(graph.hasMore).toBe(true);
+      }),
+    );
+
+    it.effect("rejects stale graph actions and applies describe/bookmark actions", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initJjRepo(cwd);
+        const jjCore = yield* JjCore;
+        const graph = yield* jjCore.commitGraph({ cwd, limit: 10 });
+
+        const staleError = yield* Effect.flip(
+          jjCore.runCommitGraphAction({
+            cwd,
+            expectedOperationId: "stale",
+            action: { kind: "describe", changeId: graph.nodes[0]!.changeId, message: "updated" },
+          }),
+        );
+        expect(staleError.detail).toMatch(/changed since this graph was loaded/i);
+
+        yield* jjCore.runCommitGraphAction({
+          cwd,
+          expectedOperationId: graph.currentOperationId!,
+          action: { kind: "describe", changeId: graph.nodes[0]!.changeId, message: "updated" },
+        });
+        const afterDescribe = yield* jjCore.commitGraph({ cwd, limit: 10 });
+        yield* jjCore.runCommitGraphAction({
+          cwd,
+          expectedOperationId: afterDescribe.currentOperationId!,
+          action: {
+            kind: "bookmark_set",
+            name: "feature/from-graph",
+            changeId: graph.nodes[0]!.changeId,
+          },
+        });
+        const afterBookmark = yield* jjCore.commitGraph({ cwd, limit: 10 });
+
+        expect(afterDescribe.nodes[0]?.description).toBe("updated");
+        expect(afterBookmark.nodes[0]?.localBookmarks).toContain("feature/from-graph");
+      }),
+    );
+  });
 });

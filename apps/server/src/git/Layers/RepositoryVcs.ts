@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect";
-import type { GitCommandError } from "@t3tools/contracts";
+import { GitCommandError } from "@t3tools/contracts";
 
 import { GitCore } from "../Services/GitCore.ts";
 import { JjCore } from "../Services/JjCore.ts";
@@ -53,6 +53,49 @@ export const RepositoryVcsLive = Layer.effect(
         ),
       listBranches: (input) =>
         route(input.cwd, jjCore.listBranches(input), gitCore.listBranches(input)),
+      commitGraph: (input) =>
+        Effect.flatMap(useJj(input.cwd), (isJj) => {
+          if (isJj) return jjCore.commitGraph(input);
+          return gitCore.status(input).pipe(
+            Effect.map((status) => ({
+              isRepo: status.isRepo,
+              ...(status.isRepo ? { vcs: "git" as const } : {}),
+              supported: false,
+              revset: input.revset?.trim() || "",
+              limit: input.limit ?? 150,
+              hasMore: false,
+              currentOperationId: null,
+              nodes: [],
+              edges: [],
+            })),
+          );
+        }),
+      commitGraphChangeDetails: (input) =>
+        route(
+          input.cwd,
+          jjCore.commitGraphChangeDetails(input),
+          Effect.fail(
+            new GitCommandError({
+              operation: "RepositoryVcs.commitGraphChangeDetails",
+              command: "git.commitGraphChangeDetails",
+              cwd: input.cwd,
+              detail: "Commit graph details are only available for JJ repositories.",
+            }),
+          ),
+        ),
+      runCommitGraphAction: (input) =>
+        route(
+          input.cwd,
+          jjCore.runCommitGraphAction(input),
+          Effect.fail(
+            new GitCommandError({
+              operation: "RepositoryVcs.runCommitGraphAction",
+              command: "git.runCommitGraphAction",
+              cwd: input.cwd,
+              detail: "Commit graph actions are only available for JJ repositories.",
+            }),
+          ),
+        ),
       createWorktree: (input) =>
         route(input.cwd, jjCore.createWorktree(input), gitCore.createWorktree(input)),
       removeWorktree: (input) =>

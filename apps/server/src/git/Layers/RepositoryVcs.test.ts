@@ -98,10 +98,13 @@ it.layer(TestLayer)("RepositoryVcs", (it) => {
 
       const status = yield* repositoryVcs.status({ cwd });
       const branches = yield* repositoryVcs.listBranches({ cwd });
+      const graph = yield* repositoryVcs.commitGraph({ cwd, limit: 10 });
 
       expect(status.vcs).toBe("jj");
       expect(status.branch).toBe("feature/router");
       expect(branches.vcs).toBe("jj");
+      expect(graph.vcs).toBe("jj");
+      expect(graph.supported).toBe(true);
       expect(branches.branches).toContainEqual(
         expect.objectContaining({
           name: "feature/router",
@@ -123,9 +126,12 @@ it.layer(TestLayer)("RepositoryVcs", (it) => {
 
       const status = yield* (yield* RepositoryVcs).status({ cwd });
       const branches = yield* (yield* RepositoryVcs).listBranches({ cwd });
+      const graph = yield* (yield* RepositoryVcs).commitGraph({ cwd, limit: 10 });
 
       expect(status.vcs).toBe("git");
       expect(branches.vcs).toBe("git");
+      expect(graph.vcs).toBe("git");
+      expect(graph.supported).toBe(false);
       expect(branches.branches.some((branch) => branch.current)).toBe(true);
     }),
   );

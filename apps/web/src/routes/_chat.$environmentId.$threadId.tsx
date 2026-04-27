@@ -1,7 +1,9 @@
+import { scopeProjectRef } from "@t3tools/client-runtime";
 import { createFileRoute, retainSearchParams, useNavigate } from "@tanstack/react-router";
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import ChatView from "../components/ChatView";
+import JjCommitGraphPanel from "../components/JjCommitGraphPanel";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import {
@@ -19,7 +21,7 @@ import {
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../store";
-import { createThreadSelectorByRef } from "../storeSelectors";
+import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
@@ -52,9 +54,9 @@ const DiffPanelInlineSidebar = (props: {
   diffOpen: boolean;
   onCloseDiff: () => void;
   onOpenDiff: () => void;
-  renderDiffContent: boolean;
+  children: ReactNode;
 }) => {
-  const { diffOpen, onCloseDiff, onOpenDiff, renderDiffContent } = props;
+  const { diffOpen, onCloseDiff, onOpenDiff, children } = props;
   const onOpenChange = useCallback(
     (open: boolean) => {
       if (open) {
@@ -129,7 +131,7 @@ const DiffPanelInlineSidebar = (props: {
           storageKey: DIFF_INLINE_SIDEBAR_WIDTH_STORAGE_KEY,
         }}
       >
-        {renderDiffContent ? <LazyDiffPanel mode="sidebar" /> : null}
+        {children}
         <SidebarRail />
       </Sidebar>
     </SidebarProvider>
@@ -156,6 +158,16 @@ function ChatThreadRouteView() {
   const draftThread = useComposerDraftStore((store) =>
     threadRef ? store.getDraftThreadByRef(threadRef) : null,
   );
+  const activeProjectRef = serverThread
+    ? scopeProjectRef(serverThread.environmentId, serverThread.projectId)
+    : draftThread
+      ? scopeProjectRef(draftThread.environmentId, draftThread.projectId)
+      : null;
+  const activeProjectSelector = useMemo(
+    () => createProjectSelectorByRef(activeProjectRef),
+    [activeProjectRef],
+  );
+  const activeProject = useStore(activeProjectSelector);
   const environmentHasDraftThreads = useComposerDraftStore((store) => {
     if (!threadRef) {
       return false;
@@ -165,7 +177,9 @@ function ChatThreadRouteView() {
   const routeThreadExists = threadExists || draftThreadExists;
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
-  const diffOpen = search.diff === "1";
+  const graphOpen = search.panel === "graph";
+  const diffOpen = search.diff === "1" && !graphOpen;
+  const rightPanelOpen = diffOpen || graphOpen;
   const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   const currentThreadKey = threadRef ? `${threadRef.environmentId}:${threadRef.threadId}` : null;
   const [diffPanelMountState, setDiffPanelMountState] = useState(() => ({
@@ -195,6 +209,19 @@ function ChatThreadRouteView() {
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
       search: { diff: undefined },
+    });
+  }, [navigate, threadRef]);
+  const closeGraph = useCallback(() => {
+    if (!threadRef) {
+      return;
+    }
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(threadRef),
+      search: (previous) => {
+        const { panel: _panel, ...rest } = previous;
+        return rest;
+      },
     });
   }, [navigate, threadRef]);
   const openDiff = useCallback(() => {
@@ -234,6 +261,8 @@ function ChatThreadRouteView() {
   }
 
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
+  const graphCwd =
+    serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeProject?.cwd ?? null;
 
   if (!shouldUseDiffSheet) {
     return (
@@ -248,11 +277,21 @@ function ChatThreadRouteView() {
           />
         </SidebarInset>
         <DiffPanelInlineSidebar
-          diffOpen={diffOpen}
-          onCloseDiff={closeDiff}
+          diffOpen={rightPanelOpen}
+          onCloseDiff={graphOpen ? closeGraph : closeDiff}
           onOpenDiff={openDiff}
-          renderDiffContent={shouldRenderDiffContent}
-        />
+        >
+          {graphOpen ? (
+            <JjCommitGraphPanel
+              environmentId={threadRef.environmentId}
+              cwd={graphCwd}
+              mode="sidebar"
+              onClose={closeGraph}
+            />
+          ) : shouldRenderDiffContent ? (
+            <LazyDiffPanel mode="sidebar" />
+          ) : null}
+        </DiffPanelInlineSidebar>
       </>
     );
   }
@@ -267,8 +306,17 @@ function ChatThreadRouteView() {
           routeKind="server"
         />
       </SidebarInset>
-      <RightPanelSheet open={diffOpen} onClose={closeDiff}>
-        {shouldRenderDiffContent ? <LazyDiffPanel mode="sheet" /> : null}
+      <RightPanelSheet open={rightPanelOpen} onClose={graphOpen ? closeGraph : closeDiff}>
+        {graphOpen ? (
+          <JjCommitGraphPanel
+            environmentId={threadRef.environmentId}
+            cwd={graphCwd}
+            mode="sheet"
+            onClose={closeGraph}
+          />
+        ) : shouldRenderDiffContent ? (
+          <LazyDiffPanel mode="sheet" />
+        ) : null}
       </RightPanelSheet>
     </>
   );
@@ -277,7 +325,7 @@ function ChatThreadRouteView() {
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
   search: {
-    middlewares: [retainSearchParams<DiffRouteSearch>(["diff"])],
+    middlewares: [retainSearchParams<DiffRouteSearch>(["diff", "panel"])],
   },
   component: ChatThreadRouteView,
 });

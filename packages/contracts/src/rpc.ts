@@ -13,6 +13,12 @@ import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCheckoutResult,
+  GitCommitGraphActionInput,
+  GitCommitGraphActionResult,
+  GitCommitGraphChangeDetailsInput,
+  GitCommitGraphChangeDetailsResult,
+  GitCommitGraphInput,
+  GitCommitGraphResult,
   GitCommandError,
   GitCreateBranchInput,
   GitCreateBranchResult,
@@ -95,6 +101,9 @@ export const WS_METHODS = {
   gitPull: "git.pull",
   gitRefreshStatus: "git.refreshStatus",
   gitRunStackedAction: "git.runStackedAction",
+  gitCommitGraph: "git.commitGraph",
+  gitCommitGraphChangeDetails: "git.commitGraphChangeDetails",
+  gitRunCommitGraphAction: "git.runCommitGraphAction",
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
   gitRemoveWorktree: "git.removeWorktree",
@@ -203,6 +212,24 @@ export const WsGitRunStackedActionRpc = Rpc.make(WS_METHODS.gitRunStackedAction,
   success: GitActionProgressEvent,
   error: GitManagerServiceError,
   stream: true,
+});
+
+export const WsGitCommitGraphRpc = Rpc.make(WS_METHODS.gitCommitGraph, {
+  payload: GitCommitGraphInput,
+  success: GitCommitGraphResult,
+  error: GitCommandError,
+});
+
+export const WsGitCommitGraphChangeDetailsRpc = Rpc.make(WS_METHODS.gitCommitGraphChangeDetails, {
+  payload: GitCommitGraphChangeDetailsInput,
+  success: GitCommitGraphChangeDetailsResult,
+  error: GitCommandError,
+});
+
+export const WsGitRunCommitGraphActionRpc = Rpc.make(WS_METHODS.gitRunCommitGraphAction, {
+  payload: GitCommitGraphActionInput,
+  success: GitCommitGraphActionResult,
+  error: GitCommandError,
 });
 
 export const WsGitResolvePullRequestRpc = Rpc.make(WS_METHODS.gitResolvePullRequest, {
@@ -369,6 +396,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitPullRpc,
   WsGitRefreshStatusRpc,
   WsGitRunStackedActionRpc,
+  WsGitCommitGraphRpc,
+  WsGitCommitGraphChangeDetailsRpc,
+  WsGitRunCommitGraphActionRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsGitListBranchesRpc,

@@ -1,6 +1,12 @@
 import type {
   GitCheckoutInput,
   GitCheckoutResult,
+  GitCommitGraphActionInput,
+  GitCommitGraphActionResult,
+  GitCommitGraphChangeDetailsInput,
+  GitCommitGraphChangeDetailsResult,
+  GitCommitGraphInput,
+  GitCommitGraphResult,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -261,6 +267,11 @@ export interface EnvironmentApi {
     createBranch: (input: GitCreateBranchInput) => Promise<GitCreateBranchResult>;
     checkout: (input: GitCheckoutInput) => Promise<GitCheckoutResult>;
     init: (input: GitInitInput) => Promise<void>;
+    commitGraph: (input: GitCommitGraphInput) => Promise<GitCommitGraphResult>;
+    commitGraphChangeDetails: (
+      input: GitCommitGraphChangeDetailsInput,
+    ) => Promise<GitCommitGraphChangeDetailsResult>;
+    runCommitGraphAction: (input: GitCommitGraphActionInput) => Promise<GitCommitGraphActionResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,

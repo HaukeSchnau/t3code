@@ -871,6 +871,24 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
             ),
             { "rpc.aggregate": "git" },
           ),
+        [WS_METHODS.gitCommitGraph]: (input) =>
+          observeRpcEffect(WS_METHODS.gitCommitGraph, repositoryVcs.commitGraph(input), {
+            "rpc.aggregate": "git",
+          }),
+        [WS_METHODS.gitCommitGraphChangeDetails]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitCommitGraphChangeDetails,
+            repositoryVcs.commitGraphChangeDetails(input),
+            { "rpc.aggregate": "git" },
+          ),
+        [WS_METHODS.gitRunCommitGraphAction]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.gitRunCommitGraphAction,
+            repositoryVcs
+              .runCommitGraphAction(input)
+              .pipe(Effect.tap(() => refreshGitStatus(input.cwd))),
+            { "rpc.aggregate": "git" },
+          ),
         [WS_METHODS.gitResolvePullRequest]: (input) =>
           observeRpcEffect(WS_METHODS.gitResolvePullRequest, gitManager.resolvePullRequest(input), {
             "rpc.aggregate": "git",

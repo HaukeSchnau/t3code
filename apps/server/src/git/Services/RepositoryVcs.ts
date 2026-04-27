@@ -3,6 +3,12 @@ import type { Effect } from "effect";
 import type {
   GitCheckoutInput,
   GitCheckoutResult,
+  GitCommitGraphActionInput,
+  GitCommitGraphActionResult,
+  GitCommitGraphChangeDetailsInput,
+  GitCommitGraphChangeDetailsResult,
+  GitCommitGraphInput,
+  GitCommitGraphResult,
   GitCommandError,
   GitCreateBranchInput,
   GitCreateBranchResult,
@@ -52,6 +58,15 @@ export interface RepositoryVcsShape {
   readonly listBranches: (
     input: GitListBranchesInput,
   ) => Effect.Effect<GitListBranchesResult, GitCommandError>;
+  readonly commitGraph: (
+    input: GitCommitGraphInput,
+  ) => Effect.Effect<GitCommitGraphResult, GitCommandError>;
+  readonly commitGraphChangeDetails: (
+    input: GitCommitGraphChangeDetailsInput,
+  ) => Effect.Effect<GitCommitGraphChangeDetailsResult, GitCommandError>;
+  readonly runCommitGraphAction: (
+    input: GitCommitGraphActionInput,
+  ) => Effect.Effect<GitCommitGraphActionResult, GitCommandError>;
   readonly createWorktree: (
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;

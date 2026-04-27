@@ -3,6 +3,7 @@ import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
+const GIT_COMMIT_GRAPH_MAX_LIMIT = 500;
 
 // Domain Types
 
@@ -191,6 +192,128 @@ export const GitInitInput = Schema.Struct({
 });
 export type GitInitInput = typeof GitInitInput.Type;
 
+export const GitCommitGraphInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  revset: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(2_000))),
+  limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_COMMIT_GRAPH_MAX_LIMIT))),
+});
+export type GitCommitGraphInput = typeof GitCommitGraphInput.Type;
+
+export const GitCommitGraphChangeDetailsInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  changeId: TrimmedNonEmptyStringSchema,
+});
+export type GitCommitGraphChangeDetailsInput = typeof GitCommitGraphChangeDetailsInput.Type;
+
+const GitCommitGraphActionChangeId = TrimmedNonEmptyStringSchema;
+const GitCommitGraphActionBookmark = TrimmedNonEmptyStringSchema;
+const GitCommitGraphActionFilesets = Schema.Array(TrimmedNonEmptyStringSchema).check(
+  Schema.isMinLength(1),
+);
+const GitCommitGraphRebaseMode = Schema.Literals(["source", "branch", "revisions"]);
+const GitCommitGraphDestinationMode = Schema.Literals(["onto", "after", "before"]);
+
+const GitCommitGraphAction = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("edit"),
+    changeId: GitCommitGraphActionChangeId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("describe"),
+    changeId: GitCommitGraphActionChangeId,
+    message: Schema.String.check(Schema.isMaxLength(20_000)),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("new"),
+    parentChangeIds: Schema.Array(GitCommitGraphActionChangeId).check(Schema.isMinLength(1)),
+    message: Schema.optional(Schema.String.check(Schema.isMaxLength(20_000))),
+    edit: Schema.optional(Schema.Boolean),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("insert_new"),
+    changeId: GitCommitGraphActionChangeId,
+    position: Schema.Literals(["after", "before"]),
+    message: Schema.optional(Schema.String.check(Schema.isMaxLength(20_000))),
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("abandon"),
+    changeIds: Schema.Array(GitCommitGraphActionChangeId).check(Schema.isMinLength(1)),
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("duplicate"),
+    changeIds: Schema.Array(GitCommitGraphActionChangeId).check(Schema.isMinLength(1)),
+    destinationMode: Schema.optional(GitCommitGraphDestinationMode),
+    destinationChangeIds: Schema.optional(
+      Schema.Array(GitCommitGraphActionChangeId).check(Schema.isMinLength(1)),
+    ),
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("rebase"),
+    mode: GitCommitGraphRebaseMode,
+    revset: TrimmedNonEmptyStringSchema,
+    destinationMode: GitCommitGraphDestinationMode,
+    destinationChangeIds: Schema.Array(GitCommitGraphActionChangeId).check(Schema.isMinLength(1)),
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("squash"),
+    fromChangeId: GitCommitGraphActionChangeId,
+    intoChangeId: GitCommitGraphActionChangeId,
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("split"),
+    changeId: GitCommitGraphActionChangeId,
+    filesets: GitCommitGraphActionFilesets,
+    message: Schema.optional(Schema.String.check(Schema.isMaxLength(20_000))),
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_set"),
+    name: GitCommitGraphActionBookmark,
+    changeId: GitCommitGraphActionChangeId,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_move"),
+    name: GitCommitGraphActionBookmark,
+    changeId: GitCommitGraphActionChangeId,
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_rename"),
+    oldName: GitCommitGraphActionBookmark,
+    newName: GitCommitGraphActionBookmark,
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_delete"),
+    name: GitCommitGraphActionBookmark,
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_track"),
+    name: GitCommitGraphActionBookmark,
+    remote: GitCommitGraphActionBookmark,
+    confirmed: Schema.Boolean,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("bookmark_untrack"),
+    name: GitCommitGraphActionBookmark,
+    remote: GitCommitGraphActionBookmark,
+    confirmed: Schema.Boolean,
+  }),
+]);
+export type GitCommitGraphAction = typeof GitCommitGraphAction.Type;
+
+export const GitCommitGraphActionInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  expectedOperationId: TrimmedNonEmptyStringSchema,
+  action: GitCommitGraphAction,
+});
+export type GitCommitGraphActionInput = typeof GitCommitGraphActionInput.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({
@@ -287,6 +410,64 @@ export const GitCheckoutResult = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyStringSchema),
 });
 export type GitCheckoutResult = typeof GitCheckoutResult.Type;
+
+export const GitCommitGraphNode = Schema.Struct({
+  changeId: TrimmedNonEmptyStringSchema,
+  displayChangeId: TrimmedNonEmptyStringSchema,
+  commitId: TrimmedNonEmptyStringSchema,
+  shortCommitId: TrimmedNonEmptyStringSchema,
+  parentChangeIds: Schema.Array(TrimmedNonEmptyStringSchema),
+  description: Schema.String,
+  authorName: Schema.String,
+  authorEmail: Schema.String,
+  committerTimestamp: Schema.String,
+  localBookmarks: Schema.Array(TrimmedNonEmptyStringSchema),
+  remoteBookmarks: Schema.Array(TrimmedNonEmptyStringSchema),
+  currentWorkingCopy: Schema.Boolean,
+  empty: Schema.Boolean,
+  conflict: Schema.Boolean,
+  immutable: Schema.Boolean,
+  divergent: Schema.Boolean,
+});
+export type GitCommitGraphNode = typeof GitCommitGraphNode.Type;
+
+export const GitCommitGraphEdge = Schema.Struct({
+  fromChangeId: TrimmedNonEmptyStringSchema,
+  toChangeId: TrimmedNonEmptyStringSchema,
+  elidedParent: Schema.Boolean,
+});
+export type GitCommitGraphEdge = typeof GitCommitGraphEdge.Type;
+
+export const GitCommitGraphResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
+  supported: Schema.Boolean,
+  revset: TrimmedNonEmptyStringSchema,
+  limit: PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_COMMIT_GRAPH_MAX_LIMIT)),
+  hasMore: Schema.Boolean,
+  currentOperationId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  nodes: Schema.Array(GitCommitGraphNode),
+  edges: Schema.Array(GitCommitGraphEdge),
+});
+export type GitCommitGraphResult = typeof GitCommitGraphResult.Type;
+
+export const GitCommitGraphChangeDetailsResult = Schema.Struct({
+  node: GitCommitGraphNode,
+  changedFilesSummary: Schema.String,
+  diffStat: Schema.String,
+  diffPreview: Schema.String,
+  diffPreviewTruncated: Schema.Boolean,
+});
+export type GitCommitGraphChangeDetailsResult = typeof GitCommitGraphChangeDetailsResult.Type;
+
+export const GitCommitGraphActionResult = Schema.Struct({
+  action: GitCommitGraphAction,
+  status: Schema.Literal("applied"),
+  operationId: Schema.optional(TrimmedNonEmptyStringSchema),
+  targetChangeId: Schema.optional(TrimmedNonEmptyStringSchema),
+  branch: Schema.optional(TrimmedNonEmptyStringSchema),
+});
+export type GitCommitGraphActionResult = typeof GitCommitGraphActionResult.Type;
 
 export const GitRunStackedActionResult = Schema.Struct({
   action: GitStackedAction,

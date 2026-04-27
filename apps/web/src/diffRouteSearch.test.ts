@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseDiffRouteSearch } from "./diffRouteSearch";
+import { parseDiffRouteSearch, stripDiffSearchParams } from "./diffRouteSearch";
 
 describe("parseDiffRouteSearch", () => {
   it("parses valid diff search values", () => {
@@ -70,5 +70,25 @@ describe("parseDiffRouteSearch", () => {
     expect(parsed).toEqual({
       diff: "1",
     });
+  });
+
+  it("keeps graph panel route state", () => {
+    expect(parseDiffRouteSearch({ panel: "graph", diff: "1" })).toEqual({
+      diff: "1",
+      panel: "graph",
+    });
+    expect(parseDiffRouteSearch({ panel: "other" })).toEqual({});
+  });
+
+  it("strips diff and graph panel search state together", () => {
+    expect(
+      stripDiffSearchParams({
+        diff: "1",
+        diffTurnId: "turn-1",
+        diffFilePath: "src/app.ts",
+        panel: "graph",
+        keep: "value",
+      }),
+    ).toEqual({ keep: "value" });
   });
 });
