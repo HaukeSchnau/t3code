@@ -89,7 +89,7 @@ export const ChatHeader = memo(function ChatHeader({
         )}
         {activeProjectName && !isGitRepo && (
           <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
-            No Git
+            No VCS
           </Badge>
         )}
       </div>
@@ -179,7 +179,7 @@ export const ChatHeader = memo(function ChatHeader({
           />
           <TooltipPopup side="bottom">
             {!isGitRepo
-              ? "Diff panel is unavailable because this project is not a git repository."
+              ? "Diff panel is unavailable because this project is not a supported repository."
               : diffToggleShortcutLabel
                 ? `Toggle diff panel (${diffToggleShortcutLabel})`
                 : "Toggle diff panel"}

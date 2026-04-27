@@ -130,7 +130,7 @@ function getMenuActionDisabledReason({
 }): string | null {
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
-  if (!gitStatus) return "Git status is unavailable.";
+  if (!gitStatus) return "VCS status is unavailable.";
 
   const hasBranch = gitStatus.branch !== null;
   const hasChanges = gitStatus.hasWorkingTreeChanges;
@@ -147,13 +147,17 @@ function getMenuActionDisabledReason({
 
   if (item.id === "push") {
     if (!hasBranch) {
-      return "Detached HEAD: checkout a branch before pushing.";
+      return gitStatus.vcs === "jj"
+        ? "Create a bookmark before pushing."
+        : "Detached HEAD: checkout a branch before pushing.";
     }
     if (hasChanges) {
       return "Commit or stash local changes before pushing.";
     }
     if (isBehind) {
-      return "Branch is behind upstream. Pull/rebase before pushing.";
+      return gitStatus.vcs === "jj"
+        ? "Bookmark is behind upstream. Sync before pushing."
+        : "Branch is behind upstream. Pull/rebase before pushing.";
     }
     if (!gitStatus.hasUpstream && !hasOriginRemote) {
       return 'Add an "origin" remote before pushing.';
@@ -168,7 +172,9 @@ function getMenuActionDisabledReason({
     return "View PR is currently unavailable.";
   }
   if (!hasBranch) {
-    return "Detached HEAD: checkout a branch before creating a PR.";
+    return gitStatus.vcs === "jj"
+      ? "Create a bookmark before creating a PR."
+      : "Detached HEAD: checkout a branch before creating a PR.";
   }
   if (hasChanges) {
     return "Commit local changes before creating a PR.";
@@ -180,7 +186,9 @@ function getMenuActionDisabledReason({
     return "No local commits to include in a PR.";
   }
   if (isBehind) {
-    return "Branch is behind upstream. Pull/rebase before creating a PR.";
+    return gitStatus.vcs === "jj"
+      ? "Bookmark is behind upstream. Sync before creating a PR."
+      : "Branch is behind upstream. Pull/rebase before creating a PR.";
   }
   return "Create PR is currently unavailable.";
 }

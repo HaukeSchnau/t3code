@@ -44,6 +44,8 @@ const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
+export const VcsKind = Schema.Literals(["git", "jj"]);
+export type VcsKind = typeof VcsKind.Type;
 export const GitHostingProviderKind = Schema.Literals(["github", "gitlab", "unknown"]);
 export type GitHostingProviderKind = typeof GitHostingProviderKind.Type;
 export const GitHostingProvider = Schema.Struct({
@@ -202,6 +204,7 @@ const GitStatusPr = Schema.Struct({
 
 const GitStatusLocalShape = {
   isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
   hostingProvider: Schema.optional(GitHostingProvider),
   hasOriginRemote: Schema.Boolean,
   isDefaultBranch: Schema.Boolean,
@@ -256,6 +259,7 @@ export type GitStatusStreamEvent = typeof GitStatusStreamEvent.Type;
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),
   isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
   hasOriginRemote: Schema.Boolean,
   nextCursor: NonNegativeInt.pipe(Schema.NullOr),
   totalCount: NonNegativeInt,

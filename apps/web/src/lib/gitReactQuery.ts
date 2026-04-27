@@ -75,8 +75,8 @@ export function gitBranchSearchInfiniteQueryOptions(input: {
     queryKey: gitQueryKeys.branchSearch(input.environmentId, input.cwd, normalizedQuery),
     initialPageParam: 0,
     queryFn: async ({ pageParam }) => {
-      if (!input.cwd) throw new Error("Git branches are unavailable.");
-      if (!input.environmentId) throw new Error("Git branches are unavailable.");
+      if (!input.cwd) throw new Error("VCS branches are unavailable.");
+      if (!input.environmentId) throw new Error("VCS branches are unavailable.");
       const api = ensureEnvironmentApi(input.environmentId);
       return api.git.listBranches({
         cwd: input.cwd,

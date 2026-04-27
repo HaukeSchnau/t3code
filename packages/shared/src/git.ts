@@ -285,6 +285,7 @@ function toRemoteStatusPart(status: GitStatusResult): GitStatusRemoteResult {
 function toLocalStatusPart(status: GitStatusResult): GitStatusLocalResult {
   return {
     isRepo: status.isRepo,
+    ...(status.vcs ? { vcs: status.vcs } : {}),
     ...(status.hostingProvider ? { hostingProvider: status.hostingProvider } : {}),
     hasOriginRemote: status.hasOriginRemote,
     isDefaultBranch: status.isDefaultBranch,

@@ -24,6 +24,7 @@ import { type TextGenerationShape, TextGeneration } from "../Services/TextGenera
 import { GitCoreLive } from "./GitCore.ts";
 import { GitCore } from "../Services/GitCore.ts";
 import { makeGitManager } from "./GitManager.ts";
+import { RepositoryVcs, type RepositoryVcsShape } from "../Services/RepositoryVcs.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import {
@@ -643,6 +644,29 @@ function makeManager(input?: {
     Layer.provideMerge(NodeServices.layer),
     Layer.provideMerge(ServerConfigLayer),
   );
+  const repositoryVcsLayer = Layer.effect(
+    RepositoryVcs,
+    Effect.gen(function* () {
+      const gitCore = yield* GitCore;
+      return {
+        status: gitCore.status,
+        statusDetails: gitCore.statusDetails,
+        statusDetailsLocal: gitCore.statusDetailsLocal,
+        prepareCommitContext: gitCore.prepareCommitContext,
+        commit: (cwd, subject, body, options) => gitCore.commit(cwd, subject, body, options),
+        pushCurrentBranch: gitCore.pushCurrentBranch,
+        pullCurrentBranch: gitCore.pullCurrentBranch,
+        readRangeContext: gitCore.readRangeContext,
+        listBranches: gitCore.listBranches,
+        createWorktree: gitCore.createWorktree,
+        removeWorktree: gitCore.removeWorktree,
+        createBranch: gitCore.createBranch,
+        checkoutBranch: gitCore.checkoutBranch,
+        initRepo: gitCore.initRepo,
+        listLocalBranchNames: gitCore.listLocalBranchNames,
+      } satisfies RepositoryVcsShape;
+    }),
+  ).pipe(Layer.provide(gitCoreLayer));
 
   const managerLayer = Layer.mergeAll(
     Layer.succeed(GitHubCli, gitHubCli),
@@ -654,6 +678,7 @@ function makeManager(input?: {
       },
     ),
     gitCoreLayer,
+    repositoryVcsLayer,
     serverSettingsLayer,
   ).pipe(Layer.provideMerge(NodeServices.layer));
 

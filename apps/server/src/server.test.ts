@@ -58,6 +58,7 @@ import {
 } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { GitCore, type GitCoreShape } from "./git/Services/GitCore.ts";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
+import { RepositoryVcs, type RepositoryVcsShape } from "./git/Services/RepositoryVcs.ts";
 import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
 import {
   GitStatusBroadcaster,
@@ -323,6 +324,7 @@ const buildAppUnderTest = (options?: {
     serverSettings?: Partial<ServerSettingsShape>;
     open?: Partial<OpenShape>;
     gitCore?: Partial<GitCoreShape>;
+    repositoryVcs?: Partial<RepositoryVcsShape>;
     gitManager?: Partial<GitManagerShape>;
     gitStatusBroadcaster?: Partial<GitStatusBroadcasterShape>;
     projectSetupScriptRunner?: Partial<ProjectSetupScriptRunnerShape>;
@@ -380,6 +382,31 @@ const buildAppUnderTest = (options?: {
       filterIgnoredPaths: (_cwd, relativePaths) => Effect.succeed(relativePaths),
       ...options?.layers?.gitCore,
     });
+    const repositoryVcsLayer = Layer.effect(
+      RepositoryVcs,
+      Effect.gen(function* () {
+        const gitCore = yield* GitCore;
+        return {
+          status: gitCore.status,
+          statusDetails: gitCore.statusDetails,
+          statusDetailsLocal: gitCore.statusDetailsLocal,
+          prepareCommitContext: gitCore.prepareCommitContext,
+          commit: (cwd, subject, body, commitOptions) =>
+            gitCore.commit(cwd, subject, body, commitOptions),
+          pushCurrentBranch: gitCore.pushCurrentBranch,
+          pullCurrentBranch: gitCore.pullCurrentBranch,
+          readRangeContext: gitCore.readRangeContext,
+          listBranches: gitCore.listBranches,
+          createWorktree: gitCore.createWorktree,
+          removeWorktree: gitCore.removeWorktree,
+          createBranch: gitCore.createBranch,
+          checkoutBranch: gitCore.checkoutBranch,
+          initRepo: gitCore.initRepo,
+          listLocalBranchNames: gitCore.listLocalBranchNames,
+          ...options?.layers?.repositoryVcs,
+        } satisfies RepositoryVcsShape;
+      }),
+    ).pipe(Layer.provide(gitCoreLayer));
     const gitManagerLayer = Layer.mock(GitManager)({
       ...options?.layers?.gitManager,
     });
@@ -440,6 +467,7 @@ const buildAppUnderTest = (options?: {
         }),
       ),
       Layer.provide(gitCoreLayer),
+      Layer.provide(repositoryVcsLayer),
       Layer.provide(gitManagerLayer),
       Layer.provideMerge(gitStatusBroadcasterLayer),
       Layer.provide(

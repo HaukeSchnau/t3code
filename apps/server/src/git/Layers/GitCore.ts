@@ -1314,6 +1314,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
 
     return {
       isRepo: true,
+      vcs: "git" as const,
       hasOriginRemote,
       isDefaultBranch:
         branch !== null &&
@@ -1351,6 +1352,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     statusDetails(input.cwd).pipe(
       Effect.map((details) => ({
         isRepo: details.isRepo,
+        ...(details.isRepo ? { vcs: "git" as const } : {}),
         hasOriginRemote: details.hasOriginRemote,
         isDefaultBranch: details.isDefaultBranch,
         branch: details.branch,
@@ -1937,6 +1939,7 @@ export const makeGitCore = Effect.fn("makeGitCore")(function* (options?: {
     return {
       branches: [...branches.branches],
       isRepo: true,
+      vcs: "git" as const,
       hasOriginRemote: remoteNames.includes("origin"),
       nextCursor: branches.nextCursor,
       totalCount: branches.totalCount,

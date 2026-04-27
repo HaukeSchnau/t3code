@@ -157,7 +157,7 @@ export function resolveQuickAction(
       label: "Commit",
       disabled: true,
       kind: "show_hint",
-      hint: "Git status is unavailable.",
+      hint: "VCS status is unavailable.",
     };
   }
 
@@ -242,7 +242,7 @@ export function resolveQuickAction(
 
   if (isBehind) {
     return {
-      label: "Pull",
+      label: gitStatus.vcs === "jj" ? "Sync" : "Pull",
       disabled: false,
       kind: "run_pull",
     };

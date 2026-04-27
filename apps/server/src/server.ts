@@ -31,6 +31,8 @@ import { CheckpointDiffQueryLive } from "./checkpointing/Layers/CheckpointDiffQu
 import { CheckpointStoreLive } from "./checkpointing/Layers/CheckpointStore.ts";
 import { GitCoreLive } from "./git/Layers/GitCore.ts";
 import { GitHubCliLive } from "./git/Layers/GitHubCli.ts";
+import { JjCoreLive } from "./git/Layers/JjCore.ts";
+import { RepositoryVcsLive } from "./git/Layers/RepositoryVcs.ts";
 import { GitStatusBroadcasterLive } from "./git/Layers/GitStatusBroadcaster.ts";
 import { RoutingTextGenerationLive } from "./git/Layers/RoutingTextGeneration.ts";
 import { TerminalManagerLive } from "./terminal/Layers/Manager.ts";
@@ -186,7 +188,11 @@ const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersisten
 
 const GitManagerLayerLive = GitManagerLive.pipe(
   Layer.provideMerge(ProjectSetupScriptRunnerLive),
+  Layer.provideMerge(
+    RepositoryVcsLive.pipe(Layer.provideMerge(GitCoreLive), Layer.provideMerge(JjCoreLive)),
+  ),
   Layer.provideMerge(GitCoreLive),
+  Layer.provideMerge(JjCoreLive),
   Layer.provideMerge(GitHubCliLive),
   Layer.provideMerge(RoutingTextGenerationLive),
 );
@@ -194,7 +200,11 @@ const GitManagerLayerLive = GitManagerLive.pipe(
 const GitLayerLive = Layer.empty.pipe(
   Layer.provideMerge(GitManagerLayerLive),
   Layer.provideMerge(GitStatusBroadcasterLive.pipe(Layer.provide(GitManagerLayerLive))),
+  Layer.provideMerge(
+    RepositoryVcsLive.pipe(Layer.provideMerge(GitCoreLive), Layer.provideMerge(JjCoreLive)),
+  ),
   Layer.provideMerge(GitCoreLive),
+  Layer.provideMerge(JjCoreLive),
 );
 
 const TerminalLayerLive = TerminalManagerLive.pipe(Layer.provide(PtyAdapterLive));

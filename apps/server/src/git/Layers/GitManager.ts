@@ -40,6 +40,7 @@ import {
 } from "../Services/GitManager.ts";
 import { GitCore } from "../Services/GitCore.ts";
 import type { GitStatusDetails } from "../Services/GitCore.ts";
+import { RepositoryVcs } from "../Services/RepositoryVcs.ts";
 import { GitHubCli, type GitHubPullRequestSummary } from "../Services/GitHubCli.ts";
 import { TextGeneration } from "../Services/TextGeneration.ts";
 import { ProjectSetupScriptRunner } from "../../project/Services/ProjectSetupScriptRunner.ts";
@@ -492,6 +493,7 @@ function toPullRequestHeadRemoteInfo(pr: {
 
 export const makeGitManager = Effect.fn("makeGitManager")(function* () {
   const gitCore = yield* GitCore;
+  const repositoryVcs = yield* RepositoryVcs;
   const gitHubCli = yield* GitHubCli;
   const textGeneration = yield* TextGeneration;
   const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
@@ -649,7 +651,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     behindCount: 0,
   } satisfies GitStatusDetails;
   const readLocalStatus = Effect.fn("readLocalStatus")(function* (cwd: string) {
-    const details = yield* gitCore
+    const details = yield* repositoryVcs
       .statusDetailsLocal(cwd)
       .pipe(
         Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(nonRepositoryStatusDetails)),
@@ -664,6 +666,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       hasOriginRemote: details.hasOriginRemote,
       isDefaultBranch: details.isDefaultBranch,
       branch: details.branch,
+      ...(details.isRepo && details.vcs ? { vcs: details.vcs } : {}),
       hasWorkingTreeChanges: details.hasWorkingTreeChanges,
       workingTree: details.workingTree,
     } satisfies GitStatusLocalResult;
@@ -675,7 +678,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
   const invalidateLocalStatusResultCache = (cwd: string) =>
     Cache.invalidate(localStatusResultCache, normalizeStatusCacheKey(cwd));
   const readRemoteStatus = Effect.fn("readRemoteStatus")(function* (cwd: string) {
-    const details = yield* gitCore
+    const details = yield* repositoryVcs
       .statusDetails(cwd)
       .pipe(Effect.catchIf(isNotGitRepositoryError, () => Effect.succeed(null)));
     if (details === null || !details.isRepo) {
@@ -935,7 +938,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     } | null = null;
 
     if (result.action !== "commit") {
-      const finalStatus = yield* gitCore.statusDetails(cwd);
+      const finalStatus = yield* repositoryVcs.statusDetails(cwd);
       if (finalStatus.branch) {
         finalBranchContext = {
           branch: finalStatus.branch,
@@ -1049,7 +1052,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       filePaths?: readonly string[];
       modelSelection: ModelSelection;
     }) {
-      const context = yield* gitCore.prepareCommitContext(input.cwd, input.filePaths);
+      const context = yield* repositoryVcs.prepareCommitContext(input.cwd, input.filePaths);
       if (!context) {
         return null;
       }
@@ -1179,10 +1182,16 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
             },
           }
         : null;
-    const { commitSha } = yield* gitCore.commit(cwd, suggestion.subject, suggestion.body, {
-      timeoutMs: COMMIT_TIMEOUT_MS,
-      ...(commitProgress ? { progress: commitProgress } : {}),
-    });
+    const { commitSha } = yield* repositoryVcs.commit(
+      cwd,
+      suggestion.subject,
+      suggestion.body,
+      {
+        timeoutMs: COMMIT_TIMEOUT_MS,
+        ...(commitProgress ? { progress: commitProgress } : {}),
+      },
+      filePaths,
+    );
     if (currentHookName !== null) {
       yield* emit({
         kind: "hook_finished",
@@ -1205,7 +1214,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     fallbackBranch: string | null,
     emit: GitActionProgressEmitter,
   ) {
-    const details = yield* gitCore.statusDetails(cwd);
+    const details = yield* repositoryVcs.statusDetails(cwd);
     const branch = details.branch ?? fallbackBranch;
     if (!branch) {
       return yield* gitManagerError(
@@ -1243,7 +1252,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       phase: "pr",
       label: "Generating PR content...",
     });
-    const rangeContext = yield* gitCore.readRangeContext(cwd, baseBranch);
+    const rangeContext = yield* repositoryVcs.readRangeContext(cwd, baseBranch);
 
     const generated = yield* textGeneration.generatePrContent({
       cwd,
@@ -1376,7 +1385,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
           reference: normalizedReference,
           force: true,
         });
-        const details = yield* gitCore.statusDetails(input.cwd);
+        const details = yield* repositoryVcs.statusDetails(input.cwd);
         yield* configurePullRequestHeadUpstream(
           input.cwd,
           {
@@ -1395,7 +1404,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
       const ensureExistingWorktreeUpstream = Effect.fn("ensureExistingWorktreeUpstream")(function* (
         worktreePath: string,
       ) {
-        const details = yield* gitCore.statusDetails(worktreePath);
+        const details = yield* repositoryVcs.statusDetails(worktreePath);
         yield* configurePullRequestHeadUpstream(
           worktreePath,
           {
@@ -1414,7 +1423,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
 
       const findLocalHeadBranch = (cwd: string) =>
-        gitCore.listBranches({ cwd }).pipe(
+        repositoryVcs.listBranches({ cwd }).pipe(
           Effect.map((result) => {
             const localBranch = result.branches.find(
               (branch) => !branch.isRemote && branch.name === localPullRequestBranch,
@@ -1487,7 +1496,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         );
       }
 
-      const worktree = yield* gitCore.createWorktree({
+      const worktree = yield* repositoryVcs.createWorktree({
         cwd: input.cwd,
         branch: localPullRequestBranch,
         path: null,
@@ -1526,11 +1535,11 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
     }
 
     const preferredBranch = suggestion.branch ?? sanitizeFeatureBranchName(suggestion.subject);
-    const existingBranchNames = yield* gitCore.listLocalBranchNames(cwd);
+    const existingBranchNames = yield* repositoryVcs.listLocalBranchNames(cwd);
     const resolvedBranch = resolveAutoFeatureBranchName(existingBranchNames, preferredBranch);
 
-    yield* gitCore.createBranch({ cwd, branch: resolvedBranch });
-    yield* Effect.scoped(gitCore.checkoutBranch({ cwd, branch: resolvedBranch }));
+    yield* repositoryVcs.createBranch({ cwd, branch: resolvedBranch });
+    yield* Effect.scoped(repositoryVcs.checkoutBranch({ cwd, branch: resolvedBranch }));
 
     return {
       branchStep: { status: "created" as const, name: resolvedBranch },
@@ -1548,7 +1557,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
         GitRunStackedActionResult,
         GitManagerServiceError
       > {
-        const initialStatus = yield* gitCore.statusDetails(input.cwd);
+        const initialStatus = yield* repositoryVcs.statusDetails(input.cwd);
         const wantsCommit = isCommitAction(input.action);
         const wantsPush =
           input.action === "push" ||
@@ -1661,7 +1670,7 @@ export const makeGitManager = Effect.fn("makeGitManager")(function* () {
               })
               .pipe(
                 Effect.tap(() => Ref.set(currentPhase, Option.some("push"))),
-                Effect.flatMap(() => gitCore.pushCurrentBranch(input.cwd, currentBranch)),
+                Effect.flatMap(() => repositoryVcs.pushCurrentBranch(input.cwd, currentBranch)),
               )
           : { status: "skipped_not_requested" as const };
 

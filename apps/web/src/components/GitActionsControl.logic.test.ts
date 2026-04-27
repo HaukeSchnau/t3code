@@ -140,7 +140,7 @@ describe("when: git status is unavailable", () => {
       kind: "show_hint",
       label: "Commit",
       disabled: true,
-      hint: "Git status is unavailable.",
+      hint: "VCS status is unavailable.",
     });
   });
 
@@ -297,6 +297,11 @@ describe("when: branch is behind upstream", () => {
   it("resolveQuickAction returns pull", () => {
     const quick = resolveQuickAction(status({ behindCount: 2 }), false);
     assert.deepInclude(quick, { kind: "run_pull", label: "Pull", disabled: false });
+  });
+
+  it("resolveQuickAction returns sync for JJ repositories", () => {
+    const quick = resolveQuickAction(status({ vcs: "jj", behindCount: 2 }), false);
+    assert.deepInclude(quick, { kind: "run_pull", label: "Sync", disabled: false });
   });
 
   it("buildMenuItems disables push and create PR", () => {
