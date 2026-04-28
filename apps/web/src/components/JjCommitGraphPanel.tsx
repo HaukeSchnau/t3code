@@ -27,7 +27,7 @@ import {
   RefreshCwIcon,
   ScissorsIcon,
 } from "lucide-react";
-import { memo, useCallback, useMemo, useState, type ChangeEvent } from "react";
+import { memo, startTransition, useCallback, useMemo, useState, type ChangeEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -54,7 +54,6 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 
 type GraphNodeData = {
   readonly node: GitCommitGraphNodeContract;
-  readonly selected: boolean;
 };
 
 type ActionDialogKind =
@@ -312,10 +311,7 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
   };
 }
 
-function buildFlowGraph(input: {
-  nodes: readonly GitCommitGraphNodeContract[];
-  selectedChangeId: string | null;
-}): {
+function buildFlowGraph(input: { nodes: readonly GitCommitGraphNodeContract[] }): {
   nodes: Node<GraphNodeData>[];
   edges: Edge[];
   currentLineNodeIds: string[];
@@ -326,7 +322,7 @@ function buildFlowGraph(input: {
   const flowNodes: Node<GraphNodeData>[] = input.nodes.map((node) => ({
     id: node.changeId,
     type: "jjCommit",
-    data: { node, selected: node.changeId === input.selectedChangeId },
+    data: { node },
     position: positions.get(node.changeId) ?? { x: 0, y: 0 },
     sourcePosition: Position.Bottom,
     targetPosition: Position.Top,
@@ -385,7 +381,10 @@ function JjCommitGraphEdge(props: EdgeProps) {
   );
 }
 
-const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNodeData>>) {
+const JjCommitNode = memo(function JjCommitNode({
+  data,
+  selected,
+}: NodeProps<Node<GraphNodeData>>) {
   const node = data.node;
   const description = node.description || "(no description set)";
   const authorLabel = node.authorName || node.authorEmail || "Unknown author";
@@ -409,7 +408,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
       style={{ contain: "layout paint style", height: GRAPH_NODE_HEIGHT }}
       className={cn(
         "w-40 overflow-hidden rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
-        data.selected ? "border-primary shadow-primary/15" : "border-border/80",
+        selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
       )}
     >
@@ -1015,11 +1014,12 @@ export default function JjCommitGraphPanel({
     graph?.nodes.find((node) => node.currentWorkingCopy) ??
     graph?.nodes[0] ??
     null;
-  const flowGraph = useMemo(
-    () =>
-      buildFlowGraph({ nodes: graph?.nodes ?? [], selectedChangeId: selected?.changeId ?? null }),
-    [graph?.nodes, selected?.changeId],
-  );
+  const flowGraph = useMemo(() => buildFlowGraph({ nodes: graph?.nodes ?? [] }), [graph?.nodes]);
+  const handleNodeClick = useCallback((_: unknown, node: Node<GraphNodeData>) => {
+    startTransition(() => {
+      setSelectedChangeId(node.id);
+    });
+  }, []);
   const fitCurrentLine = useCallback(() => {
     if (!flowInstance || flowGraph.currentLineNodeIds.length === 0) return;
     void flowInstance.fitView({
@@ -1205,7 +1205,7 @@ export default function JjCommitGraphPanel({
                 edgeTypes={edgeTypes}
                 onInit={setFlowInstance}
                 defaultViewport={{ x: 8, y: 24, zoom: 1 }}
-                onNodeClick={(_, node) => setSelectedChangeId(node.id)}
+                onNodeClick={handleNodeClick}
                 minZoom={0.25}
                 maxZoom={1.5}
                 onlyRenderVisibleElements
