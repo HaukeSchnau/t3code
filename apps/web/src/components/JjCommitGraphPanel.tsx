@@ -404,7 +404,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
   const hiddenBookmarkCount = Math.max(0, bookmarks.length - visibleBookmarks.length);
   return (
     <div
-      style={{ height: GRAPH_NODE_HEIGHT }}
+      style={{ contain: "layout paint style", height: GRAPH_NODE_HEIGHT }}
       className={cn(
         "w-40 overflow-hidden rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         data.selected ? "border-primary shadow-primary/15" : "border-border/80",
@@ -988,6 +988,7 @@ export default function JjCommitGraphPanel({
   const [appliedRevset, setAppliedRevset] = useState<string | null>(null);
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
+  const [showMiniMap, setShowMiniMap] = useState(false);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
     Node<GraphNodeData>,
     Edge
@@ -1161,10 +1162,17 @@ export default function JjCommitGraphPanel({
           <div className="flex min-h-96 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2 text-muted-foreground text-xs">
               <span className="truncate">
-                Recent JJ work in compact lanes. Drag or use the minimap for branches; @ marks the
+                Recent JJ work in compact lanes. Drag the canvas to follow branches; @ marks the
                 current checkout.
               </span>
               <div className="flex shrink-0 gap-1">
+                <Button
+                  size="xs"
+                  variant={showMiniMap ? "secondary" : "ghost"}
+                  onClick={() => setShowMiniMap((value) => !value)}
+                >
+                  Map
+                </Button>
                 <Button
                   size="xs"
                   variant="secondary"
@@ -1195,20 +1203,31 @@ export default function JjCommitGraphPanel({
                 onNodeClick={(_, node) => setSelectedChangeId(node.id)}
                 minZoom={0.25}
                 maxZoom={1.5}
+                onlyRenderVisibleElements
+                nodesDraggable={false}
+                nodesConnectable={false}
+                nodesFocusable={false}
+                edgesFocusable={false}
+                edgesReconnectable={false}
+                connectOnClick={false}
+                selectNodesOnDrag={false}
+                zoomOnDoubleClick={false}
                 proOptions={{ hideAttribution: true }}
               >
                 <Controls position="bottom-left" />
-                <MiniMap
-                  pannable
-                  zoomable
-                  position="top-right"
-                  style={{ width: 110, height: 82 }}
-                  nodeColor={(node) =>
-                    (node.data as GraphNodeData).node.currentWorkingCopy
-                      ? "var(--primary)"
-                      : "var(--muted-foreground)"
-                  }
-                />
+                {showMiniMap ? (
+                  <MiniMap
+                    pannable
+                    zoomable
+                    position="top-right"
+                    style={{ width: 110, height: 82 }}
+                    nodeColor={(node) =>
+                      (node.data as GraphNodeData).node.currentWorkingCopy
+                        ? "var(--primary)"
+                        : "var(--muted-foreground)"
+                    }
+                  />
+                ) : null}
               </ReactFlow>
             </div>
           </div>
