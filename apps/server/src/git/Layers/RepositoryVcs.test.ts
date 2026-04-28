@@ -132,6 +132,7 @@ it.layer(TestLayer)("RepositoryVcs", (it) => {
       expect(branches.vcs).toBe("git");
       expect(graph.vcs).toBe("git");
       expect(graph.supported).toBe(false);
+      expect(graph.revset).toBe("unsupported");
       expect(branches.branches.some((branch) => branch.current)).toBe(true);
     }),
   );

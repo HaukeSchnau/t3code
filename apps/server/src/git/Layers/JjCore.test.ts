@@ -292,6 +292,27 @@ it.layer(TestLayer)("JjCore", (it) => {
       }),
     );
 
+    it.effect("loads change details for selected JJ graph nodes", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initJjRepo(cwd);
+        yield* writeTextFile(path.join(cwd, "details.txt"), "hello\n");
+        yield* (yield* JjCore).commit(cwd, "details", "");
+
+        const graph = yield* (yield* JjCore).commitGraph({ cwd, limit: 10 });
+        const detailsNode = graph.nodes.find((node) => node.description === "details")!;
+        const details = yield* (yield* JjCore).commitGraphChangeDetails({
+          cwd,
+          changeId: detailsNode.changeId,
+        });
+
+        expect(details.node.description).toBe("details");
+        expect(details.changedFilesSummary).toContain("details.txt");
+        expect(details.diffStat).toContain("details.txt");
+        expect(details.diffPreview).toContain("details.txt");
+      }),
+    );
+
     it.effect("rejects stale graph actions and applies describe/bookmark actions", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

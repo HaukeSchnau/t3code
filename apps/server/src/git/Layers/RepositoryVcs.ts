@@ -61,7 +61,7 @@ export const RepositoryVcsLive = Layer.effect(
               isRepo: status.isRepo,
               ...(status.isRepo ? { vcs: "git" as const } : {}),
               supported: false,
-              revset: input.revset?.trim() || "",
+              revset: input.revset?.trim() || "unsupported",
               limit: input.limit ?? 150,
               hasMore: false,
               currentOperationId: null,

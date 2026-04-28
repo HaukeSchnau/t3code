@@ -3473,6 +3473,7 @@ export default function ChatView(props: ChatViewProps) {
               envLocked={envLocked}
               onComposerFocusRequest={scheduleComposerFocus}
               onCommitGraphOpen={onOpenCommitGraph}
+              canOpenCommitGraph={isServerThread}
               {...(canCheckoutPullRequestIntoThread
                 ? { onCheckoutPullRequestRequest: openPullRequestDialog }
                 : {})}

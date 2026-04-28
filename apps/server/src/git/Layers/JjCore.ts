@@ -787,6 +787,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
     runJjStdout("JjCore.resolveCurrentOperationId", cwd, [
       "op",
       "log",
+      "--no-graph",
       "--limit",
       "1",
       "-T",
@@ -823,24 +824,19 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
     Effect.gen(function* () {
       const limit = Math.min(input.limit ?? COMMIT_GRAPH_DEFAULT_LIMIT, COMMIT_GRAPH_MAX_LIMIT);
       const revset = input.revset?.trim() || defaultCommitGraphRevset(limit + 1);
-      const [currentOperationId, stdout] = yield* Effect.all(
-        [
-          resolveCurrentOperationId(input.cwd),
-          runJjStdout("JjCore.commitGraph", input.cwd, [
-            "log",
-            "--no-graph",
-            "--color",
-            "never",
-            "--limit",
-            String(limit + 1),
-            "-r",
-            revset,
-            "-T",
-            COMMIT_GRAPH_NODE_TEMPLATE,
-          ]),
-        ],
-        { concurrency: "unbounded" },
-      );
+      const stdout = yield* runJjStdout("JjCore.commitGraph", input.cwd, [
+        "log",
+        "--no-graph",
+        "--color",
+        "never",
+        "--limit",
+        String(limit + 1),
+        "-r",
+        revset,
+        "-T",
+        COMMIT_GRAPH_NODE_TEMPLATE,
+      ]);
+      const currentOperationId = yield* resolveCurrentOperationId(input.cwd);
       const nodes = yield* Effect.try({
         try: () => splitLines(stdout).map(parseCommitGraphNode),
         catch: (cause) =>
@@ -872,16 +868,14 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         [
           readCommitGraphNode(input.cwd, input.changeId),
           runJjStdout("JjCore.commitGraph.details.summary", input.cwd, [
-            "show",
+            "diff",
             "--summary",
-            "--no-patch",
             "-r",
             input.changeId,
           ]),
           runJjStdout("JjCore.commitGraph.details.stat", input.cwd, [
-            "show",
+            "diff",
             "--stat",
-            "--no-patch",
             "-r",
             input.changeId,
           ]),
@@ -946,6 +940,19 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         );
       }
       case "duplicate": {
+        if (
+          (action.destinationMode === undefined) !==
+          (action.destinationChangeIds === undefined || action.destinationChangeIds.length === 0)
+        ) {
+          return Effect.fail(
+            createJjCommandError(
+              "JjCore.commitGraph.action.duplicate",
+              cwd,
+              ["duplicate", ...action.changeIds],
+              "Duplicate destination requires both a destination mode and at least one destination change.",
+            ),
+          );
+        }
         const destinationFlags =
           action.destinationMode === "onto"
             ? action.destinationChangeIds?.flatMap((changeId) => ["-o", changeId])
@@ -989,6 +996,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
           "-r",
           action.changeId,
           ...(action.message !== undefined ? ["-m", action.message] : []),
+          "--",
           ...action.filesets,
         ];
         return requireConfirmed("JjCore.commitGraph.action.split", cwd, args, action).pipe(

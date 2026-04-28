@@ -31,6 +31,7 @@ interface BranchToolbarProps {
   onCheckoutPullRequestRequest?: (reference: string) => void;
   onComposerFocusRequest?: () => void;
   onCommitGraphOpen?: () => void;
+  canOpenCommitGraph?: boolean;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
 }
@@ -47,6 +48,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onCheckoutPullRequestRequest,
   onComposerFocusRequest,
   onCommitGraphOpen,
+  canOpenCommitGraph = true,
   availableEnvironments,
   onEnvironmentChange,
 }: BranchToolbarProps) {
@@ -120,7 +122,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
         {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
       />
-      {gitStatus.data?.vcs === "jj" && onCommitGraphOpen ? (
+      {gitStatus.data?.vcs === "jj" && onCommitGraphOpen && canOpenCommitGraph ? (
         <Tooltip>
           <TooltipTrigger
             render={

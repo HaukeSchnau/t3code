@@ -7,12 +7,14 @@ import {
   Background,
   Controls,
   MiniMap,
+  Panel,
   ReactFlow,
   type Edge,
   type Node,
   type NodeProps,
   Position,
   Handle,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -134,6 +136,18 @@ function buildFlowGraph(input: {
 const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNodeData>>) {
   const node = data.node;
   const description = node.description || "(no description set)";
+  const bookmarks = [
+    ...node.localBookmarks.map((bookmark, index) => ({
+      bookmark,
+      key: `local-${index}-${bookmark}`,
+      label: bookmark,
+    })),
+    ...node.remoteBookmarks.map((bookmark, index) => ({
+      bookmark,
+      key: `remote-${index}-${bookmark}`,
+      label: bookmark,
+    })),
+  ];
   return (
     <div
       className={cn(
@@ -165,15 +179,15 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
             ) : null}
             {node.immutable ? <span className="rounded bg-muted px-1">immutable</span> : null}
           </div>
-          {node.localBookmarks.length > 0 || node.remoteBookmarks.length > 0 ? (
+          {bookmarks.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1">
-              {[...node.localBookmarks, ...node.remoteBookmarks].slice(0, 4).map((bookmark) => (
+              {bookmarks.slice(0, 4).map(({ key, label }) => (
                 <span
-                  key={bookmark}
+                  key={key}
                   className="inline-flex max-w-36 items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px]"
                 >
                   <GitBranchIcon className="size-3" />
-                  <span className="truncate">{bookmark}</span>
+                  <span className="truncate">{label}</span>
                 </span>
               ))}
             </div>
@@ -186,6 +200,43 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
 });
 
 const nodeTypes = { jjCommit: JjCommitNode };
+
+function GraphViewportControls(props: { selectedChangeId: string | null; hasNodes: boolean }) {
+  const flow = useReactFlow<Node<GraphNodeData>>();
+  return (
+    <Panel
+      position="top-left"
+      className="flex gap-1 rounded-md border bg-background/95 p-1 shadow-sm"
+    >
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={!props.selectedChangeId}
+        onClick={() => {
+          if (!props.selectedChangeId) return;
+          void flow.fitView({
+            nodes: [{ id: props.selectedChangeId }],
+            padding: 0.9,
+            maxZoom: 1,
+            duration: 180,
+          });
+        }}
+      >
+        Current
+      </Button>
+      <Button
+        size="xs"
+        variant="ghost"
+        disabled={!props.hasNodes}
+        onClick={() => {
+          void flow.fitView({ padding: 0.25, maxZoom: 0.8, duration: 180 });
+        }}
+      >
+        Fit all
+      </Button>
+    </Panel>
+  );
+}
 
 function isRiskyDialog(kind: ActionDialogKind): boolean {
   return [
@@ -647,7 +698,11 @@ function JjCommitGraphInspector(props: {
             {detailsQuery.isPending ? (
               <div className="text-muted-foreground text-sm">Loading details...</div>
             ) : detailsQuery.isError ? (
-              <div className="text-destructive text-sm">JJ graph details unavailable.</div>
+              <div className="text-destructive text-sm">
+                {detailsQuery.error instanceof Error
+                  ? detailsQuery.error.message
+                  : "JJ graph details unavailable."}
+              </div>
             ) : (
               <>
                 <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs">
@@ -656,6 +711,17 @@ function JjCommitGraphInspector(props: {
                 <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs">
                   {detail?.diffStat.trim() || "No diff stat."}
                 </pre>
+                {detail?.diffPreview.trim() ? (
+                  <details className="rounded-md border border-border/70 bg-muted/30 p-2 text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">
+                      Preview diff
+                      {detail.diffPreviewTruncated ? " (truncated)" : ""}
+                    </summary>
+                    <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap">
+                      {detail.diffPreview}
+                    </pre>
+                  </details>
+                ) : null}
               </>
             )}
           </section>
@@ -765,6 +831,15 @@ export default function JjCommitGraphPanel({
           Apply
         </Button>
       </div>
+      {graph ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 text-muted-foreground text-xs">
+          <span>{graph.nodes.length} changes shown</span>
+          {graph.hasMore ? (
+            <span>More changes available; narrow the revset to inspect them.</span>
+          ) : null}
+          <span className="ml-auto truncate">Revset: {graph.revset}</span>
+        </div>
+      ) : null}
       {graphQuery.isPending ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground text-sm">
           <Loader2Icon className="mr-2 size-4 animate-spin" />
@@ -793,6 +868,11 @@ export default function JjCommitGraphPanel({
               edges={flowGraph.edges}
               nodeTypes={nodeTypes}
               fitView
+              fitViewOptions={{
+                ...(selected ? { nodes: [{ id: selected.changeId }] } : {}),
+                padding: 0.9,
+                maxZoom: 1,
+              }}
               onNodeClick={(_, node) => setSelectedChangeId(node.id)}
               minZoom={0.25}
               maxZoom={1.5}
@@ -800,15 +880,21 @@ export default function JjCommitGraphPanel({
             >
               <Background />
               <Controls />
-              <MiniMap
-                pannable
-                zoomable
-                nodeColor={(node) =>
-                  (node.data as GraphNodeData).node.currentWorkingCopy
-                    ? "var(--primary)"
-                    : "var(--muted-foreground)"
-                }
+              <GraphViewportControls
+                selectedChangeId={selected?.changeId ?? null}
+                hasNodes={flowGraph.nodes.length > 0}
               />
+              {mode === "sheet" ? (
+                <MiniMap
+                  pannable
+                  zoomable
+                  nodeColor={(node) =>
+                    (node.data as GraphNodeData).node.currentWorkingCopy
+                      ? "var(--primary)"
+                      : "var(--muted-foreground)"
+                  }
+                />
+              ) : null}
             </ReactFlow>
           </div>
           <JjCommitGraphInspector
