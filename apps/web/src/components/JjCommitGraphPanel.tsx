@@ -88,9 +88,9 @@ const JJ_GRAPH_REVSET_PRESETS = [
   { label: "Ancestors", revset: "ancestors(@, 80)" },
 ] as const;
 const GRAPH_COMPONENT_GAP = 180;
-const GRAPH_ROW_GAP = 92;
-const GRAPH_NODE_X = 64;
-const GRAPH_LANE_GAP = 252;
+const GRAPH_ROW_GAP = 84;
+const GRAPH_NODE_X = 16;
+const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
 const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
 
@@ -182,12 +182,14 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
         (left, right) => indexByChangeId.get(left.changeId)! - indexByChangeId.get(right.changeId)!,
       );
     const laneByChangeId = new Map<string, number>();
+    const rowByChangeId = new Map<string, number>();
     let activeLanes: string[] = [];
 
     for (const node of componentNodes) {
       const activeLane = activeLanes.indexOf(node.changeId);
       const lane = activeLane >= 0 ? activeLane : activeLanes.length;
       laneByChangeId.set(node.changeId, lane);
+      const row = rowByChangeId.get(node.changeId) ?? 0;
 
       const loadedParentChangeIds = node.parentChangeIds.filter((parentChangeId) =>
         componentIds.has(parentChangeId),
@@ -203,6 +205,12 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
           isCurrentLineEdge ? "spine" : isFirstParent ? "branch" : "merge",
         );
       });
+      for (const parentChangeId of loadedParentChangeIds) {
+        rowByChangeId.set(
+          parentChangeId,
+          Math.max(rowByChangeId.get(parentChangeId) ?? 0, row + 1),
+        );
+      }
 
       if (activeLane >= 0) {
         activeLanes.splice(activeLane, 1, ...loadedParentChangeIds);
@@ -217,15 +225,47 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
       });
     }
 
-    componentNodes.forEach((node, index) => {
+    for (let iteration = 0; iteration < componentNodes.length * 2; iteration++) {
+      let changed = false;
+      for (const node of componentNodes) {
+        const row = rowByChangeId.get(node.changeId) ?? 0;
+        for (const parentChangeId of node.parentChangeIds.filter((parentChangeId) =>
+          componentIds.has(parentChangeId),
+        )) {
+          const nextParentRow = Math.max(rowByChangeId.get(parentChangeId) ?? 0, row + 1);
+          if (nextParentRow !== (rowByChangeId.get(parentChangeId) ?? 0)) {
+            rowByChangeId.set(parentChangeId, nextParentRow);
+            changed = true;
+          }
+        }
+      }
+
+      const occupiedCells = new Set<string>();
+      for (const node of componentNodes) {
+        const lane = laneByChangeId.get(node.changeId) ?? 0;
+        let row = rowByChangeId.get(node.changeId) ?? 0;
+        while (occupiedCells.has(`${lane}:${row}`)) {
+          row++;
+          changed = true;
+        }
+        rowByChangeId.set(node.changeId, row);
+        occupiedCells.add(`${lane}:${row}`);
+      }
+      if (!changed) break;
+    }
+
+    let maxRow = 0;
+    componentNodes.forEach((node) => {
       const lane = laneByChangeId.get(node.changeId) ?? 0;
+      const row = rowByChangeId.get(node.changeId) ?? 0;
+      maxRow = Math.max(maxRow, row);
       positions.set(node.changeId, {
         x: GRAPH_NODE_X + lane * GRAPH_LANE_GAP,
-        y: componentOffsetY + index * GRAPH_ROW_GAP,
+        y: componentOffsetY + row * GRAPH_ROW_GAP,
       });
     });
 
-    componentOffsetY += componentNodes.length * GRAPH_ROW_GAP + GRAPH_COMPONENT_GAP;
+    componentOffsetY += (maxRow + 1) * GRAPH_ROW_GAP + GRAPH_COMPONENT_GAP;
   }
 
   return {
@@ -326,7 +366,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
   return (
     <div
       className={cn(
-        "w-56 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
+        "w-40 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         data.selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
       )}
@@ -1069,8 +1109,8 @@ export default function JjCommitGraphPanel({
           <div className="flex min-h-96 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2 text-muted-foreground text-xs">
               <span className="truncate">
-                Recent JJ work in compact lanes. Pan sideways for branches; @ marks the current
-                checkout.
+                Recent JJ work in compact lanes. Drag or use the minimap for branches; @ marks the
+                current checkout.
               </span>
               <div className="flex shrink-0 gap-1">
                 <Button
@@ -1106,17 +1146,17 @@ export default function JjCommitGraphPanel({
                 proOptions={{ hideAttribution: true }}
               >
                 <Controls position="bottom-left" />
-                {mode === "sheet" ? (
-                  <MiniMap
-                    pannable
-                    zoomable
-                    nodeColor={(node) =>
-                      (node.data as GraphNodeData).node.currentWorkingCopy
-                        ? "var(--primary)"
-                        : "var(--muted-foreground)"
-                    }
-                  />
-                ) : null}
+                <MiniMap
+                  pannable
+                  zoomable
+                  position="top-right"
+                  style={{ width: 110, height: 82 }}
+                  nodeColor={(node) =>
+                    (node.data as GraphNodeData).node.currentWorkingCopy
+                      ? "var(--primary)"
+                      : "var(--muted-foreground)"
+                  }
+                />
               </ReactFlow>
             </div>
           </div>
