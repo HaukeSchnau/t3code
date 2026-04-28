@@ -13,6 +13,7 @@ import {
   type Node,
   type NodeProps,
   type ReactFlowInstance,
+  useNodesState,
   Position,
   Handle,
 } from "@xyflow/react";
@@ -27,7 +28,15 @@ import {
   RefreshCwIcon,
   ScissorsIcon,
 } from "lucide-react";
-import { memo, startTransition, useCallback, useMemo, useState, type ChangeEvent } from "react";
+import {
+  memo,
+  startTransition,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ChangeEvent,
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
@@ -993,6 +1002,7 @@ export default function JjCommitGraphPanel({
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(false);
+  const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<GraphNodeData>>([]);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
     Node<GraphNodeData>,
     Edge
@@ -1015,6 +1025,18 @@ export default function JjCommitGraphPanel({
     graph?.nodes[0] ??
     null;
   const flowGraph = useMemo(() => buildFlowGraph({ nodes: graph?.nodes ?? [] }), [graph?.nodes]);
+  const defaultSelectedChangeId =
+    graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ?? graph?.nodes[0]?.changeId;
+  useEffect(
+    () =>
+      setFlowNodes(
+        flowGraph.nodes.map((node) => ({
+          ...node,
+          selected: node.id === defaultSelectedChangeId,
+        })),
+      ),
+    [defaultSelectedChangeId, flowGraph.nodes, setFlowNodes],
+  );
   const handleNodeClick = useCallback((_: unknown, node: Node<GraphNodeData>) => {
     startTransition(() => {
       setSelectedChangeId(node.id);
@@ -1199,10 +1221,11 @@ export default function JjCommitGraphPanel({
             <div className="min-h-0 flex-1">
               <ReactFlow
                 key={graph?.revset ?? appliedRevset ?? "jj-graph"}
-                nodes={flowGraph.nodes}
+                nodes={flowNodes}
                 edges={flowGraph.edges}
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
+                onNodesChange={onFlowNodesChange}
                 onInit={setFlowInstance}
                 defaultViewport={{ x: 8, y: 24, zoom: 1 }}
                 onNodeClick={handleNodeClick}
