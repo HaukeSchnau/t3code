@@ -388,6 +388,8 @@ function JjCommitGraphEdge(props: EdgeProps) {
 const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNodeData>>) {
   const node = data.node;
   const description = node.description || "(no description set)";
+  const authorLabel = node.authorName || node.authorEmail || "Unknown author";
+  const authorTitle = node.authorEmail ? `${authorLabel} <${node.authorEmail}>` : authorLabel;
   const bookmarks = [
     ...node.localBookmarks.map((bookmark, index) => ({
       bookmark,
@@ -442,6 +444,9 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
             {node.immutable ? (
               <span className="shrink-0 rounded bg-muted px-1">immutable</span>
             ) : null}
+          </div>
+          <div className="mt-1 truncate text-[11px] text-muted-foreground" title={authorTitle}>
+            {authorLabel}
           </div>
           {bookmarks.length > 0 ? (
             <div className="mt-auto flex h-5 min-w-0 items-center gap-1 overflow-hidden">
