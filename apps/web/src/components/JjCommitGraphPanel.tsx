@@ -88,7 +88,8 @@ const JJ_GRAPH_REVSET_PRESETS = [
   { label: "Ancestors", revset: "ancestors(@, 80)" },
 ] as const;
 const GRAPH_COMPONENT_GAP = 180;
-const GRAPH_ROW_GAP = 84;
+const GRAPH_NODE_HEIGHT = 96;
+const GRAPH_ROW_GAP = 128;
 const GRAPH_NODE_X = 16;
 const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
@@ -101,6 +102,61 @@ type GraphEdgeData = {
 
 function graphEdgeKey(changeId: string, parentChangeId: string): string {
   return `${changeId}:${parentChangeId}`;
+}
+
+function enforceAncestorRows(params: {
+  componentNodes: readonly GitCommitGraphNodeContract[];
+  componentIds: ReadonlySet<string>;
+  rowByChangeId: Map<string, number>;
+}): boolean {
+  let changed = false;
+  for (const node of params.componentNodes) {
+    const childRow = params.rowByChangeId.get(node.changeId) ?? 0;
+    for (const parentChangeId of node.parentChangeIds) {
+      if (!params.componentIds.has(parentChangeId)) continue;
+      const parentRow = params.rowByChangeId.get(parentChangeId) ?? 0;
+      const nextParentRow = Math.max(parentRow, childRow + 1);
+      if (nextParentRow !== parentRow) {
+        params.rowByChangeId.set(parentChangeId, nextParentRow);
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+function resolveLaneRowCollisions(params: {
+  componentNodes: readonly GitCommitGraphNodeContract[];
+  indexByChangeId: ReadonlyMap<string, number>;
+  laneByChangeId: ReadonlyMap<string, number>;
+  rowByChangeId: Map<string, number>;
+}): boolean {
+  let changed = false;
+  const occupiedCells = new Set<string>();
+  const nodesByVisualOrder = params.componentNodes.toSorted((left, right) => {
+    const leftRow = params.rowByChangeId.get(left.changeId) ?? 0;
+    const rightRow = params.rowByChangeId.get(right.changeId) ?? 0;
+    if (leftRow !== rightRow) return leftRow - rightRow;
+    const leftLane = params.laneByChangeId.get(left.changeId) ?? 0;
+    const rightLane = params.laneByChangeId.get(right.changeId) ?? 0;
+    if (leftLane !== rightLane) return leftLane - rightLane;
+    return (
+      (params.indexByChangeId.get(left.changeId) ?? 0) -
+      (params.indexByChangeId.get(right.changeId) ?? 0)
+    );
+  });
+
+  for (const node of nodesByVisualOrder) {
+    const lane = params.laneByChangeId.get(node.changeId) ?? 0;
+    let row = params.rowByChangeId.get(node.changeId) ?? 0;
+    while (occupiedCells.has(`${lane}:${row}`)) {
+      row++;
+      changed = true;
+    }
+    params.rowByChangeId.set(node.changeId, row);
+    occupiedCells.add(`${lane}:${row}`);
+  }
+  return changed;
 }
 
 function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
@@ -189,7 +245,6 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
       const activeLane = activeLanes.indexOf(node.changeId);
       const lane = activeLane >= 0 ? activeLane : activeLanes.length;
       laneByChangeId.set(node.changeId, lane);
-      const row = rowByChangeId.get(node.changeId) ?? 0;
 
       const loadedParentChangeIds = node.parentChangeIds.filter((parentChangeId) =>
         componentIds.has(parentChangeId),
@@ -205,12 +260,6 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
           isCurrentLineEdge ? "spine" : isFirstParent ? "branch" : "merge",
         );
       });
-      for (const parentChangeId of loadedParentChangeIds) {
-        rowByChangeId.set(
-          parentChangeId,
-          Math.max(rowByChangeId.get(parentChangeId) ?? 0, row + 1),
-        );
-      }
 
       if (activeLane >= 0) {
         activeLanes.splice(activeLane, 1, ...loadedParentChangeIds);
@@ -225,33 +274,20 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
       });
     }
 
-    for (let iteration = 0; iteration < componentNodes.length * 2; iteration++) {
-      let changed = false;
-      for (const node of componentNodes) {
-        const row = rowByChangeId.get(node.changeId) ?? 0;
-        for (const parentChangeId of node.parentChangeIds.filter((parentChangeId) =>
-          componentIds.has(parentChangeId),
-        )) {
-          const nextParentRow = Math.max(rowByChangeId.get(parentChangeId) ?? 0, row + 1);
-          if (nextParentRow !== (rowByChangeId.get(parentChangeId) ?? 0)) {
-            rowByChangeId.set(parentChangeId, nextParentRow);
-            changed = true;
-          }
-        }
-      }
-
-      const occupiedCells = new Set<string>();
-      for (const node of componentNodes) {
-        const lane = laneByChangeId.get(node.changeId) ?? 0;
-        let row = rowByChangeId.get(node.changeId) ?? 0;
-        while (occupiedCells.has(`${lane}:${row}`)) {
-          row++;
-          changed = true;
-        }
-        rowByChangeId.set(node.changeId, row);
-        occupiedCells.add(`${lane}:${row}`);
-      }
-      if (!changed) break;
+    const maxLayoutIterations = componentNodes.length * componentNodes.length;
+    for (let iteration = 0; iteration < maxLayoutIterations; iteration++) {
+      const ancestorRowsChanged = enforceAncestorRows({
+        componentNodes,
+        componentIds,
+        rowByChangeId,
+      });
+      const collisionsChanged = resolveLaneRowCollisions({
+        componentNodes,
+        indexByChangeId,
+        laneByChangeId,
+        rowByChangeId,
+      });
+      if (!ancestorRowsChanged && !collisionsChanged) break;
     }
 
     let maxRow = 0;
@@ -326,7 +362,8 @@ function buildFlowGraph(input: {
 function JjCommitGraphEdge(props: EdgeProps) {
   const data = props.data as GraphEdgeData | undefined;
   const kind = data?.kind ?? "branch";
-  const midY = props.sourceY + Math.max(22, (props.targetY - props.sourceY) / 2);
+  const verticalDistance = Math.max(0, props.targetY - props.sourceY);
+  const midY = props.sourceY + Math.max(22, verticalDistance / 2);
   const path = [
     `M ${props.sourceX} ${props.sourceY}`,
     `L ${props.sourceX} ${midY}`,
@@ -363,10 +400,13 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
       label: bookmark,
     })),
   ];
+  const visibleBookmarks = bookmarks.slice(0, 2);
+  const hiddenBookmarkCount = Math.max(0, bookmarks.length - visibleBookmarks.length);
   return (
     <div
+      style={{ height: GRAPH_NODE_HEIGHT }}
       className={cn(
-        "w-40 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
+        "w-40 overflow-hidden rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         data.selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
       )}
@@ -399,7 +439,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
           </div>
           {bookmarks.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1">
-              {bookmarks.slice(0, 4).map(({ key, label }) => (
+              {visibleBookmarks.map(({ key, label }) => (
                 <span
                   key={key}
                   className="inline-flex max-w-36 items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px]"
@@ -408,6 +448,11 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
                   <span className="truncate">{label}</span>
                 </span>
               ))}
+              {hiddenBookmarkCount > 0 ? (
+                <span className="rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                  +{hiddenBookmarkCount}
+                </span>
+              ) : null}
             </div>
           ) : null}
         </div>
