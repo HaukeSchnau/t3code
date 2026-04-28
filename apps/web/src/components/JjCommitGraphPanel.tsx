@@ -412,7 +412,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
       )}
     >
       <Handle type="target" position={Position.Top} className="opacity-0" />
-      <div className="flex items-start gap-2">
+      <div className="flex h-full items-start gap-2">
         <span
           className={cn(
             "mt-1 size-2.5 shrink-0 rounded-full",
@@ -423,33 +423,40 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
                 : "bg-muted-foreground/50",
           )}
         />
-        <div className="min-w-0 flex-1">
+        <div className="flex h-full min-w-0 flex-1 flex-col">
           <div className="truncate text-sm font-medium">{description}</div>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+          <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-muted-foreground text-xs">
             {node.currentWorkingCopy ? (
-              <span className="rounded bg-primary px-1 font-medium text-primary-foreground">@</span>
+              <span className="shrink-0 rounded bg-primary px-1 font-medium text-primary-foreground">
+                @
+              </span>
             ) : null}
-            <span>{node.displayChangeId}</span>
-            <span>{node.shortCommitId}</span>
-            {node.empty ? <span className="rounded bg-muted px-1">empty</span> : null}
+            <span className="shrink-0">{node.displayChangeId}</span>
+            <span className="shrink-0">{node.shortCommitId}</span>
+            {node.empty ? <span className="shrink-0 rounded bg-muted px-1">empty</span> : null}
             {node.conflict ? (
-              <span className="rounded bg-destructive/10 px-1 text-destructive">conflict</span>
+              <span className="shrink-0 rounded bg-destructive/10 px-1 text-destructive">
+                conflict
+              </span>
             ) : null}
-            {node.immutable ? <span className="rounded bg-muted px-1">immutable</span> : null}
+            {node.immutable ? (
+              <span className="shrink-0 rounded bg-muted px-1">immutable</span>
+            ) : null}
           </div>
           {bookmarks.length > 0 ? (
-            <div className="mt-2 flex flex-wrap gap-1">
+            <div className="mt-auto flex h-5 min-w-0 items-center gap-1 overflow-hidden">
               {visibleBookmarks.map(({ key, label }) => (
                 <span
                   key={key}
-                  className="inline-flex max-w-36 items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px]"
+                  title={label}
+                  className="inline-flex min-w-0 max-w-24 shrink items-center gap-1 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px] leading-none"
                 >
-                  <GitBranchIcon className="size-3" />
+                  <GitBranchIcon className="size-3 shrink-0" />
                   <span className="truncate">{label}</span>
                 </span>
               ))}
               {hiddenBookmarkCount > 0 ? (
-                <span className="rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                <span className="shrink-0 rounded-md border border-border/70 bg-background px-1.5 py-0.5 text-[10px] leading-none text-muted-foreground">
                   +{hiddenBookmarkCount}
                 </span>
               ) : null}
