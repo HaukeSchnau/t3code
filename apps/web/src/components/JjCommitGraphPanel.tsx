@@ -89,14 +89,14 @@ const JJ_GRAPH_REVSET_PRESETS = [
 ] as const;
 const GRAPH_COMPONENT_GAP = 180;
 const GRAPH_ROW_GAP = 92;
-const GRAPH_NODE_X = 88;
+const GRAPH_NODE_X = 64;
+const GRAPH_LANE_GAP = 252;
 const GRAPH_RECENT_NODE_COUNT = 10;
 const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
 
 type GraphEdgeKind = "spine" | "branch" | "merge";
 type GraphEdgeData = {
   readonly kind: GraphEdgeKind;
-  readonly lane: number;
 };
 
 function graphEdgeKey(changeId: string, parentChangeId: string): string {
@@ -106,7 +106,6 @@ function graphEdgeKey(changeId: string, parentChangeId: string): string {
 function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
   positions: Map<string, { x: number; y: number }>;
   edgeKinds: Map<string, GraphEdgeKind>;
-  edgeLanes: Map<string, number>;
   currentLineNodeIds: string[];
   recentNodeIds: string[];
 } {
@@ -174,7 +173,6 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
 
   const positions = new Map<string, { x: number; y: number }>();
   const edgeKinds = new Map<string, GraphEdgeKind>();
-  const edgeLanes = new Map<string, number>();
   let componentOffsetY = 0;
   for (const component of components) {
     const componentIds = new Set(component);
@@ -204,7 +202,6 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
           graphEdgeKey(node.changeId, parentChangeId),
           isCurrentLineEdge ? "spine" : isFirstParent ? "branch" : "merge",
         );
-        edgeLanes.set(graphEdgeKey(node.changeId, parentChangeId), lane);
       });
 
       if (activeLane >= 0) {
@@ -221,8 +218,9 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
     }
 
     componentNodes.forEach((node, index) => {
+      const lane = laneByChangeId.get(node.changeId) ?? 0;
       positions.set(node.changeId, {
-        x: GRAPH_NODE_X,
+        x: GRAPH_NODE_X + lane * GRAPH_LANE_GAP,
         y: componentOffsetY + index * GRAPH_ROW_GAP,
       });
     });
@@ -233,7 +231,6 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
   return {
     positions,
     edgeKinds,
-    edgeLanes,
     currentLineNodeIds,
     recentNodeIds: nodes.slice(0, GRAPH_RECENT_NODE_COUNT).map((node) => node.changeId),
   };
@@ -248,17 +245,15 @@ function buildFlowGraph(input: {
   currentLineNodeIds: string[];
   recentNodeIds: string[];
 } {
-  const { positions, edgeKinds, edgeLanes, currentLineNodeIds, recentNodeIds } = buildGraphLayout(
-    input.nodes,
-  );
+  const { positions, edgeKinds, currentLineNodeIds, recentNodeIds } = buildGraphLayout(input.nodes);
   const nodeIds = new Set(input.nodes.map((node) => node.changeId));
   const flowNodes: Node<GraphNodeData>[] = input.nodes.map((node) => ({
     id: node.changeId,
     type: "jjCommit",
     data: { node, selected: node.changeId === input.selectedChangeId },
     position: positions.get(node.changeId) ?? { x: 0, y: 0 },
-    sourcePosition: Position.Left,
-    targetPosition: Position.Left,
+    sourcePosition: Position.Bottom,
+    targetPosition: Position.Top,
   }));
   const flowEdges: Edge[] = input.nodes.flatMap((node) =>
     node.parentChangeIds
@@ -276,7 +271,6 @@ function buildFlowGraph(input: {
           ),
           data: {
             kind: edgeKind,
-            lane: edgeLanes.get(graphEdgeKey(node.changeId, parentChangeId)) ?? 0,
           } satisfies GraphEdgeData,
           style: {
             strokeWidth: edgeKind === "spine" ? 2.25 : 1.25,
@@ -292,12 +286,11 @@ function buildFlowGraph(input: {
 function JjCommitGraphEdge(props: EdgeProps) {
   const data = props.data as GraphEdgeData | undefined;
   const kind = data?.kind ?? "branch";
-  const renderedLane = Math.min(Math.max(data?.lane ?? 0, 0), 5);
-  const laneX = props.sourceX - 30 - renderedLane * 10;
+  const midY = props.sourceY + Math.max(22, (props.targetY - props.sourceY) / 2);
   const path = [
     `M ${props.sourceX} ${props.sourceY}`,
-    `L ${laneX} ${props.sourceY}`,
-    `L ${laneX} ${props.targetY}`,
+    `L ${props.sourceX} ${midY}`,
+    `L ${props.targetX} ${midY}`,
     `L ${props.targetX} ${props.targetY}`,
   ].join(" ");
 
@@ -333,12 +326,12 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
   return (
     <div
       className={cn(
-        "w-64 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
+        "w-56 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         data.selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
       )}
     >
-      <Handle type="target" position={Position.Left} className="opacity-0" />
+      <Handle type="target" position={Position.Top} className="opacity-0" />
       <div className="flex items-start gap-2">
         <span
           className={cn(
@@ -379,7 +372,7 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
           ) : null}
         </div>
       </div>
-      <Handle type="source" position={Position.Left} className="opacity-0" />
+      <Handle type="source" position={Position.Bottom} className="opacity-0" />
     </div>
   );
 });
@@ -1076,7 +1069,8 @@ export default function JjCommitGraphPanel({
           <div className="flex min-h-96 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2 text-muted-foreground text-xs">
               <span className="truncate">
-                Recent JJ work, with graph lanes in the left gutter. Current checkout is marked @.
+                Recent JJ work in compact lanes. Pan sideways for branches; @ marks the current
+                checkout.
               </span>
               <div className="flex shrink-0 gap-1">
                 <Button
