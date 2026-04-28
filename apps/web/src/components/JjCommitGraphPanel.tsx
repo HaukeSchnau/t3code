@@ -4,11 +4,12 @@ import type {
   GitCommitGraphNode as GitCommitGraphNodeContract,
 } from "@t3tools/contracts";
 import {
-  Background,
+  BaseEdge,
   Controls,
   MiniMap,
   ReactFlow,
   type Edge,
+  type EdgeProps,
   type Node,
   type NodeProps,
   type ReactFlowInstance,
@@ -80,58 +81,34 @@ interface JjCommitGraphPanelProps {
   onClose: () => void;
 }
 
-const JJ_GRAPH_DEFAULT_REVSET = "first_ancestors(@, 80) | @";
-const JJ_GRAPH_VISIBLE_HEADS_REVSET =
-  "ancestors(visible_heads() | bookmarks() | tracked_remote_bookmarks() | @, 151)";
+const JJ_GRAPH_CURRENT_LINE_REVSET = "first_ancestors(@, 80) | @";
 const JJ_GRAPH_REVSET_PRESETS = [
-  { label: "Current line", revset: JJ_GRAPH_DEFAULT_REVSET },
+  { label: "Recent work", revset: null },
+  { label: "Current line", revset: JJ_GRAPH_CURRENT_LINE_REVSET },
   { label: "Ancestors", revset: "ancestors(@, 80)" },
-  { label: "Visible heads", revset: JJ_GRAPH_VISIBLE_HEADS_REVSET },
 ] as const;
-const GRAPH_NODE_COLUMN_GAP = 280;
 const GRAPH_COMPONENT_GAP = 180;
-const GRAPH_ROW_GAP = 112;
-const GRAPH_FOCUS_NODE_COUNT = 4;
-const GRAPH_MAX_RENDERED_BRANCH_LANE = 2;
+const GRAPH_ROW_GAP = 92;
+const GRAPH_NODE_X = 88;
+const GRAPH_RECENT_NODE_COUNT = 10;
+const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
 
 type GraphEdgeKind = "spine" | "branch" | "merge";
+type GraphEdgeData = {
+  readonly kind: GraphEdgeKind;
+  readonly lane: number;
+};
 
 function graphEdgeKey(changeId: string, parentChangeId: string): string {
   return `${changeId}:${parentChangeId}`;
 }
 
-function nearestFreeLane(preferredLane: number, usedLanes: ReadonlySet<number>): number {
-  if (!usedLanes.has(preferredLane)) return preferredLane;
-  if (preferredLane === 0) {
-    for (let distance = 1; distance < usedLanes.size + 24; distance++) {
-      if (!usedLanes.has(distance)) return distance;
-      if (!usedLanes.has(-distance)) return -distance;
-    }
-  }
-  for (let distance = 1; distance < usedLanes.size + 24; distance++) {
-    const candidates = [preferredLane + distance, preferredLane - distance].toSorted(
-      (left, right) => Math.abs(left) - Math.abs(right),
-    );
-    for (const candidate of candidates) {
-      if (!usedLanes.has(candidate)) return candidate;
-    }
-  }
-  return usedLanes.size + 1;
-}
-
-function renderedLane(lane: number): number {
-  if (lane === 0) return 0;
-  const direction = lane > 0 ? 1 : -1;
-  return direction * Math.min(Math.abs(lane), GRAPH_MAX_RENDERED_BRANCH_LANE);
-}
-
-function buildGraphLayout(
-  nodes: readonly GitCommitGraphNodeContract[],
-  focusChangeId: string | null,
-): {
+function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
   positions: Map<string, { x: number; y: number }>;
   edgeKinds: Map<string, GraphEdgeKind>;
-  focusNodeIds: string[];
+  edgeLanes: Map<string, number>;
+  currentLineNodeIds: string[];
+  recentNodeIds: string[];
 } {
   const nodesByChangeId = new Map(nodes.map((node) => [node.changeId, node]));
   const indexByChangeId = new Map(nodes.map((node, index) => [node.changeId, index]));
@@ -170,11 +147,22 @@ function buildGraphLayout(
   }
 
   const currentChangeId = nodes.find((node) => node.currentWorkingCopy)?.changeId ?? null;
-  const focusedChangeId = focusChangeId ?? currentChangeId;
+  const currentLineNodeIds: string[] = [];
+  const visitedCurrentLineIds = new Set<string>();
+  let nextCurrentLineId = currentChangeId;
+  while (
+    nextCurrentLineId &&
+    nodesByChangeId.has(nextCurrentLineId) &&
+    !visitedCurrentLineIds.has(nextCurrentLineId)
+  ) {
+    currentLineNodeIds.push(nextCurrentLineId);
+    visitedCurrentLineIds.add(nextCurrentLineId);
+    const firstParentChangeId = nodesByChangeId.get(nextCurrentLineId)?.parentChangeIds[0] ?? null;
+    nextCurrentLineId =
+      firstParentChangeId && nodesByChangeId.has(firstParentChangeId) ? firstParentChangeId : null;
+  }
+
   components.sort((left, right) => {
-    const leftFocused = focusedChangeId ? left.includes(focusedChangeId) : false;
-    const rightFocused = focusedChangeId ? right.includes(focusedChangeId) : false;
-    if (leftFocused !== rightFocused) return leftFocused ? -1 : 1;
     const leftIndex = Math.min(
       ...left.map((changeId) => indexByChangeId.get(changeId) ?? Infinity),
     );
@@ -186,7 +174,7 @@ function buildGraphLayout(
 
   const positions = new Map<string, { x: number; y: number }>();
   const edgeKinds = new Map<string, GraphEdgeKind>();
-  let focusNodeIds: string[] = [];
+  const edgeLanes = new Map<string, number>();
   let componentOffsetY = 0;
   for (const component of components) {
     const componentIds = new Set(component);
@@ -195,73 +183,46 @@ function buildGraphLayout(
       .toSorted(
         (left, right) => indexByChangeId.get(left.changeId)! - indexByChangeId.get(right.changeId)!,
       );
-    const componentHasFocus = focusedChangeId ? componentIds.has(focusedChangeId) : false;
-    const spineStartId =
-      componentHasFocus && focusedChangeId
-        ? focusedChangeId
-        : (componentNodes[0]?.changeId ?? null);
-    const spineIds: string[] = [];
-    const visitedSpineIds = new Set<string>();
-    let nextSpineId = spineStartId;
-    while (nextSpineId && componentIds.has(nextSpineId) && !visitedSpineIds.has(nextSpineId)) {
-      spineIds.push(nextSpineId);
-      visitedSpineIds.add(nextSpineId);
-      const firstParentChangeId = nodesByChangeId.get(nextSpineId)?.parentChangeIds[0] ?? null;
-      nextSpineId =
-        firstParentChangeId && componentIds.has(firstParentChangeId) ? firstParentChangeId : null;
-    }
-    const spineIdSet = new Set(spineIds);
-    if (componentHasFocus || focusNodeIds.length === 0) {
-      focusNodeIds = spineIds.slice(0, 12);
-    }
-
     const laneByChangeId = new Map<string, number>();
-    const usedLanes = new Set<number>();
-    for (const spineId of spineIds) {
-      laneByChangeId.set(spineId, 0);
-      usedLanes.add(0);
-    }
+    let activeLanes: string[] = [];
 
     for (const node of componentNodes) {
-      const existingLane = laneByChangeId.get(node.changeId);
-      const continuingBranchLane = (childrenByParent.get(node.changeId) ?? [])
-        .filter(
-          (childChangeId) =>
-            nodesByChangeId.get(childChangeId)?.parentChangeIds[0] === node.changeId,
-        )
-        .map((childChangeId) => laneByChangeId.get(childChangeId))
-        .filter((lane): lane is number => lane !== undefined);
-      const lane =
-        existingLane ??
-        continuingBranchLane.find((childLane) => childLane !== 0) ??
-        nearestFreeLane(1, usedLanes);
+      const activeLane = activeLanes.indexOf(node.changeId);
+      const lane = activeLane >= 0 ? activeLane : activeLanes.length;
       laneByChangeId.set(node.changeId, lane);
-      usedLanes.add(lane);
-      node.parentChangeIds
-        .filter((parentChangeId) => componentIds.has(parentChangeId))
-        .forEach((parentChangeId, parentIndex) => {
-          const isFirstParent = parentIndex === 0;
-          const isSpineEdge =
-            isFirstParent && spineIdSet.has(node.changeId) && spineIdSet.has(parentChangeId);
-          edgeKinds.set(
-            graphEdgeKey(node.changeId, parentChangeId),
-            isSpineEdge ? "spine" : isFirstParent ? "branch" : "merge",
-          );
-          if (laneByChangeId.has(parentChangeId)) return;
-          const parentLane = isSpineEdge
-            ? 0
-            : isFirstParent
-              ? lane
-              : nearestFreeLane(lane, usedLanes);
-          laneByChangeId.set(parentChangeId, parentLane);
-          usedLanes.add(parentLane);
-        });
+
+      const loadedParentChangeIds = node.parentChangeIds.filter((parentChangeId) =>
+        componentIds.has(parentChangeId),
+      );
+      loadedParentChangeIds.forEach((parentChangeId, parentIndex) => {
+        const isFirstParent = parentIndex === 0;
+        const isCurrentLineEdge =
+          isFirstParent &&
+          currentLineNodeIds.includes(node.changeId) &&
+          currentLineNodeIds.includes(parentChangeId);
+        edgeKinds.set(
+          graphEdgeKey(node.changeId, parentChangeId),
+          isCurrentLineEdge ? "spine" : isFirstParent ? "branch" : "merge",
+        );
+        edgeLanes.set(graphEdgeKey(node.changeId, parentChangeId), lane);
+      });
+
+      if (activeLane >= 0) {
+        activeLanes.splice(activeLane, 1, ...loadedParentChangeIds);
+      } else {
+        activeLanes.splice(lane, 0, ...loadedParentChangeIds);
+      }
+      const seenActiveLaneIds = new Set<string>();
+      activeLanes = activeLanes.filter((activeChangeId) => {
+        if (seenActiveLaneIds.has(activeChangeId)) return false;
+        seenActiveLaneIds.add(activeChangeId);
+        return true;
+      });
     }
 
     componentNodes.forEach((node, index) => {
-      const lane = renderedLane(laneByChangeId.get(node.changeId) ?? 0);
       positions.set(node.changeId, {
-        x: lane * GRAPH_NODE_COLUMN_GAP,
+        x: GRAPH_NODE_X,
         y: componentOffsetY + index * GRAPH_ROW_GAP,
       });
     });
@@ -269,24 +230,35 @@ function buildGraphLayout(
     componentOffsetY += componentNodes.length * GRAPH_ROW_GAP + GRAPH_COMPONENT_GAP;
   }
 
-  return { positions, edgeKinds, focusNodeIds };
+  return {
+    positions,
+    edgeKinds,
+    edgeLanes,
+    currentLineNodeIds,
+    recentNodeIds: nodes.slice(0, GRAPH_RECENT_NODE_COUNT).map((node) => node.changeId),
+  };
 }
 
 function buildFlowGraph(input: {
   nodes: readonly GitCommitGraphNodeContract[];
   selectedChangeId: string | null;
-}): { nodes: Node<GraphNodeData>[]; edges: Edge[]; focusNodeIds: string[] } {
-  const layoutFocusChangeId =
-    input.nodes.find((node) => node.currentWorkingCopy)?.changeId ?? input.selectedChangeId;
-  const { positions, edgeKinds, focusNodeIds } = buildGraphLayout(input.nodes, layoutFocusChangeId);
+}): {
+  nodes: Node<GraphNodeData>[];
+  edges: Edge[];
+  currentLineNodeIds: string[];
+  recentNodeIds: string[];
+} {
+  const { positions, edgeKinds, edgeLanes, currentLineNodeIds, recentNodeIds } = buildGraphLayout(
+    input.nodes,
+  );
   const nodeIds = new Set(input.nodes.map((node) => node.changeId));
   const flowNodes: Node<GraphNodeData>[] = input.nodes.map((node) => ({
     id: node.changeId,
     type: "jjCommit",
     data: { node, selected: node.changeId === input.selectedChangeId },
     position: positions.get(node.changeId) ?? { x: 0, y: 0 },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
+    sourcePosition: Position.Left,
+    targetPosition: Position.Left,
   }));
   const flowEdges: Edge[] = input.nodes.flatMap((node) =>
     node.parentChangeIds
@@ -297,11 +269,15 @@ function buildFlowGraph(input: {
           id: graphEdgeKey(node.changeId, parentChangeId),
           source: node.changeId,
           target: parentChangeId,
-          type: "smoothstep",
+          type: "jjCommit",
           className: cn(
             "jj-commit-graph-edge",
             edgeKind === "merge" && "jj-commit-graph-edge-merge",
           ),
+          data: {
+            kind: edgeKind,
+            lane: edgeLanes.get(graphEdgeKey(node.changeId, parentChangeId)) ?? 0,
+          } satisfies GraphEdgeData,
           style: {
             strokeWidth: edgeKind === "spine" ? 2.25 : 1.25,
             opacity: edgeKind === "spine" ? 0.95 : edgeKind === "merge" ? 0.5 : 0.7,
@@ -310,7 +286,33 @@ function buildFlowGraph(input: {
         };
       }),
   );
-  return { nodes: flowNodes, edges: flowEdges, focusNodeIds };
+  return { nodes: flowNodes, edges: flowEdges, currentLineNodeIds, recentNodeIds };
+}
+
+function JjCommitGraphEdge(props: EdgeProps) {
+  const data = props.data as GraphEdgeData | undefined;
+  const kind = data?.kind ?? "branch";
+  const renderedLane = Math.min(Math.max(data?.lane ?? 0, 0), 5);
+  const laneX = props.sourceX - 30 - renderedLane * 10;
+  const path = [
+    `M ${props.sourceX} ${props.sourceY}`,
+    `L ${laneX} ${props.sourceY}`,
+    `L ${laneX} ${props.targetY}`,
+    `L ${props.targetX} ${props.targetY}`,
+  ].join(" ");
+
+  return (
+    <BaseEdge
+      id={props.id}
+      path={path}
+      style={{
+        stroke: kind === "spine" ? "var(--primary)" : "var(--muted-foreground)",
+        strokeWidth: kind === "spine" ? 2.5 : 1.35,
+        opacity: kind === "spine" ? 0.95 : kind === "merge" ? 0.48 : 0.72,
+        strokeDasharray: kind === "merge" ? "5 5" : undefined,
+      }}
+    />
+  );
 }
 
 const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNodeData>>) {
@@ -331,12 +333,12 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
   return (
     <div
       className={cn(
-        "min-w-56 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
+        "w-64 rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         data.selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
       )}
     >
-      <Handle type="target" position={Position.Top} className="opacity-0" />
+      <Handle type="target" position={Position.Left} className="opacity-0" />
       <div className="flex items-start gap-2">
         <span
           className={cn(
@@ -351,6 +353,9 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
         <div className="min-w-0 flex-1">
           <div className="truncate text-sm font-medium">{description}</div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5 text-muted-foreground text-xs">
+            {node.currentWorkingCopy ? (
+              <span className="rounded bg-primary px-1 font-medium text-primary-foreground">@</span>
+            ) : null}
             <span>{node.displayChangeId}</span>
             <span>{node.shortCommitId}</span>
             {node.empty ? <span className="rounded bg-muted px-1">empty</span> : null}
@@ -374,12 +379,13 @@ const JjCommitNode = memo(function JjCommitNode({ data }: NodeProps<Node<GraphNo
           ) : null}
         </div>
       </div>
-      <Handle type="source" position={Position.Bottom} className="opacity-0" />
+      <Handle type="source" position={Position.Left} className="opacity-0" />
     </div>
   );
 });
 
 const nodeTypes = { jjCommit: JjCommitNode };
+const edgeTypes = { jjCommit: JjCommitGraphEdge };
 
 function isRiskyDialog(kind: ActionDialogKind): boolean {
   return [
@@ -893,8 +899,8 @@ export default function JjCommitGraphPanel({
   onClose,
 }: JjCommitGraphPanelProps) {
   const queryClient = useQueryClient();
-  const [revsetInput, setRevsetInput] = useState(JJ_GRAPH_DEFAULT_REVSET);
-  const [appliedRevset, setAppliedRevset] = useState<string | null>(JJ_GRAPH_DEFAULT_REVSET);
+  const [revsetInput, setRevsetInput] = useState("");
+  const [appliedRevset, setAppliedRevset] = useState<string | null>(null);
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
@@ -923,25 +929,26 @@ export default function JjCommitGraphPanel({
       buildFlowGraph({ nodes: graph?.nodes ?? [], selectedChangeId: selected?.changeId ?? null }),
     [graph?.nodes, selected?.changeId],
   );
-  const recentNodeIds = useMemo(() => flowGraph.nodes.map((node) => node.id), [flowGraph.nodes]);
   const fitCurrentLine = useCallback(() => {
-    if (!flowInstance || flowGraph.focusNodeIds.length === 0) return;
+    if (!flowInstance || flowGraph.currentLineNodeIds.length === 0) return;
     void flowInstance.fitView({
-      nodes: flowGraph.focusNodeIds.slice(0, GRAPH_FOCUS_NODE_COUNT).map((id) => ({ id })),
+      nodes: flowGraph.currentLineNodeIds
+        .slice(0, GRAPH_CURRENT_LINE_NODE_COUNT)
+        .map((id) => ({ id })),
       padding: 0.25,
       maxZoom: 1.2,
       duration: 180,
     });
-  }, [flowGraph.focusNodeIds, flowInstance]);
+  }, [flowGraph.currentLineNodeIds, flowInstance]);
   const fitRecentChanges = useCallback(() => {
-    if (!flowInstance || recentNodeIds.length === 0) return;
+    if (!flowInstance || flowGraph.recentNodeIds.length === 0) return;
     void flowInstance.fitView({
-      nodes: recentNodeIds.slice(0, 10).map((id) => ({ id })),
+      nodes: flowGraph.recentNodeIds.map((id) => ({ id })),
       padding: 0.25,
       maxZoom: 0.95,
       duration: 180,
     });
-  }, [flowInstance, recentNodeIds]);
+  }, [flowGraph.recentNodeIds, flowInstance]);
   const runAction = useCallback(
     (action: GitCommitGraphAction) => {
       if (!graph?.currentOperationId) return;
@@ -1021,7 +1028,7 @@ export default function JjCommitGraphPanel({
             size="xs"
             variant={appliedRevset === revset ? "secondary" : "ghost"}
             onClick={() => {
-              setRevsetInput(revset);
+              setRevsetInput(revset ?? "");
               setAppliedRevset(revset);
             }}
           >
@@ -1030,12 +1037,18 @@ export default function JjCommitGraphPanel({
         ))}
       </div>
       {graph ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 text-muted-foreground text-xs">
-          <span>{graph.nodes.length} changes shown</span>
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 text-xs">
+          <span className="font-medium text-foreground">{graph.nodes.length} changes</span>
           {graph.hasMore ? (
-            <span>More changes available; narrow the revset to inspect them.</span>
+            <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-300">
+              Truncated; narrow the revset for more history
+            </span>
           ) : null}
-          <span className="ml-auto truncate">Revset: {graph.revset}</span>
+          <span className="ml-auto truncate text-muted-foreground" title={graph.revset}>
+            {appliedRevset === null
+              ? "Default: visible heads, bookmarks, remotes, @"
+              : `Revset: ${graph.revset}`}
+          </span>
         </div>
       ) : null}
       {graphQuery.isPending ? (
@@ -1063,24 +1076,24 @@ export default function JjCommitGraphPanel({
           <div className="flex min-h-96 min-w-0 flex-1 flex-col">
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2 text-muted-foreground text-xs">
               <span className="truncate">
-                Showing the current line first; pan or use Recent for nearby changes.
+                Recent JJ work, with graph lanes in the left gutter. Current checkout is marked @.
               </span>
               <div className="flex shrink-0 gap-1">
                 <Button
                   size="xs"
                   variant="secondary"
-                  disabled={flowGraph.focusNodeIds.length === 0}
-                  onClick={fitCurrentLine}
+                  disabled={flowGraph.recentNodeIds.length === 0}
+                  onClick={fitRecentChanges}
                 >
-                  Current
+                  Recent
                 </Button>
                 <Button
                   size="xs"
                   variant="ghost"
-                  disabled={recentNodeIds.length === 0}
-                  onClick={fitRecentChanges}
+                  disabled={flowGraph.currentLineNodeIds.length === 0}
+                  onClick={fitCurrentLine}
                 >
-                  Recent
+                  Current
                 </Button>
               </div>
             </div>
@@ -1090,25 +1103,14 @@ export default function JjCommitGraphPanel({
                 nodes={flowGraph.nodes}
                 edges={flowGraph.edges}
                 nodeTypes={nodeTypes}
+                edgeTypes={edgeTypes}
                 onInit={setFlowInstance}
-                fitView
-                fitViewOptions={{
-                  ...(flowGraph.focusNodeIds.length > 0
-                    ? {
-                        nodes: flowGraph.focusNodeIds
-                          .slice(0, GRAPH_FOCUS_NODE_COUNT)
-                          .map((id) => ({ id })),
-                      }
-                    : {}),
-                  padding: 0.25,
-                  maxZoom: 1.2,
-                }}
+                defaultViewport={{ x: 8, y: 24, zoom: 1 }}
                 onNodeClick={(_, node) => setSelectedChangeId(node.id)}
                 minZoom={0.25}
                 maxZoom={1.5}
                 proOptions={{ hideAttribution: true }}
               >
-                <Background />
                 <Controls position="bottom-left" />
                 {mode === "sheet" ? (
                   <MiniMap
