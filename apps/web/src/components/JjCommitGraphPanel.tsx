@@ -2,8 +2,12 @@ import type {
   ContextMenuItem,
   EnvironmentId,
   GitCommitGraphAction,
+  GitCommitGraphChangeDetailsResult,
   GitCommitGraphNode as GitCommitGraphNodeContract,
 } from "@t3tools/contracts";
+import { FileDiff, type FileDiffMetadata } from "@pierre/diffs/react";
+import { prepareFileTreeInput, type GitStatusEntry } from "@pierre/trees";
+import { FileTree, useFileTree } from "@pierre/trees/react";
 import {
   BaseEdge,
   Controls,
@@ -46,7 +50,10 @@ import {
   gitCommitGraphQueryOptions,
   GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
 } from "~/lib/gitReactQuery";
+import { resolveDiffThemeName } from "~/lib/diffRendering";
+import { getRenderablePatch, resolveFileDiffPath } from "~/lib/renderablePatch";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useTheme } from "~/hooks/useTheme";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
@@ -884,6 +891,165 @@ function JjCommitGraphActionDialog(props: {
   );
 }
 
+type JjGraphChangedFileEntry = {
+  readonly path: string;
+  readonly status: GitStatusEntry["status"];
+};
+
+const EMPTY_DIFF_FILES: readonly FileDiffMetadata[] = [];
+
+const JJ_GRAPH_TREE_UNSAFE_CSS = `
+  :host {
+    --trees-bg-override: transparent;
+    --trees-bg-muted-override: color-mix(in lab, var(--trees-accent) 7%, transparent);
+    --trees-fg-override: var(--foreground);
+    --trees-fg-muted-override: var(--muted-foreground);
+    --trees-border-color-override: var(--border);
+    --trees-accent-override: var(--primary);
+    --trees-selected-bg-override: color-mix(in lab, var(--primary) 12%, transparent);
+    --trees-selected-focused-border-color-override: var(--primary);
+    --trees-font-family-override: var(--font-sans);
+    --trees-font-size-override: 11px;
+    --trees-border-radius-override: 6px;
+    --trees-level-gap-override: 8px;
+    --trees-item-padding-x-override: 6px;
+    --trees-item-margin-x-override: 2px;
+    --trees-padding-inline-override: 4px;
+  }
+`;
+
+const JJ_GRAPH_DIFF_UNSAFE_CSS = `
+  :host {
+    --diffs-bg-override: transparent;
+    --diffs-font-family-override: var(--font-mono);
+    --diffs-font-size-override: 11px;
+    --diffs-line-height-override: 1.45;
+  }
+`;
+
+function normalizeJjSummaryPath(path: string): string {
+  const trimmed = path.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+    return trimmed.slice(1, -1).replaceAll('\\"', '"');
+  }
+  return trimmed;
+}
+
+function mapJjSummaryStatus(status: string): GitStatusEntry["status"] {
+  if (status.includes("D")) return "deleted";
+  if (status.includes("A")) return "added";
+  if (status.includes("R")) return "renamed";
+  if (status.includes("?")) return "untracked";
+  return "modified";
+}
+
+function parseJjChangedFilesSummary(summary: string | undefined): JjGraphChangedFileEntry[] {
+  if (!summary?.trim()) return [];
+  return summary
+    .split("\n")
+    .map((line): JjGraphChangedFileEntry | null => {
+      const trimmed = line.trim();
+      if (!trimmed) return null;
+      const match = /^([A-Z?]+)\s+(.+)$/.exec(trimmed);
+      if (!match) return null;
+      return {
+        path: normalizeJjSummaryPath(match[2] ?? ""),
+        status: mapJjSummaryStatus(match[1] ?? ""),
+      };
+    })
+    .filter((entry): entry is JjGraphChangedFileEntry => entry != null && entry.path.length > 0);
+}
+
+function stripLeadingRelativeSegments(path: string): string {
+  let next = path;
+  while (next.startsWith("../")) {
+    next = next.slice(3);
+  }
+  return next;
+}
+
+function resolveCanonicalChangedPath(path: string, diffPaths: readonly string[]): string {
+  const stripped = stripLeadingRelativeSegments(path);
+  return (
+    diffPaths.find(
+      (diffPath) =>
+        diffPath === path ||
+        diffPath === stripped ||
+        diffPath.endsWith(`/${path}`) ||
+        diffPath.endsWith(`/${stripped}`),
+    ) ?? path
+  );
+}
+
+function buildChangedFileEntries(
+  detail: GitCommitGraphChangeDetailsResult | undefined,
+  diffFiles: readonly FileDiffMetadata[],
+): JjGraphChangedFileEntry[] {
+  const diffPaths = diffFiles.map((fileDiff) => resolveFileDiffPath(fileDiff)).filter(Boolean);
+  const summaryEntries = parseJjChangedFilesSummary(detail?.changedFilesSummary).map((entry) => ({
+    path: resolveCanonicalChangedPath(entry.path, diffPaths),
+    status: entry.status,
+  }));
+  const statusByPath = new Map(summaryEntries.map((entry) => [entry.path, entry.status]));
+  const entries = new Map<string, JjGraphChangedFileEntry>();
+
+  for (const fileDiff of diffFiles) {
+    const path = resolveFileDiffPath(fileDiff);
+    if (!path) continue;
+    entries.set(path, {
+      path,
+      status: statusByPath.get(path) ?? "modified",
+    });
+  }
+
+  for (const entry of summaryEntries) {
+    entries.set(entry.path, entry);
+  }
+
+  return Array.from(entries.values()).toSorted((left, right) =>
+    left.path.localeCompare(right.path, undefined, { numeric: true, sensitivity: "base" }),
+  );
+}
+
+function JjChangeFileTree(props: {
+  entries: readonly JjGraphChangedFileEntry[];
+  selectedPath: string | null;
+  onSelectPath: (path: string) => void;
+}) {
+  const paths = useMemo(() => props.entries.map((entry) => entry.path), [props.entries]);
+  const preparedInput = useMemo(
+    () => prepareFileTreeInput(paths, { flattenEmptyDirectories: true }),
+    [paths],
+  );
+  const gitStatus = useMemo<GitStatusEntry[]>(
+    () => props.entries.map((entry) => ({ path: entry.path, status: entry.status })),
+    [props.entries],
+  );
+  const initialSelectedPaths = props.selectedPath ? [props.selectedPath] : paths.slice(0, 1);
+  const { model } = useFileTree({
+    preparedInput,
+    gitStatus,
+    initialExpansion: 2,
+    initialSelectedPaths,
+    density: "compact",
+    itemHeight: 24,
+    overscan: 8,
+    search: false,
+    stickyFolders: false,
+    unsafeCSS: JJ_GRAPH_TREE_UNSAFE_CSS,
+    onSelectionChange: (selectedPaths) => {
+      const nextPath = selectedPaths[0];
+      if (nextPath) props.onSelectPath(nextPath);
+    },
+  });
+
+  return <FileTree model={model} className="h-full min-h-0" />;
+}
+
+function buildJjGraphFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
+  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name ?? "none"}`;
+}
+
 function ShortcutHint(props: { keys: readonly string[]; label: string }) {
   return (
     <div className="flex min-w-0 items-center gap-2">
@@ -906,6 +1072,8 @@ function JjCommitGraphInspector(props: {
   mode: "sidebar" | "sheet";
 }) {
   const selected = props.selected;
+  const { resolvedTheme } = useTheme();
+  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const detailsQuery = useQuery(
     gitCommitGraphDetailsQueryOptions({
       environmentId: props.environmentId,
@@ -913,6 +1081,37 @@ function JjCommitGraphInspector(props: {
       changeId: selected?.changeId ?? null,
     }),
   );
+  useEffect(() => {
+    setSelectedFilePath(null);
+  }, [selected?.changeId]);
+  const detail = detailsQuery.data;
+  const renderablePatch = useMemo(
+    () =>
+      getRenderablePatch(
+        detail?.diffPreview,
+        `jj-graph:${selected?.changeId ?? "none"}:${resolvedTheme}`,
+      ),
+    [detail?.diffPreview, resolvedTheme, selected?.changeId],
+  );
+  const diffFiles = useMemo(
+    () => (renderablePatch?.kind === "files" ? renderablePatch.files : EMPTY_DIFF_FILES),
+    [renderablePatch],
+  );
+  const changedFiles = useMemo(
+    () => buildChangedFileEntries(detail, diffFiles),
+    [detail, diffFiles],
+  );
+  const effectiveSelectedFilePath =
+    selectedFilePath && changedFiles.some((entry) => entry.path === selectedFilePath)
+      ? selectedFilePath
+      : (changedFiles[0]?.path ?? null);
+  const selectedFileDiff =
+    effectiveSelectedFilePath && renderablePatch?.kind === "files"
+      ? (renderablePatch.files.find(
+          (fileDiff) => resolveFileDiffPath(fileDiff) === effectiveSelectedFilePath,
+        ) ?? null)
+      : null;
+  const treeKey = changedFiles.map((entry) => `${entry.status}:${entry.path}`).join("\0");
   const compact = props.mode === "sidebar";
   if (!selected) {
     return (
@@ -926,12 +1125,11 @@ function JjCommitGraphInspector(props: {
       </aside>
     );
   }
-  const detail = detailsQuery.data;
   return (
     <aside
       className={cn(
         "flex min-h-0 w-full shrink-0 flex-col border-t border-border bg-background",
-        props.mode === "sheet" ? "lg:w-88 lg:border-l lg:border-t-0" : "max-h-56",
+        props.mode === "sheet" ? "lg:w-88 lg:border-l lg:border-t-0" : "max-h-80",
       )}
     >
       <div className={cn("border-b border-border", compact ? "p-3" : "p-4")}>
@@ -959,26 +1157,76 @@ function JjCommitGraphInspector(props: {
                   ? detailsQuery.error.message
                   : "JJ graph details unavailable."}
               </div>
-            ) : (
+            ) : changedFiles.length > 0 ? (
               <>
-                <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs">
-                  {detail?.changedFilesSummary.trim() || "No file summary."}
-                </pre>
-                <pre className="max-h-32 overflow-auto whitespace-pre-wrap rounded-md bg-muted/50 p-2 text-xs">
-                  {detail?.diffStat.trim() || "No diff stat."}
-                </pre>
-                {detail?.diffPreview.trim() ? (
-                  <details className="rounded-md border border-border/70 bg-muted/30 p-2 text-xs">
-                    <summary className="cursor-pointer text-muted-foreground">
-                      Preview diff
-                      {detail.diffPreviewTruncated ? " (truncated)" : ""}
+                <div className="grid gap-2 lg:grid-cols-[minmax(180px,0.42fr)_minmax(0,1fr)]">
+                  <div className="min-h-0 rounded-md border border-border/70 bg-muted/20">
+                    <div className="flex items-center justify-between border-b border-border/70 px-2 py-1.5">
+                      <span className="font-medium text-xs">{changedFiles.length} files</span>
+                      {detail?.diffPreviewTruncated ? (
+                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+                          truncated
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="h-40 min-h-0">
+                      <JjChangeFileTree
+                        key={treeKey}
+                        entries={changedFiles}
+                        selectedPath={effectiveSelectedFilePath}
+                        onSelectPath={setSelectedFilePath}
+                      />
+                    </div>
+                  </div>
+                  <div className="min-w-0">
+                    {selectedFileDiff ? (
+                      <div
+                        key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
+                        className="diff-render-file max-h-72 overflow-auto rounded-md border border-border/70 bg-background/70"
+                      >
+                        <FileDiff
+                          fileDiff={selectedFileDiff}
+                          options={{
+                            diffStyle: "unified",
+                            lineDiffType: "none",
+                            overflow: "wrap",
+                            theme: resolveDiffThemeName(resolvedTheme),
+                            themeType: resolvedTheme,
+                            unsafeCSS: JJ_GRAPH_DIFF_UNSAFE_CSS,
+                          }}
+                        />
+                      </div>
+                    ) : renderablePatch?.kind === "raw" ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] text-muted-foreground">
+                          {renderablePatch.reason}
+                        </p>
+                        <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
+                          {renderablePatch.text}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-xs">
+                        No rendered diff for {effectiveSelectedFilePath ?? "this file"}.
+                      </div>
+                    )}
+                  </div>
+                </div>
+                {detail?.diffStat.trim() ? (
+                  <details className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-xs">
+                    <summary className="cursor-pointer select-none font-medium marker:text-muted-foreground">
+                      Diff stat
                     </summary>
-                    <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap">
-                      {detail.diffPreview}
+                    <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">
+                      {detail.diffStat}
                     </pre>
                   </details>
                 ) : null}
               </>
+            ) : (
+              <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-sm">
+                No changed files.
+              </div>
             )}
           </section>
           <details className="group rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-muted-foreground text-xs">
