@@ -1059,11 +1059,9 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         );
       }
       yield* runGraphActionCommand(input.cwd, input.action);
-      const operationId = yield* resolveCurrentOperationId(input.cwd);
       return {
         action: input.action,
         status: "applied" as const,
-        operationId,
         ...("changeId" in input.action ? { targetChangeId: input.action.changeId } : {}),
         ...("name" in input.action ? { branch: input.action.name } : {}),
       };

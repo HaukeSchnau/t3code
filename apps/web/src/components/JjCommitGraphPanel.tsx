@@ -1128,11 +1128,11 @@ export default function JjCommitGraphPanel({
   const runAction = useCallback(
     (action: GitCommitGraphAction) => {
       if (!graph?.currentOperationId) return;
+      setDialogKind(null);
       actionMutation.mutate(
         { expectedOperationId: graph.currentOperationId, action },
         {
           onSuccess: () => {
-            setDialogKind(null);
             toastManager.add(
               stackedThreadToast({
                 type: "success",

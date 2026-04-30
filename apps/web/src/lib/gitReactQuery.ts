@@ -141,8 +141,8 @@ export function gitCommitGraphActionMutationOptions(input: {
       const api = ensureEnvironmentApi(input.environmentId);
       return api.git.runCommitGraphAction({ ...actionInput, cwd: input.cwd });
     },
-    onSuccess: async () => {
-      await invalidateGitQueries(input.queryClient, {
+    onSuccess: () => {
+      void invalidateGitQueries(input.queryClient, {
         environmentId: input.environmentId,
         cwd: input.cwd,
       });
