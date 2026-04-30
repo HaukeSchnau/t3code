@@ -108,6 +108,7 @@ const GRAPH_NODE_X = 16;
 const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
 const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
+const GRAPH_LAYOUT_TRANSITION_MS = 220;
 const GRAPH_CONTEXT_MENU_ITEMS = [
   { id: "edit", label: "Edit change" },
   { id: "describe", label: "Describe…" },
@@ -381,6 +382,7 @@ function buildFlowGraph(input: { nodes: readonly GitCommitGraphNodeContract[] })
   const flowNodes: Node<GraphNodeData>[] = input.nodes.map((node) => ({
     id: node.changeId,
     type: "jjCommit",
+    className: "jj-commit-graph-flow-node",
     data: { node },
     position: positions.get(node.changeId) ?? { x: 0, y: 0 },
     sourcePosition: Position.Bottom,
@@ -429,6 +431,7 @@ function JjCommitGraphEdge(props: EdgeProps) {
   return (
     <BaseEdge
       id={props.id}
+      className={cn("jj-commit-graph-edge", kind === "merge" && "jj-commit-graph-edge-merge")}
       path={path}
       style={{
         stroke: kind === "spine" ? "var(--primary)" : "var(--muted-foreground)",
@@ -1013,6 +1016,7 @@ export default function JjCommitGraphPanel({
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(false);
+  const [animateGraphLayout, setAnimateGraphLayout] = useState(false);
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<GraphNodeData>>([]);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
     Node<GraphNodeData>,
@@ -1021,6 +1025,9 @@ export default function JjCommitGraphPanel({
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
   const selectedRef = useRef<GitCommitGraphNodeContract | null>(null);
   const selectedChangeIdRef = useRef<string | null>(null);
+  const hasRenderedGraphLayoutRef = useRef(false);
+  const graphLayoutSignatureRef = useRef("");
+  const graphLayoutTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const graphQuery = useQuery(
     gitCommitGraphQueryOptions({
       environmentId,
@@ -1065,15 +1072,44 @@ export default function JjCommitGraphPanel({
   const flowGraph = useMemo(() => buildFlowGraph({ nodes: graph?.nodes ?? [] }), [graph?.nodes]);
   const defaultSelectedChangeId =
     graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ?? graph?.nodes[0]?.changeId;
+  useEffect(() => {
+    const layoutSignature = flowGraph.nodes
+      .map((node) => `${node.id}:${node.position.x},${node.position.y}`)
+      .join("|");
+    const layoutChanged = graphLayoutSignatureRef.current !== layoutSignature;
+    const shouldAnimateLayout =
+      hasRenderedGraphLayoutRef.current && flowGraph.nodes.length > 0 && layoutChanged;
+    if (graphLayoutTransitionTimeoutRef.current) {
+      clearTimeout(graphLayoutTransitionTimeoutRef.current);
+      graphLayoutTransitionTimeoutRef.current = null;
+    }
+    if (shouldAnimateLayout) {
+      setAnimateGraphLayout(true);
+      graphLayoutTransitionTimeoutRef.current = setTimeout(() => {
+        setAnimateGraphLayout(false);
+        graphLayoutTransitionTimeoutRef.current = null;
+      }, GRAPH_LAYOUT_TRANSITION_MS + 80);
+    } else {
+      setAnimateGraphLayout(false);
+    }
+    setFlowNodes(
+      flowGraph.nodes.map((node) => ({
+        ...node,
+        selected: node.id === defaultSelectedChangeId,
+      })),
+    );
+    if (flowGraph.nodes.length > 0) {
+      hasRenderedGraphLayoutRef.current = true;
+    }
+    graphLayoutSignatureRef.current = layoutSignature;
+  }, [defaultSelectedChangeId, flowGraph.nodes, setFlowNodes]);
   useEffect(
-    () =>
-      setFlowNodes(
-        flowGraph.nodes.map((node) => ({
-          ...node,
-          selected: node.id === defaultSelectedChangeId,
-        })),
-      ),
-    [defaultSelectedChangeId, flowGraph.nodes, setFlowNodes],
+    () => () => {
+      if (graphLayoutTransitionTimeoutRef.current) {
+        clearTimeout(graphLayoutTransitionTimeoutRef.current);
+      }
+    },
+    [],
   );
   const focusGraphKeyboard = useCallback(() => {
     graphKeyboardRef.current?.focus({ preventScroll: true });
@@ -1343,7 +1379,10 @@ export default function JjCommitGraphPanel({
             </div>
             <div
               ref={graphKeyboardRef}
-              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              className={cn(
+                "jj-commit-graph-canvas min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
+                animateGraphLayout && "jj-commit-graph-canvas-animating",
+              )}
               tabIndex={0}
               onKeyDown={handleGraphKeyDown}
             >

@@ -67,6 +67,28 @@
   animation-duration: 0s !important;
 }
 
+.jj-commit-graph-canvas-animating .jj-commit-graph-flow-node {
+  transition:
+    transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform;
+}
+
+.jj-commit-graph-canvas-animating .jj-commit-graph-edge path {
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    stroke-width 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .jj-commit-graph-canvas-animating .jj-commit-graph-flow-node,
+  .jj-commit-graph-canvas-animating .jj-commit-graph-edge path {
+    transition: none;
+    will-change: auto;
+  }
+}
+
 :root {
   color-scheme: light;
   --radius: 0.625rem;
