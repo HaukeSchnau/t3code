@@ -1255,15 +1255,50 @@ export default function JjCommitGraphPanel({
     <div
       className={cn("flex h-full min-h-0 flex-col bg-background", mode === "sheet" ? "w-full" : "")}
     >
-      <div className="flex shrink-0 items-center gap-3 border-b border-border px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <GitForkIcon className="size-4 text-muted-foreground" />
-            <h2 className="font-semibold text-sm">JJ graph</h2>
-          </div>
-          <p className="truncate text-muted-foreground text-xs">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
+          <GitForkIcon className="size-4 shrink-0 text-muted-foreground" />
+          <h2 className="shrink-0 font-semibold text-sm">JJ graph</h2>
+          <span className="min-w-0 truncate text-muted-foreground text-xs" title={cwd ?? ""}>
             {cwd ?? "No repository selected"}
-          </p>
+          </span>
+        </div>
+        {graph ? (
+          <div className="flex shrink-0 items-center gap-2 text-xs">
+            <span className="font-medium text-foreground" title={graph.revset}>
+              {graph.nodes.length} changes
+            </span>
+            {graph.hasMore ? (
+              <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-300">
+                Truncated
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+        <div className="flex shrink-0 items-center gap-1">
+          <Button
+            size="xs"
+            variant={showMiniMap ? "secondary" : "ghost"}
+            onClick={() => setShowMiniMap((value) => !value)}
+          >
+            Map
+          </Button>
+          <Button
+            size="xs"
+            variant="secondary"
+            disabled={flowGraph.recentNodeIds.length === 0}
+            onClick={fitRecentChanges}
+          >
+            Recent
+          </Button>
+          <Button
+            size="xs"
+            variant="ghost"
+            disabled={flowGraph.currentLineNodeIds.length === 0}
+            onClick={fitCurrentLine}
+          >
+            Current
+          </Button>
         </div>
         <Button size="xs" variant="outline" onClick={() => graphQuery.refetch()}>
           <RefreshCwIcon className={cn(graphQuery.isFetching && "animate-spin")} />
@@ -1273,12 +1308,12 @@ export default function JjCommitGraphPanel({
           Close
         </Button>
       </div>
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
         <Input
           value={revsetInput}
           onChange={(event) => setRevsetInput(event.target.value)}
           placeholder="JJ revset"
-          className="h-8 text-sm"
+          className="h-7 min-w-48 flex-1 text-sm md:w-72 md:flex-none"
           onKeyDown={(event) => {
             if (event.key === "Enter") {
               setAppliedRevset(revsetInput.trim() || null);
@@ -1292,8 +1327,6 @@ export default function JjCommitGraphPanel({
         >
           Apply
         </Button>
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-4 py-1.5">
         {JJ_GRAPH_REVSET_PRESETS.map(({ label, revset }) => (
           <Button
             key={label}
@@ -1308,21 +1341,6 @@ export default function JjCommitGraphPanel({
           </Button>
         ))}
       </div>
-      {graph ? (
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-1.5 text-xs">
-          <span className="font-medium text-foreground">{graph.nodes.length} changes</span>
-          {graph.hasMore ? (
-            <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-300">
-              Truncated; narrow the revset for more history
-            </span>
-          ) : null}
-          <span className="ml-auto truncate text-muted-foreground" title={graph.revset}>
-            {appliedRevset === null
-              ? "Default: visible heads, bookmarks, remotes, @"
-              : `Revset: ${graph.revset}`}
-          </span>
-        </div>
-      ) : null}
       {graphQuery.isPending ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground text-sm">
           <Loader2Icon className="mr-2 size-4 animate-spin" />
@@ -1346,37 +1364,6 @@ export default function JjCommitGraphPanel({
       ) : (
         <div className={cn("flex min-h-0 flex-1 flex-col", mode === "sheet" && "lg:flex-row")}>
           <div className="flex min-h-96 min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border/70 px-4 py-2 text-muted-foreground text-xs">
-              <span className="truncate">
-                Recent JJ work in compact lanes. Drag the canvas to follow branches; @ marks the
-                current checkout.
-              </span>
-              <div className="flex shrink-0 gap-1">
-                <Button
-                  size="xs"
-                  variant={showMiniMap ? "secondary" : "ghost"}
-                  onClick={() => setShowMiniMap((value) => !value)}
-                >
-                  Map
-                </Button>
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  disabled={flowGraph.recentNodeIds.length === 0}
-                  onClick={fitRecentChanges}
-                >
-                  Recent
-                </Button>
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  disabled={flowGraph.currentLineNodeIds.length === 0}
-                  onClick={fitCurrentLine}
-                >
-                  Current
-                </Button>
-              </div>
-            </div>
             <div
               ref={graphKeyboardRef}
               className={cn(
