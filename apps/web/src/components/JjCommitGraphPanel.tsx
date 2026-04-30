@@ -1,4 +1,5 @@
 import type {
+  ContextMenuItem,
   EnvironmentId,
   GitCommitGraphAction,
   GitCommitGraphNode as GitCommitGraphNodeContract,
@@ -22,11 +23,8 @@ import {
   GitBranchIcon,
   GitCommitHorizontalIcon,
   GitForkIcon,
-  GitPullRequestIcon,
   Loader2Icon,
-  PencilIcon,
   RefreshCwIcon,
-  ScissorsIcon,
 } from "lucide-react";
 import {
   memo,
@@ -34,8 +32,11 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -46,6 +47,7 @@ import {
   GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
 } from "~/lib/gitReactQuery";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
 import { Button } from "./ui/button";
 import {
@@ -57,6 +59,7 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
+import { Kbd, KbdGroup } from "./ui/kbd";
 import { ScrollArea } from "./ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -81,6 +84,8 @@ type ActionDialogKind =
   | "bookmark_delete"
   | "bookmark_track"
   | "bookmark_untrack";
+
+type GraphCommand = ActionDialogKind | "edit" | "copy_change_id" | "copy_commit_id";
 
 interface JjCommitGraphPanelProps {
   environmentId: EnvironmentId;
@@ -500,6 +505,63 @@ function isRiskyDialog(kind: ActionDialogKind): boolean {
   ].includes(kind);
 }
 
+function isDialogCommand(command: GraphCommand): command is ActionDialogKind {
+  return command !== "edit" && command !== "copy_change_id" && command !== "copy_commit_id";
+}
+
+function isTextEntryTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return (
+    target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']") !== null
+  );
+}
+
+function commandForGraphKey(event: ReactKeyboardEvent<HTMLElement>): GraphCommand | null {
+  const key = event.key;
+  const normalizedKey = key.toLowerCase();
+
+  if ((event.metaKey || event.ctrlKey) && normalizedKey !== "c") {
+    return null;
+  }
+  if (event.altKey) {
+    return null;
+  }
+
+  if (normalizedKey === "c") {
+    return event.shiftKey ? "copy_commit_id" : "copy_change_id";
+  }
+  if (event.metaKey || event.ctrlKey || event.shiftKey) {
+    return null;
+  }
+
+  switch (normalizedKey) {
+    case "enter":
+    case "e":
+      return "edit";
+    case "d":
+      return "describe";
+    case "n":
+      return "new";
+    case "a":
+      return "insert_after";
+    case "b":
+      return "insert_before";
+    case "m":
+      return "bookmark_set";
+    case "r":
+      return "rebase";
+    case "s":
+      return "squash";
+    case "x":
+      return "split";
+    case "backspace":
+    case "delete":
+      return "abandon";
+    default:
+      return null;
+  }
+}
+
 function shellQuote(value: string): string {
   return value.length === 0 || /[\s'"$\\]/.test(value)
     ? `'${value.replace(/'/g, "'\\''")}'`
@@ -513,7 +575,7 @@ function previewActionCommand(
 ): string {
   switch (kind) {
     case "describe":
-      return `jj describe -r ${selected.changeId} -m ${shellQuote(form.message ?? "")}`;
+      return `jj describe -r ${selected.changeId} -m ${shellQuote(form.message ?? selected.description ?? "")}`;
     case "new":
       return `jj new ${selected.changeId}${form.message ? ` -m ${shellQuote(form.message)}` : ""}`;
     case "insert_after":
@@ -552,7 +614,11 @@ function actionFromDialog(
 ): GitCommitGraphAction {
   switch (kind) {
     case "describe":
-      return { kind: "describe", changeId: selected.changeId, message: form.message ?? "" };
+      return {
+        kind: "describe",
+        changeId: selected.changeId,
+        message: form.message ?? selected.description ?? "",
+      };
     case "new":
       return {
         kind: "new",
@@ -766,15 +832,26 @@ function JjCommitGraphActionDialog(props: {
   );
 }
 
+function ShortcutHint(props: { keys: readonly string[]; label: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <KbdGroup className="shrink-0">
+        {props.keys.map((key) => (
+          <Kbd key={key} className={key.length > 1 ? "min-w-fit px-1.5" : undefined}>
+            {key}
+          </Kbd>
+        ))}
+      </KbdGroup>
+      <span className="min-w-0 truncate">{props.label}</span>
+    </div>
+  );
+}
+
 function JjCommitGraphInspector(props: {
   selected: GitCommitGraphNodeContract | null;
   environmentId: EnvironmentId;
   cwd: string | null;
   mode: "sidebar" | "sheet";
-  currentOperationId: string | null;
-  onActionRequest: (kind: ActionDialogKind) => void;
-  onRunAction: (action: GitCommitGraphAction) => void;
-  actionPending: boolean;
 }) {
   const selected = props.selected;
   const detailsQuery = useQuery(
@@ -784,7 +861,6 @@ function JjCommitGraphInspector(props: {
       changeId: selected?.changeId ?? null,
     }),
   );
-  const { copyToClipboard } = useCopyToClipboard();
   const compact = props.mode === "sidebar";
   if (!selected) {
     return (
@@ -822,134 +898,20 @@ function JjCommitGraphInspector(props: {
       <ScrollArea className="min-h-0 flex-1">
         <div className={cn(compact ? "space-y-3 p-3" : "space-y-5 p-4")}>
           <section className="grid gap-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Navigate</h4>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={props.actionPending}
-                onClick={() => props.onRunAction({ kind: "edit", changeId: selected.changeId })}
-              >
-                <GitPullRequestIcon />
-                Edit
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => props.onActionRequest("new")}>
-                New child
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("insert_after")}
-              >
-                Insert after
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("insert_before")}
-              >
-                Insert before
-              </Button>
-            </div>
-          </section>
-          <section className="grid gap-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Change</h4>
-            <div className="flex flex-wrap gap-2">
-              <Button size="xs" variant="outline" onClick={() => props.onActionRequest("describe")}>
-                <PencilIcon />
-                Describe
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => copyToClipboard(selected.changeId, undefined)}
-              >
-                Copy change ID
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => copyToClipboard(selected.commitId, undefined)}
-              >
-                Copy commit ID
-              </Button>
-            </div>
-          </section>
-          <section className="grid gap-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Bookmarks</h4>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_set")}
-              >
-                Set
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_move")}
-              >
-                Move
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_rename")}
-              >
-                Rename
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_delete")}
-              >
-                Delete
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_track")}
-              >
-                Track
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("bookmark_untrack")}
-              >
-                Untrack
-              </Button>
-            </div>
-          </section>
-          <section className="grid gap-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Rewrite</h4>
-            <div className="flex flex-wrap gap-2">
-              <Button
-                size="xs"
-                variant="destructive-outline"
-                onClick={() => props.onActionRequest("abandon")}
-              >
-                Abandon
-              </Button>
-              <Button
-                size="xs"
-                variant="outline"
-                onClick={() => props.onActionRequest("duplicate")}
-              >
-                Duplicate
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => props.onActionRequest("rebase")}>
-                <GitForkIcon />
-                Rebase
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => props.onActionRequest("squash")}>
-                Squash
-              </Button>
-              <Button size="xs" variant="outline" onClick={() => props.onActionRequest("split")}>
-                <ScissorsIcon />
-                Split
-              </Button>
+            <h4 className="text-xs font-medium text-muted-foreground uppercase">Shortcuts</h4>
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-muted-foreground text-xs">
+              <ShortcutHint keys={["Enter", "E"]} label="Edit" />
+              <ShortcutHint keys={["D"]} label="Describe" />
+              <ShortcutHint keys={["N"]} label="New child" />
+              <ShortcutHint keys={["A", "B"]} label="Insert" />
+              <ShortcutHint keys={["C"]} label="Copy change" />
+              <ShortcutHint keys={["Shift", "C"]} label="Copy commit" />
+              <ShortcutHint keys={["M"]} label="Bookmark" />
+              <ShortcutHint keys={["R"]} label="Rebase" />
+              <ShortcutHint keys={["S"]} label="Squash" />
+              <ShortcutHint keys={["X"]} label="Split" />
+              <ShortcutHint keys={["Del"]} label="Abandon" />
+              <ShortcutHint keys={["Right click"]} label="All actions" />
             </div>
           </section>
           <section className="grid gap-2">
@@ -1007,6 +969,7 @@ export default function JjCommitGraphPanel({
     Node<GraphNodeData>,
     Edge
   > | null>(null);
+  const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
   const graphQuery = useQuery(
     gitCommitGraphQueryOptions({
       environmentId,
@@ -1018,6 +981,26 @@ export default function JjCommitGraphPanel({
   const actionMutation = useMutation(
     gitCommitGraphActionMutationOptions({ environmentId, cwd, queryClient }),
   );
+  const { copyToClipboard } = useCopyToClipboard<string>({
+    onCopy: (label) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: `${label} copied`,
+          description: "Ready on your clipboard.",
+        }),
+      );
+    },
+    onError: (error) => {
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Copy failed",
+          description: error.message,
+        }),
+      );
+    },
+  });
   const graph = graphQuery.data;
   const selected =
     graph?.nodes.find((node) => node.changeId === selectedChangeId) ??
@@ -1037,11 +1020,32 @@ export default function JjCommitGraphPanel({
       ),
     [defaultSelectedChangeId, flowGraph.nodes, setFlowNodes],
   );
-  const handleNodeClick = useCallback((_: unknown, node: Node<GraphNodeData>) => {
-    startTransition(() => {
-      setSelectedChangeId(node.id);
-    });
+  const focusGraphKeyboard = useCallback(() => {
+    graphKeyboardRef.current?.focus({ preventScroll: true });
   }, []);
+  const selectGraphNode = useCallback(
+    (changeId: string, options?: { syncFlowSelection?: boolean }) => {
+      focusGraphKeyboard();
+      startTransition(() => {
+        setSelectedChangeId(changeId);
+      });
+      if (options?.syncFlowSelection) {
+        setFlowNodes((nodes) =>
+          nodes.map((node) => {
+            const selectedNode = node.id === changeId;
+            return node.selected === selectedNode ? node : { ...node, selected: selectedNode };
+          }),
+        );
+      }
+    },
+    [focusGraphKeyboard, setFlowNodes],
+  );
+  const handleNodeClick = useCallback(
+    (_: unknown, node: Node<GraphNodeData>) => {
+      selectGraphNode(node.id);
+    },
+    [selectGraphNode],
+  );
   const fitCurrentLine = useCallback(() => {
     if (!flowInstance || flowGraph.currentLineNodeIds.length === 0) return;
     void flowInstance.fitView({
@@ -1091,6 +1095,111 @@ export default function JjCommitGraphPanel({
       );
     },
     [actionMutation, graph?.currentOperationId],
+  );
+  const runGraphCommand = useCallback(
+    (command: GraphCommand, target = selected) => {
+      if (!target || actionMutation.isPending) return;
+
+      selectGraphNode(target.changeId, { syncFlowSelection: true });
+
+      if (command === "edit") {
+        runAction({ kind: "edit", changeId: target.changeId });
+        return;
+      }
+      if (command === "copy_change_id") {
+        copyToClipboard(target.changeId, "Change ID");
+        return;
+      }
+      if (command === "copy_commit_id") {
+        copyToClipboard(target.commitId, "Commit ID");
+        return;
+      }
+      if (isDialogCommand(command)) {
+        setDialogKind(command);
+      }
+    },
+    [actionMutation.isPending, copyToClipboard, runAction, selectGraphNode, selected],
+  );
+  const handleGraphKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (dialogKind !== null || isTextEntryTarget(event.target)) return;
+      const command = commandForGraphKey(event);
+      if (!command) return;
+      event.preventDefault();
+      event.stopPropagation();
+      runGraphCommand(command);
+    },
+    [dialogKind, runGraphCommand],
+  );
+  const handleNodeDoubleClick = useCallback(
+    (event: ReactMouseEvent, node: Node<GraphNodeData>) => {
+      event.preventDefault();
+      runGraphCommand("edit", node.data.node);
+    },
+    [runGraphCommand],
+  );
+  const handleNodeContextMenu = useCallback(
+    (event: ReactMouseEvent, node: Node<GraphNodeData>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const menuPosition = { x: event.clientX, y: event.clientY };
+      selectGraphNode(node.id, { syncFlowSelection: true });
+
+      void (async () => {
+        const api = readLocalApi();
+        if (!api) return;
+
+        const actionItems = [
+          { id: "edit", label: "Edit change" },
+          { id: "describe", label: "Describe…" },
+          { id: "new", label: "New child…" },
+          {
+            id: "insert:submenu",
+            label: "Insert change",
+            children: [
+              { id: "insert_after", label: "After selected…" },
+              { id: "insert_before", label: "Before selected…" },
+            ],
+          },
+          {
+            id: "copy:submenu",
+            label: "Copy",
+            children: [
+              { id: "copy_change_id", label: "Change ID" },
+              { id: "copy_commit_id", label: "Commit ID" },
+            ],
+          },
+          {
+            id: "bookmark:submenu",
+            label: "Bookmark",
+            children: [
+              { id: "bookmark_set", label: "Set…" },
+              { id: "bookmark_move", label: "Move here…" },
+              { id: "bookmark_rename", label: "Rename…" },
+              { id: "bookmark_delete", label: "Delete…", destructive: true },
+              { id: "bookmark_track", label: "Track remote…" },
+              { id: "bookmark_untrack", label: "Untrack remote…" },
+            ],
+          },
+          {
+            id: "rewrite:submenu",
+            label: "Rewrite",
+            children: [
+              { id: "duplicate", label: "Duplicate…" },
+              { id: "rebase", label: "Rebase…" },
+              { id: "squash", label: "Squash…" },
+              { id: "split", label: "Split…" },
+              { id: "abandon", label: "Abandon…", destructive: true },
+            ],
+          },
+        ] satisfies readonly ContextMenuItem<GraphCommand | `${string}:submenu`>[];
+
+        const clicked = await api.contextMenu.show(actionItems, menuPosition);
+        if (!clicked || clicked.endsWith(":submenu")) return;
+        runGraphCommand(clicked as GraphCommand, node.data.node);
+      })();
+    },
+    [runGraphCommand, selectGraphNode],
   );
   return (
     <div
@@ -1218,7 +1327,12 @@ export default function JjCommitGraphPanel({
                 </Button>
               </div>
             </div>
-            <div className="min-h-0 flex-1">
+            <div
+              ref={graphKeyboardRef}
+              className="min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
+              tabIndex={0}
+              onKeyDown={handleGraphKeyDown}
+            >
               <ReactFlow
                 key={graph?.revset ?? appliedRevset ?? "jj-graph"}
                 nodes={flowNodes}
@@ -1229,6 +1343,8 @@ export default function JjCommitGraphPanel({
                 onInit={setFlowInstance}
                 defaultViewport={{ x: 8, y: 24, zoom: 1 }}
                 onNodeClick={handleNodeClick}
+                onNodeDoubleClick={handleNodeDoubleClick}
+                onNodeContextMenu={handleNodeContextMenu}
                 minZoom={0.25}
                 maxZoom={1.5}
                 onlyRenderVisibleElements
@@ -1264,10 +1380,6 @@ export default function JjCommitGraphPanel({
             environmentId={environmentId}
             cwd={cwd}
             mode={mode}
-            currentOperationId={graph?.currentOperationId ?? null}
-            onActionRequest={setDialogKind}
-            onRunAction={runAction}
-            actionPending={actionMutation.isPending}
           />
         </div>
       )}
