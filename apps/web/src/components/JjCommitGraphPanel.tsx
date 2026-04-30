@@ -86,6 +86,7 @@ type ActionDialogKind =
   | "bookmark_untrack";
 
 type GraphCommand = ActionDialogKind | "edit" | "copy_change_id" | "copy_commit_id";
+type GraphContextMenuCommand = GraphCommand | `${string}:submenu`;
 
 interface JjCommitGraphPanelProps {
   environmentId: EnvironmentId;
@@ -107,6 +108,50 @@ const GRAPH_NODE_X = 16;
 const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
 const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
+const GRAPH_CONTEXT_MENU_ITEMS = [
+  { id: "edit", label: "Edit change" },
+  { id: "describe", label: "Describe…" },
+  { id: "new", label: "New child…" },
+  {
+    id: "insert:submenu",
+    label: "Insert change",
+    children: [
+      { id: "insert_after", label: "After selected…" },
+      { id: "insert_before", label: "Before selected…" },
+    ],
+  },
+  {
+    id: "copy:submenu",
+    label: "Copy",
+    children: [
+      { id: "copy_change_id", label: "Change ID" },
+      { id: "copy_commit_id", label: "Commit ID" },
+    ],
+  },
+  {
+    id: "bookmark:submenu",
+    label: "Bookmark",
+    children: [
+      { id: "bookmark_set", label: "Set…" },
+      { id: "bookmark_move", label: "Move here…" },
+      { id: "bookmark_rename", label: "Rename…" },
+      { id: "bookmark_delete", label: "Delete…", destructive: true },
+      { id: "bookmark_track", label: "Track remote…" },
+      { id: "bookmark_untrack", label: "Untrack remote…" },
+    ],
+  },
+  {
+    id: "rewrite:submenu",
+    label: "Rewrite",
+    children: [
+      { id: "duplicate", label: "Duplicate…" },
+      { id: "rebase", label: "Rebase…" },
+      { id: "squash", label: "Squash…" },
+      { id: "split", label: "Split…" },
+      { id: "abandon", label: "Abandon…", destructive: true },
+    ],
+  },
+] satisfies readonly ContextMenuItem<GraphContextMenuCommand>[];
 
 type GraphEdgeKind = "spine" | "branch" | "merge";
 type GraphEdgeData = {
@@ -507,6 +552,10 @@ function isRiskyDialog(kind: ActionDialogKind): boolean {
 
 function isDialogCommand(command: GraphCommand): command is ActionDialogKind {
   return command !== "edit" && command !== "copy_change_id" && command !== "copy_commit_id";
+}
+
+function isGraphCommand(command: GraphContextMenuCommand): command is GraphCommand {
+  return !command.endsWith(":submenu");
 }
 
 function isTextEntryTarget(target: EventTarget | null): boolean {
@@ -970,6 +1019,8 @@ export default function JjCommitGraphPanel({
     Edge
   > | null>(null);
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
+  const selectedRef = useRef<GitCommitGraphNodeContract | null>(null);
+  const selectedChangeIdRef = useRef<string | null>(null);
   const graphQuery = useQuery(
     gitCommitGraphQueryOptions({
       environmentId,
@@ -1007,6 +1058,10 @@ export default function JjCommitGraphPanel({
     graph?.nodes.find((node) => node.currentWorkingCopy) ??
     graph?.nodes[0] ??
     null;
+  useEffect(() => {
+    selectedRef.current = selected;
+    selectedChangeIdRef.current = selected?.changeId ?? null;
+  }, [selected]);
   const flowGraph = useMemo(() => buildFlowGraph({ nodes: graph?.nodes ?? [] }), [graph?.nodes]);
   const defaultSelectedChangeId =
     graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ?? graph?.nodes[0]?.changeId;
@@ -1026,10 +1081,14 @@ export default function JjCommitGraphPanel({
   const selectGraphNode = useCallback(
     (changeId: string, options?: { syncFlowSelection?: boolean }) => {
       focusGraphKeyboard();
-      startTransition(() => {
-        setSelectedChangeId(changeId);
-      });
-      if (options?.syncFlowSelection) {
+      const alreadySelected = selectedChangeIdRef.current === changeId;
+      if (!alreadySelected) {
+        selectedChangeIdRef.current = changeId;
+        startTransition(() => {
+          setSelectedChangeId(changeId);
+        });
+      }
+      if (options?.syncFlowSelection && !alreadySelected) {
         setFlowNodes((nodes) =>
           nodes.map((node) => {
             const selectedNode = node.id === changeId;
@@ -1097,10 +1156,10 @@ export default function JjCommitGraphPanel({
     [actionMutation, graph?.currentOperationId],
   );
   const runGraphCommand = useCallback(
-    (command: GraphCommand, target = selected) => {
+    (command: GraphCommand, target = selectedRef.current) => {
       if (!target || actionMutation.isPending) return;
 
-      selectGraphNode(target.changeId, { syncFlowSelection: true });
+      selectGraphNode(target.changeId);
 
       if (command === "edit") {
         runAction({ kind: "edit", changeId: target.changeId });
@@ -1118,7 +1177,7 @@ export default function JjCommitGraphPanel({
         setDialogKind(command);
       }
     },
-    [actionMutation.isPending, copyToClipboard, runAction, selectGraphNode, selected],
+    [actionMutation.isPending, copyToClipboard, runAction, selectGraphNode],
   );
   const handleGraphKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -1143,60 +1202,15 @@ export default function JjCommitGraphPanel({
       event.preventDefault();
       event.stopPropagation();
       const menuPosition = { x: event.clientX, y: event.clientY };
-      selectGraphNode(node.id, { syncFlowSelection: true });
+      selectGraphNode(node.id);
 
       void (async () => {
         const api = readLocalApi();
         if (!api) return;
 
-        const actionItems = [
-          { id: "edit", label: "Edit change" },
-          { id: "describe", label: "Describe…" },
-          { id: "new", label: "New child…" },
-          {
-            id: "insert:submenu",
-            label: "Insert change",
-            children: [
-              { id: "insert_after", label: "After selected…" },
-              { id: "insert_before", label: "Before selected…" },
-            ],
-          },
-          {
-            id: "copy:submenu",
-            label: "Copy",
-            children: [
-              { id: "copy_change_id", label: "Change ID" },
-              { id: "copy_commit_id", label: "Commit ID" },
-            ],
-          },
-          {
-            id: "bookmark:submenu",
-            label: "Bookmark",
-            children: [
-              { id: "bookmark_set", label: "Set…" },
-              { id: "bookmark_move", label: "Move here…" },
-              { id: "bookmark_rename", label: "Rename…" },
-              { id: "bookmark_delete", label: "Delete…", destructive: true },
-              { id: "bookmark_track", label: "Track remote…" },
-              { id: "bookmark_untrack", label: "Untrack remote…" },
-            ],
-          },
-          {
-            id: "rewrite:submenu",
-            label: "Rewrite",
-            children: [
-              { id: "duplicate", label: "Duplicate…" },
-              { id: "rebase", label: "Rebase…" },
-              { id: "squash", label: "Squash…" },
-              { id: "split", label: "Split…" },
-              { id: "abandon", label: "Abandon…", destructive: true },
-            ],
-          },
-        ] satisfies readonly ContextMenuItem<GraphCommand | `${string}:submenu`>[];
-
-        const clicked = await api.contextMenu.show(actionItems, menuPosition);
-        if (!clicked || clicked.endsWith(":submenu")) return;
-        runGraphCommand(clicked as GraphCommand, node.data.node);
+        const clicked = await api.contextMenu.show(GRAPH_CONTEXT_MENU_ITEMS, menuPosition);
+        if (!clicked || !isGraphCommand(clicked)) return;
+        runGraphCommand(clicked, node.data.node);
       })();
     },
     [runGraphCommand, selectGraphNode],
