@@ -18,6 +18,7 @@ const GIT_BRANCHES_STALE_TIME_MS = 15_000;
 const GIT_BRANCHES_REFETCH_INTERVAL_MS = 60_000;
 const GIT_BRANCHES_PAGE_SIZE = 100;
 const GIT_COMMIT_GRAPH_STALE_TIME_MS = 5_000;
+const GIT_COMMIT_GRAPH_REFETCH_INTERVAL_MS = 10_000;
 export const GIT_COMMIT_GRAPH_DEFAULT_LIMIT = 150;
 
 export const gitQueryKeys = {
@@ -100,6 +101,7 @@ export function gitCommitGraphQueryOptions(input: {
     staleTime: GIT_COMMIT_GRAPH_STALE_TIME_MS,
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
+    refetchInterval: GIT_COMMIT_GRAPH_REFETCH_INTERVAL_MS,
   });
 }
 
