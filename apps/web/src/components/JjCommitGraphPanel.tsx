@@ -950,23 +950,6 @@ function JjCommitGraphInspector(props: {
       <ScrollArea className="min-h-0 flex-1">
         <div className={cn(compact ? "space-y-3 p-3" : "space-y-5 p-4")}>
           <section className="grid gap-2">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase">Shortcuts</h4>
-            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 text-muted-foreground text-xs">
-              <ShortcutHint keys={["Enter", "E"]} label="Edit" />
-              <ShortcutHint keys={["D"]} label="Describe" />
-              <ShortcutHint keys={["N"]} label="New child" />
-              <ShortcutHint keys={["A", "B"]} label="Insert" />
-              <ShortcutHint keys={["C"]} label="Copy change" />
-              <ShortcutHint keys={["Shift", "C"]} label="Copy commit" />
-              <ShortcutHint keys={["M"]} label="Bookmark" />
-              <ShortcutHint keys={["R"]} label="Rebase" />
-              <ShortcutHint keys={["S"]} label="Squash" />
-              <ShortcutHint keys={["X"]} label="Split" />
-              <ShortcutHint keys={["Del"]} label="Abandon" />
-              <ShortcutHint keys={["Right click"]} label="All actions" />
-            </div>
-          </section>
-          <section className="grid gap-2">
             <h4 className="text-xs font-medium text-muted-foreground uppercase">Files</h4>
             {detailsQuery.isPending ? (
               <div className="text-muted-foreground text-sm">Loading details...</div>
@@ -998,6 +981,25 @@ function JjCommitGraphInspector(props: {
               </>
             )}
           </section>
+          <details className="group rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-muted-foreground text-xs">
+            <summary className="cursor-pointer select-none font-medium text-foreground marker:text-muted-foreground">
+              Keyboard shortcuts
+            </summary>
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
+              <ShortcutHint keys={["Enter", "E"]} label="Edit" />
+              <ShortcutHint keys={["D"]} label="Describe" />
+              <ShortcutHint keys={["N"]} label="New child" />
+              <ShortcutHint keys={["A", "B"]} label="Insert" />
+              <ShortcutHint keys={["C"]} label="Copy change" />
+              <ShortcutHint keys={["Shift", "C"]} label="Copy commit" />
+              <ShortcutHint keys={["M"]} label="Bookmark" />
+              <ShortcutHint keys={["R"]} label="Rebase" />
+              <ShortcutHint keys={["S"]} label="Squash" />
+              <ShortcutHint keys={["X"]} label="Split" />
+              <ShortcutHint keys={["Del"]} label="Abandon" />
+              <ShortcutHint keys={["Right click"]} label="All actions" />
+            </div>
+          </details>
         </div>
       </ScrollArea>
     </aside>
