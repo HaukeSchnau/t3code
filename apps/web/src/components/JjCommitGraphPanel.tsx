@@ -41,6 +41,7 @@ import {
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -66,7 +67,6 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { Kbd, KbdGroup } from "./ui/kbd";
 import { ScrollArea } from "./ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -896,9 +896,11 @@ type JjGraphChangedFileEntry = {
   readonly status: GitStatusEntry["status"];
 };
 
-type JjGraphInspectorView = "summary" | "files";
-
 const EMPTY_DIFF_FILES: readonly FileDiffMetadata[] = [];
+const REVIEW_SPLIT_STORAGE_KEY = "t3code:jj-graph:review-split";
+const DEFAULT_GRAPH_REVIEW_SPLIT = 38;
+const MIN_GRAPH_REVIEW_SPLIT = 22;
+const MAX_GRAPH_REVIEW_SPLIT = 74;
 
 const JJ_GRAPH_TREE_UNSAFE_CSS = `
   :host {
@@ -1052,19 +1054,19 @@ function buildJjGraphFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
   return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name ?? "none"}`;
 }
 
-function ShortcutHint(props: { keys: readonly string[]; label: string }) {
-  return (
-    <div className="flex min-w-0 items-center gap-2">
-      <KbdGroup className="shrink-0">
-        {props.keys.map((key) => (
-          <Kbd key={key} className={key.length > 1 ? "min-w-fit px-1.5" : undefined}>
-            {key}
-          </Kbd>
-        ))}
-      </KbdGroup>
-      <span className="min-w-0 truncate">{props.label}</span>
-    </div>
-  );
+function clampGraphReviewSplit(value: number): number {
+  return Math.min(MAX_GRAPH_REVIEW_SPLIT, Math.max(MIN_GRAPH_REVIEW_SPLIT, value));
+}
+
+function readGraphReviewSplit(): number {
+  if (typeof window === "undefined") return DEFAULT_GRAPH_REVIEW_SPLIT;
+  try {
+    const rawValue = window.localStorage.getItem(REVIEW_SPLIT_STORAGE_KEY);
+    const parsed = rawValue ? Number.parseFloat(rawValue) : Number.NaN;
+    return Number.isFinite(parsed) ? clampGraphReviewSplit(parsed) : DEFAULT_GRAPH_REVIEW_SPLIT;
+  } catch {
+    return DEFAULT_GRAPH_REVIEW_SPLIT;
+  }
 }
 
 function JjCommitGraphInspector(props: {
@@ -1076,7 +1078,6 @@ function JjCommitGraphInspector(props: {
   const selected = props.selected;
   const { resolvedTheme } = useTheme();
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [inspectorView, setInspectorView] = useState<JjGraphInspectorView>("summary");
   const detailsQuery = useQuery(
     gitCommitGraphDetailsQueryOptions({
       environmentId: props.environmentId,
@@ -1086,7 +1087,6 @@ function JjCommitGraphInspector(props: {
   );
   useEffect(() => {
     setSelectedFilePath(null);
-    setInspectorView("summary");
   }, [selected?.changeId]);
   const detail = detailsQuery.data;
   const renderablePatch = useMemo(
@@ -1130,8 +1130,7 @@ function JjCommitGraphInspector(props: {
     return (
       <aside
         className={cn(
-          "flex min-h-0 w-full shrink-0 flex-col border-t border-border bg-background p-4 text-muted-foreground text-sm",
-          props.mode === "sheet" ? "lg:w-80 lg:border-l lg:border-t-0" : "max-h-56",
+          "flex min-h-0 w-full flex-1 flex-col border-t border-border bg-background p-4 text-muted-foreground text-sm",
         )}
       >
         Select a change to inspect JJ metadata and actions.
@@ -1140,16 +1139,9 @@ function JjCommitGraphInspector(props: {
   }
   return (
     <aside
-      className={cn(
-        "flex min-h-0 w-full shrink-0 flex-col border-t border-border bg-background",
-        props.mode === "sheet"
-          ? "lg:w-88 lg:border-l lg:border-t-0"
-          : inspectorView === "files"
-            ? "h-[min(68vh,760px)] min-h-96"
-            : "max-h-32",
-      )}
+      className={cn("flex min-h-0 w-full flex-1 flex-col border-t border-border bg-background")}
     >
-      <div className={cn("border-b border-border", compact ? "p-3" : "p-4")}>
+      <div className={cn("shrink-0 border-b border-border", compact ? "p-3" : "p-4")}>
         <div className="flex min-w-0 items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1168,172 +1160,106 @@ function JjCommitGraphInspector(props: {
               {selected.authorName || "Unknown author"} · {selected.committerTimestamp}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-1 rounded-lg bg-muted/60 p-0.5">
-            <Button
-              size="xs"
-              variant={inspectorView === "summary" ? "secondary" : "ghost"}
-              className="h-6 border-transparent px-2 shadow-none"
-              onClick={() => setInspectorView("summary")}
-            >
-              Summary
-            </Button>
-            <Button
-              size="xs"
-              variant={inspectorView === "files" ? "secondary" : "ghost"}
-              className="h-6 border-transparent px-2 shadow-none"
-              onClick={() => setInspectorView("files")}
-            >
-              Files
-            </Button>
-          </div>
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div
           className={cn(
+            "flex h-full min-h-0 flex-col",
             compact ? "space-y-3 p-3" : "space-y-5 p-4",
-            inspectorView === "files" && "flex h-full min-h-0 flex-col",
           )}
         >
-          {inspectorView === "summary" ? (
-            <section className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
-              <span className="font-medium">{fileSummaryLabel}</span>
-              {changedFiles.slice(0, 4).map((entry) => (
-                <button
-                  key={entry.path}
-                  type="button"
-                  className="max-w-56 truncate rounded-md border border-border/70 bg-muted/30 px-2 py-1 text-left text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
-                  onClick={() => {
-                    setSelectedFilePath(entry.path);
-                    setInspectorView("files");
-                  }}
+          <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
+            <h4 className="text-xs font-medium text-muted-foreground uppercase">Review</h4>
+            {detailsQuery.isPending ? (
+              <div className="text-muted-foreground text-sm">Loading details...</div>
+            ) : detailsQuery.isError ? (
+              <div className="text-destructive text-sm">
+                {detailsQuery.error instanceof Error
+                  ? detailsQuery.error.message
+                  : "JJ graph details unavailable."}
+              </div>
+            ) : changedFiles.length > 0 ? (
+              <>
+                <div
+                  className={cn(
+                    "grid min-h-0 gap-2",
+                    showFileTree
+                      ? "lg:grid-cols-[minmax(180px,0.42fr)_minmax(0,1fr)]"
+                      : "grid-cols-1",
+                  )}
                 >
-                  {entry.path}
-                </button>
-              ))}
-              {changedFiles.length > 4 ? (
-                <Button
-                  size="xs"
-                  variant="ghost"
-                  className="h-7 px-2"
-                  onClick={() => setInspectorView("files")}
-                >
-                  +{changedFiles.length - 4} more
-                </Button>
-              ) : null}
-              <details className="ml-auto min-w-44 rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-muted-foreground">
-                <summary className="cursor-pointer select-none font-medium text-foreground marker:text-muted-foreground">
-                  Shortcuts
-                </summary>
-                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1.5">
-                  <ShortcutHint keys={["Enter", "E"]} label="Edit" />
-                  <ShortcutHint keys={["D"]} label="Describe" />
-                  <ShortcutHint keys={["N"]} label="New child" />
-                  <ShortcutHint keys={["A", "B"]} label="Insert" />
-                  <ShortcutHint keys={["C"]} label="Copy change" />
-                  <ShortcutHint keys={["Shift", "C"]} label="Copy commit" />
-                  <ShortcutHint keys={["M"]} label="Bookmark" />
-                  <ShortcutHint keys={["R"]} label="Rebase" />
-                  <ShortcutHint keys={["S"]} label="Squash" />
-                  <ShortcutHint keys={["X"]} label="Split" />
-                  <ShortcutHint keys={["Del"]} label="Abandon" />
-                  <ShortcutHint keys={["Right click"]} label="All actions" />
-                </div>
-              </details>
-            </section>
-          ) : (
-            <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
-              <h4 className="text-xs font-medium text-muted-foreground uppercase">Files</h4>
-              {detailsQuery.isPending ? (
-                <div className="text-muted-foreground text-sm">Loading details...</div>
-              ) : detailsQuery.isError ? (
-                <div className="text-destructive text-sm">
-                  {detailsQuery.error instanceof Error
-                    ? detailsQuery.error.message
-                    : "JJ graph details unavailable."}
-                </div>
-              ) : changedFiles.length > 0 ? (
-                <>
-                  <div
-                    className={cn(
-                      "grid min-h-0 gap-2",
-                      showFileTree
-                        ? "lg:grid-cols-[minmax(180px,0.42fr)_minmax(0,1fr)]"
-                        : "grid-cols-1",
-                    )}
-                  >
-                    {showFileTree ? (
-                      <div className="min-h-0 rounded-md border border-border/70 bg-muted/20">
-                        <div className="flex items-center justify-between border-b border-border/70 px-2 py-1.5">
-                          <span className="font-medium text-xs">{changedFiles.length} files</span>
-                          {detail?.diffPreviewTruncated ? (
-                            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-                              truncated
-                            </span>
-                          ) : null}
-                        </div>
-                        <div className="h-full min-h-0">
-                          <JjChangeFileTree
-                            key={treeKey}
-                            entries={changedFiles}
-                            selectedPath={effectiveSelectedFilePath}
-                            onSelectPath={setSelectedFilePath}
-                          />
-                        </div>
+                  {showFileTree ? (
+                    <div className="min-h-0 rounded-md border border-border/70 bg-muted/20">
+                      <div className="flex items-center justify-between border-b border-border/70 px-2 py-1.5">
+                        <span className="font-medium text-xs">{changedFiles.length} files</span>
+                        {detail?.diffPreviewTruncated ? (
+                          <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
+                            truncated
+                          </span>
+                        ) : null}
                       </div>
-                    ) : null}
-                    <div className="min-h-0 min-w-0">
-                      {selectedFileDiff ? (
-                        <div
-                          key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
-                          className="diff-render-file h-full min-h-0 overflow-auto rounded-md border border-border/70 bg-background/70"
-                        >
-                          <FileDiff
-                            fileDiff={selectedFileDiff}
-                            options={{
-                              diffStyle: "unified",
-                              lineDiffType: "none",
-                              overflow: "wrap",
-                              theme: resolveDiffThemeName(resolvedTheme),
-                              themeType: resolvedTheme,
-                              unsafeCSS: JJ_GRAPH_DIFF_UNSAFE_CSS,
-                            }}
-                          />
-                        </div>
-                      ) : renderablePatch?.kind === "raw" ? (
-                        <div className="space-y-1.5">
-                          <p className="text-[11px] text-muted-foreground">
-                            {renderablePatch.reason}
-                          </p>
-                          <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
-                            {renderablePatch.text}
-                          </pre>
-                        </div>
-                      ) : (
-                        <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-xs">
-                          No rendered diff for {effectiveSelectedFilePath ?? "this file"}.
-                        </div>
-                      )}
+                      <div className="h-full min-h-0">
+                        <JjChangeFileTree
+                          key={treeKey}
+                          entries={changedFiles}
+                          selectedPath={effectiveSelectedFilePath}
+                          onSelectPath={setSelectedFilePath}
+                        />
+                      </div>
                     </div>
-                  </div>
-                  {detail?.diffStat.trim() ? (
-                    <details className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-xs">
-                      <summary className="cursor-pointer select-none font-medium marker:text-muted-foreground">
-                        Diff stat
-                      </summary>
-                      <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">
-                        {detail.diffStat}
-                      </pre>
-                    </details>
                   ) : null}
-                </>
-              ) : (
-                <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-sm">
-                  No changed files.
+                  <div className="min-h-0 min-w-0">
+                    {selectedFileDiff ? (
+                      <div
+                        key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
+                        className="diff-render-file h-full min-h-0 overflow-auto rounded-md border border-border/70 bg-background/70"
+                      >
+                        <FileDiff
+                          fileDiff={selectedFileDiff}
+                          options={{
+                            diffStyle: "unified",
+                            lineDiffType: "none",
+                            overflow: "wrap",
+                            theme: resolveDiffThemeName(resolvedTheme),
+                            themeType: resolvedTheme,
+                            unsafeCSS: JJ_GRAPH_DIFF_UNSAFE_CSS,
+                          }}
+                        />
+                      </div>
+                    ) : renderablePatch?.kind === "raw" ? (
+                      <div className="space-y-1.5">
+                        <p className="text-[11px] text-muted-foreground">
+                          {renderablePatch.reason}
+                        </p>
+                        <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
+                          {renderablePatch.text}
+                        </pre>
+                      </div>
+                    ) : (
+                      <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-xs">
+                        No rendered diff for {effectiveSelectedFilePath ?? "this file"}.
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-            </section>
-          )}
+                {detail?.diffStat.trim() ? (
+                  <details className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-xs">
+                    <summary className="cursor-pointer select-none font-medium marker:text-muted-foreground">
+                      Diff stat
+                    </summary>
+                    <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">
+                      {detail.diffStat}
+                    </pre>
+                  </details>
+                ) : null}
+              </>
+            ) : (
+              <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-sm">
+                No changed files.
+              </div>
+            )}
+          </section>
         </div>
       </ScrollArea>
     </aside>
@@ -1353,11 +1279,14 @@ export default function JjCommitGraphPanel({
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(false);
   const [animateGraphLayout, setAnimateGraphLayout] = useState(false);
+  const [graphReviewSplit, setGraphReviewSplit] = useState(readGraphReviewSplit);
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<GraphNodeData>>([]);
   const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
     Node<GraphNodeData>,
     Edge
   > | null>(null);
+  const graphReviewContainerRef = useRef<HTMLDivElement | null>(null);
+  const graphReviewDragAbortRef = useRef<AbortController | null>(null);
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
   const selectedRef = useRef<GitCommitGraphNodeContract | null>(null);
   const selectedChangeIdRef = useRef<string | null>(null);
@@ -1587,6 +1516,54 @@ export default function JjCommitGraphPanel({
     },
     [runGraphCommand, selectGraphNode],
   );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(REVIEW_SPLIT_STORAGE_KEY, String(graphReviewSplit));
+    } catch {
+      // Ignore restricted storage contexts; the split remains usable for this session.
+    }
+  }, [graphReviewSplit]);
+  useEffect(
+    () => () => {
+      graphReviewDragAbortRef.current?.abort();
+    },
+    [],
+  );
+  const handleGraphReviewSplitterPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const container = graphReviewContainerRef.current;
+      if (!container) return;
+
+      event.preventDefault();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      graphReviewDragAbortRef.current?.abort();
+      const abortController = new AbortController();
+      graphReviewDragAbortRef.current = abortController;
+
+      const updateSplit = (clientY: number) => {
+        const rect = container.getBoundingClientRect();
+        if (rect.height <= 0) return;
+        const nextSplit = ((clientY - rect.top) / rect.height) * 100;
+        setGraphReviewSplit(clampGraphReviewSplit(nextSplit));
+      };
+      const handlePointerMove = (moveEvent: PointerEvent) => updateSplit(moveEvent.clientY);
+      const handlePointerUp = () => {
+        abortController.abort();
+        if (graphReviewDragAbortRef.current === abortController) {
+          graphReviewDragAbortRef.current = null;
+        }
+      };
+
+      updateSplit(event.clientY);
+      window.addEventListener("pointermove", handlePointerMove, { signal: abortController.signal });
+      window.addEventListener("pointerup", handlePointerUp, {
+        once: true,
+        signal: abortController.signal,
+      });
+    },
+    [],
+  );
   return (
     <div
       className={cn("flex h-full min-h-0 flex-col bg-background", mode === "sheet" ? "w-full" : "")}
@@ -1698,8 +1675,11 @@ export default function JjCommitGraphPanel({
           Commit graph actions are available for JJ repositories.
         </div>
       ) : (
-        <div className={cn("flex min-h-0 flex-1 flex-col", mode === "sheet" && "lg:flex-row")}>
-          <div className="flex min-h-96 min-w-0 flex-1 flex-col">
+        <div ref={graphReviewContainerRef} className="flex min-h-0 flex-1 flex-col">
+          <div
+            className="flex min-h-36 min-w-0 flex-none flex-col"
+            style={{ flexBasis: `${graphReviewSplit}%` }}
+          >
             <div
               ref={graphKeyboardRef}
               className={cn(
@@ -1750,6 +1730,35 @@ export default function JjCommitGraphPanel({
                 ) : null}
               </ReactFlow>
             </div>
+          </div>
+          <div
+            aria-label="Resize graph and review panes"
+            aria-orientation="horizontal"
+            aria-valuemax={MAX_GRAPH_REVIEW_SPLIT}
+            aria-valuemin={MIN_GRAPH_REVIEW_SPLIT}
+            aria-valuenow={Math.round(graphReviewSplit)}
+            className="group relative z-10 flex h-3 shrink-0 cursor-row-resize items-center justify-center bg-background"
+            role="separator"
+            tabIndex={0}
+            onDoubleClick={() => setGraphReviewSplit(DEFAULT_GRAPH_REVIEW_SPLIT)}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setGraphReviewSplit((value) => clampGraphReviewSplit(value - 4));
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setGraphReviewSplit((value) => clampGraphReviewSplit(value + 4));
+              } else if (event.key === "Home") {
+                event.preventDefault();
+                setGraphReviewSplit(MIN_GRAPH_REVIEW_SPLIT);
+              } else if (event.key === "End") {
+                event.preventDefault();
+                setGraphReviewSplit(MAX_GRAPH_REVIEW_SPLIT);
+              }
+            }}
+            onPointerDown={handleGraphReviewSplitterPointerDown}
+          >
+            <div className="h-px w-full bg-border transition-colors group-hover:bg-primary/40 group-focus-visible:bg-primary/60" />
           </div>
           <JjCommitGraphInspector
             selected={selected}
