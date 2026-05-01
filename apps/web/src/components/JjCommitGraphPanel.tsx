@@ -1145,7 +1145,7 @@ function JjCommitGraphInspector(props: {
         props.mode === "sheet"
           ? "lg:w-88 lg:border-l lg:border-t-0"
           : inspectorView === "files"
-            ? "max-h-80"
+            ? "h-[min(68vh,760px)] min-h-96"
             : "max-h-32",
       )}
     >
@@ -1189,7 +1189,12 @@ function JjCommitGraphInspector(props: {
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
-        <div className={cn(compact ? "space-y-3 p-3" : "space-y-5 p-4")}>
+        <div
+          className={cn(
+            compact ? "space-y-3 p-3" : "space-y-5 p-4",
+            inspectorView === "files" && "flex h-full min-h-0 flex-col",
+          )}
+        >
           {inspectorView === "summary" ? (
             <section className="flex min-w-0 flex-wrap items-center gap-2 text-xs">
               <span className="font-medium">{fileSummaryLabel}</span>
@@ -1237,7 +1242,7 @@ function JjCommitGraphInspector(props: {
               </details>
             </section>
           ) : (
-            <section className="grid gap-2">
+            <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
               <h4 className="text-xs font-medium text-muted-foreground uppercase">Files</h4>
               {detailsQuery.isPending ? (
                 <div className="text-muted-foreground text-sm">Loading details...</div>
@@ -1251,7 +1256,7 @@ function JjCommitGraphInspector(props: {
                 <>
                   <div
                     className={cn(
-                      "grid gap-2",
+                      "grid min-h-0 gap-2",
                       showFileTree
                         ? "lg:grid-cols-[minmax(180px,0.42fr)_minmax(0,1fr)]"
                         : "grid-cols-1",
@@ -1267,7 +1272,7 @@ function JjCommitGraphInspector(props: {
                             </span>
                           ) : null}
                         </div>
-                        <div className="h-40 min-h-0">
+                        <div className="h-full min-h-0">
                           <JjChangeFileTree
                             key={treeKey}
                             entries={changedFiles}
@@ -1277,11 +1282,11 @@ function JjCommitGraphInspector(props: {
                         </div>
                       </div>
                     ) : null}
-                    <div className="min-w-0">
+                    <div className="min-h-0 min-w-0">
                       {selectedFileDiff ? (
                         <div
                           key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
-                          className="diff-render-file max-h-72 overflow-auto rounded-md border border-border/70 bg-background/70"
+                          className="diff-render-file h-full min-h-0 overflow-auto rounded-md border border-border/70 bg-background/70"
                         >
                           <FileDiff
                             fileDiff={selectedFileDiff}
@@ -1300,7 +1305,7 @@ function JjCommitGraphInspector(props: {
                           <p className="text-[11px] text-muted-foreground">
                             {renderablePatch.reason}
                           </p>
-                          <pre className="max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
+                          <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
                             {renderablePatch.text}
                           </pre>
                         </div>
