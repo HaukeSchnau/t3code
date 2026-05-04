@@ -21,6 +21,7 @@ import {
   useNodesState,
   Position,
   Handle,
+  PanOnScrollMode,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import {
@@ -1721,6 +1722,11 @@ export default function JjCommitGraphPanel({
                 minZoom={0.25}
                 maxZoom={1.5}
                 onlyRenderVisibleElements
+                zoomOnScroll={false}
+                zoomOnPinch
+                panOnScroll
+                panOnScrollMode={PanOnScrollMode.Free}
+                panOnScrollSpeed={1}
                 nodesDraggable={false}
                 nodesConnectable={false}
                 nodesFocusable={false}
