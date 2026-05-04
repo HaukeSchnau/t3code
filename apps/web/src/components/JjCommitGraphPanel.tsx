@@ -3,6 +3,7 @@ import type {
   EnvironmentId,
   GitCommitGraphAction,
   GitCommitGraphNode as GitCommitGraphNodeContract,
+  GitCommitGraphResult as GitCommitGraphResultContract,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -125,6 +126,9 @@ const GRAPH_NODE_X = 16;
 const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
 const GRAPH_LAYOUT_TRANSITION_MS = 220;
+const GRAPH_LAZY_LOAD_BATCH_SIZE = 150;
+const GRAPH_LAZY_LOAD_PARENT_COUNT = 12;
+const GRAPH_LAZY_LOAD_THRESHOLD_PX = 900;
 const GRAPH_CONTEXT_MENU_ITEMS = [
   { id: "edit", label: "Edit change" },
   { id: "describe", label: "Describe…" },
@@ -177,6 +181,50 @@ type GraphEdgeData = {
 
 function graphEdgeKey(changeId: string, parentChangeId: string): string {
   return `${changeId}:${parentChangeId}`;
+}
+
+function mergeCommitGraphPages(
+  baseGraph: GitCommitGraphResultContract | undefined,
+  pages: readonly GitCommitGraphResultContract[],
+): GitCommitGraphResultContract | undefined {
+  if (!baseGraph) return undefined;
+  const nodesByChangeId = new Map<string, GitCommitGraphNodeContract>();
+  const edgesByKey = new Map<string, GitCommitGraphResultContract["edges"][number]>();
+  for (const graph of [baseGraph, ...pages]) {
+    for (const node of graph.nodes) {
+      if (!nodesByChangeId.has(node.changeId)) {
+        nodesByChangeId.set(node.changeId, node);
+      }
+    }
+    for (const edge of graph.edges) {
+      edgesByKey.set(graphEdgeKey(edge.fromChangeId, edge.toChangeId), edge);
+    }
+  }
+  return {
+    ...baseGraph,
+    hasMore: pages.some((page) => page.hasMore),
+    nodes: Array.from(nodesByChangeId.values()),
+    edges: Array.from(edgesByKey.values()),
+  };
+}
+
+function resolveNextHistoryRevset(nodes: readonly GitCommitGraphNodeContract[]): string | null {
+  const loadedChangeIds = new Set(nodes.map((node) => node.changeId));
+  const missingParentChangeIds: string[] = [];
+  const seenMissingParentChangeIds = new Set<string>();
+  for (const node of nodes) {
+    for (const parentChangeId of node.parentChangeIds) {
+      if (loadedChangeIds.has(parentChangeId) || seenMissingParentChangeIds.has(parentChangeId)) {
+        continue;
+      }
+      seenMissingParentChangeIds.add(parentChangeId);
+      missingParentChangeIds.push(parentChangeId);
+      if (missingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+    }
+    if (missingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+  }
+  if (missingParentChangeIds.length === 0) return null;
+  return `ancestors((${missingParentChangeIds.join(" | ")}), ${GRAPH_LAZY_LOAD_BATCH_SIZE + 1})`;
 }
 
 function enforceAncestorRows(params: {
@@ -1348,13 +1396,17 @@ export default function JjCommitGraphPanel({
   const [showMiniMap, setShowMiniMap] = useState(false);
   const [showRevsetEditor, setShowRevsetEditor] = useState(false);
   const [animateGraphLayout, setAnimateGraphLayout] = useState(false);
+  const [graphHistoryPages, setGraphHistoryPages] = useState<GitCommitGraphResultContract[]>([]);
+  const [isLoadingGraphHistory, setIsLoadingGraphHistory] = useState(false);
   const [graphReviewSplit, setGraphReviewSplit] = useState(readGraphReviewSplit);
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<GraphNodeData>>([]);
   const graphReviewContainerRef = useRef<HTMLDivElement | null>(null);
   const graphReviewDragAbortRef = useRef<AbortController | null>(null);
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
+  const graphViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
   const selectedRef = useRef<GitCommitGraphNodeContract | null>(null);
   const selectedChangeIdRef = useRef<string | null>(null);
+  const requestedHistoryRevsetsRef = useRef<Set<string>>(new Set());
   const hasRenderedGraphLayoutRef = useRef(false);
   const graphLayoutSignatureRef = useRef("");
   const graphLayoutTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1407,11 +1459,23 @@ export default function JjCommitGraphPanel({
       );
     },
   });
-  const graph = graphQuery.data;
+  const baseGraph = graphQuery.data;
+  const graph = useMemo(
+    () => mergeCommitGraphPages(baseGraph, graphHistoryPages),
+    [baseGraph, graphHistoryPages],
+  );
   const activeRevsetPreset = JJ_GRAPH_REVSET_PRESETS.find(
     (preset) => preset.revset === appliedRevset,
   );
   const hasCustomRevset = appliedRevset !== null && !activeRevsetPreset;
+  const graphResetKey = `${cwd ?? ""}:${baseGraph?.revset ?? ""}:${
+    baseGraph?.currentOperationId ?? ""
+  }:${focusTurnId ?? ""}:${[...focusedChangeIds].join(",")}`;
+  useEffect(() => {
+    setGraphHistoryPages([]);
+    setIsLoadingGraphHistory(false);
+    requestedHistoryRevsetsRef.current.clear();
+  }, [graphResetKey]);
   const showCustomRevsetRow = showRevsetEditor || hasCustomRevset;
   const cwdLabel = formatGraphCwdLabel(cwd);
   const selected =
@@ -1431,6 +1495,75 @@ export default function JjCommitGraphPanel({
       }),
     [focusedChangeIds, graph?.nodes],
   );
+  const nextHistoryRevset = useMemo(
+    () => (graph?.supported && !hasCustomRevset ? resolveNextHistoryRevset(graph.nodes) : null),
+    [graph?.nodes, graph?.supported, hasCustomRevset],
+  );
+  const loadMoreGraphHistory = useCallback(() => {
+    if (
+      !environmentId ||
+      !cwd ||
+      !nextHistoryRevset ||
+      isLoadingGraphHistory ||
+      requestedHistoryRevsetsRef.current.has(nextHistoryRevset)
+    ) {
+      return;
+    }
+    requestedHistoryRevsetsRef.current.add(nextHistoryRevset);
+    setIsLoadingGraphHistory(true);
+    void queryClient
+      .fetchQuery(
+        gitCommitGraphQueryOptions({
+          environmentId,
+          cwd,
+          revset: nextHistoryRevset,
+          limit: GRAPH_LAZY_LOAD_BATCH_SIZE,
+          threadId: threadId ?? null,
+          turnId: focusTurnId ?? null,
+        }),
+      )
+      .then((page) => {
+        setGraphHistoryPages((existing) => [...existing, page]);
+      })
+      .catch((error: unknown) => {
+        requestedHistoryRevsetsRef.current.delete(nextHistoryRevset);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not extend JJ graph",
+            description:
+              error instanceof Error ? error.message : "Older JJ history could not be loaded.",
+          }),
+        );
+      })
+      .finally(() => setIsLoadingGraphHistory(false));
+  }, [
+    cwd,
+    environmentId,
+    focusTurnId,
+    isLoadingGraphHistory,
+    nextHistoryRevset,
+    queryClient,
+    threadId,
+  ]);
+  const maybeLoadMoreGraphHistory = useCallback(
+    (viewport: { x: number; y: number; zoom: number } | null = graphViewportRef.current) => {
+      if (!viewport || !nextHistoryRevset) return;
+      const graphCanvas = graphKeyboardRef.current;
+      if (!graphCanvas || flowGraph.nodes.length === 0) return;
+      const visibleBottom = (graphCanvas.clientHeight - viewport.y) / viewport.zoom;
+      const loadedBottom = Math.max(
+        ...flowGraph.nodes.map((node) => node.position.y + GRAPH_NODE_HEIGHT),
+      );
+      if (loadedBottom - visibleBottom < GRAPH_LAZY_LOAD_THRESHOLD_PX) {
+        loadMoreGraphHistory();
+      }
+    },
+    [flowGraph.nodes, loadMoreGraphHistory, nextHistoryRevset],
+  );
+  useEffect(() => {
+    maybeLoadMoreGraphHistory();
+  }, [flowGraph.nodes.length, maybeLoadMoreGraphHistory]);
   const defaultSelectedChangeId =
     initialChangeId ??
     [...focusedChangeIds][0] ??
@@ -1665,9 +1798,13 @@ export default function JjCommitGraphPanel({
               <span className="shrink-0 font-medium text-xs" title={graph.revset}>
                 {graph.nodes.length} changes
               </span>
-              {graph.hasMore ? (
+              {isLoadingGraphHistory ? (
+                <span className="rounded-md border border-primary/20 bg-primary/10 px-1.5 py-0.5 font-medium text-primary text-xs">
+                  Loading history
+                </span>
+              ) : nextHistoryRevset ? (
                 <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 text-xs dark:text-amber-300">
-                  Truncated
+                  More history
                 </span>
               ) : null}
             </>
@@ -1713,7 +1850,11 @@ export default function JjCommitGraphPanel({
           title="Refresh JJ graph"
           size="icon-xs"
           variant="outline"
-          onClick={() => graphQuery.refetch()}
+          onClick={() => {
+            setGraphHistoryPages([]);
+            requestedHistoryRevsetsRef.current.clear();
+            graphQuery.refetch();
+          }}
         >
           <RefreshCwIcon className={cn(graphQuery.isFetching && "animate-spin")} />
         </Button>
@@ -1798,6 +1939,10 @@ export default function JjCommitGraphPanel({
                 onNodeClick={handleNodeClick}
                 onNodeDoubleClick={handleNodeDoubleClick}
                 onNodeContextMenu={handleNodeContextMenu}
+                onMoveEnd={(_, viewport) => {
+                  graphViewportRef.current = viewport;
+                  maybeLoadMoreGraphHistory(viewport);
+                }}
                 minZoom={0.25}
                 maxZoom={1.5}
                 onlyRenderVisibleElements
