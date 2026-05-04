@@ -233,6 +233,33 @@ function resolveNextHistoryRevset(nodes: readonly GitCommitGraphNodeContract[]):
   return `ancestors((${missingParentChangeIds.join(" | ")}), ${GRAPH_LAZY_LOAD_BATCH_SIZE + 1})`;
 }
 
+function resolveMissingParentHistoryRevset(params: {
+  nodes: readonly GitCommitGraphNodeContract[];
+  changeIds: readonly string[];
+}): string | null {
+  const loadedChangeIds = new Set(params.nodes.map((node) => node.changeId));
+  const nodesByChangeId = new Map(params.nodes.map((node) => [node.changeId, node]));
+  const missingParentChangeIds: string[] = [];
+  const seenMissingParentChangeIds = new Set<string>();
+
+  for (const changeId of params.changeIds) {
+    const node = nodesByChangeId.get(changeId);
+    if (!node) continue;
+    for (const parentChangeId of node.parentChangeIds) {
+      if (loadedChangeIds.has(parentChangeId) || seenMissingParentChangeIds.has(parentChangeId)) {
+        continue;
+      }
+      seenMissingParentChangeIds.add(parentChangeId);
+      missingParentChangeIds.push(parentChangeId);
+      if (missingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+    }
+    if (missingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+  }
+
+  if (missingParentChangeIds.length === 0) return null;
+  return `ancestors((${missingParentChangeIds.join(" | ")}), ${GRAPH_LAZY_LOAD_BATCH_SIZE + 1})`;
+}
+
 function resolveViewportHistoryRevset(params: {
   flowNodes: readonly Node<GraphNodeData>[];
   viewport: GraphViewport;
@@ -1565,6 +1592,16 @@ export default function JjCommitGraphPanel({
     () => (graph?.supported && !hasCustomRevset ? resolveNextHistoryRevset(graph.nodes) : null),
     [graph?.nodes, graph?.supported, hasCustomRevset],
   );
+  const selectedHistoryRevset = useMemo(
+    () =>
+      graph?.supported && !hasCustomRevset && selected
+        ? resolveMissingParentHistoryRevset({
+            nodes: graph.nodes,
+            changeIds: [selected.changeId],
+          })
+        : null,
+    [graph?.nodes, graph?.supported, hasCustomRevset, selected],
+  );
   const loadMoreGraphHistory = useCallback(
     (revset: string | null = nextHistoryRevset) => {
       if (
@@ -1642,11 +1679,17 @@ export default function JjCommitGraphPanel({
   useEffect(() => {
     maybeLoadMoreGraphHistory();
   }, [flowGraph.nodes.length, maybeLoadMoreGraphHistory]);
+  useEffect(() => {
+    if (selectedHistoryRevset) {
+      loadMoreGraphHistory(selectedHistoryRevset);
+    }
+  }, [loadMoreGraphHistory, selectedHistoryRevset]);
   const defaultSelectedChangeId =
     initialChangeId ??
     [...focusedChangeIds][0] ??
     graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ??
     graph?.nodes[0]?.changeId;
+  const visualSelectedChangeId = selected?.changeId ?? defaultSelectedChangeId;
   useEffect(() => {
     const layoutSignature = flowGraph.nodes
       .map((node) => `${node.id}:${node.position.x},${node.position.y}`)
@@ -1670,14 +1713,14 @@ export default function JjCommitGraphPanel({
     setFlowNodes(
       flowGraph.nodes.map((node) => ({
         ...node,
-        selected: node.id === defaultSelectedChangeId,
+        selected: node.id === visualSelectedChangeId,
       })),
     );
     if (flowGraph.nodes.length > 0) {
       hasRenderedGraphLayoutRef.current = true;
     }
     graphLayoutSignatureRef.current = layoutSignature;
-  }, [defaultSelectedChangeId, flowGraph.nodes, setFlowNodes]);
+  }, [flowGraph.nodes, setFlowNodes, visualSelectedChangeId]);
   useEffect(
     () => () => {
       if (graphLayoutTransitionTimeoutRef.current) {
