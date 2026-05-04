@@ -178,6 +178,7 @@ const GRAPH_CONTEXT_MENU_ITEMS = [
 type GraphEdgeKind = "spine" | "branch" | "merge";
 type GraphEdgeData = {
   readonly kind: GraphEdgeKind;
+  readonly selectedRelated: boolean;
 };
 type GraphViewport = {
   readonly x: number;
@@ -531,6 +532,7 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
 function buildFlowGraph(input: {
   nodes: readonly GitCommitGraphNodeContract[];
   focusedChangeIds?: ReadonlySet<string> | undefined;
+  selectedChangeId?: string | null | undefined;
 }): {
   nodes: Node<GraphNodeData>[];
   edges: Edge[];
@@ -558,6 +560,8 @@ function buildFlowGraph(input: {
       .filter((parentChangeId) => nodeIds.has(parentChangeId))
       .map((parentChangeId) => {
         const edgeKind = edgeKinds.get(graphEdgeKey(node.changeId, parentChangeId)) ?? "branch";
+        const selectedRelated =
+          input.selectedChangeId === node.changeId || input.selectedChangeId === parentChangeId;
         return {
           id: graphEdgeKey(node.changeId, parentChangeId),
           source: node.changeId,
@@ -569,11 +573,11 @@ function buildFlowGraph(input: {
           ),
           data: {
             kind: edgeKind,
+            selectedRelated,
           } satisfies GraphEdgeData,
           style: {
-            strokeWidth: edgeKind === "spine" ? 2.25 : 1.25,
-            opacity: edgeKind === "spine" ? 0.95 : edgeKind === "merge" ? 0.5 : 0.7,
-            strokeDasharray: edgeKind === "merge" ? "6 6" : undefined,
+            strokeWidth: edgeKind === "spine" || selectedRelated ? 2.25 : 1.25,
+            opacity: edgeKind === "spine" || selectedRelated ? 0.95 : 0.7,
           },
         };
       }),
@@ -584,6 +588,7 @@ function buildFlowGraph(input: {
 function JjCommitGraphEdge(props: EdgeProps) {
   const data = props.data as GraphEdgeData | undefined;
   const kind = data?.kind ?? "branch";
+  const selectedRelated = data?.selectedRelated ?? false;
   const verticalDistance = Math.max(0, props.targetY - props.sourceY);
   const sourceX =
     kind === "merge"
@@ -610,10 +615,9 @@ function JjCommitGraphEdge(props: EdgeProps) {
       className={cn("jj-commit-graph-edge", kind === "merge" && "jj-commit-graph-edge-merge")}
       path={path}
       style={{
-        stroke: kind === "spine" ? "var(--primary)" : "var(--muted-foreground)",
-        strokeWidth: kind === "spine" ? 2.5 : 1.35,
-        opacity: kind === "spine" ? 0.95 : kind === "merge" ? 0.62 : 0.72,
-        strokeDasharray: kind === "merge" ? "5 5" : undefined,
+        stroke: kind === "spine" || selectedRelated ? "var(--primary)" : "var(--muted-foreground)",
+        strokeWidth: kind === "spine" || selectedRelated ? 2.5 : 1.35,
+        opacity: kind === "spine" || selectedRelated ? 0.95 : 0.72,
       }}
     />
   );
@@ -1596,8 +1600,9 @@ export default function JjCommitGraphPanel({
       buildFlowGraph({
         nodes: graph?.nodes ?? [],
         focusedChangeIds,
+        selectedChangeId: selected?.changeId ?? null,
       }),
-    [focusedChangeIds, graph?.nodes],
+    [focusedChangeIds, graph?.nodes, selected?.changeId],
   );
   const nextHistoryRevset = useMemo(
     () => (graph?.supported && !hasCustomRevset ? resolveNextHistoryRevset(graph.nodes) : null),
