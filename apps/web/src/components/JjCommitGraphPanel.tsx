@@ -5,6 +5,7 @@ import type {
   GitCommitGraphChangeDetailsResult,
   GitCommitGraphNode as GitCommitGraphNodeContract,
 } from "@t3tools/contracts";
+import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { FileDiff, type FileDiffMetadata } from "@pierre/diffs/react";
 import { prepareFileTreeInput, type GitStatusEntry } from "@pierre/trees";
 import { FileTree, useFileTree } from "@pierre/trees/react";
@@ -17,7 +18,6 @@ import {
   type EdgeProps,
   type Node,
   type NodeProps,
-  type ReactFlowInstance,
   useNodesState,
   Position,
   Handle,
@@ -28,7 +28,9 @@ import {
   GitCommitHorizontalIcon,
   GitForkIcon,
   Loader2Icon,
+  MapIcon,
   RefreshCwIcon,
+  XIcon,
 } from "lucide-react";
 import {
   memo,
@@ -54,6 +56,7 @@ import {
 import { resolveDiffThemeName } from "~/lib/diffRendering";
 import { getRenderablePatch, resolveFileDiffPath } from "~/lib/renderablePatch";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { useSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { readLocalApi } from "~/localApi";
 import { cn } from "~/lib/utils";
@@ -103,8 +106,8 @@ interface JjCommitGraphPanelProps {
 
 const JJ_GRAPH_CURRENT_LINE_REVSET = "first_ancestors(@, 80) | @";
 const JJ_GRAPH_REVSET_PRESETS = [
-  { label: "Recent work", revset: null },
-  { label: "Current line", revset: JJ_GRAPH_CURRENT_LINE_REVSET },
+  { label: "Recent", revset: null },
+  { label: "Line", revset: JJ_GRAPH_CURRENT_LINE_REVSET },
   { label: "Ancestors", revset: "ancestors(@, 80)" },
 ] as const;
 const GRAPH_COMPONENT_GAP = 180;
@@ -113,7 +116,6 @@ const GRAPH_ROW_GAP = 128;
 const GRAPH_NODE_X = 16;
 const GRAPH_LANE_GAP = 168;
 const GRAPH_RECENT_NODE_COUNT = 10;
-const GRAPH_CURRENT_LINE_NODE_COUNT = 6;
 const GRAPH_LAYOUT_TRANSITION_MS = 220;
 const GRAPH_CONTEXT_MENU_ITEMS = [
   { id: "edit", label: "Edit change" },
@@ -900,6 +902,36 @@ const REVIEW_SPLIT_STORAGE_KEY = "t3code:jj-graph:review-split";
 const DEFAULT_GRAPH_REVIEW_SPLIT = 38;
 const MIN_GRAPH_REVIEW_SPLIT = 22;
 const MAX_GRAPH_REVIEW_SPLIT = 74;
+const graphTimestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function getGraphTimestampFormatter(timestampFormat: TimestampFormat): Intl.DateTimeFormat {
+  const cachedFormatter = graphTimestampFormatterCache.get(timestampFormat);
+  if (cachedFormatter) return cachedFormatter;
+
+  const formatter = new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    ...(timestampFormat === "locale" ? {} : { hour12: timestampFormat === "12-hour" }),
+  });
+  graphTimestampFormatterCache.set(timestampFormat, formatter);
+  return formatter;
+}
+
+function formatGraphCommitTimestamp(value: string, timestampFormat: TimestampFormat): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return getGraphTimestampFormatter(timestampFormat).format(parsed);
+}
+
+function formatGraphCwdLabel(cwd: string | null): string {
+  if (!cwd) return "No repository selected";
+  const parts = cwd.split(/[\\/]+/).filter(Boolean);
+  if (parts.length <= 2) return cwd;
+  return `${parts.at(-2)}/${parts.at(-1)}`;
+}
 
 const JJ_GRAPH_TREE_UNSAFE_CSS = `
   :host {
@@ -1076,6 +1108,7 @@ function JjCommitGraphInspector(props: {
 }) {
   const selected = props.selected;
   const { resolvedTheme } = useTheme();
+  const timestampFormat = useSettings((settings) => settings.timestampFormat);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const detailsQuery = useQuery(
     gitCommitGraphDetailsQueryOptions({
@@ -1124,6 +1157,9 @@ function JjCommitGraphInspector(props: {
       : hasFiles
         ? `${changedFiles.length} ${changedFiles.length === 1 ? "file" : "files"} changed`
         : "No changed files";
+  const commitTimestampLabel = selected
+    ? formatGraphCommitTimestamp(selected.committerTimestamp, timestampFormat)
+    : "";
   if (!selected) {
     return (
       <aside
@@ -1155,7 +1191,9 @@ function JjCommitGraphInspector(props: {
               {selected.authorName || "Unknown author"}
             </span>
             <span className="hidden xl:inline">·</span>
-            <span className="hidden xl:inline">{selected.committerTimestamp}</span>
+            <span className="hidden xl:inline" title={selected.committerTimestamp}>
+              {commitTimestampLabel}
+            </span>
           </div>
         </div>
       </div>
@@ -1256,13 +1294,10 @@ export default function JjCommitGraphPanel({
   const [selectedChangeId, setSelectedChangeId] = useState<string | null>(null);
   const [dialogKind, setDialogKind] = useState<ActionDialogKind | null>(null);
   const [showMiniMap, setShowMiniMap] = useState(false);
+  const [showRevsetEditor, setShowRevsetEditor] = useState(false);
   const [animateGraphLayout, setAnimateGraphLayout] = useState(false);
   const [graphReviewSplit, setGraphReviewSplit] = useState(readGraphReviewSplit);
   const [flowNodes, setFlowNodes, onFlowNodesChange] = useNodesState<Node<GraphNodeData>>([]);
-  const [flowInstance, setFlowInstance] = useState<ReactFlowInstance<
-    Node<GraphNodeData>,
-    Edge
-  > | null>(null);
   const graphReviewContainerRef = useRef<HTMLDivElement | null>(null);
   const graphReviewDragAbortRef = useRef<AbortController | null>(null);
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
@@ -1303,6 +1338,12 @@ export default function JjCommitGraphPanel({
     },
   });
   const graph = graphQuery.data;
+  const activeRevsetPreset = JJ_GRAPH_REVSET_PRESETS.find(
+    (preset) => preset.revset === appliedRevset,
+  );
+  const hasCustomRevset = appliedRevset !== null && !activeRevsetPreset;
+  const showCustomRevsetRow = showRevsetEditor || hasCustomRevset;
+  const cwdLabel = formatGraphCwdLabel(cwd);
   const selected =
     graph?.nodes.find((node) => node.changeId === selectedChangeId) ??
     graph?.nodes.find((node) => node.currentWorkingCopy) ??
@@ -1384,26 +1425,11 @@ export default function JjCommitGraphPanel({
     },
     [selectGraphNode],
   );
-  const fitCurrentLine = useCallback(() => {
-    if (!flowInstance || flowGraph.currentLineNodeIds.length === 0) return;
-    void flowInstance.fitView({
-      nodes: flowGraph.currentLineNodeIds
-        .slice(0, GRAPH_CURRENT_LINE_NODE_COUNT)
-        .map((id) => ({ id })),
-      padding: 0.25,
-      maxZoom: 1.2,
-      duration: 180,
-    });
-  }, [flowGraph.currentLineNodeIds, flowInstance]);
-  const fitRecentChanges = useCallback(() => {
-    if (!flowInstance || flowGraph.recentNodeIds.length === 0) return;
-    void flowInstance.fitView({
-      nodes: flowGraph.recentNodeIds.map((id) => ({ id })),
-      padding: 0.25,
-      maxZoom: 0.95,
-      duration: 180,
-    });
-  }, [flowGraph.recentNodeIds, flowInstance]);
+  const applyRevsetInput = useCallback(() => {
+    const nextRevset = revsetInput.trim() || null;
+    setAppliedRevset(nextRevset);
+    setRevsetInput(nextRevset ?? "");
+  }, [revsetInput]);
   const runAction = useCallback(
     (action: GitCommitGraphAction) => {
       if (!graph?.currentOperationId) return;
@@ -1546,92 +1572,106 @@ export default function JjCommitGraphPanel({
     <div
       className={cn("flex h-full min-h-0 flex-col bg-background", mode === "sheet" ? "w-full" : "")}
     >
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-border px-3 py-1.5">
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <GitForkIcon className="size-4 shrink-0 text-muted-foreground" />
           <h2 className="shrink-0 font-semibold text-sm">JJ graph</h2>
-          <span className="min-w-0 truncate text-muted-foreground text-xs" title={cwd ?? ""}>
-            {cwd ?? "No repository selected"}
+          <span className="min-w-0 truncate text-muted-foreground text-xs" title={cwd ?? cwdLabel}>
+            {cwdLabel}
           </span>
-        </div>
-        {graph ? (
-          <div className="flex shrink-0 items-center gap-2 text-xs">
-            <span className="font-medium text-foreground" title={graph.revset}>
-              {graph.nodes.length} changes
-            </span>
-            {graph.hasMore ? (
-              <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 dark:text-amber-300">
-                Truncated
+          {graph ? (
+            <>
+              <span className="hidden text-muted-foreground/70 text-xs sm:inline">·</span>
+              <span className="shrink-0 font-medium text-xs" title={graph.revset}>
+                {graph.nodes.length} changes
               </span>
-            ) : null}
-          </div>
-        ) : null}
+              {graph.hasMore ? (
+                <span className="rounded-md border border-amber-500/30 bg-amber-500/10 px-1.5 py-0.5 font-medium text-amber-700 text-xs dark:text-amber-300">
+                  Truncated
+                </span>
+              ) : null}
+            </>
+          ) : null}
+        </div>
+        <div className="flex shrink-0 items-center rounded-md bg-muted/50 p-0.5">
+          {JJ_GRAPH_REVSET_PRESETS.map(({ label, revset }) => (
+            <Button
+              key={label}
+              size="xs"
+              variant={appliedRevset === revset ? "secondary" : "ghost"}
+              className="h-6"
+              onClick={() => {
+                setRevsetInput(revset ?? "");
+                setAppliedRevset(revset);
+                setShowRevsetEditor(false);
+              }}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        <Button
+          size="xs"
+          variant={showCustomRevsetRow ? "secondary" : "ghost"}
+          onClick={() => setShowRevsetEditor((value) => !value)}
+        >
+          {hasCustomRevset ? "Custom" : "Revset"}
+        </Button>
         <div className="flex shrink-0 items-center gap-1">
           <Button
-            size="xs"
+            aria-label={showMiniMap ? "Hide minimap" : "Show minimap"}
+            title={showMiniMap ? "Hide minimap" : "Show minimap"}
+            size="icon-xs"
             variant={showMiniMap ? "secondary" : "ghost"}
             onClick={() => setShowMiniMap((value) => !value)}
           >
-            Map
-          </Button>
-          <Button
-            size="xs"
-            variant="secondary"
-            disabled={flowGraph.recentNodeIds.length === 0}
-            onClick={fitRecentChanges}
-          >
-            Recent
-          </Button>
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={flowGraph.currentLineNodeIds.length === 0}
-            onClick={fitCurrentLine}
-          >
-            Current
+            <MapIcon />
           </Button>
         </div>
-        <Button size="xs" variant="outline" onClick={() => graphQuery.refetch()}>
-          <RefreshCwIcon className={cn(graphQuery.isFetching && "animate-spin")} />
-          Refresh
-        </Button>
-        <Button size="xs" variant="ghost" onClick={onClose}>
-          Close
-        </Button>
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <Input
-          value={revsetInput}
-          onChange={(event) => setRevsetInput(event.target.value)}
-          placeholder="JJ revset"
-          className="h-7 min-w-48 flex-1 text-sm md:w-72 md:flex-none"
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              setAppliedRevset(revsetInput.trim() || null);
-            }
-          }}
-        />
         <Button
-          size="xs"
+          aria-label="Refresh JJ graph"
+          title="Refresh JJ graph"
+          size="icon-xs"
           variant="outline"
-          onClick={() => setAppliedRevset(revsetInput.trim() || null)}
+          onClick={() => graphQuery.refetch()}
         >
-          Apply
+          <RefreshCwIcon className={cn(graphQuery.isFetching && "animate-spin")} />
         </Button>
-        {JJ_GRAPH_REVSET_PRESETS.map(({ label, revset }) => (
-          <Button
-            key={label}
-            size="xs"
-            variant={appliedRevset === revset ? "secondary" : "ghost"}
-            onClick={() => {
-              setRevsetInput(revset ?? "");
-              setAppliedRevset(revset);
-            }}
-          >
-            {label}
-          </Button>
-        ))}
+        <Button
+          aria-label="Close JJ graph"
+          title="Close JJ graph"
+          size="icon-xs"
+          variant="ghost"
+          onClick={onClose}
+        >
+          <XIcon />
+        </Button>
       </div>
+      {showCustomRevsetRow ? (
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-1.5">
+          <Input
+            value={revsetInput}
+            onChange={(event) => setRevsetInput(event.target.value)}
+            placeholder="Custom JJ revset"
+            className="h-7 min-w-48 flex-1 text-sm"
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                applyRevsetInput();
+              } else if (event.key === "Escape" && !hasCustomRevset) {
+                setShowRevsetEditor(false);
+              }
+            }}
+          />
+          <Button size="xs" variant="outline" onClick={applyRevsetInput}>
+            Apply
+          </Button>
+          {!hasCustomRevset ? (
+            <Button size="xs" variant="ghost" onClick={() => setShowRevsetEditor(false)}>
+              Hide
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {graphQuery.isPending ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-muted-foreground text-sm">
           <Loader2Icon className="mr-2 size-4 animate-spin" />
@@ -1674,7 +1714,6 @@ export default function JjCommitGraphPanel({
                 nodeTypes={nodeTypes}
                 edgeTypes={edgeTypes}
                 onNodesChange={onFlowNodesChange}
-                onInit={setFlowInstance}
                 defaultViewport={{ x: 8, y: 24, zoom: 1 }}
                 onNodeClick={handleNodeClick}
                 onNodeDoubleClick={handleNodeDoubleClick}
