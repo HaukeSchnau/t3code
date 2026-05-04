@@ -120,6 +120,7 @@ const JJ_GRAPH_REVSET_PRESETS = [
   { label: "Ancestors", revset: "ancestors(@, 80)" },
 ] as const;
 const GRAPH_COMPONENT_GAP = 180;
+const GRAPH_NODE_WIDTH = 160;
 const GRAPH_NODE_HEIGHT = 96;
 const GRAPH_ROW_GAP = 128;
 const GRAPH_NODE_X = 16;
@@ -178,6 +179,11 @@ type GraphEdgeKind = "spine" | "branch" | "merge";
 type GraphEdgeData = {
   readonly kind: GraphEdgeKind;
 };
+type GraphViewport = {
+  readonly x: number;
+  readonly y: number;
+  readonly zoom: number;
+};
 
 function graphEdgeKey(changeId: string, parentChangeId: string): string {
   return `${changeId}:${parentChangeId}`;
@@ -225,6 +231,66 @@ function resolveNextHistoryRevset(nodes: readonly GitCommitGraphNodeContract[]):
   }
   if (missingParentChangeIds.length === 0) return null;
   return `ancestors((${missingParentChangeIds.join(" | ")}), ${GRAPH_LAZY_LOAD_BATCH_SIZE + 1})`;
+}
+
+function resolveViewportHistoryRevset(params: {
+  flowNodes: readonly Node<GraphNodeData>[];
+  viewport: GraphViewport;
+  viewportElement: HTMLElement;
+}): string | null {
+  const loadedChangeIds = new Set(params.flowNodes.map((node) => node.id));
+  const viewportTop = -params.viewport.y / params.viewport.zoom - GRAPH_LAZY_LOAD_THRESHOLD_PX;
+  const viewportBottom =
+    (params.viewportElement.clientHeight - params.viewport.y) / params.viewport.zoom +
+    GRAPH_LAZY_LOAD_THRESHOLD_PX;
+  const viewportLeft = -params.viewport.x / params.viewport.zoom - GRAPH_LAZY_LOAD_THRESHOLD_PX;
+  const viewportRight =
+    (params.viewportElement.clientWidth - params.viewport.x) / params.viewport.zoom +
+    GRAPH_LAZY_LOAD_THRESHOLD_PX;
+  const visibleMissingParentChangeIds: string[] = [];
+  const seenMissingParentChangeIds = new Set<string>();
+  const sortedFlowNodes = params.flowNodes.toSorted((left, right) => {
+    const leftDistance = Math.max(
+      0,
+      left.position.y - viewportBottom,
+      viewportTop - left.position.y,
+    );
+    const rightDistance = Math.max(
+      0,
+      right.position.y - viewportBottom,
+      viewportTop - right.position.y,
+    );
+    if (leftDistance !== rightDistance) return leftDistance - rightDistance;
+    return left.position.y - right.position.y;
+  });
+
+  for (const flowNode of sortedFlowNodes) {
+    const nodeLeft = flowNode.position.x;
+    const nodeRight = flowNode.position.x + GRAPH_NODE_WIDTH;
+    const nodeTop = flowNode.position.y;
+    const nodeBottom = flowNode.position.y + GRAPH_NODE_HEIGHT;
+    const nearViewport =
+      nodeRight >= viewportLeft &&
+      nodeLeft <= viewportRight &&
+      nodeBottom >= viewportTop &&
+      nodeTop <= viewportBottom;
+    if (!nearViewport) continue;
+
+    for (const parentChangeId of flowNode.data.node.parentChangeIds) {
+      if (loadedChangeIds.has(parentChangeId) || seenMissingParentChangeIds.has(parentChangeId)) {
+        continue;
+      }
+      seenMissingParentChangeIds.add(parentChangeId);
+      visibleMissingParentChangeIds.push(parentChangeId);
+      if (visibleMissingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+    }
+    if (visibleMissingParentChangeIds.length >= GRAPH_LAZY_LOAD_PARENT_COUNT) break;
+  }
+
+  if (visibleMissingParentChangeIds.length === 0) return null;
+  return `ancestors((${visibleMissingParentChangeIds.join(" | ")}), ${
+    GRAPH_LAZY_LOAD_BATCH_SIZE + 1
+  })`;
 }
 
 function enforceAncestorRows(params: {
@@ -1403,7 +1469,7 @@ export default function JjCommitGraphPanel({
   const graphReviewContainerRef = useRef<HTMLDivElement | null>(null);
   const graphReviewDragAbortRef = useRef<AbortController | null>(null);
   const graphKeyboardRef = useRef<HTMLDivElement | null>(null);
-  const graphViewportRef = useRef<{ x: number; y: number; zoom: number } | null>(null);
+  const graphViewportRef = useRef<GraphViewport | null>(null);
   const selectedRef = useRef<GitCommitGraphNodeContract | null>(null);
   const selectedChangeIdRef = useRef<string | null>(null);
   const requestedHistoryRevsetsRef = useRef<Set<string>>(new Set());
@@ -1499,64 +1565,76 @@ export default function JjCommitGraphPanel({
     () => (graph?.supported && !hasCustomRevset ? resolveNextHistoryRevset(graph.nodes) : null),
     [graph?.nodes, graph?.supported, hasCustomRevset],
   );
-  const loadMoreGraphHistory = useCallback(() => {
-    if (
-      !environmentId ||
-      !cwd ||
-      !nextHistoryRevset ||
-      isLoadingGraphHistory ||
-      requestedHistoryRevsetsRef.current.has(nextHistoryRevset)
-    ) {
-      return;
-    }
-    requestedHistoryRevsetsRef.current.add(nextHistoryRevset);
-    setIsLoadingGraphHistory(true);
-    void queryClient
-      .fetchQuery(
-        gitCommitGraphQueryOptions({
-          environmentId,
-          cwd,
-          revset: nextHistoryRevset,
-          limit: GRAPH_LAZY_LOAD_BATCH_SIZE,
-          threadId: threadId ?? null,
-          turnId: focusTurnId ?? null,
-        }),
-      )
-      .then((page) => {
-        setGraphHistoryPages((existing) => [...existing, page]);
-      })
-      .catch((error: unknown) => {
-        requestedHistoryRevsetsRef.current.delete(nextHistoryRevset);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not extend JJ graph",
-            description:
-              error instanceof Error ? error.message : "Older JJ history could not be loaded.",
+  const loadMoreGraphHistory = useCallback(
+    (revset: string | null = nextHistoryRevset) => {
+      if (
+        !environmentId ||
+        !cwd ||
+        !revset ||
+        isLoadingGraphHistory ||
+        requestedHistoryRevsetsRef.current.has(revset)
+      ) {
+        return;
+      }
+      requestedHistoryRevsetsRef.current.add(revset);
+      setIsLoadingGraphHistory(true);
+      void queryClient
+        .fetchQuery(
+          gitCommitGraphQueryOptions({
+            environmentId,
+            cwd,
+            revset,
+            limit: GRAPH_LAZY_LOAD_BATCH_SIZE,
+            threadId: threadId ?? null,
+            turnId: focusTurnId ?? null,
           }),
-        );
-      })
-      .finally(() => setIsLoadingGraphHistory(false));
-  }, [
-    cwd,
-    environmentId,
-    focusTurnId,
-    isLoadingGraphHistory,
-    nextHistoryRevset,
-    queryClient,
-    threadId,
-  ]);
+        )
+        .then((page) => {
+          setGraphHistoryPages((existing) => [...existing, page]);
+        })
+        .catch((error: unknown) => {
+          requestedHistoryRevsetsRef.current.delete(revset);
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Could not extend JJ graph",
+              description:
+                error instanceof Error ? error.message : "Older JJ history could not be loaded.",
+            }),
+          );
+        })
+        .finally(() => setIsLoadingGraphHistory(false));
+    },
+    [
+      cwd,
+      environmentId,
+      focusTurnId,
+      isLoadingGraphHistory,
+      nextHistoryRevset,
+      queryClient,
+      threadId,
+    ],
+  );
   const maybeLoadMoreGraphHistory = useCallback(
-    (viewport: { x: number; y: number; zoom: number } | null = graphViewportRef.current) => {
+    (viewport: GraphViewport | null = graphViewportRef.current) => {
       if (!viewport || !nextHistoryRevset) return;
       const graphCanvas = graphKeyboardRef.current;
       if (!graphCanvas || flowGraph.nodes.length === 0) return;
+      const visibleRevset = resolveViewportHistoryRevset({
+        flowNodes: flowGraph.nodes,
+        viewport,
+        viewportElement: graphCanvas,
+      });
+      if (visibleRevset) {
+        loadMoreGraphHistory(visibleRevset);
+        return;
+      }
       const visibleBottom = (graphCanvas.clientHeight - viewport.y) / viewport.zoom;
       const loadedBottom = Math.max(
         ...flowGraph.nodes.map((node) => node.position.y + GRAPH_NODE_HEIGHT),
       );
       if (loadedBottom - visibleBottom < GRAPH_LAZY_LOAD_THRESHOLD_PX) {
-        loadMoreGraphHistory();
+        loadMoreGraphHistory(nextHistoryRevset);
       }
     },
     [flowGraph.nodes, loadMoreGraphHistory, nextHistoryRevset],
@@ -1939,6 +2017,10 @@ export default function JjCommitGraphPanel({
                 onNodeClick={handleNodeClick}
                 onNodeDoubleClick={handleNodeDoubleClick}
                 onNodeContextMenu={handleNodeContextMenu}
+                onMove={(_, viewport) => {
+                  graphViewportRef.current = viewport;
+                  maybeLoadMoreGraphHistory(viewport);
+                }}
                 onMoveEnd={(_, viewport) => {
                   graphViewportRef.current = viewport;
                   maybeLoadMoreGraphHistory(viewport);
