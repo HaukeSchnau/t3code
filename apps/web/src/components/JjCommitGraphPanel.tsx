@@ -585,10 +585,21 @@ function JjCommitGraphEdge(props: EdgeProps) {
   const data = props.data as GraphEdgeData | undefined;
   const kind = data?.kind ?? "branch";
   const verticalDistance = Math.max(0, props.targetY - props.sourceY);
-  const midY = props.sourceY + Math.max(22, verticalDistance / 2);
+  const sourceX =
+    kind === "merge"
+      ? props.sourceX + Math.sign(props.targetX - props.sourceX || 1) * 10
+      : props.sourceX;
+  const mergeFanoutOffset = Math.min(
+    Math.max(28, verticalDistance * 0.18),
+    Math.max(28, Math.min(72, verticalDistance - 18)),
+  );
+  const midY =
+    kind === "merge"
+      ? props.sourceY + mergeFanoutOffset
+      : props.sourceY + Math.max(22, verticalDistance / 2);
   const path = [
-    `M ${props.sourceX} ${props.sourceY}`,
-    `L ${props.sourceX} ${midY}`,
+    `M ${sourceX} ${props.sourceY}`,
+    `L ${sourceX} ${midY}`,
     `L ${props.targetX} ${midY}`,
     `L ${props.targetX} ${props.targetY}`,
   ].join(" ");
@@ -601,7 +612,7 @@ function JjCommitGraphEdge(props: EdgeProps) {
       style={{
         stroke: kind === "spine" ? "var(--primary)" : "var(--muted-foreground)",
         strokeWidth: kind === "spine" ? 2.5 : 1.35,
-        opacity: kind === "spine" ? 0.95 : kind === "merge" ? 0.48 : 0.72,
+        opacity: kind === "spine" ? 0.95 : kind === "merge" ? 0.62 : 0.72,
         strokeDasharray: kind === "merge" ? "5 5" : undefined,
       }}
     />
