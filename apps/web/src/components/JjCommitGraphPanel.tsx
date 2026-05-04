@@ -67,7 +67,6 @@ import {
   DialogTitle,
 } from "./ui/dialog";
 import { Input } from "./ui/input";
-import { ScrollArea } from "./ui/scroll-area";
 import { Textarea } from "./ui/textarea";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
@@ -1047,7 +1046,7 @@ function JjChangeFileTree(props: {
     },
   });
 
-  return <FileTree model={model} className="h-full min-h-0" />;
+  return <FileTree model={model} className="h-full min-h-0 w-full" />;
 }
 
 function buildJjGraphFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
@@ -1162,14 +1161,14 @@ function JjCommitGraphInspector(props: {
           </div>
         </div>
       </div>
-      <ScrollArea className="min-h-0 flex-1">
+      <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden", compact ? "p-3" : "p-4")}>
         <div
           className={cn(
-            "flex h-full min-h-0 flex-col",
-            compact ? "space-y-3 p-3" : "space-y-5 p-4",
+            "flex min-h-0 flex-1 flex-col overflow-hidden",
+            compact ? "space-y-3" : "space-y-5",
           )}
         >
-          <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)_auto] gap-2">
+          <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-2 overflow-hidden">
             <h4 className="text-xs font-medium text-muted-foreground uppercase">Review</h4>
             {detailsQuery.isPending ? (
               <div className="text-muted-foreground text-sm">Loading details...</div>
@@ -1183,18 +1182,18 @@ function JjCommitGraphInspector(props: {
               <>
                 <div
                   className={cn(
-                    "grid min-h-0 gap-2",
+                    "grid h-full min-h-0 gap-2 overflow-hidden",
                     showFileTree
                       ? "lg:grid-cols-[minmax(180px,0.42fr)_minmax(0,1fr)]"
                       : "grid-cols-1",
                   )}
                 >
                   {showFileTree ? (
-                    <div className="min-h-0 rounded-md border border-border/70 bg-muted/20">
+                    <div className="flex min-h-0 flex-col overflow-hidden rounded-md border border-border/70 bg-muted/20">
                       <div className="flex items-center justify-between border-b border-border/70 px-2 py-1.5">
                         <span className="font-medium text-xs">{changedFiles.length} files</span>
                       </div>
-                      <div className="h-full min-h-0">
+                      <div className="min-h-0 flex-1 overflow-hidden">
                         <JjChangeFileTree
                           key={treeKey}
                           entries={changedFiles}
@@ -1204,30 +1203,32 @@ function JjCommitGraphInspector(props: {
                       </div>
                     </div>
                   ) : null}
-                  <div className="min-h-0 min-w-0">
+                  <div className="min-h-0 min-w-0 overflow-hidden">
                     {selectedFileDiff ? (
-                      <div
-                        key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
-                        className="diff-render-file h-full min-h-0 overflow-auto rounded-md border border-border/70 bg-background/70"
-                      >
-                        <FileDiff
-                          fileDiff={selectedFileDiff}
-                          options={{
-                            diffStyle: "unified",
-                            lineDiffType: "none",
-                            overflow: "wrap",
-                            theme: resolveDiffThemeName(resolvedTheme),
-                            themeType: resolvedTheme,
-                            unsafeCSS: JJ_GRAPH_DIFF_UNSAFE_CSS,
-                          }}
-                        />
+                      <div className="h-full min-h-0 overflow-auto rounded-md border border-border/70 bg-background/70">
+                        <div
+                          key={`${buildJjGraphFileDiffRenderKey(selectedFileDiff)}:${resolvedTheme}`}
+                          className="diff-render-file min-h-full border-0"
+                        >
+                          <FileDiff
+                            fileDiff={selectedFileDiff}
+                            options={{
+                              diffStyle: "unified",
+                              lineDiffType: "none",
+                              overflow: "wrap",
+                              theme: resolveDiffThemeName(resolvedTheme),
+                              themeType: resolvedTheme,
+                              unsafeCSS: JJ_GRAPH_DIFF_UNSAFE_CSS,
+                            }}
+                          />
+                        </div>
                       </div>
                     ) : renderablePatch?.kind === "raw" ? (
-                      <div className="space-y-1.5">
+                      <div className="flex h-full min-h-0 flex-col space-y-1.5">
                         <p className="text-[11px] text-muted-foreground">
                           {renderablePatch.reason}
                         </p>
-                        <pre className="h-full min-h-0 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
+                        <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap rounded-md border border-border/70 bg-muted/30 p-2 font-mono text-[11px]">
                           {renderablePatch.text}
                         </pre>
                       </div>
@@ -1246,7 +1247,7 @@ function JjCommitGraphInspector(props: {
             )}
           </section>
         </div>
-      </ScrollArea>
+      </div>
     </aside>
   );
 }
