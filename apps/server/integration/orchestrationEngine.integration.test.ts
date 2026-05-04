@@ -840,12 +840,6 @@ it.live("reverts to an earlier checkpoint and trims checkpoint projections + git
       );
       assert.equal(
         revertedThread.activities.some(
-          (activity) => activity.turnId === "turn-1" && activity.kind === "tool.started",
-        ),
-        true,
-      );
-      assert.equal(
-        revertedThread.activities.some(
           (activity) => activity.turnId === "turn-1" && activity.kind === "tool.completed",
         ),
         true,

@@ -356,5 +356,30 @@ it.layer(TestLayer)("JjCore", (it) => {
         expect(afterBookmark.nodes[0]?.localBookmarks).toContain("feature/from-graph");
       }),
     );
+
+    it.effect("reads change diffs and prunes empty undescribed non-working-copy changes", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initJjRepo(cwd);
+        const jjCore = yield* JjCore;
+        yield* writeTextFile(path.join(cwd, "owned.txt"), "owned\n");
+
+        const current = yield* jjCore.readChange(cwd, "@");
+        const diff = yield* jjCore.changeDiff({ cwd, changeId: current.changeId });
+
+        expect(diff.changeId).toBe(current.changeId);
+        expect(diff.files.map((file) => file.path)).toContain("owned.txt");
+        expect(diff.diff).toContain("owned.txt");
+        expect(diff.tooLarge).toBe(false);
+
+        yield* jj(cwd, ["new", "-m", "temporary child"]);
+        yield* jj(cwd, ["new", "--no-edit", "@-"]);
+        const pruned = yield* jjCore.pruneEmptyUndescribedChanges(cwd);
+
+        expect(pruned.length).toBeGreaterThan(0);
+        const workingCopy = yield* jjCore.readChange(cwd, "@");
+        expect(pruned).not.toContain(workingCopy.changeId);
+      }),
+    );
   });
 });

@@ -94,6 +94,8 @@ export interface WsRpcClient {
       typeof WS_METHODS.gitCommitGraphChangeDetails
     >;
     readonly runCommitGraphAction: RpcUnaryMethod<typeof WS_METHODS.gitRunCommitGraphAction>;
+    readonly threadChanges: RpcUnaryMethod<typeof WS_METHODS.gitThreadChanges>;
+    readonly changeDiff: RpcUnaryMethod<typeof WS_METHODS.gitChangeDiff>;
     readonly listBranches: RpcUnaryMethod<typeof WS_METHODS.gitListBranches>;
     readonly createWorktree: RpcUnaryMethod<typeof WS_METHODS.gitCreateWorktree>;
     readonly removeWorktree: RpcUnaryMethod<typeof WS_METHODS.gitRemoveWorktree>;
@@ -202,6 +204,9 @@ export function createWsRpcClient(transport: WsTransport): WsRpcClient {
         transport.request((client) => client[WS_METHODS.gitCommitGraphChangeDetails](input)),
       runCommitGraphAction: (input) =>
         transport.request((client) => client[WS_METHODS.gitRunCommitGraphAction](input)),
+      threadChanges: (input) =>
+        transport.request((client) => client[WS_METHODS.gitThreadChanges](input)),
+      changeDiff: (input) => transport.request((client) => client[WS_METHODS.gitChangeDiff](input)),
       createWorktree: (input) =>
         transport.request((client) => client[WS_METHODS.gitCreateWorktree](input)),
       removeWorktree: (input) =>

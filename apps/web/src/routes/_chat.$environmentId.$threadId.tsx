@@ -24,6 +24,7 @@ import { selectEnvironmentState, selectThreadExistsByRef, useStore } from "../st
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
 import { resolveThreadRouteRef, buildThreadRouteParams } from "../threadRoutes";
 import { RightPanelSheet } from "../components/RightPanelSheet";
+import { useGitStatus } from "~/lib/gitStatusState";
 import { Sidebar, SidebarInset, SidebarProvider, SidebarRail } from "~/components/ui/sidebar";
 
 const DiffPanel = lazy(() => import("../components/DiffPanel"));
@@ -177,7 +178,14 @@ function ChatThreadRouteView() {
   const routeThreadExists = threadExists || draftThreadExists;
   const serverThreadStarted = threadHasStarted(serverThread);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
-  const graphOpen = search.panel === "graph";
+  const graphCwd =
+    serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeProject?.cwd ?? null;
+  const gitStatusQuery = useGitStatus({
+    environmentId: threadRef?.environmentId ?? null,
+    cwd: graphCwd,
+  });
+  const graphOpen =
+    search.panel === "graph" || (search.diff === "1" && gitStatusQuery.data?.vcs === "jj");
   const diffOpen = search.diff === "1" && !graphOpen;
   const rightPanelOpen = diffOpen || graphOpen;
   const shouldUseDiffSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
@@ -219,7 +227,7 @@ function ChatThreadRouteView() {
       to: "/$environmentId/$threadId",
       params: buildThreadRouteParams(threadRef),
       search: (previous) => {
-        const { panel: _panel, ...rest } = previous;
+        const { panel: _panel, changeId: _changeId, focusTurnId: _focusTurnId, ...rest } = previous;
         return rest;
       },
     });
@@ -261,9 +269,6 @@ function ChatThreadRouteView() {
   }
 
   const shouldRenderDiffContent = diffOpen || hasOpenedDiff;
-  const graphCwd =
-    serverThread?.worktreePath ?? draftThread?.worktreePath ?? activeProject?.cwd ?? null;
-
   if (!shouldUseDiffSheet) {
     return (
       <>
@@ -285,6 +290,9 @@ function ChatThreadRouteView() {
             <JjCommitGraphPanel
               environmentId={threadRef.environmentId}
               cwd={graphCwd}
+              threadId={threadRef.threadId}
+              focusTurnId={search.focusTurnId ?? search.diffTurnId}
+              initialChangeId={search.changeId}
               mode="sidebar"
               onClose={closeGraph}
             />
@@ -311,6 +319,9 @@ function ChatThreadRouteView() {
           <JjCommitGraphPanel
             environmentId={threadRef.environmentId}
             cwd={graphCwd}
+            threadId={threadRef.threadId}
+            focusTurnId={search.focusTurnId ?? search.diffTurnId}
+            initialChangeId={search.changeId}
             mode="sheet"
             onClose={closeGraph}
           />
@@ -325,7 +336,16 @@ function ChatThreadRouteView() {
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({
   validateSearch: (search) => parseDiffRouteSearch(search),
   search: {
-    middlewares: [retainSearchParams<DiffRouteSearch>(["diff", "panel"])],
+    middlewares: [
+      retainSearchParams<DiffRouteSearch>([
+        "diff",
+        "panel",
+        "diffTurnId",
+        "diffFilePath",
+        "changeId",
+        "focusTurnId",
+      ]),
+    ],
   },
   component: ChatThreadRouteView,
 });

@@ -3,6 +3,8 @@ import type { Effect } from "effect";
 import type {
   GitCheckoutInput,
   GitCheckoutResult,
+  GitChangeDiffInput,
+  GitChangeDiffResult,
   GitCommitGraphActionInput,
   GitCommitGraphActionResult,
   GitCommitGraphChangeDetailsInput,
@@ -21,6 +23,8 @@ import type {
   GitRemoveWorktreeInput,
   GitStatusInput,
   GitStatusResult,
+  GitThreadChangeSummaryInput,
+  GitThreadChangeSummaryResult,
 } from "@t3tools/contracts";
 
 import type {
@@ -67,6 +71,12 @@ export interface RepositoryVcsShape {
   readonly runCommitGraphAction: (
     input: GitCommitGraphActionInput,
   ) => Effect.Effect<GitCommitGraphActionResult, GitCommandError>;
+  readonly threadChanges: (
+    input: GitThreadChangeSummaryInput,
+  ) => Effect.Effect<GitThreadChangeSummaryResult, GitCommandError>;
+  readonly changeDiff: (
+    input: GitChangeDiffInput,
+  ) => Effect.Effect<GitChangeDiffResult, GitCommandError>;
   readonly createWorktree: (
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;

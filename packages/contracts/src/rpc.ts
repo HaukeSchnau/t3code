@@ -13,6 +13,8 @@ import {
   GitActionProgressEvent,
   GitCheckoutInput,
   GitCheckoutResult,
+  GitChangeDiffInput,
+  GitChangeDiffResult,
   GitCommitGraphActionInput,
   GitCommitGraphActionResult,
   GitCommitGraphChangeDetailsInput,
@@ -39,6 +41,8 @@ import {
   GitStatusInput,
   GitStatusResult,
   GitStatusStreamEvent,
+  GitThreadChangeSummaryInput,
+  GitThreadChangeSummaryResult,
 } from "./git.ts";
 import { KeybindingsConfigError } from "./keybindings.ts";
 import {
@@ -104,6 +108,8 @@ export const WS_METHODS = {
   gitCommitGraph: "git.commitGraph",
   gitCommitGraphChangeDetails: "git.commitGraphChangeDetails",
   gitRunCommitGraphAction: "git.runCommitGraphAction",
+  gitThreadChanges: "git.threadChanges",
+  gitChangeDiff: "git.changeDiff",
   gitListBranches: "git.listBranches",
   gitCreateWorktree: "git.createWorktree",
   gitRemoveWorktree: "git.removeWorktree",
@@ -229,6 +235,18 @@ export const WsGitCommitGraphChangeDetailsRpc = Rpc.make(WS_METHODS.gitCommitGra
 export const WsGitRunCommitGraphActionRpc = Rpc.make(WS_METHODS.gitRunCommitGraphAction, {
   payload: GitCommitGraphActionInput,
   success: GitCommitGraphActionResult,
+  error: GitCommandError,
+});
+
+export const WsGitThreadChangesRpc = Rpc.make(WS_METHODS.gitThreadChanges, {
+  payload: GitThreadChangeSummaryInput,
+  success: GitThreadChangeSummaryResult,
+  error: GitCommandError,
+});
+
+export const WsGitChangeDiffRpc = Rpc.make(WS_METHODS.gitChangeDiff, {
+  payload: GitChangeDiffInput,
+  success: GitChangeDiffResult,
   error: GitCommandError,
 });
 
@@ -399,6 +417,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitCommitGraphRpc,
   WsGitCommitGraphChangeDetailsRpc,
   WsGitRunCommitGraphActionRpc,
+  WsGitThreadChangesRpc,
+  WsGitChangeDiffRpc,
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsGitListBranchesRpc,

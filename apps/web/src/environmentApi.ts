@@ -31,6 +31,8 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
       commitGraph: rpcClient.git.commitGraph,
       commitGraphChangeDetails: rpcClient.git.commitGraphChangeDetails,
       runCommitGraphAction: rpcClient.git.runCommitGraphAction,
+      threadChanges: rpcClient.git.threadChanges,
+      changeDiff: rpcClient.git.changeDiff,
       createWorktree: rpcClient.git.createWorktree,
       removeWorktree: rpcClient.git.removeWorktree,
       createBranch: rpcClient.git.createBranch,

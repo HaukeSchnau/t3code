@@ -1,6 +1,8 @@
 import type {
   GitCheckoutInput,
   GitCheckoutResult,
+  GitChangeDiffInput,
+  GitChangeDiffResult,
   GitCommitGraphActionInput,
   GitCommitGraphActionResult,
   GitCommitGraphChangeDetailsInput,
@@ -23,6 +25,8 @@ import type {
   GitStatusInput,
   GitStatusResult,
   GitCreateBranchResult,
+  GitThreadChangeSummaryInput,
+  GitThreadChangeSummaryResult,
 } from "./git.ts";
 import type { FilesystemBrowseInput, FilesystemBrowseResult } from "./filesystem.ts";
 import type {
@@ -272,6 +276,8 @@ export interface EnvironmentApi {
       input: GitCommitGraphChangeDetailsInput,
     ) => Promise<GitCommitGraphChangeDetailsResult>;
     runCommitGraphAction: (input: GitCommitGraphActionInput) => Promise<GitCommitGraphActionResult>;
+    threadChanges: (input: GitThreadChangeSummaryInput) => Promise<GitThreadChangeSummaryResult>;
+    changeDiff: (input: GitChangeDiffInput) => Promise<GitChangeDiffResult>;
     resolvePullRequest: (input: GitPullRequestRefInput) => Promise<GitResolvePullRequestResult>;
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,

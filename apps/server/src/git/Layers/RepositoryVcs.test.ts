@@ -13,6 +13,10 @@ import { GitCoreLive } from "./GitCore.ts";
 import { JjCoreLive } from "./JjCore.ts";
 import { RepositoryVcsLive } from "./RepositoryVcs.ts";
 import { RepositoryVcs } from "../Services/RepositoryVcs.ts";
+import {
+  VcsExternalDiffRepository,
+  VcsTurnChangeRepository,
+} from "../../persistence/Services/VcsTurnChanges.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-repository-vcs-test-",
@@ -23,6 +27,24 @@ const RepositoryVcsTestLayer = RepositoryVcsLive.pipe(
   ),
   Layer.provide(
     JjCoreLive.pipe(Layer.provide(ServerConfigLayer), Layer.provide(NodeServices.layer)),
+  ),
+  Layer.provide(
+    Layer.succeed(VcsTurnChangeRepository, {
+      upsertScope: () => Effect.void,
+      completeScope: () => Effect.void,
+      getScope: () => Effect.succeed(null),
+      listScopesByThread: () => Effect.succeed([]),
+      upsertLink: () => Effect.void,
+      listLinksByChangeIds: () => Effect.succeed([]),
+      listLinksByThread: () => Effect.succeed([]),
+      markPruned: () => Effect.void,
+    }),
+  ),
+  Layer.provide(
+    Layer.succeed(VcsExternalDiffRepository, {
+      upsert: () => Effect.void,
+      listByThread: () => Effect.succeed([]),
+    }),
   ),
   Layer.provide(NodeServices.layer),
 );

@@ -3260,13 +3260,20 @@ export default function ChatView(props: ChatViewProps) {
         },
         search: (previous) => {
           const rest = stripDiffSearchParams(previous);
+          if (gitStatusQuery.data?.vcs === "jj") {
+            return {
+              ...rest,
+              panel: "graph",
+              focusTurnId: turnId,
+            };
+          }
           return filePath
             ? { ...rest, diff: "1", diffTurnId: turnId, diffFilePath: filePath }
             : { ...rest, diff: "1", diffTurnId: turnId };
         },
       });
     },
-    [environmentId, isServerThread, navigate, onDiffPanelOpen, threadId],
+    [environmentId, gitStatusQuery.data?.vcs, isServerThread, navigate, onDiffPanelOpen, threadId],
   );
   // Both the Map and the revert handler are read from refs at call-time so
   // the callback reference is fully stable and never busts context identity.
@@ -3357,6 +3364,7 @@ export default function ChatView(props: ChatViewProps) {
               completionDividerBeforeEntryId={completionDividerBeforeEntryId}
               completionSummary={completionSummary}
               turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+              hideCheckpointChangedFiles={gitStatusQuery.data?.vcs === "jj"}
               activeThreadEnvironmentId={activeThread.environmentId}
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}

@@ -1,5 +1,12 @@
 import { Schema } from "effect";
-import { NonNegativeInt, PositiveInt, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnId,
+} from "./baseSchemas.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
@@ -196,6 +203,11 @@ export const GitCommitGraphInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   revset: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(2_000))),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_COMMIT_GRAPH_MAX_LIMIT))),
+  threadId: Schema.optional(ThreadId),
+  turnId: Schema.optional(TurnId),
+  changeIds: Schema.optional(
+    Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
+  ),
 });
 export type GitCommitGraphInput = typeof GitCommitGraphInput.Type;
 
@@ -210,6 +222,16 @@ const GitCommitGraphActionBookmark = TrimmedNonEmptyStringSchema;
 const GitCommitGraphActionFilesets = Schema.Array(TrimmedNonEmptyStringSchema).check(
   Schema.isMinLength(1),
 );
+const GitChangeTurnLinkRole = Schema.Literals([
+  "guard",
+  "created",
+  "modified",
+  "fallback",
+  "finalized",
+]);
+export type GitChangeTurnLinkRole = typeof GitChangeTurnLinkRole.Type;
+const GitExternalTurnChangeScope = Schema.Literals(["non_repo", "outside_repo", "unsupported"]);
+export type GitExternalTurnChangeScope = typeof GitExternalTurnChangeScope.Type;
 const GitCommitGraphRebaseMode = Schema.Literals(["source", "branch", "revisions"]);
 const GitCommitGraphDestinationMode = Schema.Literals(["onto", "after", "before"]);
 
@@ -314,6 +336,19 @@ export const GitCommitGraphActionInput = Schema.Struct({
 });
 export type GitCommitGraphActionInput = typeof GitCommitGraphActionInput.Type;
 
+export const GitThreadChangeSummaryInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  threadId: ThreadId,
+  turnId: Schema.optional(TurnId),
+});
+export type GitThreadChangeSummaryInput = typeof GitThreadChangeSummaryInput.Type;
+
+export const GitChangeDiffInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  changeId: TrimmedNonEmptyStringSchema,
+});
+export type GitChangeDiffInput = typeof GitChangeDiffInput.Type;
+
 // RPC Results
 
 const GitStatusPr = Schema.Struct({
@@ -411,6 +446,64 @@ export const GitCheckoutResult = Schema.Struct({
 });
 export type GitCheckoutResult = typeof GitCheckoutResult.Type;
 
+export const GitChangeTurnLink = Schema.Struct({
+  changeId: TrimmedNonEmptyStringSchema,
+  threadId: ThreadId,
+  turnId: TurnId,
+  role: GitChangeTurnLinkRole,
+  firstOperationId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  lastOperationId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  firstCommitId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  latestCommitId: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+  prunedAt: Schema.NullOr(IsoDateTime),
+});
+export type GitChangeTurnLink = typeof GitChangeTurnLink.Type;
+
+const GitChangeFile = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  insertions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type GitChangeFile = typeof GitChangeFile.Type;
+
+export const GitExternalTurnChange = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  scope: GitExternalTurnChangeScope,
+  cwd: TrimmedNonEmptyStringSchema,
+  files: Schema.Array(GitChangeFile),
+  diff: Schema.String,
+});
+export type GitExternalTurnChange = typeof GitExternalTurnChange.Type;
+
+export const GitThreadChangeTurn = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+  links: Schema.Array(GitChangeTurnLink),
+  externalChanges: Schema.Array(GitExternalTurnChange),
+});
+export type GitThreadChangeTurn = typeof GitThreadChangeTurn.Type;
+
+export const GitThreadChangeSummaryResult = Schema.Struct({
+  isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
+  supported: Schema.Boolean,
+  turns: Schema.Array(GitThreadChangeTurn),
+  externalChanges: Schema.Array(GitExternalTurnChange),
+});
+export type GitThreadChangeSummaryResult = typeof GitThreadChangeSummaryResult.Type;
+
+export const GitChangeDiffResult = Schema.Struct({
+  changeId: TrimmedNonEmptyStringSchema,
+  commitId: TrimmedNonEmptyStringSchema,
+  files: Schema.Array(GitChangeFile),
+  diff: Schema.String,
+  tooLarge: Schema.Boolean,
+});
+export type GitChangeDiffResult = typeof GitChangeDiffResult.Type;
+
 export const GitCommitGraphNode = Schema.Struct({
   changeId: TrimmedNonEmptyStringSchema,
   displayChangeId: TrimmedNonEmptyStringSchema,
@@ -428,6 +521,8 @@ export const GitCommitGraphNode = Schema.Struct({
   conflict: Schema.Boolean,
   immutable: Schema.Boolean,
   divergent: Schema.Boolean,
+  wip: Schema.Boolean,
+  t3Links: Schema.Array(GitChangeTurnLink),
 });
 export type GitCommitGraphNode = typeof GitCommitGraphNode.Type;
 

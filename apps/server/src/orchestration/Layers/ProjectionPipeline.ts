@@ -271,6 +271,24 @@ function retainProjectionActivitiesAfterRevert(
       )
       .flatMap((turn) => (turn.turnId === null ? [] : [turn.turnId])),
   );
+  if (retainedTurnIds.size < turnCount) {
+    const fallbackTurns = turns
+      .filter((turn) => turn.turnId !== null && !retainedTurnIds.has(turn.turnId))
+      .toSorted((left, right) => {
+        const leftTime = left.completedAt ?? left.startedAt ?? left.requestedAt;
+        const rightTime = right.completedAt ?? right.startedAt ?? right.requestedAt;
+        return (
+          leftTime.localeCompare(rightTime) ||
+          String(left.turnId).localeCompare(String(right.turnId))
+        );
+      })
+      .slice(0, turnCount - retainedTurnIds.size);
+    for (const turn of fallbackTurns) {
+      if (turn.turnId !== null) {
+        retainedTurnIds.add(turn.turnId);
+      }
+    }
+  }
   return activities.filter(
     (activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId),
   );

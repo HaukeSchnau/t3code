@@ -4,6 +4,7 @@ import {
   type GitActionProgressEvent,
   type GitStackedAction,
   type ThreadId,
+  type TurnId,
 } from "@t3tools/contracts";
 import {
   infiniteQueryOptions,
@@ -32,12 +33,34 @@ export const gitQueryKeys = {
     cwd: string | null,
     revset: string | null,
     limit: number,
-  ) => ["git", "commit-graph", environmentId ?? null, cwd, revset ?? null, limit] as const,
+    threadId?: ThreadId | null,
+    turnId?: TurnId | null,
+    changeIds?: readonly string[] | null,
+  ) =>
+    [
+      "git",
+      "commit-graph",
+      environmentId ?? null,
+      cwd,
+      revset ?? null,
+      limit,
+      threadId ?? null,
+      turnId ?? null,
+      changeIds?.join("\n") ?? null,
+    ] as const,
   commitGraphDetails: (
     environmentId: EnvironmentId | null,
     cwd: string | null,
     changeId: string | null,
   ) => ["git", "commit-graph-details", environmentId ?? null, cwd, changeId] as const,
+  threadChanges: (
+    environmentId: EnvironmentId | null,
+    cwd: string | null,
+    threadId: ThreadId | null,
+    turnId?: TurnId | null,
+  ) => ["git", "thread-changes", environmentId ?? null, cwd, threadId, turnId ?? null] as const,
+  changeDiff: (environmentId: EnvironmentId | null, cwd: string | null, changeId: string | null) =>
+    ["git", "change-diff", environmentId ?? null, cwd, changeId] as const,
 };
 
 export const gitMutationKeys = {
@@ -70,6 +93,12 @@ export function invalidateGitQueries(
       queryClient.invalidateQueries({
         queryKey: ["git", "commit-graph-details", environmentId, cwd] as const,
       }),
+      queryClient.invalidateQueries({
+        queryKey: ["git", "thread-changes", environmentId, cwd] as const,
+      }),
+      queryClient.invalidateQueries({
+        queryKey: ["git", "change-diff", environmentId, cwd] as const,
+      }),
     ]);
   }
 
@@ -81,12 +110,23 @@ export function gitCommitGraphQueryOptions(input: {
   cwd: string | null;
   revset?: string | null;
   limit?: number;
+  threadId?: ThreadId | null;
+  turnId?: TurnId | null;
+  changeIds?: readonly string[] | null;
   enabled?: boolean;
 }) {
   const limit = input.limit ?? GIT_COMMIT_GRAPH_DEFAULT_LIMIT;
   const normalizedRevset = input.revset?.trim() || null;
   return queryOptions({
-    queryKey: gitQueryKeys.commitGraph(input.environmentId, input.cwd, normalizedRevset, limit),
+    queryKey: gitQueryKeys.commitGraph(
+      input.environmentId,
+      input.cwd,
+      normalizedRevset,
+      limit,
+      input.threadId,
+      input.turnId,
+      input.changeIds,
+    ),
     queryFn: async () => {
       if (!input.cwd) throw new Error("JJ graph is unavailable.");
       if (!input.environmentId) throw new Error("JJ graph is unavailable.");
@@ -95,6 +135,11 @@ export function gitCommitGraphQueryOptions(input: {
         cwd: input.cwd,
         ...(normalizedRevset ? { revset: normalizedRevset } : {}),
         limit,
+        ...(input.threadId ? { threadId: input.threadId } : {}),
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+        ...(input.changeIds && input.changeIds.length > 0
+          ? { changeIds: [...input.changeIds] }
+          : {}),
       });
     },
     enabled: input.environmentId !== null && input.cwd !== null && (input.enabled ?? true),
@@ -102,6 +147,69 @@ export function gitCommitGraphQueryOptions(input: {
     refetchOnWindowFocus: true,
     refetchOnReconnect: true,
     refetchInterval: GIT_COMMIT_GRAPH_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function gitThreadChangesQueryOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  threadId: ThreadId | null;
+  turnId?: TurnId | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.threadChanges(
+      input.environmentId,
+      input.cwd,
+      input.threadId,
+      input.turnId,
+    ),
+    queryFn: async () => {
+      if (!input.cwd || !input.threadId || !input.environmentId) {
+        throw new Error("JJ turn changes are unavailable.");
+      }
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.threadChanges({
+        cwd: input.cwd,
+        threadId: input.threadId,
+        ...(input.turnId ? { turnId: input.turnId } : {}),
+      });
+    },
+    enabled:
+      input.environmentId !== null &&
+      input.cwd !== null &&
+      input.threadId !== null &&
+      (input.enabled ?? true),
+    staleTime: GIT_COMMIT_GRAPH_STALE_TIME_MS,
+    refetchOnWindowFocus: true,
+    refetchOnReconnect: true,
+    refetchInterval: GIT_COMMIT_GRAPH_REFETCH_INTERVAL_MS,
+  });
+}
+
+export function gitChangeDiffQueryOptions(input: {
+  environmentId: EnvironmentId | null;
+  cwd: string | null;
+  changeId: string | null;
+  enabled?: boolean;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.changeDiff(input.environmentId, input.cwd, input.changeId),
+    queryFn: async () => {
+      if (!input.cwd || !input.changeId || !input.environmentId) {
+        throw new Error("JJ change diff is unavailable.");
+      }
+      const api = ensureEnvironmentApi(input.environmentId);
+      return api.git.changeDiff({ cwd: input.cwd, changeId: input.changeId });
+    },
+    enabled:
+      input.environmentId !== null &&
+      input.cwd !== null &&
+      input.changeId !== null &&
+      (input.enabled ?? true),
+    staleTime: GIT_COMMIT_GRAPH_STALE_TIME_MS,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: true,
   });
 }
 

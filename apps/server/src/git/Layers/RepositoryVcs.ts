@@ -1,15 +1,59 @@
 import { Effect, Layer } from "effect";
-import { GitCommandError } from "@t3tools/contracts";
+import {
+  GitCommandError,
+  type GitChangeTurnLink,
+  type GitCommitGraphNode,
+} from "@t3tools/contracts";
 
 import { GitCore } from "../Services/GitCore.ts";
 import { JjCore } from "../Services/JjCore.ts";
 import { RepositoryVcs, type RepositoryVcsShape } from "../Services/RepositoryVcs.ts";
+import {
+  VcsExternalDiffRepository,
+  VcsTurnChangeRepository,
+  type VcsExternalTurnDiff,
+  type VcsTurnChangeLink,
+} from "../../persistence/Services/VcsTurnChanges.ts";
+
+const toApiLink = (link: VcsTurnChangeLink): GitChangeTurnLink => ({
+  changeId: link.changeId,
+  threadId: link.threadId,
+  turnId: link.turnId,
+  role: link.role,
+  firstOperationId: link.firstOperationId,
+  lastOperationId: link.lastOperationId,
+  firstCommitId: link.firstCommitId,
+  latestCommitId: link.latestCommitId,
+  createdAt: link.createdAt,
+  updatedAt: link.updatedAt,
+  prunedAt: link.prunedAt,
+});
+
+const toExternalChange = (diff: VcsExternalTurnDiff) => ({
+  threadId: diff.threadId,
+  turnId: diff.turnId,
+  scope: diff.scope,
+  cwd: diff.cwd,
+  files: diff.files,
+  diff: diff.diff,
+});
 
 export const RepositoryVcsLive = Layer.effect(
   RepositoryVcs,
   Effect.gen(function* () {
     const gitCore = yield* GitCore;
     const jjCore = yield* JjCore;
+    const turnChangeRepository = yield* VcsTurnChangeRepository;
+    const externalDiffRepository = yield* VcsExternalDiffRepository;
+
+    const toRepositoryError = (operation: string, cwd: string) => (cause: unknown) =>
+      new GitCommandError({
+        operation,
+        command: "sqlite vcs turn metadata",
+        cwd,
+        detail: cause instanceof Error ? cause.message : "Failed to read VCS turn metadata.",
+        cause,
+      });
 
     const useJj = (cwd: string) =>
       jjCore.isJjRepository(cwd).pipe(Effect.catch(() => Effect.succeed(false)));
@@ -19,6 +63,28 @@ export const RepositoryVcsLive = Layer.effect(
       onJj: Effect.Effect<A, GitCommandError>,
       onGit: Effect.Effect<A, GitCommandError>,
     ) => Effect.flatMap(useJj(cwd), (isJj) => (isJj ? onJj : onGit));
+
+    const loadLinksForChanges = (cwd: string, repoRoot: string, changeIds: readonly string[]) =>
+      turnChangeRepository.listLinksByChangeIds({ repoRoot, changeIds }).pipe(
+        Effect.map((links) => links.map(toApiLink)),
+        Effect.catch(() => Effect.succeed([])),
+      );
+
+    const attachLinksToNodes = (
+      links: readonly GitChangeTurnLink[],
+      nodes: readonly GitCommitGraphNode[],
+    ) => {
+      const linksByChangeId = new Map<string, GitChangeTurnLink[]>();
+      for (const link of links) {
+        const existing = linksByChangeId.get(link.changeId) ?? [];
+        existing.push(link);
+        linksByChangeId.set(link.changeId, existing);
+      }
+      return nodes.map((node) => ({
+        ...node,
+        t3Links: linksByChangeId.get(node.changeId) ?? [],
+      }));
+    };
 
     return {
       status: (input) => route(input.cwd, jjCore.status(input), gitCore.status(input)),
@@ -55,7 +121,21 @@ export const RepositoryVcsLive = Layer.effect(
         route(input.cwd, jjCore.listBranches(input), gitCore.listBranches(input)),
       commitGraph: (input) =>
         Effect.flatMap(useJj(input.cwd), (isJj) => {
-          if (isJj) return jjCore.commitGraph(input);
+          if (isJj) {
+            return Effect.gen(function* () {
+              const graph = yield* jjCore.commitGraph(input);
+              const repoRoot = yield* jjCore.root(input.cwd);
+              const links = yield* loadLinksForChanges(
+                input.cwd,
+                repoRoot,
+                graph.nodes.map((node) => node.changeId),
+              );
+              return {
+                ...graph,
+                nodes: attachLinksToNodes(links, graph.nodes),
+              };
+            });
+          }
           return gitCore.status(input).pipe(
             Effect.map((status) => ({
               isRepo: status.isRepo,
@@ -73,7 +153,18 @@ export const RepositoryVcsLive = Layer.effect(
       commitGraphChangeDetails: (input) =>
         route(
           input.cwd,
-          jjCore.commitGraphChangeDetails(input),
+          Effect.gen(function* () {
+            const details = yield* jjCore.commitGraphChangeDetails(input);
+            const repoRoot = yield* jjCore.root(input.cwd);
+            const links = yield* loadLinksForChanges(input.cwd, repoRoot, [details.node.changeId]);
+            return {
+              ...details,
+              node: {
+                ...details.node,
+                t3Links: links,
+              },
+            };
+          }),
           Effect.fail(
             new GitCommandError({
               operation: "RepositoryVcs.commitGraphChangeDetails",
@@ -105,6 +196,104 @@ export const RepositoryVcsLive = Layer.effect(
       checkoutBranch: (input) =>
         route(input.cwd, jjCore.checkoutBranch(input), gitCore.checkoutBranch(input)),
       initRepo: (input) => jjCore.initRepo(input).pipe(Effect.catch(() => gitCore.initRepo(input))),
+      threadChanges: (input) =>
+        Effect.gen(function* () {
+          const isJj = yield* useJj(input.cwd);
+          const externalChanges = yield* externalDiffRepository
+            .listByThread({ threadId: input.threadId, turnId: input.turnId })
+            .pipe(
+              Effect.map((diffs) => diffs.map(toExternalChange)),
+              Effect.mapError(toRepositoryError("RepositoryVcs.threadChanges.external", input.cwd)),
+            );
+          if (!isJj) {
+            const status = yield* gitCore.status({ cwd: input.cwd }).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  isRepo: false,
+                  hasOriginRemote: false,
+                  isDefaultBranch: false,
+                  branch: null,
+                  hasWorkingTreeChanges: false,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                  hasUpstream: false,
+                  upstreamRef: null,
+                  aheadCount: 0,
+                  behindCount: 0,
+                  pr: null,
+                }),
+              ),
+            );
+            return {
+              isRepo: status.isRepo,
+              ...(status.isRepo ? { vcs: "git" as const } : {}),
+              supported: false,
+              turns: [],
+              externalChanges,
+            };
+          }
+          const repoRoot = yield* jjCore.root(input.cwd);
+          const [scopes, links] = yield* Effect.all([
+            turnChangeRepository.listScopesByThread({ threadId: input.threadId }).pipe(
+              Effect.map((rows) =>
+                rows.filter(
+                  (scope) =>
+                    scope.repoRoot === repoRoot &&
+                    (input.turnId === undefined || scope.turnId === input.turnId),
+                ),
+              ),
+              Effect.mapError(toRepositoryError("RepositoryVcs.threadChanges.scopes", input.cwd)),
+            ),
+            turnChangeRepository
+              .listLinksByThread({ threadId: input.threadId, turnId: input.turnId })
+              .pipe(
+                Effect.map((rows) => rows.filter((link) => link.repoRoot === repoRoot)),
+                Effect.map((rows) => rows.map(toApiLink)),
+                Effect.mapError(toRepositoryError("RepositoryVcs.threadChanges.links", input.cwd)),
+              ),
+          ]);
+          const linksByTurnId = new Map<string, GitChangeTurnLink[]>();
+          for (const link of links) {
+            const existing = linksByTurnId.get(link.turnId) ?? [];
+            existing.push(link);
+            linksByTurnId.set(link.turnId, existing);
+          }
+          const externalByTurnId = new Map<string, typeof externalChanges>();
+          for (const external of externalChanges) {
+            const existing = externalByTurnId.get(external.turnId) ?? [];
+            existing.push(external);
+            externalByTurnId.set(external.turnId, existing);
+          }
+          const turnIds = new Set([
+            ...scopes.map((scope) => scope.turnId),
+            ...links.map((link) => link.turnId),
+            ...externalChanges.map((external) => external.turnId),
+          ]);
+          return {
+            isRepo: true,
+            vcs: "jj" as const,
+            supported: true,
+            turns: [...turnIds].map((turnId) => ({
+              threadId: input.threadId,
+              turnId,
+              links: linksByTurnId.get(turnId) ?? [],
+              externalChanges: externalByTurnId.get(turnId) ?? [],
+            })),
+            externalChanges,
+          };
+        }),
+      changeDiff: (input) =>
+        route(
+          input.cwd,
+          jjCore.changeDiff(input),
+          Effect.fail(
+            new GitCommandError({
+              operation: "RepositoryVcs.changeDiff",
+              command: "git.changeDiff",
+              cwd: input.cwd,
+              detail: "Change diffs are only available for JJ repositories.",
+            }),
+          ),
+        ),
       listLocalBranchNames: (cwd) =>
         route(cwd, jjCore.listLocalBranchNames(cwd), gitCore.listLocalBranchNames(cwd)),
     } satisfies RepositoryVcsShape;

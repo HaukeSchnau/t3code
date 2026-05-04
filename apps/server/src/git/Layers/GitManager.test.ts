@@ -688,6 +688,23 @@ function makeManager(input?: {
               detail: "Unsupported in GitManager tests.",
             }),
           ),
+        threadChanges: () =>
+          Effect.succeed({
+            isRepo: true,
+            vcs: "git" as const,
+            supported: false,
+            turns: [],
+            externalChanges: [],
+          }),
+        changeDiff: (input) =>
+          Effect.fail(
+            new GitCommandError({
+              operation: "GitManager.test.changeDiff",
+              command: "git.changeDiff",
+              cwd: input.cwd,
+              detail: "Unsupported in GitManager tests.",
+            }),
+          ),
         createWorktree: gitCore.createWorktree,
         removeWorktree: gitCore.removeWorktree,
         createBranch: gitCore.createBranch,

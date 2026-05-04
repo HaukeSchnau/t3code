@@ -23,7 +23,7 @@ import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { RuntimeReceiptBus } from "../Services/RuntimeReceiptBus.ts";
 import type { CheckpointStoreError } from "../../checkpointing/Errors.ts";
 import type { OrchestrationDispatchError } from "../Errors.ts";
-import { isGitRepository } from "../../git/Utils.ts";
+import { isGitRepository, isJjRepositoryPath } from "../../git/Utils.ts";
 import { GitStatusBroadcaster } from "../../git/Services/GitStatusBroadcaster.ts";
 import { WorkspaceEntries } from "../../workspace/Services/WorkspaceEntries.ts";
 
@@ -182,6 +182,9 @@ const make = Effect.gen(function* () {
       return undefined;
     }
     if (!isGitWorkspace(cwd)) {
+      return undefined;
+    }
+    if (isJjRepositoryPath(cwd)) {
       return undefined;
     }
     return cwd;

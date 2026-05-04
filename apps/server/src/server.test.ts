@@ -194,16 +194,6 @@ const makeDefaultOrchestrationThreadShell = (
   };
 };
 
-const workspaceAndProjectServicesLayer = Layer.mergeAll(
-  WorkspacePathsLive,
-  WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive)),
-  WorkspaceFileSystemLive.pipe(
-    Layer.provide(WorkspacePathsLive),
-    Layer.provide(WorkspaceEntriesLive.pipe(Layer.provide(WorkspacePathsLive))),
-  ),
-  ProjectFaviconResolverLive,
-);
-
 const browserOtlpTracingLayer = Layer.mergeAll(
   FetchHttpClient.layer,
   OtlpSerialization.layerJson,
@@ -426,6 +416,22 @@ const buildAppUnderTest = (options?: {
                 detail: "Unsupported in server tests.",
               }),
             ),
+          threadChanges: () =>
+            Effect.succeed({
+              isRepo: false,
+              supported: false,
+              turns: [],
+              externalChanges: [],
+            }),
+          changeDiff: (input) =>
+            Effect.fail(
+              new GitCommandError({
+                operation: "server.test.changeDiff",
+                command: "git.changeDiff",
+                cwd: input.cwd,
+                detail: "Unsupported in server tests.",
+              }),
+            ),
           createWorktree: gitCore.createWorktree,
           removeWorktree: gitCore.removeWorktree,
           createBranch: gitCore.createBranch,
@@ -433,7 +439,7 @@ const buildAppUnderTest = (options?: {
           initRepo: gitCore.initRepo,
           listLocalBranchNames: gitCore.listLocalBranchNames,
           ...options?.layers?.repositoryVcs,
-        } satisfies RepositoryVcsShape;
+        } as RepositoryVcsShape;
       }),
     ).pipe(Layer.provide(gitCoreLayer));
     const gitManagerLayer = Layer.mock(GitManager)({

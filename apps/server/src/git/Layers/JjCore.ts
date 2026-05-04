@@ -33,6 +33,7 @@ const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const COMMIT_GRAPH_DEFAULT_LIMIT = 150;
 const COMMIT_GRAPH_MAX_LIMIT = 500;
 const COMMIT_GRAPH_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
+const CHANGE_DIFF_MAX_OUTPUT_BYTES = 20_000_000;
 
 interface ExecuteJjOptions {
   readonly allowNonZeroExit?: boolean;
@@ -237,6 +238,8 @@ function parseCommitGraphNode(line: string): GitCommitGraphNode {
     conflict: conflict === "true",
     immutable: immutable === "true",
     divergent: divergent === "true",
+    wip: description.trim().toLowerCase().startsWith("wip:"),
+    t3Links: [],
   };
 }
 
@@ -490,6 +493,16 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       timeoutMs: 5_000,
       maxOutputBytes: 4_096,
     }).pipe(Effect.map((result) => result.code === 0 && result.stdout.trim().length > 0));
+
+  const root: JjCoreShape["root"] = (cwd) =>
+    runJjStdout("JjCore.root", cwd, ["root"]).pipe(
+      Effect.flatMap((stdout) => {
+        const trimmed = stdout.trim();
+        return trimmed.length > 0
+          ? Effect.succeed(trimmed)
+          : Effect.fail(createJjCommandError("JjCore.root", cwd, ["root"], "JJ root was empty."));
+      }),
+    );
 
   const statusDetailsLocal: JjCoreShape["statusDetailsLocal"] = (cwd) =>
     readStatusDetailsLocal(cwd);
@@ -794,6 +807,9 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       'id.short() ++ "\n"',
     ]).pipe(Effect.map((stdout) => stdout.trim()));
 
+  const readCurrentOperationId: JjCoreShape["readCurrentOperationId"] = (cwd) =>
+    resolveCurrentOperationId(cwd);
+
   const readCommitGraphNode = (cwd: string, changeId: string) =>
     runJjStdout("JjCore.commitGraph.node", cwd, [
       "log",
@@ -819,6 +835,130 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         }),
       ),
     );
+
+  const readChange: JjCoreShape["readChange"] = (cwd, rev) =>
+    readCommitGraphNode(cwd, rev).pipe(
+      Effect.map((node) => ({
+        changeId: node.changeId,
+        commitId: node.commitId,
+        description: node.description,
+        empty: node.empty,
+      })),
+    );
+
+  const resolveChangeId = (cwd: string, rev: string) =>
+    readChange(cwd, rev).pipe(Effect.map((change) => change.changeId));
+
+  const listOperationTouchedChanges: JjCoreShape["listOperationTouchedChanges"] = (
+    cwd,
+    fromOperationId,
+    toOperationId,
+  ) =>
+    Effect.gen(function* () {
+      const stdout = yield* runJjStdout("JjCore.operationTouchedChanges", cwd, [
+        "op",
+        "diff",
+        "--from",
+        fromOperationId,
+        "--to",
+        toOperationId,
+        "--no-graph",
+        "--color",
+        "never",
+      ]);
+      const prefixes = new Set<string>();
+      for (const line of stdout.split(/\r?\n/g)) {
+        const match = /^[+-]\s+([a-z]{6,})\b/i.exec(line.trim());
+        if (match?.[1]) prefixes.add(match[1]);
+      }
+      const resolved = yield* Effect.forEach(
+        prefixes,
+        (prefix) => resolveChangeId(cwd, prefix).pipe(Effect.catch(() => Effect.succeed(null))),
+        { concurrency: 4 },
+      );
+      return [...new Set(resolved.filter((changeId): changeId is string => changeId !== null))];
+    });
+
+  const ensureFallbackTurnChange: JjCoreShape["ensureFallbackTurnChange"] = (cwd, message) =>
+    Effect.gen(function* () {
+      yield* runJj("JjCore.ensureFallbackTurnChange", cwd, [
+        "new",
+        "-A",
+        "@",
+        "-B",
+        "@+",
+        "-m",
+        message,
+      ]);
+      const change = yield* readChange(cwd, "@");
+      return {
+        changeId: change.changeId,
+        commitId: change.commitId,
+      };
+    });
+
+  const describeChangeIfEmpty: JjCoreShape["describeChangeIfEmpty"] = (cwd, changeId, message) =>
+    Effect.gen(function* () {
+      const change = yield* readChange(cwd, changeId);
+      if (change.description.trim().length > 0) return;
+      yield* runJj("JjCore.describeChangeIfEmpty", cwd, [
+        "describe",
+        "-r",
+        changeId,
+        "-m",
+        message,
+      ]);
+    });
+
+  const changeDiff: JjCoreShape["changeDiff"] = (input) =>
+    Effect.gen(function* () {
+      const detailsCwd = yield* root(input.cwd).pipe(Effect.catch(() => Effect.succeed(input.cwd)));
+      const [node, summary, diffResult] = yield* Effect.all(
+        [
+          readCommitGraphNode(detailsCwd, input.changeId),
+          runJjStdout("JjCore.changeDiff.summary", detailsCwd, [
+            "show",
+            "--summary",
+            "-r",
+            input.changeId,
+          ]),
+          executeJj(
+            "JjCore.changeDiff.diff",
+            detailsCwd,
+            ["show", "--git", "--context", "3", "-r", input.changeId],
+            {
+              maxOutputBytes: CHANGE_DIFF_MAX_OUTPUT_BYTES,
+              truncateOutputAtMaxBytes: true,
+            },
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      return {
+        changeId: node.changeId,
+        commitId: node.commitId,
+        files: splitLines(summary).map(parseSummaryLine),
+        diff: diffResult.stdout,
+        tooLarge: diffResult.stdoutTruncated,
+      };
+    });
+
+  const pruneEmptyUndescribedChanges: JjCoreShape["pruneEmptyUndescribedChanges"] = (cwd) =>
+    Effect.gen(function* () {
+      const revset = 'empty() & description(exact:"") & mutable() & ~working_copies()';
+      const stdout = yield* runJjStdout("JjCore.pruneEmptyUndescribedChanges.list", cwd, [
+        "log",
+        "--no-graph",
+        "-r",
+        revset,
+        "-T",
+        'change_id ++ "\n"',
+      ]);
+      const changeIds = [...new Set(splitLines(stdout))];
+      if (changeIds.length === 0) return [];
+      yield* runJj("JjCore.pruneEmptyUndescribedChanges.abandon", cwd, ["abandon", ...changeIds]);
+      return changeIds;
+    });
 
   const commitGraph: JjCoreShape["commitGraph"] = (input) =>
     Effect.gen(function* () {
@@ -1064,6 +1204,18 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       };
     });
 
+  const threadChanges: JjCoreShape["threadChanges"] = (input) =>
+    Effect.gen(function* () {
+      const isRepo = yield* isJjRepository(input.cwd);
+      return {
+        isRepo,
+        ...(isRepo ? { vcs: "jj" as const } : {}),
+        supported: isRepo,
+        turns: [],
+        externalChanges: [],
+      };
+    });
+
   const createWorktree: JjCoreShape["createWorktree"] = (input) =>
     Effect.gen(function* () {
       const targetBranch = input.newBranch ?? input.branch;
@@ -1178,6 +1330,14 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
 
   return {
     isJjRepository,
+    root,
+    readCurrentOperationId,
+    readChange,
+    listOperationTouchedChanges,
+    ensureFallbackTurnChange,
+    describeChangeIfEmpty,
+    changeDiff,
+    pruneEmptyUndescribedChanges,
     status,
     statusDetails,
     statusDetailsLocal,
@@ -1190,6 +1350,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
     commitGraph,
     commitGraphChangeDetails,
     runCommitGraphAction,
+    threadChanges,
     createWorktree,
     removeWorktree,
     createBranch,

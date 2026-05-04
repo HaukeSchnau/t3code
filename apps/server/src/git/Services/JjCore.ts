@@ -3,6 +3,8 @@ import type { Effect } from "effect";
 import type {
   GitCheckoutInput,
   GitCheckoutResult,
+  GitChangeDiffInput,
+  GitChangeDiffResult,
   GitCommitGraphActionInput,
   GitCommitGraphActionResult,
   GitCommitGraphChangeDetailsInput,
@@ -21,6 +23,8 @@ import type {
   GitRemoveWorktreeInput,
   GitStatusInput,
   GitStatusResult,
+  GitThreadChangeSummaryInput,
+  GitThreadChangeSummaryResult,
 } from "@t3tools/contracts";
 
 import type {
@@ -33,6 +37,40 @@ import type {
 
 export interface JjCoreShape {
   readonly isJjRepository: (cwd: string) => Effect.Effect<boolean, GitCommandError>;
+  readonly root: (cwd: string) => Effect.Effect<string, GitCommandError>;
+  readonly readCurrentOperationId: (cwd: string) => Effect.Effect<string, GitCommandError>;
+  readonly readChange: (
+    cwd: string,
+    rev: string,
+  ) => Effect.Effect<
+    {
+      readonly changeId: string;
+      readonly commitId: string;
+      readonly description: string;
+      readonly empty: boolean;
+    },
+    GitCommandError
+  >;
+  readonly listOperationTouchedChanges: (
+    cwd: string,
+    fromOperationId: string,
+    toOperationId: string,
+  ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
+  readonly ensureFallbackTurnChange: (
+    cwd: string,
+    message: string,
+  ) => Effect.Effect<{ readonly changeId: string; readonly commitId: string }, GitCommandError>;
+  readonly describeChangeIfEmpty: (
+    cwd: string,
+    changeId: string,
+    message: string,
+  ) => Effect.Effect<void, GitCommandError>;
+  readonly changeDiff: (
+    input: GitChangeDiffInput,
+  ) => Effect.Effect<GitChangeDiffResult, GitCommandError>;
+  readonly pruneEmptyUndescribedChanges: (
+    cwd: string,
+  ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
   readonly status: (input: GitStatusInput) => Effect.Effect<GitStatusResult, GitCommandError>;
   readonly statusDetails: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
   readonly statusDetailsLocal: (cwd: string) => Effect.Effect<GitStatusDetails, GitCommandError>;
@@ -68,6 +106,9 @@ export interface JjCoreShape {
   readonly runCommitGraphAction: (
     input: GitCommitGraphActionInput,
   ) => Effect.Effect<GitCommitGraphActionResult, GitCommandError>;
+  readonly threadChanges: (
+    input: GitThreadChangeSummaryInput,
+  ) => Effect.Effect<GitThreadChangeSummaryResult, GitCommandError>;
   readonly createWorktree: (
     input: GitCreateWorktreeInput,
   ) => Effect.Effect<GitCreateWorktreeResult, GitCommandError>;

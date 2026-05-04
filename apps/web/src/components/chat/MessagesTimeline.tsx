@@ -97,6 +97,7 @@ interface TimelineRowSharedState {
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   activeThreadEnvironmentId: EnvironmentId;
+  hideCheckpointChangedFiles: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -125,6 +126,7 @@ interface MessagesTimelineProps {
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  hideCheckpointChangedFiles?: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -153,6 +155,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  hideCheckpointChangedFiles = false,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -220,6 +223,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       activeThreadEnvironmentId,
+      hideCheckpointChangedFiles,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -236,6 +240,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       activeThreadEnvironmentId,
+      hideCheckpointChangedFiles,
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
@@ -423,12 +428,22 @@ function TimelineRowContent({ row }: { row: TimelineRow }) {
                   cwd={ctx.markdownCwd}
                   isStreaming={Boolean(row.message.streaming)}
                 />
-                <AssistantChangedFilesSection
-                  turnSummary={row.assistantTurnDiffSummary}
-                  routeThreadKey={ctx.routeThreadKey}
-                  resolvedTheme={ctx.resolvedTheme}
-                  onOpenTurnDiff={ctx.onOpenTurnDiff}
-                />
+                {ctx.hideCheckpointChangedFiles && row.assistantTurnDiffSummary ? (
+                  <button
+                    type="button"
+                    className="mt-2 rounded-full border border-border/80 bg-card/60 px-2.5 py-1 text-muted-foreground text-xs transition-colors hover:border-primary/50 hover:text-foreground"
+                    onClick={() => ctx.onOpenTurnDiff(row.assistantTurnDiffSummary!.turnId)}
+                  >
+                    JJ changes
+                  </button>
+                ) : (
+                  <AssistantChangedFilesSection
+                    turnSummary={row.assistantTurnDiffSummary}
+                    routeThreadKey={ctx.routeThreadKey}
+                    resolvedTheme={ctx.resolvedTheme}
+                    onOpenTurnDiff={ctx.onOpenTurnDiff}
+                  />
+                )}
                 <div className="mt-1.5 flex items-center gap-2">
                   <p className="text-[10px] text-muted-foreground/30">
                     {row.message.streaming ? (

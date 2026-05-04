@@ -2,8 +2,9 @@ import type {
   ContextMenuItem,
   EnvironmentId,
   GitCommitGraphAction,
-  GitCommitGraphChangeDetailsResult,
   GitCommitGraphNode as GitCommitGraphNodeContract,
+  ThreadId,
+  TurnId,
 } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import { FileDiff, type FileDiffMetadata } from "@pierre/diffs/react";
@@ -50,8 +51,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   gitCommitGraphActionMutationOptions,
-  gitCommitGraphDetailsQueryOptions,
+  gitChangeDiffQueryOptions,
   gitCommitGraphQueryOptions,
+  gitThreadChangesQueryOptions,
   GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
 } from "~/lib/gitReactQuery";
 import { resolveDiffThemeName } from "~/lib/diffRendering";
@@ -76,6 +78,8 @@ import { stackedThreadToast, toastManager } from "./ui/toast";
 
 type GraphNodeData = {
   readonly node: GitCommitGraphNodeContract;
+  readonly turnFocused: boolean;
+  readonly turnDimmed: boolean;
 };
 
 type ActionDialogKind =
@@ -101,6 +105,9 @@ type GraphContextMenuCommand = GraphCommand | `${string}:submenu`;
 interface JjCommitGraphPanelProps {
   environmentId: EnvironmentId;
   cwd: string | null;
+  threadId?: ThreadId | undefined;
+  focusTurnId?: TurnId | undefined;
+  initialChangeId?: string | undefined;
   mode: "sidebar" | "sheet";
   onClose: () => void;
 }
@@ -380,7 +387,10 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
   };
 }
 
-function buildFlowGraph(input: { nodes: readonly GitCommitGraphNodeContract[] }): {
+function buildFlowGraph(input: {
+  nodes: readonly GitCommitGraphNodeContract[];
+  focusedChangeIds?: ReadonlySet<string> | undefined;
+}): {
   nodes: Node<GraphNodeData>[];
   edges: Edge[];
   currentLineNodeIds: string[];
@@ -388,11 +398,16 @@ function buildFlowGraph(input: { nodes: readonly GitCommitGraphNodeContract[] })
 } {
   const { positions, edgeKinds, currentLineNodeIds, recentNodeIds } = buildGraphLayout(input.nodes);
   const nodeIds = new Set(input.nodes.map((node) => node.changeId));
+  const hasFocusedTurn = input.focusedChangeIds !== undefined && input.focusedChangeIds.size > 0;
   const flowNodes: Node<GraphNodeData>[] = input.nodes.map((node) => ({
     id: node.changeId,
     type: "jjCommit",
     className: "jj-commit-graph-flow-node",
-    data: { node },
+    data: {
+      node,
+      turnFocused: input.focusedChangeIds?.has(node.changeId) ?? false,
+      turnDimmed: hasFocusedTurn && !(input.focusedChangeIds?.has(node.changeId) ?? false),
+    },
     position: positions.get(node.changeId) ?? { x: 0, y: 0 },
     sourcePosition: Position.Bottom,
     targetPosition: Position.Top,
@@ -481,6 +496,8 @@ const JjCommitNode = memo(function JjCommitNode({
         "w-40 overflow-hidden rounded-lg border bg-card px-3 py-2 text-card-foreground shadow-sm transition-colors",
         selected ? "border-primary shadow-primary/15" : "border-border/80",
         node.currentWorkingCopy && "ring-2 ring-primary/35",
+        data.turnFocused && "ring-2 ring-amber-400/55",
+        data.turnDimmed && "opacity-35",
       )}
     >
       <Handle type="target" position={Position.Top} className="opacity-0" />
@@ -506,6 +523,16 @@ const JjCommitNode = memo(function JjCommitNode({
             <span className="shrink-0">{node.displayChangeId}</span>
             <span className="shrink-0">{node.shortCommitId}</span>
             {node.empty ? <span className="shrink-0 rounded bg-muted px-1">empty</span> : null}
+            {node.wip ? (
+              <span className="shrink-0 rounded bg-amber-100 px-1 font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">
+                WIP
+              </span>
+            ) : null}
+            {node.t3Links.length > 0 ? (
+              <span className="shrink-0 rounded bg-sky-100 px-1 font-medium text-sky-800 dark:bg-sky-900/40 dark:text-sky-200">
+                T3 {node.t3Links.length}
+              </span>
+            ) : null}
             {node.conflict ? (
               <span className="shrink-0 rounded bg-destructive/10 px-1 text-destructive">
                 conflict
@@ -1018,11 +1045,11 @@ function resolveCanonicalChangedPath(path: string, diffPaths: readonly string[])
 }
 
 function buildChangedFileEntries(
-  detail: GitCommitGraphChangeDetailsResult | undefined,
+  changedFilesSummary: string | undefined,
   diffFiles: readonly FileDiffMetadata[],
 ): JjGraphChangedFileEntry[] {
   const diffPaths = diffFiles.map((fileDiff) => resolveFileDiffPath(fileDiff)).filter(Boolean);
-  const summaryEntries = parseJjChangedFilesSummary(detail?.changedFilesSummary).map((entry) => ({
+  const summaryEntries = parseJjChangedFilesSummary(changedFilesSummary).map((entry) => ({
     path: resolveCanonicalChangedPath(entry.path, diffPaths),
     status: entry.status,
   }));
@@ -1111,8 +1138,8 @@ function JjCommitGraphInspector(props: {
   const { resolvedTheme } = useTheme();
   const timestampFormat = useSettings((settings) => settings.timestampFormat);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const detailsQuery = useQuery(
-    gitCommitGraphDetailsQueryOptions({
+  const changeDiffQuery = useQuery(
+    gitChangeDiffQueryOptions({
       environmentId: props.environmentId,
       cwd: props.cwd,
       changeId: selected?.changeId ?? null,
@@ -1121,21 +1148,19 @@ function JjCommitGraphInspector(props: {
   useEffect(() => {
     setSelectedFilePath(null);
   }, [selected?.changeId]);
-  const detail = detailsQuery.data;
+  const detail = changeDiffQuery.data;
   const renderablePatch = useMemo(
     () =>
-      getRenderablePatch(
-        detail?.diffPreview,
-        `jj-graph:${selected?.changeId ?? "none"}:${resolvedTheme}`,
-      ),
-    [detail?.diffPreview, resolvedTheme, selected?.changeId],
+      getRenderablePatch(detail?.diff, `jj-graph:${selected?.changeId ?? "none"}:${resolvedTheme}`),
+    [detail?.diff, resolvedTheme, selected?.changeId],
   );
   const diffFiles = useMemo(
     () => (renderablePatch?.kind === "files" ? renderablePatch.files : EMPTY_DIFF_FILES),
     [renderablePatch],
   );
   const changedFiles = useMemo(
-    () => buildChangedFileEntries(detail, diffFiles),
+    () =>
+      buildChangedFileEntries(detail?.files.map((file) => `M ${file.path}`).join("\n"), diffFiles),
     [detail, diffFiles],
   );
   const effectiveSelectedFilePath =
@@ -1151,9 +1176,9 @@ function JjCommitGraphInspector(props: {
   const treeKey = changedFiles.map((entry) => `${entry.status}:${entry.path}`).join("\0");
   const hasFiles = changedFiles.length > 0;
   const showFileTree = changedFiles.length > 1;
-  const fileSummaryLabel = detailsQuery.isPending
+  const fileSummaryLabel = changeDiffQuery.isPending
     ? "Loading files..."
-    : detailsQuery.isError
+    : changeDiffQuery.isError
       ? "Files unavailable"
       : hasFiles
         ? `${changedFiles.length} ${changedFiles.length === 1 ? "file" : "files"} changed`
@@ -1197,17 +1222,40 @@ function JjCommitGraphInspector(props: {
             </span>
           </div>
         </div>
+        {selected.t3Links.length > 0 ? (
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-1.5 text-[11px]">
+            {selected.t3Links.slice(0, 4).map((link) => (
+              <span
+                key={`${link.threadId}:${link.turnId}:${link.role}`}
+                className="rounded-md border border-border/70 bg-muted/30 px-1.5 py-0.5 text-muted-foreground"
+                title={`thread ${link.threadId}\nturn ${link.turnId}\n${link.firstOperationId ?? "?"} -> ${
+                  link.lastOperationId ?? "?"
+                }`}
+              >
+                {link.role} · {link.turnId}
+              </span>
+            ))}
+            {selected.t3Links.length > 4 ? (
+              <span className="text-muted-foreground">+{selected.t3Links.length - 4}</span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-2">
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <section className="grid min-h-0 flex-1 overflow-hidden" aria-label="Review">
-            {detailsQuery.isPending ? (
+            {changeDiffQuery.isPending ? (
               <div className="text-muted-foreground text-sm">Loading details...</div>
-            ) : detailsQuery.isError ? (
+            ) : changeDiffQuery.isError ? (
               <div className="text-destructive text-sm">
-                {detailsQuery.error instanceof Error
-                  ? detailsQuery.error.message
+                {changeDiffQuery.error instanceof Error
+                  ? changeDiffQuery.error.message
                   : "JJ graph details unavailable."}
+              </div>
+            ) : detail?.tooLarge ? (
+              <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-sm">
+                This JJ diff is too large to render inline. Narrow the selection or open the change
+                in your editor.
               </div>
             ) : changedFiles.length > 0 ? (
               <>
@@ -1286,6 +1334,9 @@ function JjCommitGraphInspector(props: {
 export default function JjCommitGraphPanel({
   environmentId,
   cwd,
+  threadId,
+  focusTurnId,
+  initialChangeId,
   mode,
   onClose,
 }: JjCommitGraphPanelProps) {
@@ -1307,12 +1358,30 @@ export default function JjCommitGraphPanel({
   const hasRenderedGraphLayoutRef = useRef(false);
   const graphLayoutSignatureRef = useRef("");
   const graphLayoutTransitionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const threadChangesQuery = useQuery(
+    gitThreadChangesQueryOptions({
+      environmentId,
+      cwd,
+      threadId: threadId ?? null,
+      turnId: focusTurnId ?? null,
+      enabled: Boolean(threadId && focusTurnId),
+    }),
+  );
+  const focusedChangeIds = useMemo(() => {
+    if (!focusTurnId) return new Set<string>();
+    const links =
+      threadChangesQuery.data?.turns.find((turn) => turn.turnId === focusTurnId)?.links ?? [];
+    return new Set(links.map((link) => link.changeId));
+  }, [focusTurnId, threadChangesQuery.data?.turns]);
   const graphQuery = useQuery(
     gitCommitGraphQueryOptions({
       environmentId,
       cwd,
       revset: appliedRevset,
       limit: GIT_COMMIT_GRAPH_DEFAULT_LIMIT,
+      threadId: threadId ?? null,
+      turnId: focusTurnId ?? null,
+      changeIds: [...focusedChangeIds],
     }),
   );
   const actionMutation = useMutation(
@@ -1354,9 +1423,19 @@ export default function JjCommitGraphPanel({
     selectedRef.current = selected;
     selectedChangeIdRef.current = selected?.changeId ?? null;
   }, [selected]);
-  const flowGraph = useMemo(() => buildFlowGraph({ nodes: graph?.nodes ?? [] }), [graph?.nodes]);
+  const flowGraph = useMemo(
+    () =>
+      buildFlowGraph({
+        nodes: graph?.nodes ?? [],
+        focusedChangeIds,
+      }),
+    [focusedChangeIds, graph?.nodes],
+  );
   const defaultSelectedChangeId =
-    graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ?? graph?.nodes[0]?.changeId;
+    initialChangeId ??
+    [...focusedChangeIds][0] ??
+    graph?.nodes.find((node) => node.currentWorkingCopy)?.changeId ??
+    graph?.nodes[0]?.changeId;
   useEffect(() => {
     const layoutSignature = flowGraph.nodes
       .map((node) => `${node.id}:${node.position.x},${node.position.y}`)
