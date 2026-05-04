@@ -15,6 +15,7 @@ const codexSettings = (homePath: string): CodexSettings => ({
   customModels: [],
   enabled: true,
   homePath,
+  shadowHomePath: homePath,
 });
 
 const writeAuthJson = (homePath: string, accessToken: string, accountId: string) =>

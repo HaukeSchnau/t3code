@@ -1,4 +1,4 @@
-import type { OrchestrationThreadActivity, ProviderKind } from "@t3tools/contracts";
+import type { OrchestrationThreadActivity } from "@t3tools/contracts";
 
 import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 
@@ -64,7 +64,7 @@ export interface UsageLimitsSnapshot {
 }
 
 export interface UsageLimitsActivitySource {
-  provider: ProviderKind | null;
+  provider: string | null;
   activities: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
 }
 
@@ -521,7 +521,7 @@ export function deriveLatestUsageLimitsSnapshot(
 
 export function deriveLatestUsageLimitsSnapshotForSources(
   sources: ReadonlyArray<UsageLimitsActivitySource>,
-  provider: ProviderKind | null | undefined = null,
+  provider: string | null | undefined = null,
 ): UsageLimitsSnapshot | null {
   const candidates: Array<UsageLimitsSnapshotCandidate> = [];
 

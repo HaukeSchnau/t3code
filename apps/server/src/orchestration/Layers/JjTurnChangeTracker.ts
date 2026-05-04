@@ -12,13 +12,13 @@ import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts";
 import { resolveThreadWorkspaceCwd } from "../../checkpointing/Utils.ts";
 import { JjCore } from "../../git/Services/JjCore.ts";
-import { GitStatusBroadcaster } from "../../git/Services/GitStatusBroadcaster.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import {
   VcsExternalDiffRepository,
   VcsTurnChangeRepository,
   type VcsTurnScopeState,
 } from "../../persistence/Services/VcsTurnChanges.ts";
+import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import {
   JjTurnChangeTracker,
@@ -47,7 +47,7 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const providerService = yield* ProviderService;
   const jjCore = yield* JjCore;
-  const gitStatusBroadcaster = yield* GitStatusBroadcaster;
+  const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const turnChangeRepository = yield* VcsTurnChangeRepository;
   const externalDiffRepository = yield* VcsExternalDiffRepository;
   const lastPrunedAtByRoot = new Map<string, number>();
@@ -270,7 +270,7 @@ const make = Effect.gen(function* () {
       completedAt: now,
     });
     yield* pruneEmptyChanges(cwd, repoRoot, true);
-    yield* gitStatusBroadcaster.refreshStatus(cwd);
+    yield* vcsStatusBroadcaster.refreshStatus(cwd);
   });
 
   const persistExternalDiff = Effect.fn("JjTurnChangeTracker.persistExternalDiff")(function* (

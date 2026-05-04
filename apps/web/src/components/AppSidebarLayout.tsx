@@ -55,7 +55,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   }, [navigate]);
 
   return (
-    <SidebarProvider defaultOpen>
+    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen>
       <DesktopOpenWorkspaceEffect />
       <Sidebar
         side="left"

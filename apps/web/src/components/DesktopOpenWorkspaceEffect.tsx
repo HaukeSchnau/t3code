@@ -1,5 +1,10 @@
 import { useEffect, useEffectEvent, useRef } from "react";
-import { type ProjectId, DEFAULT_MODEL_BY_PROVIDER } from "@t3tools/contracts";
+import {
+  DEFAULT_MODEL,
+  defaultInstanceIdForDriver,
+  type ProjectId,
+  ProviderDriverKind,
+} from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 
@@ -68,8 +73,8 @@ export function DesktopOpenWorkspaceEffect() {
           workspaceRoot: input.cwd,
           createWorkspaceRootIfMissing: true,
           defaultModelSelection: {
-            provider: "codex",
-            model: DEFAULT_MODEL_BY_PROVIDER.codex,
+            instanceId: defaultInstanceIdForDriver(ProviderDriverKind.make("codex")),
+            model: DEFAULT_MODEL,
           },
           createdAt: new Date().toISOString(),
         });

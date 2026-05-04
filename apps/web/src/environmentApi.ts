@@ -23,6 +23,22 @@ export function createEnvironmentApi(rpcClient: WsRpcClient): EnvironmentApi {
     filesystem: {
       browse: rpcClient.filesystem.browse,
     },
+    sourceControl: {
+      lookupRepository: rpcClient.sourceControl.lookupRepository,
+      cloneRepository: rpcClient.sourceControl.cloneRepository,
+      publishRepository: rpcClient.sourceControl.publishRepository,
+    },
+    vcs: {
+      pull: rpcClient.vcs.pull,
+      refreshStatus: rpcClient.vcs.refreshStatus,
+      onStatus: (input, callback, options) => rpcClient.vcs.onStatus(input, callback, options),
+      listRefs: rpcClient.vcs.listRefs,
+      createWorktree: rpcClient.vcs.createWorktree,
+      removeWorktree: rpcClient.vcs.removeWorktree,
+      createRef: rpcClient.vcs.createRef,
+      switchRef: rpcClient.vcs.switchRef,
+      init: rpcClient.vcs.init,
+    },
     git: {
       pull: rpcClient.git.pull,
       refreshStatus: rpcClient.git.refreshStatus,

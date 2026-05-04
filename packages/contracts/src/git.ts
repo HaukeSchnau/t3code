@@ -7,6 +7,8 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
+import { SourceControlProviderError, SourceControlProviderInfo } from "./sourceControl.ts";
+import { VcsDriverKind } from "./vcs.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
@@ -48,7 +50,7 @@ const GitPushStepStatus = Schema.Literals([
 ]);
 const GitBranchStepStatus = Schema.Literals(["created", "skipped_not_requested"]);
 const GitPrStepStatus = Schema.Literals(["created", "opened_existing", "skipped_not_requested"]);
-const GitStatusPrState = Schema.Literals(["open", "closed", "merged"]);
+const VcsStatusChangeRequestState = Schema.Literals(["open", "closed", "merged"]);
 const GitPullRequestReference = TrimmedNonEmptyStringSchema;
 const GitPullRequestState = Schema.Literals(["open", "closed", "merged"]);
 const GitPreparePullRequestThreadMode = Schema.Literals(["local", "worktree"]);
@@ -89,7 +91,7 @@ const GitRunStackedActionToast = Schema.Struct({
 });
 export type GitRunStackedActionToast = typeof GitRunStackedActionToast.Type;
 
-export const GitBranch = Schema.Struct({
+export const VcsRef = Schema.Struct({
   name: TrimmedNonEmptyStringSchema,
   isRemote: Schema.optional(Schema.Boolean),
   remoteName: Schema.optional(TrimmedNonEmptyStringSchema),
@@ -97,8 +99,15 @@ export const GitBranch = Schema.Struct({
   isDefault: Schema.Boolean,
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
+export type VcsRef = typeof VcsRef.Type;
+
+export const GitBranch = VcsRef;
 export type GitBranch = typeof GitBranch.Type;
 
+const VcsWorktree = Schema.Struct({
+  path: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
 const GitWorktree = Schema.Struct({
   path: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -115,14 +124,18 @@ export type GitResolvedPullRequest = typeof GitResolvedPullRequest.Type;
 
 // RPC Inputs
 
-export const GitStatusInput = Schema.Struct({
+export const VcsStatusInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
+export type VcsStatusInput = typeof VcsStatusInput.Type;
+export const GitStatusInput = VcsStatusInput;
 export type GitStatusInput = typeof GitStatusInput.Type;
 
-export const GitPullInput = Schema.Struct({
+export const VcsPullInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
+export type VcsPullInput = typeof VcsPullInput.Type;
+export const GitPullInput = VcsPullInput;
 export type GitPullInput = typeof GitPullInput.Type;
 
 export const GitRunStackedActionInput = Schema.Struct({
@@ -137,7 +150,7 @@ export const GitRunStackedActionInput = Schema.Struct({
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 
-export const GitListBranchesInput = Schema.Struct({
+export const VcsListRefsInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   query: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(256))),
   cursor: Schema.optional(NonNegativeInt),
@@ -145,8 +158,17 @@ export const GitListBranchesInput = Schema.Struct({
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
   ),
 });
+export type VcsListRefsInput = typeof VcsListRefsInput.Type;
+export const GitListBranchesInput = VcsListRefsInput;
 export type GitListBranchesInput = typeof GitListBranchesInput.Type;
 
+export const VcsCreateWorktreeInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+  newRefName: Schema.optional(TrimmedNonEmptyStringSchema),
+  path: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type VcsCreateWorktreeInput = typeof VcsCreateWorktreeInput.Type;
 export const GitCreateWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -169,13 +191,26 @@ export const GitPreparePullRequestThreadInput = Schema.Struct({
 });
 export type GitPreparePullRequestThreadInput = typeof GitPreparePullRequestThreadInput.Type;
 
-export const GitRemoveWorktreeInput = Schema.Struct({
+export const VcsRemoveWorktreeInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   path: TrimmedNonEmptyStringSchema,
   force: Schema.optional(Schema.Boolean),
 });
+export type VcsRemoveWorktreeInput = typeof VcsRemoveWorktreeInput.Type;
+export const GitRemoveWorktreeInput = VcsRemoveWorktreeInput;
 export type GitRemoveWorktreeInput = typeof GitRemoveWorktreeInput.Type;
 
+export const VcsCreateRefInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+  switchRef: Schema.optional(Schema.Boolean),
+});
+export type VcsCreateRefInput = typeof VcsCreateRefInput.Type;
+
+export const VcsCreateRefResult = Schema.Struct({
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsCreateRefResult = typeof VcsCreateRefResult.Type;
 export const GitCreateBranchInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
@@ -188,12 +223,22 @@ export const GitCreateBranchResult = Schema.Struct({
 });
 export type GitCreateBranchResult = typeof GitCreateBranchResult.Type;
 
+export const VcsSwitchRefInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  refName: TrimmedNonEmptyStringSchema,
+});
+export type VcsSwitchRefInput = typeof VcsSwitchRefInput.Type;
 export const GitCheckoutInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,
 });
 export type GitCheckoutInput = typeof GitCheckoutInput.Type;
 
+export const VcsInitInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  kind: Schema.optional(VcsDriverKind),
+});
+export type VcsInitInput = typeof VcsInitInput.Type;
 export const GitInitInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
 });
@@ -351,14 +396,44 @@ export type GitChangeDiffInput = typeof GitChangeDiffInput.Type;
 
 // RPC Results
 
+const VcsStatusChangeRequest = Schema.Struct({
+  number: PositiveInt,
+  title: TrimmedNonEmptyStringSchema,
+  url: Schema.String,
+  baseRef: TrimmedNonEmptyStringSchema,
+  headRef: TrimmedNonEmptyStringSchema,
+  state: VcsStatusChangeRequestState,
+});
+
 const GitStatusPr = Schema.Struct({
   number: PositiveInt,
   title: TrimmedNonEmptyStringSchema,
   url: Schema.String,
   baseBranch: TrimmedNonEmptyStringSchema,
   headBranch: TrimmedNonEmptyStringSchema,
-  state: GitStatusPrState,
+  state: GitPullRequestState,
 });
+
+const VcsStatusLocalShape = {
+  isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
+  sourceControlProvider: Schema.optional(SourceControlProviderInfo),
+  hasPrimaryRemote: Schema.Boolean,
+  isDefaultRef: Schema.Boolean,
+  refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+  hasWorkingTreeChanges: Schema.Boolean,
+  workingTree: Schema.Struct({
+    files: Schema.Array(
+      Schema.Struct({
+        path: TrimmedNonEmptyStringSchema,
+        insertions: NonNegativeInt,
+        deletions: NonNegativeInt,
+      }),
+    ),
+    insertions: NonNegativeInt,
+    deletions: NonNegativeInt,
+  }),
+};
 
 const GitStatusLocalShape = {
   isRepo: Schema.Boolean,
@@ -381,12 +456,32 @@ const GitStatusLocalShape = {
   }),
 };
 
+const VcsStatusRemoteShape = {
+  hasUpstream: Schema.Boolean,
+  aheadCount: NonNegativeInt,
+  behindCount: NonNegativeInt,
+  aheadOfDefaultCount: Schema.optional(NonNegativeInt),
+  pr: Schema.NullOr(VcsStatusChangeRequest),
+};
+
 const GitStatusRemoteShape = {
   hasUpstream: Schema.Boolean,
   aheadCount: NonNegativeInt,
   behindCount: NonNegativeInt,
   pr: Schema.NullOr(GitStatusPr),
 };
+
+export const VcsStatusLocalResult = Schema.Struct(VcsStatusLocalShape);
+export type VcsStatusLocalResult = typeof VcsStatusLocalResult.Type;
+
+export const VcsStatusRemoteResult = Schema.Struct(VcsStatusRemoteShape);
+export type VcsStatusRemoteResult = typeof VcsStatusRemoteResult.Type;
+
+export const VcsStatusResult = Schema.Struct({
+  ...VcsStatusLocalShape,
+  ...VcsStatusRemoteShape,
+});
+export type VcsStatusResult = typeof VcsStatusResult.Type;
 
 export const GitStatusLocalResult = Schema.Struct(GitStatusLocalShape);
 export type GitStatusLocalResult = typeof GitStatusLocalResult.Type;
@@ -399,6 +494,20 @@ export const GitStatusResult = Schema.Struct({
   ...GitStatusRemoteShape,
 });
 export type GitStatusResult = typeof GitStatusResult.Type;
+
+export const VcsStatusStreamEvent = Schema.Union([
+  Schema.TaggedStruct("snapshot", {
+    local: VcsStatusLocalResult,
+    remote: Schema.NullOr(VcsStatusRemoteResult),
+  }),
+  Schema.TaggedStruct("localUpdated", {
+    local: VcsStatusLocalResult,
+  }),
+  Schema.TaggedStruct("remoteUpdated", {
+    remote: Schema.NullOr(VcsStatusRemoteResult),
+  }),
+]);
+export type VcsStatusStreamEvent = typeof VcsStatusStreamEvent.Type;
 
 export const GitStatusStreamEvent = Schema.Union([
   Schema.TaggedStruct("snapshot", {
@@ -414,6 +523,16 @@ export const GitStatusStreamEvent = Schema.Union([
 ]);
 export type GitStatusStreamEvent = typeof GitStatusStreamEvent.Type;
 
+export const VcsListRefsResult = Schema.Struct({
+  refs: Schema.Array(VcsRef),
+  isRepo: Schema.Boolean,
+  vcs: Schema.optional(VcsKind),
+  hasPrimaryRemote: Schema.Boolean,
+  nextCursor: NonNegativeInt.pipe(Schema.NullOr),
+  totalCount: NonNegativeInt,
+});
+export type VcsListRefsResult = typeof VcsListRefsResult.Type;
+
 export const GitListBranchesResult = Schema.Struct({
   branches: Schema.Array(GitBranch),
   isRepo: Schema.Boolean,
@@ -423,6 +542,11 @@ export const GitListBranchesResult = Schema.Struct({
   totalCount: NonNegativeInt,
 });
 export type GitListBranchesResult = typeof GitListBranchesResult.Type;
+
+export const VcsCreateWorktreeResult = Schema.Struct({
+  worktree: VcsWorktree,
+});
+export type VcsCreateWorktreeResult = typeof VcsCreateWorktreeResult.Type;
 
 export const GitCreateWorktreeResult = Schema.Struct({
   worktree: GitWorktree,
@@ -440,6 +564,11 @@ export const GitPreparePullRequestThreadResult = Schema.Struct({
   worktreePath: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
 });
 export type GitPreparePullRequestThreadResult = typeof GitPreparePullRequestThreadResult.Type;
+
+export const VcsSwitchRefResult = Schema.Struct({
+  refName: Schema.NullOr(TrimmedNonEmptyStringSchema),
+});
+export type VcsSwitchRefResult = typeof VcsSwitchRefResult.Type;
 
 export const GitCheckoutResult = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyStringSchema),
@@ -593,6 +722,13 @@ export const GitRunStackedActionResult = Schema.Struct({
 });
 export type GitRunStackedActionResult = typeof GitRunStackedActionResult.Type;
 
+export const VcsPullResult = Schema.Struct({
+  status: Schema.Literals(["pulled", "skipped_up_to_date"]),
+  refName: TrimmedNonEmptyStringSchema,
+  upstreamRef: TrimmedNonEmptyStringSchema.pipe(Schema.NullOr),
+});
+export type VcsPullResult = typeof VcsPullResult.Type;
+
 export const GitPullResult = Schema.Struct({
   status: Schema.Literals(["pulled", "skipped_up_to_date"]),
   branch: TrimmedNonEmptyStringSchema,
@@ -650,6 +786,7 @@ export const GitManagerServiceError = Schema.Union([
   GitManagerError,
   GitCommandError,
   GitHubCliError,
+  SourceControlProviderError,
   TextGenerationError,
 ]);
 export type GitManagerServiceError = typeof GitManagerServiceError.Type;
