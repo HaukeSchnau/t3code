@@ -7,6 +7,7 @@ import {
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
+  type GitStatusResult,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
@@ -17,6 +18,8 @@ import {
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   OrchestrationReplayEventsError,
+  type VcsStatusResult,
+  type VcsStatusStreamEvent,
   FilesystemBrowseError,
   ThreadId,
   type TerminalEvent,
@@ -96,6 +99,68 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
     event.type === "thread.reverted" ||
     event.type === "thread.session-set"
   );
+}
+
+function gitStatusToVcsStatus(status: GitStatusResult): VcsStatusResult {
+  const sourceControlProvider = status.hostingProvider
+    ? {
+        kind: status.hostingProvider.kind,
+        name: status.hostingProvider.name,
+        baseUrl: status.hostingProvider.baseUrl,
+      }
+    : undefined;
+
+  return {
+    isRepo: status.isRepo,
+    ...(status.vcs ? { vcs: status.vcs } : {}),
+    ...(sourceControlProvider ? { sourceControlProvider } : {}),
+    hasPrimaryRemote: status.hasOriginRemote,
+    isDefaultRef: status.isDefaultBranch,
+    refName: status.branch,
+    hasWorkingTreeChanges: status.hasWorkingTreeChanges,
+    workingTree: status.workingTree,
+    hasUpstream: status.hasUpstream,
+    aheadCount: status.aheadCount,
+    behindCount: status.behindCount,
+    pr: status.pr
+      ? {
+          number: status.pr.number,
+          title: status.pr.title,
+          url: status.pr.url,
+          baseRef: status.pr.baseBranch,
+          headRef: status.pr.headBranch,
+          state: status.pr.state,
+        }
+      : null,
+  };
+}
+
+function gitStatusToVcsSnapshot(status: GitStatusResult): VcsStatusStreamEvent {
+  const snapshot = gitStatusToVcsStatus(status);
+  return {
+    _tag: "snapshot",
+    local: {
+      isRepo: snapshot.isRepo,
+      ...(snapshot.vcs ? { vcs: snapshot.vcs } : {}),
+      ...(snapshot.sourceControlProvider
+        ? { sourceControlProvider: snapshot.sourceControlProvider }
+        : {}),
+      hasPrimaryRemote: snapshot.hasPrimaryRemote,
+      isDefaultRef: snapshot.isDefaultRef,
+      refName: snapshot.refName,
+      hasWorkingTreeChanges: snapshot.hasWorkingTreeChanges,
+      workingTree: snapshot.workingTree,
+    },
+    remote: {
+      hasUpstream: snapshot.hasUpstream,
+      aheadCount: snapshot.aheadCount,
+      behindCount: snapshot.behindCount,
+      ...(snapshot.aheadOfDefaultCount !== undefined
+        ? { aheadOfDefaultCount: snapshot.aheadOfDefaultCount }
+        : {}),
+      pr: snapshot.pr,
+    },
+  };
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -914,7 +979,15 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.subscribeVcsStatus]: (input) =>
           observeRpcStream(
             WS_METHODS.subscribeVcsStatus,
-            vcsStatusBroadcaster.streamStatus(input),
+            Stream.fromEffect(
+              repositoryVcs.status(input).pipe(Effect.catchCause(() => Effect.succeed(null))),
+            ).pipe(
+              Stream.flatMap((status) =>
+                status?.vcs === "jj"
+                  ? Stream.succeed(gitStatusToVcsSnapshot(status))
+                  : vcsStatusBroadcaster.streamStatus(input),
+              ),
+            ),
             {
               "rpc.aggregate": "vcs",
             },
@@ -922,7 +995,14 @@ const makeWsRpcLayer = (currentSessionId: AuthSessionId) =>
         [WS_METHODS.vcsRefreshStatus]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRefreshStatus,
-            vcsStatusBroadcaster.refreshStatus(input.cwd),
+            repositoryVcs.status(input).pipe(
+              Effect.catchCause(() => Effect.succeed(null)),
+              Effect.flatMap((status) =>
+                status?.vcs === "jj"
+                  ? Effect.succeed(gitStatusToVcsStatus(status))
+                  : vcsStatusBroadcaster.refreshStatus(input.cwd),
+              ),
+            ),
             {
               "rpc.aggregate": "vcs",
             },
