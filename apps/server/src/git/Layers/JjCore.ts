@@ -32,7 +32,7 @@ const RANGE_DIFF_SUMMARY_MAX_OUTPUT_BYTES = 19_000;
 const RANGE_DIFF_PATCH_MAX_OUTPUT_BYTES = 59_000;
 const COMMIT_GRAPH_DEFAULT_LIMIT = 150;
 const COMMIT_GRAPH_MAX_LIMIT = 500;
-const COMMIT_GRAPH_DIFF_PREVIEW_MAX_OUTPUT_BYTES = 80_000;
+const COMMIT_GRAPH_DIFF_MAX_OUTPUT_BYTES = 10_000_000;
 
 interface ExecuteJjOptions {
   readonly allowNonZeroExit?: boolean;
@@ -864,28 +864,25 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
 
   const commitGraphChangeDetails: JjCoreShape["commitGraphChangeDetails"] = (input) =>
     Effect.gen(function* () {
-      const [node, changedFilesSummary, diffStat, diffPreviewResult] = yield* Effect.all(
+      const root = (yield* runJjStdout("JjCore.commitGraph.details.root", input.cwd, [
+        "root",
+      ])).trim();
+      const detailsCwd = root.length > 0 ? root : input.cwd;
+      const [node, changedFilesSummary, diffPreviewResult] = yield* Effect.all(
         [
-          readCommitGraphNode(input.cwd, input.changeId),
-          runJjStdout("JjCore.commitGraph.details.summary", input.cwd, [
+          readCommitGraphNode(detailsCwd, input.changeId),
+          runJjStdout("JjCore.commitGraph.details.summary", detailsCwd, [
             "diff",
             "--summary",
             "-r",
             input.changeId,
           ]),
-          runJjStdout("JjCore.commitGraph.details.stat", input.cwd, [
-            "diff",
-            "--stat",
-            "-r",
-            input.changeId,
-          ]),
           executeJj(
             "JjCore.commitGraph.details.diff",
-            input.cwd,
+            detailsCwd,
             ["show", "--git", "--context", "3", "-r", input.changeId],
             {
-              maxOutputBytes: COMMIT_GRAPH_DIFF_PREVIEW_MAX_OUTPUT_BYTES,
-              truncateOutputAtMaxBytes: true,
+              maxOutputBytes: COMMIT_GRAPH_DIFF_MAX_OUTPUT_BYTES,
             },
           ),
         ],
@@ -894,9 +891,9 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       return {
         node,
         changedFilesSummary,
-        diffStat,
+        diffStat: "",
         diffPreview: diffPreviewResult.stdout,
-        diffPreviewTruncated: diffPreviewResult.stdoutTruncated,
+        diffPreviewTruncated: false,
       };
     });
 

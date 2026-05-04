@@ -296,20 +296,26 @@ it.layer(TestLayer)("JjCore", (it) => {
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();
         yield* initJjRepo(cwd);
-        yield* writeTextFile(path.join(cwd, "details.txt"), "hello\n");
+        const nestedCwd = path.join(cwd, "apps", "server");
+        const fileSystem = yield* FileSystem.FileSystem;
+        yield* fileSystem.makeDirectory(nestedCwd, { recursive: true });
+        yield* fileSystem.makeDirectory(path.join(cwd, "patches"), { recursive: true });
+        yield* writeTextFile(path.join(cwd, "patches", "details.md"), "hello\n");
         yield* (yield* JjCore).commit(cwd, "details", "");
 
-        const graph = yield* (yield* JjCore).commitGraph({ cwd, limit: 10 });
+        const graph = yield* (yield* JjCore).commitGraph({ cwd: nestedCwd, limit: 10 });
         const detailsNode = graph.nodes.find((node) => node.description === "details")!;
         const details = yield* (yield* JjCore).commitGraphChangeDetails({
-          cwd,
+          cwd: nestedCwd,
           changeId: detailsNode.changeId,
         });
 
         expect(details.node.description).toBe("details");
-        expect(details.changedFilesSummary).toContain("details.txt");
-        expect(details.diffStat).toContain("details.txt");
-        expect(details.diffPreview).toContain("details.txt");
+        expect(details.changedFilesSummary).toContain("patches/details.md");
+        expect(details.changedFilesSummary).not.toContain("../patches/details.md");
+        expect(details.diffStat).toBe("");
+        expect(details.diffPreview).toContain("patches/details.md");
+        expect(details.diffPreviewTruncated).toBe(false);
       }),
     );
 

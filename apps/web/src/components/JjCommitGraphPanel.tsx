@@ -1193,11 +1193,6 @@ function JjCommitGraphInspector(props: {
                     <div className="min-h-0 rounded-md border border-border/70 bg-muted/20">
                       <div className="flex items-center justify-between border-b border-border/70 px-2 py-1.5">
                         <span className="font-medium text-xs">{changedFiles.length} files</span>
-                        {detail?.diffPreviewTruncated ? (
-                          <span className="rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-700 dark:text-amber-300">
-                            truncated
-                          </span>
-                        ) : null}
                       </div>
                       <div className="h-full min-h-0">
                         <JjChangeFileTree
@@ -1238,21 +1233,11 @@ function JjCommitGraphInspector(props: {
                       </div>
                     ) : (
                       <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-xs">
-                        No rendered diff for {effectiveSelectedFilePath ?? "this file"}.
+                        No textual diff available for {effectiveSelectedFilePath ?? "this file"}.
                       </div>
                     )}
                   </div>
                 </div>
-                {detail?.diffStat.trim() ? (
-                  <details className="rounded-md border border-border/70 bg-muted/20 px-2 py-1.5 text-xs">
-                    <summary className="cursor-pointer select-none font-medium marker:text-muted-foreground">
-                      Diff stat
-                    </summary>
-                    <pre className="mt-2 max-h-24 overflow-auto whitespace-pre-wrap text-muted-foreground">
-                      {detail.diffStat}
-                    </pre>
-                  </details>
-                ) : null}
               </>
             ) : (
               <div className="rounded-md border border-border/70 bg-muted/30 p-2 text-muted-foreground text-sm">

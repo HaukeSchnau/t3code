@@ -57,8 +57,8 @@ hit-testing and viewport controls.
 - Graph nodes:
   `jj log --no-graph --color never --limit <limit+1> -r <revset> -T <ndjson-template>`
 - Details:
-  - `jj show --summary --no-patch -r <change>`
-  - `jj show --stat --no-patch -r <change>`
+  - `jj root` to resolve repo-root-relative paths for file tree and rendered diffs
+  - `jj diff --summary -r <change>`
   - `jj show --git --context 3 -r <change>`
 - Actions:
   - edit: `jj edit <change>`
