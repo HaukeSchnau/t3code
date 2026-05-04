@@ -304,7 +304,7 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
 
   const positions = new Map<string, { x: number; y: number }>();
   const edgeKinds = new Map<string, GraphEdgeKind>();
-  let componentOffsetY = 0;
+  let componentOffsetX = 0;
   for (const component of components) {
     const componentIds = new Set(component);
     const componentNodes = component
@@ -365,18 +365,18 @@ function buildGraphLayout(nodes: readonly GitCommitGraphNodeContract[]): {
       if (!ancestorRowsChanged && !collisionsChanged) break;
     }
 
-    let maxRow = 0;
+    let maxLane = 0;
     componentNodes.forEach((node) => {
       const lane = laneByChangeId.get(node.changeId) ?? 0;
       const row = rowByChangeId.get(node.changeId) ?? 0;
-      maxRow = Math.max(maxRow, row);
+      maxLane = Math.max(maxLane, lane);
       positions.set(node.changeId, {
-        x: GRAPH_NODE_X + lane * GRAPH_LANE_GAP,
-        y: componentOffsetY + row * GRAPH_ROW_GAP,
+        x: componentOffsetX + GRAPH_NODE_X + lane * GRAPH_LANE_GAP,
+        y: row * GRAPH_ROW_GAP,
       });
     });
 
-    componentOffsetY += (maxRow + 1) * GRAPH_ROW_GAP + GRAPH_COMPONENT_GAP;
+    componentOffsetX += (maxLane + 1) * GRAPH_LANE_GAP + GRAPH_COMPONENT_GAP;
   }
 
   return {

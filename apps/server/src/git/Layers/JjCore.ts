@@ -76,12 +76,20 @@ function isNotJjRepositoryError(error: GitCommandError): boolean {
 
 function parseSummaryLine(line: string): { path: string; insertions: number; deletions: number } {
   const trimmed = line.trim();
-  const status = trimmed.slice(0, 1);
-  const path = trimmed.slice(1).trim();
+  const match = /^([A-Z?]+)\s+(.+)$/.exec(trimmed);
+  if (!match) {
+    return {
+      path: "",
+      insertions: 0,
+      deletions: 0,
+    };
+  }
+  const status = match[1] ?? "";
+  const path = (match[2] ?? "").trim();
   return {
     path,
-    insertions: status === "D" ? 0 : 0,
-    deletions: status === "A" ? 0 : 0,
+    insertions: status.includes("D") ? 0 : 0,
+    deletions: status.includes("A") ? 0 : 0,
   };
 }
 
@@ -190,6 +198,7 @@ conflict ++ "\t" ++
 immutable ++ "\t" ++
 divergent ++ "\n"
 `.trim();
+const COMMIT_GRAPH_CURRENT_LINE_SUPPLEMENT_LIMIT = 32;
 
 function splitCommitGraphList(value: string): string[] {
   return value
@@ -200,6 +209,17 @@ function splitCommitGraphList(value: string): string[] {
 
 function defaultCommitGraphRevset(limit: number): string {
   return `ancestors(visible_heads() | bookmarks() | tracked_remote_bookmarks() | @, ${limit})`;
+}
+
+function dedupeCommitGraphNodes(nodes: ReadonlyArray<GitCommitGraphNode>): GitCommitGraphNode[] {
+  const seenChangeIds = new Set<string>();
+  const deduped: GitCommitGraphNode[] = [];
+  for (const node of nodes) {
+    if (seenChangeIds.has(node.changeId)) continue;
+    seenChangeIds.add(node.changeId);
+    deduped.push(node);
+  }
+  return deduped;
 }
 
 function parseCommitGraphNode(line: string): GitCommitGraphNode {
@@ -917,7 +937,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         [
           readCommitGraphNode(detailsCwd, input.changeId),
           runJjStdout("JjCore.changeDiff.summary", detailsCwd, [
-            "show",
+            "diff",
             "--summary",
             "-r",
             input.changeId,
@@ -925,7 +945,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
           executeJj(
             "JjCore.changeDiff.diff",
             detailsCwd,
-            ["show", "--git", "--context", "3", "-r", input.changeId],
+            ["diff", "--git", "--context", "3", "-r", input.changeId],
             {
               maxOutputBytes: CHANGE_DIFF_MAX_OUTPUT_BYTES,
               truncateOutputAtMaxBytes: true,
@@ -937,7 +957,9 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
       return {
         changeId: node.changeId,
         commitId: node.commitId,
-        files: splitLines(summary).map(parseSummaryLine),
+        files: splitLines(summary)
+          .map(parseSummaryLine)
+          .filter((entry) => entry.path.length > 0),
         diff: diffResult.stdout,
         tooLarge: diffResult.stdoutTruncated,
       };
@@ -963,7 +985,8 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
   const commitGraph: JjCoreShape["commitGraph"] = (input) =>
     Effect.gen(function* () {
       const limit = Math.min(input.limit ?? COMMIT_GRAPH_DEFAULT_LIMIT, COMMIT_GRAPH_MAX_LIMIT);
-      const revset = input.revset?.trim() || defaultCommitGraphRevset(limit + 1);
+      const customRevset = input.revset?.trim();
+      const revset = customRevset || defaultCommitGraphRevset(limit + 1);
       const stdout = yield* runJjStdout("JjCore.commitGraph", input.cwd, [
         "log",
         "--no-graph",
@@ -976,9 +999,27 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
         "-T",
         COMMIT_GRAPH_NODE_TEMPLATE,
       ]);
+      const currentLineStdout = customRevset
+        ? ""
+        : yield* runJjStdout("JjCore.commitGraph.currentLine", input.cwd, [
+            "log",
+            "--no-graph",
+            "--color",
+            "never",
+            "--limit",
+            String(COMMIT_GRAPH_CURRENT_LINE_SUPPLEMENT_LIMIT),
+            "-r",
+            `first_ancestors(@, ${COMMIT_GRAPH_CURRENT_LINE_SUPPLEMENT_LIMIT}) | @`,
+            "-T",
+            COMMIT_GRAPH_NODE_TEMPLATE,
+          ]).pipe(Effect.catch(() => Effect.succeed("")));
       const currentOperationId = yield* resolveCurrentOperationId(input.cwd);
       const nodes = yield* Effect.try({
-        try: () => splitLines(stdout).map(parseCommitGraphNode),
+        try: () =>
+          dedupeCommitGraphNodes([
+            ...splitLines(currentLineStdout).map(parseCommitGraphNode),
+            ...splitLines(stdout).map(parseCommitGraphNode),
+          ]),
         catch: (cause) =>
           createJjCommandError(
             "JjCore.commitGraph",
@@ -1020,7 +1061,7 @@ export const makeJjCore = Effect.fn("makeJjCore")(function* () {
           executeJj(
             "JjCore.commitGraph.details.diff",
             detailsCwd,
-            ["show", "--git", "--context", "3", "-r", input.changeId],
+            ["diff", "--git", "--context", "3", "-r", input.changeId],
             {
               maxOutputBytes: COMMIT_GRAPH_DIFF_MAX_OUTPUT_BYTES,
             },

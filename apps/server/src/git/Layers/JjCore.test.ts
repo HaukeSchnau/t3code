@@ -372,6 +372,14 @@ it.layer(TestLayer)("JjCore", (it) => {
         expect(diff.diff).toContain("owned.txt");
         expect(diff.tooLarge).toBe(false);
 
+        yield* jj(cwd, ["new", "-m", "empty child"]);
+        const empty = yield* jjCore.readChange(cwd, "@");
+        const emptyDiff = yield* jjCore.changeDiff({ cwd, changeId: empty.changeId });
+
+        expect(emptyDiff.files).toEqual([]);
+        expect(emptyDiff.diff).toBe("");
+        expect(emptyDiff.tooLarge).toBe(false);
+
         yield* jj(cwd, ["new", "-m", "temporary child"]);
         yield* jj(cwd, ["new", "--no-edit", "@-"]);
         const pruned = yield* jjCore.pruneEmptyUndescribedChanges(cwd);
