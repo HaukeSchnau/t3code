@@ -12,7 +12,11 @@ import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vc
 
 import { EmptyState } from "../../components/EmptyState";
 import { LoadingScreen } from "../../components/LoadingScreen";
-import { buildThreadRoutePath, buildThreadTerminalNavigation } from "../../lib/routes";
+import {
+  buildThreadRoutePath,
+  buildThreadTerminalNavigation,
+  dismissRoute,
+} from "../../lib/routes";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { connectionTone } from "../connection/connectionTone";
 
@@ -139,6 +143,10 @@ export function ThreadRouteScreen() {
   const handleOpenDrawer = useCallback(() => {
     setDrawerVisible(true);
   }, []);
+
+  const handleNavigateBack = useCallback(() => {
+    dismissRoute(router);
+  }, [router]);
 
   const handleOpenConnectionEditor = useCallback(() => {
     void router.push("/connections");
@@ -358,6 +366,11 @@ export function ThreadRouteScreen() {
         onRunAction={gitActions.onRunSelectedThreadGitAction}
       />
 
+      <Stack.Toolbar placement="left">
+        <Stack.Toolbar.Button icon="chevron.left" onPress={handleNavigateBack} />
+        <Stack.Toolbar.Button icon="sidebar.left" onPress={handleOpenDrawer} />
+      </Stack.Toolbar>
+
       <GitActionProgressOverlay progress={gitActionProgress} onDismiss={dismissGitActionResult} />
 
       <View className="flex-1 bg-screen">
@@ -382,7 +395,7 @@ export function ThreadRouteScreen() {
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
-          onOpenDrawer={handleOpenDrawer}
+          onNavigateBack={handleNavigateBack}
           onOpenConnectionEditor={handleOpenConnectionEditor}
           onChangeDraftMessage={composer.onChangeDraftMessage}
           onPickDraftImages={composer.onPickDraftImages}

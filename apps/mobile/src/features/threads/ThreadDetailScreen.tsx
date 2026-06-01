@@ -61,7 +61,7 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadQueueCount: number;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: MobileLayoutVariant;
-  readonly onOpenDrawer: () => void;
+  readonly onNavigateBack: () => void;
   readonly onOpenConnectionEditor: () => void;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
@@ -164,6 +164,9 @@ function useStreamingHaptics(threadId: ThreadId, feed: ReadonlyArray<ThreadFeedE
 }
 
 const WORKING_INDICATOR_HEIGHT = 44;
+const EDGE_BACK_GESTURE_WIDTH = 44;
+const BACK_SWIPE_DISTANCE = 56;
+const BACK_SWIPE_VELOCITY = 650;
 
 const WorkingDurationPill = memo(function WorkingDurationPill(props: {
   readonly startedAt: string;
@@ -198,7 +201,7 @@ const WorkingDurationPill = memo(function WorkingDurationPill(props: {
 });
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
-  const { onOpenDrawer, onRefresh } = props;
+  const { onNavigateBack, onRefresh } = props;
 
   const insets = useSafeAreaInsets();
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
@@ -218,10 +221,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const feedBottomInset =
     Math.max(estimatedOverlayHeight, measuredOverlayHeight) + expandedToolbarInset + 8;
 
-  const completeDrawerGesture = useCallback(() => {
+  const completeBackGesture = useCallback(() => {
     void Haptics.selectionAsync();
-    onOpenDrawer();
-  }, [onOpenDrawer]);
+    onNavigateBack();
+  }, [onNavigateBack]);
 
   const handleRefresh = useCallback(async (): Promise<void> => {
     if (refreshing) {
@@ -236,21 +239,20 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   }, [onRefresh, refreshing]);
 
-  const drawerGestureThreshold = 80;
-  const headerDrawerGesture = useMemo(
+  const edgeBackGesture = useMemo(
     () =>
       Gesture.Pan()
         .enabled(!isSplitLayout)
-        .hitSlop({ left: 0, width: 40 })
-        .activeOffsetX([10, 999])
+        .hitSlop({ left: 0, width: EDGE_BACK_GESTURE_WIDTH })
+        .activeOffsetX([-12, 12])
         .failOffsetY([-24, 24])
         .onEnd((event) => {
           const translationX = Math.max(event.translationX, 0);
-          if (event.y < drawerGestureThreshold && translationX > 56) {
-            runOnJS(completeDrawerGesture)();
+          if (translationX > BACK_SWIPE_DISTANCE || event.velocityX > BACK_SWIPE_VELOCITY) {
+            runOnJS(completeBackGesture)();
           }
         }),
-    [completeDrawerGesture, isSplitLayout],
+    [completeBackGesture, isSplitLayout],
   );
 
   const handleOverlayLayout = useCallback((event: LayoutChangeEvent) => {
@@ -261,7 +263,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, []);
 
   return (
-    <GestureDetector gesture={headerDrawerGesture}>
+    <GestureDetector gesture={edgeBackGesture}>
       <View className="flex-1">
         {showContent ? (
           <ThreadFeed
