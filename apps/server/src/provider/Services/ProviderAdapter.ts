@@ -137,6 +137,14 @@ export interface ProviderAdapterShape<TError> {
   >;
 
   /**
+   * Read one provider-persisted thread by the provider's native thread id.
+   * Used to hydrate a lightweight imported shell on demand.
+   */
+  readonly getStoredThread?: (
+    providerThreadId: string,
+  ) => Effect.Effect<ProviderStoredThreadSummary | undefined, TError>;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;

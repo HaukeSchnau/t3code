@@ -59,6 +59,7 @@ import {
   listCodexStoredThreadShells,
   listCodexStoredThreads,
   makeCodexSessionRuntime,
+  readCodexStoredThread,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
@@ -1697,6 +1698,29 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
     );
 
+  const getStoredThread: NonNullable<CodexAdapterShape["getStoredThread"]> = (providerThreadId) =>
+    Effect.scoped(
+      readCodexStoredThread(
+        {
+          binaryPath: codexConfig.binaryPath,
+          cwd: serverConfig.cwd,
+          ...(options?.environment ? { environment: options.environment } : {}),
+          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
+        },
+        providerThreadId,
+      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "thread/read",
+            detail: cause.message,
+            cause,
+          }),
+      ),
+    );
+
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
@@ -1730,6 +1754,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     listSessions,
     listStoredThreads,
     listStoredThreadShells,
+    getStoredThread,
     hasSession,
     stopAll,
     get streamEvents() {

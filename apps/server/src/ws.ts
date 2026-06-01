@@ -61,8 +61,11 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import { syncCodexStoredThreadByThreadId } from "./provider/codexStoredThreadSync.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
@@ -320,6 +323,20 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           authorizeEffect(requiredScopeForMethod(method), effect),
           traceAttributes,
         );
+      const hydrateCodexStoredThreadOnOpen = (threadId: ThreadId) =>
+        Effect.gen(function* () {
+          const [providerInstancesOption, sessionDirectoryOption] = yield* Effect.all([
+            Effect.serviceOption(ProviderInstanceRegistry),
+            Effect.serviceOption(ProviderSessionDirectory),
+          ]);
+          if (Option.isNone(providerInstancesOption) || Option.isNone(sessionDirectoryOption)) {
+            return;
+          }
+          yield* syncCodexStoredThreadByThreadId(threadId).pipe(
+            Effect.provideService(ProviderInstanceRegistry, providerInstancesOption.value),
+            Effect.provideService(ProviderSessionDirectory, sessionDirectoryOption.value),
+          );
+        });
       const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
         isOrchestrationDispatchCommandError(cause)
           ? cause
@@ -925,6 +942,15 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              yield* hydrateCodexStoredThreadOnOpen(input.threadId).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("failed to hydrate Codex stored thread on open", {
+                    threadId: input.threadId,
+                    cause,
+                  }),
+                ),
+              );
+
               const [threadDetail, snapshotSequence] = yield* Effect.all([
                 projectionSnapshotQuery.getThreadDetailById(input.threadId).pipe(
                   Effect.mapError(

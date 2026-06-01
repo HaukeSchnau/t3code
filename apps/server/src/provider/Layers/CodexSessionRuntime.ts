@@ -983,6 +983,23 @@ export const listCodexStoredThreads = (
     return summaries;
   });
 
+export const readCodexStoredThread = (
+  options: CodexStoredThreadListOptions,
+  providerThreadId: string,
+): Effect.Effect<
+  CodexStoredThreadSummary | undefined,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const client = yield* makeCodexStoredThreadClient(options);
+    const read = yield* client.request("thread/read", {
+      threadId: providerThreadId,
+      includeTurns: true,
+    });
+    return read.thread.ephemeral ? undefined : summarizeStoredThread(read.thread);
+  });
+
 export const makeCodexSessionRuntime = (
   options: CodexSessionRuntimeOptions,
 ): Effect.Effect<
