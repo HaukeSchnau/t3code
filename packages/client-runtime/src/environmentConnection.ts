@@ -113,6 +113,8 @@ function createBootstrapGate() {
   };
 }
 
+const noop: () => void = () => undefined;
+
 export function createEnvironmentConnection(
   input: EnvironmentConnectionInput,
 ): EnvironmentConnection {
@@ -128,6 +130,7 @@ export function createEnvironmentConnection(
   const bootstrapGate = createBootstrapGate();
   const shouldObserveLifecycle = input.kind === "saved" || input.onWelcome !== undefined;
   const shouldObserveConfig = input.kind === "saved" || input.onConfigSnapshot !== undefined;
+  const shouldDeferSideSubscriptions = input.kind === "saved";
 
   const observeEnvironmentIdentity = (nextEnvironmentId: EnvironmentId, source: string) => {
     if (environmentId !== nextEnvironmentId) {
@@ -137,33 +140,54 @@ export function createEnvironmentConnection(
     }
   };
 
-  const unsubLifecycle = shouldObserveLifecycle
-    ? input.client.server.subscribeLifecycle((event) => {
-        if (disposed || event.type !== "welcome") {
-          return;
-        }
+  let sideSubscriptionsStarted = false;
+  let unsubLifecycle = noop;
+  let unsubConfig = noop;
+  const stopSideSubscriptions = () => {
+    if (!sideSubscriptionsStarted) {
+      return;
+    }
 
-        observeEnvironmentIdentity(
-          event.payload.environment.environmentId,
-          "server lifecycle welcome",
-        );
-        input.onWelcome?.(event.payload);
-      })
-    : () => undefined;
+    sideSubscriptionsStarted = false;
+    unsubLifecycle();
+    unsubConfig();
+    unsubLifecycle = noop;
+    unsubConfig = noop;
+  };
+  const startSideSubscriptions = () => {
+    if (disposed || sideSubscriptionsStarted) {
+      return;
+    }
 
-  const unsubConfig = shouldObserveConfig
-    ? input.client.server.subscribeConfig((event) => {
-        if (disposed || event.type !== "snapshot") {
-          return;
-        }
+    sideSubscriptionsStarted = true;
+    unsubLifecycle = shouldObserveLifecycle
+      ? input.client.server.subscribeLifecycle((event) => {
+          if (disposed || event.type !== "welcome") {
+            return;
+          }
 
-        observeEnvironmentIdentity(
-          event.config.environment.environmentId,
-          "server config snapshot",
-        );
-        input.onConfigSnapshot?.(event.config);
-      })
-    : () => undefined;
+          observeEnvironmentIdentity(
+            event.payload.environment.environmentId,
+            "server lifecycle welcome",
+          );
+          input.onWelcome?.(event.payload);
+        })
+      : noop;
+
+    unsubConfig = shouldObserveConfig
+      ? input.client.server.subscribeConfig((event) => {
+          if (disposed || event.type !== "snapshot") {
+            return;
+          }
+
+          observeEnvironmentIdentity(
+            event.config.environment.environmentId,
+            "server config snapshot",
+          );
+          input.onConfigSnapshot?.(event.config);
+        })
+      : noop;
+  };
 
   const unsubShell = input.client.orchestration.subscribeShell(
     (item) => {
@@ -174,6 +198,7 @@ export function createEnvironmentConnection(
       if (item.kind === "snapshot") {
         input.syncShellSnapshot(item.snapshot, environmentId);
         bootstrapGate.resolve();
+        startSideSubscriptions();
         return;
       }
 
@@ -186,10 +211,17 @@ export function createEnvironmentConnection(
         }
 
         bootstrapGate.reset();
+        if (shouldDeferSideSubscriptions) {
+          stopSideSubscriptions();
+        }
         input.onShellResubscribe?.(environmentId);
       },
     },
   );
+
+  if (!shouldDeferSideSubscriptions) {
+    startSideSubscriptions();
+  }
 
   const unsubTerminalEvent = input.applyTerminalEvent
     ? input.client.terminal.onEvent((event) => {
@@ -208,8 +240,7 @@ export function createEnvironmentConnection(
     bootstrapGate.reject(new EnvironmentConnectionDisposedError(environmentId));
     unsubShell();
     unsubTerminalEvent();
-    unsubLifecycle();
-    unsubConfig();
+    stopSideSubscriptions();
   };
 
   return {
