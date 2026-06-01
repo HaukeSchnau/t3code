@@ -1,7 +1,7 @@
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Pressable, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -22,7 +22,11 @@ export default function ConnectionsNewRouteScreen() {
     pairingConnectionError,
   } = useRemoteConnections();
   const router = useRouter();
-  const params = useLocalSearchParams<{ mode?: string }>();
+  const params = useLocalSearchParams<{
+    autoConnect?: string;
+    mode?: string;
+    pairingUrl?: string;
+  }>();
   const insets = useSafeAreaInsets();
   const [hostInput, setHostInput] = useState("");
   const [codeInput, setCodeInput] = useState("");
@@ -30,9 +34,15 @@ export default function ConnectionsNewRouteScreen() {
   const [showScanner, setShowScanner] = useState(params.mode === "scan_qr");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [scannerLocked, setScannerLocked] = useState(false);
+  const consumedPairingUrlRef = useRef<string | null>(null);
 
   const textColor = useThemeColor("--color-icon");
   const placeholderColor = useThemeColor("--color-placeholder");
+  const developmentPairingUrl = __DEV__
+    ? (process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL?.trim() ?? "")
+    : "";
+  const developmentAutoConnect =
+    __DEV__ && process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT === "1";
 
   const connectDisabled = isSubmitting || hostInput.trim().length === 0;
 
@@ -41,6 +51,36 @@ export default function ConnectionsNewRouteScreen() {
     setHostInput(host);
     setCodeInput(code);
   }, [connectionPairingUrl]);
+
+  useEffect(() => {
+    const pairingUrl = params.pairingUrl?.trim() || developmentPairingUrl;
+    if (!pairingUrl || consumedPairingUrlRef.current === pairingUrl) {
+      return;
+    }
+
+    consumedPairingUrlRef.current = pairingUrl;
+
+    const { host, code } = parsePairingUrl(pairingUrl);
+    setHostInput(host);
+    setCodeInput(code);
+    onChangeConnectionPairingUrl(pairingUrl);
+
+    if (developmentAutoConnect || params.autoConnect === "1" || params.autoConnect === "true") {
+      setIsSubmitting(true);
+      void onConnectPress(pairingUrl).then(
+        () => dismissRoute(router),
+        () => setIsSubmitting(false),
+      );
+    }
+  }, [
+    developmentAutoConnect,
+    developmentPairingUrl,
+    onChangeConnectionPairingUrl,
+    onConnectPress,
+    params.autoConnect,
+    params.pairingUrl,
+    router,
+  ]);
 
   useEffect(() => {
     if (pairingConnectionError) {
