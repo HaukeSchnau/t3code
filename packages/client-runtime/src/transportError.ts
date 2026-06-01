@@ -3,6 +3,8 @@ const TRANSPORT_ERROR_PATTERNS = [
   /\bSocketOpenError\b/i,
   /Unable to connect to the T3 server WebSocket\./i,
   /\bping timeout\b/i,
+  /Stream end encountered/i,
+  /Remote connection closed \(\d+\)\./i,
 ] as const;
 
 /**

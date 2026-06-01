@@ -21,6 +21,14 @@ describe("isTransportConnectionErrorMessage", () => {
     expect(isTransportConnectionErrorMessage("ping timeout")).toBe(true);
   });
 
+  it("returns true for Effect stream end errors", () => {
+    expect(isTransportConnectionErrorMessage("Stream end encountered")).toBe(true);
+  });
+
+  it("returns true for remote socket close messages", () => {
+    expect(isTransportConnectionErrorMessage("Remote connection closed (1001).")).toBe(true);
+  });
+
   it("returns false for business logic errors", () => {
     expect(isTransportConnectionErrorMessage("Thread not found")).toBe(false);
     expect(isTransportConnectionErrorMessage("Invalid model selection")).toBe(false);

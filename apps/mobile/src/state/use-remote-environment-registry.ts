@@ -10,6 +10,7 @@ import {
   createWsRpcClient,
   EnvironmentConnectionState,
   WsTransport,
+  isTransportConnectionErrorMessage,
   resolveRemoteWebSocketConnectionUrl,
 } from "@t3tools/client-runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
@@ -153,6 +154,55 @@ function setEnvironmentConnectionStatus(
   }));
 }
 
+function setEnvironmentTransportError(environmentId: EnvironmentId, message: string): void {
+  environmentRuntimeManager.patch({ environmentId }, (previous) => {
+    const wasReady =
+      previous.connectionState === "ready" || previous.connectionState === "reconnecting";
+    if (wasReady && isTransportConnectionErrorMessage(message)) {
+      return {
+        ...previous,
+        connectionState: "reconnecting",
+        connectionError: null,
+      };
+    }
+
+    return {
+      ...previous,
+      connectionState: "disconnected",
+      connectionError: message,
+    };
+  });
+}
+
+function syncTerminalMetadataSubscription(input: {
+  readonly environmentId: EnvironmentId;
+  readonly client: ReturnType<typeof createWsRpcClient>;
+  readonly supportsTerminalMetadata: boolean;
+}): void {
+  const existing = terminalMetadataUnsubscribers.get(input.environmentId);
+
+  if (!input.supportsTerminalMetadata) {
+    existing?.();
+    terminalMetadataUnsubscribers.delete(input.environmentId);
+    return;
+  }
+
+  if (existing) {
+    return;
+  }
+
+  terminalMetadataUnsubscribers.set(
+    input.environmentId,
+    subscribeTerminalMetadata({
+      environmentId: input.environmentId,
+      client: input.client,
+    }),
+  );
+  terminalDebugLog("registry:terminal-metadata-subscribed", {
+    environmentId: input.environmentId,
+  });
+}
+
 function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
@@ -265,7 +315,7 @@ export async function connectSavedEnvironment(
       },
       onError: (message) => {
         if (isCurrentAttempt()) {
-          setEnvironmentConnectionStatus(connection.environmentId, "disconnected", message);
+          setEnvironmentTransportError(connection.environmentId, message);
         }
       },
       onClose: (details) => {
@@ -279,7 +329,10 @@ export async function connectSavedEnvironment(
             : details.code === 1000
               ? null
               : `Remote connection closed (${details.code}).`;
-        setEnvironmentConnectionStatus(connection.environmentId, "disconnected", reason);
+        if (reason === null) {
+          return;
+        }
+        setEnvironmentTransportError(connection.environmentId, reason);
       },
     },
   );
@@ -330,6 +383,11 @@ export async function connectSavedEnvironment(
           ...runtime,
           serverConfig,
         }));
+        syncTerminalMetadataSubscription({
+          environmentId: connection.environmentId,
+          client,
+          supportsTerminalMetadata: serverConfig.environment.capabilities.terminalMetadata === true,
+        });
       }
     },
   });
@@ -342,16 +400,6 @@ export async function connectSavedEnvironment(
   setEnvironmentSession(connection.environmentId, {
     client,
     connection: environmentConnection,
-  });
-  terminalMetadataUnsubscribers.set(
-    connection.environmentId,
-    subscribeTerminalMetadata({
-      environmentId: connection.environmentId,
-      client,
-    }),
-  );
-  terminalDebugLog("registry:terminal-metadata-subscribed", {
-    environmentId: connection.environmentId,
   });
   notifyEnvironmentConnectionListeners();
 
