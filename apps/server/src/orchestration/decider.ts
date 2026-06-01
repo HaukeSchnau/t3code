@@ -245,6 +245,68 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "thread.import": {
+      yield* requireProject({
+        readModel,
+        command,
+        projectId: command.projectId,
+      });
+      yield* requireThreadAbsent({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+
+      const events: PlannedOrchestrationEvent[] = [
+        {
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: command.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.created",
+          payload: {
+            threadId: command.threadId,
+            projectId: command.projectId,
+            title: command.title,
+            modelSelection: command.modelSelection,
+            runtimeMode: command.runtimeMode,
+            interactionMode: command.interactionMode,
+            branch: command.branch,
+            worktreePath: command.worktreePath,
+            createdAt: command.createdAt,
+            updatedAt: command.updatedAt,
+          },
+        },
+      ];
+
+      for (const message of command.messages) {
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            turnId: message.turnId,
+            streaming: message.streaming,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        });
+      }
+
+      return events;
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,

@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   DEFAULT_MODEL,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderItemId,
   type ProviderInstanceId,
@@ -23,6 +24,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Scope from "effect/Scope";
@@ -125,6 +127,33 @@ export interface CodexThreadTurnSnapshot {
 export interface CodexThreadSnapshot {
   readonly threadId: string;
   readonly turns: ReadonlyArray<CodexThreadTurnSnapshot>;
+}
+
+export interface CodexStoredThreadMessage {
+  readonly messageId: MessageId;
+  readonly role: "user" | "assistant";
+  readonly text: string;
+  readonly turnId: TurnId | null;
+  readonly streaming: false;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface CodexStoredThreadSummary {
+  readonly providerThreadId: string;
+  readonly title: string;
+  readonly cwd: string;
+  readonly preview: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly messages: ReadonlyArray<CodexStoredThreadMessage>;
+}
+
+export interface CodexStoredThreadListOptions {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly environment?: NodeJS.ProcessEnv;
+  readonly cwd: string;
 }
 
 export interface CodexSessionRuntimeShape {
@@ -691,6 +720,194 @@ function parseThreadSnapshot(
     })),
   };
 }
+
+function unixSecondsToIso(value: number | undefined | null, fallback: string): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Option.match(DateTime.make(value * 1000), {
+    onNone: () => fallback,
+    onSome: DateTime.formatIso,
+  });
+}
+
+function codexMessageId(threadId: string, itemId: string): MessageId {
+  return MessageId.make(`codex:${threadId}:${itemId}`);
+}
+
+function textFromUserInput(input: EffectCodexSchema.V2ThreadReadResponse__UserInput): string {
+  switch (input.type) {
+    case "text":
+      return input.text;
+    case "image":
+      return input.url ? `[image: ${input.url}]` : "[image]";
+    case "localImage":
+      return `[image: ${input.path}]`;
+    case "skill":
+      return `@${input.name}`;
+    case "mention":
+      return `@${input.name}`;
+    default:
+      return "";
+  }
+}
+
+function messagesFromStoredThread(
+  thread: EffectCodexSchema.V2ThreadReadResponse["thread"],
+): ReadonlyArray<CodexStoredThreadMessage> {
+  const threadCreatedAt = unixSecondsToIso(thread.createdAt, "1970-01-01T00:00:00.000Z");
+  const threadUpdatedAt = unixSecondsToIso(thread.updatedAt, threadCreatedAt);
+  const messages: CodexStoredThreadMessage[] = [];
+
+  for (const turn of thread.turns) {
+    const turnCreatedAt = unixSecondsToIso(turn.startedAt, threadCreatedAt);
+    const turnUpdatedAt = unixSecondsToIso(turn.completedAt, turnCreatedAt);
+    for (const item of turn.items) {
+      if (item.type === "userMessage") {
+        const text = item.content.map(textFromUserInput).filter(Boolean).join("\n");
+        if (text.trim().length === 0) continue;
+        messages.push({
+          messageId: codexMessageId(thread.id, item.id),
+          role: "user",
+          text,
+          turnId: TurnId.make(turn.id),
+          streaming: false,
+          createdAt: turnCreatedAt,
+          updatedAt: turnCreatedAt,
+        });
+        continue;
+      }
+      if (item.type === "agentMessage" || item.type === "plan") {
+        if (item.text.trim().length === 0) continue;
+        messages.push({
+          messageId: codexMessageId(thread.id, item.id),
+          role: "assistant",
+          text: item.text,
+          turnId: TurnId.make(turn.id),
+          streaming: false,
+          createdAt: turnUpdatedAt,
+          updatedAt: turnUpdatedAt,
+        });
+      }
+    }
+  }
+
+  if (messages.length > 0 || thread.preview.trim().length === 0) {
+    return messages;
+  }
+
+  const previewMessage = {
+    messageId: codexMessageId(thread.id, "preview"),
+    role: "assistant",
+    text: thread.preview,
+    turnId: null,
+    streaming: false,
+    createdAt: threadCreatedAt,
+    updatedAt: threadUpdatedAt,
+  } satisfies CodexStoredThreadMessage;
+  return [previewMessage];
+}
+
+function titleFromStoredThread(
+  thread: EffectCodexSchema.V2ThreadReadResponse["thread"],
+  messages: ReadonlyArray<CodexStoredThreadMessage>,
+): string {
+  const explicit = thread.name?.trim();
+  if (explicit) return explicit;
+  const firstUserMessage = messages.find((message) => message.role === "user")?.text.trim();
+  if (firstUserMessage) return firstUserMessage.slice(0, 80);
+  const preview = thread.preview.trim();
+  return preview.length > 0 ? preview.slice(0, 80) : "Codex thread";
+}
+
+function summarizeStoredThread(
+  thread: EffectCodexSchema.V2ThreadReadResponse["thread"],
+): CodexStoredThreadSummary {
+  const createdAt = unixSecondsToIso(thread.createdAt, "1970-01-01T00:00:00.000Z");
+  const updatedAt = unixSecondsToIso(thread.updatedAt, createdAt);
+  const messages = messagesFromStoredThread(thread);
+  return {
+    providerThreadId: thread.id,
+    title: titleFromStoredThread(thread, messages),
+    cwd: thread.cwd,
+    preview: thread.preview,
+    createdAt,
+    updatedAt,
+    messages,
+  };
+}
+
+export const listCodexStoredThreads = (
+  options: CodexStoredThreadListOptions,
+): Effect.Effect<
+  ReadonlyArray<CodexStoredThreadSummary>,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const runtimeScope = yield* Scope.Scope;
+    const resolvedHomePath = options.homePath ? expandHomePath(options.homePath) : undefined;
+    const env = {
+      ...(options.environment ?? process.env),
+      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+    };
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(options.binaryPath, ["app-server"], {
+          cwd: options.cwd,
+          env,
+          forceKillAfter: CODEX_APP_SERVER_FORCE_KILL_AFTER,
+          shell: process.platform === "win32",
+        }),
+      )
+      .pipe(
+        Effect.provideService(Scope.Scope, runtimeScope),
+        Effect.mapError(
+          (cause) =>
+            new CodexErrors.CodexAppServerSpawnError({
+              command: `${options.binaryPath} app-server`,
+              cause,
+            }),
+        ),
+      );
+
+    const clientContext = yield* CodexClient.layerChildProcess(child).pipe(
+      Layer.build,
+      Effect.provideService(Scope.Scope, runtimeScope),
+    );
+    const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+      Effect.provide(clientContext),
+    );
+
+    yield* client.request("initialize", buildCodexInitializeParams());
+    yield* client.notify("initialized", undefined);
+
+    const summaries: CodexStoredThreadSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = yield* client.request("thread/list", {
+        archived: false,
+        limit: 100,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const listedThread of page.data) {
+        if (listedThread.ephemeral) {
+          continue;
+        }
+        const read = yield* client.request("thread/read", {
+          threadId: listedThread.id,
+          includeTurns: true,
+        });
+        summaries.push(summarizeStoredThread(read.thread));
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined && cursor.length > 0);
+
+    return summaries;
+  });
 
 export const makeCodexSessionRuntime = (
   options: CodexSessionRuntimeOptions,

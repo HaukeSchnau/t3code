@@ -225,6 +225,18 @@ export const OrchestrationMessage = Schema.Struct({
 });
 export type OrchestrationMessage = typeof OrchestrationMessage.Type;
 
+const ThreadImportMessage = Schema.Struct({
+  messageId: MessageId,
+  role: OrchestrationMessageRole,
+  text: Schema.String,
+  attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  turnId: Schema.NullOr(TurnId),
+  streaming: Schema.Boolean,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadImportMessage = typeof ThreadImportMessage.Type;
+
 export const OrchestrationProposedPlanId = TrimmedNonEmptyString;
 export type OrchestrationProposedPlanId = typeof OrchestrationProposedPlanId.Type;
 
@@ -645,6 +657,24 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
+  branch: Schema.NullOr(TrimmedNonEmptyString),
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  messages: Schema.Array(ThreadImportMessage),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -759,6 +789,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadTurnDiffCompleteCommand,
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
+  ThreadImportCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 

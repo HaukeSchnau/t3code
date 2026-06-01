@@ -9,6 +9,7 @@
  */
 import type {
   ApprovalRequestId,
+  MessageId,
   ProviderApprovalDecision,
   ProviderDriverKind,
   ProviderUserInputAnswers,
@@ -40,6 +41,26 @@ export interface ProviderThreadTurnSnapshot {
 export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
+}
+
+export interface ProviderStoredThreadMessage {
+  readonly messageId: MessageId;
+  readonly role: "user" | "assistant" | "system";
+  readonly text: string;
+  readonly turnId: TurnId | null;
+  readonly streaming: boolean;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface ProviderStoredThreadSummary {
+  readonly providerThreadId: string;
+  readonly title: string;
+  readonly cwd: string;
+  readonly preview: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly messages: ReadonlyArray<ProviderStoredThreadMessage>;
 }
 
 export interface ProviderAdapterShape<TError> {
@@ -95,6 +116,16 @@ export interface ProviderAdapterShape<TError> {
    * List currently active provider sessions for this adapter.
    */
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
+
+  /**
+   * List threads persisted by the provider outside T3 Code's own projection.
+   *
+   * Optional because not every provider exposes a durable thread index.
+   */
+  readonly listStoredThreads?: () => Effect.Effect<
+    ReadonlyArray<ProviderStoredThreadSummary>,
+    TError
+  >;
 
   /**
    * Check whether this adapter owns an active session id.
