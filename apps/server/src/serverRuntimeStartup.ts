@@ -34,7 +34,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { ProviderSessionReaper } from "./provider/Services/ProviderSessionReaper.ts";
-import { importCodexStoredThreads } from "./provider/codexStoredThreadImport.ts";
+import { syncCodexStoredThreads } from "./provider/codexStoredThreadSync.ts";
 import {
   formatHeadlessServeOutput,
   formatHostForUrl,
@@ -337,12 +337,12 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       }),
     );
 
-    yield* Effect.logDebug("startup phase: importing Codex stored threads");
+    yield* Effect.logDebug("startup phase: syncing Codex stored threads");
     yield* runStartupPhase(
-      "codex.thread-import",
-      importCodexStoredThreads().pipe(
+      "codex.thread-sync",
+      syncCodexStoredThreads().pipe(
         Effect.catch((cause) =>
-          Effect.logWarning("startup Codex stored thread import failed", {
+          Effect.logWarning("startup Codex stored thread sync failed", {
             cause,
           }),
         ),

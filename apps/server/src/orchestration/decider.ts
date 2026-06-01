@@ -307,6 +307,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       return events;
     }
 
+    case "thread.messages.sync": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const existingMessageIds = new Set(thread.messages.map((message) => message.id));
+      const events: PlannedOrchestrationEvent[] = [];
+
+      for (const message of command.messages) {
+        if (existingMessageIds.has(message.messageId)) {
+          continue;
+        }
+        existingMessageIds.add(message.messageId);
+        events.push({
+          ...(yield* withEventBase({
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            occurredAt: message.createdAt,
+            commandId: command.commandId,
+          })),
+          type: "thread.message-sent",
+          payload: {
+            threadId: command.threadId,
+            messageId: message.messageId,
+            role: message.role,
+            text: message.text,
+            ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+            turnId: message.turnId,
+            streaming: message.streaming,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          },
+        });
+      }
+
+      return events;
+    }
+
     case "thread.delete": {
       yield* requireThread({
         readModel,

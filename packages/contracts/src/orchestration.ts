@@ -675,6 +675,13 @@ const ThreadImportCommand = Schema.Struct({
   updatedAt: IsoDateTime,
 });
 
+const ThreadMessagesSyncCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.sync"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messages: Schema.Array(ThreadImportMessage),
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -790,6 +797,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadImportCommand,
+  ThreadMessagesSyncCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 

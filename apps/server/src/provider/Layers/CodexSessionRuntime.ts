@@ -735,6 +735,10 @@ function codexMessageId(threadId: string, itemId: string): MessageId {
   return MessageId.make(`codex:${threadId}:${itemId}`);
 }
 
+function codexAssistantMessageId(itemId: string): MessageId {
+  return MessageId.make(`assistant:${itemId}`);
+}
+
 function textFromUserInput(input: EffectCodexSchema.V2ThreadReadResponse__UserInput): string {
   switch (input.type) {
     case "text":
@@ -780,7 +784,10 @@ function messagesFromStoredThread(
       if (item.type === "agentMessage" || item.type === "plan") {
         if (item.text.trim().length === 0) continue;
         messages.push({
-          messageId: codexMessageId(thread.id, item.id),
+          messageId:
+            item.type === "agentMessage"
+              ? codexAssistantMessageId(item.id)
+              : codexMessageId(thread.id, item.id),
           role: "assistant",
           text: item.text,
           turnId: TurnId.make(turn.id),

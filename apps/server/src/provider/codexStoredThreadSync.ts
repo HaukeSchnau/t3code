@@ -1,0 +1,286 @@
+import {
+  CommandId,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  ProjectId,
+  ProviderDriverKind,
+  ThreadId,
+  type ModelSelection,
+  type OrchestrationMessage,
+} from "@t3tools/contracts";
+import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
+
+import { OrchestrationEngineService } from "../orchestration/Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderInstanceRegistry } from "./Services/ProviderInstanceRegistry.ts";
+import { ProviderSessionDirectory } from "./Services/ProviderSessionDirectory.ts";
+import type { ProviderRuntimeBindingWithMetadata } from "./Services/ProviderSessionDirectory.ts";
+import type {
+  ProviderStoredThreadMessage,
+  ProviderStoredThreadSummary,
+} from "./Services/ProviderAdapter.ts";
+
+const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+
+function readCodexResumeThreadId(binding: ProviderRuntimeBindingWithMetadata): string | undefined {
+  const cursor = binding.resumeCursor;
+  if (!cursor || typeof cursor !== "object" || Array.isArray(cursor)) {
+    return undefined;
+  }
+  const value = "threadId" in cursor ? cursor.threadId : undefined;
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function projectTitleFromCwd(path: Path.Path, cwd: string): string {
+  const title = path.basename(cwd.trim());
+  return title.length > 0 ? title : cwd;
+}
+
+function modelSelectionForCodexInstance(instanceId: ModelSelection["instanceId"]): ModelSelection {
+  return {
+    instanceId,
+    model: DEFAULT_MODEL,
+  };
+}
+
+function normalizedMessageText(text: string): string {
+  return text.replace(/\r\n/g, "\n").trim();
+}
+
+function messageContentKey(
+  message: Pick<OrchestrationMessage | ProviderStoredThreadMessage, "role" | "text">,
+): string {
+  return `${message.role}\u0000${normalizedMessageText(message.text)}`;
+}
+
+function incrementCount(map: Map<string, number>, key: string): number {
+  const next = (map.get(key) ?? 0) + 1;
+  map.set(key, next);
+  return next;
+}
+
+export function selectMissingStoredThreadMessages(
+  storedMessages: ReadonlyArray<ProviderStoredThreadMessage>,
+  existingMessages: ReadonlyArray<OrchestrationMessage>,
+): ReadonlyArray<ProviderStoredThreadMessage> {
+  const existingMessageIds = new Set(existingMessages.map((message) => message.id));
+  const existingContentCounts = new Map<string, number>();
+  for (const message of existingMessages) {
+    incrementCount(existingContentCounts, messageContentKey(message));
+  }
+
+  const seenStoredContentCounts = new Map<string, number>();
+  const missing: ProviderStoredThreadMessage[] = [];
+  for (const message of storedMessages) {
+    const key = messageContentKey(message);
+    const storedOrdinal = incrementCount(seenStoredContentCounts, key);
+    if (existingMessageIds.has(message.messageId)) {
+      continue;
+    }
+    if ((existingContentCounts.get(key) ?? 0) >= storedOrdinal) {
+      continue;
+    }
+    missing.push(message);
+  }
+  return missing;
+}
+
+export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(function* () {
+  const registry = yield* ProviderInstanceRegistry;
+  const projection = yield* ProjectionSnapshotQuery;
+  const engine = yield* OrchestrationEngineService;
+  const sessionDirectory = yield* ProviderSessionDirectory;
+  const crypto = yield* Crypto.Crypto;
+  const path = yield* Path.Path;
+  const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+  const randomId = crypto.randomUUIDv4;
+
+  const bindings = yield* sessionDirectory.listBindings();
+  const codexBindingByProviderThreadId = new Map<string, ProviderRuntimeBindingWithMetadata>();
+  for (const binding of bindings) {
+    if (binding.provider !== CODEX_PROVIDER) {
+      continue;
+    }
+    const providerThreadId = readCodexResumeThreadId(binding);
+    if (providerThreadId) {
+      codexBindingByProviderThreadId.set(providerThreadId, binding);
+    }
+  }
+
+  const upsertCodexBinding = Effect.fn("syncCodexStoredThreads.upsertCodexBinding")(
+    function* (input: {
+      readonly instanceId: ModelSelection["instanceId"];
+      readonly threadId: ThreadId;
+      readonly thread: ProviderStoredThreadSummary;
+      readonly status?: ProviderRuntimeBindingWithMetadata["status"];
+      readonly runtimeMode?: ProviderRuntimeBindingWithMetadata["runtimeMode"];
+      readonly lastRuntimeEvent: string;
+    }) {
+      yield* sessionDirectory.upsert({
+        threadId: input.threadId,
+        provider: CODEX_PROVIDER,
+        providerInstanceId: input.instanceId,
+        ...(input.runtimeMode ? { runtimeMode: input.runtimeMode } : {}),
+        ...(input.status ? { status: input.status } : { status: "stopped" }),
+        resumeCursor: { threadId: input.thread.providerThreadId },
+        runtimePayload: {
+          cwd: input.thread.cwd,
+          modelSelection: modelSelectionForCodexInstance(input.instanceId),
+          lastRuntimeEvent: input.lastRuntimeEvent,
+          lastRuntimeEventAt: yield* nowIso,
+        },
+      });
+      codexBindingByProviderThreadId.set(input.thread.providerThreadId, {
+        threadId: input.threadId,
+        provider: CODEX_PROVIDER,
+        providerInstanceId: input.instanceId,
+        runtimeMode: input.runtimeMode ?? "full-access",
+        status: input.status ?? "stopped",
+        resumeCursor: { threadId: input.thread.providerThreadId },
+        runtimePayload: {
+          cwd: input.thread.cwd,
+          modelSelection: modelSelectionForCodexInstance(input.instanceId),
+        },
+        lastSeenAt: yield* nowIso,
+      });
+    },
+  );
+
+  const syncOneThread = Effect.fn("syncCodexStoredThreads.syncOneThread")(function* (input: {
+    readonly instanceId: ModelSelection["instanceId"];
+    readonly thread: ProviderStoredThreadSummary;
+  }) {
+    const existingBinding = codexBindingByProviderThreadId.get(input.thread.providerThreadId);
+    const threadId = existingBinding?.threadId ?? ThreadId.make(input.thread.providerThreadId);
+    const existingThread = yield* projection.getThreadDetailById(threadId);
+
+    if (Option.isSome(existingThread)) {
+      const missingMessages = selectMissingStoredThreadMessages(
+        input.thread.messages,
+        existingThread.value.messages,
+      );
+      if (missingMessages.length > 0) {
+        yield* engine.dispatch({
+          type: "thread.messages.sync",
+          commandId: CommandId.make(yield* randomId),
+          threadId,
+          messages: missingMessages.map((message) => ({ ...message })),
+        });
+      }
+      yield* upsertCodexBinding({
+        instanceId: input.instanceId,
+        threadId,
+        thread: input.thread,
+        ...(existingBinding?.status ? { status: existingBinding.status } : {}),
+        ...(existingBinding?.runtimeMode ? { runtimeMode: existingBinding.runtimeMode } : {}),
+        lastRuntimeEvent:
+          missingMessages.length > 0 ? "codex.thread.sync" : "codex.thread.sync.noop",
+      });
+      return { imported: false, syncedMessages: missingMessages.length };
+    }
+
+    if (existingBinding) {
+      yield* Effect.logDebug("skipping Codex stored thread with stale T3 binding", {
+        providerThreadId: input.thread.providerThreadId,
+        threadId,
+      });
+      return { imported: false, syncedMessages: 0 };
+    }
+
+    const existingProject = yield* projection.getActiveProjectByWorkspaceRoot(input.thread.cwd);
+    let projectId: ProjectId;
+    if (Option.isSome(existingProject)) {
+      projectId = existingProject.value.id;
+    } else {
+      const createdAt = yield* nowIso;
+      projectId = ProjectId.make(yield* randomId);
+      yield* engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make(yield* randomId),
+        projectId,
+        title: projectTitleFromCwd(path, input.thread.cwd),
+        workspaceRoot: input.thread.cwd,
+        defaultModelSelection: modelSelectionForCodexInstance(input.instanceId),
+        createdAt,
+      });
+    }
+
+    yield* engine.dispatch({
+      type: "thread.import",
+      commandId: CommandId.make(yield* randomId),
+      threadId,
+      projectId,
+      title: input.thread.title,
+      modelSelection: modelSelectionForCodexInstance(input.instanceId),
+      runtimeMode: "full-access",
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      branch: null,
+      worktreePath: null,
+      messages: input.thread.messages.map((message) => ({ ...message })),
+      createdAt: input.thread.createdAt,
+      updatedAt: input.thread.updatedAt,
+    });
+
+    yield* upsertCodexBinding({
+      instanceId: input.instanceId,
+      threadId,
+      runtimeMode: "full-access",
+      status: "stopped",
+      thread: input.thread,
+      lastRuntimeEvent: "codex.thread.import",
+    });
+    return { imported: true, syncedMessages: input.thread.messages.length };
+  });
+
+  let importedCount = 0;
+  let syncedMessageCount = 0;
+  const instances = yield* registry.listInstances;
+  for (const instance of instances) {
+    if (instance.driverKind !== CODEX_PROVIDER || !instance.enabled) {
+      continue;
+    }
+    const listStoredThreads = instance.adapter.listStoredThreads;
+    if (!listStoredThreads) {
+      continue;
+    }
+
+    const threads = yield* listStoredThreads().pipe(
+      Effect.catch((cause) =>
+        Effect.logWarning("failed to list Codex stored threads", {
+          providerInstanceId: instance.instanceId,
+          cause,
+        }).pipe(Effect.as([] as ReadonlyArray<ProviderStoredThreadSummary>)),
+      ),
+    );
+    for (const thread of threads) {
+      const result = yield* syncOneThread({
+        instanceId: instance.instanceId,
+        thread,
+      }).pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to sync Codex stored thread", {
+            providerInstanceId: instance.instanceId,
+            providerThreadId: thread.providerThreadId,
+            cause,
+          }).pipe(Effect.as({ imported: false, syncedMessages: 0 })),
+        ),
+      );
+      if (result.imported) {
+        importedCount += 1;
+      }
+      syncedMessageCount += result.syncedMessages;
+    }
+  }
+
+  if (importedCount > 0 || syncedMessageCount > 0) {
+    yield* Effect.logInfo("synced Codex stored threads", {
+      importedCount,
+      syncedMessageCount,
+    });
+  }
+  return { importedCount, syncedMessageCount };
+});
