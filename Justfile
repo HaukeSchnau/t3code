@@ -1,0 +1,158 @@
+set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
+
+mobile_device := env_var_or_default("T3CODE_IOS_DEVICE", "iPhone von Hauke")
+apple_team_id := env_var_or_default("T3CODE_APPLE_TEAM_ID", "2243J9RD68")
+desktop_output_dir := env_var_or_default("T3CODE_DESKTOP_INSTALL_OUTPUT_DIR", "release/local-desktop-install")
+
+default:
+    @just --list
+
+# Build and install the iOS development app on the configured device.
+mobile-dev:
+    just _mobile-ios development Debug T3CodeDev
+
+# Build and install the bundled iOS production app on the configured device.
+mobile-prod:
+    just _mobile-ios production Release T3Code
+
+# Build a macOS desktop DMG and install the contained app into /Applications.
+desktop-macos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    out_dir="{{ desktop_output_dir }}"
+    rm -rf "$out_dir"
+    mkdir -p "$out_dir"
+
+    node scripts/build-desktop-artifact.ts --platform mac --target dmg --output-dir "$out_dir"
+
+    dmg_path="$(find "$out_dir" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
+    if [[ -z "$dmg_path" ]]; then
+      echo "No DMG artifact was produced in $out_dir." >&2
+      exit 1
+    fi
+
+    mount_dir="$(mktemp -d /tmp/t3code-desktop-dmg.XXXXXX)"
+    cleanup() {
+      hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
+      rmdir "$mount_dir" >/dev/null 2>&1 || true
+    }
+    trap cleanup EXIT
+
+    hdiutil attach "$dmg_path" -mountpoint "$mount_dir" -nobrowse -quiet
+
+    app_path="$(find "$mount_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
+    if [[ -z "$app_path" ]]; then
+      echo "No .app bundle was found in $dmg_path." >&2
+      exit 1
+    fi
+
+    app_name="$(basename "$app_path")"
+    if [[ "$app_name" != *.app ]]; then
+      echo "Refusing to install unexpected app bundle name: $app_name" >&2
+      exit 1
+    fi
+
+    install_path="/Applications/$app_name"
+    rm -rf "$install_path"
+    ditto "$app_path" "$install_path"
+    echo "Installed $install_path"
+
+_mobile-ios variant configuration scheme:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    device_name="{{ mobile_device }}"
+    team_id="{{ apple_team_id }}"
+    variant="{{ variant }}"
+    configuration="{{ configuration }}"
+    scheme="{{ scheme }}"
+    derived_data_path="apps/mobile/ios/build/$scheme-$configuration"
+
+    cd apps/mobile
+    APP_VARIANT="$variant" EXPO_NO_GIT_STATUS=1 bunx expo prebuild --clean --platform ios
+    cd ../..
+
+    TEAM_ID="$team_id" node <<'NODE'
+    const fs = require("node:fs");
+    const path = require("node:path");
+
+    const teamId = process.env.TEAM_ID;
+    if (!teamId) {
+      throw new Error("TEAM_ID is required.");
+    }
+
+    const projectPath = path.join(
+      "apps",
+      "mobile",
+      "ios",
+      "T3Code.xcodeproj",
+      "project.pbxproj",
+    );
+    const altProjectPath = path.join(
+      "apps",
+      "mobile",
+      "ios",
+      "T3CodeDev.xcodeproj",
+      "project.pbxproj",
+    );
+    const pbxprojPath = fs.existsSync(projectPath) ? projectPath : altProjectPath;
+    let project = fs.readFileSync(pbxprojPath, "utf8");
+
+    project = project.replace(/DevelopmentTeam = [A-Z0-9]+;/g, `DevelopmentTeam = ${teamId};`);
+    if (!project.includes(`DevelopmentTeam = ${teamId};`)) {
+      project = project.replace(
+        /(TargetAttributes = \{\n\s+[A-Z0-9]+ = \{\n)/,
+        `$1\t\t\t\t\t\tDevelopmentTeam = ${teamId};\n`,
+      );
+    }
+
+    project = project.replace(
+      /(buildSettings = \{\n)([\s\S]*?PRODUCT_BUNDLE_IDENTIFIER = [^;]+;[\s\S]*?)(\n\s+\};\n\s+name = (?:Debug|Release);)/g,
+      (_match, start, body, end) => {
+        const upsertSetting = (source, key, value) => {
+          const settingPattern = new RegExp(`\\n\\s+${key} = [^;]+;`);
+          if (settingPattern.test(source)) {
+            return source.replace(settingPattern, `\n\t\t\t\t${key} = ${value};`);
+          }
+          return `\t\t\t\t${key} = ${value};\n${source}`;
+        };
+
+        let nextBody = upsertSetting(body, "CODE_SIGN_STYLE", "Automatic");
+        nextBody = upsertSetting(nextBody, "DEVELOPMENT_TEAM", teamId);
+        return `${start}${nextBody}${end}`;
+      },
+    );
+
+    fs.writeFileSync(pbxprojPath, project);
+    NODE
+
+    device_identifier="$(
+      xcrun devicectl list devices |
+        awk -v name="$device_name" 'BEGIN { FS = "  +" } $1 == name { print $3; exit }'
+    )"
+    if [[ -z "$device_identifier" ]]; then
+      echo "Could not find iOS device named '$device_name'." >&2
+      xcrun devicectl list devices >&2
+      exit 1
+    fi
+
+    rm -rf "$derived_data_path"
+    xcodebuild \
+      -quiet \
+      -workspace "apps/mobile/ios/$scheme.xcworkspace" \
+      -scheme "$scheme" \
+      -configuration "$configuration" \
+      -destination "platform=iOS,name=$device_name" \
+      -derivedDataPath "$derived_data_path" \
+      DEVELOPMENT_TEAM="$team_id" \
+      CODE_SIGN_STYLE=Automatic \
+      build
+
+    app_path="$derived_data_path/Build/Products/$configuration-iphoneos/$scheme.app"
+    if [[ ! -d "$app_path" ]]; then
+      echo "Built app bundle was not found at $app_path." >&2
+      exit 1
+    fi
+
+    xcrun devicectl device install app --device "$device_identifier" "$app_path"
