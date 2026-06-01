@@ -133,6 +133,25 @@ describe("MessagesTimeline", () => {
     }
   });
 
+  it("shows a syncing state while an empty thread is waiting for its first detail snapshot", async () => {
+    const screen = await render(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[]}
+        isLoadingInitialThreadDetail={true}
+      />,
+    );
+
+    try {
+      await expect.element(page.getByText("Syncing conversation...")).toBeVisible();
+      await expect
+        .element(page.getByText("Send a message to start the conversation."))
+        .not.toBeInTheDocument();
+    } finally {
+      await screen.unmount();
+    }
+  });
+
   it("snaps to the bottom when timeline rows appear after an initially empty render", async () => {
     const requestAnimationFrameSpy = vi
       .spyOn(window, "requestAnimationFrame")

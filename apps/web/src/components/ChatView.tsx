@@ -36,7 +36,15 @@ import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/proje
 import { truncate } from "@t3tools/shared/String";
 import { nextTerminalId, resolveTerminalSessionLabel } from "@t3tools/shared/terminalLabels";
 import { Debouncer } from "@tanstack/react-pacer";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 import { useVcsStatus } from "~/lib/vcsStatusState";
@@ -185,7 +193,11 @@ import {
   useServerKeybindings,
 } from "~/rpc/serverState";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
-import { retainThreadDetailSubscription } from "../environments/runtime/service";
+import {
+  readThreadDetailLoading,
+  retainThreadDetailSubscription,
+  subscribeThreadDetailLoading,
+} from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
 import { Button } from "./ui/button";
 import {
@@ -1070,6 +1082,14 @@ export default function ChatView(props: ChatViewProps) {
     }
     return retainThreadDetailSubscription(environmentId, threadId);
   }, [environmentId, routeKind, threadId]);
+  const isLoadingInitialThreadDetail = useSyncExternalStore(
+    subscribeThreadDetailLoading,
+    () =>
+      routeKind === "server" && activeThread?.messages.length === 0
+        ? readThreadDetailLoading(environmentId, threadId)
+        : false,
+    () => false,
+  );
 
   // Compute the list of environments this logical project spans, used to
   // drive the environment picker in BranchToolbar.
@@ -3800,6 +3820,7 @@ export default function ChatView(props: ChatViewProps) {
               timestampFormat={timestampFormat}
               workspaceRoot={activeWorkspaceRoot}
               skills={activeProviderStatus?.skills ?? EMPTY_PROVIDER_SKILLS}
+              isLoadingInitialThreadDetail={isLoadingInitialThreadDetail}
               onIsAtEndChange={onIsAtEndChange}
             />
 

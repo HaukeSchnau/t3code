@@ -7,6 +7,7 @@ import {
   ThreadId,
   TurnId,
   type OrchestrationShellSnapshot,
+  type OrchestrationThread,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -342,6 +343,53 @@ describe("retainThreadDetailSubscription", () => {
     await vi.advanceTimersByTimeAsync(28 * 60 * 1000);
     expect(mockThreadUnsubscribe).toHaveBeenCalledTimes(1);
 
+    stop();
+    await resetEnvironmentServiceForTests();
+  });
+
+  it("reports loading until the retained thread detail subscription receives its first item", async () => {
+    const {
+      readThreadDetailLoading,
+      retainThreadDetailSubscription,
+      resetEnvironmentServiceForTests,
+      startEnvironmentConnectionService,
+      subscribeThreadDetailLoading,
+    } = await import("./service");
+
+    const stop = startEnvironmentConnectionService(new QueryClient());
+    const environmentId = EnvironmentId.make("env-1");
+    const threadId = ThreadId.make("thread-loading");
+    const listener = vi.fn();
+    const unsubscribeLoading = subscribeThreadDetailLoading(listener);
+
+    const release = retainThreadDetailSubscription(environmentId, threadId);
+
+    expect(readThreadDetailLoading(environmentId, threadId)).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(1);
+
+    const callback = mockSubscribeThread.mock.calls[0]?.[1];
+    expect(callback).toBeTypeOf("function");
+    const shell = makeThreadShellSnapshot({ threadId }).threads[0]!;
+    callback({
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 1,
+        thread: {
+          ...shell,
+          deletedAt: null,
+          messages: [],
+          proposedPlans: [],
+          activities: [],
+          checkpoints: [],
+        } satisfies OrchestrationThread,
+      },
+    });
+
+    expect(readThreadDetailLoading(environmentId, threadId)).toBe(false);
+    expect(listener).toHaveBeenCalledTimes(2);
+
+    unsubscribeLoading();
+    release();
     stop();
     await resetEnvironmentServiceForTests();
   });

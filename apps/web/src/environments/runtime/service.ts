@@ -100,6 +100,7 @@ type ThreadDetailSubscriptionEntry = {
   refCount: number;
   lastAccessedAt: number;
   evictionTimeoutId: ReturnType<typeof setTimeout> | null;
+  awaitingInitialSnapshot: boolean;
 };
 
 const environmentConnections = new Map<EnvironmentId, EnvironmentConnection>();
@@ -132,6 +133,38 @@ const lastAppliedProjectionVersionByEnvironment = new Map<
   }
 >();
 const terminalMetadataSubscriptions = new Map<EnvironmentId, () => void>();
+const threadDetailLoadingListeners = new Set<() => void>();
+
+function emitThreadDetailLoadingChange(): void {
+  for (const listener of threadDetailLoadingListeners) {
+    listener();
+  }
+}
+
+function setThreadDetailAwaitingInitialSnapshot(
+  entry: ThreadDetailSubscriptionEntry,
+  awaitingInitialSnapshot: boolean,
+): void {
+  if (entry.awaitingInitialSnapshot === awaitingInitialSnapshot) {
+    return;
+  }
+  entry.awaitingInitialSnapshot = awaitingInitialSnapshot;
+  emitThreadDetailLoadingChange();
+}
+
+export function subscribeThreadDetailLoading(listener: () => void): () => void {
+  threadDetailLoadingListeners.add(listener);
+  return () => {
+    threadDetailLoadingListeners.delete(listener);
+  };
+}
+
+export function readThreadDetailLoading(environmentId: EnvironmentId, threadId: ThreadId): boolean {
+  return (
+    threadDetailSubscriptions.get(getThreadDetailSubscriptionKey(environmentId, threadId))
+      ?.awaitingInitialSnapshot ?? false
+  );
+}
 
 let activeService: EnvironmentServiceState | null = null;
 let needsProviderInvalidation = false;
@@ -384,12 +417,15 @@ function attachThreadDetailSubscription(entry: ThreadDetailSubscriptionEntry): b
 
   const connection = readEnvironmentConnection(entry.environmentId);
   if (!connection) {
+    setThreadDetailAwaitingInitialSnapshot(entry, false);
     return false;
   }
 
+  setThreadDetailAwaitingInitialSnapshot(entry, true);
   entry.unsubscribe = connection.client.orchestration.subscribeThread(
     { threadId: entry.threadId },
     (item) => {
+      setThreadDetailAwaitingInitialSnapshot(entry, false);
       if (item.kind === "snapshot") {
         useStore.getState().syncServerThreadDetail(item.snapshot.thread, entry.environmentId);
         return;
@@ -425,6 +461,7 @@ function disposeThreadDetailSubscriptionByKey(key: string): boolean {
   threadDetailSubscriptions.delete(key);
   entry.unsubscribe();
   entry.unsubscribe = NOOP;
+  setThreadDetailAwaitingInitialSnapshot(entry, false);
   return true;
 }
 
@@ -580,6 +617,7 @@ export function retainThreadDetailSubscription(
     refCount: 1,
     lastAccessedAt: Date.now(),
     evictionTimeoutId: null,
+    awaitingInitialSnapshot: false,
   };
   threadDetailSubscriptions.set(key, entry);
   if (!attachThreadDetailSubscription(entry)) {
@@ -1859,6 +1897,7 @@ export async function resetEnvironmentServiceForTests(): Promise<void> {
     unsubscribe();
   }
   terminalMetadataSubscriptions.clear();
+  threadDetailLoadingListeners.clear();
   terminalSessionManager.reset();
   await Promise.all(
     [...environmentConnections.keys()].map((environmentId) => removeConnection(environmentId)),

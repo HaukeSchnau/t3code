@@ -34,6 +34,7 @@ import {
   GlobeIcon,
   HammerIcon,
   type LucideIcon,
+  LoaderCircleIcon,
   SquarePenIcon,
   TerminalIcon,
   Undo2Icon,
@@ -136,6 +137,7 @@ interface MessagesTimelineProps {
   timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  isLoadingInitialThreadDetail?: boolean;
   onIsAtEndChange: (isAtEnd: boolean) => void;
 }
 
@@ -165,6 +167,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timestampFormat,
   workspaceRoot,
   skills = EMPTY_TIMELINE_SKILLS,
+  isLoadingInitialThreadDetail = false,
   onIsAtEndChange,
 }: MessagesTimelineProps) {
   const rawRows = useMemo(
@@ -263,6 +266,17 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     ),
     [],
   );
+
+  if (rows.length === 0 && isLoadingInitialThreadDetail) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <div className="flex items-center gap-2 rounded-md border border-border/50 bg-card/60 px-3 py-2 text-muted-foreground text-sm shadow-sm">
+          <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground/70" />
+          <span>Syncing conversation...</span>
+        </div>
+      </div>
+    );
+  }
 
   if (rows.length === 0 && !isWorking) {
     return (
