@@ -24,6 +24,48 @@ Start Metro for the dev client:
 bun run dev:client
 ```
 
+From the repo root, the `Justfile` has wrappers for the physical iOS dev loop:
+
+```bash
+just mobile-dev
+just mobile-dev-server
+just mobile-dev-open
+just mobile-dev-reload
+just mobile-dev-snapshot
+```
+
+The `agent-device` wrappers pass the signing settings needed by the iOS runner. Override the defaults with:
+
+```bash
+T3CODE_IOS_DEVICE="My iPhone"
+T3CODE_APPLE_TEAM_ID="ABCDE12345"
+T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID="dev.example.agentdevice.runner"
+T3CODE_AGENT_DEVICE_SESSION="t3dev-physical"
+T3CODE_MOBILE_METRO_HOST="192.168.1.10"
+```
+
+`just mobile-dev-open` infers `http://<en0 address>:8081` when possible. Pass a URL explicitly when using another interface:
+
+```bash
+just mobile-dev-open http://192.168.1.10:8081
+```
+
+For remote-pairing debugging, start Metro with a fresh one-time pairing URL and the dev client will fill and submit the Add Environment screen automatically:
+
+```bash
+just mobile-dev-server 'https://example.com/pair#token=REPLACE_ME'
+```
+
+This avoids physical-device text-entry flakiness during `agent-device` runs. Always generate a fresh token for each run; pairing URLs are credentials and should not be committed or pasted into logs.
+
+### Physical-device debugging notes
+
+- Prefer `just mobile-dev-open`, `just mobile-dev-reload`, and `just mobile-dev-snapshot` over hand-written `agent-device` commands. They keep the session name, physical device, Team ID, and runner bundle ID aligned.
+- If `agent-device` cannot snapshot a physical iPhone, check runner signing first. The wrappers set `AGENT_DEVICE_IOS_TEAM_ID` and `AGENT_DEVICE_IOS_BUNDLE_ID`; override them with the env vars above when using another Apple account or runner bundle.
+- When debugging remote environments, keep the Metro log visible. Warnings such as `Unknown request tag: ...` usually mean the dev client is newer than the deployed remote server.
+- A project list can load even if the Environments sheet briefly shows a transport error. After reconnect-related changes, use the environment refresh button, wait a few seconds, then snapshot again to catch sticky status regressions.
+- `agent-device network dump` depends on active session log capture and can be empty on physical iOS runs. Treat snapshots and Metro logs as the primary signal unless log capture has been explicitly started and verified.
+
 Build and run the local iOS dev client:
 
 ```bash

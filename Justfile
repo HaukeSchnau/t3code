@@ -3,6 +3,8 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 mobile_device := env_var_or_default("T3CODE_IOS_DEVICE", "iPhone von Hauke")
 apple_team_id := env_var_or_default("T3CODE_APPLE_TEAM_ID", "2243J9RD68")
 desktop_output_dir := env_var_or_default("T3CODE_DESKTOP_INSTALL_OUTPUT_DIR", "release/local-desktop-install")
+agent_device_session := env_var_or_default("T3CODE_AGENT_DEVICE_SESSION", "t3dev-physical")
+agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID", "dev.schnau.agentdevice.runner")
 
 default:
     @just --list
@@ -14,6 +16,70 @@ mobile-dev:
 # Build and install the bundled iOS production app on the configured device.
 mobile-prod:
     just _mobile-ios production Release T3Code
+
+# Start Metro for the iOS dev client. Pass a pairing URL to auto-fill and auto-connect the Add Environment screen.
+mobile-dev-server pairing_url="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    cd apps/mobile
+    if [[ -n "{{ pairing_url }}" ]]; then
+      EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL="{{ pairing_url }}" \
+        EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT=1 \
+        bun run dev:client
+    else
+      bun run dev:client
+    fi
+
+# Open the iOS dev client on the configured physical device through agent-device.
+mobile-dev-open metro_url="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    resolved_metro_url="{{ metro_url }}"
+    if [[ -z "$resolved_metro_url" ]]; then
+      host="${T3CODE_MOBILE_METRO_HOST:-}"
+      if [[ -z "$host" ]]; then
+        host="$(ipconfig getifaddr en0 2>/dev/null || true)"
+      fi
+      if [[ -z "$host" ]]; then
+        echo "Could not infer a LAN host for Metro. Set T3CODE_MOBILE_METRO_HOST or pass a Metro URL." >&2
+        exit 1
+      fi
+      resolved_metro_url="http://$host:8081"
+    fi
+
+    encoded_url="$(node -e 'console.log(encodeURIComponent(process.argv[1]))' "$resolved_metro_url")"
+    AGENT_DEVICE_IOS_TEAM_ID="{{ apple_team_id }}" \
+      AGENT_DEVICE_IOS_BUNDLE_ID="{{ agent_device_ios_bundle_id }}" \
+      agent-device \
+        --session "{{ agent_device_session }}" \
+        open "t3code-dev://expo-development-client/?url=$encoded_url" \
+        --platform ios \
+        --device "{{ mobile_device }}" \
+        --target mobile
+
+# Reload React Native through Metro for the configured physical-device agent-device session.
+mobile-dev-reload:
+    AGENT_DEVICE_IOS_TEAM_ID="{{ apple_team_id }}" \
+      AGENT_DEVICE_IOS_BUNDLE_ID="{{ agent_device_ios_bundle_id }}" \
+      agent-device \
+        --session "{{ agent_device_session }}" \
+        metro reload \
+        --platform ios \
+        --device "{{ mobile_device }}" \
+        --target mobile
+
+# Capture the current accessibility snapshot from the configured physical-device agent-device session.
+mobile-dev-snapshot:
+    AGENT_DEVICE_IOS_TEAM_ID="{{ apple_team_id }}" \
+      AGENT_DEVICE_IOS_BUNDLE_ID="{{ agent_device_ios_bundle_id }}" \
+      agent-device \
+        --session "{{ agent_device_session }}" \
+        snapshot \
+        --platform ios \
+        --device "{{ mobile_device }}" \
+        --target mobile
 
 # Build a macOS desktop DMG and install the contained app into /Applications.
 desktop-macos:
