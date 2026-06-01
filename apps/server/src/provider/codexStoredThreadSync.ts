@@ -244,10 +244,55 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
       continue;
     }
     const listStoredThreads = instance.adapter.listStoredThreads;
-    if (!listStoredThreads) {
+    const listStoredThreadShells = instance.adapter.listStoredThreadShells;
+    if (!listStoredThreads && !listStoredThreadShells) {
       continue;
     }
 
+    const syncThreads = Effect.fn("syncCodexStoredThreads.syncThreads")(function* (
+      threads: ReadonlyArray<ProviderStoredThreadSummary>,
+    ) {
+      for (const thread of threads) {
+        const result = yield* syncOneThread({
+          instanceId: instance.instanceId,
+          thread,
+        }).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("failed to sync Codex stored thread", {
+              providerInstanceId: instance.instanceId,
+              providerThreadId: thread.providerThreadId,
+              cause,
+            }).pipe(Effect.as({ imported: false, syncedMessages: 0 })),
+          ),
+        );
+        if (result.imported) {
+          importedCount += 1;
+        }
+        syncedMessageCount += result.syncedMessages;
+      }
+    });
+
+    if (listStoredThreadShells) {
+      const threadShells = yield* listStoredThreadShells().pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("failed to list Codex stored thread shells", {
+            providerInstanceId: instance.instanceId,
+            cause,
+          }).pipe(Effect.as([] as ReadonlyArray<ProviderStoredThreadSummary>)),
+        ),
+      );
+      yield* syncThreads(threadShells);
+      if (threadShells.length > 0) {
+        yield* Effect.logInfo("synced Codex stored thread shells", {
+          providerInstanceId: instance.instanceId,
+          count: threadShells.length,
+        });
+      }
+    }
+
+    if (!listStoredThreads) {
+      continue;
+    }
     const threads = yield* listStoredThreads().pipe(
       Effect.catch((cause) =>
         Effect.logWarning("failed to list Codex stored threads", {
@@ -256,24 +301,7 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
         }).pipe(Effect.as([] as ReadonlyArray<ProviderStoredThreadSummary>)),
       ),
     );
-    for (const thread of threads) {
-      const result = yield* syncOneThread({
-        instanceId: instance.instanceId,
-        thread,
-      }).pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("failed to sync Codex stored thread", {
-            providerInstanceId: instance.instanceId,
-            providerThreadId: thread.providerThreadId,
-            cause,
-          }).pipe(Effect.as({ imported: false, syncedMessages: 0 })),
-        ),
-      );
-      if (result.imported) {
-        importedCount += 1;
-      }
-      syncedMessageCount += result.syncedMessages;
-    }
+    yield* syncThreads(threads);
   }
 
   if (importedCount > 0 || syncedMessageCount > 0) {

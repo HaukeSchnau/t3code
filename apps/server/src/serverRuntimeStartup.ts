@@ -337,18 +337,6 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
       }),
     );
 
-    yield* Effect.logDebug("startup phase: syncing Codex stored threads");
-    yield* runStartupPhase(
-      "codex.thread-sync",
-      syncCodexStoredThreads().pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("startup Codex stored thread sync failed", {
-            cause,
-          }),
-        ),
-      ),
-    );
-
     const welcomeBase = yield* resolveWelcomeBase;
     const environment = yield* serverEnvironment.getDescriptor;
     yield* Effect.logDebug("startup phase: preparing welcome payload");
@@ -367,6 +355,20 @@ export const makeServerRuntimeStartup = Effect.gen(function* () {
           ...welcomeBase,
         },
       }),
+    );
+
+    yield* Effect.logDebug("startup phase: scheduling Codex stored thread sync");
+    yield* runStartupPhase(
+      "codex.thread-sync.schedule",
+      syncCodexStoredThreads().pipe(
+        Effect.catch((cause) =>
+          Effect.logWarning("startup Codex stored thread sync failed", {
+            cause,
+          }),
+        ),
+        Effect.forkScoped,
+        Effect.asVoid,
+      ),
     );
 
     if (serverConfig.autoBootstrapProjectFromCwd) {

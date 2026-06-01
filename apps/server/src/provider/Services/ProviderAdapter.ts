@@ -128,6 +128,15 @@ export interface ProviderAdapterShape<TError> {
   >;
 
   /**
+   * List lightweight provider-persisted thread metadata without hydrating full
+   * turn history. Used to make externally-created threads visible quickly.
+   */
+  readonly listStoredThreadShells?: () => Effect.Effect<
+    ReadonlyArray<ProviderStoredThreadSummary>,
+    TError
+  >;
+
+  /**
    * Check whether this adapter owns an active session id.
    */
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;

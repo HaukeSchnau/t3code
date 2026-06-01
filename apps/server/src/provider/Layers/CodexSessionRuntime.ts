@@ -844,14 +844,37 @@ function summarizeStoredThread(
   };
 }
 
-export const listCodexStoredThreads = (
+function titleFromListedThread(thread: EffectCodexSchema.V2ThreadListResponse__Thread): string {
+  const explicit = thread.name?.trim();
+  if (explicit) return explicit;
+  const preview = thread.preview.trim();
+  return preview.length > 0 ? preview.slice(0, 80) : "Codex thread";
+}
+
+function summarizeListedThread(
+  thread: EffectCodexSchema.V2ThreadListResponse__Thread,
+): CodexStoredThreadSummary {
+  const createdAt = unixSecondsToIso(thread.createdAt, "1970-01-01T00:00:00.000Z");
+  const updatedAt = unixSecondsToIso(thread.updatedAt, createdAt);
+  return {
+    providerThreadId: thread.id,
+    title: titleFromListedThread(thread),
+    cwd: thread.cwd,
+    preview: thread.preview,
+    createdAt,
+    updatedAt,
+    messages: [],
+  };
+}
+
+function makeCodexStoredThreadClient(
   options: CodexStoredThreadListOptions,
 ): Effect.Effect<
-  ReadonlyArray<CodexStoredThreadSummary>,
+  CodexClient.CodexAppServerClientShape,
   CodexErrors.CodexAppServerError,
   ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
-> =>
-  Effect.gen(function* () {
+> {
+  return Effect.gen(function* () {
     const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
     const runtimeScope = yield* Scope.Scope;
     const resolvedHomePath = options.homePath ? expandHomePath(options.homePath) : undefined;
@@ -889,6 +912,50 @@ export const listCodexStoredThreads = (
 
     yield* client.request("initialize", buildCodexInitializeParams());
     yield* client.notify("initialized", undefined);
+    return client;
+  });
+}
+
+export const listCodexStoredThreadShells = (
+  options: CodexStoredThreadListOptions,
+): Effect.Effect<
+  ReadonlyArray<CodexStoredThreadSummary>,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const client = yield* makeCodexStoredThreadClient(options);
+
+    const summaries: CodexStoredThreadSummary[] = [];
+    let cursor: string | undefined;
+    do {
+      const page = yield* client.request("thread/list", {
+        archived: false,
+        limit: 100,
+        sortKey: "updated_at",
+        sortDirection: "desc",
+        ...(cursor ? { cursor } : {}),
+      });
+      for (const listedThread of page.data) {
+        if (!listedThread.ephemeral) {
+          summaries.push(summarizeListedThread(listedThread));
+        }
+      }
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined && cursor.length > 0);
+
+    return summaries;
+  });
+
+export const listCodexStoredThreads = (
+  options: CodexStoredThreadListOptions,
+): Effect.Effect<
+  ReadonlyArray<CodexStoredThreadSummary>,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+> =>
+  Effect.gen(function* () {
+    const client = yield* makeCodexStoredThreadClient(options);
 
     const summaries: CodexStoredThreadSummary[] = [];
     let cursor: string | undefined;
