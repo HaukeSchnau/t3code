@@ -28,6 +28,7 @@ import type {
 } from "./Services/ProviderAdapter.ts";
 
 const CODEX_PROVIDER = ProviderDriverKind.make("codex");
+const STORED_THREAD_MESSAGE_SYNC_BATCH_SIZE = 25;
 
 function readCodexResumeThreadId(
   binding: ProviderRuntimeBinding | ProviderRuntimeBindingWithMetadata,
@@ -80,6 +81,16 @@ function incrementCount(map: Map<string, number>, key: string): number {
   const next = (map.get(key) ?? 0) + 1;
   map.set(key, next);
   return next;
+}
+
+export function chunkStoredThreadMessagesForSync(
+  messages: ReadonlyArray<ProviderStoredThreadMessage>,
+): ReadonlyArray<ReadonlyArray<ProviderStoredThreadMessage>> {
+  const chunks: Array<ReadonlyArray<ProviderStoredThreadMessage>> = [];
+  for (let index = 0; index < messages.length; index += STORED_THREAD_MESSAGE_SYNC_BATCH_SIZE) {
+    chunks.push(messages.slice(index, index + STORED_THREAD_MESSAGE_SYNC_BATCH_SIZE));
+  }
+  return chunks;
 }
 
 export function selectMissingStoredThreadMessages(
@@ -186,12 +197,12 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
         input.thread.messages,
         existingThread.value.messages,
       );
-      if (missingMessages.length > 0) {
+      for (const messages of chunkStoredThreadMessagesForSync(missingMessages)) {
         yield* engine.dispatch({
           type: "thread.messages.sync",
           commandId: CommandId.make(yield* randomId),
           threadId,
-          messages: missingMessages.map((message) => ({ ...message })),
+          messages: [...messages],
         });
       }
       yield* upsertCodexBinding({
@@ -243,7 +254,7 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       branch: null,
       worktreePath: null,
-      messages: input.thread.messages.map((message) => ({ ...message })),
+      messages: [...input.thread.messages],
       createdAt: input.thread.createdAt,
       updatedAt: input.thread.updatedAt,
     });
@@ -388,12 +399,12 @@ export const syncCodexStoredThreadByThreadId = Effect.fn("syncCodexStoredThreadB
       storedThread.messages,
       existingThread.value.messages,
     );
-    if (missingMessages.length > 0) {
+    for (const messages of chunkStoredThreadMessagesForSync(missingMessages)) {
       yield* engine.dispatch({
         type: "thread.messages.sync",
         commandId: CommandId.make(yield* randomId),
         threadId,
-        messages: missingMessages.map((message) => ({ ...message })),
+        messages: [...messages],
       });
     }
 

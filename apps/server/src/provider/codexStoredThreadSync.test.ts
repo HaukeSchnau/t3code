@@ -30,6 +30,7 @@ import type {
   ProviderSessionDirectoryShape,
 } from "./Services/ProviderSessionDirectory.ts";
 import {
+  chunkStoredThreadMessagesForSync,
   selectMissingStoredThreadMessages,
   syncCodexStoredThreadByThreadId,
 } from "./codexStoredThreadSync.ts";
@@ -160,6 +161,20 @@ it("selects existing Codex messages when stored timestamps need repair", () => {
 
   expect(missing.map((message) => message.messageId)).toEqual([MessageId.make("assistant:item-1")]);
   expect(missing[0]?.createdAt).toBe(repairedTimestamp);
+});
+
+it("splits stored message sync into small batches", () => {
+  const messages = Array.from({ length: 61 }, (_, index) =>
+    storedMessage({
+      messageId: MessageId.make(`assistant:item-${index}`),
+      role: "assistant",
+      text: `Answer ${index}`,
+    }),
+  );
+
+  const batches = chunkStoredThreadMessagesForSync(messages);
+
+  expect(batches.map((batch) => batch.length)).toEqual([25, 25, 11]);
 });
 
 it.layer(NodeServices.layer)("targeted stored Codex thread sync", (it) => {
