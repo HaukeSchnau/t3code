@@ -63,6 +63,7 @@ const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "unknown thread",
   "does not exist",
 ];
+const CODEX_RATE_LIMIT_REFRESH_INTERVAL = "5 minutes" as const;
 
 export const CodexResumeCursorSchema = Schema.Struct({
   threadId: Schema.String,
@@ -496,6 +497,34 @@ export const openCodexThread = (input: {
       ),
     );
 };
+
+function hasRateLimitSnapshotContent(
+  snapshot: EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] | undefined | null,
+): snapshot is EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] {
+  return snapshot !== null && snapshot !== undefined && Object.keys(snapshot).length > 0;
+}
+
+export function selectInitialCodexRateLimitSnapshot(
+  response: Pick<
+    EffectCodexSchema.V2GetAccountRateLimitsResponse,
+    "rateLimits" | "rateLimitsByLimitId"
+  >,
+): EffectCodexSchema.V2GetAccountRateLimitsResponse["rateLimits"] | undefined {
+  const codexLimit = response.rateLimitsByLimitId?.codex;
+  if (hasRateLimitSnapshotContent(codexLimit)) {
+    return codexLimit;
+  }
+
+  const legacyRateLimits = response.rateLimits;
+  if (hasRateLimitSnapshotContent(legacyRateLimits)) {
+    return legacyRateLimits;
+  }
+
+  const entries = Object.values(response.rateLimitsByLimitId ?? {}).filter(
+    hasRateLimitSnapshotContent,
+  );
+  return entries.length === 1 ? entries[0] : undefined;
+}
 
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {
   switch (notification.method) {
@@ -1495,6 +1524,31 @@ export const makeCodexSessionRuntime = (
       Effect.forkIn(runtimeScope),
     );
 
+    const refreshRateLimits = Effect.fn("CodexSessionRuntime.refreshRateLimits")(function* () {
+      const response = yield* client.request("account/rateLimits/read", undefined);
+      const rateLimits = selectInitialCodexRateLimitSnapshot(response);
+      if (!rateLimits) {
+        return;
+      }
+      yield* emitEvent({
+        kind: "notification",
+        threadId: options.threadId,
+        method: "account/rateLimits/updated",
+        payload: {
+          rateLimits,
+        } satisfies EffectCodexSchema.V2AccountRateLimitsUpdatedNotification,
+      });
+    });
+
+    const refreshRateLimitsSafely = refreshRateLimits().pipe(
+      Effect.catch((error: CodexSessionRuntimeError) =>
+        Effect.logDebug("codex rate limit refresh skipped", {
+          threadId: options.threadId,
+          cause: error,
+        }),
+      ),
+    );
+
     const start = Effect.fn("CodexSessionRuntime.start")(function* () {
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
@@ -1523,6 +1577,12 @@ export const makeCodexSessionRuntime = (
       } satisfies ProviderSession;
       yield* Ref.set(sessionRef, session);
       yield* emitSessionEvent("session/ready", "Codex App Server session ready.");
+      yield* refreshRateLimitsSafely.pipe(Effect.forkIn(runtimeScope));
+      yield* Effect.forever(
+        Effect.sleep(CODEX_RATE_LIMIT_REFRESH_INTERVAL).pipe(
+          Effect.andThen(refreshRateLimitsSafely),
+        ),
+      ).pipe(Effect.forkIn(runtimeScope));
       return session;
     });
 

@@ -20,6 +20,7 @@ import {
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -209,6 +210,159 @@ function buildContextWindowActivityPayload(
     return undefined;
   }
   return event.payload.usage;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+function asBoolean(value: unknown): boolean | null {
+  return typeof value === "boolean" ? value : null;
+}
+
+function normalizeRateLimitResetTimestamp(value: unknown): string | null {
+  const text = asString(value);
+  if (text) {
+    return Option.match(DateTime.make(text), {
+      onNone: () => null,
+      onSome: DateTime.formatIso,
+    });
+  }
+
+  const raw = asFiniteNumber(value);
+  if (raw === null || raw <= 0) {
+    return null;
+  }
+  const epochMs = raw >= 1_000_000_000_000 ? raw : raw * 1000;
+  return Option.match(DateTime.make(epochMs), {
+    onNone: () => null,
+    onSome: DateTime.formatIso,
+  });
+}
+
+function normalizeRateLimitWindow(value: unknown): {
+  readonly usedPercent: number;
+  readonly resetsAt: string | null;
+  readonly windowDurationMins: number | null;
+} | null {
+  const record = asRecord(value);
+  const usedPercent = asFiniteNumber(record?.usedPercent);
+  if (usedPercent === null) {
+    return null;
+  }
+
+  return {
+    usedPercent,
+    resetsAt: normalizeRateLimitResetTimestamp(record?.resetsAt),
+    windowDurationMins: asFiniteNumber(record?.windowDurationMins),
+  };
+}
+
+function hasRateLimitSnapshotFields(value: Record<string, unknown>): boolean {
+  return (
+    value.primary !== undefined ||
+    value.secondary !== undefined ||
+    value.limitId !== undefined ||
+    value.limitName !== undefined ||
+    value.planType !== undefined ||
+    value.rateLimitReachedType !== undefined ||
+    value.credits !== undefined
+  );
+}
+
+function unwrapRateLimitSnapshot(value: unknown): Record<string, unknown> | null {
+  let current = asRecord(value);
+  for (let depth = 0; depth < 3; depth += 1) {
+    if (!current) {
+      return null;
+    }
+    if (hasRateLimitSnapshotFields(current)) {
+      return current;
+    }
+    const nested = asRecord(current.rateLimits);
+    if (!nested) {
+      return current;
+    }
+    current = nested;
+  }
+  return current;
+}
+
+function buildUsageLimitsActivityPayload(event: ProviderRuntimeEvent):
+  | {
+      readonly limitId: string | null;
+      readonly limitName: string | null;
+      readonly planType: string | null;
+      readonly rateLimitReachedType: string | null;
+      readonly credits: {
+        readonly balance: string | null;
+        readonly hasCredits: boolean;
+        readonly unlimited: boolean;
+      } | null;
+      readonly primary: {
+        readonly usedPercent: number;
+        readonly resetsAt: string | null;
+        readonly windowDurationMins: number | null;
+      } | null;
+      readonly secondary: {
+        readonly usedPercent: number;
+        readonly resetsAt: string | null;
+        readonly windowDurationMins: number | null;
+      } | null;
+    }
+  | undefined {
+  if (event.type !== "account.rate-limits.updated") {
+    return undefined;
+  }
+
+  const rateLimits = unwrapRateLimitSnapshot(event.payload.rateLimits);
+  if (!rateLimits) {
+    return undefined;
+  }
+
+  const creditsRecord = asRecord(rateLimits.credits);
+  const hasCredits = asBoolean(creditsRecord?.hasCredits);
+  const unlimited = asBoolean(creditsRecord?.unlimited);
+  const credits =
+    hasCredits !== null && unlimited !== null
+      ? {
+          balance: asString(creditsRecord?.balance),
+          hasCredits,
+          unlimited,
+        }
+      : null;
+
+  const primary = normalizeRateLimitWindow(rateLimits.primary);
+  const secondary = normalizeRateLimitWindow(rateLimits.secondary);
+  if (
+    primary === null &&
+    secondary === null &&
+    asString(rateLimits.limitId) === null &&
+    asString(rateLimits.limitName) === null &&
+    asString(rateLimits.planType) === null &&
+    asString(rateLimits.rateLimitReachedType) === null &&
+    credits === null
+  ) {
+    return undefined;
+  }
+
+  return {
+    limitId: asString(rateLimits.limitId),
+    limitName: asString(rateLimits.limitName),
+    planType: asString(rateLimits.planType),
+    rateLimitReachedType: asString(rateLimits.rateLimitReachedType),
+    credits,
+    primary,
+    secondary,
+  };
 }
 
 function normalizeRuntimeTurnState(
@@ -525,6 +679,26 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "context-window.updated",
           summary: "Context window updated",
+          payload,
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
+    case "account.rate-limits.updated": {
+      const payload = buildUsageLimitsActivityPayload(event);
+      if (!payload) {
+        return [];
+      }
+
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "account.rate-limits.updated",
+          summary: "Usage limits updated",
           payload,
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

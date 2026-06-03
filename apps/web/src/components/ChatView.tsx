@@ -83,6 +83,7 @@ import {
 } from "../pendingUserInput";
 import {
   selectProjectsAcrossEnvironments,
+  selectThreadsForEnvironment,
   selectThreadsAcrossEnvironments,
   useStore,
 } from "../store";
@@ -156,6 +157,7 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { ChatHeader } from "./chat/ChatHeader";
 import { type ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { NoActiveThreadState } from "./NoActiveThreadState";
@@ -1486,6 +1488,29 @@ export default function ChatView(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
+  const environmentThreads = useStore(
+    useShallow((state) => selectThreadsForEnvironment(state, environmentId)),
+  );
+  const providerDriverByInstanceId = useMemo(
+    () => new Map(providerStatuses.map((status) => [status.instanceId, status.driver])),
+    [providerStatuses],
+  );
+  const activeUsageLimits = useMemo(
+    () =>
+      deriveLatestUsageLimitsSnapshotForSources(
+        environmentThreads.map((thread) => ({
+          provider:
+            providerDriverByInstanceId.get(thread.modelSelection.instanceId) ??
+            (thread.modelSelection.instanceId ===
+            defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
+              ? ProviderDriverKind.make("codex")
+              : null),
+          activities: thread.activities,
+        })),
+        ProviderDriverKind.make("codex"),
+      ),
+    [environmentThreads, providerDriverByInstanceId],
+  );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const workLogEntries = useMemo(
@@ -3890,6 +3915,7 @@ export default function ChatView(props: ChatViewProps) {
                   activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                   activeThreadModelSelection={activeThread?.modelSelection}
                   activeThreadActivities={activeThread?.activities}
+                  activeUsageLimits={activeUsageLimits}
                   resolvedTheme={resolvedTheme}
                   settings={settings}
                   keybindings={keybindings}

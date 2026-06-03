@@ -15,8 +15,11 @@ import {
   buildTurnStartParams,
   isRecoverableThreadResumeError,
   openCodexThread,
+  selectInitialCodexRateLimitSnapshot,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+type RateLimitsReadResponse = Parameters<typeof selectInitialCodexRateLimitSnapshot>[0];
 
 function makeThreadOpenResponse(
   threadId: string,
@@ -273,5 +276,82 @@ describe("openCodexThread", () => {
         isCodexAppServerRequestError(error) &&
         error.errorMessage === "timed out waiting for server",
     );
+  });
+});
+
+describe("selectInitialCodexRateLimitSnapshot", () => {
+  it("prefers the Codex bucket from rateLimitsByLimitId", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {
+        primary: {
+          usedPercent: 99,
+          resetsAt: "2026-01-01T05:00:00.000Z",
+          windowDurationMins: 300,
+        },
+      },
+      rateLimitsByLimitId: {
+        codex: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            resetsAt: "2026-01-01T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+        other: {
+          primary: {
+            usedPercent: 50,
+            resetsAt: "2026-01-01T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+      },
+    } as unknown as RateLimitsReadResponse);
+
+    assert.equal(snapshot?.limitId, "codex");
+    assert.equal(snapshot?.primary?.usedPercent, 25);
+  });
+
+  it("falls back to legacy rateLimits when no Codex bucket is available", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimits: {
+        limitId: "legacy",
+        primary: {
+          usedPercent: 37,
+          resetsAt: "2026-01-01T05:00:00.000Z",
+          windowDurationMins: 300,
+        },
+      },
+      rateLimitsByLimitId: {
+        other: {
+          primary: {
+            usedPercent: 12,
+            resetsAt: "2026-01-01T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+      },
+    } as unknown as RateLimitsReadResponse);
+
+    assert.equal(snapshot?.limitId, "legacy");
+    assert.equal(snapshot?.primary?.usedPercent, 37);
+  });
+
+  it("falls back to a sole available bucket", () => {
+    const snapshot = selectInitialCodexRateLimitSnapshot({
+      rateLimitsByLimitId: {
+        sole: {
+          limitId: "sole",
+          secondary: {
+            usedPercent: 42,
+            resetsAt: "2026-01-08T00:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+        },
+      },
+    } as unknown as RateLimitsReadResponse);
+
+    assert.equal(snapshot?.limitId, "sole");
+    assert.equal(snapshot?.secondary?.usedPercent, 42);
   });
 });

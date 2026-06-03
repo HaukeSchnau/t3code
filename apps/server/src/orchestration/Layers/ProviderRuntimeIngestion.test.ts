@@ -2631,6 +2631,75 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects Codex rate limit updates into normalized thread activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits-updated"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "plus",
+            rateLimitReachedType: null,
+            credits: {
+              balance: "12.50",
+              hasCredits: true,
+              unlimited: false,
+            },
+            primary: {
+              usedPercent: 40,
+              resetsAt: 1_746_052_800,
+              windowDurationMins: 300,
+            },
+            secondary: {
+              usedPercent: 10,
+              resetsAt: "2026-01-08T00:00:00.000Z",
+              windowDurationMins: 10080,
+            },
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+    );
+    expect(usageActivity).toBeDefined();
+    expect(usageActivity?.payload).toMatchObject({
+      limitId: "codex",
+      limitName: "Codex",
+      planType: "plus",
+      credits: {
+        balance: "12.50",
+        hasCredits: true,
+        unlimited: false,
+      },
+      primary: {
+        usedPercent: 40,
+        resetsAt: "2025-04-30T22:40:00.000Z",
+        windowDurationMins: 300,
+      },
+      secondary: {
+        usedPercent: 10,
+        resetsAt: "2026-01-08T00:00:00.000Z",
+        windowDurationMins: 10080,
+      },
+    });
+  });
+
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

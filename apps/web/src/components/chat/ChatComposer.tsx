@@ -74,6 +74,7 @@ import {
 } from "./composerProviderState";
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { UsageLimitsMeter } from "./UsageLimitsMeter";
 import { basenameOfPath } from "../../vscode-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
@@ -105,6 +106,7 @@ import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
+import { deriveLatestUsageLimitsSnapshot } from "../../lib/usageLimits";
 import { formatProviderSkillDisplayName } from "../../providerSkillPresentation";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -279,9 +281,23 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   );
 });
 
+export function ComposerUsageLimitsMeterSlot(props: {
+  compact: boolean;
+  selectedProvider: ProviderDriverKind;
+  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
+}) {
+  if (props.selectedProvider !== ProviderDriverKind.make("codex") || !props.activeUsageLimits) {
+    return null;
+  }
+
+  return <UsageLimitsMeter usageLimits={props.activeUsageLimits} compact={props.compact} />;
+}
+
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  selectedProvider: ProviderDriverKind;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
+  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
   isPreparingWorktree: boolean;
   pendingAction: {
     questionIndex: number;
@@ -305,6 +321,11 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   return (
     <>
       {props.activeContextWindow ? <ContextWindowMeter usage={props.activeContextWindow} /> : null}
+      <ComposerUsageLimitsMeterSlot
+        compact={props.compact}
+        selectedProvider={props.selectedProvider}
+        activeUsageLimits={props.activeUsageLimits}
+      />
       {props.isPreparingWorktree ? (
         <span className="text-muted-foreground/70 text-xs">Preparing worktree...</span>
       ) : null}
@@ -431,6 +452,7 @@ export interface ChatComposerProps {
 
   // Context window
   activeThreadActivities: Thread["activities"] | undefined;
+  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -523,6 +545,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeThreadActivities,
+    activeUsageLimits,
     resolvedTheme,
     settings,
     keybindings,
@@ -2376,7 +2399,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               >
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
+                  selectedProvider={selectedProvider}
                   activeContextWindow={activeContextWindow}
+                  activeUsageLimits={activeUsageLimits}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
