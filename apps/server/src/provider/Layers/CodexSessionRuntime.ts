@@ -760,6 +760,11 @@ function unixSecondsToIso(value: number | undefined | null, fallback: string): s
   });
 }
 
+function parseIsoMilliseconds(value: string, fallback: number): number {
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function codexMessageId(threadId: string, itemId: string): MessageId {
   return MessageId.make(`codex:${threadId}:${itemId}`);
 }
@@ -785,12 +790,22 @@ function textFromUserInput(input: EffectCodexSchema.V2ThreadReadResponse__UserIn
   }
 }
 
-function messagesFromStoredThread(
+export function messagesFromStoredThread(
   thread: EffectCodexSchema.V2ThreadReadResponse["thread"],
 ): ReadonlyArray<CodexStoredThreadMessage> {
   const threadCreatedAt = unixSecondsToIso(thread.createdAt, "1970-01-01T00:00:00.000Z");
   const threadUpdatedAt = unixSecondsToIso(thread.updatedAt, threadCreatedAt);
+  let lastMessageAtMs = parseIsoMilliseconds(threadCreatedAt, 0) - 1;
   const messages: CodexStoredThreadMessage[] = [];
+
+  const nextMessageTimestamp = (candidate: string): string => {
+    const candidateMs = parseIsoMilliseconds(candidate, lastMessageAtMs + 1);
+    lastMessageAtMs = Math.max(candidateMs, lastMessageAtMs + 1);
+    return Option.match(DateTime.make(lastMessageAtMs), {
+      onNone: () => candidate,
+      onSome: DateTime.formatIso,
+    });
+  };
 
   for (const turn of thread.turns) {
     const turnCreatedAt = unixSecondsToIso(turn.startedAt, threadCreatedAt);
@@ -799,19 +814,21 @@ function messagesFromStoredThread(
       if (item.type === "userMessage") {
         const text = item.content.map(textFromUserInput).filter(Boolean).join("\n");
         if (text.trim().length === 0) continue;
+        const createdAt = nextMessageTimestamp(turnCreatedAt);
         messages.push({
           messageId: codexMessageId(thread.id, item.id),
           role: "user",
           text,
           turnId: TurnId.make(turn.id),
           streaming: false,
-          createdAt: turnCreatedAt,
-          updatedAt: turnCreatedAt,
+          createdAt,
+          updatedAt: createdAt,
         });
         continue;
       }
       if (item.type === "agentMessage" || item.type === "plan") {
         if (item.text.trim().length === 0) continue;
+        const createdAt = nextMessageTimestamp(turnUpdatedAt);
         messages.push({
           messageId:
             item.type === "agentMessage"
@@ -821,8 +838,8 @@ function messagesFromStoredThread(
           text: item.text,
           turnId: TurnId.make(turn.id),
           streaming: false,
-          createdAt: turnUpdatedAt,
-          updatedAt: turnUpdatedAt,
+          createdAt,
+          updatedAt: createdAt,
         });
       }
     }

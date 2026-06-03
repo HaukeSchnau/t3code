@@ -158,4 +158,73 @@ it.layer(NodeServices.layer)("decider thread import", (it) => {
       expect(events.map((event) => event.type)).toEqual(["thread.message-sent"]);
     }),
   );
+
+  it.effect("allows sync to repair existing historical message metadata", () =>
+    Effect.gen(function* () {
+      const readModel = yield* seedReadModel;
+      const imported = yield* decideOrchestrationCommand({
+        readModel,
+        command: {
+          type: "thread.import",
+          commandId: CommandId.make("cmd-thread-import"),
+          threadId: ThreadId.make("codex-thread-1"),
+          projectId: ProjectId.make("project-import"),
+          title: "Imported Codex Thread",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          branch: null,
+          worktreePath: null,
+          messages: [
+            {
+              messageId: MessageId.make("assistant:item-1"),
+              role: "assistant",
+              text: "Answer",
+              turnId: TurnId.make("turn-1"),
+              streaming: false,
+              createdAt: "2026-01-01T00:00:05.000Z",
+              updatedAt: "2026-01-01T00:00:05.000Z",
+            },
+          ],
+          createdAt: now,
+          updatedAt: "2026-01-01T00:00:05.000Z",
+        },
+      });
+
+      let projected = readModel;
+      for (const [index, event] of (Array.isArray(imported) ? imported : [imported]).entries()) {
+        projected = yield* projectEvent(projected, { ...event, sequence: index + 2 });
+      }
+
+      const synced = yield* decideOrchestrationCommand({
+        readModel: projected,
+        command: {
+          type: "thread.messages.sync",
+          commandId: CommandId.make("cmd-thread-sync"),
+          threadId: ThreadId.make("codex-thread-1"),
+          messages: [
+            {
+              messageId: MessageId.make("assistant:item-1"),
+              role: "assistant",
+              text: "Answer",
+              turnId: TurnId.make("turn-1"),
+              streaming: false,
+              createdAt: "2026-01-01T00:00:01.000Z",
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+          ],
+        },
+      });
+
+      const events = Array.isArray(synced) ? synced : [synced];
+      expect(events.map((event) => event.type)).toEqual(["thread.message-sent"]);
+      expect(events[0]?.payload).toMatchObject({
+        messageId: MessageId.make("assistant:item-1"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+      });
+    }),
+  );
 });

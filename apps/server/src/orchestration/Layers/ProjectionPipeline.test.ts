@@ -1367,6 +1367,127 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("updates historical message timestamps when sync replays a full message", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const originalCreatedAt = "2026-01-01T00:00:05.000Z";
+      const repairedCreatedAt = "2026-01-01T00:00:01.000Z";
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("evt-repair-1"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-repair"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-repair-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-repair-1"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-repair"),
+          title: "Project Repair",
+          workspaceRoot: "/tmp/project-repair",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("evt-repair-2"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-repair"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-repair-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-repair-2"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-repair"),
+          projectId: ProjectId.make("project-repair"),
+          title: "Thread Repair",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-repair-3"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-repair"),
+        occurredAt: originalCreatedAt,
+        commandId: CommandId.make("cmd-repair-3"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-repair-3"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-repair"),
+          messageId: MessageId.make("assistant-repair"),
+          role: "assistant",
+          text: "Answer",
+          turnId: TurnId.make("turn-repair"),
+          streaming: false,
+          createdAt: originalCreatedAt,
+          updatedAt: originalCreatedAt,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-repair-4"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-repair"),
+        occurredAt: repairedCreatedAt,
+        commandId: CommandId.make("cmd-repair-4"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-repair-4"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-repair"),
+          messageId: MessageId.make("assistant-repair"),
+          role: "assistant",
+          text: "Answer",
+          turnId: TurnId.make("turn-repair"),
+          streaming: false,
+          createdAt: repairedCreatedAt,
+          updatedAt: repairedCreatedAt,
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const messageRows = yield* sql<{
+        readonly createdAt: string;
+        readonly updatedAt: string;
+      }>`
+        SELECT
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM projection_thread_messages
+        WHERE message_id = 'assistant-repair'
+      `;
+      assert.deepEqual(messageRows, [
+        {
+          createdAt: repairedCreatedAt,
+          updatedAt: repairedCreatedAt,
+        },
+      ]);
+    }),
+  );
+
   it.effect(
     "resolves turn-count conflicts when checkpoint completion rewrites provisional turns",
     () =>

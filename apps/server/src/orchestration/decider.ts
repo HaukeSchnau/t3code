@@ -308,19 +308,19 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.messages.sync": {
-      const thread = yield* requireThread({
+      yield* requireThread({
         readModel,
         command,
         threadId: command.threadId,
       });
-      const existingMessageIds = new Set(thread.messages.map((message) => message.id));
+      const syncedMessageIds = new Set<string>();
       const events: PlannedOrchestrationEvent[] = [];
 
       for (const message of command.messages) {
-        if (existingMessageIds.has(message.messageId)) {
+        if (syncedMessageIds.has(message.messageId)) {
           continue;
         }
-        existingMessageIds.add(message.messageId);
+        syncedMessageIds.add(message.messageId);
         events.push({
           ...(yield* withEventBase({
             aggregateKind: "thread",

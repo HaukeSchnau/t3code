@@ -94,6 +94,7 @@ it("selects only stored Codex messages not already represented in T3", () => {
         id: MessageId.make("codex:thread:user-1"),
         role: "user",
         text: "Already imported by provider id",
+        turnId: TurnId.make("turn-1"),
       }),
       projectedMessage({
         id: MessageId.make("local-user-message"),
@@ -132,6 +133,33 @@ it("preserves repeated same-text messages by comparing occurrence counts", () =>
   expect(missing.map((message) => message.messageId)).toEqual([
     MessageId.make("codex:thread:user-2"),
   ]);
+});
+
+it("selects existing Codex messages when stored timestamps need repair", () => {
+  const repairedTimestamp = "2026-01-01T00:00:02.000Z";
+  const missing = selectMissingStoredThreadMessages(
+    [
+      {
+        ...storedMessage({
+          messageId: MessageId.make("assistant:item-1"),
+          role: "assistant",
+          text: "Answer",
+        }),
+        createdAt: repairedTimestamp,
+        updatedAt: repairedTimestamp,
+      },
+    ],
+    [
+      projectedMessage({
+        id: MessageId.make("assistant:item-1"),
+        role: "assistant",
+        text: "Answer",
+      }),
+    ],
+  );
+
+  expect(missing.map((message) => message.messageId)).toEqual([MessageId.make("assistant:item-1")]);
+  expect(missing[0]?.createdAt).toBe(repairedTimestamp);
 });
 
 it.layer(NodeServices.layer)("targeted stored Codex thread sync", (it) => {

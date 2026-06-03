@@ -62,6 +62,20 @@ function messageContentKey(
   return `${message.role}\u0000${normalizedMessageText(message.text)}`;
 }
 
+function storedMessageMatchesExisting(
+  stored: ProviderStoredThreadMessage,
+  existing: OrchestrationMessage,
+): boolean {
+  return (
+    existing.role === stored.role &&
+    normalizedMessageText(existing.text) === normalizedMessageText(stored.text) &&
+    existing.turnId === stored.turnId &&
+    existing.streaming === stored.streaming &&
+    existing.createdAt === stored.createdAt &&
+    existing.updatedAt === stored.updatedAt
+  );
+}
+
 function incrementCount(map: Map<string, number>, key: string): number {
   const next = (map.get(key) ?? 0) + 1;
   map.set(key, next);
@@ -72,7 +86,7 @@ export function selectMissingStoredThreadMessages(
   storedMessages: ReadonlyArray<ProviderStoredThreadMessage>,
   existingMessages: ReadonlyArray<OrchestrationMessage>,
 ): ReadonlyArray<ProviderStoredThreadMessage> {
-  const existingMessageIds = new Set(existingMessages.map((message) => message.id));
+  const existingMessageById = new Map(existingMessages.map((message) => [message.id, message]));
   const existingContentCounts = new Map<string, number>();
   for (const message of existingMessages) {
     incrementCount(existingContentCounts, messageContentKey(message));
@@ -83,7 +97,11 @@ export function selectMissingStoredThreadMessages(
   for (const message of storedMessages) {
     const key = messageContentKey(message);
     const storedOrdinal = incrementCount(seenStoredContentCounts, key);
-    if (existingMessageIds.has(message.messageId)) {
+    const existingMessage = existingMessageById.get(message.messageId);
+    if (existingMessage !== undefined) {
+      if (!storedMessageMatchesExisting(message, existingMessage)) {
+        missing.push(message);
+      }
       continue;
     }
     if ((existingContentCounts.get(key) ?? 0) >= storedOrdinal) {
