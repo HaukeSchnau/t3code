@@ -389,6 +389,10 @@ function buildCursorDiscoveredModelsFromAvailableModelsResponse(
   );
 }
 
+const decodeCursorListAvailableModelsResponse = Schema.decodeUnknownEffect(
+  CursorListAvailableModelsResponse,
+);
+
 const makeCursorAcpProbeRuntime = (
   cursorSettings: CursorSettings,
   environment: NodeJS.ProcessEnv = process.env,
@@ -547,9 +551,7 @@ const discoverCursorModelsViaListAvailableModels = (
       Effect.gen(function* () {
         yield* acp.start();
         const response = yield* acp.request("cursor/list_available_models", {});
-        const decoded = yield* Schema.decodeUnknownEffect(CursorListAvailableModelsResponse)(
-          response,
-        );
+        const decoded = yield* decodeCursorListAvailableModelsResponse(response);
         return buildCursorDiscoveredModelsFromAvailableModelsResponse(decoded);
       }),
     environment,
