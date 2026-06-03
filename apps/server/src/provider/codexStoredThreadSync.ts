@@ -93,6 +93,13 @@ export function chunkStoredThreadMessagesForSync(
   return chunks;
 }
 
+function toStoredThreadShell(thread: ProviderStoredThreadSummary): ProviderStoredThreadSummary {
+  return {
+    ...thread,
+    messages: [],
+  };
+}
+
 export function selectMissingStoredThreadMessages(
   storedMessages: ReadonlyArray<ProviderStoredThreadMessage>,
   existingMessages: ReadonlyArray<OrchestrationMessage>,
@@ -191,30 +198,18 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
     const existingBinding = codexBindingByProviderThreadId.get(input.thread.providerThreadId);
     const threadId = existingBinding?.threadId ?? ThreadId.make(input.thread.providerThreadId);
     const existingThread = yield* projection.getThreadDetailById(threadId);
+    const threadShell = toStoredThreadShell(input.thread);
 
     if (Option.isSome(existingThread)) {
-      const missingMessages = selectMissingStoredThreadMessages(
-        input.thread.messages,
-        existingThread.value.messages,
-      );
-      for (const messages of chunkStoredThreadMessagesForSync(missingMessages)) {
-        yield* engine.dispatch({
-          type: "thread.messages.sync",
-          commandId: CommandId.make(yield* randomId),
-          threadId,
-          messages: [...messages],
-        });
-      }
       yield* upsertCodexBinding({
         instanceId: input.instanceId,
         threadId,
-        thread: input.thread,
+        thread: threadShell,
         ...(existingBinding?.status ? { status: existingBinding.status } : {}),
         ...(existingBinding?.runtimeMode ? { runtimeMode: existingBinding.runtimeMode } : {}),
-        lastRuntimeEvent:
-          missingMessages.length > 0 ? "codex.thread.sync" : "codex.thread.sync.noop",
+        lastRuntimeEvent: "codex.thread.shell-sync",
       });
-      return { imported: false, syncedMessages: missingMessages.length };
+      return { imported: false, syncedMessages: 0 };
     }
 
     if (existingBinding) {
@@ -248,15 +243,15 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
       commandId: CommandId.make(yield* randomId),
       threadId,
       projectId,
-      title: input.thread.title,
+      title: threadShell.title,
       modelSelection: modelSelectionForCodexInstance(input.instanceId),
       runtimeMode: "full-access",
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
       branch: null,
       worktreePath: null,
-      messages: [...input.thread.messages],
-      createdAt: input.thread.createdAt,
-      updatedAt: input.thread.updatedAt,
+      messages: [],
+      createdAt: threadShell.createdAt,
+      updatedAt: threadShell.updatedAt,
     });
 
     yield* upsertCodexBinding({
@@ -264,10 +259,10 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
       threadId,
       runtimeMode: "full-access",
       status: "stopped",
-      thread: input.thread,
-      lastRuntimeEvent: "codex.thread.import",
+      thread: threadShell,
+      lastRuntimeEvent: "codex.thread.shell-import",
     });
-    return { imported: true, syncedMessages: input.thread.messages.length };
+    return { imported: true, syncedMessages: 0 };
   });
 
   let importedCount = 0;
@@ -322,6 +317,7 @@ export const syncCodexStoredThreads = Effect.fn("syncCodexStoredThreads")(functi
           count: threadShells.length,
         });
       }
+      continue;
     }
 
     if (!listStoredThreads) {

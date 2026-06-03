@@ -32,10 +32,14 @@ import type {
 import {
   chunkStoredThreadMessagesForSync,
   selectMissingStoredThreadMessages,
+  syncCodexStoredThreads,
   syncCodexStoredThreadByThreadId,
 } from "./codexStoredThreadSync.ts";
 import type { ProviderInstance } from "./ProviderDriver.ts";
-import type { ProviderStoredThreadMessage } from "./Services/ProviderAdapter.ts";
+import type {
+  ProviderStoredThreadMessage,
+  ProviderStoredThreadSummary,
+} from "./Services/ProviderAdapter.ts";
 
 const timestamp = "2026-01-01T00:00:00.000Z";
 const codexProvider = ProviderDriverKind.make("codex");
@@ -69,6 +73,83 @@ function projectedMessage(
     createdAt: timestamp,
     updatedAt: timestamp,
   };
+}
+
+function storedThread(
+  input: Partial<ProviderStoredThreadSummary> &
+    Pick<ProviderStoredThreadSummary, "providerThreadId" | "messages">,
+): ProviderStoredThreadSummary {
+  return {
+    providerThreadId: input.providerThreadId,
+    title: input.title ?? "Stored Codex Thread",
+    cwd: input.cwd ?? "/tmp/project-1",
+    preview: input.preview ?? "Stored preview",
+    createdAt: input.createdAt ?? timestamp,
+    updatedAt: input.updatedAt ?? timestamp,
+    messages: input.messages,
+  };
+}
+
+function makeCodexProviderInstance(
+  adapter: Partial<ProviderInstance["adapter"]>,
+): ProviderInstance {
+  return {
+    instanceId: codexInstanceId,
+    driverKind: codexProvider,
+    continuationIdentity: {
+      driverKind: codexProvider,
+      continuationKey: "codex:instance:codex",
+    },
+    displayName: "Codex",
+    enabled: true,
+    adapter: adapter as ProviderInstance["adapter"],
+    snapshot: {} as ProviderInstance["snapshot"],
+    textGeneration: {} as ProviderInstance["textGeneration"],
+  };
+}
+
+function makeBulkSyncLayer(input: {
+  readonly adapter: Partial<ProviderInstance["adapter"]>;
+  readonly dispatchedCommands?: OrchestrationCommand[];
+  readonly upsertedBindings?: ProviderRuntimeBinding[];
+  readonly getThreadDetailById?: ProjectionSnapshotQueryShape["getThreadDetailById"];
+  readonly getActiveProjectByWorkspaceRoot?: ProjectionSnapshotQueryShape["getActiveProjectByWorkspaceRoot"];
+}) {
+  const dispatchedCommands = input.dispatchedCommands ?? [];
+  const upsertedBindings = input.upsertedBindings ?? [];
+  return Layer.mergeAll(
+    Layer.succeed(ProviderSessionDirectory, {
+      getBinding: () => Effect.succeed(Option.none()),
+      upsert: (binding) =>
+        Effect.sync(() => {
+          upsertedBindings.push(binding);
+        }),
+      getProvider: () => Effect.succeed(codexProvider),
+      listThreadIds: () => Effect.succeed([]),
+      listBindings: () => Effect.succeed([]),
+    } satisfies ProviderSessionDirectoryShape),
+    Layer.succeed(ProviderInstanceRegistry, {
+      getInstance: () => Effect.sync(() => undefined),
+      listInstances: Effect.succeed([makeCodexProviderInstance(input.adapter)]),
+      listUnavailable: Effect.succeed([]),
+      streamChanges: Stream.empty,
+      subscribeChanges: Effect.die("not used"),
+    } satisfies ProviderInstanceRegistryShape),
+    Layer.succeed(ProjectionSnapshotQuery, {
+      getThreadDetailById: input.getThreadDetailById ?? (() => Effect.succeed(Option.none())),
+      getActiveProjectByWorkspaceRoot:
+        input.getActiveProjectByWorkspaceRoot ?? (() => Effect.succeed(Option.none())),
+    } as unknown as ProjectionSnapshotQueryShape),
+    Layer.succeed(OrchestrationEngineService, {
+      dispatch: (command) =>
+        Effect.sync(() => {
+          dispatchedCommands.push(command);
+          return { sequence: dispatchedCommands.length };
+        }),
+      readEvents: () => Stream.empty,
+      streamDomainEvents: Stream.empty,
+    } satisfies OrchestrationEngineShape),
+  );
 }
 
 it("selects only stored Codex messages not already represented in T3", () => {
@@ -175,6 +256,142 @@ it("splits stored message sync into small batches", () => {
   const batches = chunkStoredThreadMessagesForSync(messages);
 
   expect(batches.map((batch) => batch.length)).toEqual([25, 25, 11]);
+});
+
+it.layer(NodeServices.layer)("bulk stored Codex thread sync", (it) => {
+  it.effect("prefers shell listing and imports threads without hydrating messages", () =>
+    Effect.gen(function* () {
+      const providerThreadId = "codex-thread-shell";
+      const dispatchedCommands: OrchestrationCommand[] = [];
+      const upsertedBindings: ProviderRuntimeBinding[] = [];
+
+      const adapter = {
+        listStoredThreadShells: () =>
+          Effect.succeed([
+            storedThread({
+              providerThreadId,
+              title: "Shell Thread",
+              messages: [],
+            }),
+          ]),
+        listStoredThreads: () => Effect.die("full stored thread listing should stay lazy"),
+      } satisfies Pick<ProviderInstance["adapter"], "listStoredThreadShells" | "listStoredThreads">;
+
+      const layer = makeBulkSyncLayer({ adapter, dispatchedCommands, upsertedBindings });
+
+      const result = yield* syncCodexStoredThreads().pipe(Effect.provide(layer));
+
+      expect(result).toEqual({ importedCount: 1, syncedMessageCount: 0 });
+      expect(dispatchedCommands.map((command) => command.type)).toEqual([
+        "project.create",
+        "thread.import",
+      ]);
+      expect(dispatchedCommands[1]).toMatchObject({
+        type: "thread.import",
+        messages: [],
+      });
+      expect(upsertedBindings[0]?.runtimePayload).toMatchObject({
+        lastRuntimeEvent: "codex.thread.shell-import",
+      });
+    }),
+  );
+
+  it.effect("discards full-list messages during startup fallback", () =>
+    Effect.gen(function* () {
+      const providerThreadId = "codex-thread-full-list";
+      const dispatchedCommands: OrchestrationCommand[] = [];
+
+      const adapter = {
+        listStoredThreads: () =>
+          Effect.succeed([
+            storedThread({
+              providerThreadId,
+              messages: [
+                storedMessage({
+                  messageId: MessageId.make("assistant:item-1"),
+                  role: "assistant",
+                  text: "Hydrate me later",
+                }),
+              ],
+            }),
+          ]),
+      } satisfies Pick<ProviderInstance["adapter"], "listStoredThreads">;
+
+      const layer = makeBulkSyncLayer({ adapter, dispatchedCommands });
+
+      const result = yield* syncCodexStoredThreads().pipe(Effect.provide(layer));
+
+      expect(result).toEqual({ importedCount: 1, syncedMessageCount: 0 });
+      expect(dispatchedCommands[1]).toMatchObject({
+        type: "thread.import",
+        messages: [],
+      });
+    }),
+  );
+
+  it.effect("does not repair existing thread messages during bulk sync", () =>
+    Effect.gen(function* () {
+      const providerThreadId = "codex-thread-existing";
+      const threadId = ThreadId.make(providerThreadId);
+      const dispatchedCommands: OrchestrationCommand[] = [];
+      const upsertedBindings: ProviderRuntimeBinding[] = [];
+      const existingThread: OrchestrationThread = {
+        id: threadId,
+        projectId: ProjectId.make("project-1"),
+        title: "Existing imported thread",
+        modelSelection: {
+          instanceId: codexInstanceId,
+          model: DEFAULT_MODEL,
+        },
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        latestTurn: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        archivedAt: null,
+        deletedAt: null,
+        messages: [],
+        proposedPlans: [],
+        activities: [],
+        checkpoints: [],
+        session: null,
+      };
+
+      const adapter = {
+        listStoredThreads: () =>
+          Effect.succeed([
+            storedThread({
+              providerThreadId,
+              messages: [
+                storedMessage({
+                  messageId: MessageId.make("assistant:item-1"),
+                  role: "assistant",
+                  text: "Repair me when opened",
+                }),
+              ],
+            }),
+          ]),
+      } satisfies Pick<ProviderInstance["adapter"], "listStoredThreads">;
+
+      const layer = makeBulkSyncLayer({
+        adapter,
+        dispatchedCommands,
+        upsertedBindings,
+        getThreadDetailById: () => Effect.succeed(Option.some(existingThread)),
+        getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+      });
+
+      const result = yield* syncCodexStoredThreads().pipe(Effect.provide(layer));
+
+      expect(result).toEqual({ importedCount: 0, syncedMessageCount: 0 });
+      expect(dispatchedCommands).toEqual([]);
+      expect(upsertedBindings[0]?.runtimePayload).toMatchObject({
+        lastRuntimeEvent: "codex.thread.shell-sync",
+      });
+    }),
+  );
 });
 
 it.layer(NodeServices.layer)("targeted stored Codex thread sync", (it) => {
