@@ -72,10 +72,10 @@ agents.
 
 ## Syncing and Publishing
 
-- This is a personal repository; before starting work, always pull `main` with `jj-pull main` and pull again regularly during longer tasks.
-- When work is done, commit the intended changes and push directly to `main` with `jj-push main` instead of opening a pull request.
-
-## Syncing and Publishing
-
-- This is a personal repository; before starting work, always pull `main` with `jj-pull main` and `main` from `upstream` with `jj-pull main --remote upstream`, and pull again regularly during longer tasks.
+- This is a personal fork; keep `origin/main` as the fork branch and regularly sync upstream by merging `upstream/main` into it.
+- Before starting work, fetch both remotes sequentially with `jj git fetch --remote origin` and `jj git fetch --remote upstream`, then inspect `jj status`.
+- If `upstream/main` has advanced, create a dedicated sync merge with `jj new main main@upstream -m "merge: sync upstream main"`.
+- Resolve any merge conflicts in that sync change. Do not mix feature work or unrelated edits into the upstream sync merge.
+- After resolving conflicts, run the required checks, then commit the sync change with `jj commit -m "merge: sync upstream main"`.
+- Do not use `jj-pull main --remote upstream` for routine fork syncing; that moves/rebases `main` to upstream instead of preserving the fork's merge-based history.
 - When work is done, commit the intended changes and push directly to `main` with `jj-push main` instead of opening a pull request.
