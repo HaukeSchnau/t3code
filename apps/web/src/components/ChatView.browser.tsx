@@ -4161,6 +4161,52 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("shows explicit and inherited tags in the selected thread header", async () => {
+    const projectKey = derivePhysicalProjectKey({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      cwd: "/repo/project",
+    });
+    useUiStateStore.setState({
+      tagById: {
+        bug: {
+          id: "bug",
+          name: "Bug",
+          createdAt: isoAt(1),
+        },
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: isoAt(1),
+        },
+      },
+      threadTagIdsByThreadKey: {
+        [THREAD_KEY]: ["bug"],
+      },
+      projectTagIdsByProjectKey: {
+        [projectKey]: ["work"],
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-header-tags" as MessageId,
+        targetText: "header tags",
+      }),
+    });
+
+    try {
+      await expect
+        .element(page.getByTestId("chat-header-tag-bug").getByText("Bug"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId("chat-header-tag-work").getByText("Work"))
+        .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("shows the sidebar terminal indicator from terminal metadata activity", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

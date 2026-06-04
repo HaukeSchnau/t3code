@@ -89,7 +89,7 @@ import {
   useStore,
 } from "../store";
 import { createProjectSelectorByRef, createThreadSelectorByRef } from "../storeSelectors";
-import { useUiStateStore } from "../uiStateStore";
+import { type UiTag, useUiStateStore } from "../uiStateStore";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -131,6 +131,7 @@ import { useSettings } from "../hooks/useSettings";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import {
+  derivePhysicalProjectKey,
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
@@ -217,6 +218,7 @@ const EMPTY_PROPOSED_PLANS: Thread["proposedPlans"] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
+const EMPTY_ACTIVE_TAGS: UiTag[] = [];
 
 function readComposerHandle(
   composerRef: RefObject<ChatComposerHandle | null>,
@@ -1084,6 +1086,39 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const activeProject = useStore(
     useMemo(() => createProjectSelectorByRef(activeProjectRef), [activeProjectRef]),
+  );
+  const activeProjectTagKey = activeProject ? derivePhysicalProjectKey(activeProject) : null;
+  const activeTags = useUiStateStore(
+    useShallow((state) => {
+      if (!activeThreadKey) {
+        return EMPTY_ACTIVE_TAGS;
+      }
+
+      const tagIds = new Set<string>();
+      for (const tagId of state.threadTagIdsByThreadKey[activeThreadKey] ?? []) {
+        tagIds.add(tagId);
+      }
+      if (activeProjectTagKey) {
+        for (const tagId of state.projectTagIdsByProjectKey[activeProjectTagKey] ?? []) {
+          tagIds.add(tagId);
+        }
+      }
+
+      if (tagIds.size === 0) {
+        return EMPTY_ACTIVE_TAGS;
+      }
+
+      return [...tagIds]
+        .flatMap((tagId) => {
+          const tag = state.tagById[tagId];
+          return tag ? [tag] : [];
+        })
+        .toSorted((left, right) =>
+          left.name.localeCompare(right.name, undefined, {
+            sensitivity: "base",
+          }),
+        );
+    }),
   );
 
   useEffect(() => {
@@ -3800,6 +3835,7 @@ export default function ChatView(props: ChatViewProps) {
           {...(routeKind === "draft" && draftId ? { draftId } : {})}
           activeThreadTitle={activeThread.title}
           activeProjectName={activeProject?.name}
+          activeTags={activeTags}
           isGitRepo={isGitRepo}
           openInCwd={gitCwd}
           activeProjectScripts={activeProject?.scripts}
