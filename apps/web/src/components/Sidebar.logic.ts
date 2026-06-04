@@ -353,9 +353,12 @@ export function isContextMenuPointerDown(input: {
 export function resolveThreadRowClassName(input: {
   isActive: boolean;
   isSelected: boolean;
+  isMultiline?: boolean;
 }): string {
-  const baseClassName =
-    "h-6 w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring sm:h-7";
+  const baseClassName = cn(
+    "w-full translate-x-0 cursor-pointer justify-start px-2 text-left select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring",
+    input.isMultiline ? "h-auto min-h-10 items-start py-1.5 sm:h-auto sm:min-h-11" : "h-6 sm:h-7",
+  );
 
   if (input.isSelected && input.isActive) {
     return cn(

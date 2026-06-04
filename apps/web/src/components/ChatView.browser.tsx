@@ -3986,10 +3986,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect.element(page.getByText("Pinned")).toBeInTheDocument();
       await expect.element(page.getByText("Recent")).toBeInTheDocument();
       await expect
-        .element(page.getByTestId(`thread-row-${pinnedThreadId}`).getByText("Alpha Project"))
+        .element(page.getByTestId(`thread-project-${pinnedThreadId}`).getByText("Alpha Project"))
         .toBeInTheDocument();
       await expect
-        .element(page.getByTestId(`thread-row-${newestThreadId}`).getByText("Beta Project"))
+        .element(page.getByTestId(`thread-project-${newestThreadId}`).getByText("Beta Project"))
         .toBeInTheDocument();
 
       await vi.waitFor(

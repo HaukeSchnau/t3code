@@ -661,6 +661,17 @@ describe("resolveThreadRowClassName", () => {
     expect(className).toContain("bg-accent/85");
     expect(className).toContain("hover:bg-accent");
   });
+
+  it("uses a taller auto-height row for multiline thread metadata", () => {
+    const className = resolveThreadRowClassName({
+      isActive: false,
+      isSelected: false,
+      isMultiline: true,
+    });
+    expect(className).toContain("h-auto");
+    expect(className).toContain("min-h-10");
+    expect(className).not.toContain("h-6");
+  });
 });
 
 describe("resolveProjectStatusIndicator", () => {
