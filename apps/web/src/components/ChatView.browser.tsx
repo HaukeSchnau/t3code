@@ -1768,6 +1768,8 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectExpandedById: {},
       projectOrder: [],
       threadLastVisitedAtById: {},
+      threadPinnedAtById: {},
+      sidebarViewMode: "projects",
     });
     useTerminalUiStateStore.persist.clearStorage();
     useTerminalUiStateStore.setState({
@@ -3894,6 +3896,108 @@ describe("ChatView timeline estimator parity (full app)", () => {
           const tooltip = document.querySelector<HTMLElement>('[data-slot="tooltip-popup"]');
           expect(tooltip).not.toBeNull();
           expect(tooltip?.textContent).toContain(THREAD_TITLE);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows pinned and recent threads in the all threads sidebar view with project labels", async () => {
+    const pinnedThreadId = "thread-pinned-alpha" as ThreadId;
+    const newestThreadId = "thread-newest-beta" as ThreadId;
+    const olderThreadId = "thread-older-alpha" as ThreadId;
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-all-threads-target" as MessageId,
+      targetText: "all threads target",
+    });
+    const alphaThread = {
+      ...baseSnapshot.threads[0]!,
+      id: pinnedThreadId,
+      title: "Alpha investigation",
+      createdAt: isoAt(120),
+      updatedAt: isoAt(420),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: pinnedThreadId,
+        updatedAt: isoAt(420),
+      },
+    };
+    const newestThread = {
+      ...baseSnapshot.threads[0]!,
+      id: newestThreadId,
+      projectId: SECOND_PROJECT_ID,
+      title: "Newest beta follow-up",
+      createdAt: isoAt(180),
+      updatedAt: isoAt(900),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: newestThreadId,
+        updatedAt: isoAt(900),
+      },
+    };
+    const olderThread = {
+      ...baseSnapshot.threads[0]!,
+      id: olderThreadId,
+      title: "Older alpha cleanup",
+      createdAt: isoAt(60),
+      updatedAt: isoAt(240),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: olderThreadId,
+        updatedAt: isoAt(240),
+      },
+    };
+    const snapshot: OrchestrationReadModel = {
+      ...baseSnapshot,
+      projects: [
+        {
+          ...baseSnapshot.projects[0]!,
+          title: "Alpha Project",
+          workspaceRoot: "/repo/alpha",
+          updatedAt: isoAt(450),
+        },
+        {
+          ...baseSnapshot.projects[0]!,
+          id: SECOND_PROJECT_ID,
+          title: "Beta Project",
+          workspaceRoot: "/repo/beta",
+          updatedAt: isoAt(900),
+        },
+      ],
+      threads: [olderThread, alphaThread, newestThread],
+      updatedAt: isoAt(900),
+    };
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: `/${LOCAL_ENVIRONMENT_ID}/${olderThreadId}`,
+    });
+
+    try {
+      await expect.element(page.getByTestId(`thread-row-${pinnedThreadId}`)).toBeInTheDocument();
+      await page.getByTestId(`thread-row-${pinnedThreadId}`).hover();
+      await page.getByTestId(`thread-pin-${pinnedThreadId}`).click();
+
+      await page.getByRole("button", { name: "Show all threads" }).click();
+      await expect.element(page.getByText("All Threads")).toBeInTheDocument();
+      await expect.element(page.getByText("Pinned")).toBeInTheDocument();
+      await expect.element(page.getByText("Recent")).toBeInTheDocument();
+      await expect
+        .element(page.getByTestId(`thread-row-${pinnedThreadId}`).getByText("Alpha Project"))
+        .toBeInTheDocument();
+      await expect
+        .element(page.getByTestId(`thread-row-${newestThreadId}`).getByText("Beta Project"))
+        .toBeInTheDocument();
+
+      await vi.waitFor(
+        () => {
+          const rowIds = Array.from(
+            document.querySelectorAll<HTMLElement>("[data-testid^='thread-row-']"),
+          ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
+          expect(rowIds).toEqual([pinnedThreadId, newestThreadId, olderThreadId]);
         },
         { timeout: 8_000, interval: 16 },
       );
