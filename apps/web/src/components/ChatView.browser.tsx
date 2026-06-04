@@ -4010,6 +4010,84 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("keeps pinned and active threads visible in collapsed projects", async () => {
+    const pinnedThreadId = "thread-project-collapsed-pinned" as ThreadId;
+    const activeThreadId = "thread-project-collapsed-active" as ThreadId;
+    const hiddenThreadId = "thread-project-collapsed-hidden" as ThreadId;
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-collapsed-project-target" as MessageId,
+      targetText: "collapsed project target",
+    });
+    const pinnedThread = {
+      ...baseSnapshot.threads[0]!,
+      id: pinnedThreadId,
+      title: "Pinned collapsed project thread",
+      createdAt: isoAt(120),
+      updatedAt: isoAt(420),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: pinnedThreadId,
+        updatedAt: isoAt(420),
+      },
+    };
+    const activeThread = {
+      ...baseSnapshot.threads[0]!,
+      id: activeThreadId,
+      title: "Active collapsed project thread",
+      createdAt: isoAt(60),
+      updatedAt: isoAt(240),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: activeThreadId,
+        updatedAt: isoAt(240),
+      },
+    };
+    const hiddenThread = {
+      ...baseSnapshot.threads[0]!,
+      id: hiddenThreadId,
+      title: "Hidden collapsed project thread",
+      createdAt: isoAt(180),
+      updatedAt: isoAt(900),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: hiddenThreadId,
+        updatedAt: isoAt(900),
+      },
+    };
+    const pinnedThreadKey = scopedThreadKey(scopeThreadRef(LOCAL_ENVIRONMENT_ID, pinnedThreadId));
+    useUiStateStore.setState({
+      threadPinnedAtById: {
+        [pinnedThreadKey]: isoAt(1_000),
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: {
+        ...baseSnapshot,
+        threads: [activeThread, pinnedThread, hiddenThread],
+        updatedAt: isoAt(900),
+      },
+      initialPath: `/${LOCAL_ENVIRONMENT_ID}/${activeThreadId}`,
+    });
+
+    try {
+      await page.getByTestId(`project-row-${PROJECT_LOGICAL_KEY}`).click();
+
+      await vi.waitFor(
+        () => {
+          const rowIds = Array.from(
+            document.querySelectorAll<HTMLElement>("[data-testid^='thread-row-']"),
+          ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
+          expect(rowIds).toEqual([pinnedThreadId, activeThreadId]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("groups tagged threads by collapsible tag sections with inherited project tags", async () => {
     const pinnedThreadId = "thread-tagged-pinned-alpha" as ThreadId;
     const olderThreadId = "thread-tagged-older-alpha" as ThreadId;
@@ -4155,6 +4233,21 @@ describe("ChatView timeline estimator parity (full app)", () => {
             ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
           expect(readRowIds(bugSection)).toEqual([pinnedThreadId]);
           expect(readRowIds(workSection)).toEqual([pinnedThreadId, betaThreadId, olderThreadId]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      await page.getByTestId("sidebar-tag-work").click();
+      await vi.waitFor(
+        () => {
+          const workSection = document.querySelector<HTMLElement>(
+            '[data-testid="sidebar-section-work"]',
+          );
+          expect(workSection).not.toBeNull();
+          const rowIds = Array.from(
+            workSection?.querySelectorAll<HTMLElement>("[data-testid^='thread-row-']") ?? [],
+          ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
+          expect(rowIds).toEqual([pinnedThreadId, olderThreadId]);
         },
         { timeout: 8_000, interval: 16 },
       );
