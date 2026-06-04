@@ -11,6 +11,7 @@ import {
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
+  TagIcon,
   TerminalIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -164,6 +165,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
   getSidebarThreadIdsToPrewarm,
+  buildSidebarTagThreadGroups,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
   resolveProjectStatusIndicator,
@@ -322,6 +324,18 @@ interface SidebarThreadRowProps {
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
 }
+
+type SidebarTagDialogTarget =
+  | {
+      kind: "thread";
+      threadKey: string;
+      title: string;
+    }
+  | {
+      kind: "project";
+      projectKey: string;
+      title: string;
+    };
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowProps) {
   const {
@@ -990,6 +1004,8 @@ interface SidebarProjectItemProps {
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
+  openThreadTagDialog: (threadKey: string, title: string) => void;
+  openProjectTagDialog: (projectKey: string, title: string) => void;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
   collapseThreadListForProject: (projectKey: string) => void;
@@ -1010,6 +1026,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     archiveThread,
     deleteThread,
     threadJumpLabelByKey,
+    openThreadTagDialog,
+    openProjectTagDialog,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
     collapseThreadListForProject,
@@ -1040,6 +1058,8 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setThreadPinned = useUiStateStore((state) => state.setThreadPinned);
+  const removeTagFromThread = useUiStateStore((state) => state.removeTagFromThread);
+  const removeTagFromProject = useUiStateStore((state) => state.removeTagFromProject);
   const toggleProject = useUiStateStore((state) => state.toggleProject);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
@@ -1147,6 +1167,9 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       ),
     ),
   );
+  const tagById = useUiStateStore((state) => state.tagById);
+  const threadTagIdsByThreadKey = useUiStateStore((state) => state.threadTagIdsByThreadKey);
+  const projectTagIdsByProjectKey = useUiStateStore((state) => state.projectTagIdsByProjectKey);
   const [renamingThreadKey, setRenamingThreadKey] = useState<string | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
   const [confirmingArchiveThreadKey, setConfirmingArchiveThreadKey] = useState<string | null>(null);
@@ -1524,14 +1547,19 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
         const actionHandlers = new Map<string, () => Promise<void> | void>();
         const makeLeaf = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "add-tag" | "remove-tag" | "copy-path" | "delete",
           member: SidebarProjectGroupMember,
           options?: {
             destructive?: boolean;
             disabled?: boolean;
+            tagId?: string;
+            tagName?: string;
           },
         ): ContextMenuItem<string> => {
-          const id = `${action}:${member.physicalProjectKey}`;
+          const id =
+            action === "remove-tag" && options?.tagId
+              ? `${action}:${member.physicalProjectKey}:${options.tagId}`
+              : `${action}:${member.physicalProjectKey}`;
           actionHandlers.set(id, () => {
             switch (action) {
               case "rename":
@@ -1539,6 +1567,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
                 return;
               case "grouping":
                 openProjectGroupingDialog(member);
+                return;
+              case "add-tag":
+                openProjectTagDialog(member.physicalProjectKey, member.name);
+                return;
+              case "remove-tag":
+                if (options?.tagId) {
+                  removeTagFromProject(member.physicalProjectKey, options.tagId);
+                }
                 return;
               case "copy-path":
                 copyPathToClipboard(member.cwd, { path: member.cwd });
@@ -1550,14 +1586,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
 
           return {
             id,
-            label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+            label:
+              options?.tagName ??
+              formatProjectMemberActionLabel(member, project.groupedProjectCount),
             ...(options?.destructive ? { destructive: true } : {}),
             ...(options?.disabled ? { disabled: true } : {}),
           };
         };
 
         const buildTargetedItem = (
-          action: "rename" | "grouping" | "copy-path" | "delete",
+          action: "rename" | "grouping" | "add-tag" | "copy-path" | "delete",
           label: string,
           options?: {
             destructive?: boolean;
@@ -1587,10 +1625,57 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
           };
         };
 
+        const buildRemoveTagItem = (): ContextMenuItem<string> => {
+          const buildMemberChildren = (
+            member: SidebarProjectGroupMember,
+          ): ContextMenuItem<string>[] =>
+            (projectTagIdsByProjectKey[member.physicalProjectKey] ?? []).flatMap((tagId) => {
+              const tag = tagById[tagId];
+              return tag
+                ? [
+                    makeLeaf("remove-tag", member, {
+                      tagId,
+                      tagName: tag.name,
+                    }),
+                  ]
+                : [];
+            });
+
+          if (project.memberProjects.length === 1) {
+            const singleMember = project.memberProjects[0]!;
+            const children = buildMemberChildren(singleMember);
+            return {
+              id: "remove-tag:submenu",
+              label: "Remove default tag",
+              disabled: children.length === 0,
+              children,
+            };
+          }
+
+          const children = project.memberProjects.map((member) => {
+            const memberChildren = buildMemberChildren(member);
+            return {
+              id: `remove-tag:${member.physicalProjectKey}:submenu`,
+              label: formatProjectMemberActionLabel(member, project.groupedProjectCount),
+              disabled: memberChildren.length === 0,
+              children: memberChildren,
+            };
+          });
+
+          return {
+            id: "remove-tag:submenu",
+            label: "Remove default tag",
+            disabled: children.every((child) => child.disabled),
+            children,
+          };
+        };
+
         const clicked = await api.contextMenu.show(
           [
             buildTargetedItem("rename", "Rename project"),
             buildTargetedItem("grouping", "Project grouping…"),
+            buildTargetedItem("add-tag", "Add default tag…"),
+            buildRemoveTagItem(),
             buildTargetedItem("copy-path", "Copy Project Path"),
             buildTargetedItem("delete", "Remove project", {
               destructive: true,
@@ -1613,10 +1698,14 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       copyPathToClipboard,
       handleRemoveProject,
       openProjectGroupingDialog,
+      openProjectTagDialog,
       openProjectRenameDialog,
       project.groupedProjectCount,
       project.memberProjects,
+      projectTagIdsByProjectKey,
+      removeTagFromProject,
       suppressProjectClickForContextMenuRef,
+      tagById,
     ],
   );
 
@@ -2003,10 +2092,21 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       );
       const threadWorkspacePath = thread.worktreePath ?? threadProject?.cwd ?? project.cwd ?? null;
       const isThreadPinned = threadKey in useUiStateStore.getState().threadPinnedAtById;
+      const explicitThreadTagIds = threadTagIdsByThreadKey[threadKey] ?? [];
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
           { id: "pin", label: isThreadPinned ? "Unpin thread" : "Pin thread" },
+          { id: "add-tag", label: "Add tag…" },
+          {
+            id: "remove-tag:submenu",
+            label: "Remove tag",
+            disabled: explicitThreadTagIds.length === 0,
+            children: explicitThreadTagIds.flatMap((tagId) => {
+              const tag = tagById[tagId];
+              return tag ? [{ id: `remove-tag:${tagId}`, label: tag.name }] : [];
+            }),
+          },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2019,6 +2119,16 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         setRenamingThreadKey(threadKey);
         setRenamingTitle(thread.title);
         renamingCommittedRef.current = false;
+        return;
+      }
+
+      if (clicked === "add-tag") {
+        openThreadTagDialog(threadKey, thread.title);
+        return;
+      }
+
+      if (clicked?.startsWith("remove-tag:")) {
+        removeTagFromThread(threadKey, clicked.slice("remove-tag:".length));
         return;
       }
 
@@ -2069,8 +2179,12 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       deleteThread,
       markThreadUnread,
       memberProjectByScopedKey,
+      openThreadTagDialog,
       project.cwd,
+      removeTagFromThread,
       setThreadPinned,
+      tagById,
+      threadTagIdsByThreadKey,
     ],
   );
 
@@ -2341,13 +2455,26 @@ interface SidebarAllThreadsProjectMeta {
   cwd: string | null;
 }
 
-interface SidebarAllThreadsListProps {
-  pinnedThreads: readonly SidebarThreadSummary[];
-  recentThreads: readonly SidebarThreadSummary[];
+interface SidebarThreadListSection {
+  id: string;
+  label: string;
+  threads: readonly SidebarThreadSummary[];
+  emptyLabel?: string | undefined;
+  countLabel?: string | undefined;
+  collapsible?: boolean | undefined;
+  expanded?: boolean | undefined;
+  onToggle?: (() => void) | undefined;
+}
+
+interface SidebarThreadSectionsListProps {
+  title: string;
+  count: number;
+  sections: readonly SidebarThreadListSection[];
   orderedThreadKeys: readonly string[];
   activeRouteThreadKey: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   projectMetaByThreadKey: ReadonlyMap<string, SidebarAllThreadsProjectMeta>;
+  openThreadTagDialog: (threadKey: string, title: string) => void;
   appSettingsConfirmThreadArchive: boolean;
   appSettingsConfirmThreadDelete: boolean;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
@@ -2355,16 +2482,18 @@ interface SidebarAllThreadsListProps {
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
 }
 
-const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
-  props: SidebarAllThreadsListProps,
+const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
+  props: SidebarThreadSectionsListProps,
 ) {
   const {
-    pinnedThreads,
-    recentThreads,
+    title,
+    count,
+    sections,
     orderedThreadKeys,
     activeRouteThreadKey,
     threadJumpLabelByKey,
     projectMetaByThreadKey,
+    openThreadTagDialog,
     appSettingsConfirmThreadArchive,
     appSettingsConfirmThreadDelete,
     archiveThread,
@@ -2375,6 +2504,9 @@ const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
   const { isMobile, setOpenMobile } = useSidebar();
   const markThreadUnread = useUiStateStore((state) => state.markThreadUnread);
   const setThreadPinned = useUiStateStore((state) => state.setThreadPinned);
+  const removeTagFromThread = useUiStateStore((state) => state.removeTagFromThread);
+  const tagById = useUiStateStore((state) => state.tagById);
+  const threadTagIdsByThreadKey = useUiStateStore((state) => state.threadTagIdsByThreadKey);
   const toggleThreadSelection = useThreadSelectionStore((state) => state.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((state) => state.rangeSelectTo);
   const clearSelection = useThreadSelectionStore((state) => state.clearSelection);
@@ -2386,10 +2518,7 @@ const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const confirmArchiveButtonRefs = useRef(new Map<string, HTMLButtonElement>());
-  const allThreads = useMemo(
-    () => [...pinnedThreads, ...recentThreads],
-    [pinnedThreads, recentThreads],
-  );
+  const allThreads = useMemo(() => sections.flatMap((section) => section.threads), [sections]);
   const sidebarThreadByKey = useMemo(
     () =>
       new Map(
@@ -2667,10 +2796,21 @@ const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
       const projectMeta = projectMetaByThreadKey.get(threadKey);
       const threadWorkspacePath = thread.worktreePath ?? projectMeta?.cwd ?? null;
       const isThreadPinned = threadKey in useUiStateStore.getState().threadPinnedAtById;
+      const explicitThreadTagIds = threadTagIdsByThreadKey[threadKey] ?? [];
       const clicked = await api.contextMenu.show(
         [
           { id: "rename", label: "Rename thread" },
           { id: "pin", label: isThreadPinned ? "Unpin thread" : "Pin thread" },
+          { id: "add-tag", label: "Add tag…" },
+          {
+            id: "remove-tag:submenu",
+            label: "Remove tag",
+            disabled: explicitThreadTagIds.length === 0,
+            children: explicitThreadTagIds.flatMap((tagId) => {
+              const tag = tagById[tagId];
+              return tag ? [{ id: `remove-tag:${tagId}`, label: tag.name }] : [];
+            }),
+          },
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2683,6 +2823,14 @@ const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
         setRenamingThreadKey(threadKey);
         setRenamingTitle(thread.title);
         renamingCommittedRef.current = false;
+        return;
+      }
+      if (clicked === "add-tag") {
+        openThreadTagDialog(threadKey, thread.title);
+        return;
+      }
+      if (clicked?.startsWith("remove-tag:")) {
+        removeTagFromThread(threadKey, clicked.slice("remove-tag:".length));
         return;
       }
       if (clicked === "pin") {
@@ -2731,87 +2879,108 @@ const SidebarAllThreadsList = memo(function SidebarAllThreadsList(
       copyThreadIdToClipboard,
       deleteThread,
       markThreadUnread,
+      openThreadTagDialog,
       projectMetaByThreadKey,
+      removeTagFromThread,
       setThreadPinned,
+      tagById,
+      threadTagIdsByThreadKey,
     ],
   );
 
-  const renderSection = (
-    label: string,
-    threads: readonly SidebarThreadSummary[],
-    emptyLabel?: string,
-  ) => (
-    <div className="space-y-1">
-      <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
-        {label}
-      </div>
-      <SidebarMenuSub
-        ref={attachThreadListAutoAnimateRef}
-        className="mx-0.5 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1 py-0 sm:mx-1 sm:px-1.5"
-      >
-        {threads.length === 0 && emptyLabel ? (
-          <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
-            <div
-              data-thread-selection-safe
-              className="flex h-6 w-full translate-x-0 items-center px-2 text-left text-[10px] text-muted-foreground/60"
-            >
-              <span>{emptyLabel}</span>
-            </div>
-          </SidebarMenuSubItem>
-        ) : null}
-        {threads.map((thread) => {
-          const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-          const projectMeta = projectMetaByThreadKey.get(threadKey);
-          return (
-            <SidebarThreadRow
-              key={threadKey}
-              thread={thread}
-              projectCwd={projectMeta?.cwd ?? null}
-              projectLabel={projectMeta?.label ?? null}
-              projectTooltip={projectMeta?.tooltip ?? null}
-              timestampIso={thread.updatedAt ?? thread.createdAt}
-              orderedProjectThreadKeys={orderedThreadKeys}
-              isActive={activeRouteThreadKey === threadKey}
-              jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
-              appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
-              renamingThreadKey={renamingThreadKey}
-              renamingTitle={renamingTitle}
-              setRenamingTitle={setRenamingTitle}
-              renamingInputRef={renamingInputRef}
-              renamingCommittedRef={renamingCommittedRef}
-              confirmingArchiveThreadKey={confirmingArchiveThreadKey}
-              setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
-              confirmArchiveButtonRefs={confirmArchiveButtonRefs}
-              handleThreadClick={handleThreadClick}
-              navigateToThread={navigateToThread}
-              handleMultiSelectContextMenu={handleMultiSelectContextMenu}
-              handleThreadContextMenu={handleThreadContextMenu}
-              clearSelection={clearSelection}
-              commitRename={commitRename}
-              cancelRename={cancelRename}
-              attemptArchiveThread={attemptArchiveThread}
-              openPrLink={openPrLink}
+  const renderSection = (section: SidebarThreadListSection) => {
+    const expanded = section.expanded ?? true;
+    return (
+      <div className="space-y-1" key={section.id} data-testid={`sidebar-section-${section.id}`}>
+        {section.collapsible ? (
+          <button
+            type="button"
+            className="flex h-7 w-full items-center gap-1.5 rounded-md px-2 text-left text-xs text-muted-foreground/78 transition-colors hover:bg-accent hover:text-foreground"
+            aria-expanded={expanded}
+            data-testid={`sidebar-tag-${section.id}`}
+            onClick={section.onToggle}
+          >
+            <ChevronRightIcon
+              className={`size-3.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
             />
-          );
-        })}
-      </SidebarMenuSub>
-    </div>
-  );
+            <TagIcon className="size-3.5 shrink-0 text-muted-foreground/55" />
+            <span className="min-w-0 flex-1 truncate">{section.label}</span>
+            {section.countLabel ? (
+              <span className="shrink-0 text-[10px] text-muted-foreground/45">
+                {section.countLabel}
+              </span>
+            ) : null}
+          </button>
+        ) : (
+          <div className="px-2 pt-1 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/55">
+            {section.label}
+          </div>
+        )}
+        {expanded ? (
+          <SidebarMenuSub
+            ref={attachThreadListAutoAnimateRef}
+            className="mx-0.5 my-0 w-full translate-x-0 gap-0.5 overflow-hidden px-1 py-0 sm:mx-1 sm:px-1.5"
+          >
+            {section.threads.length === 0 && section.emptyLabel ? (
+              <SidebarMenuSubItem className="w-full" data-thread-selection-safe>
+                <div
+                  data-thread-selection-safe
+                  className="flex h-6 w-full translate-x-0 items-center px-2 text-left text-[10px] text-muted-foreground/60"
+                >
+                  <span>{section.emptyLabel}</span>
+                </div>
+              </SidebarMenuSubItem>
+            ) : null}
+            {section.threads.map((thread) => {
+              const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+              const projectMeta = projectMetaByThreadKey.get(threadKey);
+              return (
+                <SidebarThreadRow
+                  key={`${section.id}:${threadKey}`}
+                  thread={thread}
+                  projectCwd={projectMeta?.cwd ?? null}
+                  projectLabel={projectMeta?.label ?? null}
+                  projectTooltip={projectMeta?.tooltip ?? null}
+                  timestampIso={thread.updatedAt ?? thread.createdAt}
+                  orderedProjectThreadKeys={orderedThreadKeys}
+                  isActive={activeRouteThreadKey === threadKey}
+                  jumpLabel={threadJumpLabelByKey.get(threadKey) ?? null}
+                  appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+                  renamingThreadKey={renamingThreadKey}
+                  renamingTitle={renamingTitle}
+                  setRenamingTitle={setRenamingTitle}
+                  renamingInputRef={renamingInputRef}
+                  renamingCommittedRef={renamingCommittedRef}
+                  confirmingArchiveThreadKey={confirmingArchiveThreadKey}
+                  setConfirmingArchiveThreadKey={setConfirmingArchiveThreadKey}
+                  confirmArchiveButtonRefs={confirmArchiveButtonRefs}
+                  handleThreadClick={handleThreadClick}
+                  navigateToThread={navigateToThread}
+                  handleMultiSelectContextMenu={handleMultiSelectContextMenu}
+                  handleThreadContextMenu={handleThreadContextMenu}
+                  clearSelection={clearSelection}
+                  commitRename={commitRename}
+                  cancelRename={cancelRename}
+                  attemptArchiveThread={attemptArchiveThread}
+                  openPrLink={openPrLink}
+                />
+              );
+            })}
+          </SidebarMenuSub>
+        ) : null}
+      </div>
+    );
+  };
 
   return (
     <SidebarGroup className="px-2 py-2">
       <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
         <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
-          All Threads
+          {title}
         </span>
-        <span className="text-[10px] text-muted-foreground/45">{allThreads.length}</span>
+        <span className="text-[10px] text-muted-foreground/45">{count}</span>
       </div>
-      {pinnedThreads.length > 0 ? renderSection("Pinned", pinnedThreads) : null}
-      {renderSection(
-        "Recent",
-        recentThreads,
-        allThreads.length === 0 ? "No threads yet" : undefined,
-      )}
+      {sections.map(renderSection)}
     </SidebarGroup>
   );
 });
@@ -3108,6 +3277,7 @@ interface SidebarProjectsContentProps {
   sidebarViewMode: SidebarViewMode;
   onSidebarViewModeChange: (mode: SidebarViewMode) => void;
   allThreadsNode: React.ReactNode;
+  tagsNode: React.ReactNode;
   updateSettings: ReturnType<typeof useUpdateSettings>["updateSettings"];
   openAddProject: () => void;
   isManualProjectSorting: boolean;
@@ -3126,6 +3296,8 @@ interface SidebarProjectsContentProps {
   newThreadShortcutLabel: string | null;
   commandPaletteShortcutLabel: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
+  openThreadTagDialog: (threadKey: string, title: string) => void;
+  openProjectTagDialog: (projectKey: string, title: string) => void;
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
   expandThreadListForProject: (projectKey: string) => void;
   collapseThreadListForProject: (projectKey: string) => void;
@@ -3152,6 +3324,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     sidebarViewMode,
     onSidebarViewModeChange,
     allThreadsNode,
+    tagsNode,
     updateSettings,
     openAddProject,
     isManualProjectSorting,
@@ -3170,6 +3343,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     newThreadShortcutLabel,
     commandPaletteShortcutLabel,
     threadJumpLabelByKey,
+    openThreadTagDialog,
+    openProjectTagDialog,
     attachThreadListAutoAnimateRef,
     expandThreadListForProject,
     collapseThreadListForProject,
@@ -3254,7 +3429,7 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
         </SidebarGroup>
       ) : null}
       <SidebarGroup className="px-2 pb-0 pt-2">
-        <div className="grid grid-cols-2 gap-0.5 rounded-md bg-muted/45 p-0.5">
+        <div className="grid grid-cols-3 gap-0.5 rounded-md bg-muted/45 p-0.5">
           <Tooltip>
             <TooltipTrigger
               render={
@@ -3295,10 +3470,32 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
             </TooltipTrigger>
             <TooltipPopup side="right">Show threads by last activity</TooltipPopup>
           </Tooltip>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Show tags"
+                  className={`inline-flex h-7 items-center justify-center gap-1.5 rounded-sm px-2 text-xs transition-colors ${
+                    sidebarViewMode === "tags"
+                      ? "bg-background text-foreground shadow-sm"
+                      : "text-muted-foreground/70 hover:text-foreground"
+                  }`}
+                  onClick={() => onSidebarViewModeChange("tags")}
+                />
+              }
+            >
+              <TagIcon className="size-3.5" />
+              <span>Tags</span>
+            </TooltipTrigger>
+            <TooltipPopup side="right">Group threads by tag</TooltipPopup>
+          </Tooltip>
         </div>
       </SidebarGroup>
       {sidebarViewMode === "all-threads" ? (
         allThreadsNode
+      ) : sidebarViewMode === "tags" ? (
+        tagsNode
       ) : (
         <SidebarGroup className="px-2 py-2">
           <div className="mb-1 flex items-center justify-between pl-2 pr-1.5">
@@ -3365,6 +3562,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                           archiveThread={archiveThread}
                           deleteThread={deleteThread}
                           threadJumpLabelByKey={threadJumpLabelByKey}
+                          openThreadTagDialog={openThreadTagDialog}
+                          openProjectTagDialog={openProjectTagDialog}
                           attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                           expandThreadListForProject={expandThreadListForProject}
                           collapseThreadListForProject={collapseThreadListForProject}
@@ -3397,6 +3596,8 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   archiveThread={archiveThread}
                   deleteThread={deleteThread}
                   threadJumpLabelByKey={threadJumpLabelByKey}
+                  openThreadTagDialog={openThreadTagDialog}
+                  openProjectTagDialog={openProjectTagDialog}
                   attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
                   expandThreadListForProject={expandThreadListForProject}
                   collapseThreadListForProject={collapseThreadListForProject}
@@ -3430,6 +3631,13 @@ export default function Sidebar() {
   const sidebarViewMode = useUiStateStore((store) => store.sidebarViewMode);
   const setSidebarViewMode = useUiStateStore((store) => store.setSidebarViewMode);
   const threadPinnedAtById = useUiStateStore((store) => store.threadPinnedAtById);
+  const tagById = useUiStateStore((store) => store.tagById);
+  const threadTagIdsByThreadKey = useUiStateStore((store) => store.threadTagIdsByThreadKey);
+  const projectTagIdsByProjectKey = useUiStateStore((store) => store.projectTagIdsByProjectKey);
+  const tagExpandedById = useUiStateStore((store) => store.tagExpandedById);
+  const addTagToThread = useUiStateStore((store) => store.addTagToThread);
+  const addTagToProject = useUiStateStore((store) => store.addTagToProject);
+  const setTagExpanded = useUiStateStore((store) => store.setTagExpanded);
   const navigate = useNavigate();
   const pathname = useLocation({ select: (loc) => loc.pathname });
   const isOnSettings = pathname.startsWith("/settings");
@@ -3454,6 +3662,8 @@ export default function Sidebar() {
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [tagDialogTarget, setTagDialogTarget] = useState<SidebarTagDialogTarget | null>(null);
+  const [tagDialogValue, setTagDialogValue] = useState("");
   const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
@@ -3708,6 +3918,29 @@ export default function Sidebar() {
       }),
     );
   }, [projectByScopedRef, visibleThreads]);
+  const tagThreadGroups = useMemo(
+    () =>
+      buildSidebarTagThreadGroups({
+        threads: visibleThreads,
+        tagById,
+        threadTagIdsByThreadKey,
+        projectTagIdsByProjectKey,
+        pinnedAtByThreadKey: threadPinnedAtById,
+        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        getProjectKey: (thread) =>
+          projectPhysicalKeyByScopedRef.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          ) ?? null,
+      }),
+    [
+      projectPhysicalKeyByScopedRef,
+      projectTagIdsByProjectKey,
+      tagById,
+      threadPinnedAtById,
+      threadTagIdsByThreadKey,
+      visibleThreads,
+    ],
+  );
   const { pinnedThreads, recentThreads } = useMemo(
     () =>
       splitPinnedSidebarThreads({
@@ -3724,6 +3957,24 @@ export default function Sidebar() {
       ),
     [pinnedThreads, recentThreads],
   );
+  const tagSidebarThreadKeys = useMemo(() => {
+    const nextKeys: string[] = [];
+    const seenKeys = new Set<string>();
+    for (const group of tagThreadGroups) {
+      if ((tagExpandedById[group.tag.id] ?? true) === false) {
+        continue;
+      }
+      for (const thread of [...group.pinnedThreads, ...group.recentThreads]) {
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        if (seenKeys.has(threadKey)) {
+          continue;
+        }
+        seenKeys.add(threadKey);
+        nextKeys.push(threadKey);
+      }
+    }
+    return nextKeys;
+  }, [tagExpandedById, tagThreadGroups]);
   const sortedProjects = useMemo(() => {
     const sortableProjects = sidebarProjects.map((project) => ({
       ...project,
@@ -3801,7 +4052,11 @@ export default function Sidebar() {
     ],
   );
   const visibleSidebarThreadKeys =
-    sidebarViewMode === "all-threads" ? allSidebarThreadKeys : projectVisibleSidebarThreadKeys;
+    sidebarViewMode === "all-threads"
+      ? allSidebarThreadKeys
+      : sidebarViewMode === "tags"
+        ? tagSidebarThreadKeys
+        : projectVisibleSidebarThreadKeys;
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
     for (const [visibleThreadIndex, threadKey] of visibleSidebarThreadKeys.entries()) {
@@ -4100,15 +4355,78 @@ export default function Sidebar() {
     });
   }, []);
 
+  const openThreadTagDialog = useCallback((threadKey: string, title: string) => {
+    setTagDialogTarget({
+      kind: "thread",
+      threadKey,
+      title,
+    });
+    setTagDialogValue("");
+  }, []);
+
+  const openProjectTagDialog = useCallback((projectKey: string, title: string) => {
+    setTagDialogTarget({
+      kind: "project",
+      projectKey,
+      title,
+    });
+    setTagDialogValue("");
+  }, []);
+
+  const closeTagDialog = useCallback(() => {
+    setTagDialogTarget(null);
+    setTagDialogValue("");
+  }, []);
+
+  const submitTagDialog = useCallback(() => {
+    const target = tagDialogTarget;
+    const tagName = tagDialogValue.trim();
+    if (!target) {
+      return;
+    }
+    if (tagName.length === 0) {
+      toastManager.add({
+        type: "warning",
+        title: "Tag name cannot be empty",
+      });
+      return;
+    }
+    if (target.kind === "thread") {
+      addTagToThread(target.threadKey, tagName);
+    } else {
+      addTagToProject(target.projectKey, tagName);
+    }
+    closeTagDialog();
+  }, [addTagToProject, addTagToThread, closeTagDialog, tagDialogTarget, tagDialogValue]);
+
   const allThreadsNode = useMemo(
     () => (
-      <SidebarAllThreadsList
-        pinnedThreads={pinnedThreads}
-        recentThreads={recentThreads}
+      <SidebarThreadSectionsList
+        title="All Threads"
+        count={pinnedThreads.length + recentThreads.length}
+        sections={[
+          ...(pinnedThreads.length > 0
+            ? [
+                {
+                  id: "pinned",
+                  label: "Pinned",
+                  threads: pinnedThreads,
+                },
+              ]
+            : []),
+          {
+            id: "recent",
+            label: "Recent",
+            threads: recentThreads,
+            emptyLabel:
+              pinnedThreads.length + recentThreads.length === 0 ? "No threads yet" : undefined,
+          },
+        ]}
         orderedThreadKeys={allSidebarThreadKeys}
         activeRouteThreadKey={routeThreadKey}
         threadJumpLabelByKey={visibleThreadJumpLabelByKey}
         projectMetaByThreadKey={projectMetaByThreadKey}
+        openThreadTagDialog={openThreadTagDialog}
         appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
         appSettingsConfirmThreadDelete={appSettingsConfirmThreadDelete}
         archiveThread={archiveThread}
@@ -4123,6 +4441,7 @@ export default function Sidebar() {
       archiveThread,
       attachThreadListAutoAnimateRef,
       deleteThread,
+      openThreadTagDialog,
       pinnedThreads,
       projectMetaByThreadKey,
       recentThreads,
@@ -4131,8 +4450,112 @@ export default function Sidebar() {
     ],
   );
 
+  const tagsNode = useMemo(() => {
+    const sections: SidebarThreadListSection[] =
+      tagThreadGroups.length > 0
+        ? tagThreadGroups.map((group) => {
+            const expanded = tagExpandedById[group.tag.id] ?? true;
+            return {
+              id: group.tag.id,
+              label: group.tag.name,
+              countLabel: String(group.threadCount),
+              collapsible: true,
+              expanded,
+              onToggle: () => setTagExpanded(group.tag.id, !expanded),
+              threads: [...group.pinnedThreads, ...group.recentThreads],
+            };
+          })
+        : [
+            {
+              id: "empty",
+              label: "Tags",
+              threads: [],
+              emptyLabel: "No tags yet",
+            },
+          ];
+
+    return (
+      <SidebarThreadSectionsList
+        title="Tags"
+        count={tagThreadGroups.length}
+        sections={sections}
+        orderedThreadKeys={tagSidebarThreadKeys}
+        activeRouteThreadKey={routeThreadKey}
+        threadJumpLabelByKey={visibleThreadJumpLabelByKey}
+        projectMetaByThreadKey={projectMetaByThreadKey}
+        openThreadTagDialog={openThreadTagDialog}
+        appSettingsConfirmThreadArchive={appSettingsConfirmThreadArchive}
+        appSettingsConfirmThreadDelete={appSettingsConfirmThreadDelete}
+        archiveThread={archiveThread}
+        deleteThread={deleteThread}
+        attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
+      />
+    );
+  }, [
+    appSettingsConfirmThreadArchive,
+    appSettingsConfirmThreadDelete,
+    archiveThread,
+    attachThreadListAutoAnimateRef,
+    deleteThread,
+    openThreadTagDialog,
+    projectMetaByThreadKey,
+    routeThreadKey,
+    setTagExpanded,
+    tagExpandedById,
+    tagSidebarThreadKeys,
+    tagThreadGroups,
+    visibleThreadJumpLabelByKey,
+  ]);
+
   return (
     <>
+      <Dialog
+        open={tagDialogTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeTagDialog();
+          }
+        }}
+      >
+        <DialogPopup className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              {tagDialogTarget?.kind === "project" ? "Add default tag" : "Add tag"}
+            </DialogTitle>
+            <DialogDescription>
+              {tagDialogTarget
+                ? tagDialogTarget.kind === "project"
+                  ? `Threads in ${tagDialogTarget.title} inherit this tag.`
+                  : `Tag ${tagDialogTarget.title}.`
+                : "Add a tag."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-4">
+            <div className="grid gap-1.5">
+              <span className="text-xs font-medium text-foreground">Tag name</span>
+              <Input
+                aria-label="Tag name"
+                autoFocus
+                value={tagDialogValue}
+                onChange={(event) => setTagDialogValue(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    submitTagDialog();
+                  }
+                }}
+              />
+            </div>
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="outline" onClick={closeTagDialog}>
+              Cancel
+            </Button>
+            <Button onClick={submitTagDialog}>Add</Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
       <SidebarChromeHeader isElectron={isElectron} />
 
       {isOnSettings ? (
@@ -4152,6 +4575,7 @@ export default function Sidebar() {
             sidebarViewMode={sidebarViewMode}
             onSidebarViewModeChange={setSidebarViewMode}
             allThreadsNode={allThreadsNode}
+            tagsNode={tagsNode}
             updateSettings={updateSettings}
             openAddProject={openAddProjectCommandPalette}
             isManualProjectSorting={isManualProjectSorting}
@@ -4170,6 +4594,8 @@ export default function Sidebar() {
             newThreadShortcutLabel={newThreadShortcutLabel}
             commandPaletteShortcutLabel={commandPaletteShortcutLabel}
             threadJumpLabelByKey={visibleThreadJumpLabelByKey}
+            openThreadTagDialog={openThreadTagDialog}
+            openProjectTagDialog={openProjectTagDialog}
             attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
             expandThreadListForProject={expandThreadListForProject}
             collapseThreadListForProject={collapseThreadListForProject}

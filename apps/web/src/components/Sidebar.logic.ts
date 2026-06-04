@@ -9,6 +9,7 @@ import {
 import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
+import type { UiTag } from "../uiStateStore";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
@@ -33,6 +34,11 @@ export type SidebarThreadActivityInput = Pick<
 export interface SidebarPinnedThreadGroups<TThread> {
   pinnedThreads: TThread[];
   recentThreads: TThread[];
+}
+
+export interface SidebarTagThreadGroup<TThread> extends SidebarPinnedThreadGroups<TThread> {
+  tag: UiTag;
+  threadCount: number;
 }
 
 export interface ThreadStatusPill {
@@ -312,6 +318,68 @@ export function splitPinnedSidebarThreads<T extends SidebarThreadActivityInput>(
     pinnedThreads: sortSidebarThreadsByLastActivity(pinnedThreads),
     recentThreads: sortSidebarThreadsByLastActivity(recentThreads),
   };
+}
+
+export function buildSidebarTagThreadGroups<T extends SidebarThreadActivityInput>(input: {
+  threads: readonly T[];
+  tagById: Readonly<Record<string, UiTag>>;
+  threadTagIdsByThreadKey: Readonly<Record<string, readonly string[]>>;
+  projectTagIdsByProjectKey: Readonly<Record<string, readonly string[]>>;
+  pinnedAtByThreadKey: Readonly<Record<string, string>>;
+  getThreadKey: (thread: T) => string;
+  getProjectKey: (thread: T) => string | null;
+}): SidebarTagThreadGroup<T>[] {
+  const threadsByTagId = new Map<string, T[]>();
+
+  for (const thread of input.threads) {
+    const threadKey = input.getThreadKey(thread);
+    const tagIds = new Set(input.threadTagIdsByThreadKey[threadKey] ?? []);
+    const projectKey = input.getProjectKey(thread);
+    if (projectKey) {
+      for (const tagId of input.projectTagIdsByProjectKey[projectKey] ?? []) {
+        tagIds.add(tagId);
+      }
+    }
+
+    for (const tagId of tagIds) {
+      if (!input.tagById[tagId]) {
+        continue;
+      }
+      const threads = threadsByTagId.get(tagId);
+      if (threads) {
+        threads.push(thread);
+      } else {
+        threadsByTagId.set(tagId, [thread]);
+      }
+    }
+  }
+
+  return [...threadsByTagId.entries()]
+    .flatMap(([tagId, threads]) => {
+      const tag = input.tagById[tagId];
+      if (!tag) {
+        return [];
+      }
+      const { pinnedThreads, recentThreads } = splitPinnedSidebarThreads({
+        threads,
+        pinnedAtByThreadKey: input.pinnedAtByThreadKey,
+        getThreadKey: input.getThreadKey,
+      });
+      return [
+        {
+          tag,
+          threadCount: threads.length,
+          pinnedThreads,
+          recentThreads,
+        },
+      ];
+    })
+    .toSorted((left, right) =>
+      left.tag.name.localeCompare(right.tag.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
 }
 
 export function resolveAdjacentThreadId<T>(input: {

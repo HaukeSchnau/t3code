@@ -64,7 +64,7 @@ import { __resetLocalApiForTests } from "../localApi";
 import { AppAtomRegistryProvider } from "../rpc/atomRegistry";
 import { getServerConfig } from "../rpc/serverState";
 import { getRouter } from "../router";
-import { deriveLogicalProjectKeyFromSettings } from "../logicalProject";
+import { deriveLogicalProjectKeyFromSettings, derivePhysicalProjectKey } from "../logicalProject";
 import { selectBootstrapCompleteForActiveEnvironment, useStore } from "../store";
 import { terminalSessionManager } from "../terminalSessionState";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -1769,6 +1769,10 @@ describe("ChatView timeline estimator parity (full app)", () => {
       projectOrder: [],
       threadLastVisitedAtById: {},
       threadPinnedAtById: {},
+      tagById: {},
+      threadTagIdsByThreadKey: {},
+      projectTagIdsByProjectKey: {},
+      tagExpandedById: {},
       sidebarViewMode: "projects",
     });
     useTerminalUiStateStore.persist.clearStorage();
@@ -3998,6 +4002,157 @@ describe("ChatView timeline estimator parity (full app)", () => {
             document.querySelectorAll<HTMLElement>("[data-testid^='thread-row-']"),
           ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
           expect(rowIds).toEqual([pinnedThreadId, newestThreadId, olderThreadId]);
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("groups tagged threads by collapsible tag sections with inherited project tags", async () => {
+    const pinnedThreadId = "thread-tagged-pinned-alpha" as ThreadId;
+    const olderThreadId = "thread-tagged-older-alpha" as ThreadId;
+    const betaThreadId = "thread-tagged-beta" as ThreadId;
+    const baseSnapshot = createSnapshotForTargetUser({
+      targetMessageId: "msg-user-tags-target" as MessageId,
+      targetText: "tags target",
+    });
+    const pinnedThread = {
+      ...baseSnapshot.threads[0]!,
+      id: pinnedThreadId,
+      title: "Pinned alpha tag thread",
+      createdAt: isoAt(120),
+      updatedAt: isoAt(420),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: pinnedThreadId,
+        updatedAt: isoAt(420),
+      },
+    };
+    const olderThread = {
+      ...baseSnapshot.threads[0]!,
+      id: olderThreadId,
+      title: "Older alpha tag thread",
+      createdAt: isoAt(60),
+      updatedAt: isoAt(240),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: olderThreadId,
+        updatedAt: isoAt(240),
+      },
+    };
+    const betaThread = {
+      ...baseSnapshot.threads[0]!,
+      id: betaThreadId,
+      projectId: SECOND_PROJECT_ID,
+      title: "Beta explicit tag thread",
+      createdAt: isoAt(180),
+      updatedAt: isoAt(900),
+      session: {
+        ...baseSnapshot.threads[0]!.session!,
+        threadId: betaThreadId,
+        updatedAt: isoAt(900),
+      },
+    };
+    const snapshot: OrchestrationReadModel = {
+      ...baseSnapshot,
+      projects: [
+        {
+          ...baseSnapshot.projects[0]!,
+          title: "Alpha Project",
+          workspaceRoot: "/repo/alpha",
+          updatedAt: isoAt(450),
+        },
+        {
+          ...baseSnapshot.projects[0]!,
+          id: SECOND_PROJECT_ID,
+          title: "Beta Project",
+          workspaceRoot: "/repo/beta",
+          updatedAt: isoAt(900),
+        },
+      ],
+      threads: [olderThread, pinnedThread, betaThread],
+      updatedAt: isoAt(900),
+    };
+    const pinnedThreadKey = scopedThreadKey(scopeThreadRef(LOCAL_ENVIRONMENT_ID, pinnedThreadId));
+    const betaThreadKey = scopedThreadKey(scopeThreadRef(LOCAL_ENVIRONMENT_ID, betaThreadId));
+    const alphaProjectKey = derivePhysicalProjectKey({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      cwd: "/repo/alpha",
+    });
+    useUiStateStore.setState({
+      tagById: {
+        bug: {
+          id: "bug",
+          name: "Bug",
+          createdAt: isoAt(1),
+        },
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: isoAt(1),
+        },
+      },
+      threadTagIdsByThreadKey: {
+        [pinnedThreadKey]: ["bug"],
+        [betaThreadKey]: ["work"],
+      },
+      projectTagIdsByProjectKey: {
+        [alphaProjectKey]: ["work"],
+      },
+      tagExpandedById: {
+        bug: true,
+        work: true,
+      },
+      threadPinnedAtById: {
+        [pinnedThreadKey]: isoAt(1_000),
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot,
+      initialPath: `/${LOCAL_ENVIRONMENT_ID}/${olderThreadId}`,
+    });
+
+    try {
+      await page.getByRole("button", { name: "Show tags" }).click();
+      await expect.element(page.getByTestId("sidebar-tag-bug")).toBeInTheDocument();
+      await expect.element(page.getByTestId("sidebar-tag-work")).toBeInTheDocument();
+      await expect
+        .element(
+          page
+            .getByTestId("sidebar-section-work")
+            .getByTestId(`thread-project-${pinnedThreadId}`)
+            .getByText("Alpha Project"),
+        )
+        .toBeInTheDocument();
+      await expect
+        .element(
+          page
+            .getByTestId("sidebar-section-work")
+            .getByTestId(`thread-project-${betaThreadId}`)
+            .getByText("Beta Project"),
+        )
+        .toBeInTheDocument();
+
+      await vi.waitFor(
+        () => {
+          const workSection = document.querySelector<HTMLElement>(
+            '[data-testid="sidebar-section-work"]',
+          );
+          const bugSection = document.querySelector<HTMLElement>(
+            '[data-testid="sidebar-section-bug"]',
+          );
+          expect(workSection).not.toBeNull();
+          expect(bugSection).not.toBeNull();
+          const readRowIds = (section: HTMLElement | null) =>
+            Array.from(
+              section?.querySelectorAll<HTMLElement>("[data-testid^='thread-row-']") ?? [],
+            ).map((row) => row.dataset.testid?.replace("thread-row-", ""));
+          expect(readRowIds(bugSection)).toEqual([pinnedThreadId]);
+          expect(readRowIds(workSection)).toEqual([pinnedThreadId, betaThreadId, olderThreadId]);
         },
         { timeout: 8_000, interval: 16 },
       );

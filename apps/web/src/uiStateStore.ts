@@ -22,6 +22,10 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   sidebarViewMode?: SidebarViewMode;
   threadPinnedAtById?: Record<string, string>;
+  tagById?: Record<string, UiTag>;
+  threadTagIdsByThreadKey?: Record<string, string[]>;
+  projectTagIdsByProjectKey?: Record<string, string[]>;
+  tagExpandedById?: Record<string, boolean>;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
 }
 
@@ -40,13 +44,27 @@ export interface UiEndpointState {
   defaultAdvertisedEndpointKey: string | null;
 }
 
-export type SidebarViewMode = "projects" | "all-threads";
+export type SidebarViewMode = "projects" | "all-threads" | "tags";
 
 export interface UiSidebarState {
   sidebarViewMode: SidebarViewMode;
 }
 
-export interface UiState extends UiProjectState, UiThreadState, UiEndpointState, UiSidebarState {}
+export interface UiTag {
+  id: string;
+  name: string;
+  createdAt: string;
+}
+
+export interface UiTagState {
+  tagById: Record<string, UiTag>;
+  threadTagIdsByThreadKey: Record<string, string[]>;
+  projectTagIdsByProjectKey: Record<string, string[]>;
+  tagExpandedById: Record<string, boolean>;
+}
+
+export interface UiState
+  extends UiProjectState, UiThreadState, UiEndpointState, UiSidebarState, UiTagState {}
 
 export interface SyncProjectInput {
   /** Physical project key (env + cwd). Used for manual sort order. */
@@ -69,6 +87,10 @@ const initialState: UiState = {
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
   sidebarViewMode: "projects",
+  tagById: {},
+  threadTagIdsByThreadKey: {},
+  projectTagIdsByProjectKey: {},
+  tagExpandedById: {},
 };
 
 const persistedCollapsedProjectCwds = new Set<string>();
@@ -113,6 +135,12 @@ function readPersistedState(): UiState {
           : null,
       sidebarViewMode: sanitizeSidebarViewMode(parsed.sidebarViewMode),
       threadPinnedAtById: sanitizePersistedIsoRecord(parsed.threadPinnedAtById),
+      tagById: sanitizePersistedTagCatalog(parsed.tagById),
+      threadTagIdsByThreadKey: sanitizePersistedTagReferenceRecord(parsed.threadTagIdsByThreadKey),
+      projectTagIdsByProjectKey: sanitizePersistedTagReferenceRecord(
+        parsed.projectTagIdsByProjectKey,
+      ),
+      tagExpandedById: sanitizePersistedBooleanRecord(parsed.tagExpandedById),
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
@@ -123,7 +151,85 @@ function readPersistedState(): UiState {
 }
 
 function sanitizeSidebarViewMode(value: PersistedUiState["sidebarViewMode"]): SidebarViewMode {
-  return value === "all-threads" ? "all-threads" : "projects";
+  return value === "all-threads" || value === "tags" ? value : "projects";
+}
+
+export function normalizeTagName(value: string): string | null {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+export function tagIdFromName(name: string): string {
+  return name.toLocaleLowerCase();
+}
+
+function sanitizeTagId(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function sanitizePersistedTagCatalog(value: unknown): Record<string, UiTag> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const nextTags: Record<string, UiTag> = {};
+  for (const [key, tag] of Object.entries(value)) {
+    if (!tag || typeof tag !== "object") {
+      continue;
+    }
+    const persistedTag = tag as Partial<UiTag>;
+    const id = sanitizeTagId(persistedTag.id) ?? sanitizeTagId(key);
+    const name = normalizeTagName(typeof persistedTag.name === "string" ? persistedTag.name : "");
+    const createdAt =
+      typeof persistedTag.createdAt === "string" &&
+      Number.isFinite(Date.parse(persistedTag.createdAt))
+        ? persistedTag.createdAt
+        : new Date(0).toISOString();
+    if (!id || !name) {
+      continue;
+    }
+    nextTags[id] = { id, name, createdAt };
+  }
+  return nextTags;
+}
+
+function sanitizePersistedTagReferenceRecord(value: unknown): Record<string, string[]> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  const nextRecord: Record<string, string[]> = {};
+  for (const [key, tagIds] of Object.entries(value)) {
+    if (!key || !Array.isArray(tagIds)) {
+      continue;
+    }
+    const seen = new Set<string>();
+    const nextTagIds: string[] = [];
+    for (const rawTagId of tagIds) {
+      const tagId = sanitizeTagId(rawTagId);
+      if (!tagId || seen.has(tagId)) {
+        continue;
+      }
+      seen.add(tagId);
+      nextTagIds.push(tagId);
+    }
+    if (nextTagIds.length > 0) {
+      nextRecord[key] = nextTagIds;
+    }
+  }
+  return nextRecord;
+}
+
+function sanitizePersistedBooleanRecord(value: unknown): Record<string, boolean> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key, expanded]) => key.length > 0 && typeof expanded === "boolean",
+    ),
+  );
 }
 
 function sanitizePersistedIsoRecord(value: unknown): Record<string, string> {
@@ -229,6 +335,10 @@ export function persistState(state: UiState): void {
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
         sidebarViewMode: state.sidebarViewMode,
         threadPinnedAtById: state.threadPinnedAtById,
+        tagById: state.tagById,
+        threadTagIdsByThreadKey: state.threadTagIdsByThreadKey,
+        projectTagIdsByProjectKey: state.projectTagIdsByProjectKey,
+        tagExpandedById: state.tagExpandedById,
         threadChangedFilesExpandedById,
       } satisfies PersistedUiState),
     );
@@ -257,6 +367,82 @@ function recordsEqual<T>(left: Record<string, T>, right: Record<string, T>): boo
     }
   }
   return true;
+}
+
+function tagRecordsEqual(left: Record<string, UiTag>, right: Record<string, UiTag>): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  for (const [key, leftTag] of leftEntries) {
+    const rightTag = right[key];
+    if (
+      !rightTag ||
+      rightTag.id !== leftTag.id ||
+      rightTag.name !== leftTag.name ||
+      rightTag.createdAt !== leftTag.createdAt
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function stringArrayRecordsEqual(
+  left: Record<string, string[]>,
+  right: Record<string, string[]>,
+): boolean {
+  const leftEntries = Object.entries(left);
+  const rightEntries = Object.entries(right);
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  for (const [key, leftValues] of leftEntries) {
+    const rightValues = right[key];
+    if (
+      !rightValues ||
+      leftValues.length !== rightValues.length ||
+      leftValues.some((value, index) => value !== rightValues[index])
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function pruneUnusedTags(state: UiState): UiState {
+  const usedTagIds = new Set<string>();
+  for (const tagIds of Object.values(state.threadTagIdsByThreadKey)) {
+    for (const tagId of tagIds) {
+      usedTagIds.add(tagId);
+    }
+  }
+  for (const tagIds of Object.values(state.projectTagIdsByProjectKey)) {
+    for (const tagId of tagIds) {
+      usedTagIds.add(tagId);
+    }
+  }
+
+  const nextTagById = Object.fromEntries(
+    Object.entries(state.tagById).filter(([tagId]) => usedTagIds.has(tagId)),
+  );
+  const nextTagExpandedById = Object.fromEntries(
+    Object.entries(state.tagExpandedById).filter(([tagId]) => usedTagIds.has(tagId)),
+  );
+
+  if (
+    tagRecordsEqual(state.tagById, nextTagById) &&
+    recordsEqual(state.tagExpandedById, nextTagExpandedById)
+  ) {
+    return state;
+  }
+
+  return {
+    ...state,
+    tagById: nextTagById,
+    tagExpandedById: nextTagExpandedById,
+  };
 }
 
 function projectOrdersEqual(left: readonly string[], right: readonly string[]): boolean {
@@ -426,19 +612,28 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
           })
           .map((project) => project.id);
 
+  const currentProjectKeys = new Set(projects.map((project) => project.key));
+  const nextProjectTagIdsByProjectKey = Object.fromEntries(
+    Object.entries(state.projectTagIdsByProjectKey).filter(([projectKey]) =>
+      currentProjectKeys.has(projectKey),
+    ),
+  );
+
   if (
     recordsEqual(state.projectExpandedById, nextExpandedById) &&
     projectOrdersEqual(state.projectOrder, nextProjectOrder) &&
+    stringArrayRecordsEqual(state.projectTagIdsByProjectKey, nextProjectTagIdsByProjectKey) &&
     !cwdMappingChanged
   ) {
     return state;
   }
 
-  return {
+  return pruneUnusedTags({
     ...state,
     projectExpandedById: nextExpandedById,
     projectOrder: nextProjectOrder,
-  };
+    projectTagIdsByProjectKey: nextProjectTagIdsByProjectKey,
+  });
 }
 
 export function syncThreads(state: UiState, threads: readonly SyncThreadInput[]): UiState {
@@ -467,9 +662,15 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
       retainedThreadIds.has(threadId),
     ),
   );
+  const nextThreadTagIdsByThreadKey = Object.fromEntries(
+    Object.entries(state.threadTagIdsByThreadKey).filter(([threadId]) =>
+      retainedThreadIds.has(threadId),
+    ),
+  );
   if (
     recordsEqual(state.threadLastVisitedAtById, nextThreadLastVisitedAtById) &&
     recordsEqual(state.threadPinnedAtById, nextThreadPinnedAtById) &&
+    stringArrayRecordsEqual(state.threadTagIdsByThreadKey, nextThreadTagIdsByThreadKey) &&
     nestedBooleanRecordsEqual(
       state.threadChangedFilesExpandedById,
       nextThreadChangedFilesExpandedById,
@@ -477,12 +678,13 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   ) {
     return state;
   }
-  return {
+  return pruneUnusedTags({
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPinnedAtById: nextThreadPinnedAtById,
+    threadTagIdsByThreadKey: nextThreadTagIdsByThreadKey,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
-  };
+  });
 }
 
 export function setSidebarViewMode(state: UiState, mode: SidebarViewMode): UiState {
@@ -545,21 +747,25 @@ export function clearThreadUi(state: UiState, threadId: string): UiState {
   const hasVisitedState = threadId in state.threadLastVisitedAtById;
   const hasPinnedState = threadId in state.threadPinnedAtById;
   const hasChangedFilesState = threadId in state.threadChangedFilesExpandedById;
-  if (!hasVisitedState && !hasPinnedState && !hasChangedFilesState) {
+  const hasTagState = threadId in state.threadTagIdsByThreadKey;
+  if (!hasVisitedState && !hasPinnedState && !hasChangedFilesState && !hasTagState) {
     return state;
   }
   const nextThreadLastVisitedAtById = { ...state.threadLastVisitedAtById };
   const nextThreadPinnedAtById = { ...state.threadPinnedAtById };
   const nextThreadChangedFilesExpandedById = { ...state.threadChangedFilesExpandedById };
+  const nextThreadTagIdsByThreadKey = { ...state.threadTagIdsByThreadKey };
   delete nextThreadLastVisitedAtById[threadId];
   delete nextThreadPinnedAtById[threadId];
   delete nextThreadChangedFilesExpandedById[threadId];
-  return {
+  delete nextThreadTagIdsByThreadKey[threadId];
+  return pruneUnusedTags({
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPinnedAtById: nextThreadPinnedAtById,
+    threadTagIdsByThreadKey: nextThreadTagIdsByThreadKey,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
-  };
+  });
 }
 
 export function setThreadPinned(
@@ -587,6 +793,114 @@ export function setThreadPinned(
     threadPinnedAtById: {
       ...state.threadPinnedAtById,
       [threadId]: pinnedAt ?? new Date().toISOString(),
+    },
+  };
+}
+
+function addTagReference(
+  state: UiState,
+  recordKey: string,
+  tagName: string,
+  recordName: "threadTagIdsByThreadKey" | "projectTagIdsByProjectKey",
+  createdAt?: string,
+): UiState {
+  const normalizedName = normalizeTagName(tagName);
+  if (!normalizedName) {
+    return state;
+  }
+  const tagId = tagIdFromName(normalizedName);
+  const currentTagIds = state[recordName][recordKey] ?? [];
+  const existingTag = state.tagById[tagId];
+  if (existingTag && currentTagIds.includes(tagId)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    tagById: existingTag
+      ? state.tagById
+      : {
+          ...state.tagById,
+          [tagId]: {
+            id: tagId,
+            name: normalizedName,
+            createdAt: createdAt ?? new Date().toISOString(),
+          },
+        },
+    tagExpandedById:
+      tagId in state.tagExpandedById
+        ? state.tagExpandedById
+        : {
+            ...state.tagExpandedById,
+            [tagId]: true,
+          },
+    [recordName]: {
+      ...state[recordName],
+      [recordKey]: currentTagIds.includes(tagId) ? currentTagIds : [...currentTagIds, tagId],
+    },
+  };
+}
+
+function removeTagReference(
+  state: UiState,
+  recordKey: string,
+  tagId: string,
+  recordName: "threadTagIdsByThreadKey" | "projectTagIdsByProjectKey",
+): UiState {
+  const currentTagIds = state[recordName][recordKey] ?? [];
+  if (!currentTagIds.includes(tagId)) {
+    return state;
+  }
+
+  const nextTagIds = currentTagIds.filter((currentTagId) => currentTagId !== tagId);
+  const nextRecord = { ...state[recordName] };
+  if (nextTagIds.length > 0) {
+    nextRecord[recordKey] = nextTagIds;
+  } else {
+    delete nextRecord[recordKey];
+  }
+
+  return pruneUnusedTags({
+    ...state,
+    [recordName]: nextRecord,
+  });
+}
+
+export function addTagToThread(
+  state: UiState,
+  threadKey: string,
+  tagName: string,
+  createdAt?: string,
+): UiState {
+  return addTagReference(state, threadKey, tagName, "threadTagIdsByThreadKey", createdAt);
+}
+
+export function removeTagFromThread(state: UiState, threadKey: string, tagId: string): UiState {
+  return removeTagReference(state, threadKey, tagId, "threadTagIdsByThreadKey");
+}
+
+export function addTagToProject(
+  state: UiState,
+  projectKey: string,
+  tagName: string,
+  createdAt?: string,
+): UiState {
+  return addTagReference(state, projectKey, tagName, "projectTagIdsByProjectKey", createdAt);
+}
+
+export function removeTagFromProject(state: UiState, projectKey: string, tagId: string): UiState {
+  return removeTagReference(state, projectKey, tagId, "projectTagIdsByProjectKey");
+}
+
+export function setTagExpanded(state: UiState, tagId: string, expanded: boolean): UiState {
+  if ((state.tagExpandedById[tagId] ?? true) === expanded) {
+    return state;
+  }
+  return {
+    ...state,
+    tagExpandedById: {
+      ...state.tagExpandedById,
+      [tagId]: expanded,
     },
   };
 }
@@ -726,6 +1040,11 @@ interface UiStateStore extends UiState {
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   clearThreadUi: (threadId: string) => void;
   setThreadPinned: (threadId: string, pinned: boolean, pinnedAt?: string) => void;
+  addTagToThread: (threadKey: string, tagName: string, createdAt?: string) => void;
+  removeTagFromThread: (threadKey: string, tagId: string) => void;
+  addTagToProject: (projectKey: string, tagName: string, createdAt?: string) => void;
+  removeTagFromProject: (projectKey: string, tagId: string) => void;
+  setTagExpanded: (tagId: string, expanded: boolean) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   toggleProject: (projectId: string) => void;
@@ -748,6 +1067,15 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   clearThreadUi: (threadId) => set((state) => clearThreadUi(state, threadId)),
   setThreadPinned: (threadId, pinned, pinnedAt) =>
     set((state) => setThreadPinned(state, threadId, pinned, pinnedAt)),
+  addTagToThread: (threadKey, tagName, createdAt) =>
+    set((state) => addTagToThread(state, threadKey, tagName, createdAt)),
+  removeTagFromThread: (threadKey, tagId) =>
+    set((state) => removeTagFromThread(state, threadKey, tagId)),
+  addTagToProject: (projectKey, tagName, createdAt) =>
+    set((state) => addTagToProject(state, projectKey, tagName, createdAt)),
+  removeTagFromProject: (projectKey, tagId) =>
+    set((state) => removeTagFromProject(state, projectKey, tagId)),
+  setTagExpanded: (tagId, expanded) => set((state) => setTagExpanded(state, tagId, expanded)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>

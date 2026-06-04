@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
+  buildSidebarTagThreadGroups,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
   getVisibleSidebarThreadIds,
@@ -207,6 +208,69 @@ describe("splitPinnedSidebarThreads", () => {
       ThreadId.make("thread-c"),
     ]);
     expect(result.recentThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-b")]);
+  });
+});
+
+describe("buildSidebarTagThreadGroups", () => {
+  it("groups threads by explicit and inherited project tags with pinned threads first", () => {
+    const threads = [
+      {
+        id: ThreadId.make("thread-alpha-old"),
+        projectKey: "project-alpha",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:03:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-alpha-new"),
+        projectKey: "project-alpha",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:05:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-beta"),
+        projectKey: "project-beta",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:04:00.000Z",
+      },
+    ];
+
+    const groups = buildSidebarTagThreadGroups({
+      threads,
+      tagById: {
+        bug: {
+          id: "bug",
+          name: "Bug",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      threadTagIdsByThreadKey: {
+        "env:thread-alpha-old": ["bug"],
+      },
+      projectTagIdsByProjectKey: {
+        "project-alpha": ["work"],
+      },
+      pinnedAtByThreadKey: {
+        "env:thread-alpha-old": "2026-03-09T10:06:00.000Z",
+      },
+      getThreadKey: (thread) => `env:${thread.id}`,
+      getProjectKey: (thread) => thread.projectKey,
+    });
+
+    expect(groups.map((group) => group.tag.id)).toEqual(["bug", "work"]);
+    expect(groups.find((group) => group.tag.id === "bug")?.pinnedThreads.map((t) => t.id)).toEqual([
+      ThreadId.make("thread-alpha-old"),
+    ]);
+    expect(groups.find((group) => group.tag.id === "work")?.pinnedThreads.map((t) => t.id)).toEqual(
+      [ThreadId.make("thread-alpha-old")],
+    );
+    expect(groups.find((group) => group.tag.id === "work")?.recentThreads.map((t) => t.id)).toEqual(
+      [ThreadId.make("thread-alpha-new")],
+    );
   });
 });
 

@@ -2,10 +2,13 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  addTagToProject,
+  addTagToThread,
   clearThreadUi,
   hydratePersistedProjectState,
   markThreadVisited,
   markThreadUnread,
+  normalizeTagName,
   PERSISTED_STATE_KEY,
   type PersistedUiState,
   persistState,
@@ -13,6 +16,7 @@ import {
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setSidebarViewMode,
+  setTagExpanded,
   setThreadChangedFilesExpanded,
   setThreadPinned,
   syncProjects,
@@ -29,6 +33,10 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     sidebarViewMode: "projects",
+    tagById: {},
+    threadTagIdsByThreadKey: {},
+    projectTagIdsByProjectKey: {},
+    tagExpandedById: {},
     ...overrides,
   };
 }
@@ -123,10 +131,60 @@ describe("uiStateStore pure functions", () => {
   it("setSidebarViewMode stores the selected sidebar lens", () => {
     const initialState = makeUiState();
 
-    const next = setSidebarViewMode(initialState, "all-threads");
+    const next = setSidebarViewMode(initialState, "tags");
 
-    expect(next.sidebarViewMode).toBe("all-threads");
-    expect(setSidebarViewMode(next, "all-threads")).toBe(next);
+    expect(next.sidebarViewMode).toBe("tags");
+    expect(setSidebarViewMode(next, "tags")).toBe(next);
+  });
+
+  it("normalizes tag names before storing them", () => {
+    expect(normalizeTagName("  client   work  ")).toBe("client work");
+    expect(normalizeTagName("   ")).toBeNull();
+  });
+
+  it("stores and dedupes explicit thread tags", () => {
+    const threadKey = "environment-local:thread-1";
+    const initialState = makeUiState();
+
+    const tagged = addTagToThread(initialState, threadKey, " Work ", "2026-03-09T10:00:00.000Z");
+    expect(tagged.tagById.work).toEqual({
+      id: "work",
+      name: "Work",
+      createdAt: "2026-03-09T10:00:00.000Z",
+    });
+    expect(tagged.threadTagIdsByThreadKey[threadKey]).toEqual(["work"]);
+    expect(tagged.tagExpandedById.work).toBe(true);
+
+    expect(addTagToThread(tagged, threadKey, "work")).toBe(tagged);
+  });
+
+  it("stores project default tags separately from thread tags", () => {
+    const projectKey = "environment-local:/repo/project";
+    const initialState = makeUiState();
+
+    const tagged = addTagToProject(
+      initialState,
+      projectKey,
+      "Planning",
+      "2026-03-09T10:00:00.000Z",
+    );
+
+    expect(tagged.projectTagIdsByProjectKey[projectKey]).toEqual(["planning"]);
+    expect(tagged.threadTagIdsByThreadKey).toEqual({});
+  });
+
+  it("persists collapsed tag state", () => {
+    const initialState = addTagToThread(
+      makeUiState(),
+      "environment-local:thread-1",
+      "Work",
+      "2026-03-09T10:00:00.000Z",
+    );
+
+    const next = setTagExpanded(initialState, "work", false);
+
+    expect(next.tagExpandedById.work).toBe(false);
+    expect(setTagExpanded(next, "work", false)).toBe(next);
   });
 
   it("setThreadPinned records and clears a pinned timestamp", () => {
@@ -310,6 +368,39 @@ describe("uiStateStore pure functions", () => {
     expect(next.projectExpandedById[project1]).toBe(false);
   });
 
+  it("syncProjects prunes default tags for missing projects", () => {
+    const project1 = {
+      key: "environment-local:/repo/project-1",
+      logicalKey: "environment-local:/repo/project-1",
+      cwd: "/repo/project-1",
+    };
+    const project2 = {
+      key: "environment-local:/repo/project-2",
+      logicalKey: "environment-local:/repo/project-2",
+      cwd: "/repo/project-2",
+    };
+    const initialState = makeUiState({
+      tagById: {
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      projectTagIdsByProjectKey: {
+        [project1.key]: ["work"],
+        [project2.key]: ["work"],
+      },
+    });
+
+    const next = syncProjects(initialState, [project1]);
+
+    expect(next.projectTagIdsByProjectKey).toEqual({
+      [project1.key]: ["work"],
+    });
+    expect(next.tagById.work).toBeDefined();
+  });
+
   it("syncProjects keys projectExpandedById by the logical key, not the physical key", () => {
     // In repository grouping mode, multiple physical projects (different
     // environments or different repo-relative paths) collapse into one
@@ -382,6 +473,17 @@ describe("uiStateStore pure functions", () => {
         [thread1]: "2026-02-25T12:37:00.000Z",
         [thread2]: "2026-02-25T12:38:00.000Z",
       },
+      tagById: {
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      threadTagIdsByThreadKey: {
+        [thread1]: ["work"],
+        [thread2]: ["work"],
+      },
     });
 
     const next = syncThreads(initialState, [{ key: thread1 }]);
@@ -397,6 +499,10 @@ describe("uiStateStore pure functions", () => {
     expect(next.threadPinnedAtById).toEqual({
       [thread1]: "2026-02-25T12:37:00.000Z",
     });
+    expect(next.threadTagIdsByThreadKey).toEqual({
+      [thread1]: ["work"],
+    });
+    expect(next.tagById.work).toBeDefined();
   });
 
   it("syncThreads seeds visit state for unseen snapshot threads", () => {
@@ -444,6 +550,16 @@ describe("uiStateStore pure functions", () => {
       threadPinnedAtById: {
         [thread1]: "2026-02-25T12:37:00.000Z",
       },
+      tagById: {
+        work: {
+          id: "work",
+          name: "Work",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      threadTagIdsByThreadKey: {
+        [thread1]: ["work"],
+      },
     });
 
     const next = clearThreadUi(initialState, thread1);
@@ -451,6 +567,8 @@ describe("uiStateStore pure functions", () => {
     expect(next.threadLastVisitedAtById).toEqual({});
     expect(next.threadChangedFilesExpandedById).toEqual({});
     expect(next.threadPinnedAtById).toEqual({});
+    expect(next.threadTagIdsByThreadKey).toEqual({});
+    expect(next.tagById).toEqual({});
   });
 
   it("setThreadChangedFilesExpanded stores collapsed turns per thread", () => {
@@ -617,11 +735,25 @@ describe("uiStateStore persistence round-trip", () => {
   });
 
   it("persists sidebar view mode and pinned threads", () => {
-    const state = setThreadPinned(
-      setSidebarViewMode(makeUiState(), "all-threads"),
-      "environment-local:thread-1",
-      true,
-      "2026-03-09T10:00:00.000Z",
+    const state = setTagExpanded(
+      addTagToProject(
+        addTagToThread(
+          setThreadPinned(
+            setSidebarViewMode(makeUiState(), "tags"),
+            "environment-local:thread-1",
+            true,
+            "2026-03-09T10:00:00.000Z",
+          ),
+          "environment-local:thread-1",
+          "Work",
+          "2026-03-09T10:00:01.000Z",
+        ),
+        "environment-local:/repo/project",
+        "Planning",
+        "2026-03-09T10:00:02.000Z",
+      ),
+      "work",
+      false,
     );
 
     persistState(state);
@@ -629,9 +761,23 @@ describe("uiStateStore persistence round-trip", () => {
     const persisted = JSON.parse(
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
-    expect(persisted.sidebarViewMode).toBe("all-threads");
+    expect(persisted.sidebarViewMode).toBe("tags");
     expect(persisted.threadPinnedAtById).toEqual({
       "environment-local:thread-1": "2026-03-09T10:00:00.000Z",
+    });
+    expect(persisted.tagById?.work).toMatchObject({
+      id: "work",
+      name: "Work",
+    });
+    expect(persisted.threadTagIdsByThreadKey).toEqual({
+      "environment-local:thread-1": ["work"],
+    });
+    expect(persisted.projectTagIdsByProjectKey).toEqual({
+      "environment-local:/repo/project": ["planning"],
+    });
+    expect(persisted.tagExpandedById).toEqual({
+      work: false,
+      planning: true,
     });
   });
 
