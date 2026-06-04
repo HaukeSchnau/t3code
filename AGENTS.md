@@ -72,7 +72,7 @@ agents.
 
 ## Syncing and Publishing
 
-- This is a personal repository; before starting work, always pull `main` with `jj-pull main` and `main` from `upstream` with `jj-pull main --remote upstream`, and pull again regularly during longer tasks.
+- This is a personal repository; before starting work, always pull `main` with `jj-pull main` and pull again regularly during longer tasks.
 - When work is done, commit the intended changes and push directly to `main` with `jj-push main` instead of opening a pull request.
 
 ## Syncing and Publishing
