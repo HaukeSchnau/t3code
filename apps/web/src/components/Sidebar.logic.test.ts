@@ -240,11 +240,13 @@ describe("buildSidebarTagThreadGroups", () => {
         bug: {
           id: "bug",
           name: "Bug",
+          color: "red",
           createdAt: "2026-03-09T10:00:00.000Z",
         },
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: "2026-03-09T10:00:00.000Z",
         },
       },
@@ -271,6 +273,37 @@ describe("buildSidebarTagThreadGroups", () => {
     expect(groups.find((group) => group.tag.id === "work")?.recentThreads.map((t) => t.id)).toEqual(
       [ThreadId.make("thread-alpha-new")],
     );
+  });
+
+  it("includes catalog tags with no matching threads", () => {
+    const threads: Array<{ id: ThreadId; createdAt: string; updatedAt: string }> = [];
+    const groups = buildSidebarTagThreadGroups({
+      threads,
+      tagById: {
+        ideas: {
+          id: "ideas",
+          name: "Ideas",
+          color: "purple",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      threadTagIdsByThreadKey: {},
+      projectTagIdsByProjectKey: {},
+      pinnedAtByThreadKey: {},
+      getThreadKey: (thread) => `env:${thread.id}`,
+      getProjectKey: () => null,
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      tag: {
+        id: "ideas",
+        name: "Ideas",
+      },
+      threadCount: 0,
+      pinnedThreads: [],
+      recentThreads: [],
+    });
   });
 });
 

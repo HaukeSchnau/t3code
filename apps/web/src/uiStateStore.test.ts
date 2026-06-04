@@ -5,6 +5,7 @@ import {
   addTagToProject,
   addTagToThread,
   clearThreadUi,
+  deleteTag,
   hydratePersistedProjectState,
   markThreadVisited,
   markThreadUnread,
@@ -16,9 +17,11 @@ import {
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
   setSidebarViewMode,
+  setTagColor,
   setTagExpanded,
   setThreadChangedFilesExpanded,
   setThreadPinned,
+  renameTag,
   syncProjects,
   syncThreads,
   type UiState,
@@ -150,6 +153,7 @@ describe("uiStateStore pure functions", () => {
     expect(tagged.tagById.work).toEqual({
       id: "work",
       name: "Work",
+      color: "blue",
       createdAt: "2026-03-09T10:00:00.000Z",
     });
     expect(tagged.threadTagIdsByThreadKey[threadKey]).toEqual(["work"]);
@@ -185,6 +189,69 @@ describe("uiStateStore pure functions", () => {
 
     expect(next.tagExpandedById.work).toBe(false);
     expect(setTagExpanded(next, "work", false)).toBe(next);
+  });
+
+  it("renames tags and rewrites thread and project references", () => {
+    const threadKey = "environment-local:thread-1";
+    const projectKey = "environment-local:/repo/project";
+    const initialState = setTagExpanded(
+      addTagToProject(
+        addTagToThread(makeUiState(), threadKey, "Work", "2026-03-09T10:00:00.000Z"),
+        projectKey,
+        "Work",
+        "2026-03-09T10:00:00.000Z",
+      ),
+      "work",
+      false,
+    );
+
+    const next = renameTag(initialState, "work", "Client Work");
+
+    expect(next.tagById.work).toBeUndefined();
+    expect(next.tagById["client work"]).toMatchObject({
+      id: "client work",
+      name: "Client Work",
+      color: "blue",
+    });
+    expect(next.threadTagIdsByThreadKey[threadKey]).toEqual(["client work"]);
+    expect(next.projectTagIdsByProjectKey[projectKey]).toEqual(["client work"]);
+    expect(next.tagExpandedById["client work"]).toBe(false);
+  });
+
+  it("does not rename a tag over an existing tag", () => {
+    const initialState = addTagToThread(
+      addTagToThread(makeUiState(), "environment-local:thread-1", "Work"),
+      "environment-local:thread-2",
+      "Planning",
+    );
+
+    expect(renameTag(initialState, "work", "Planning")).toBe(initialState);
+  });
+
+  it("updates tag colors", () => {
+    const initialState = addTagToThread(makeUiState(), "environment-local:thread-1", "Work");
+
+    const next = setTagColor(initialState, "work", "green");
+
+    expect(next.tagById.work?.color).toBe("green");
+    expect(setTagColor(next, "work", "green")).toBe(next);
+  });
+
+  it("deletes tags and clears all references", () => {
+    const threadKey = "environment-local:thread-1";
+    const projectKey = "environment-local:/repo/project";
+    const initialState = setTagExpanded(
+      addTagToProject(addTagToThread(makeUiState(), threadKey, "Work"), projectKey, "Work"),
+      "work",
+      false,
+    );
+
+    const next = deleteTag(initialState, "work");
+
+    expect(next.tagById.work).toBeUndefined();
+    expect(next.tagExpandedById.work).toBeUndefined();
+    expect(next.threadTagIdsByThreadKey).toEqual({});
+    expect(next.projectTagIdsByProjectKey).toEqual({});
   });
 
   it("setThreadPinned records and clears a pinned timestamp", () => {
@@ -384,6 +451,7 @@ describe("uiStateStore pure functions", () => {
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: "2026-03-09T10:00:00.000Z",
         },
       },
@@ -477,6 +545,7 @@ describe("uiStateStore pure functions", () => {
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: "2026-03-09T10:00:00.000Z",
         },
       },
@@ -554,6 +623,7 @@ describe("uiStateStore pure functions", () => {
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: "2026-03-09T10:00:00.000Z",
         },
       },
@@ -568,7 +638,7 @@ describe("uiStateStore pure functions", () => {
     expect(next.threadChangedFilesExpandedById).toEqual({});
     expect(next.threadPinnedAtById).toEqual({});
     expect(next.threadTagIdsByThreadKey).toEqual({});
-    expect(next.tagById).toEqual({});
+    expect(next.tagById.work).toBeDefined();
   });
 
   it("setThreadChangedFilesExpanded stores collapsed turns per thread", () => {
@@ -768,6 +838,7 @@ describe("uiStateStore persistence round-trip", () => {
     expect(persisted.tagById?.work).toMatchObject({
       id: "work",
       name: "Work",
+      color: "blue",
     });
     expect(persisted.threadTagIdsByThreadKey).toEqual({
       "environment-local:thread-1": ["work"],

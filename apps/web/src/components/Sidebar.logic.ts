@@ -354,25 +354,20 @@ export function buildSidebarTagThreadGroups<T extends SidebarThreadActivityInput
     }
   }
 
-  return [...threadsByTagId.entries()]
-    .flatMap(([tagId, threads]) => {
-      const tag = input.tagById[tagId];
-      if (!tag) {
-        return [];
-      }
+  return Object.values(input.tagById)
+    .map((tag) => {
+      const threads = threadsByTagId.get(tag.id) ?? [];
       const { pinnedThreads, recentThreads } = splitPinnedSidebarThreads({
         threads,
         pinnedAtByThreadKey: input.pinnedAtByThreadKey,
         getThreadKey: input.getThreadKey,
       });
-      return [
-        {
-          tag,
-          threadCount: threads.length,
-          pinnedThreads,
-          recentThreads,
-        },
-      ];
+      return {
+        tag,
+        threadCount: threads.length,
+        pinnedThreads,
+        recentThreads,
+      };
     })
     .toSorted((left, right) =>
       left.tag.name.localeCompare(right.tag.name, undefined, {

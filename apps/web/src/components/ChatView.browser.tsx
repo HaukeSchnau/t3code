@@ -4086,11 +4086,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         bug: {
           id: "bug",
           name: "Bug",
+          color: "red",
           createdAt: isoAt(1),
         },
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: isoAt(1),
         },
       },
@@ -4171,11 +4173,13 @@ describe("ChatView timeline estimator parity (full app)", () => {
         bug: {
           id: "bug",
           name: "Bug",
+          color: "red",
           createdAt: isoAt(1),
         },
         work: {
           id: "work",
           name: "Work",
+          color: "blue",
           createdAt: isoAt(1),
         },
       },
@@ -4202,6 +4206,84 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await expect
         .element(page.getByTestId("chat-header-tag-work").getByText("Work"))
         .toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("manages tag names, colors, and deletion from the tag library", async () => {
+    const projectKey = derivePhysicalProjectKey({
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      cwd: "/repo/project",
+    });
+    useUiStateStore.setState({
+      tagById: {
+        work: {
+          id: "work",
+          name: "Work",
+          color: "blue",
+          createdAt: isoAt(1),
+        },
+      },
+      threadTagIdsByThreadKey: {
+        [THREAD_KEY]: ["work"],
+      },
+      projectTagIdsByProjectKey: {
+        [projectKey]: ["work"],
+      },
+      tagExpandedById: {
+        work: true,
+      },
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-tag-library" as MessageId,
+        targetText: "tag library",
+      }),
+    });
+
+    try {
+      await page.getByRole("button", { name: "Show tags" }).click();
+      await page.getByTestId("manage-tags-button").click();
+      await expect.element(page.getByTestId("tag-library-row-work")).toBeInTheDocument();
+
+      await page.getByRole("button", { name: "Tag actions for Work" }).click();
+      await page.getByRole("menuitem", { name: "Rename" }).click();
+      const renameInput = page.getByRole("textbox", { name: "Rename tag Work" });
+      await renameInput.fill("Client Work");
+      await vi.waitFor(() => {
+        const input = document.querySelector<HTMLInputElement>('[aria-label="Rename tag Work"]');
+        expect(input).not.toBeNull();
+        input!.dispatchEvent(
+          new KeyboardEvent("keydown", {
+            bubbles: true,
+            cancelable: true,
+            key: "Enter",
+          }),
+        );
+      });
+      await expect.element(page.getByTestId("tag-library-row-client work")).toBeInTheDocument();
+
+      await page.getByRole("button", { name: "Tag actions for Client Work" }).click();
+      await page.getByRole("menuitem", { name: "Green" }).click();
+      await vi.waitFor(() => {
+        expect(useUiStateStore.getState().tagById["client work"]?.color).toBe("green");
+      });
+
+      await page.getByRole("button", { name: "Tag actions for Client Work" }).click();
+      await page.getByRole("menuitem", { name: "Delete" }).click();
+      await expect
+        .element(page.getByRole("heading", { name: 'Delete "Client Work"?' }))
+        .toBeInTheDocument();
+      await page.getByRole("button", { name: "Delete tag" }).click();
+      await vi.waitFor(() => {
+        const state = useUiStateStore.getState();
+        expect(state.tagById["client work"]).toBeUndefined();
+        expect(state.threadTagIdsByThreadKey).toEqual({});
+        expect(state.projectTagIdsByProjectKey).toEqual({});
+      });
     } finally {
       await mounted.cleanup();
     }

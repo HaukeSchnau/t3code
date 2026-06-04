@@ -1,5 +1,6 @@
 import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
+import { sanitizeTagColor, tagColorFromId, type UiTagColor } from "./tagColors";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const LEGACY_PERSISTED_STATE_KEYS = [
@@ -53,6 +54,7 @@ export interface UiSidebarState {
 export interface UiTag {
   id: string;
   name: string;
+  color: UiTagColor;
   createdAt: string;
 }
 
@@ -188,7 +190,12 @@ function sanitizePersistedTagCatalog(value: unknown): Record<string, UiTag> {
     if (!id || !name) {
       continue;
     }
-    nextTags[id] = { id, name, createdAt };
+    nextTags[id] = {
+      id,
+      name,
+      color: sanitizeTagColor(persistedTag.color) ?? tagColorFromId(id),
+      createdAt,
+    };
   }
   return nextTags;
 }
@@ -369,26 +376,6 @@ function recordsEqual<T>(left: Record<string, T>, right: Record<string, T>): boo
   return true;
 }
 
-function tagRecordsEqual(left: Record<string, UiTag>, right: Record<string, UiTag>): boolean {
-  const leftEntries = Object.entries(left);
-  const rightEntries = Object.entries(right);
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  for (const [key, leftTag] of leftEntries) {
-    const rightTag = right[key];
-    if (
-      !rightTag ||
-      rightTag.id !== leftTag.id ||
-      rightTag.name !== leftTag.name ||
-      rightTag.createdAt !== leftTag.createdAt
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function stringArrayRecordsEqual(
   left: Record<string, string[]>,
   right: Record<string, string[]>,
@@ -411,36 +398,17 @@ function stringArrayRecordsEqual(
   return true;
 }
 
-function pruneUnusedTags(state: UiState): UiState {
-  const usedTagIds = new Set<string>();
-  for (const tagIds of Object.values(state.threadTagIdsByThreadKey)) {
-    for (const tagId of tagIds) {
-      usedTagIds.add(tagId);
-    }
-  }
-  for (const tagIds of Object.values(state.projectTagIdsByProjectKey)) {
-    for (const tagId of tagIds) {
-      usedTagIds.add(tagId);
-    }
-  }
-
-  const nextTagById = Object.fromEntries(
-    Object.entries(state.tagById).filter(([tagId]) => usedTagIds.has(tagId)),
-  );
+function pruneUnknownTagExpansion(state: UiState): UiState {
   const nextTagExpandedById = Object.fromEntries(
-    Object.entries(state.tagExpandedById).filter(([tagId]) => usedTagIds.has(tagId)),
+    Object.entries(state.tagExpandedById).filter(([tagId]) => state.tagById[tagId]),
   );
 
-  if (
-    tagRecordsEqual(state.tagById, nextTagById) &&
-    recordsEqual(state.tagExpandedById, nextTagExpandedById)
-  ) {
+  if (recordsEqual(state.tagExpandedById, nextTagExpandedById)) {
     return state;
   }
 
   return {
     ...state,
-    tagById: nextTagById,
     tagExpandedById: nextTagExpandedById,
   };
 }
@@ -628,7 +596,7 @@ export function syncProjects(state: UiState, projects: readonly SyncProjectInput
     return state;
   }
 
-  return pruneUnusedTags({
+  return pruneUnknownTagExpansion({
     ...state,
     projectExpandedById: nextExpandedById,
     projectOrder: nextProjectOrder,
@@ -678,7 +646,7 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   ) {
     return state;
   }
-  return pruneUnusedTags({
+  return pruneUnknownTagExpansion({
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPinnedAtById: nextThreadPinnedAtById,
@@ -759,13 +727,13 @@ export function clearThreadUi(state: UiState, threadId: string): UiState {
   delete nextThreadPinnedAtById[threadId];
   delete nextThreadChangedFilesExpandedById[threadId];
   delete nextThreadTagIdsByThreadKey[threadId];
-  return pruneUnusedTags({
+  return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
     threadPinnedAtById: nextThreadPinnedAtById,
     threadTagIdsByThreadKey: nextThreadTagIdsByThreadKey,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
-  });
+  };
 }
 
 export function setThreadPinned(
@@ -824,6 +792,7 @@ function addTagReference(
           [tagId]: {
             id: tagId,
             name: normalizedName,
+            color: tagColorFromId(tagId),
             createdAt: createdAt ?? new Date().toISOString(),
           },
         },
@@ -860,10 +829,10 @@ function removeTagReference(
     delete nextRecord[recordKey];
   }
 
-  return pruneUnusedTags({
+  return {
     ...state,
     [recordName]: nextRecord,
-  });
+  };
 }
 
 export function addTagToThread(
@@ -890,6 +859,120 @@ export function addTagToProject(
 
 export function removeTagFromProject(state: UiState, projectKey: string, tagId: string): UiState {
   return removeTagReference(state, projectKey, tagId, "projectTagIdsByProjectKey");
+}
+
+function replaceTagIdReferences(record: Record<string, string[]>, fromId: string, toId: string) {
+  const nextRecord: Record<string, string[]> = {};
+  let changed = false;
+  for (const [recordKey, tagIds] of Object.entries(record)) {
+    const seen = new Set<string>();
+    const nextTagIds: string[] = [];
+    for (const tagId of tagIds) {
+      const nextTagId = tagId === fromId ? toId : tagId;
+      if (nextTagId !== tagId) {
+        changed = true;
+      }
+      if (seen.has(nextTagId)) {
+        changed = true;
+        continue;
+      }
+      seen.add(nextTagId);
+      nextTagIds.push(nextTagId);
+    }
+    nextRecord[recordKey] = nextTagIds;
+  }
+  return changed ? nextRecord : record;
+}
+
+export function renameTag(state: UiState, tagId: string, nextName: string): UiState {
+  const tag = state.tagById[tagId];
+  const normalizedName = normalizeTagName(nextName);
+  if (!tag || !normalizedName) {
+    return state;
+  }
+
+  const nextTagId = tagIdFromName(normalizedName);
+  if (nextTagId !== tagId && state.tagById[nextTagId]) {
+    return state;
+  }
+  if (nextTagId === tagId && tag.name === normalizedName) {
+    return state;
+  }
+
+  const nextTagById = { ...state.tagById };
+  delete nextTagById[tagId];
+  nextTagById[nextTagId] = {
+    ...tag,
+    id: nextTagId,
+    name: normalizedName,
+  };
+
+  const nextTagExpandedById = { ...state.tagExpandedById };
+  if (nextTagId !== tagId) {
+    const expanded = nextTagExpandedById[tagId];
+    delete nextTagExpandedById[tagId];
+    if (expanded !== undefined) {
+      nextTagExpandedById[nextTagId] = expanded;
+    }
+  }
+
+  return {
+    ...state,
+    tagById: nextTagById,
+    threadTagIdsByThreadKey:
+      nextTagId === tagId
+        ? state.threadTagIdsByThreadKey
+        : replaceTagIdReferences(state.threadTagIdsByThreadKey, tagId, nextTagId),
+    projectTagIdsByProjectKey:
+      nextTagId === tagId
+        ? state.projectTagIdsByProjectKey
+        : replaceTagIdReferences(state.projectTagIdsByProjectKey, tagId, nextTagId),
+    tagExpandedById: nextTagExpandedById,
+  };
+}
+
+export function setTagColor(state: UiState, tagId: string, color: UiTagColor): UiState {
+  const tag = state.tagById[tagId];
+  if (!tag || tag.color === color) {
+    return state;
+  }
+  return {
+    ...state,
+    tagById: {
+      ...state.tagById,
+      [tagId]: {
+        ...tag,
+        color,
+      },
+    },
+  };
+}
+
+export function deleteTag(state: UiState, tagId: string): UiState {
+  if (!state.tagById[tagId]) {
+    return state;
+  }
+  const nextTagById = { ...state.tagById };
+  const nextTagExpandedById = { ...state.tagExpandedById };
+  delete nextTagById[tagId];
+  delete nextTagExpandedById[tagId];
+  const removeReference = (tagIds: string[]) =>
+    tagIds.filter((currentTagId) => currentTagId !== tagId);
+  const pruneRecord = (record: Record<string, string[]>) =>
+    Object.fromEntries(
+      Object.entries(record).flatMap(([recordKey, tagIds]) => {
+        const nextTagIds = removeReference(tagIds);
+        return nextTagIds.length > 0 ? [[recordKey, nextTagIds]] : [];
+      }),
+    );
+
+  return {
+    ...state,
+    tagById: nextTagById,
+    tagExpandedById: nextTagExpandedById,
+    threadTagIdsByThreadKey: pruneRecord(state.threadTagIdsByThreadKey),
+    projectTagIdsByProjectKey: pruneRecord(state.projectTagIdsByProjectKey),
+  };
 }
 
 export function setTagExpanded(state: UiState, tagId: string, expanded: boolean): UiState {
@@ -1044,6 +1127,9 @@ interface UiStateStore extends UiState {
   removeTagFromThread: (threadKey: string, tagId: string) => void;
   addTagToProject: (projectKey: string, tagName: string, createdAt?: string) => void;
   removeTagFromProject: (projectKey: string, tagId: string) => void;
+  renameTag: (tagId: string, nextName: string) => void;
+  setTagColor: (tagId: string, color: UiTagColor) => void;
+  deleteTag: (tagId: string) => void;
   setTagExpanded: (tagId: string, expanded: boolean) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
@@ -1075,6 +1161,9 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
     set((state) => addTagToProject(state, projectKey, tagName, createdAt)),
   removeTagFromProject: (projectKey, tagId) =>
     set((state) => removeTagFromProject(state, projectKey, tagId)),
+  renameTag: (tagId, nextName) => set((state) => renameTag(state, tagId, nextName)),
+  setTagColor: (tagId, color) => set((state) => setTagColor(state, tagId, color)),
+  deleteTag: (tagId) => set((state) => deleteTag(state, tagId)),
   setTagExpanded: (tagId, expanded) => set((state) => setTagExpanded(state, tagId, expanded)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),

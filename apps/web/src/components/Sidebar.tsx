@@ -1,11 +1,13 @@
 import {
   ArchiveIcon,
+  ArrowLeftIcon,
   ArrowUpDownIcon,
   ChevronRightIcon,
   CloudIcon,
   FolderIcon,
   FolderPlusIcon,
   ListIcon,
+  MoreHorizontalIcon,
   PinIcon,
   PinOffIcon,
   SearchIcon,
@@ -80,7 +82,7 @@ import {
 } from "../store";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useThreadRunningTerminalIds } from "../terminalSessionState";
-import { useUiStateStore } from "../uiStateStore";
+import { normalizeTagName, tagIdFromName, useUiStateStore } from "../uiStateStore";
 import {
   resolveShortcutCommand,
   shortcutLabelForCommand,
@@ -131,6 +133,7 @@ import { Input } from "./ui/input";
 import {
   Menu,
   MenuGroup,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -198,7 +201,8 @@ import {
   useSavedEnvironmentRuntimeStore,
 } from "../environments/runtime";
 import type { SidebarThreadSummary } from "../types";
-import type { SidebarViewMode } from "../uiStateStore";
+import type { SidebarViewMode, UiTag } from "../uiStateStore";
+import { TAG_COLOR_LABELS, TAG_COLOR_VALUES, type UiTagColor } from "../tagColors";
 import {
   buildPhysicalToLogicalProjectKeyMap,
   buildSidebarProjectSnapshots,
@@ -206,6 +210,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
 import { SidebarProviderUpdatePill } from "./sidebar/SidebarProviderUpdatePill";
+import { TagColorDot } from "./TagColorDot";
 const SIDEBAR_SORT_LABELS: Record<SidebarProjectSortOrder, string> = {
   updated_at: "Last user message",
   created_at: "Created at",
@@ -2458,6 +2463,7 @@ interface SidebarAllThreadsProjectMeta {
 interface SidebarThreadListSection {
   id: string;
   label: string;
+  tagColor?: UiTagColor | undefined;
   threads: readonly SidebarThreadSummary[];
   emptyLabel?: string | undefined;
   countLabel?: string | undefined;
@@ -2470,6 +2476,7 @@ interface SidebarThreadSectionsListProps {
   title: string;
   count: number;
   sections: readonly SidebarThreadListSection[];
+  headerAction?: React.ReactNode;
   orderedThreadKeys: readonly string[];
   activeRouteThreadKey: string | null;
   threadJumpLabelByKey: ReadonlyMap<string, string>;
@@ -2489,6 +2496,7 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
     title,
     count,
     sections,
+    headerAction,
     orderedThreadKeys,
     activeRouteThreadKey,
     threadJumpLabelByKey,
@@ -2903,7 +2911,11 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
             <ChevronRightIcon
               className={`size-3.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
             />
-            <TagIcon className="size-3.5 shrink-0 text-muted-foreground/55" />
+            {section.tagColor ? (
+              <TagColorDot color={section.tagColor} />
+            ) : (
+              <TagIcon className="size-3.5 shrink-0 text-muted-foreground/55" />
+            )}
             <span className="min-w-0 flex-1 truncate">{section.label}</span>
             {section.countLabel ? (
               <span className="shrink-0 text-[10px] text-muted-foreground/45">
@@ -2978,10 +2990,252 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
         <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
           {title}
         </span>
-        <span className="text-[10px] text-muted-foreground/45">{count}</span>
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] text-muted-foreground/45">{count}</span>
+          {headerAction}
+        </div>
       </div>
       {sections.map(renderSection)}
     </SidebarGroup>
+  );
+});
+
+interface SidebarTagUsage {
+  threadCount: number;
+  projectCount: number;
+}
+
+interface SidebarTagLibraryProps {
+  tags: readonly UiTag[];
+  usageByTagId: ReadonlyMap<string, SidebarTagUsage>;
+  onBack: () => void;
+}
+
+const SidebarTagLibrary = memo(function SidebarTagLibrary({
+  tags,
+  usageByTagId,
+  onBack,
+}: SidebarTagLibraryProps) {
+  const renameTag = useUiStateStore((state) => state.renameTag);
+  const setTagColor = useUiStateStore((state) => state.setTagColor);
+  const deleteTag = useUiStateStore((state) => state.deleteTag);
+  const [renamingTagId, setRenamingTagId] = useState<string | null>(null);
+  const [renamingName, setRenamingName] = useState("");
+  const [renameError, setRenameError] = useState<string | null>(null);
+  const [deleteCandidate, setDeleteCandidate] = useState<UiTag | null>(null);
+  const renamingInputRef = useRef<HTMLInputElement | null>(null);
+
+  const tagIdSet = useMemo(() => new Set(tags.map((tag) => tag.id)), [tags]);
+
+  const closeRename = useCallback(() => {
+    setRenamingTagId(null);
+    setRenamingName("");
+    setRenameError(null);
+    renamingInputRef.current = null;
+  }, []);
+
+  const beginRename = useCallback((tag: UiTag) => {
+    setRenamingTagId(tag.id);
+    setRenamingName(tag.name);
+    setRenameError(null);
+    requestAnimationFrame(() => {
+      renamingInputRef.current?.focus();
+      renamingInputRef.current?.select();
+    });
+  }, []);
+
+  const commitRename = useCallback(
+    (tag: UiTag) => {
+      const normalizedName = normalizeTagName(renamingName);
+      if (!normalizedName) {
+        setRenameError("Tag name cannot be empty.");
+        return;
+      }
+      const nextTagId = tagIdFromName(normalizedName);
+      if (nextTagId !== tag.id && tagIdSet.has(nextTagId)) {
+        setRenameError("A tag with this name already exists.");
+        return;
+      }
+      renameTag(tag.id, normalizedName);
+      closeRename();
+    },
+    [closeRename, renameTag, renamingName, tagIdSet],
+  );
+
+  const handleDeleteConfirmed = useCallback(() => {
+    if (!deleteCandidate) {
+      return;
+    }
+    deleteTag(deleteCandidate.id);
+    setDeleteCandidate(null);
+    if (renamingTagId === deleteCandidate.id) {
+      closeRename();
+    }
+  }, [closeRename, deleteCandidate, deleteTag, renamingTagId]);
+
+  return (
+    <>
+      <SidebarGroup className="px-2 py-2">
+        <div className="mb-2 flex items-center gap-1 pl-1 pr-1.5">
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Back to tags"
+                  className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/70 transition-colors hover:bg-accent hover:text-foreground"
+                  onClick={onBack}
+                />
+              }
+            >
+              <ArrowLeftIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="right">Back to tags</TooltipPopup>
+          </Tooltip>
+          <span className="min-w-0 flex-1 truncate text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60">
+            Tag Library
+          </span>
+          <span className="text-[10px] text-muted-foreground/45">{tags.length}</span>
+        </div>
+        <div className="space-y-1" data-testid="tag-library">
+          {tags.length === 0 ? (
+            <div className="px-2 py-4 text-center text-xs text-muted-foreground/60">
+              No tags yet
+            </div>
+          ) : null}
+          {tags.map((tag) => {
+            const usage = usageByTagId.get(tag.id) ?? { threadCount: 0, projectCount: 0 };
+            const isRenaming = renamingTagId === tag.id;
+            return (
+              <div
+                key={tag.id}
+                className="group/tag-row flex min-h-9 items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                data-testid={`tag-library-row-${tag.id}`}
+              >
+                <TagColorDot color={tag.color} />
+                <div className="min-w-0 flex-1">
+                  {isRenaming ? (
+                    <div className="space-y-1">
+                      <Input
+                        ref={renamingInputRef}
+                        aria-label={`Rename tag ${tag.name}`}
+                        className="h-7 px-2 text-xs"
+                        value={renamingName}
+                        onChange={(event) => {
+                          setRenamingName(event.target.value);
+                          setRenameError(null);
+                        }}
+                        onBlur={() => commitRename(tag)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") {
+                            event.preventDefault();
+                            commitRename(tag);
+                          } else if (event.key === "Escape") {
+                            event.preventDefault();
+                            closeRename();
+                          }
+                        }}
+                      />
+                      {renameError ? (
+                        <div className="text-[10px] text-destructive-foreground">{renameError}</div>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="truncate text-xs text-foreground">{tag.name}</div>
+                  )}
+                  {!isRenaming ? (
+                    <div className="mt-0.5 text-[10px] text-muted-foreground/55">
+                      {usage.threadCount} thread{usage.threadCount === 1 ? "" : "s"}
+                      {usage.projectCount > 0
+                        ? `, ${usage.projectCount} project${usage.projectCount === 1 ? "" : "s"}`
+                        : ""}
+                    </div>
+                  ) : null}
+                </div>
+                <Menu>
+                  <MenuTrigger
+                    aria-label={`Tag actions for ${tag.name}`}
+                    className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground/65 opacity-0 transition-[opacity,background-color,color] hover:bg-background hover:text-foreground group-hover/tag-row:opacity-100 focus-visible:opacity-100"
+                  >
+                    <MoreHorizontalIcon className="size-3.5" />
+                  </MenuTrigger>
+                  <MenuPopup align="end" side="bottom" className="min-w-44">
+                    <MenuGroup>
+                      <MenuItem onClick={() => beginRename(tag)}>Rename</MenuItem>
+                    </MenuGroup>
+                    <MenuGroup>
+                      <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">
+                        Color
+                      </div>
+                      {TAG_COLOR_VALUES.map((color) => (
+                        <MenuItem
+                          key={color}
+                          onClick={() => {
+                            setTagColor(tag.id, color);
+                          }}
+                        >
+                          <TagColorDot color={color} />
+                          <span>{TAG_COLOR_LABELS[color]}</span>
+                          {tag.color === color ? (
+                            <span className="ml-auto text-[10px] text-muted-foreground/70">
+                              Current
+                            </span>
+                          ) : null}
+                        </MenuItem>
+                      ))}
+                    </MenuGroup>
+                    <MenuSeparator />
+                    <MenuGroup>
+                      <MenuItem variant="destructive" onClick={() => setDeleteCandidate(tag)}>
+                        Delete
+                      </MenuItem>
+                    </MenuGroup>
+                  </MenuPopup>
+                </Menu>
+              </div>
+            );
+          })}
+        </div>
+      </SidebarGroup>
+
+      <Dialog
+        open={deleteCandidate !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteCandidate(null);
+          }
+        }}
+      >
+        <DialogPopup className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Delete "{deleteCandidate?.name ?? "tag"}"?</DialogTitle>
+            <DialogDescription>
+              {deleteCandidate
+                ? (() => {
+                    const usage = usageByTagId.get(deleteCandidate.id) ?? {
+                      threadCount: 0,
+                      projectCount: 0,
+                    };
+                    return `This removes the tag from ${usage.threadCount} thread${
+                      usage.threadCount === 1 ? "" : "s"
+                    } and ${usage.projectCount} project${
+                      usage.projectCount === 1 ? "" : "s"
+                    }. Threads and projects will not be deleted.`;
+                  })()
+                : "Threads and projects will not be deleted."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteCandidate(null)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" onClick={handleDeleteConfirmed}>
+              Delete tag
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+    </>
   );
 });
 
@@ -3662,6 +3916,7 @@ export default function Sidebar() {
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<string>
   >(() => new Set());
+  const [tagLibraryOpen, setTagLibraryOpen] = useState(false);
   const [tagDialogTarget, setTagDialogTarget] = useState<SidebarTagDialogTarget | null>(null);
   const [tagDialogValue, setTagDialogValue] = useState("");
   const { showThreadJumpHints, updateThreadJumpHintsVisibility } = useThreadJumpHintVisibility();
@@ -3941,6 +4196,73 @@ export default function Sidebar() {
       visibleThreads,
     ],
   );
+  const sortedTags = useMemo(
+    () =>
+      Object.values(tagById).toSorted((left, right) =>
+        left.name.localeCompare(right.name, undefined, {
+          numeric: true,
+          sensitivity: "base",
+        }),
+      ),
+    [tagById],
+  );
+  const tagUsageById = useMemo(() => {
+    const nextUsage = new Map<string, SidebarTagUsage>();
+    for (const tag of sortedTags) {
+      nextUsage.set(tag.id, { threadCount: 0, projectCount: 0 });
+    }
+
+    for (const tagIds of Object.values(projectTagIdsByProjectKey)) {
+      for (const tagId of tagIds) {
+        const currentUsage = nextUsage.get(tagId);
+        if (currentUsage) {
+          currentUsage.projectCount += 1;
+        }
+      }
+    }
+
+    const threadKeysByTagId = new Map<string, Set<string>>();
+    for (const thread of visibleThreads) {
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      const tagIds = new Set(threadTagIdsByThreadKey[threadKey] ?? []);
+      const projectKey =
+        projectPhysicalKeyByScopedRef.get(
+          scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+        ) ?? null;
+      if (projectKey) {
+        for (const tagId of projectTagIdsByProjectKey[projectKey] ?? []) {
+          tagIds.add(tagId);
+        }
+      }
+      for (const tagId of tagIds) {
+        if (!tagById[tagId]) {
+          continue;
+        }
+        const threadKeys = threadKeysByTagId.get(tagId);
+        if (threadKeys) {
+          threadKeys.add(threadKey);
+        } else {
+          threadKeysByTagId.set(tagId, new Set([threadKey]));
+        }
+      }
+    }
+
+    for (const [tagId, threadKeys] of threadKeysByTagId) {
+      const currentUsage = nextUsage.get(tagId);
+      if (currentUsage) {
+        currentUsage.threadCount = threadKeys.size;
+      }
+    }
+
+    return nextUsage;
+  }, [
+    projectPhysicalKeyByScopedRef,
+    projectTagIdsByProjectKey,
+    sortedTags,
+    tagById,
+    threadTagIdsByThreadKey,
+    visibleThreads,
+  ]);
   const { pinnedThreads, recentThreads } = useMemo(
     () =>
       splitPinnedSidebarThreads({
@@ -4055,7 +4377,9 @@ export default function Sidebar() {
     sidebarViewMode === "all-threads"
       ? allSidebarThreadKeys
       : sidebarViewMode === "tags"
-        ? tagSidebarThreadKeys
+        ? tagLibraryOpen
+          ? []
+          : tagSidebarThreadKeys
         : projectVisibleSidebarThreadKeys;
   const threadJumpCommandByKey = useMemo(() => {
     const mapping = new Map<string, NonNullable<ReturnType<typeof threadJumpCommandForIndex>>>();
@@ -4136,6 +4460,12 @@ export default function Sidebar() {
   useEffect(() => {
     updateThreadJumpHintsVisibility(shouldShowThreadJumpHintsNow);
   }, [shouldShowThreadJumpHintsNow, updateThreadJumpHintsVisibility]);
+
+  useEffect(() => {
+    if (sidebarViewMode !== "tags") {
+      setTagLibraryOpen(false);
+    }
+  }, [sidebarViewMode]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -4451,6 +4781,16 @@ export default function Sidebar() {
   );
 
   const tagsNode = useMemo(() => {
+    if (tagLibraryOpen) {
+      return (
+        <SidebarTagLibrary
+          tags={sortedTags}
+          usageByTagId={tagUsageById}
+          onBack={() => setTagLibraryOpen(false)}
+        />
+      );
+    }
+
     const sections: SidebarThreadListSection[] =
       tagThreadGroups.length > 0
         ? tagThreadGroups.map((group) => {
@@ -4458,11 +4798,13 @@ export default function Sidebar() {
             return {
               id: group.tag.id,
               label: group.tag.name,
+              tagColor: group.tag.color,
               countLabel: String(group.threadCount),
               collapsible: true,
               expanded,
               onToggle: () => setTagExpanded(group.tag.id, !expanded),
               threads: [...group.pinnedThreads, ...group.recentThreads],
+              emptyLabel: group.threadCount === 0 ? "No threads yet" : undefined,
             };
           })
         : [
@@ -4479,6 +4821,24 @@ export default function Sidebar() {
         title="Tags"
         count={tagThreadGroups.length}
         sections={sections}
+        headerAction={
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <button
+                  type="button"
+                  aria-label="Manage tags"
+                  className="inline-flex size-5 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-accent hover:text-foreground"
+                  data-testid="manage-tags-button"
+                  onClick={() => setTagLibraryOpen(true)}
+                />
+              }
+            >
+              <SettingsIcon className="size-3.5" />
+            </TooltipTrigger>
+            <TooltipPopup side="right">Manage tags</TooltipPopup>
+          </Tooltip>
+        }
         orderedThreadKeys={tagSidebarThreadKeys}
         activeRouteThreadKey={routeThreadKey}
         threadJumpLabelByKey={visibleThreadJumpLabelByKey}
@@ -4501,9 +4861,12 @@ export default function Sidebar() {
     projectMetaByThreadKey,
     routeThreadKey,
     setTagExpanded,
+    sortedTags,
     tagExpandedById,
+    tagLibraryOpen,
     tagSidebarThreadKeys,
     tagThreadGroups,
+    tagUsageById,
     visibleThreadJumpLabelByKey,
   ]);
 

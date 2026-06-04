@@ -17,6 +17,8 @@ import { Toggle } from "../ui/toggle";
 import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../environments/primary";
+import { TagColorDot } from "../TagColorDot";
+import type { UiTagColor } from "../../tagColors";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -27,6 +29,7 @@ interface ChatHeaderProps {
   activeTags: ReadonlyArray<{
     readonly id: string;
     readonly name: string;
+    readonly color: UiTagColor;
   }>;
   isGitRepo: boolean;
   openInCwd: string | null;
@@ -122,6 +125,7 @@ export const ChatHeader = memo(function ChatHeader({
             aria-label={`Tag ${tag.name}`}
             title={tag.name}
           >
+            <TagColorDot color={tag.color} className="size-1.5" />
             <span className="min-w-0 truncate">{tag.name}</span>
           </Badge>
         ))}
