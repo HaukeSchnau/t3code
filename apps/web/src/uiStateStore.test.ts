@@ -12,7 +12,9 @@ import {
   reorderProjects,
   setDefaultAdvertisedEndpointKey,
   setProjectExpanded,
+  setSidebarViewMode,
   setThreadChangedFilesExpanded,
+  setThreadPinned,
   syncProjects,
   syncThreads,
   type UiState,
@@ -23,8 +25,10 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     threadLastVisitedAtById: {},
+    threadPinnedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
+    sidebarViewMode: "projects",
     ...overrides,
   };
 }
@@ -114,6 +118,28 @@ describe("uiStateStore pure functions", () => {
     expect(setDefaultAdvertisedEndpointKey(next, "")).toMatchObject({
       defaultAdvertisedEndpointKey: null,
     });
+  });
+
+  it("setSidebarViewMode stores the selected sidebar lens", () => {
+    const initialState = makeUiState();
+
+    const next = setSidebarViewMode(initialState, "all-threads");
+
+    expect(next.sidebarViewMode).toBe("all-threads");
+    expect(setSidebarViewMode(next, "all-threads")).toBe(next);
+  });
+
+  it("setThreadPinned records and clears a pinned timestamp", () => {
+    const threadKey = "environment-local:thread-1";
+    const initialState = makeUiState();
+
+    const pinned = setThreadPinned(initialState, threadKey, true, "2026-03-09T10:00:00.000Z");
+    expect(pinned.threadPinnedAtById[threadKey]).toBe("2026-03-09T10:00:00.000Z");
+    expect(setThreadPinned(pinned, threadKey, true)).toBe(pinned);
+
+    const unpinned = setThreadPinned(pinned, threadKey, false);
+    expect(unpinned.threadPinnedAtById).toEqual({});
+    expect(setThreadPinned(unpinned, threadKey, false)).toBe(unpinned);
   });
 
   it("reorderProjects moves all member keys of a multi-member group together", () => {
@@ -352,6 +378,10 @@ describe("uiStateStore pure functions", () => {
           "turn-2": false,
         },
       },
+      threadPinnedAtById: {
+        [thread1]: "2026-02-25T12:37:00.000Z",
+        [thread2]: "2026-02-25T12:38:00.000Z",
+      },
     });
 
     const next = syncThreads(initialState, [{ key: thread1 }]);
@@ -363,6 +393,9 @@ describe("uiStateStore pure functions", () => {
       [thread1]: {
         "turn-1": false,
       },
+    });
+    expect(next.threadPinnedAtById).toEqual({
+      [thread1]: "2026-02-25T12:37:00.000Z",
     });
   });
 
@@ -408,12 +441,16 @@ describe("uiStateStore pure functions", () => {
           "turn-1": false,
         },
       },
+      threadPinnedAtById: {
+        [thread1]: "2026-02-25T12:37:00.000Z",
+      },
     });
 
     const next = clearThreadUi(initialState, thread1);
 
     expect(next.threadLastVisitedAtById).toEqual({});
     expect(next.threadChangedFilesExpandedById).toEqual({});
+    expect(next.threadPinnedAtById).toEqual({});
   });
 
   it("setThreadChangedFilesExpanded stores collapsed turns per thread", () => {
@@ -577,6 +614,25 @@ describe("uiStateStore persistence round-trip", () => {
       localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
     ) as PersistedUiState;
     expect(persisted.defaultAdvertisedEndpointKey).toBe("desktop-core:lan:http");
+  });
+
+  it("persists sidebar view mode and pinned threads", () => {
+    const state = setThreadPinned(
+      setSidebarViewMode(makeUiState(), "all-threads"),
+      "environment-local:thread-1",
+      true,
+      "2026-03-09T10:00:00.000Z",
+    );
+
+    persistState(state);
+
+    const persisted = JSON.parse(
+      localStorageStub.getItem(PERSISTED_STATE_KEY) ?? "{}",
+    ) as PersistedUiState;
+    expect(persisted.sidebarViewMode).toBe("all-threads");
+    expect(persisted.threadPinnedAtById).toEqual({
+      "environment-local:thread-1": "2026-03-09T10:00:00.000Z",
+    });
   });
 
   it("preserves expand state across restart when project's logical key changes", () => {

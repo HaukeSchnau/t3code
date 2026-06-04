@@ -18,7 +18,9 @@ import {
   resolveThreadRowClassName,
   resolveThreadStatusPill,
   shouldClearThreadSelectionOnMouseDown,
+  sortSidebarThreadsByLastActivity,
   sortProjectsForSidebar,
+  splitPinnedSidebarThreads,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
 import {
@@ -140,6 +142,71 @@ describe("getSidebarThreadIdsToPrewarm", () => {
 
   it("returns no thread ids when the limit is zero", () => {
     expect(getSidebarThreadIdsToPrewarm(["t1", "t2"], 0)).toEqual([]);
+  });
+});
+
+describe("sortSidebarThreadsByLastActivity", () => {
+  it("sorts by updatedAt before createdAt and uses id as a deterministic tie-breaker", () => {
+    const threads = [
+      {
+        id: ThreadId.make("thread-a"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:03:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-c"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:05:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-b"),
+        createdAt: "2026-03-09T10:05:00.000Z",
+        updatedAt: undefined,
+      },
+    ];
+
+    expect(sortSidebarThreadsByLastActivity(threads).map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-c"),
+      ThreadId.make("thread-b"),
+      ThreadId.make("thread-a"),
+    ]);
+  });
+});
+
+describe("splitPinnedSidebarThreads", () => {
+  it("splits pinned threads from recent threads while preserving last-activity sorting in each group", () => {
+    const threads = [
+      {
+        id: ThreadId.make("thread-a"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:04:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-b"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:03:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-c"),
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:02:00.000Z",
+      },
+    ];
+
+    const result = splitPinnedSidebarThreads({
+      threads,
+      pinnedAtByThreadKey: {
+        "env:thread-a": "2026-03-09T10:10:00.000Z",
+        "env:thread-c": "2026-03-09T10:11:00.000Z",
+      },
+      getThreadKey: (thread) => `env:${thread.id}`,
+    });
+
+    expect(result.pinnedThreads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-a"),
+      ThreadId.make("thread-c"),
+    ]);
+    expect(result.recentThreads.map((thread) => thread.id)).toEqual([ThreadId.make("thread-b")]);
   });
 });
 

@@ -25,6 +25,16 @@ type SidebarProject = {
 
 export type ThreadTraversalDirection = "previous" | "next";
 
+export type SidebarThreadActivityInput = Pick<
+  SidebarThreadSummary,
+  "createdAt" | "id" | "updatedAt"
+>;
+
+export interface SidebarPinnedThreadGroups<TThread> {
+  pinnedThreads: TThread[];
+  recentThreads: TThread[];
+}
+
 export interface ThreadStatusPill {
   label:
     | "Working"
@@ -257,6 +267,51 @@ export function getSidebarThreadIdsToPrewarm<TThreadId>(
   limit = SIDEBAR_THREAD_PREWARM_LIMIT,
 ): TThreadId[] {
   return visibleThreadIds.slice(0, Math.max(0, limit));
+}
+
+export function getSidebarThreadLastActivityTimestamp(
+  thread: Pick<SidebarThreadSummary, "createdAt" | "updatedAt">,
+): number {
+  return (
+    toSortableTimestamp(thread.updatedAt) ??
+    toSortableTimestamp(thread.createdAt) ??
+    Number.NEGATIVE_INFINITY
+  );
+}
+
+export function sortSidebarThreadsByLastActivity<T extends SidebarThreadActivityInput>(
+  threads: readonly T[],
+): T[] {
+  return threads.toSorted((left, right) => {
+    const rightTimestamp = getSidebarThreadLastActivityTimestamp(right);
+    const leftTimestamp = getSidebarThreadLastActivityTimestamp(left);
+    const byTimestamp =
+      rightTimestamp === leftTimestamp ? 0 : rightTimestamp > leftTimestamp ? 1 : -1;
+    if (byTimestamp !== 0) return byTimestamp;
+    return right.id.localeCompare(left.id);
+  });
+}
+
+export function splitPinnedSidebarThreads<T extends SidebarThreadActivityInput>(input: {
+  threads: readonly T[];
+  pinnedAtByThreadKey: Readonly<Record<string, string>>;
+  getThreadKey: (thread: T) => string;
+}): SidebarPinnedThreadGroups<T> {
+  const pinnedThreads: T[] = [];
+  const recentThreads: T[] = [];
+
+  for (const thread of input.threads) {
+    if (input.pinnedAtByThreadKey[input.getThreadKey(thread)]) {
+      pinnedThreads.push(thread);
+    } else {
+      recentThreads.push(thread);
+    }
+  }
+
+  return {
+    pinnedThreads: sortSidebarThreadsByLastActivity(pinnedThreads),
+    recentThreads: sortSidebarThreadsByLastActivity(recentThreads),
+  };
 }
 
 export function resolveAdjacentThreadId<T>(input: {

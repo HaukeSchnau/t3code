@@ -20,6 +20,8 @@ export interface PersistedUiState {
   expandedProjectCwds?: string[];
   projectOrderCwds?: string[];
   defaultAdvertisedEndpointKey?: string | null;
+  sidebarViewMode?: SidebarViewMode;
+  threadPinnedAtById?: Record<string, string>;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
 }
 
@@ -30,6 +32,7 @@ export interface UiProjectState {
 
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
+  threadPinnedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
 }
 
@@ -37,7 +40,13 @@ export interface UiEndpointState {
   defaultAdvertisedEndpointKey: string | null;
 }
 
-export interface UiState extends UiProjectState, UiThreadState, UiEndpointState {}
+export type SidebarViewMode = "projects" | "all-threads";
+
+export interface UiSidebarState {
+  sidebarViewMode: SidebarViewMode;
+}
+
+export interface UiState extends UiProjectState, UiThreadState, UiEndpointState, UiSidebarState {}
 
 export interface SyncProjectInput {
   /** Physical project key (env + cwd). Used for manual sort order. */
@@ -56,8 +65,10 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   threadLastVisitedAtById: {},
+  threadPinnedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
+  sidebarViewMode: "projects",
 };
 
 const persistedCollapsedProjectCwds = new Set<string>();
@@ -100,6 +111,8 @@ function readPersistedState(): UiState {
         parsed.defaultAdvertisedEndpointKey.length > 0
           ? parsed.defaultAdvertisedEndpointKey
           : null,
+      sidebarViewMode: sanitizeSidebarViewMode(parsed.sidebarViewMode),
+      threadPinnedAtById: sanitizePersistedIsoRecord(parsed.threadPinnedAtById),
       threadChangedFilesExpandedById: sanitizePersistedThreadChangedFilesExpanded(
         parsed.threadChangedFilesExpandedById,
       ),
@@ -107,6 +120,26 @@ function readPersistedState(): UiState {
   } catch {
     return initialState;
   }
+}
+
+function sanitizeSidebarViewMode(value: PersistedUiState["sidebarViewMode"]): SidebarViewMode {
+  return value === "all-threads" ? "all-threads" : "projects";
+}
+
+function sanitizePersistedIsoRecord(value: unknown): Record<string, string> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.entries(value).filter(
+      ([key, iso]) =>
+        key.length > 0 &&
+        typeof iso === "string" &&
+        iso.length > 0 &&
+        Number.isFinite(Date.parse(iso)),
+    ),
+  );
 }
 
 function sanitizePersistedThreadChangedFilesExpanded(
@@ -194,6 +227,8 @@ export function persistState(state: UiState): void {
         expandedProjectCwds,
         projectOrderCwds,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
+        sidebarViewMode: state.sidebarViewMode,
+        threadPinnedAtById: state.threadPinnedAtById,
         threadChangedFilesExpandedById,
       } satisfies PersistedUiState),
     );
@@ -427,8 +462,14 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
       retainedThreadIds.has(threadId),
     ),
   );
+  const nextThreadPinnedAtById = Object.fromEntries(
+    Object.entries(state.threadPinnedAtById).filter(([threadId]) =>
+      retainedThreadIds.has(threadId),
+    ),
+  );
   if (
     recordsEqual(state.threadLastVisitedAtById, nextThreadLastVisitedAtById) &&
+    recordsEqual(state.threadPinnedAtById, nextThreadPinnedAtById) &&
     nestedBooleanRecordsEqual(
       state.threadChangedFilesExpandedById,
       nextThreadChangedFilesExpandedById,
@@ -439,7 +480,18 @@ export function syncThreads(state: UiState, threads: readonly SyncThreadInput[])
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
+    threadPinnedAtById: nextThreadPinnedAtById,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
+  };
+}
+
+export function setSidebarViewMode(state: UiState, mode: SidebarViewMode): UiState {
+  if (state.sidebarViewMode === mode) {
+    return state;
+  }
+  return {
+    ...state,
+    sidebarViewMode: mode,
   };
 }
 
@@ -491,18 +543,51 @@ export function markThreadUnread(
 
 export function clearThreadUi(state: UiState, threadId: string): UiState {
   const hasVisitedState = threadId in state.threadLastVisitedAtById;
+  const hasPinnedState = threadId in state.threadPinnedAtById;
   const hasChangedFilesState = threadId in state.threadChangedFilesExpandedById;
-  if (!hasVisitedState && !hasChangedFilesState) {
+  if (!hasVisitedState && !hasPinnedState && !hasChangedFilesState) {
     return state;
   }
   const nextThreadLastVisitedAtById = { ...state.threadLastVisitedAtById };
+  const nextThreadPinnedAtById = { ...state.threadPinnedAtById };
   const nextThreadChangedFilesExpandedById = { ...state.threadChangedFilesExpandedById };
   delete nextThreadLastVisitedAtById[threadId];
+  delete nextThreadPinnedAtById[threadId];
   delete nextThreadChangedFilesExpandedById[threadId];
   return {
     ...state,
     threadLastVisitedAtById: nextThreadLastVisitedAtById,
+    threadPinnedAtById: nextThreadPinnedAtById,
     threadChangedFilesExpandedById: nextThreadChangedFilesExpandedById,
+  };
+}
+
+export function setThreadPinned(
+  state: UiState,
+  threadId: string,
+  pinned: boolean,
+  pinnedAt?: string,
+): UiState {
+  const isCurrentlyPinned = threadId in state.threadPinnedAtById;
+  if (pinned === isCurrentlyPinned) {
+    return state;
+  }
+
+  if (!pinned) {
+    const nextThreadPinnedAtById = { ...state.threadPinnedAtById };
+    delete nextThreadPinnedAtById[threadId];
+    return {
+      ...state,
+      threadPinnedAtById: nextThreadPinnedAtById,
+    };
+  }
+
+  return {
+    ...state,
+    threadPinnedAtById: {
+      ...state.threadPinnedAtById,
+      [threadId]: pinnedAt ?? new Date().toISOString(),
+    },
   };
 }
 
@@ -634,11 +719,13 @@ export function reorderProjects(
 }
 
 interface UiStateStore extends UiState {
+  setSidebarViewMode: (mode: SidebarViewMode) => void;
   syncProjects: (projects: readonly SyncProjectInput[]) => void;
   syncThreads: (threads: readonly SyncThreadInput[]) => void;
   markThreadVisited: (threadId: string, visitedAt?: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   clearThreadUi: (threadId: string) => void;
+  setThreadPinned: (threadId: string, pinned: boolean, pinnedAt?: string) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   toggleProject: (projectId: string) => void;
@@ -651,6 +738,7 @@ interface UiStateStore extends UiState {
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
   ...readPersistedState(),
+  setSidebarViewMode: (mode) => set((state) => setSidebarViewMode(state, mode)),
   syncProjects: (projects) => set((state) => syncProjects(state, projects)),
   syncThreads: (threads) => set((state) => syncThreads(state, threads)),
   markThreadVisited: (threadId, visitedAt) =>
@@ -658,6 +746,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
   clearThreadUi: (threadId) => set((state) => clearThreadUi(state, threadId)),
+  setThreadPinned: (threadId, pinned, pinnedAt) =>
+    set((state) => setThreadPinned(state, threadId, pinned, pinnedAt)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
