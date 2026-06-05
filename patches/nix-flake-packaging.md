@@ -20,11 +20,13 @@ The package follows the existing server publish flow:
 3. Create a minimal runtime workspace containing only `apps/server`, the lockfile, workspace settings, patch
    files, and the built `dist`.
 4. Run `pnpm install --prod --frozen-lockfile --filter t3 --ignore-scripts` offline in that runtime workspace.
-5. Wrap the resulting CLI with Node and common runtime tools on `PATH`.
+5. Rebuild only `node-pty` from source so the runtime closure contains the native `pty.node` module.
+6. Wrap the resulting CLI with Node and common runtime tools on `PATH`.
 
 The minimal runtime workspace avoids pulling unrelated packages such as `infra/relay` into the deployable
 server closure. The `--ignore-scripts` install flag avoids rerunning the root `prepare` patch script during
-the install phase; native packages used by the server are already present in the fixed pnpm dependency store.
+the install phase. `node-pty` is rebuilt explicitly because it needs a platform-specific native module and its
+generic install script cannot run during the broad script-free production install.
 
 The build environment sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to nixpkgs' `cacert` bundle. Vite+'s
 Rust-side build tooling initializes an HTTP client during `vp build`; without an explicit CA bundle, sandboxed
