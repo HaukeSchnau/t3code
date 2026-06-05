@@ -21,7 +21,8 @@
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
 
-      mkPkgs = system:
+      mkPkgs =
+        system:
         import nixpkgs {
           inherit system;
         };
@@ -221,16 +222,34 @@
               description = "Group account that runs the T3 Code server.";
             };
 
+            createUser = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether to create the configured service user and group.";
+            };
+
             baseDir = lib.mkOption {
               type = lib.types.path;
               default = "/var/lib/t3code";
               description = "Persistent T3CODE_HOME directory.";
             };
 
+            createBaseDir = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether to create the persistent T3CODE_HOME directory with tmpfiles.";
+            };
+
             cwd = lib.mkOption {
               type = lib.types.path;
               default = "/var/lib/t3code/projects/default";
               description = "Default working directory for provider sessions.";
+            };
+
+            createCwd = lib.mkOption {
+              type = lib.types.bool;
+              default = true;
+              description = "Whether to create the default working directory with tmpfiles.";
             };
 
             host = lib.mkOption {
@@ -272,18 +291,26 @@
           };
 
           config = lib.mkIf cfg.enable {
-            users.groups.${cfg.group} = { };
-            users.users.${cfg.user} = {
-              isSystemUser = true;
-              group = cfg.group;
-              home = toString cfg.baseDir;
-              createHome = true;
+            users.groups = lib.mkIf cfg.createUser {
+              ${cfg.group} = { };
             };
 
-            systemd.tmpfiles.rules = [
-              "d ${toString cfg.baseDir} 0750 ${cfg.user} ${cfg.group} -"
-              "d ${toString cfg.cwd} 0750 ${cfg.user} ${cfg.group} -"
-            ];
+            users.users = lib.mkIf cfg.createUser {
+              ${cfg.user} = {
+                isSystemUser = true;
+                group = cfg.group;
+                home = toString cfg.baseDir;
+                createHome = true;
+              };
+            };
+
+            systemd.tmpfiles.rules =
+              lib.optionals cfg.createBaseDir [
+                "d ${toString cfg.baseDir} 0750 ${cfg.user} ${cfg.group} -"
+              ]
+              ++ lib.optionals cfg.createCwd [
+                "d ${toString cfg.cwd} 0750 ${cfg.user} ${cfg.group} -"
+              ];
 
             systemd.services.t3code = {
               description = "T3 Code server";
@@ -292,23 +319,21 @@
               wants = [ "network-online.target" ];
               after = [ "network-online.target" ];
 
-              path =
-                [
-                  cfg.package
-                  pkgs.git
-                  pkgs.jujutsu
-                  pkgs.openssh
-                ]
-                ++ cfg.providerPackages;
+              path = [
+                cfg.package
+                pkgs.git
+                pkgs.jujutsu
+                pkgs.openssh
+              ]
+              ++ cfg.providerPackages;
 
-              environment =
-                {
-                  T3CODE_HOME = toString cfg.baseDir;
-                  T3CODE_HOST = cfg.host;
-                  T3CODE_PORT = toString cfg.port;
-                  T3CODE_NO_BROWSER = "1";
-                }
-                // cfg.environment;
+              environment = {
+                T3CODE_HOME = toString cfg.baseDir;
+                T3CODE_HOST = cfg.host;
+                T3CODE_PORT = toString cfg.port;
+                T3CODE_NO_BROWSER = "1";
+              }
+              // cfg.environment;
 
               serviceConfig = {
                 Type = "simple";

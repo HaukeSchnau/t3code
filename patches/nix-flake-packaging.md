@@ -33,5 +33,10 @@ state under `/var/lib/t3code`, and uses `/var/lib/t3code/projects/default` as th
 directory. Deployments that should be reachable beyond localhost must set `services.t3code.host`, and usually
 `services.t3code.openFirewall`.
 
+Some deployments already have a user, home directory, and agent credentials managed by their host
+configuration. Those hosts can set `services.t3code.createUser = false`, `createBaseDir = false`, or
+`createCwd = false` and provide their own user, tmpfiles, and environment values such as `HOME` or
+`CODEX_HOME`. The default remains self-contained so new installs do not need host-specific user management.
+
 Provider CLIs such as Codex, Claude, Cursor, or OpenCode are intentionally not bundled into the package. Add
 them through `services.t3code.providerPackages` or configure absolute binary paths in T3 Code settings.
