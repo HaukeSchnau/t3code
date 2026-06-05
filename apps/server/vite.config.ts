@@ -2,8 +2,20 @@ import "vite-plus/test/config";
 import { defineConfig, mergeConfig } from "vite-plus";
 
 import baseConfig from "../../vite.config.ts";
+import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
 
-const internalPackagePrefixes = ["@t3tools/", "effect-acp", "effect-codex-app-server"];
+const bundledPackagePrefixes = [
+  "@pierre/diffs",
+  "@t3tools/",
+  "effect-acp",
+  "effect-codex-app-server",
+];
+
+export function shouldBundleCliDependency(id: string): boolean {
+  return bundledPackagePrefixes.some((prefix) => id.startsWith(prefix));
+}
+
+const repoEnv = loadRepoEnv();
 
 export default mergeConfig(
   baseConfig,
@@ -23,12 +35,20 @@ export default mergeConfig(
       sourcemap: true,
       clean: true,
       deps: {
-        alwaysBundle: (id: string) =>
-          internalPackagePrefixes.some((prefix) => id.startsWith(prefix)),
+        alwaysBundle: shouldBundleCliDependency,
         onlyBundle: false,
       },
       banner: {
         js: "#!/usr/bin/env node\n",
+      },
+      define: {
+        __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
+        __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
+          repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
+        ),
+        __T3CODE_BUILD_CLERK_CLI_OAUTH_CLIENT_ID__: JSON.stringify(
+          repoEnv.T3CODE_CLERK_CLI_OAUTH_CLIENT_ID?.trim() ?? "",
+        ),
       },
     },
     test: {

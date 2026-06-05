@@ -67,7 +67,6 @@ export interface ThreadDetailScreenProps {
   readonly onPickDraftImages: () => Promise<void>;
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
-  readonly onRefresh: () => Promise<void>;
   readonly onStopThread: () => Promise<void>;
   readonly onSendMessage: () => void;
   readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => Promise<void>;
@@ -201,7 +200,7 @@ const WorkingDurationPill = memo(function WorkingDurationPill(props: {
 });
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
-  const { onNavigateBack, onRefresh } = props;
+  const { onNavigateBack } = props;
 
   const insets = useSafeAreaInsets();
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
@@ -212,7 +211,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const activeWorkIndicatorHeight = props.activeWorkStartedAt ? WORKING_INDICATOR_HEIGHT : 0;
   const estimatedOverlayHeight = composerOverlapHeight + activeWorkIndicatorHeight;
   const [measuredOverlayHeight, setMeasuredOverlayHeight] = useState(0);
-  const [refreshing, setRefreshing] = useState(false);
   const showContent = props.showContent ?? true;
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
@@ -225,19 +223,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     void Haptics.selectionAsync();
     onNavigateBack();
   }, [onNavigateBack]);
-
-  const handleRefresh = useCallback(async (): Promise<void> => {
-    if (refreshing) {
-      return;
-    }
-
-    setRefreshing(true);
-    try {
-      await onRefresh();
-    } finally {
-      setRefreshing(false);
-    }
-  }, [onRefresh, refreshing]);
 
   const edgeBackGesture = useMemo(
     () =>
@@ -275,8 +260,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             contentBottomInset={feedBottomInset}
             layoutVariant={layoutVariant}
             composerExpanded={composerExpanded}
-            refreshing={refreshing}
-            onRefresh={handleRefresh}
           />
         ) : (
           <View style={{ flex: 1 }} />
@@ -332,7 +315,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onPickDraftImages={props.onPickDraftImages}
                 onNativePasteImages={props.onNativePasteImages}
                 onRemoveDraftImage={props.onRemoveDraftImage}
-                onRefresh={props.onRefresh}
                 onStopThread={props.onStopThread}
                 onSendMessage={props.onSendMessage}
                 onUpdateModelSelection={props.onUpdateThreadModelSelection}
