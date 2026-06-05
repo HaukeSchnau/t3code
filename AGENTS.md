@@ -20,6 +20,19 @@ This repository is a VERY EARLY WIP. Proposing sweeping changes that improve lon
 
 If a tradeoff is required, choose correctness and robustness over short-term convenience.
 
+## Fork Patch Policy
+
+This repository is a fork. Implement new features and patches with the smallest practical footprint on
+existing code so future upstream merges stay reviewable and low-risk.
+
+- Prefer extension points, small adapters, and narrowly scoped modules over broad rewrites of upstream code.
+- Keep changes close to the behavior they affect, and avoid formatting churn or unrelated cleanup in patched
+  files.
+- When a fork-specific change must touch upstream-owned code, isolate the custom logic and document the reason,
+  requirements, and maintenance risk.
+- Thoroughly document every custom patch, fork-specific feature, and its requirements in `./patches/*.md` so
+  future syncs can verify whether the patch is still needed and how it should behave.
+
 ## Maintainability
 
 Long term maintainability is a core priority. If you add new functionality, first check if there is shared logic that can be extracted to a separate module. Duplicate logic across multiple files is a code smell and should be avoided. Don't be afraid to change existing code. Don't take shortcuts by just adding local logic to solve a problem.
