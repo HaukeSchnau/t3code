@@ -191,6 +191,19 @@ describe("uiStateStore pure functions", () => {
     expect(setTagExpanded(next, "work", false)).toBe(next);
   });
 
+  it("preserves collapsed synthetic tag-combination groups during thread sync", () => {
+    const threadKey = "environment-local:thread-1";
+    const initialState = setTagExpanded(
+      addTagToThread(makeUiState(), threadKey, "Work"),
+      "tag-combination:bug+work",
+      false,
+    );
+
+    const next = syncThreads(initialState, [{ key: threadKey }]);
+
+    expect(next.tagExpandedById["tag-combination:bug+work"]).toBe(false);
+  });
+
   it("renames tags and rewrites thread and project references", () => {
     const threadKey = "environment-local:thread-1";
     const projectKey = "environment-local:/repo/project";

@@ -168,6 +168,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import {
   getSidebarThreadIdsToPrewarm,
+  buildSidebarTagCombinationThreadGroups,
   buildSidebarTagThreadGroups,
   resolveAdjacentThreadId,
   isContextMenuPointerDown,
@@ -2479,6 +2480,7 @@ interface SidebarThreadListSection {
   id: string;
   label: string;
   tagColor?: UiTagColor | undefined;
+  tagColorDots?: readonly { id: string; color: UiTagColor }[] | undefined;
   threads: readonly SidebarThreadSummary[];
   collapsedThreads?: readonly SidebarThreadSummary[] | undefined;
   emptyLabel?: string | undefined;
@@ -2944,7 +2946,17 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
             <ChevronRightIcon
               className={`size-3.5 shrink-0 transition-transform ${expanded ? "rotate-90" : ""}`}
             />
-            {section.tagColor ? (
+            {section.tagColorDots && section.tagColorDots.length > 0 ? (
+              <span className="flex w-3.5 shrink-0 items-center">
+                {section.tagColorDots.slice(0, 3).map((tagColorDot, index) => (
+                  <TagColorDot
+                    key={tagColorDot.id}
+                    color={tagColorDot.color}
+                    className={index === 0 ? "" : "-ml-1.5 ring-1 ring-sidebar"}
+                  />
+                ))}
+              </span>
+            ) : section.tagColor ? (
               <TagColorDot color={section.tagColor} />
             ) : (
               <TagIcon className="size-3.5 shrink-0 text-muted-foreground/55" />
@@ -4229,6 +4241,29 @@ export default function Sidebar() {
       visibleThreads,
     ],
   );
+  const tagCombinationThreadGroups = useMemo(
+    () =>
+      buildSidebarTagCombinationThreadGroups({
+        threads: visibleThreads,
+        tagById,
+        threadTagIdsByThreadKey,
+        projectTagIdsByProjectKey,
+        pinnedAtByThreadKey: threadPinnedAtById,
+        getThreadKey: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        getProjectKey: (thread) =>
+          projectPhysicalKeyByScopedRef.get(
+            scopedProjectKey(scopeProjectRef(thread.environmentId, thread.projectId)),
+          ) ?? null,
+      }),
+    [
+      projectPhysicalKeyByScopedRef,
+      projectTagIdsByProjectKey,
+      tagById,
+      threadPinnedAtById,
+      threadTagIdsByThreadKey,
+      visibleThreads,
+    ],
+  );
   const sortedTags = useMemo(
     () =>
       Object.values(tagById).toSorted((left, right) =>
@@ -4315,6 +4350,24 @@ export default function Sidebar() {
   const tagSidebarThreadKeys = useMemo(() => {
     const nextKeys: string[] = [];
     const seenKeys = new Set<string>();
+    for (const group of tagCombinationThreadGroups) {
+      const groupThreads =
+        (tagExpandedById[group.id] ?? true) === false
+          ? getCollapsedPinnedAndActiveThreads(
+              group.pinnedThreads,
+              group.recentThreads,
+              routeThreadKey,
+            )
+          : [...group.pinnedThreads, ...group.recentThreads];
+      for (const thread of groupThreads) {
+        const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+        if (seenKeys.has(threadKey)) {
+          continue;
+        }
+        seenKeys.add(threadKey);
+        nextKeys.push(threadKey);
+      }
+    }
     for (const group of tagThreadGroups) {
       const groupThreads =
         (tagExpandedById[group.tag.id] ?? true) === false
@@ -4334,7 +4387,7 @@ export default function Sidebar() {
       }
     }
     return nextKeys;
-  }, [routeThreadKey, tagExpandedById, tagThreadGroups]);
+  }, [routeThreadKey, tagCombinationThreadGroups, tagExpandedById, tagThreadGroups]);
   const sortedProjects = useMemo(() => {
     const sortableProjects = sidebarProjects.map((project) => ({
       ...project,
@@ -4841,27 +4894,48 @@ export default function Sidebar() {
       );
     }
 
+    const combinationSections: SidebarThreadListSection[] = tagCombinationThreadGroups.map(
+      (group) => {
+        const expanded = tagExpandedById[group.id] ?? true;
+        return {
+          id: group.id,
+          label: group.label,
+          tagColorDots: group.tags.map((tag) => ({ id: tag.id, color: tag.color })),
+          countLabel: String(group.threadCount),
+          collapsible: true,
+          expanded,
+          onToggle: () => setTagExpanded(group.id, !expanded),
+          threads: [...group.pinnedThreads, ...group.recentThreads],
+          collapsedThreads: getCollapsedPinnedAndActiveThreads(
+            group.pinnedThreads,
+            group.recentThreads,
+            routeThreadKey,
+          ),
+        };
+      },
+    );
+    const tagSections: SidebarThreadListSection[] = tagThreadGroups.map((group) => {
+      const expanded = tagExpandedById[group.tag.id] ?? true;
+      return {
+        id: group.tag.id,
+        label: group.tag.name,
+        tagColor: group.tag.color,
+        countLabel: String(group.threadCount),
+        collapsible: true,
+        expanded,
+        onToggle: () => setTagExpanded(group.tag.id, !expanded),
+        threads: [...group.pinnedThreads, ...group.recentThreads],
+        collapsedThreads: getCollapsedPinnedAndActiveThreads(
+          group.pinnedThreads,
+          group.recentThreads,
+          routeThreadKey,
+        ),
+        emptyLabel: group.threadCount === 0 ? "No threads yet" : undefined,
+      };
+    });
     const sections: SidebarThreadListSection[] =
-      tagThreadGroups.length > 0
-        ? tagThreadGroups.map((group) => {
-            const expanded = tagExpandedById[group.tag.id] ?? true;
-            return {
-              id: group.tag.id,
-              label: group.tag.name,
-              tagColor: group.tag.color,
-              countLabel: String(group.threadCount),
-              collapsible: true,
-              expanded,
-              onToggle: () => setTagExpanded(group.tag.id, !expanded),
-              threads: [...group.pinnedThreads, ...group.recentThreads],
-              collapsedThreads: getCollapsedPinnedAndActiveThreads(
-                group.pinnedThreads,
-                group.recentThreads,
-                routeThreadKey,
-              ),
-              emptyLabel: group.threadCount === 0 ? "No threads yet" : undefined,
-            };
-          })
+      combinationSections.length + tagSections.length > 0
+        ? [...combinationSections, ...tagSections]
         : [
             {
               id: "empty",
@@ -4874,7 +4948,7 @@ export default function Sidebar() {
     return (
       <SidebarThreadSectionsList
         title="Tags"
-        count={tagThreadGroups.length}
+        count={sections.length === 1 && sections[0]?.id === "empty" ? 0 : sections.length}
         sections={sections}
         headerAction={
           <Tooltip>
@@ -4918,6 +4992,7 @@ export default function Sidebar() {
     setTagExpanded,
     sortedTags,
     tagExpandedById,
+    tagCombinationThreadGroups,
     tagLibraryOpen,
     tagSidebarThreadKeys,
     tagThreadGroups,

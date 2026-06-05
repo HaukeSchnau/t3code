@@ -41,6 +41,18 @@ export interface SidebarTagThreadGroup<TThread> extends SidebarPinnedThreadGroup
   threadCount: number;
 }
 
+export interface SidebarTagCombinationThreadGroup<
+  TThread,
+> extends SidebarPinnedThreadGroups<TThread> {
+  id: string;
+  tags: UiTag[];
+  label: string;
+  threadCount: number;
+}
+
+export const SIDEBAR_TAG_COMBINATION_GROUP_ID_PREFIX = "tag-combination:";
+export const MIN_SIDEBAR_TAG_COMBINATION_THREAD_COUNT = 2;
+
 export interface ThreadStatusPill {
   label:
     | "Working"
@@ -320,6 +332,33 @@ export function splitPinnedSidebarThreads<T extends SidebarThreadActivityInput>(
   };
 }
 
+export function sidebarTagCombinationGroupId(tagIds: readonly string[]): string {
+  return `${SIDEBAR_TAG_COMBINATION_GROUP_ID_PREFIX}${tagIds.map(encodeURIComponent).join("+")}`;
+}
+
+export function isSidebarTagCombinationGroupId(groupId: string): boolean {
+  return groupId.startsWith(SIDEBAR_TAG_COMBINATION_GROUP_ID_PREFIX);
+}
+
+function getEffectiveSidebarThreadTags(input: {
+  tagById: Readonly<Record<string, UiTag>>;
+  threadTagIds: readonly string[];
+  projectTagIds: readonly string[];
+}): UiTag[] {
+  const tagIds = new Set([...input.projectTagIds, ...input.threadTagIds]);
+  return [...tagIds]
+    .flatMap((tagId) => {
+      const tag = input.tagById[tagId];
+      return tag ? [tag] : [];
+    })
+    .toSorted((left, right) =>
+      left.name.localeCompare(right.name, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
+}
+
 export function buildSidebarTagThreadGroups<T extends SidebarThreadActivityInput>(input: {
   threads: readonly T[];
   tagById: Readonly<Record<string, UiTag>>;
@@ -333,18 +372,14 @@ export function buildSidebarTagThreadGroups<T extends SidebarThreadActivityInput
 
   for (const thread of input.threads) {
     const threadKey = input.getThreadKey(thread);
-    const tagIds = new Set(input.threadTagIdsByThreadKey[threadKey] ?? []);
     const projectKey = input.getProjectKey(thread);
-    if (projectKey) {
-      for (const tagId of input.projectTagIdsByProjectKey[projectKey] ?? []) {
-        tagIds.add(tagId);
-      }
-    }
+    const tags = getEffectiveSidebarThreadTags({
+      tagById: input.tagById,
+      threadTagIds: input.threadTagIdsByThreadKey[threadKey] ?? [],
+      projectTagIds: projectKey ? (input.projectTagIdsByProjectKey[projectKey] ?? []) : [],
+    });
 
-    for (const tagId of tagIds) {
-      if (!input.tagById[tagId]) {
-        continue;
-      }
+    for (const tagId of tags.map((tag) => tag.id)) {
       const threads = threadsByTagId.get(tagId);
       if (threads) {
         threads.push(thread);
@@ -375,6 +410,83 @@ export function buildSidebarTagThreadGroups<T extends SidebarThreadActivityInput
         sensitivity: "base",
       }),
     );
+}
+
+export function buildSidebarTagCombinationThreadGroups<
+  T extends SidebarThreadActivityInput,
+>(input: {
+  threads: readonly T[];
+  tagById: Readonly<Record<string, UiTag>>;
+  threadTagIdsByThreadKey: Readonly<Record<string, readonly string[]>>;
+  projectTagIdsByProjectKey: Readonly<Record<string, readonly string[]>>;
+  pinnedAtByThreadKey: Readonly<Record<string, string>>;
+  getThreadKey: (thread: T) => string;
+  getProjectKey: (thread: T) => string | null;
+  minThreadCount?: number;
+}): SidebarTagCombinationThreadGroup<T>[] {
+  const minThreadCount = input.minThreadCount ?? MIN_SIDEBAR_TAG_COMBINATION_THREAD_COUNT;
+  const threadsByCombinationId = new Map<
+    string,
+    {
+      tags: UiTag[];
+      threads: T[];
+    }
+  >();
+
+  for (const thread of input.threads) {
+    const threadKey = input.getThreadKey(thread);
+    const projectKey = input.getProjectKey(thread);
+    const tags = getEffectiveSidebarThreadTags({
+      tagById: input.tagById,
+      threadTagIds: input.threadTagIdsByThreadKey[threadKey] ?? [],
+      projectTagIds: projectKey ? (input.projectTagIdsByProjectKey[projectKey] ?? []) : [],
+    });
+    if (tags.length < 2) {
+      continue;
+    }
+
+    const id = sidebarTagCombinationGroupId(tags.map((tag) => tag.id));
+    const existing = threadsByCombinationId.get(id);
+    if (existing) {
+      existing.threads.push(thread);
+    } else {
+      threadsByCombinationId.set(id, {
+        tags,
+        threads: [thread],
+      });
+    }
+  }
+
+  return [...threadsByCombinationId.entries()]
+    .flatMap(([id, group]) => {
+      if (group.threads.length < minThreadCount) {
+        return [];
+      }
+      const { pinnedThreads, recentThreads } = splitPinnedSidebarThreads({
+        threads: group.threads,
+        pinnedAtByThreadKey: input.pinnedAtByThreadKey,
+        getThreadKey: input.getThreadKey,
+      });
+      return [
+        {
+          id,
+          tags: group.tags,
+          label: group.tags.map((tag) => tag.name).join(" + "),
+          threadCount: group.threads.length,
+          pinnedThreads,
+          recentThreads,
+        },
+      ];
+    })
+    .toSorted((left, right) => {
+      if (left.threadCount !== right.threadCount) {
+        return right.threadCount - left.threadCount;
+      }
+      return left.label.localeCompare(right.label, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
 }
 
 export function resolveAdjacentThreadId<T>(input: {

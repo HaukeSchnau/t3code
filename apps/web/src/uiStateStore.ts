@@ -15,6 +15,7 @@ const LEGACY_PERSISTED_STATE_KEYS = [
   "codething:renderer-state:v2",
   "codething:renderer-state:v1",
 ] as const;
+const TAG_COMBINATION_GROUP_ID_PREFIX = "tag-combination:";
 
 export interface PersistedUiState {
   collapsedProjectCwds?: string[];
@@ -400,7 +401,9 @@ function stringArrayRecordsEqual(
 
 function pruneUnknownTagExpansion(state: UiState): UiState {
   const nextTagExpandedById = Object.fromEntries(
-    Object.entries(state.tagExpandedById).filter(([tagId]) => state.tagById[tagId]),
+    Object.entries(state.tagExpandedById).filter(
+      ([tagId]) => state.tagById[tagId] || tagId.startsWith(TAG_COMBINATION_GROUP_ID_PREFIX),
+    ),
   );
 
   if (recordsEqual(state.tagExpandedById, nextTagExpandedById)) {

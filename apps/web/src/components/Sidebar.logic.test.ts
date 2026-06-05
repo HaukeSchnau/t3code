@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import {
+  buildSidebarTagCombinationThreadGroups,
   buildSidebarTagThreadGroups,
   createThreadJumpHintVisibilityController,
   getSidebarThreadIdsToPrewarm,
@@ -304,6 +305,83 @@ describe("buildSidebarTagThreadGroups", () => {
       pinnedThreads: [],
       recentThreads: [],
     });
+  });
+});
+
+describe("buildSidebarTagCombinationThreadGroups", () => {
+  it("builds frequent exact tag-combination groups with inherited project tags", () => {
+    const threads = [
+      {
+        id: ThreadId.make("thread-alpha-old"),
+        projectKey: "project-alpha",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:03:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-alpha-new"),
+        projectKey: "project-alpha",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:05:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-beta"),
+        projectKey: "project-beta",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:04:00.000Z",
+      },
+      {
+        id: ThreadId.make("thread-one-off"),
+        projectKey: "project-beta",
+        createdAt: "2026-03-09T10:00:00.000Z",
+        updatedAt: "2026-03-09T10:06:00.000Z",
+      },
+    ];
+
+    const groups = buildSidebarTagCombinationThreadGroups({
+      threads,
+      tagById: {
+        bug: {
+          id: "bug",
+          name: "Bug",
+          color: "red",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+        urgent: {
+          id: "urgent",
+          name: "Urgent",
+          color: "amber",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+        work: {
+          id: "work",
+          name: "Work",
+          color: "blue",
+          createdAt: "2026-03-09T10:00:00.000Z",
+        },
+      },
+      threadTagIdsByThreadKey: {
+        "env:thread-alpha-old": ["bug"],
+        "env:thread-alpha-new": ["bug"],
+        "env:thread-beta": ["bug"],
+        "env:thread-one-off": ["bug", "urgent"],
+      },
+      projectTagIdsByProjectKey: {
+        "project-alpha": ["work"],
+      },
+      pinnedAtByThreadKey: {
+        "env:thread-alpha-old": "2026-03-09T10:06:00.000Z",
+      },
+      getThreadKey: (thread) => `env:${thread.id}`,
+      getProjectKey: (thread) => thread.projectKey,
+    });
+
+    expect(groups.map((group) => group.label)).toEqual(["Bug + Work"]);
+    expect(groups[0]?.pinnedThreads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-alpha-old"),
+    ]);
+    expect(groups[0]?.recentThreads.map((thread) => thread.id)).toEqual([
+      ThreadId.make("thread-alpha-new"),
+    ]);
   });
 });
 
