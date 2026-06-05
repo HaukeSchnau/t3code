@@ -111,6 +111,12 @@ export type ProviderRespondToUserInputInput = typeof ProviderRespondToUserInputI
 
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
+const ProviderEventAgentContext = Schema.Struct({
+  providerThreadId: TrimmedNonEmptyString,
+  parentTurnId: Schema.optional(TurnId),
+});
+export type ProviderEventAgentContext = typeof ProviderEventAgentContext.Type;
+
 export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
@@ -126,6 +132,7 @@ export const ProviderEvent = Schema.Struct({
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
   textDelta: Schema.optional(Schema.String),
+  agentContext: Schema.optional(ProviderEventAgentContext),
   payload: Schema.optional(Schema.Unknown),
 });
 export type ProviderEvent = typeof ProviderEvent.Type;

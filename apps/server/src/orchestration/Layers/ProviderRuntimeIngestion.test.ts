@@ -751,6 +751,73 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("projects subagent assistant text into a subagent activity without parent transcript rows", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-subagent-message"),
+      agentContext: {
+        providerThreadId: "provider-child-thread",
+        parentTurnId: asTurnId("turn-parent"),
+      },
+      payload: {
+        streamKind: "assistant_text",
+        delta: "child agent findings",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-subagent-message"),
+      agentContext: {
+        providerThreadId: "provider-child-thread",
+        parentTurnId: asTurnId("turn-parent"),
+      },
+      payload: {
+        itemType: "assistant_message",
+        title: "Assistant message",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as Record<string, unknown>)
+            : null;
+        return (
+          activity.kind === "subagent.thread" &&
+          payload?.providerThreadId === "provider-child-thread" &&
+          payload?.status === "completed"
+        );
+      }),
+    );
+    const subagentActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "subagent.thread",
+    );
+    const payload =
+      subagentActivity?.payload && typeof subagentActivity.payload === "object"
+        ? (subagentActivity.payload as Record<string, unknown>)
+        : null;
+
+    expect(thread.messages).toHaveLength(0);
+    expect(subagentActivity?.id).toBe("subagent:provider-child-thread");
+    expect(subagentActivity?.turnId).toBe("turn-parent");
+    expect(payload?.transcript).toBe("child agent findings");
+    expect(payload?.parentTurnId).toBe("turn-parent");
+  });
+
   it("preserves completed tool metadata on projected tool activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

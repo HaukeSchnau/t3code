@@ -49,6 +49,12 @@ const ProviderRefs = Schema.Struct({
 });
 export type ProviderRefs = typeof ProviderRefs.Type;
 
+const RuntimeAgentContext = Schema.Struct({
+  providerThreadId: TrimmedNonEmptyStringSchema,
+  parentTurnId: Schema.optional(TurnId),
+});
+export type RuntimeAgentContext = typeof RuntimeAgentContext.Type;
+
 const RuntimeSessionState = Schema.Literals([
   "starting",
   "ready",
@@ -257,6 +263,7 @@ const ProviderRuntimeEventBase = Schema.Struct({
   itemId: Schema.optional(RuntimeItemId),
   requestId: Schema.optional(RuntimeRequestId),
   providerRefs: Schema.optional(ProviderRefs),
+  agentContext: Schema.optional(RuntimeAgentContext),
   raw: Schema.optional(RuntimeEventRaw),
 });
 export type ProviderRuntimeEventBase = typeof ProviderRuntimeEventBase.Type;

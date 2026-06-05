@@ -203,7 +203,9 @@ import {
   subscribeThreadDetailLoading,
 } from "../environments/runtime/service";
 import { RightPanelSheet } from "./RightPanelSheet";
+import { SubagentInspector } from "./SubagentInspector";
 import { Button } from "./ui/button";
+import { deriveSubagentTimelineEntries } from "../subagents";
 import {
   buildVersionMismatchDismissalKey,
   dismissVersionMismatch,
@@ -889,6 +891,9 @@ export default function ChatView(props: ChatViewProps) {
   const [pendingUserInputQuestionIndexByRequestId, setPendingUserInputQuestionIndexByRequestId] =
     useState<Record<string, number>>({});
   const [planSidebarOpen, setPlanSidebarOpen] = useState(false);
+  const [selectedSubagentProviderThreadId, setSelectedSubagentProviderThreadId] = useState<
+    string | null
+  >(null);
   const shouldUsePlanSidebarSheet = useMediaQuery(RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY);
   // Tracks whether the user explicitly dismissed the sidebar for the active turn.
   const planSidebarDismissedForTurnRef = useRef<string | null>(null);
@@ -1556,6 +1561,19 @@ export default function ChatView(props: ChatViewProps) {
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const subagentEntries = useMemo(
+    () => deriveSubagentTimelineEntries(threadActivities),
+    [threadActivities],
+  );
+  const selectedSubagent = useMemo(
+    () =>
+      selectedSubagentProviderThreadId
+        ? (subagentEntries.find(
+            (subagent) => subagent.providerThreadId === selectedSubagentProviderThreadId,
+          ) ?? null)
+        : null,
+    [selectedSubagentProviderThreadId, subagentEntries],
+  );
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
@@ -2503,6 +2521,13 @@ export default function ChatView(props: ChatViewProps) {
     planSidebarDismissedForTurnRef.current =
       activePlan?.turnId ?? sidebarProposedPlan?.turnId ?? "__dismissed__";
   }, [activePlan?.turnId, sidebarProposedPlan?.turnId]);
+  const openSubagentInspector = useCallback((providerThreadId: string) => {
+    setPlanSidebarOpen(false);
+    setSelectedSubagentProviderThreadId(providerThreadId);
+  }, []);
+  const closeSubagentInspector = useCallback(() => {
+    setSelectedSubagentProviderThreadId(null);
+  }, []);
 
   const persistThreadSettingsForNextTurn = useCallback(
     async (input: {
@@ -3886,6 +3911,7 @@ export default function ChatView(props: ChatViewProps) {
               activeThreadEnvironmentId={activeThread.environmentId}
               routeThreadKey={routeThreadKey}
               onOpenTurnDiff={onOpenTurnDiff}
+              onOpenSubagentInspector={openSubagentInspector}
               revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
               onRevertUserMessage={onRevertUserMessage}
               isRevertingCheckpoint={isRevertingCheckpoint}
@@ -4092,6 +4118,17 @@ export default function ChatView(props: ChatViewProps) {
           />
         </RightPanelSheet>
       ) : null}
+      <RightPanelSheet
+        open={selectedSubagentProviderThreadId !== null}
+        onClose={closeSubagentInspector}
+      >
+        <SubagentInspector
+          subagent={selectedSubagent}
+          markdownCwd={gitCwd ?? undefined}
+          timestampFormat={timestampFormat}
+          onClose={closeSubagentInspector}
+        />
+      </RightPanelSheet>
 
       {expandedImage && (
         <ExpandedImageDialog preview={expandedImage} onClose={closeExpandedImage} />

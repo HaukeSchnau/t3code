@@ -2,6 +2,7 @@ import {
   ApprovalRequestId,
   type AssistantDeliveryMode,
   CommandId,
+  EventId,
   MessageId,
   type OrchestrationEvent,
   type OrchestrationMessage,
@@ -48,13 +49,23 @@ interface AssistantSegmentState {
   activeMessageId: MessageId | null;
 }
 
+interface SubagentProjectionState {
+  transcript: string;
+  status: "running" | "waiting" | "completed" | "failed";
+  lastActivity: string | null;
+  updatedAt: string;
+}
+
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
 const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
+const SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_CACHE_CAPACITY = 1_000;
+const SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
+const MAX_SUBAGENT_TRANSCRIPT_CHARS = 48_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -165,6 +176,110 @@ function maxCheckpointTurnCount(
 
 function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
+}
+
+function subagentActivityId(providerThreadId: string): EventId {
+  return EventId.make(`subagent:${providerThreadId.replace(/[^a-zA-Z0-9_.:-]/g, "_")}`);
+}
+
+function isSubagentRuntimeEvent(event: ProviderRuntimeEvent): event is ProviderRuntimeEvent & {
+  readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
+} {
+  return event.agentContext !== undefined;
+}
+
+function subagentStatusFromRuntimeEvent(
+  event: ProviderRuntimeEvent,
+): SubagentProjectionState["status"] | undefined {
+  if (event.type === "runtime.error") {
+    return "failed";
+  }
+  if (event.type === "request.opened" || event.type === "user-input.requested") {
+    return "waiting";
+  }
+  if (event.type === "request.resolved" || event.type === "user-input.resolved") {
+    return "running";
+  }
+  if (event.type === "turn.completed") {
+    return event.payload.state === "failed" ? "failed" : "completed";
+  }
+  if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
+    return "completed";
+  }
+  return undefined;
+}
+
+function subagentLastActivityFromRuntimeEvent(event: ProviderRuntimeEvent): string | null {
+  switch (event.type) {
+    case "thread.started":
+      return "Started";
+    case "thread.state.changed":
+      return `Thread ${event.payload.state}`;
+    case "turn.completed":
+      return event.payload.state === "failed" ? "Turn failed" : "Turn completed";
+    case "item.started":
+      return `${event.payload.title ?? "Tool"} started`;
+    case "item.updated":
+      return event.payload.title ?? event.payload.detail ?? "Tool updated";
+    case "item.completed":
+      return `${event.payload.title ?? "Tool"} completed`;
+    case "tool.progress":
+      return event.payload.summary ?? "Tool progress";
+    case "request.opened":
+      return "Waiting for approval";
+    case "request.resolved":
+      return "Approval resolved";
+    case "user-input.requested":
+      return "Waiting for input";
+    case "user-input.resolved":
+      return "Input submitted";
+    case "runtime.error":
+      return event.payload.message;
+    default:
+      return null;
+  }
+}
+
+function appendSubagentTranscript(existingTranscript: string, delta: string): string {
+  if (delta.length === 0) {
+    return existingTranscript;
+  }
+  const nextTranscript = `${existingTranscript}${delta}`;
+  if (nextTranscript.length <= MAX_SUBAGENT_TRANSCRIPT_CHARS) {
+    return nextTranscript;
+  }
+  return nextTranscript.slice(nextTranscript.length - MAX_SUBAGENT_TRANSCRIPT_CHARS);
+}
+
+function subagentTranscriptDeltaFromRuntimeEvent(event: ProviderRuntimeEvent): string {
+  if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+    return event.payload.delta;
+  }
+  if (
+    event.type === "item.completed" &&
+    event.payload.itemType === "assistant_message" &&
+    event.payload.detail
+  ) {
+    return event.payload.detail;
+  }
+  return "";
+}
+
+function runtimeAgentContextPayload(event: ProviderRuntimeEvent):
+  | {
+      readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
+    }
+  | Record<string, never> {
+  if (!isSubagentRuntimeEvent(event)) {
+    return {};
+  }
+  return {
+    agentContext: event.agentContext,
+  };
+}
+
+function subagentAwareSummary(event: ProviderRuntimeEvent, summary: string): string {
+  return isSubagentRuntimeEvent(event) ? `Subagent ${summary.toLowerCase()}` : summary;
 }
 
 function normalizeProposedPlanMarkdown(planMarkdown: string | undefined): string | undefined {
@@ -437,7 +552,8 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "approval",
           kind: "approval.requested",
-          summary:
+          summary: subagentAwareSummary(
+            event,
             requestKind === "command"
               ? "Command approval requested"
               : requestKind === "file-read"
@@ -445,11 +561,13 @@ function runtimeEventToActivities(
                 : requestKind === "file-change"
                   ? "File-change approval requested"
                   : "Approval requested",
+          ),
           payload: {
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -468,12 +586,13 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "approval",
           kind: "approval.resolved",
-          summary: "Approval resolved",
+          summary: subagentAwareSummary(event, "Approval resolved"),
           payload: {
             requestId: toApprovalRequestId(event.requestId),
             ...(requestKind ? { requestKind } : {}),
             requestType: event.payload.requestType,
             ...(event.payload.decision ? { decision: event.payload.decision } : {}),
+            ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -488,9 +607,10 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: "Runtime error",
+          summary: subagentAwareSummary(event, "Runtime error"),
           payload: {
             message: truncateDetail(event.payload.message),
+            ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -543,10 +663,11 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "user-input.requested",
-          summary: "User input requested",
+          summary: subagentAwareSummary(event, "User input requested"),
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
+            ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -561,10 +682,11 @@ function runtimeEventToActivities(
           createdAt: event.createdAt,
           tone: "info",
           kind: "user-input.resolved",
-          summary: "User input submitted",
+          summary: subagentAwareSummary(event, "User input submitted"),
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             answers: event.payload.answers,
+            ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -818,6 +940,18 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
+  const subagentStateByProviderThreadId = yield* Cache.make<string, SubagentProjectionState>({
+    capacity: SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_CACHE_CAPACITY,
+    timeToLive: SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_TTL,
+    lookup: () =>
+      Effect.succeed({
+        transcript: "",
+        status: "running",
+        lastActivity: null,
+        updatedAt: "",
+      }),
+  });
+
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
@@ -1006,6 +1140,83 @@ const make = Effect.gen(function* () {
 
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
+
+  const appendActivities = (
+    event: ProviderRuntimeEvent,
+    threadId: ThreadId,
+    activities: ReadonlyArray<OrchestrationThreadActivity>,
+  ) =>
+    Effect.forEach(activities, (activity) =>
+      providerCommandId(event, "thread-activity-append").pipe(
+        Effect.flatMap((commandId) =>
+          orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId,
+            threadId,
+            activity,
+            createdAt: activity.createdAt,
+          }),
+        ),
+      ),
+    ).pipe(Effect.asVoid);
+
+  const updateSubagentActivity = (input: { event: ProviderRuntimeEvent; threadId: ThreadId }) =>
+    Effect.gen(function* () {
+      if (!isSubagentRuntimeEvent(input.event)) {
+        return;
+      }
+
+      const providerThreadId = input.event.agentContext.providerThreadId;
+      const existingState = yield* Cache.getOption(
+        subagentStateByProviderThreadId,
+        providerThreadId,
+      );
+      const existing = Option.getOrElse(existingState, () => ({
+        transcript: "",
+        status: "running" as const,
+        lastActivity: null,
+        updatedAt: "",
+      }));
+      const rawTranscriptDelta = subagentTranscriptDeltaFromRuntimeEvent(input.event);
+      const transcriptDelta =
+        input.event.type === "item.completed" && existing.transcript.length > 0
+          ? ""
+          : rawTranscriptDelta;
+      const status = subagentStatusFromRuntimeEvent(input.event) ?? existing.status;
+      const lastActivity =
+        subagentLastActivityFromRuntimeEvent(input.event) ?? existing.lastActivity;
+      const nextState: SubagentProjectionState = {
+        transcript: appendSubagentTranscript(existing.transcript, transcriptDelta),
+        status,
+        lastActivity,
+        updatedAt: input.event.createdAt,
+      };
+
+      yield* Cache.set(subagentStateByProviderThreadId, providerThreadId, nextState);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: yield* providerCommandId(input.event, "subagent-thread-activity-upsert"),
+        threadId: input.threadId,
+        activity: {
+          id: subagentActivityId(providerThreadId),
+          createdAt: input.event.createdAt,
+          tone: status === "failed" ? "error" : "info",
+          kind: "subagent.thread",
+          summary: `Subagent ${status}`,
+          payload: {
+            providerThreadId,
+            parentTurnId: input.event.agentContext.parentTurnId ?? null,
+            status,
+            transcript: nextState.transcript,
+            lastActivity,
+            updatedAt: nextState.updatedAt,
+            latestEventType: input.event.type,
+          },
+          turnId: input.event.agentContext.parentTurnId ?? toTurnId(input.event.turnId) ?? null,
+        },
+        createdAt: input.event.createdAt,
+      });
+    });
 
   const clearAssistantMessageState = (messageId: MessageId) =>
     clearBufferedAssistantText(messageId);
@@ -1373,6 +1584,12 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+
+      if (isSubagentRuntimeEvent(event)) {
+        yield* updateSubagentActivity({ event, threadId: thread.id });
+        yield* appendActivities(event, thread.id, runtimeEventToActivities(event));
+        return;
+      }
 
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
@@ -1790,20 +2007,7 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event);
-      yield* Effect.forEach(activities, (activity) =>
-        providerCommandId(event, "thread-activity-append").pipe(
-          Effect.flatMap((commandId) =>
-            orchestrationEngine.dispatch({
-              type: "thread.activity.append",
-              commandId,
-              threadId: thread.id,
-              activity,
-              createdAt: activity.createdAt,
-            }),
-          ),
-        ),
-      ).pipe(Effect.asVoid);
+      yield* appendActivities(event, thread.id, runtimeEventToActivities(event));
     });
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;

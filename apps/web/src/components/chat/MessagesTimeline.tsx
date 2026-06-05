@@ -98,6 +98,7 @@ interface TimelineRowSharedState {
   onRevertUserMessage: (messageId: MessageId) => void;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenSubagentInspector: ((providerThreadId: string) => void) | undefined;
 }
 
 interface TimelineRowActivityState {
@@ -127,6 +128,7 @@ interface MessagesTimelineProps {
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
+  onOpenSubagentInspector?: (providerThreadId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   isRevertingCheckpoint: boolean;
@@ -157,6 +159,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
+  onOpenSubagentInspector,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   isRevertingCheckpoint,
@@ -234,6 +237,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenSubagentInspector,
     }),
     [
       timestampFormat,
@@ -246,6 +250,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       onRevertUserMessage,
       onImageExpand,
       onOpenTurnDiff,
+      onOpenSubagentInspector,
     ],
   );
   const activityState = useMemo<TimelineRowActivityState>(
@@ -1122,9 +1127,11 @@ function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles">,
+  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles" | "subagent">,
   workspaceRoot: string | undefined,
 ) {
+  if (workEntry.subagent?.prompt) return workEntry.subagent.prompt;
+  if (workEntry.subagent?.lastActivity) return workEntry.subagent.lastActivity;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
@@ -1147,6 +1154,7 @@ function workEntryRawCommand(
 }
 
 function workEntryIcon(workEntry: TimelineWorkEntry): LucideIcon {
+  if (workEntry.subagent) return BotIcon;
   if (workEntry.requestKind === "command") return TerminalIcon;
   if (workEntry.requestKind === "file-read") return EyeIcon;
   if (workEntry.requestKind === "file-change") return SquarePenIcon;
@@ -1180,6 +1188,9 @@ function capitalizePhrase(value: string): string {
 }
 
 function toolWorkEntryHeading(workEntry: TimelineWorkEntry): string {
+  if (workEntry.subagent) {
+    return workEntry.subagent.label;
+  }
   if (!workEntry.toolTitle) {
     return capitalizePhrase(normalizeCompactToolLabel(workEntry.label));
   }
@@ -1190,7 +1201,9 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
 }) {
+  const { onOpenSubagentInspector } = use(TimelineRowCtx);
   const { workEntry, workspaceRoot } = props;
+  const subagent = workEntry.subagent;
   const iconConfig = workToneIcon(workEntry.tone);
   const EntryIcon = workEntryIcon(workEntry);
   const heading = toolWorkEntryHeading(workEntry);
@@ -1205,9 +1218,10 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const hasChangedFiles = (workEntry.changedFiles?.length ?? 0) > 0;
   const previewIsChangedFiles = hasChangedFiles && !workEntry.command && !workEntry.detail;
+  const subagentStatus = subagent ? formatSubagentStatus(subagent.status) : null;
 
-  return (
-    <div className="rounded-lg px-1 py-1">
+  const content = (
+    <>
       <div className="flex items-center gap-2 transition-[opacity,translate] duration-200">
         <span
           className={cn("flex size-5 shrink-0 items-center justify-center", iconConfig.className)}
@@ -1270,6 +1284,11 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
                   <span className={cn("text-foreground/80", workToneClass(workEntry.tone))}>
                     {heading}
                   </span>
+                  {subagentStatus && (
+                    <span className="ml-1 rounded border border-border/55 px-1 py-px text-[9px] uppercase tracking-[0.1em] text-muted-foreground/60">
+                      {subagentStatus}
+                    </span>
+                  )}
                   {preview && <span className="text-muted-foreground/55"> - {preview}</span>}
                 </p>
               </TooltipTrigger>
@@ -1303,6 +1322,37 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           )}
         </div>
       )}
-    </div>
+    </>
   );
+
+  if (subagent && onOpenSubagentInspector) {
+    return (
+      <button
+        type="button"
+        className="block w-full rounded-lg px-1 py-1 text-left transition-colors duration-150 hover:bg-muted/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        onClick={() => onOpenSubagentInspector(subagent.providerThreadId)}
+      >
+        {content}
+      </button>
+    );
+  }
+
+  return <div className="rounded-lg px-1 py-1">{content}</div>;
 });
+
+function formatSubagentStatus(
+  status: NonNullable<TimelineWorkEntry["subagent"]>["status"],
+): string {
+  switch (status) {
+    case "running":
+      return "Running";
+    case "waiting":
+      return "Waiting";
+    case "completed":
+      return "Done";
+    case "failed":
+      return "Failed";
+    default:
+      return "Subagent";
+  }
+}

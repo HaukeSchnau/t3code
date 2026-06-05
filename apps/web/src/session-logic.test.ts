@@ -593,6 +593,65 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("derives clickable subagent entries and omits subagent transcript projections", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "subagent-projection",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "subagent.thread",
+        summary: "Subagent running",
+        tone: "info",
+        payload: {
+          providerThreadId: "provider-child-thread",
+          status: "running",
+          transcript: "child transcript",
+        },
+      }),
+      makeActivity({
+        id: "subagent-spawn",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "tool.completed",
+        summary: "Subagent",
+        payload: {
+          itemType: "collab_agent_tool_call",
+          data: {
+            item: {
+              type: "collabAgentToolCall",
+              tool: "spawnAgent",
+              status: "inProgress",
+              prompt: "Inspect auth flow",
+              model: "gpt-5-codex",
+              reasoningEffort: "high",
+              receiverThreadIds: ["provider-child-thread"],
+              senderThreadId: "provider-parent-thread",
+              agentsStates: {
+                "provider-child-thread": {
+                  status: "inProgress",
+                  message: "Inspecting auth flow",
+                },
+              },
+            },
+          },
+        },
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe("subagent-spawn");
+    expect(entries[0]?.subagent).toEqual({
+      providerThreadId: "provider-child-thread",
+      receiverThreadIds: ["provider-child-thread"],
+      label: "Inspecting auth flow",
+      status: "running",
+      prompt: "Inspect auth flow",
+      model: "gpt-5-codex",
+      reasoningEffort: "high",
+      lastActivity: "Inspecting auth flow",
+    });
+  });
+
   it("omits task.started but shows task.progress and task.completed", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

@@ -257,6 +257,8 @@ function itemTitle(itemType: CanonicalItemType): string | undefined {
       return "MCP tool call";
     case "dynamic_tool_call":
       return "Tool call";
+    case "collab_agent_tool_call":
+      return "Subagent";
     case "web_search":
       return "Web search";
     case "image_view":
@@ -441,6 +443,7 @@ function runtimeEventBase(
     ...(event.itemId ? { itemId: asRuntimeItemId(event.itemId) } : {}),
     ...(event.requestId ? { requestId: asRuntimeRequestId(event.requestId) } : {}),
     ...(refs ? { providerRefs: refs } : {}),
+    ...(event.agentContext ? { agentContext: event.agentContext } : {}),
     raw: {
       source: eventRawSource(event),
       method: event.method,

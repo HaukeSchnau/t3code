@@ -21,6 +21,7 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
+import { extractSubagentWorkEntryFromPayload, type SubagentWorkEntry } from "./subagents";
 
 export type ProviderPickerKind = ProviderDriverKind;
 
@@ -59,6 +60,7 @@ export interface WorkLogEntry {
   toolTitle?: string;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
+  subagent?: SubagentWorkEntry;
 }
 
 interface DerivedWorkLogEntry extends WorkLogEntry {
@@ -488,6 +490,7 @@ export function deriveWorkLogEntries(
     if (activity.kind === "tool.started") continue;
     if (activity.kind === "task.started") continue;
     if (activity.kind === "context-window.updated") continue;
+    if (activity.kind === "subagent.thread") continue;
     if (activity.summary === "Checkpoint captured") continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     entries.push(toDerivedWorkLogEntry(activity));
@@ -553,6 +556,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   };
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
+  const subagent = extractSubagentWorkEntryFromPayload(payload);
   if (detail) {
     entry.detail = detail;
   }
@@ -573,6 +577,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (requestKind) {
     entry.requestKind = requestKind;
+  }
+  if (subagent) {
+    entry.subagent = subagent;
   }
   if (toolCallId) {
     entry.toolCallId = toolCallId;

@@ -655,25 +655,6 @@ function rememberCollabReceiverTurns(
   }
 }
 
-function shouldSuppressChildConversationNotification(
-  method: CodexRpc.ServerNotificationMethod,
-): boolean {
-  return (
-    method === "thread/started" ||
-    method === "thread/status/changed" ||
-    method === "thread/archived" ||
-    method === "thread/unarchived" ||
-    method === "thread/closed" ||
-    method === "thread/compacted" ||
-    method === "thread/name/updated" ||
-    method === "thread/tokenUsage/updated" ||
-    method === "turn/started" ||
-    method === "turn/completed" ||
-    method === "turn/plan/updated" ||
-    method === "item/plan/delta"
-  );
-}
-
 function toCodexUserInputAnswer(
   questionId: string,
   value: ProviderUserInputAnswers[string],
@@ -722,6 +703,12 @@ function toProtocolParseError(
 
 function currentProviderThreadId(session: ProviderSession): string | undefined {
   return readResumeCursorThreadId(session.resumeCursor);
+}
+
+function providerThreadIdFromPayload(payload: { readonly threadId?: string }): string | undefined {
+  return typeof payload.threadId === "string" && payload.threadId.trim().length > 0
+    ? payload.threadId
+    : undefined;
 }
 
 function updateSession(
@@ -1175,18 +1162,12 @@ export const makeCodexSessionRuntime = (
         const payload = notification.params;
         const route = readRouteFields(notification);
         const collabReceiverTurns = yield* Ref.get(collabReceiverTurnsRef);
-        const childParentTurnId = (() => {
-          const providerConversationId = readNotificationThreadId(notification);
-          return providerConversationId
-            ? collabReceiverTurns.get(providerConversationId)
-            : undefined;
-        })();
+        const providerConversationId = readNotificationThreadId(notification);
+        const childParentTurnId = providerConversationId
+          ? collabReceiverTurns.get(providerConversationId)
+          : undefined;
 
         rememberCollabReceiverTurns(collabReceiverTurns, notification, route.turnId);
-        if (childParentTurnId && shouldSuppressChildConversationNotification(notification.method)) {
-          yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
-          return;
-        }
 
         let requestId: ApprovalRequestId | undefined;
         let requestKind: ProviderRequestKind | undefined;
@@ -1215,6 +1196,13 @@ export const makeCodexSessionRuntime = (
         }
 
         yield* Ref.set(collabReceiverTurnsRef, collabReceiverTurns);
+        const agentContext =
+          childParentTurnId && providerConversationId
+            ? {
+                providerThreadId: providerConversationId,
+                parentTurnId: childParentTurnId,
+              }
+            : undefined;
         yield* emitEvent({
           kind: "notification",
           threadId: options.threadId,
@@ -1223,6 +1211,7 @@ export const makeCodexSessionRuntime = (
           ...(itemId ? { itemId } : {}),
           ...(requestId ? { requestId } : {}),
           ...(requestKind ? { requestKind } : {}),
+          ...(agentContext ? { agentContext } : {}),
           ...(notification.method === "item/agentMessage/delta"
             ? { textDelta: notification.params.delta }
             : {}),
@@ -1298,9 +1287,20 @@ export const makeCodexSessionRuntime = (
     yield* client.handleServerRequest("item/commandExecution/requestApproval", (payload) =>
       Effect.gen(function* () {
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
-        const turnId = TurnId.make(payload.turnId);
+        const providerThreadId = providerThreadIdFromPayload(payload);
+        const parentTurnId = providerThreadId
+          ? (yield* Ref.get(collabReceiverTurnsRef)).get(providerThreadId)
+          : undefined;
+        const turnId = parentTurnId ?? TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const decision = yield* Deferred.make<ProviderApprovalDecision>();
+        const agentContext =
+          parentTurnId && providerThreadId
+            ? {
+                providerThreadId,
+                parentTurnId,
+              }
+            : undefined;
 
         yield* Ref.update(pendingApprovalsRef, (current) => {
           const next = new Map(current);
@@ -1333,6 +1333,7 @@ export const makeCodexSessionRuntime = (
           requestKind: "command",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
+          ...(agentContext ? { agentContext } : {}),
           payload,
         });
 
@@ -1354,9 +1355,20 @@ export const makeCodexSessionRuntime = (
     yield* client.handleServerRequest("item/fileChange/requestApproval", (payload) =>
       Effect.gen(function* () {
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
-        const turnId = TurnId.make(payload.turnId);
+        const providerThreadId = providerThreadIdFromPayload(payload);
+        const parentTurnId = providerThreadId
+          ? (yield* Ref.get(collabReceiverTurnsRef)).get(providerThreadId)
+          : undefined;
+        const turnId = parentTurnId ?? TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const decision = yield* Deferred.make<ProviderApprovalDecision>();
+        const agentContext =
+          parentTurnId && providerThreadId
+            ? {
+                providerThreadId,
+                parentTurnId,
+              }
+            : undefined;
 
         yield* Ref.update(pendingApprovalsRef, (current) => {
           const next = new Map(current);
@@ -1389,6 +1401,7 @@ export const makeCodexSessionRuntime = (
           requestKind: "file-change",
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
+          ...(agentContext ? { agentContext } : {}),
           payload,
         });
 
@@ -1410,9 +1423,20 @@ export const makeCodexSessionRuntime = (
     yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
       Effect.gen(function* () {
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4);
-        const turnId = TurnId.make(payload.turnId);
+        const providerThreadId = providerThreadIdFromPayload(payload);
+        const parentTurnId = providerThreadId
+          ? (yield* Ref.get(collabReceiverTurnsRef)).get(providerThreadId)
+          : undefined;
+        const turnId = parentTurnId ?? TurnId.make(payload.turnId);
         const itemId = ProviderItemId.make(payload.itemId);
         const answers = yield* Deferred.make<ProviderUserInputAnswers>();
+        const agentContext =
+          parentTurnId && providerThreadId
+            ? {
+                providerThreadId,
+                parentTurnId,
+              }
+            : undefined;
 
         yield* Ref.update(pendingUserInputsRef, (current) => {
           const next = new Map(current);
@@ -1432,6 +1456,7 @@ export const makeCodexSessionRuntime = (
           requestId,
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
+          ...(agentContext ? { agentContext } : {}),
           payload,
         });
 
