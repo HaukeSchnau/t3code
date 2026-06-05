@@ -3,6 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import {
   createStagePnpmConfig,
@@ -13,10 +14,19 @@ import {
   resolveDesktopUpdateChannel,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
+  resolveWorkspaceVpCommand,
 } from "./build-desktop-artifact.ts";
 import { BRAND_ASSET_PATHS } from "./lib/brand-assets.ts";
 
 it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
+  it.effect("resolves vp from the workspace-local binary", () =>
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const command = resolveWorkspaceVpCommand("/repo", path).replaceAll("\\", "/");
+      assert.match(command, /\/repo\/node_modules\/\.bin\/vp(?:\.cmd)?$/);
+    }),
+  );
+
   it("resolves the dedicated nightly updater channel from nightly versions", () => {
     assert.equal(resolveDesktopUpdateChannel("0.0.17-nightly.20260413.42"), "nightly");
     assert.equal(resolveDesktopUpdateChannel("0.0.17"), "latest");

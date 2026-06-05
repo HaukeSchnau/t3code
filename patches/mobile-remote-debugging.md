@@ -27,6 +27,9 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   - `just mobile-dev-reload`
   - `just mobile-dev-snapshot`
   - `just desktop-macos`
+- Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
+  executable so `just desktop-macos` works in non-interactive shells where `vp` is not installed
+  globally or present on `PATH`.
 - Default physical-device settings are local to this fork and must be overridable with environment
   variables such as `T3CODE_IOS_DEVICE`, `T3CODE_APPLE_TEAM_ID`,
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
@@ -55,6 +58,7 @@ dump` can be empty unless log capture has been explicitly started.
 ## Upstream Touch Points
 
 - `Justfile`
+- `scripts/build-desktop-artifact.ts`
 - `apps/mobile/README.md`
 - `apps/mobile/src/app/connections/new.tsx`
 - `apps/mobile/src/state/use-remote-environment-registry.ts`

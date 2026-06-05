@@ -195,6 +195,15 @@ const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRo
   return hash.toLowerCase();
 });
 
+export function resolveWorkspaceVpCommand(repoRoot: string, path: Path.Path): string {
+  return path.join(
+    repoRoot,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "vp.cmd" : "vp",
+  );
+}
+
 const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -830,6 +839,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const appVersion = options.version ?? serverPackageJson.version;
   const iconAssets = resolveDesktopBuildIconAssets(appVersion);
   const commitHash = yield* resolveGitCommitHash(repoRoot);
+  const vpCommand = resolveWorkspaceVpCommand(repoRoot, path);
   const mkdir = options.keepStage ? fs.makeTempDirectory : fs.makeTempDirectoryScoped;
   const stageRoot = yield* mkdir({
     prefix: `t3code-desktop-${options.platform}-stage-`,
@@ -847,11 +857,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (!options.skipBuild) {
     yield* Effect.log("[desktop-artifact] Building desktop/server/web artifacts...");
     yield* runCommand(
-      ChildProcess.make({
+      ChildProcess.make(vpCommand, ["run", "build:desktop"], {
         cwd: repoRoot,
-        // Windows needs shell mode to resolve .cmd shims (e.g. vp.cmd).
+        // Windows needs shell mode to run .cmd shims.
         shell: process.platform === "win32",
-      })`vp run build:desktop`,
+      }),
       { label: "vp run build:desktop", verbose: options.verbose },
     );
   }
@@ -934,11 +944,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
   yield* runCommand(
-    ChildProcess.make({
+    ChildProcess.make(vpCommand, ["install", "--prod", "--no-optional"], {
       cwd: stageAppDir,
-      // Windows needs shell mode to resolve .cmd shims (e.g. vp.cmd).
+      // Windows needs shell mode to run .cmd shims.
       shell: process.platform === "win32",
-    })`vp install --prod --no-optional`,
+    }),
     { label: "vp install --prod --no-optional", verbose: options.verbose },
   );
 
@@ -979,12 +989,28 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     `[desktop-artifact] Building ${options.platform}/${options.target} (arch=${options.arch}, version=${appVersion})...`,
   );
   yield* runCommand(
-    ChildProcess.make({
-      cwd: repoRoot,
-      env: buildEnv,
-      // Windows needs shell mode to resolve .cmd shims.
-      shell: process.platform === "win32",
-    })`vp exec --filter @t3tools/desktop -- electron-builder --projectDir ${stageAppDir} ${platformConfig.cliFlag} --${options.arch} --publish never`,
+    ChildProcess.make(
+      vpCommand,
+      [
+        "exec",
+        "--filter",
+        "@t3tools/desktop",
+        "--",
+        "electron-builder",
+        "--projectDir",
+        stageAppDir,
+        platformConfig.cliFlag,
+        `--${options.arch}`,
+        "--publish",
+        "never",
+      ],
+      {
+        cwd: repoRoot,
+        env: buildEnv,
+        // Windows needs shell mode to run .cmd shims.
+        shell: process.platform === "win32",
+      },
+    ),
     {
       label: `vp exec --filter @t3tools/desktop -- electron-builder --projectDir ${stageAppDir} ${platformConfig.cliFlag} --${options.arch} --publish never`,
       verbose: options.verbose,
