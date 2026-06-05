@@ -2,11 +2,9 @@
 
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import {
-  DEFAULT_MODEL,
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
-  ProviderInstanceId,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -60,12 +58,10 @@ import {
   appendBrowsePathSegment,
   canNavigateUp,
   ensureBrowseDirectoryPath,
-  findProjectByPath,
   getBrowseDirectoryPath,
   getBrowseLeafPathSegment,
   getBrowseParentPath,
   hasTrailingPathSeparator,
-  inferProjectTitleFromPath,
   isExplicitRelativeProjectPath,
   isFilesystemBrowseQuery,
   isUnsupportedWindowsProjectPath,
@@ -73,6 +69,7 @@ import {
 } from "../lib/projectPaths";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { getLatestThreadForProject } from "../lib/threadSort";
+import { openWorkspaceInApp } from "../lib/openWorkspaceInApp";
 import { cn, isMacPlatform, isWindowsPlatform, newCommandId, newProjectId } from "../lib/utils";
 import {
   selectProjectsAcrossEnvironments,
@@ -1078,75 +1075,29 @@ function OpenCommandPaletteDialog() {
       const api = readEnvironmentApi(browseEnvironmentId);
       if (!api) return;
 
-      if (isUnsupportedWindowsProjectPath(rawCwd.trim(), browseEnvironmentPlatform)) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to add project",
-            description: "Windows-style paths are only supported on Windows.",
-          }),
-        );
-        return;
-      }
-
-      if (isExplicitRelativeProjectPath(rawCwd.trim()) && !currentProjectCwdForBrowse) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to add project",
-            description: "Relative paths require an active project.",
-          }),
-        );
-        return;
-      }
-
-      const cwd = resolveProjectPathForDispatch(rawCwd, currentProjectCwdForBrowse);
-      if (cwd.length === 0) return;
-
-      const existing = findProjectByPath(
-        projects.filter((project) => project.environmentId === browseEnvironmentId),
-        cwd,
-      );
-      if (existing) {
-        const latestThread = getLatestThreadForProject(
-          threads.filter((thread) => thread.environmentId === existing.environmentId),
-          existing.id,
-          settings.sidebarThreadSortOrder,
-        );
-        if (latestThread) {
-          await navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(
-              scopeThreadRef(latestThread.environmentId, latestThread.id),
-            ),
-          });
-        } else {
-          await handleNewThread(scopeProjectRef(existing.environmentId, existing.id), {
-            envMode: settings.defaultThreadEnvMode,
-          }).catch(() => undefined);
-        }
-        setOpen(false);
-        return;
-      }
-
       try {
-        const projectId = newProjectId();
-        await api.orchestration.dispatchCommand({
-          type: "project.create",
-          commandId: newCommandId(),
-          projectId,
-          title: inferProjectTitleFromPath(cwd),
-          workspaceRoot: cwd,
-          createWorkspaceRootIfMissing: true,
-          defaultModelSelection: {
-            instanceId: ProviderInstanceId.make("codex"),
-            model: DEFAULT_MODEL,
+        await openWorkspaceInApp({
+          environmentId: browseEnvironmentId,
+          environmentPlatform: browseEnvironmentPlatform,
+          rawCwd,
+          currentProjectCwd: currentProjectCwdForBrowse,
+          projects,
+          threads,
+          sidebarThreadSortOrder: settings.sidebarThreadSortOrder,
+          defaultThreadEnvMode: settings.defaultThreadEnvMode,
+          newCommandId,
+          newProjectId,
+          dispatchCreateProject: async (command) => {
+            await api.orchestration.dispatchCommand(command);
           },
-          createdAt: new Date().toISOString(),
+          handleNewThread,
+          navigateToThread: async (threadRef) => {
+            await navigate({
+              to: "/$environmentId/$threadId",
+              params: buildThreadRouteParams(threadRef),
+            });
+          },
         });
-        await handleNewThread(scopeProjectRef(browseEnvironmentId, projectId), {
-          envMode: settings.defaultThreadEnvMode,
-        }).catch(() => undefined);
         setOpen(false);
       } catch (error) {
         toastManager.add(

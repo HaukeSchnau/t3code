@@ -394,6 +394,11 @@ export const DesktopCloudAuthFetchResultSchema = Schema.Struct({
 });
 export type DesktopCloudAuthFetchResult = typeof DesktopCloudAuthFetchResultSchema.Type;
 
+export const DesktopOpenWorkspaceRequestSchema = Schema.Struct({
+  cwd: Schema.String,
+});
+export type DesktopOpenWorkspaceRequest = typeof DesktopOpenWorkspaceRequestSchema.Type;
+
 export interface DesktopBridge {
   getAppBranding: () => DesktopAppBranding | null;
   getLocalEnvironmentBootstrap: () => DesktopEnvironmentBootstrap | null;
@@ -445,6 +450,8 @@ export interface DesktopBridge {
   clearCloudAuthToken: () => Promise<void>;
   fetchCloudAuth: (input: DesktopCloudAuthFetchInput) => Promise<DesktopCloudAuthFetchResult>;
   onCloudAuthCallback: (listener: (rawUrl: string) => void) => () => void;
+  consumePendingOpenWorkspaceRequests: () => Promise<readonly DesktopOpenWorkspaceRequest[]>;
+  onOpenWorkspaceRequest: (listener: (request: DesktopOpenWorkspaceRequest) => void) => () => void;
   onMenuAction: (listener: (action: string) => void) => () => void;
   getUpdateState: () => Promise<DesktopUpdateState>;
   setUpdateChannel: (channel: DesktopUpdateChannel) => Promise<DesktopUpdateState>;

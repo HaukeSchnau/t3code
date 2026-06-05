@@ -9,6 +9,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopCloudAuth from "./DesktopCloudAuth.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopOpenWorkspace from "./DesktopOpenWorkspace.ts";
 
 interface CloudAuthHarness {
   readonly app: ElectronApp.ElectronAppShape;
@@ -24,6 +25,7 @@ interface CloudAuthHarness {
   readonly layer: Layer.Layer<
     | DesktopCloudAuth.DesktopCloudAuth
     | DesktopEnvironment.DesktopEnvironment
+    | DesktopOpenWorkspace.DesktopOpenWorkspace
     | ElectronApp.ElectronApp
     | ElectronWindow.ElectronWindow
   >;
@@ -110,6 +112,7 @@ function makeHarness(input: { readonly isDevelopment: boolean }): CloudAuthHarne
         Layer.provideMerge(environmentLayer),
         Layer.provide(NodeServices.layer),
       ),
+      DesktopOpenWorkspace.layer,
       Layer.succeed(ElectronApp.ElectronApp, app),
       Layer.succeed(ElectronWindow.ElectronWindow, window),
     ),
@@ -206,7 +209,7 @@ describe("DesktopCloudAuth", () => {
       assert.isTrue(prevented);
       assert.deepEqual(
         harness.protocolRegistrations.map((registration) => registration.protocol),
-        ["t3code-dev"],
+        ["t3code-dev", "t3"],
       );
       assert.isString(harness.protocolRegistrations[0]?.path);
       assert.isArray(harness.protocolRegistrations[0]?.args);
@@ -258,7 +261,7 @@ describe("DesktopCloudAuth", () => {
 
       assert.deepEqual(
         harness.protocolRegistrations.map((registration) => registration.protocol),
-        ["t3code"],
+        ["t3code", "t3"],
       );
       assert.deepEqual(harness.sends, [
         {

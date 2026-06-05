@@ -9,6 +9,9 @@ export const SET_CLOUD_AUTH_TOKEN_CHANNEL = "desktop:set-cloud-auth-token";
 export const CLEAR_CLOUD_AUTH_TOKEN_CHANNEL = "desktop:clear-cloud-auth-token";
 export const FETCH_CLOUD_AUTH_CHANNEL = "desktop:fetch-cloud-auth";
 export const CLOUD_AUTH_CALLBACK_CHANNEL = "desktop:cloud-auth-callback";
+export const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
+  "desktop:consume-pending-open-workspace-requests";
+export const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
 export const UPDATE_STATE_CHANNEL = "desktop:update-state";
 export const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";

@@ -113,6 +113,19 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.CLOUD_AUTH_CALLBACK_CHANNEL, wrappedListener);
     };
   },
+  consumePendingOpenWorkspaceRequests: () =>
+    ipcRenderer.invoke(IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL),
+  onOpenWorkspaceRequest: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
+      if (typeof request !== "object" || request === null) return;
+      listener(request as Parameters<typeof listener>[0]);
+    };
+
+    ipcRenderer.on(IpcChannels.OPEN_WORKSPACE_REQUEST_CHANNEL, wrappedListener);
+    return () => {
+      ipcRenderer.removeListener(IpcChannels.OPEN_WORKSPACE_REQUEST_CHANNEL, wrappedListener);
+    };
+  },
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;

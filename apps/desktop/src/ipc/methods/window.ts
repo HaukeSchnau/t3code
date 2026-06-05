@@ -2,6 +2,7 @@ import {
   ContextMenuItemSchema,
   DesktopAppBrandingSchema,
   DesktopEnvironmentBootstrapSchema,
+  DesktopOpenWorkspaceRequestSchema,
   DesktopThemeSchema,
   PickFolderOptionsSchema,
 } from "@t3tools/contracts";
@@ -11,6 +12,7 @@ import * as Schema from "effect/Schema";
 
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
+import * as DesktopOpenWorkspace from "../../app/DesktopOpenWorkspace.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronMenu from "../../electron/ElectronMenu.ts";
 import * as ElectronShell from "../../electron/ElectronShell.ts";
@@ -131,5 +133,15 @@ export const openExternal = makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openExternal")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openExternal(url);
+  }),
+});
+
+export const consumePendingOpenWorkspaceRequests = makeIpcMethod({
+  channel: IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL,
+  payload: Schema.Undefined,
+  result: Schema.Array(DesktopOpenWorkspaceRequestSchema),
+  handler: Effect.fn("desktop.ipc.window.consumePendingOpenWorkspaceRequests")(function* () {
+    const openWorkspace = yield* DesktopOpenWorkspace.DesktopOpenWorkspace;
+    return yield* openWorkspace.consumePending;
   }),
 });

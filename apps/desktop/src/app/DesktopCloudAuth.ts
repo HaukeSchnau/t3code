@@ -12,6 +12,7 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopOpenWorkspace from "./DesktopOpenWorkspace.ts";
 import type * as Electron from "electron";
 
 export const CLOUD_AUTH_CALLBACK_HOST = "auth";
@@ -19,6 +20,7 @@ export const CLOUD_AUTH_CALLBACK_PATHNAME = "/callback";
 export const CLOUD_AUTH_CALLBACK_STATE_PARAM = "t3_state";
 export const CLOUD_AUTH_CALLBACK_SCHEME = "t3code";
 export const DEVELOPMENT_CLOUD_AUTH_CALLBACK_SCHEME = "t3code-dev";
+export const LEGACY_WORKSPACE_OPEN_SCHEME = "t3";
 
 const CLOUD_AUTH_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -43,7 +45,10 @@ export interface DesktopCloudAuthShape {
   readonly configure: Effect.Effect<
     void,
     never,
-    ElectronApp.ElectronApp | ElectronWindow.ElectronWindow | Scope.Scope
+    | DesktopOpenWorkspace.DesktopOpenWorkspace
+    | ElectronApp.ElectronApp
+    | ElectronWindow.ElectronWindow
+    | Scope.Scope
   >;
 }
 
@@ -145,6 +150,37 @@ function resolveProtocolCallbackForwardUrl(): URL | null {
   }
 }
 
+function registerProtocolClient(input: {
+  readonly electronApp: ElectronApp.ElectronAppShape;
+  readonly protocol: string;
+  readonly isDevelopment: boolean;
+}): Effect.Effect<boolean> {
+  if (isProtocolRegistrationManagedExternally()) {
+    // Development macOS launchers set default URL handlers before the stock Electron
+    // process starts so LaunchServices binds schemes to the worktree-specific app bundle.
+    return Effect.succeed(false);
+  }
+
+  if (input.isDevelopment) {
+    const configuredClient = resolveConfiguredProtocolClient();
+    if (configuredClient) {
+      return input.electronApp.setAsDefaultProtocolClient(
+        input.protocol,
+        configuredClient.path,
+        configuredClient.args,
+      );
+    }
+
+    return input.electronApp.setAsDefaultProtocolClient(
+      input.protocol,
+      process.execPath,
+      resolveProtocolClientLaunchArgs({ argv: process.argv }),
+    );
+  }
+
+  return input.electronApp.setAsDefaultProtocolClient(input.protocol);
+}
+
 const closeCloudAuthRequest = (request: PendingCloudAuthRequest | null): null => {
   request?.close();
   return null;
@@ -222,6 +258,7 @@ const make = Effect.gen(function* () {
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      const openWorkspace = yield* DesktopOpenWorkspace.DesktopOpenWorkspace;
       const scope = yield* Scope.Scope;
       const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
       const runPromise = Effect.runPromiseWith(context);
@@ -236,27 +273,16 @@ const make = Effect.gen(function* () {
         }),
       );
 
-      if (isProtocolRegistrationManagedExternally()) {
-        // Development macOS launchers set the default URL handler before the stock Electron
-        // process starts so LaunchServices binds the scheme to the worktree-specific app bundle.
-      } else if (environment.isDevelopment) {
-        const configuredClient = resolveConfiguredProtocolClient();
-        if (configuredClient) {
-          yield* electronApp.setAsDefaultProtocolClient(
-            scheme,
-            configuredClient.path,
-            configuredClient.args,
-          );
-        } else {
-          yield* electronApp.setAsDefaultProtocolClient(
-            scheme,
-            process.execPath,
-            resolveProtocolClientLaunchArgs({ argv: process.argv }),
-          );
-        }
-      } else {
-        yield* electronApp.setAsDefaultProtocolClient(scheme);
-      }
+      yield* registerProtocolClient({
+        electronApp,
+        protocol: scheme,
+        isDevelopment: environment.isDevelopment,
+      });
+      yield* registerProtocolClient({
+        electronApp,
+        protocol: LEGACY_WORKSPACE_OPEN_SCHEME,
+        isDevelopment: environment.isDevelopment,
+      });
 
       dispatchCloudAuthCallback = (rawUrl: string) => {
         const pending = pendingAuthRequest;
@@ -297,7 +323,15 @@ const make = Effect.gen(function* () {
 
       yield* electronApp.on<[Electron.Event, string]>("open-url", (event, rawUrl) => {
         event.preventDefault?.();
-        dispatchCloudAuthCallback(rawUrl);
+        void runPromise(
+          openWorkspace
+            .dispatchUrl(rawUrl)
+            .pipe(
+              Effect.flatMap((handled) =>
+                handled ? Effect.void : Effect.sync(() => dispatchCloudAuthCallback(rawUrl)),
+              ),
+            ),
+        );
       });
 
       yield* electronApp.on<[Electron.Event, readonly string[]]>(
@@ -315,6 +349,12 @@ const make = Effect.gen(function* () {
 
           void runPromise(
             Effect.gen(function* () {
+              for (const value of values) {
+                if (yield* openWorkspace.dispatchUrl(value)) {
+                  return;
+                }
+              }
+
               const mainWindow = yield* electronWindow.currentMainOrFirst;
               if (Option.isSome(mainWindow)) {
                 yield* electronWindow.reveal(mainWindow.value);
