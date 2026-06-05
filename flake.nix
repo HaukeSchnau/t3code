@@ -118,7 +118,7 @@
             (
               cd "$runtimeRoot"
               pnpm --offline install --prod --frozen-lockfile --filter t3 --ignore-scripts
-              npm_config_build_from_source=true pnpm --offline --filter t3 rebuild node-pty
+              npm_config_build_from_source=true pnpm --filter t3 rebuild node-pty
             )
 
             mkdir -p "$out/lib"
