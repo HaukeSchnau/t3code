@@ -26,6 +26,10 @@ The minimal runtime workspace avoids pulling unrelated packages such as `infra/r
 server closure. The `--ignore-scripts` install flag avoids rerunning the root `prepare` patch script during
 the install phase; native packages used by the server are already present in the fixed pnpm dependency store.
 
+The build environment sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to nixpkgs' `cacert` bundle. Vite+'s
+Rust-side build tooling initializes an HTTP client during `vp build`; without an explicit CA bundle, sandboxed
+Nix builds can inherit `/no-cert-file.crt` and abort before the web bundle is produced.
+
 ## Service behavior
 
 The NixOS module runs `t3 serve` as a dedicated system user. By default it binds to `127.0.0.1:3773`, stores

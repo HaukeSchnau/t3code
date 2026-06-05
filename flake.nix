@@ -77,6 +77,8 @@
           ];
 
           env = {
+            NODE_EXTRA_CA_CERTS = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
             npm_config_nodedir = nodejs;
           };
 
