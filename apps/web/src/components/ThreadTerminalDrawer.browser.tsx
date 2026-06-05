@@ -284,6 +284,30 @@ describe("TerminalViewport", () => {
     }
   });
 
+  it("uses JetBrains Mono Nerd Font for the terminal", async () => {
+    const environment = createEnvironmentApi();
+    environmentApiById.set("environment-a", environment);
+
+    const mounted = await mountTerminalViewport({
+      threadRef: scopeThreadRef("environment-a" as never, THREAD_ID),
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(terminalConstructorSpy).toHaveBeenCalledTimes(1);
+      });
+
+      expect(terminalConstructorSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fontFamily:
+            '"JetBrainsMono Nerd Font Mono", "JetBrainsMono Nerd Font", "JetBrains Mono Nerd Font", "SF Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+        }),
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("keeps the terminal mounted when xterm fit runs before dimensions are ready", async () => {
     const environment = createEnvironmentApi();
     environmentApiById.set("environment-a", environment);
