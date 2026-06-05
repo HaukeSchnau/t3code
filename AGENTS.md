@@ -76,7 +76,7 @@ agents.
 - Before starting work, fetch both remotes sequentially with `jj git fetch --remote origin` and `jj git fetch --remote upstream`, then inspect `jj status`.
 - If `upstream/main` has advanced, create a dedicated sync merge with `jj new main main@upstream -m "merge: sync upstream main"`.
 - Resolve any merge conflicts in that sync change. Do not mix feature work or unrelated edits into the upstream sync merge.
-- For large upstream merge conflicts, delegate the conflict investigation and resolution plan to a subagent so the main agent's context stays focused. Have the subagent inspect the conflicted files, identify upstream/local intent, and report the exact resolution strategy before applying or reviewing the final edits in the main agent.
+- For large upstream merge conflicts, delegate the conflict investigation and resolution work to a subagent so the main agent's context stays focused. Have the subagent inspect the conflicted files, identify upstream/local intent, resolve the conflicts, and report the exact files and strategy used. The main agent must wait for the subagent to finish before reviewing the completed resolution, running checks, and committing the sync merge.
 - After resolving conflicts, run the required checks, then commit the sync change with `jj commit -m "merge: sync upstream main"`.
 - Do not use `jj-pull main --remote upstream` for routine fork syncing; that moves/rebases `main` to upstream instead of preserving the fork's merge-based history.
 - When work is done, commit the intended changes and push directly to `main` with `jj-push main` instead of opening a pull request.
