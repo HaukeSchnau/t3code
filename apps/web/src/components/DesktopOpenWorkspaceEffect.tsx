@@ -1,4 +1,6 @@
 import { useEffect, useEffectEvent, useRef } from "react";
+import { scopeThreadRef } from "@t3tools/client-runtime";
+import type { DesktopOpenWorkspaceRequest } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { useShallow } from "zustand/react/shallow";
 
@@ -72,14 +74,41 @@ export function DesktopOpenWorkspaceEffect() {
     });
   });
 
-  const enqueueWorkspaceRequest = useEffectEvent((cwd: string) => {
+  const resumeCodexThreadRequest = useEffectEvent(async (threadId: string) => {
+    if (!primaryEnvironmentId) {
+      throw new Error("Local environment is not ready yet.");
+    }
+
+    const api = readEnvironmentApi(primaryEnvironmentId);
+    if (!api) {
+      throw new Error("Local environment is not ready yet.");
+    }
+
+    const result = await api.codex.resumeThread({ threadId });
+    await navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(scopeThreadRef(primaryEnvironmentId, result.threadId)),
+    });
+  });
+
+  const enqueueWorkspaceRequest = useEffectEvent((request: DesktopOpenWorkspaceRequest) => {
     requestQueueRef.current = requestQueueRef.current
-      .then(() => openWorkspaceRequest(cwd))
+      .then(() => {
+        switch (request.type) {
+          case "open-workspace":
+            return openWorkspaceRequest(request.cwd);
+          case "codex-thread-resume":
+            return resumeCodexThreadRequest(request.threadId);
+        }
+      })
       .catch((error) => {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Unable to open workspace",
+            title:
+              request.type === "codex-thread-resume"
+                ? "Unable to resume Codex thread"
+                : "Unable to open workspace",
             description: buildDesktopOpenWorkspaceErrorMessage(error),
           }),
         );
@@ -93,7 +122,7 @@ export function DesktopOpenWorkspaceEffect() {
     }
 
     const unsubscribe = bridge.onOpenWorkspaceRequest((request) => {
-      enqueueWorkspaceRequest(request.cwd);
+      enqueueWorkspaceRequest(request);
     });
 
     if (!consumedInitialRequestsRef.current) {
@@ -102,7 +131,7 @@ export function DesktopOpenWorkspaceEffect() {
         .consumePendingOpenWorkspaceRequests()
         .then((requests) => {
           for (const request of requests) {
-            enqueueWorkspaceRequest(request.cwd);
+            enqueueWorkspaceRequest(request);
           }
         })
         .catch((error) => {

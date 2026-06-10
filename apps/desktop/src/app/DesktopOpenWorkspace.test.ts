@@ -45,23 +45,40 @@ describe("DesktopOpenWorkspace", () => {
   it("parses workspace open requests from supported schemes", () => {
     assert.deepEqual(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://open?cwd=/Users/dev/t3code"),
-      { cwd: "/Users/dev/t3code" },
+      { type: "open-workspace", cwd: "/Users/dev/t3code" },
     );
     assert.deepEqual(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
         "t3code:///open?cwd=%2FUsers%2Fdev%2Fwith%20spaces",
       ),
-      { cwd: "/Users/dev/with spaces" },
+      { type: "open-workspace", cwd: "/Users/dev/with spaces" },
     );
     assert.deepEqual(
       DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code-dev://open?cwd=/repo"),
-      { cwd: "/repo" },
+      { type: "open-workspace", cwd: "/repo" },
+    );
+  });
+
+  it("parses Codex thread resume requests from supported schemes", () => {
+    assert.deepEqual(
+      DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
+        "t3code://codex/resume?threadId=thread-123",
+      ),
+      { type: "codex-thread-resume", threadId: "thread-123" },
+    );
+    assert.deepEqual(
+      DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl(
+        "t3code:///codex/resume?threadId=thread-456",
+      ),
+      { type: "codex-thread-resume", threadId: "thread-456" },
     );
   });
 
   it("ignores unsupported actions and malformed requests", () => {
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://settings"));
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3://open"));
+    assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code://codex"));
+    assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("t3code://codex/resume"));
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("https://open?cwd=/repo"));
     assert.isNull(DesktopOpenWorkspace.parseDesktopOpenWorkspaceUrl("not-a-url"));
   });
@@ -74,14 +91,16 @@ describe("DesktopOpenWorkspace", () => {
       yield* openWorkspace.dispatchUrl("t3://open?cwd=/repo/one");
 
       assert.deepEqual(harness.sends, []);
-      assert.deepEqual(yield* openWorkspace.consumePending, [{ cwd: "/repo/one" }]);
+      assert.deepEqual(yield* openWorkspace.consumePending, [
+        { type: "open-workspace", cwd: "/repo/one" },
+      ]);
 
       yield* openWorkspace.dispatchUrl("t3://open?cwd=/repo/two");
 
       assert.deepEqual(harness.sends, [
         {
           channel: IpcChannels.OPEN_WORKSPACE_REQUEST_CHANNEL,
-          args: [{ cwd: "/repo/two" }],
+          args: [{ type: "open-workspace", cwd: "/repo/two" }],
         },
       ]);
       assert.lengthOf(harness.reveals, 1);

@@ -92,6 +92,7 @@ import {
   ProviderRegistry,
   type ProviderRegistryShape,
 } from "./provider/Services/ProviderRegistry.ts";
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import { ServerLifecycleEvents, type ServerLifecycleEventsShape } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup, type ServerRuntimeStartupShape } from "./serverRuntimeStartup.ts";
@@ -562,6 +563,15 @@ const buildAppUnderTest = (options?: {
           setProviderMaintenanceActionState: () => Effect.succeed([]),
           streamChanges: Stream.empty,
           ...options?.layers?.providerRegistry,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(ProviderSessionDirectory)({
+          upsert: () => Effect.void,
+          getProvider: () => Effect.succeed(ProviderDriverKind.make("codex")),
+          getBinding: () => Effect.succeed(Option.none()),
+          listThreadIds: () => Effect.succeed([]),
+          listBindings: () => Effect.succeed([]),
         }),
       ),
       Layer.provide(

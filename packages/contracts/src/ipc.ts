@@ -34,6 +34,8 @@ import type {
   ServerProcessResourceHistoryResult,
   ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
+  CodexThreadResumeInput,
+  CodexThreadResumeResult,
   ServerRemoveKeybindingResult,
   ServerSignalProcessInput,
   ServerSignalProcessResult,
@@ -402,9 +404,16 @@ export const DesktopCloudAuthFetchResultSchema = Schema.Struct({
 });
 export type DesktopCloudAuthFetchResult = typeof DesktopCloudAuthFetchResultSchema.Type;
 
-export const DesktopOpenWorkspaceRequestSchema = Schema.Struct({
-  cwd: Schema.String,
-});
+export const DesktopOpenWorkspaceRequestSchema = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("open-workspace"),
+    cwd: Schema.String,
+  }),
+  Schema.Struct({
+    type: Schema.Literal("codex-thread-resume"),
+    threadId: Schema.String,
+  }),
+]);
 export type DesktopOpenWorkspaceRequest = typeof DesktopOpenWorkspaceRequestSchema.Type;
 
 export interface DesktopBridge {
@@ -540,6 +549,9 @@ export interface LocalApi {
  * `environmentId` rather than reaching through the local desktop bridge.
  */
 export interface EnvironmentApi {
+  codex: {
+    resumeThread: (input: CodexThreadResumeInput) => Promise<CodexThreadResumeResult>;
+  };
   terminal: {
     open: (input: typeof TerminalOpenInput.Encoded) => Promise<TerminalSessionSnapshot>;
     attach: (

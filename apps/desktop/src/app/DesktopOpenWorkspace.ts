@@ -9,6 +9,8 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as IpcChannels from "../ipc/channels.ts";
 
 const OPEN_WORKSPACE_ACTION = "open";
+const CODEX_DEEP_LINK_ACTION = "codex";
+const CODEX_RESUME_ACTION = "resume";
 const DESKTOP_WORKSPACE_DEEP_LINK_PROTOCOLS = new Set(["t3:", "t3code:", "t3code-dev:"]);
 
 function resolveDeepLinkAction(url: URL): string | null {
@@ -23,6 +25,13 @@ function resolveDeepLinkAction(url: URL): string | null {
       .map((segment) => segment.trim().toLowerCase())
       .find((segment) => segment.length > 0) ?? null
   );
+}
+
+function resolveDeepLinkPathSegments(url: URL): readonly string[] {
+  return url.pathname
+    .split("/")
+    .map((segment) => segment.trim().toLowerCase())
+    .filter((segment) => segment.length > 0);
 }
 
 export function parseDesktopOpenWorkspaceUrl(rawUrl: unknown): DesktopOpenWorkspaceRequest | null {
@@ -41,16 +50,34 @@ export function parseDesktopOpenWorkspaceUrl(rawUrl: unknown): DesktopOpenWorksp
     return null;
   }
 
-  if (resolveDeepLinkAction(url) !== OPEN_WORKSPACE_ACTION) {
-    return null;
+  const action = resolveDeepLinkAction(url);
+
+  if (action === OPEN_WORKSPACE_ACTION) {
+    const cwd = url.searchParams.get("cwd")?.trim();
+    if (!cwd) {
+      return null;
+    }
+
+    return { type: "open-workspace", cwd };
   }
 
-  const cwd = url.searchParams.get("cwd")?.trim();
-  if (!cwd) {
-    return null;
+  if (action === CODEX_DEEP_LINK_ACTION) {
+    const pathSegments = resolveDeepLinkPathSegments(url);
+    const subaction =
+      pathSegments[0] === CODEX_DEEP_LINK_ACTION ? pathSegments[1] : pathSegments[0];
+    if (subaction !== CODEX_RESUME_ACTION) {
+      return null;
+    }
+
+    const threadId = url.searchParams.get("threadId")?.trim();
+    if (!threadId) {
+      return null;
+    }
+
+    return { type: "codex-thread-resume", threadId };
   }
 
-  return { cwd };
+  return null;
 }
 
 export interface DesktopOpenWorkspaceShape {

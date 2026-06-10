@@ -195,6 +195,27 @@ export type ServerProvider = typeof ServerProvider.Type;
 export const ServerProviders = Schema.Array(ServerProvider);
 export type ServerProviders = typeof ServerProviders.Type;
 
+export const CodexThreadResumeInput = Schema.Struct({
+  threadId: TrimmedNonEmptyString,
+});
+export type CodexThreadResumeInput = typeof CodexThreadResumeInput.Type;
+
+export const CodexThreadResumeResult = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  providerThreadId: TrimmedNonEmptyString,
+  importedMessageCount: NonNegativeInt,
+});
+export type CodexThreadResumeResult = typeof CodexThreadResumeResult.Type;
+
+export class CodexThreadResumeError extends Schema.TaggedErrorClass<CodexThreadResumeError>()(
+  "CodexThreadResumeError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 /**
  * Treat the optional `availability` as "available" when absent. This is
  * the rule legacy producers (which omit the field) and new producers

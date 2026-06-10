@@ -88,6 +88,9 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  CodexThreadResumeError,
+  CodexThreadResumeInput,
+  CodexThreadResumeResult,
   ServerProviderUpdateError,
   ServerProviderUpdateInput,
   ServerLifecycleStreamEvent,
@@ -158,6 +161,7 @@ export const WS_METHODS = {
   terminalClose: "terminal.close",
 
   // Server meta
+  codexResumeThread: "codex.resumeThread",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -205,6 +209,12 @@ export const WsServerGetConfigRpc = Rpc.make(WS_METHODS.serverGetConfig, {
   payload: Schema.Struct({}),
   success: ServerConfig,
   error: Schema.Union([KeybindingsConfigError, ServerSettingsError, EnvironmentAuthorizationError]),
+});
+
+export const WsCodexResumeThreadRpc = Rpc.make(WS_METHODS.codexResumeThread, {
+  payload: CodexThreadResumeInput,
+  success: CodexThreadResumeResult,
+  error: Schema.Union([CodexThreadResumeError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -546,6 +556,7 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsCodexResumeThreadRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

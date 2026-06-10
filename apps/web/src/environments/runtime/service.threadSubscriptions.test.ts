@@ -86,6 +86,9 @@ vi.mock("@t3tools/client-runtime", async (importOriginal) => {
       getRelayClientStatus: vi.fn(),
       installRelayClient: vi.fn(),
     },
+    codex: {
+      resumeThread: vi.fn(),
+    },
     orchestration: {
       dispatchCommand: vi.fn(),
       getTurnDiff: vi.fn(),

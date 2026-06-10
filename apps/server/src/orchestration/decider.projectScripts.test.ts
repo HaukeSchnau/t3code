@@ -5,6 +5,7 @@ import {
   MessageId,
   ProjectId,
   ThreadId,
+  TurnId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -344,6 +345,111 @@ it.layer(NodeServices.layer)("decider project scripts", (it) => {
           interactionMode: "plan",
         },
       });
+    }),
+  );
+
+  it.effect("imports historical messages as message-sent events", () =>
+    Effect.gen(function* () {
+      const now = "2026-01-01T00:00:00.000Z";
+      const initial = createEmptyReadModel(now);
+      const withProject = yield* projectEvent(initial, {
+        sequence: 1,
+        eventId: asEventId("evt-project-import-create"),
+        aggregateKind: "project",
+        aggregateId: asProjectId("project-import"),
+        type: "project.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-project-import-create"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-project-import-create"),
+        metadata: {},
+        payload: {
+          projectId: asProjectId("project-import"),
+          title: "Import",
+          workspaceRoot: "/tmp/import",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const readModel = yield* projectEvent(withProject, {
+        sequence: 2,
+        eventId: asEventId("evt-thread-import-create"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-import"),
+        type: "thread.created",
+        occurredAt: now,
+        commandId: CommandId.make("cmd-thread-import-create"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-thread-import-create"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-import"),
+          projectId: asProjectId("project-import"),
+          title: "Import",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.messages.import",
+          commandId: CommandId.make("cmd-message-import"),
+          threadId: ThreadId.make("thread-import"),
+          messages: [
+            {
+              id: asMessageId("message-import-user"),
+              role: "user",
+              text: "Old prompt",
+              turnId: null,
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+            {
+              id: asMessageId("message-import-assistant"),
+              role: "assistant",
+              text: "Old answer",
+              turnId: TurnId.make("turn-import"),
+              streaming: false,
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+          createdAt: now,
+        },
+        readModel,
+      });
+
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.message-sent",
+        "thread.message-sent",
+      ]);
+      expect(events.map((event) => event.payload)).toMatchObject([
+        {
+          messageId: "message-import-user",
+          role: "user",
+          text: "Old prompt",
+          turnId: null,
+        },
+        {
+          messageId: "message-import-assistant",
+          role: "assistant",
+          text: "Old answer",
+          turnId: "turn-import",
+        },
+      ]);
     }),
   );
 });

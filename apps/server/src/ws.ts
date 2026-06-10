@@ -11,6 +11,9 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthReviewWriteScope,
@@ -21,8 +24,11 @@ import {
   type AuthAccessStreamEvent,
   type AuthEnvironmentScope,
   AuthSessionId,
+  CodexSettings,
+  CodexThreadResumeError,
   CommandId,
   EventId,
+  MessageId,
   type OrchestrationCommand,
   type GitActionProgressEvent,
   type GitManagerServiceError,
@@ -40,17 +46,23 @@ import {
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
   EnvironmentAuthorizationError,
+  ProjectId,
+  ProviderDriverKind,
+  defaultInstanceIdForDriver,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  TurnId,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import * as CodexClient from "effect-codex-app-server/client";
+import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { ServerConfig } from "./config.ts";
@@ -65,6 +77,13 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import { ProviderRegistry } from "./provider/Services/ProviderRegistry.ts";
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
+import {
+  materializeCodexShadowHome,
+  resolveCodexHomeLayout,
+} from "./provider/Drivers/CodexHomeLayout.ts";
+import { buildCodexInitializeParams } from "./provider/Layers/CodexProvider.ts";
+import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
@@ -101,6 +120,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isCodexThreadResumeError = Schema.is(CodexThreadResumeError);
 const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -128,6 +148,9 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
+const DEFAULT_CODEX_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER);
+const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
@@ -137,6 +160,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
+  [WS_METHODS.codexResumeThread, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
@@ -184,6 +208,97 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
 ]);
+
+function codexThreadTitle(input: {
+  readonly name?: string | null;
+  readonly preview: string;
+  readonly cwd: string;
+}): string {
+  const explicit = input.name?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const preview = input.preview.trim();
+  if (preview) {
+    return preview.slice(0, 80);
+  }
+  return pathBasename(input.cwd);
+}
+
+function pathBasename(value: string): string {
+  const trimmed = value.replace(/[\\/]+$/, "");
+  const basename = trimmed.split(/[\\/]/).pop()?.trim();
+  return basename || value;
+}
+
+function codexThreadTimestamp(value: number | null | undefined, fallback: string): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Option.match(DateTime.make(value * 1000), {
+    onNone: () => fallback,
+    onSome: DateTime.formatIso,
+  });
+}
+
+function codexUserInputText(input: EffectCodexSchema.V2ThreadReadResponse__UserInput): string {
+  switch (input.type) {
+    case "text":
+      return input.text;
+    case "mention":
+      return `@${input.name}`;
+    case "skill":
+      return `$${input.name}`;
+    case "image":
+    case "localImage":
+      return "";
+  }
+}
+
+function codexThreadMessages(input: {
+  readonly thread: EffectCodexSchema.V2ThreadReadResponse__Thread;
+  readonly importedAt: string;
+}) {
+  const messages = [];
+  for (const turn of input.thread.turns) {
+    const timestamp = codexThreadTimestamp(turn.startedAt, input.importedAt);
+    for (const item of turn.items) {
+      if (item.type === "userMessage") {
+        const text = item.content.map(codexUserInputText).join("\n").trim();
+        if (!text) {
+          continue;
+        }
+        messages.push({
+          id: MessageId.make(`codex:${input.thread.id}:${turn.id}:${item.id}`),
+          role: "user" as const,
+          text,
+          turnId: null,
+          streaming: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+        continue;
+      }
+
+      if (item.type === "agentMessage") {
+        const text = item.text.trim();
+        if (!text) {
+          continue;
+        }
+        messages.push({
+          id: MessageId.make(`codex:${input.thread.id}:${turn.id}:${item.id}`),
+          role: "assistant" as const,
+          text,
+          turnId: TurnId.make(turn.id),
+          streaming: false,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+        });
+      }
+    }
+  }
+  return messages;
+}
 
 function toAuthAccessStreamEvent(
   change: PairingGrantStore.BootstrapCredentialChange | SessionStore.SessionCredentialChange,
@@ -241,6 +356,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
       const providerRegistry = yield* ProviderRegistry;
+      const providerSessionDirectory = yield* ProviderSessionDirectory;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const config = yield* ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents;
@@ -724,6 +840,212 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           );
       };
 
+      const readCodexThread = (input: {
+        readonly providerThreadId: string;
+        readonly binaryPath: string;
+        readonly homePath?: string;
+        readonly environment: NodeJS.ProcessEnv;
+      }) =>
+        Effect.scoped(
+          Effect.gen(function* () {
+            const clientContext = yield* Layer.build(
+              CodexClient.layerCommand({
+                command: input.binaryPath,
+                args: ["app-server"],
+                cwd: config.cwd,
+                env: {
+                  ...input.environment,
+                  ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+                },
+              }),
+            );
+            const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+              Effect.provide(clientContext),
+            );
+            yield* client.request("initialize", buildCodexInitializeParams());
+            yield* client.notify("initialized", undefined);
+            return yield* client.request("thread/read", {
+              threadId: input.providerThreadId,
+              includeTurns: true,
+            });
+          }),
+        );
+
+      const resumeCodexThread = (input: { readonly threadId: string }) =>
+        Effect.gen(function* () {
+          const providerThreadId = input.threadId.trim();
+          if (!providerThreadId) {
+            return yield* new CodexThreadResumeError({
+              message: "Codex thread id is required.",
+            });
+          }
+
+          const providers = yield* providerRegistry.getProviders;
+          const codexProvider =
+            providers.find(
+              (provider) =>
+                provider.driver === CODEX_DRIVER &&
+                provider.instanceId === DEFAULT_CODEX_INSTANCE_ID &&
+                provider.enabled &&
+                provider.availability !== "unavailable",
+            ) ??
+            providers.find(
+              (provider) =>
+                provider.driver === CODEX_DRIVER &&
+                provider.enabled &&
+                provider.availability !== "unavailable",
+            );
+          if (!codexProvider) {
+            return yield* new CodexThreadResumeError({
+              message: "No enabled Codex provider instance is available.",
+            });
+          }
+
+          const settings = yield* serverSettings.getSettings;
+          const instanceEnvelope = settings.providerInstances[codexProvider.instanceId];
+          const usesLegacyDefault =
+            codexProvider.instanceId === DEFAULT_CODEX_INSTANCE_ID &&
+            instanceEnvelope === undefined;
+          const decodedConfig = yield* decodeCodexSettings(
+            usesLegacyDefault ? settings.providers.codex : (instanceEnvelope?.config ?? {}),
+          );
+          const codexConfig = {
+            ...decodedConfig,
+            enabled: instanceEnvelope?.enabled ?? decodedConfig.enabled,
+          };
+          const providerEnvironment = usesLegacyDefault ? undefined : instanceEnvelope?.environment;
+          const processEnv = mergeProviderInstanceEnvironment(providerEnvironment);
+          const homeLayout = yield* resolveCodexHomeLayout(codexConfig);
+          yield* materializeCodexShadowHome(homeLayout);
+
+          const readResponse = yield* readCodexThread({
+            providerThreadId,
+            binaryPath: codexConfig.binaryPath,
+            ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
+            environment: processEnv,
+          });
+          const providerThread = readResponse.thread;
+          const threadId = ThreadId.make(providerThread.id);
+          const importedAt = yield* nowIso;
+          const modelSelection = {
+            instanceId: codexProvider.instanceId,
+            model: codexProvider.models[0]?.slug ?? DEFAULT_MODEL,
+          };
+
+          const readModel = yield* projectionSnapshotQuery.getCommandReadModel();
+          const existingThread = readModel.threads.find(
+            (thread) => thread.id === threadId && thread.deletedAt === null,
+          );
+
+          const projectId = existingThread
+            ? existingThread.projectId
+            : yield* projectionSnapshotQuery
+                .getActiveProjectByWorkspaceRoot(providerThread.cwd)
+                .pipe(
+                  Effect.flatMap(
+                    Option.match({
+                      onSome: (project) => Effect.succeed(project.id),
+                      onNone: () =>
+                        Effect.gen(function* () {
+                          const nextProjectId = ProjectId.make(yield* randomUUID);
+                          yield* dispatchNormalizedCommand({
+                            type: "project.create",
+                            commandId: yield* serverCommandId("codex-resume-project-create"),
+                            projectId: nextProjectId,
+                            title: pathBasename(providerThread.cwd),
+                            workspaceRoot: providerThread.cwd,
+                            defaultModelSelection: modelSelection,
+                            createdAt: importedAt,
+                          });
+                          return nextProjectId;
+                        }),
+                    }),
+                  ),
+                );
+
+          if (!existingThread) {
+            yield* dispatchNormalizedCommand({
+              type: "thread.create",
+              commandId: yield* serverCommandId("codex-resume-thread-create"),
+              threadId,
+              projectId,
+              title: codexThreadTitle(providerThread),
+              modelSelection,
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+              branch: null,
+              worktreePath: null,
+              createdAt: codexThreadTimestamp(providerThread.createdAt, importedAt),
+            });
+          }
+
+          const importedMessages = codexThreadMessages({
+            thread: providerThread,
+            importedAt,
+          });
+          const existingMessageIds = new Set(existingThread?.messages.map((message) => message.id));
+          const messagesToImport = importedMessages.filter(
+            (message) => !existingMessageIds.has(message.id),
+          );
+          if (messagesToImport.length > 0) {
+            yield* dispatchNormalizedCommand({
+              type: "thread.messages.import",
+              commandId: yield* serverCommandId("codex-resume-messages-import"),
+              threadId,
+              messages: messagesToImport,
+              createdAt: importedAt,
+            });
+          }
+
+          yield* providerSessionDirectory.upsert({
+            threadId,
+            provider: CODEX_DRIVER,
+            providerInstanceId: codexProvider.instanceId,
+            status: "stopped",
+            resumeCursor: { threadId: providerThread.id },
+            runtimePayload: {
+              cwd: providerThread.cwd,
+              modelSelection,
+              source: "codex-thread-resume-deeplink",
+            },
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+          });
+
+          yield* dispatchNormalizedCommand({
+            type: "thread.session.set",
+            commandId: yield* serverCommandId("codex-resume-session-set"),
+            threadId,
+            session: {
+              threadId,
+              status: "stopped",
+              providerName: CODEX_DRIVER,
+              providerInstanceId: codexProvider.instanceId,
+              runtimeMode: DEFAULT_RUNTIME_MODE,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: importedAt,
+            },
+            createdAt: importedAt,
+          });
+
+          return {
+            threadId,
+            projectId,
+            providerThreadId: providerThread.id,
+            importedMessageCount: messagesToImport.length,
+          };
+        }).pipe(
+          Effect.mapError((cause) =>
+            isCodexThreadResumeError(cause)
+              ? cause
+              : new CodexThreadResumeError({
+                  message:
+                    cause instanceof Error ? cause.message : "Failed to resume Codex thread.",
+                  cause,
+                }),
+          ),
+        );
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -987,6 +1309,10 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             }),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.codexResumeThread]: (input) =>
+          observeRpcEffect(WS_METHODS.codexResumeThread, resumeCodexThread(input), {
+            "rpc.aggregate": "codex",
+          }),
         [WS_METHODS.serverGetConfig]: (_input) =>
           observeRpcEffect(WS_METHODS.serverGetConfig, loadServerConfig, {
             "rpc.aggregate": "server",
