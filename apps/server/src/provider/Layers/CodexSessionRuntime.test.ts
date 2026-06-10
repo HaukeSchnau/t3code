@@ -14,7 +14,6 @@ import {
 import {
   buildTurnStartParams,
   isRecoverableThreadResumeError,
-  messagesFromStoredThread,
   openCodexThread,
   selectInitialCodexRateLimitSnapshot,
 } from "./CodexSessionRuntime.ts";
@@ -196,71 +195,6 @@ describe("isRecoverableThreadResumeError", () => {
         }),
       ),
       false,
-    );
-  });
-});
-
-describe("messagesFromStoredThread", () => {
-  it("assigns monotonic timestamps in Codex turn and item order", () => {
-    const thread = {
-      id: "codex-thread-1",
-      name: null,
-      cwd: "/tmp/project",
-      preview: "",
-      createdAt: 1_800_000_000,
-      updatedAt: 1_800_000_010,
-      turns: [
-        {
-          id: "turn-1",
-          startedAt: 1_800_000_000,
-          completedAt: 1_800_000_005,
-          items: [
-            {
-              type: "userMessage",
-              id: "user-1",
-              content: [{ type: "text", text: "first prompt" }],
-            },
-            {
-              type: "agentMessage",
-              id: "assistant-1",
-              text: "first answer",
-            },
-          ],
-        },
-        {
-          id: "turn-2",
-          startedAt: 1_800_000_002,
-          completedAt: 1_800_000_004,
-          items: [
-            {
-              type: "userMessage",
-              id: "user-2",
-              content: [{ type: "text", text: "second prompt" }],
-            },
-            {
-              type: "agentMessage",
-              id: "assistant-2",
-              text: "second answer",
-            },
-          ],
-        },
-      ],
-    } as unknown as Parameters<typeof messagesFromStoredThread>[0];
-
-    const messages = messagesFromStoredThread(thread);
-
-    assert.deepStrictEqual(
-      messages.map((message) => message.text),
-      ["first prompt", "first answer", "second prompt", "second answer"],
-    );
-    assert.deepStrictEqual(
-      messages.map((message) => message.createdAt),
-      [
-        "2027-01-15T08:00:00.000Z",
-        "2027-01-15T08:00:05.000Z",
-        "2027-01-15T08:00:05.001Z",
-        "2027-01-15T08:00:05.002Z",
-      ],
     );
   });
 });

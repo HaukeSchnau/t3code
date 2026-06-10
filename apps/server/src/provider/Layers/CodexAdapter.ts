@@ -56,10 +56,7 @@ import { ServerConfig } from "../../config.ts";
 import {
   CodexResumeCursorSchema,
   CodexSessionRuntimeThreadIdMissingError,
-  listCodexStoredThreadShells,
-  listCodexStoredThreads,
   makeCodexSessionRuntime,
-  readCodexStoredThread,
   type CodexSessionRuntimeError,
   type CodexSessionRuntimeOptions,
   type CodexSessionRuntimeShape,
@@ -1661,69 +1658,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       { concurrency: 1 },
     );
 
-  const listStoredThreads: NonNullable<CodexAdapterShape["listStoredThreads"]> = () =>
-    Effect.scoped(
-      listCodexStoredThreads({
-        binaryPath: codexConfig.binaryPath,
-        cwd: serverConfig.cwd,
-        ...(options?.environment ? { environment: options.environment } : {}),
-        ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "thread/list",
-            detail: cause.message,
-            cause,
-          }),
-      ),
-    );
-
-  const listStoredThreadShells: NonNullable<CodexAdapterShape["listStoredThreadShells"]> = () =>
-    Effect.scoped(
-      listCodexStoredThreadShells({
-        binaryPath: codexConfig.binaryPath,
-        cwd: serverConfig.cwd,
-        ...(options?.environment ? { environment: options.environment } : {}),
-        ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
-      }).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "thread/list",
-            detail: cause.message,
-            cause,
-          }),
-      ),
-    );
-
-  const getStoredThread: NonNullable<CodexAdapterShape["getStoredThread"]> = (providerThreadId) =>
-    Effect.scoped(
-      readCodexStoredThread(
-        {
-          binaryPath: codexConfig.binaryPath,
-          cwd: serverConfig.cwd,
-          ...(options?.environment ? { environment: options.environment } : {}),
-          ...(codexConfig.homePath ? { homePath: codexConfig.homePath } : {}),
-        },
-        providerThreadId,
-      ).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner)),
-    ).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ProviderAdapterRequestError({
-            provider: PROVIDER,
-            method: "thread/read",
-            detail: cause.message,
-            cause,
-          }),
-      ),
-    );
-
   const hasSession: CodexAdapterShape["hasSession"] = (threadId) =>
     Effect.succeed(Boolean(sessions.get(threadId) && !sessions.get(threadId)?.stopped));
 
@@ -1755,9 +1689,6 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     respondToUserInput,
     stopSession,
     listSessions,
-    listStoredThreads,
-    listStoredThreadShells,
-    getStoredThread,
     hasSession,
     stopAll,
     get streamEvents() {
