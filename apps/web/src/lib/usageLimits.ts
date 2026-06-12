@@ -352,7 +352,9 @@ function deriveWindowDisplay(
   return {
     ...window,
     durationLabel: formatWindowDurationLabel(window.windowDurationMins),
-    resetRelativeLabel: window.resetsAt ? formatRelativeTimeUntilLabel(window.resetsAt) : null,
+    resetRelativeLabel: window.resetsAt
+      ? formatRelativeTimeUntilLabel(window.resetsAt, nowMs)
+      : null,
     resetAbsoluteLabel: formatAbsoluteResetLabel(window.resetsAt),
     elapsedPercent,
     projectedPercentAtReset,

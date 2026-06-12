@@ -144,6 +144,31 @@ describe("usageLimits", () => {
     vi.useRealTimers();
   });
 
+  it("derives reset labels from the supplied snapshot clock", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:00:00.000Z"));
+
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        primary: {
+          usedPercent: 10,
+          resetsAt: "2026-03-23T13:00:00.000Z",
+          windowDurationMins: 300,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date("2026-03-23T12:30:00.000Z").getTime(),
+    );
+
+    expect(displayed?.primary?.resetRelativeLabel).toBe("30m left");
+
+    vi.useRealTimers();
+  });
+
   it("keeps daytime 5h projections equivalent to wall-clock elapsed time", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
       makeActivity("activity-1", "account.rate-limits.updated", {

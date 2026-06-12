@@ -415,6 +415,10 @@ export function projectEvent(
               entry.id === message.id
                 ? {
                     ...entry,
+                    createdAt:
+                      message.streaming || message.text.length === 0
+                        ? entry.createdAt
+                        : message.createdAt,
                     text: message.streaming
                       ? `${entry.text}${message.text}`
                       : message.text.length > 0
