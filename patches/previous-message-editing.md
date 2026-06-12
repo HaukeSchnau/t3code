@@ -15,3 +15,5 @@ The web client lets a user edit an earlier user message by rendering the normal 
 
 - The server-side rollback primitive lives in the existing `thread.checkpoint.revert` command path and Codex App Server `thread/rollback` adapter call. This patch should not need custom server behavior unless the upstream rollback protocol changes.
 - Keep the inline editor on `ChatComposer` rather than adding a second composer implementation. The feature depends on having one composer surface with isolated draft targets.
+- The fork-owned implementation lives in `apps/web/src/components/chat/usePreviousMessageEditing.tsx`, `InlineMessageEditor.tsx`, and `previousMessageEditing.ts`. `ChatView` should keep only the hook call and timeline controller wiring so upstream sync conflicts stay small.
+- `MessagesTimeline` exposes this feature through the optional `userMessageEditing` controller prop. Prefer extending that controller over adding more top-level timeline props.
