@@ -110,7 +110,10 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  editingUserMessageId: MessageId | null;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onEditUserMessage: (messageId: MessageId) => void;
+  renderUserMessageEditor: (message: TimelineMessage) => ReactNode;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenSubagentInspector: ((providerThreadId: string) => void) | undefined;
@@ -128,6 +131,8 @@ const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const noopEditUserMessage = (_messageId: MessageId) => {};
+const renderEmptyUserMessageEditor = () => null;
 
 // ---------------------------------------------------------------------------
 // Props (public API)
@@ -146,6 +151,9 @@ interface MessagesTimelineProps {
   onOpenSubagentInspector?: (providerThreadId: string) => void;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  editingUserMessageId?: MessageId | null;
+  onEditUserMessage?: (messageId: MessageId) => void;
+  renderUserMessageEditor?: (message: TimelineMessage) => ReactNode;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
@@ -175,6 +183,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onOpenSubagentInspector,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  editingUserMessageId = null,
+  onEditUserMessage = noopEditUserMessage,
+  renderUserMessageEditor = renderEmptyUserMessageEditor,
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
@@ -311,7 +322,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      editingUserMessageId,
       onRevertUserMessage,
+      onEditUserMessage,
+      renderUserMessageEditor,
       onImageExpand,
       onOpenTurnDiff,
       onOpenSubagentInspector,
@@ -325,7 +339,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      editingUserMessageId,
       onRevertUserMessage,
+      onEditUserMessage,
+      renderUserMessageEditor,
       onImageExpand,
       onOpenTurnDiff,
       onOpenSubagentInspector,
@@ -444,6 +461,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const displayedUserMessage = deriveDisplayedUserMessageState(row.message.text);
   const terminalContexts = displayedUserMessage.contexts;
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const isEditing = ctx.editingUserMessageId === row.message.id;
+
+  if (isEditing) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <div className="w-full max-w-[80%]">{ctx.renderUserMessageEditor(row.message)}</div>
+      </div>
+    );
+  }
 
   return (
     <div className="group flex flex-col items-end gap-1">
@@ -499,6 +525,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
+            {canRevertAgentWork && <EditUserMessageButton messageId={row.message.id} />}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />
@@ -507,6 +534,35 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
         </div>
       </div>
     </div>
+  );
+}
+
+function EditUserMessageButton({ messageId }: { messageId: MessageId }) {
+  const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            disabled={
+              activity.isRevertingCheckpoint ||
+              activity.isWorking ||
+              ctx.editingUserMessageId !== null
+            }
+            onClick={() => ctx.onEditUserMessage(messageId)}
+            aria-label="Edit message"
+          />
+        }
+      >
+        <SquarePenIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Edit message</TooltipPopup>
+    </Tooltip>
   );
 }
 

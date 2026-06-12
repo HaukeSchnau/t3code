@@ -544,6 +544,11 @@ export interface ChatComposerProps {
   scheduleComposerFocus: () => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
+  variant?: "default" | "inline";
+  inlineEdit?: {
+    onCancel: () => void;
+    isSubmitting: boolean;
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -619,7 +624,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     scheduleComposerFocus,
     setThreadError,
     onExpandImage,
+    variant = "default",
+    inlineEdit,
   } = props;
+  const isInlineComposer = variant === "inline";
 
   // ------------------------------------------------------------------
   // Store subscriptions (prompt / images / terminal contexts)
@@ -629,6 +637,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerImages = composerDraft.images;
   const composerTerminalContexts = composerDraft.terminalContexts;
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
+  const effectiveRuntimeMode = composerDraft.runtimeMode ?? runtimeMode;
+  const effectiveInteractionMode = composerDraft.interactionMode ?? interactionMode;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
@@ -875,7 +885,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const isMobileViewport = useMediaQuery("max-sm");
-  const isComposerCollapsedMobile = isMobileViewport && !isComposerFocused;
+  const isComposerCollapsedMobile = !isInlineComposer && isMobileViewport && !isComposerFocused;
 
   // ------------------------------------------------------------------
   // Refs
@@ -1021,6 +1031,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const isComposerApprovalState = activePendingApproval !== null;
   const activePendingUserInput = pendingUserInputs[0] ?? null;
   const hasComposerHeader =
+    inlineEdit !== undefined ||
     isComposerApprovalState ||
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
@@ -2032,12 +2043,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     <form
       ref={composerFormRef}
       onSubmit={submitComposer}
-      className="mx-auto w-full min-w-0 max-w-208"
+      className={cn("w-full min-w-0", isInlineComposer ? "max-w-none" : "mx-auto max-w-208")}
       data-chat-composer-form="true"
+      data-chat-composer-variant={variant}
     >
       <div
         className={cn(
           "group rounded-[22px] p-px transition-colors duration-200",
+          isInlineComposer && "rounded-xl",
           composerProviderState.composerFrameClassName,
         )}
         onDragEnter={onComposerDragEnter}
@@ -2050,6 +2063,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
           className={cn(
             "rounded-[20px] border bg-card transition-colors duration-200 has-focus-visible:border-ring/45",
+            isInlineComposer && "rounded-xl",
             isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border",
             environmentUnavailable ? "opacity-75" : null,
             composerProviderState.composerSurfaceClassName,
@@ -2073,6 +2087,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             scheduleComposerCollapseCheck();
           }}
         >
+          {inlineEdit !== undefined ? (
+            <div className="rounded-t-xl border-b border-border/65 bg-muted/20 px-3 py-2 text-xs sm:px-4">
+              <span className="min-w-0 text-muted-foreground">
+                Editing this message will discard later conversation history.
+              </span>
+            </div>
+          ) : null}
+
           {!isComposerCollapsedMobile &&
             (activePendingApproval ? (
               <div className="rounded-t-[19px] border-b border-border/65 bg-muted/20">
@@ -2432,10 +2454,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
                     activePlan={showPlanSidebarToggle}
-                    interactionMode={interactionMode}
+                    interactionMode={effectiveInteractionMode}
                     planSidebarLabel={planSidebarLabel}
                     planSidebarOpen={planSidebarOpen}
-                    runtimeMode={runtimeMode}
+                    runtimeMode={effectiveRuntimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
@@ -2452,8 +2474,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     ) : null}
                     <ComposerFooterModeControls
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
-                      interactionMode={interactionMode}
-                      runtimeMode={runtimeMode}
+                      interactionMode={effectiveInteractionMode}
+                      runtimeMode={effectiveRuntimeMode}
                       showPlanToggle={showPlanSidebarToggle}
                       planSidebarLabel={planSidebarLabel}
                       planSidebarOpen={planSidebarOpen}
@@ -2473,6 +2495,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                {inlineEdit !== undefined ? (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={inlineEdit.isSubmitting}
+                    onClick={inlineEdit.onCancel}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   selectedProvider={selectedProvider}
