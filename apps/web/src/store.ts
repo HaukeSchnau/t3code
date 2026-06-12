@@ -25,8 +25,10 @@ import { resolveModelSlugForProvider } from "@t3tools/shared/model";
 import { create } from "zustand";
 import {
   type ChatMessage,
+  type ChatAttachment,
   type Project,
   type ProposedPlan,
+  type QueuedMessage,
   type SidebarThreadSummary,
   type Thread,
   type ThreadSession,
@@ -81,6 +83,8 @@ export interface EnvironmentState {
   activityByThreadId: Record<ThreadId, Record<string, OrchestrationThreadActivity>>;
   proposedPlanIdsByThreadId: Record<ThreadId, string[]>;
   proposedPlanByThreadId: Record<ThreadId, Record<string, ProposedPlan>>;
+  queuedMessageIdsByThreadId?: Record<ThreadId, MessageId[]>;
+  queuedMessageByThreadId?: Record<ThreadId, Record<MessageId, QueuedMessage>>;
   turnDiffIdsByThreadId: Record<ThreadId, TurnId[]>;
   turnDiffSummaryByThreadId: Record<ThreadId, Record<TurnId, TurnDiffSummary>>;
 
@@ -115,6 +119,8 @@ const initialEnvironmentState: EnvironmentState = {
   activityByThreadId: {},
   proposedPlanIdsByThreadId: {},
   proposedPlanByThreadId: {},
+  queuedMessageIdsByThreadId: {},
+  queuedMessageByThreadId: {},
   turnDiffIdsByThreadId: {},
   turnDiffSummaryByThreadId: {},
   sidebarThreadSummaryById: {},
@@ -166,8 +172,11 @@ function mapSession(session: OrchestrationSession): ThreadSession {
   };
 }
 
-function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage): ChatMessage {
-  const attachments = message.attachments?.map((attachment) => ({
+function mapChatAttachment(
+  environmentId: EnvironmentId,
+  attachment: NonNullable<OrchestrationMessage["attachments"]>[number],
+): ChatAttachment {
+  return {
     type: "image" as const,
     id: attachment.id,
     name: attachment.name,
@@ -177,7 +186,13 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
       environmentId,
       pathname: attachmentPreviewRoutePath(attachment.id),
     }),
-  }));
+  };
+}
+
+function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage): ChatMessage {
+  const attachments = message.attachments?.map((attachment) =>
+    mapChatAttachment(environmentId, attachment),
+  );
 
   return {
     id: message.id,
@@ -188,6 +203,31 @@ function mapMessage(environmentId: EnvironmentId, message: OrchestrationMessage)
     streaming: message.streaming,
     ...(message.streaming ? {} : { completedAt: message.updatedAt }),
     ...(attachments && attachments.length > 0 ? { attachments } : {}),
+  };
+}
+
+function mapQueuedMessage(
+  environmentId: EnvironmentId,
+  message: NonNullable<OrchestrationThread["queuedMessages"]>[number],
+): QueuedMessage {
+  return {
+    messageId: message.messageId,
+    threadId: message.threadId,
+    text: message.text,
+    attachments: message.attachments.map((attachment) =>
+      mapChatAttachment(environmentId, attachment),
+    ),
+    ...(message.modelSelection !== undefined
+      ? { modelSelection: normalizeModelSelection(message.modelSelection) }
+      : {}),
+    ...(message.titleSeed !== undefined ? { titleSeed: message.titleSeed } : {}),
+    runtimeMode: message.runtimeMode,
+    interactionMode: message.interactionMode,
+    ...(message.sourceProposedPlan !== undefined
+      ? { sourceProposedPlan: message.sourceProposedPlan }
+      : {}),
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
   };
 }
 
@@ -249,6 +289,9 @@ function mapThread(thread: OrchestrationThread, environmentId: EnvironmentId): T
     session: thread.session ? mapSession(thread.session) : null,
     messages: thread.messages.map((message) => mapMessage(environmentId, message)),
     proposedPlans: thread.proposedPlans.map(mapProposedPlan),
+    queuedMessages: (thread.queuedMessages ?? []).map((message) =>
+      mapQueuedMessage(environmentId, message),
+    ),
     error: sanitizeThreadErrorMessage(thread.session?.lastError),
     createdAt: thread.createdAt,
     archivedAt: thread.archivedAt,
@@ -485,6 +528,19 @@ function buildProposedPlanSlice(thread: Thread): {
   };
 }
 
+function buildQueuedMessageSlice(thread: Thread): {
+  ids: MessageId[];
+  byId: Record<MessageId, QueuedMessage>;
+} {
+  const queuedMessages = thread.queuedMessages ?? [];
+  return {
+    ids: queuedMessages.map((message) => message.messageId),
+    byId: Object.fromEntries(
+      queuedMessages.map((message) => [message.messageId, message] as const),
+    ) as Record<MessageId, QueuedMessage>,
+  };
+}
+
 function buildTurnDiffSlice(thread: Thread): {
   ids: TurnId[];
   byId: Record<TurnId, TurnDiffSummary>;
@@ -668,6 +724,21 @@ function writeThreadState(
     };
   }
 
+  if (previousThread?.queuedMessages !== nextThread.queuedMessages) {
+    const nextQueuedMessageSlice = buildQueuedMessageSlice(nextThread);
+    nextState = {
+      ...nextState,
+      queuedMessageIdsByThreadId: {
+        ...nextState.queuedMessageIdsByThreadId,
+        [nextThread.id]: nextQueuedMessageSlice.ids,
+      },
+      queuedMessageByThreadId: {
+        ...nextState.queuedMessageByThreadId,
+        [nextThread.id]: nextQueuedMessageSlice.byId,
+      },
+    };
+  }
+
   if (previousThread?.turnDiffSummaries !== nextThread.turnDiffSummaries) {
     const nextTurnDiffSlice = buildTurnDiffSlice(nextThread);
     nextState = {
@@ -808,6 +879,10 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
   const { [threadId]: _removedPlanIds, ...proposedPlanIdsByThreadId } =
     state.proposedPlanIdsByThreadId;
   const { [threadId]: _removedPlans, ...proposedPlanByThreadId } = state.proposedPlanByThreadId;
+  const { [threadId]: _removedQueuedMessageIds, ...queuedMessageIdsByThreadId } =
+    state.queuedMessageIdsByThreadId ?? {};
+  const { [threadId]: _removedQueuedMessages, ...queuedMessageByThreadId } =
+    state.queuedMessageByThreadId ?? {};
   const { [threadId]: _removedTurnDiffIds, ...turnDiffIdsByThreadId } = state.turnDiffIdsByThreadId;
   const { [threadId]: _removedTurnDiffs, ...turnDiffSummaryByThreadId } =
     state.turnDiffSummaryByThreadId;
@@ -827,6 +902,8 @@ function removeThreadState(state: EnvironmentState, threadId: ThreadId): Environ
     activityByThreadId,
     proposedPlanIdsByThreadId,
     proposedPlanByThreadId,
+    queuedMessageIdsByThreadId,
+    queuedMessageByThreadId,
     turnDiffIdsByThreadId,
     turnDiffSummaryByThreadId,
     sidebarThreadSummaryById,
@@ -1129,6 +1206,14 @@ function syncEnvironmentShellSnapshot(
       nextThreadIds,
     ),
     proposedPlanByThreadId: retainThreadScopedRecord(state.proposedPlanByThreadId, nextThreadIds),
+    queuedMessageIdsByThreadId: retainThreadScopedRecord(
+      state.queuedMessageIdsByThreadId ?? {},
+      nextThreadIds,
+    ),
+    queuedMessageByThreadId: retainThreadScopedRecord(
+      state.queuedMessageByThreadId ?? {},
+      nextThreadIds,
+    ),
     turnDiffIdsByThreadId: retainThreadScopedRecord(state.turnDiffIdsByThreadId, nextThreadIds),
     turnDiffSummaryByThreadId: retainThreadScopedRecord(
       state.turnDiffSummaryByThreadId,
@@ -1301,6 +1386,7 @@ function applyEnvironmentOrchestrationEvent(
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          queuedMessages: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -1364,6 +1450,38 @@ function applyEnvironmentOrchestrationEvent(
         runtimeMode: event.payload.runtimeMode,
         interactionMode: event.payload.interactionMode,
         pendingSourceProposedPlan: event.payload.sourceProposedPlan,
+        updatedAt: event.occurredAt,
+      }));
+
+    case "thread.message-queued":
+      return updateThreadState(state, event.payload.threadId, (thread) => {
+        const queuedMessage = mapQueuedMessage(thread.environmentId, event.payload.queuedMessage);
+        const existingQueuedMessages = thread.queuedMessages ?? [];
+        const queuedMessages = existingQueuedMessages.some(
+          (entry) => entry.messageId === queuedMessage.messageId,
+        )
+          ? existingQueuedMessages.map((entry) =>
+              entry.messageId === queuedMessage.messageId ? queuedMessage : entry,
+            )
+          : [...existingQueuedMessages, queuedMessage];
+        return {
+          ...thread,
+          queuedMessages: queuedMessages.toSorted(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) ||
+              left.messageId.localeCompare(right.messageId),
+          ),
+          updatedAt: event.occurredAt,
+        };
+      });
+
+    case "thread.queued-message-deleted":
+    case "thread.queued-message-dispatched":
+      return updateThreadState(state, event.payload.threadId, (thread) => ({
+        ...thread,
+        queuedMessages: (thread.queuedMessages ?? []).filter(
+          (entry) => entry.messageId !== event.payload.messageId,
+        ),
         updatedAt: event.occurredAt,
       }));
 

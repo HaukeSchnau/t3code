@@ -6,6 +6,7 @@ import type {
   RepositoryIdentity,
   OrchestrationSessionStatus,
   OrchestrationThreadActivity,
+  OrchestrationQueuedMessage,
   ProjectScript as ContractProjectScript,
   ThreadId,
   ProjectId,
@@ -64,6 +65,20 @@ export interface ProposedPlan {
   updatedAt: string;
 }
 
+export interface QueuedMessage {
+  messageId: MessageId;
+  threadId: ThreadId;
+  text: string;
+  attachments: ChatAttachment[];
+  modelSelection?: OrchestrationQueuedMessage["modelSelection"];
+  titleSeed?: string;
+  runtimeMode: RuntimeMode;
+  interactionMode: ProviderInteractionMode;
+  sourceProposedPlan?: OrchestrationQueuedMessage["sourceProposedPlan"];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface TurnDiffFileChange {
   path: string;
   kind?: string | undefined;
@@ -105,6 +120,7 @@ export interface Thread {
   session: ThreadSession | null;
   messages: ChatMessage[];
   proposedPlans: ProposedPlan[];
+  queuedMessages?: QueuedMessage[];
   error: string | null;
   createdAt: string;
   archivedAt: string | null;

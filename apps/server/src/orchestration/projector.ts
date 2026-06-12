@@ -2,6 +2,7 @@ import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3to
 import {
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
+  OrchestrationQueuedMessage,
   OrchestrationSession,
   OrchestrationThread,
 } from "@t3tools/contracts";
@@ -19,8 +20,11 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadMessageQueuedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
+  ThreadQueuedMessageDeletedPayload,
+  ThreadQueuedMessageDispatchedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
@@ -288,6 +292,7 @@ export function projectEvent(
             archivedAt: null,
             deletedAt: null,
             messages: [],
+            queuedMessages: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -378,6 +383,93 @@ export function projectEvent(
             updatedAt: payload.updatedAt,
           }),
         })),
+      );
+
+    case "thread.message-queued":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadMessageQueuedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+        const queuedMessage: OrchestrationQueuedMessage = yield* decodeForEvent(
+          OrchestrationQueuedMessage,
+          payload.queuedMessage,
+          event.type,
+          "queuedMessage",
+        );
+        const existingQueuedMessages = thread.queuedMessages ?? [];
+        const queuedMessages = existingQueuedMessages.some(
+          (entry) => entry.messageId === queuedMessage.messageId,
+        )
+          ? existingQueuedMessages.map((entry) =>
+              entry.messageId === queuedMessage.messageId ? queuedMessage : entry,
+            )
+          : [...existingQueuedMessages, queuedMessage];
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            queuedMessages: queuedMessages.toSorted(
+              (left, right) =>
+                left.createdAt.localeCompare(right.createdAt) ||
+                left.messageId.localeCompare(right.messageId),
+            ),
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.queued-message-deleted":
+      return decodeForEvent(
+        ThreadQueuedMessageDeletedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages: (thread.queuedMessages ?? []).filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.queued-message-dispatched":
+      return decodeForEvent(
+        ThreadQueuedMessageDispatchedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              queuedMessages: (thread.queuedMessages ?? []).filter(
+                (entry) => entry.messageId !== payload.messageId,
+              ),
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
       );
 
     case "thread.message-sent":

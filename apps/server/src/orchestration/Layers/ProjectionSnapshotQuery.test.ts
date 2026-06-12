@@ -154,6 +154,37 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       `;
 
       yield* sql`
+        INSERT INTO projection_thread_queued_messages (
+          message_id,
+          thread_id,
+          text,
+          attachments_json,
+          model_selection_json,
+          title_seed,
+          runtime_mode,
+          interaction_mode,
+          source_proposed_plan_thread_id,
+          source_proposed_plan_id,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          'message-queued-1',
+          'thread-1',
+          'queued from projection',
+          '[]',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'Queued title',
+          'full-access',
+          'default',
+          'thread-1',
+          'plan-1',
+          '2026-02-24T00:00:05.600Z',
+          '2026-02-24T00:00:05.600Z'
+        )
+      `;
+
+      yield* sql`
         INSERT INTO projection_thread_activities (
           activity_id,
           thread_id,
@@ -321,6 +352,27 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               updatedAt: "2026-02-24T00:00:05.000Z",
             },
           ],
+          queuedMessages: [
+            {
+              messageId: asMessageId("message-queued-1"),
+              threadId: ThreadId.make("thread-1"),
+              text: "queued from projection",
+              attachments: [],
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5-codex",
+              },
+              titleSeed: "Queued title",
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              sourceProposedPlan: {
+                threadId: ThreadId.make("thread-1"),
+                planId: "plan-1",
+              },
+              createdAt: "2026-02-24T00:00:05.600Z",
+              updatedAt: "2026-02-24T00:00:05.600Z",
+            },
+          ],
           proposedPlans: [
             {
               id: "plan-1",
@@ -440,6 +492,29 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       if (threadDetail._tag === "Some") {
         assert.deepEqual(threadDetail.value, snapshot.threads[0]);
       }
+
+      const commandReadModel = yield* snapshotQuery.getCommandReadModel();
+      assert.deepEqual(commandReadModel.threads[0]?.queuedMessages, [
+        {
+          messageId: asMessageId("message-queued-1"),
+          threadId: ThreadId.make("thread-1"),
+          text: "queued from projection",
+          attachments: [],
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          titleSeed: "Queued title",
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          sourceProposedPlan: {
+            threadId: ThreadId.make("thread-1"),
+            planId: "plan-1",
+          },
+          createdAt: "2026-02-24T00:00:05.600Z",
+          updatedAt: "2026-02-24T00:00:05.600Z",
+        },
+      ]);
     }),
   );
 
@@ -542,6 +617,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threads}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}, 4, '2026-04-06T00:00:07.000Z'),
+          (${ORCHESTRATION_PROJECTOR_NAMES.threadQueuedMessages}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadActivities}, 4, '2026-04-06T00:00:07.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}, 4, '2026-04-06T00:00:07.000Z'),
@@ -1286,6 +1362,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.projects}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threads}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadMessages}, 3, '2026-04-03T00:00:40.000Z'),
+          (${ORCHESTRATION_PROJECTOR_NAMES.threadQueuedMessages}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadActivities}, 3, '2026-04-03T00:00:40.000Z'),
           (${ORCHESTRATION_PROJECTOR_NAMES.threadSessions}, 3, '2026-04-03T00:00:40.000Z'),

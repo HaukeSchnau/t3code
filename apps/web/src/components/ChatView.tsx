@@ -98,6 +98,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  type QueuedMessage,
   type SessionPhase,
   type Thread,
   type TurnDiffSummary,
@@ -164,6 +165,7 @@ import { resolveEffectiveEnvMode, resolveEnvironmentOptionLabel } from "./Branch
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { usePreviousMessageEditing } from "./chat/usePreviousMessageEditing";
 import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
@@ -3068,6 +3070,7 @@ export default function ChatView(props: ChatViewProps) {
     }
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
+    const shouldQueueMessage = phase === "running";
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const baseBranchForWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
@@ -3084,7 +3087,9 @@ export default function ChatView(props: ChatViewProps) {
     }
 
     sendInFlightRef.current = true;
-    beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    if (!shouldQueueMessage) {
+      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+    }
 
     const composerImagesSnapshot = [...composerImages];
     const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
@@ -3118,25 +3123,27 @@ export default function ChatView(props: ChatViewProps) {
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
     }));
-    // Scroll to the current end *before* adding the optimistic message.
-    // This sets LegendList's internal isAtEnd=true so maintainScrollAtEnd
-    // automatically pins to the new item when the data changes.
-    isAtEndRef.current = true;
-    showScrollDebouncer.current.cancel();
-    setShowScrollToBottom(false);
-    await legendListRef.current?.scrollToEnd?.({ animated: false });
+    if (!shouldQueueMessage) {
+      // Scroll to the current end *before* adding the optimistic message.
+      // This sets LegendList's internal isAtEnd=true so maintainScrollAtEnd
+      // automatically pins to the new item when the data changes.
+      isAtEndRef.current = true;
+      showScrollDebouncer.current.cancel();
+      setShowScrollToBottom(false);
+      await legendListRef.current?.scrollToEnd?.({ animated: false });
 
-    setOptimisticUserMessages((existing) => [
-      ...existing,
-      {
-        id: messageIdForSend,
-        role: "user",
-        text: outgoingMessageText,
-        ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-        createdAt: messageCreatedAt,
-        streaming: false,
-      },
-    ]);
+      setOptimisticUserMessages((existing) => [
+        ...existing,
+        {
+          id: messageIdForSend,
+          role: "user",
+          text: outgoingMessageText,
+          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+          createdAt: messageCreatedAt,
+          streaming: false,
+        },
+      ]);
+    }
 
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -3156,7 +3163,7 @@ export default function ChatView(props: ChatViewProps) {
     clearComposerDraftContent(composerDraftTarget);
     readComposerHandle(composerRef)?.resetCursorState();
 
-    let turnStartSucceeded = false;
+    let sendOrQueueSucceeded = false;
     await (async () => {
       let firstComposerImageName: string | null = null;
       if (composerImagesSnapshot.length > 0) {
@@ -3183,7 +3190,7 @@ export default function ChatView(props: ChatViewProps) {
       );
 
       // Auto-title from first message
-      if (isFirstMessage && isServerThread) {
+      if (!shouldQueueMessage && isFirstMessage && isServerThread) {
         await api.orchestration.dispatchCommand({
           type: "thread.meta.update",
           commandId: newCommandId(),
@@ -3192,7 +3199,7 @@ export default function ChatView(props: ChatViewProps) {
         });
       }
 
-      if (isServerThread) {
+      if (!shouldQueueMessage && isServerThread) {
         await persistThreadSettingsForNextTurn({
           threadId: threadIdForSend,
           createdAt: messageCreatedAt,
@@ -3232,9 +3239,11 @@ export default function ChatView(props: ChatViewProps) {
                 : {}),
             }
           : undefined;
-      beginLocalDispatch({ preparingWorktree: false });
+      if (!shouldQueueMessage) {
+        beginLocalDispatch({ preparingWorktree: false });
+      }
       await api.orchestration.dispatchCommand({
-        type: "thread.turn.start",
+        type: shouldQueueMessage ? "thread.message.queue" : "thread.turn.start",
         commandId: newCommandId(),
         threadId: threadIdForSend,
         message: {
@@ -3247,13 +3256,13 @@ export default function ChatView(props: ChatViewProps) {
         titleSeed: title,
         runtimeMode,
         interactionMode,
-        ...(bootstrap ? { bootstrap } : {}),
+        ...(!shouldQueueMessage && bootstrap ? { bootstrap } : {}),
         createdAt: messageCreatedAt,
       });
-      turnStartSucceeded = true;
+      sendOrQueueSucceeded = true;
     })().catch(async (err: unknown) => {
       if (
-        !turnStartSucceeded &&
+        !sendOrQueueSucceeded &&
         promptRef.current.length === 0 &&
         composerImagesRef.current.length === 0 &&
         composerTerminalContextsRef.current.length === 0
@@ -3285,7 +3294,7 @@ export default function ChatView(props: ChatViewProps) {
       );
     });
     sendInFlightRef.current = false;
-    if (!turnStartSucceeded) {
+    if (!sendOrQueueSucceeded) {
       resetLocalDispatch();
     }
   };
@@ -3300,6 +3309,50 @@ export default function ChatView(props: ChatViewProps) {
       createdAt: new Date().toISOString(),
     });
   };
+
+  const onDispatchQueuedMessage = useCallback(
+    async (message: QueuedMessage) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api || !activeThread) return;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-message.dispatch",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId: message.messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to send queued message.",
+        );
+      }
+    },
+    [activeThread, environmentId, setThreadError],
+  );
+
+  const onDeleteQueuedMessage = useCallback(
+    async (message: QueuedMessage) => {
+      const api = readEnvironmentApi(environmentId);
+      if (!api || !activeThread) return;
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-message.delete",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          messageId: message.messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setThreadError(
+          activeThread.id,
+          err instanceof Error ? err.message : "Failed to remove queued message.",
+        );
+      }
+    },
+    [activeThread, environmentId, setThreadError],
+  );
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -4091,6 +4144,14 @@ export default function ChatView(props: ChatViewProps) {
           >
             <div className="relative isolate">
               <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+              {previousMessageEditing.isEditing ? null : (
+                <QueuedMessagesStrip
+                  queuedMessages={activeThread?.queuedMessages ?? []}
+                  isRunning={phase === "running"}
+                  onDispatch={onDispatchQueuedMessage}
+                  onDelete={onDeleteQueuedMessage}
+                />
+              )}
               <div className="relative z-10">
                 {previousMessageEditing.isEditing ? null : (
                   <ChatComposer

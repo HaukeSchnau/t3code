@@ -3,6 +3,7 @@ import type { EnvironmentState } from "./store";
 import type {
   ChatMessage,
   ProposedPlan,
+  QueuedMessage,
   Thread,
   ThreadSession,
   ThreadShell,
@@ -13,10 +14,12 @@ import type {
 const EMPTY_MESSAGES: ChatMessage[] = [];
 const EMPTY_ACTIVITIES: Thread["activities"] = [];
 const EMPTY_PROPOSED_PLANS: ProposedPlan[] = [];
+const EMPTY_QUEUED_MESSAGES: QueuedMessage[] = [];
 const EMPTY_TURN_DIFF_SUMMARIES: TurnDiffSummary[] = [];
 const EMPTY_MESSAGE_MAP: Record<MessageId, ChatMessage> = {};
 const EMPTY_ACTIVITY_MAP: Record<string, Thread["activities"][number]> = {};
 const EMPTY_PROPOSED_PLAN_MAP: Record<string, ProposedPlan> = {};
+const EMPTY_QUEUED_MESSAGE_MAP: Record<MessageId, QueuedMessage> = {};
 const EMPTY_TURN_DIFF_MAP: Record<TurnId, TurnDiffSummary> = {};
 
 const collectedByIdsCache = new WeakMap<readonly string[], WeakMap<object, readonly unknown[]>>();
@@ -28,6 +31,7 @@ const threadCache = new WeakMap<
     messages: Thread["messages"];
     activities: Thread["activities"];
     proposedPlans: Thread["proposedPlans"];
+    queuedMessages: QueuedMessage[];
     turnDiffSummaries: Thread["turnDiffSummaries"];
     thread: Thread;
   }
@@ -87,6 +91,14 @@ function selectThreadProposedPlans(
   );
 }
 
+function selectThreadQueuedMessages(state: EnvironmentState, threadId: ThreadId): QueuedMessage[] {
+  return collectByIds(
+    state.queuedMessageIdsByThreadId?.[threadId],
+    state.queuedMessageByThreadId?.[threadId] ?? EMPTY_QUEUED_MESSAGE_MAP,
+    EMPTY_QUEUED_MESSAGES,
+  );
+}
+
 function selectThreadTurnDiffSummaries(
   state: EnvironmentState,
   threadId: ThreadId,
@@ -112,6 +124,7 @@ export function getThreadFromEnvironmentState(
   const messages = selectThreadMessages(state, threadId);
   const activities = selectThreadActivities(state, threadId);
   const proposedPlans = selectThreadProposedPlans(state, threadId);
+  const queuedMessages = selectThreadQueuedMessages(state, threadId);
   const turnDiffSummaries = selectThreadTurnDiffSummaries(state, threadId);
   const cached = threadCache.get(shell);
 
@@ -122,6 +135,7 @@ export function getThreadFromEnvironmentState(
     cached.messages === messages &&
     cached.activities === activities &&
     cached.proposedPlans === proposedPlans &&
+    cached.queuedMessages === queuedMessages &&
     cached.turnDiffSummaries === turnDiffSummaries
   ) {
     return cached.thread;
@@ -135,6 +149,7 @@ export function getThreadFromEnvironmentState(
     messages,
     activities,
     proposedPlans,
+    queuedMessages,
     turnDiffSummaries,
   };
 
@@ -144,6 +159,7 @@ export function getThreadFromEnvironmentState(
     messages,
     activities,
     proposedPlans,
+    queuedMessages,
     turnDiffSummaries,
     thread,
   });

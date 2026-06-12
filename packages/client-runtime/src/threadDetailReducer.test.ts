@@ -37,6 +37,7 @@ const baseThread: OrchestrationThread = {
   deletedAt: null,
   messages: [],
   proposedPlans: [],
+  queuedMessages: [],
   activities: [],
   checkpoints: [],
   session: null,
@@ -521,6 +522,57 @@ describe("applyThreadDetailEvent", () => {
       if (result.kind === "updated") {
         expect(result.thread.activities).toHaveLength(1);
         expect(result.thread.activities[0]?.kind).toBe("file-edit");
+      }
+    });
+  });
+
+  describe("queued messages", () => {
+    it("adds queued messages and removes them after dispatch", () => {
+      const queued = applyThreadDetailEvent(baseThread, {
+        ...baseEventFields,
+        sequence: 20,
+        occurredAt: "2026-04-01T01:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-queued",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          queuedMessage: {
+            messageId: MessageId.make("msg-queued-1"),
+            threadId: ThreadId.make("thread-1"),
+            text: "Queued follow-up",
+            attachments: [],
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-04-01T01:00:00.000Z",
+            updatedAt: "2026-04-01T01:00:00.000Z",
+          },
+        },
+      });
+
+      expect(queued.kind).toBe("updated");
+      if (queued.kind !== "updated") {
+        return;
+      }
+      expect(queued.thread.queuedMessages).toHaveLength(1);
+
+      const dispatched = applyThreadDetailEvent(queued.thread, {
+        ...baseEventFields,
+        sequence: 21,
+        occurredAt: "2026-04-01T01:01:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.queued-message-dispatched",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-queued-1"),
+          dispatchedAt: "2026-04-01T01:01:00.000Z",
+        },
+      });
+
+      expect(dispatched.kind).toBe("updated");
+      if (dispatched.kind === "updated") {
+        expect(dispatched.thread.queuedMessages).toEqual([]);
       }
     });
   });

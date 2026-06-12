@@ -94,6 +94,7 @@ export function applyThreadDetailEvent(
           deletedAt: null,
           messages: [],
           proposedPlans: [],
+          queuedMessages: [],
           activities: [],
           checkpoints: [],
           session: null,
@@ -294,6 +295,45 @@ export function applyThreadDetailEvent(
         },
       };
     }
+
+    case "thread.message-queued": {
+      const queuedMessage = event.payload.queuedMessage;
+      const existingQueuedMessages = thread.queuedMessages ?? [];
+      const existingMessage = existingQueuedMessages.find(
+        (entry) => entry.messageId === queuedMessage.messageId,
+      );
+      const queuedMessages = existingMessage
+        ? existingQueuedMessages.map((entry) =>
+            entry.messageId === queuedMessage.messageId ? queuedMessage : entry,
+          )
+        : [...existingQueuedMessages, queuedMessage];
+
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: queuedMessages.toSorted(
+            (left, right) =>
+              left.createdAt.localeCompare(right.createdAt) ||
+              left.messageId.localeCompare(right.messageId),
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.queued-message-deleted":
+    case "thread.queued-message-dispatched":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages: (thread.queuedMessages ?? []).filter(
+            (entry) => entry.messageId !== event.payload.messageId,
+          ),
+          updatedAt: event.occurredAt,
+        },
+      };
 
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {

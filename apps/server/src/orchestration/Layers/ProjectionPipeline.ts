@@ -28,6 +28,7 @@ import {
   type ProjectionThreadProposedPlan,
   ProjectionThreadProposedPlanRepository,
 } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadQueuedMessageRepository } from "../../persistence/Services/ProjectionThreadQueuedMessages.ts";
 import { ProjectionThreadSessionRepository } from "../../persistence/Services/ProjectionThreadSessions.ts";
 import {
   type ProjectionTurn,
@@ -40,6 +41,7 @@ import { ProjectionStateRepositoryLive } from "../../persistence/Layers/Projecti
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
 import { ProjectionThreadMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadMessages.ts";
 import { ProjectionThreadProposedPlanRepositoryLive } from "../../persistence/Layers/ProjectionThreadProposedPlans.ts";
+import { ProjectionThreadQueuedMessageRepositoryLive } from "../../persistence/Layers/ProjectionThreadQueuedMessages.ts";
 import { ProjectionThreadSessionRepositoryLive } from "../../persistence/Layers/ProjectionThreadSessions.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProjectionThreadRepositoryLive } from "../../persistence/Layers/ProjectionThreads.ts";
@@ -59,6 +61,7 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   projects: "projection.projects",
   threads: "projection.threads",
   threadMessages: "projection.thread-messages",
+  threadQueuedMessages: "projection.thread-queued-messages",
   threadProposedPlans: "projection.thread-proposed-plans",
   threadActivities: "projection.thread-activities",
   threadSessions: "projection.thread-sessions",
@@ -475,6 +478,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionProjectRepository = yield* ProjectionProjectRepository;
     const projectionThreadRepository = yield* ProjectionThreadRepository;
     const projectionThreadMessageRepository = yield* ProjectionThreadMessageRepository;
+    const projectionThreadQueuedMessageRepository = yield* ProjectionThreadQueuedMessageRepository;
     const projectionThreadProposedPlanRepository = yield* ProjectionThreadProposedPlanRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
@@ -884,6 +888,48 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           );
           return;
         }
+
+        default:
+          return;
+      }
+    });
+
+    const applyThreadQueuedMessagesProjection: ProjectorDefinition["apply"] = Effect.fn(
+      "applyThreadQueuedMessagesProjection",
+    )(function* (event, _attachmentSideEffects) {
+      switch (event.type) {
+        case "thread.message-queued":
+          yield* projectionThreadQueuedMessageRepository.upsert({
+            messageId: event.payload.queuedMessage.messageId,
+            threadId: event.payload.threadId,
+            text: event.payload.queuedMessage.text,
+            attachments: yield* materializeAttachmentsForProjection({
+              attachments: event.payload.queuedMessage.attachments,
+            }),
+            modelSelection: event.payload.queuedMessage.modelSelection ?? null,
+            titleSeed: event.payload.queuedMessage.titleSeed ?? null,
+            runtimeMode: event.payload.queuedMessage.runtimeMode,
+            interactionMode: event.payload.queuedMessage.interactionMode,
+            sourceProposedPlanThreadId:
+              event.payload.queuedMessage.sourceProposedPlan?.threadId ?? null,
+            sourceProposedPlanId: event.payload.queuedMessage.sourceProposedPlan?.planId ?? null,
+            createdAt: event.payload.queuedMessage.createdAt,
+            updatedAt: event.payload.queuedMessage.updatedAt,
+          });
+          return;
+
+        case "thread.queued-message-deleted":
+        case "thread.queued-message-dispatched":
+          yield* projectionThreadQueuedMessageRepository.deleteByMessageId({
+            messageId: event.payload.messageId,
+          });
+          return;
+
+        case "thread.deleted":
+          yield* projectionThreadQueuedMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          return;
 
         default:
           return;
@@ -1473,6 +1519,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         apply: applyThreadMessagesProjection,
       },
       {
+        name: ORCHESTRATION_PROJECTOR_NAMES.threadQueuedMessages,
+        apply: applyThreadQueuedMessagesProjection,
+      },
+      {
         name: ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans,
         apply: applyThreadProposedPlansProjection,
       },
@@ -1597,6 +1647,7 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionProjectRepositoryLive),
   Layer.provideMerge(ProjectionThreadRepositoryLive),
   Layer.provideMerge(ProjectionThreadMessageRepositoryLive),
+  Layer.provideMerge(ProjectionThreadQueuedMessageRepositoryLive),
   Layer.provideMerge(ProjectionThreadProposedPlanRepositoryLive),
   Layer.provideMerge(ProjectionThreadActivityRepositoryLive),
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),

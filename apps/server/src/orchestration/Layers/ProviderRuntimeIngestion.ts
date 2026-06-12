@@ -1964,6 +1964,22 @@ const make = Effect.gen(function* () {
             updatedAt: now,
           });
         }
+
+        if (
+          shouldApplyThreadLifecycle &&
+          normalizeRuntimeTurnState(event.payload.state) === "completed"
+        ) {
+          const queuedMessage = detailedThread?.queuedMessages?.[0];
+          if (queuedMessage) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.queued-message.dispatch",
+              commandId: yield* providerCommandId(event, "queued-message-dispatch"),
+              threadId: thread.id,
+              messageId: queuedMessage.messageId,
+              createdAt: now,
+            });
+          }
+        }
       }
 
       if (event.type === "session.exited") {
