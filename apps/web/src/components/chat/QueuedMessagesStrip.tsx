@@ -26,7 +26,7 @@ export const QueuedMessagesStrip = memo(function QueuedMessagesStrip({
   return (
     <div
       className={cn(
-        "mb-2 flex max-h-36 flex-col gap-1.5 overflow-y-auto rounded-md border border-border/70 bg-background/95 p-2 shadow-sm",
+        "mx-auto mb-2 flex max-h-36 w-full max-w-208 flex-col gap-1.5 overflow-y-auto rounded-md border border-border/70 bg-background/95 p-2 shadow-sm",
         className,
       )}
     >
