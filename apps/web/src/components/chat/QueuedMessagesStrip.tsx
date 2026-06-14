@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { SendIcon, XIcon } from "lucide-react";
+import { CornerDownRightIcon, Trash2Icon } from "lucide-react";
 import type { QueuedMessage } from "~/types";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
@@ -25,12 +25,13 @@ export const QueuedMessagesStrip = memo(function QueuedMessagesStrip({
 
   return (
     <div
+      data-queued-messages-strip="true"
       className={cn(
-        "mx-auto mb-2 flex max-h-36 w-full max-w-208 flex-col gap-1.5 overflow-y-auto rounded-md border border-border/70 bg-background/95 p-2 shadow-sm",
+        "relative z-0 mx-auto -mb-3 flex max-h-48 w-full max-w-208 flex-col gap-2 overflow-y-auto rounded-[20px] border border-border/70 bg-card/95 p-3 pb-6 shadow-sm",
         className,
       )}
     >
-      <div className="flex items-center justify-between gap-3 px-1">
+      <div className="flex items-center justify-between gap-3 px-1.5">
         <span className="text-xs font-medium text-muted-foreground">
           Queue ({queuedMessages.length})
         </span>
@@ -38,34 +39,39 @@ export const QueuedMessagesStrip = memo(function QueuedMessagesStrip({
       {queuedMessages.map((message) => (
         <div
           key={message.messageId}
-          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md bg-muted/45 px-2 py-1.5"
+          className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl bg-muted/35 px-3 py-2.5"
         >
           <div className="min-w-0">
-            <div className="truncate text-sm text-foreground">{message.text || "Image"}</div>
+            <div className="truncate text-sm font-medium text-foreground">
+              {message.text || "Image"}
+            </div>
             {message.attachments.length > 0 ? (
               <div className="truncate text-xs text-muted-foreground">
                 {message.attachments.length} attachment{message.attachments.length === 1 ? "" : "s"}
               </div>
             ) : null}
           </div>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5">
             <Button
               type="button"
-              size="icon-sm"
+              size="xs"
               variant="ghost"
               aria-label={isRunning ? "Send queued message now" : "Send queued message"}
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => onDispatch(message)}
             >
-              <SendIcon className="size-3.5" />
+              <CornerDownRightIcon className="size-3.5" />
+              <span className="hidden sm:inline">Steer</span>
             </Button>
             <Button
               type="button"
-              size="icon-sm"
+              size="icon-xs"
               variant="ghost"
               aria-label="Remove queued message"
+              className="text-muted-foreground hover:text-foreground"
               onClick={() => onDelete(message)}
             >
-              <XIcon className="size-3.5" />
+              <Trash2Icon className="size-3.5" />
             </Button>
           </div>
         </div>
