@@ -125,12 +125,15 @@ const isWorkspacePathOutsideRootError = Schema.is(WorkspacePathOutsideRootError)
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
-function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
+export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   OrchestrationEvent,
   {
     type:
       | "thread.message-sent"
+      | "thread.message-queued"
       | "thread.proposed-plan-upserted"
+      | "thread.queued-message-deleted"
+      | "thread.queued-message-dispatched"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
       | "thread.reverted"
@@ -139,7 +142,10 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 > {
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.message-queued" ||
     event.type === "thread.proposed-plan-upserted" ||
+    event.type === "thread.queued-message-deleted" ||
+    event.type === "thread.queued-message-dispatched" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
     event.type === "thread.reverted" ||
