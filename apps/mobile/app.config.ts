@@ -54,6 +54,7 @@ function resolveAppVariant(value: string | undefined): AppVariant {
 }
 
 const variant = VARIANT_CONFIG[APP_VARIANT];
+const iosBundleIdentifier = resolveIosBundleIdentifier(variant.iosBundleIdentifier, APP_VARIANT);
 
 const config: ExpoConfig = {
   name: variant.appName,
@@ -76,7 +77,7 @@ const config: ExpoConfig = {
   ios: {
     icon: variant.iosIcon,
     supportsTablet: true,
-    bundleIdentifier: variant.iosBundleIdentifier,
+    bundleIdentifier: iosBundleIdentifier,
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
@@ -137,8 +138,8 @@ const config: ExpoConfig = {
     [
       "expo-widgets",
       {
-        bundleIdentifier: `${variant.iosBundleIdentifier}.widgets`,
-        groupIdentifier: `group.${variant.iosBundleIdentifier}`,
+        bundleIdentifier: `${iosBundleIdentifier}.widgets`,
+        groupIdentifier: `group.${iosBundleIdentifier}`,
         enablePushNotifications: true,
         widgets: [
           {
@@ -151,6 +152,7 @@ const config: ExpoConfig = {
       },
     ],
     "./plugins/withAndroidCleartextTraffic.cjs",
+    "./plugins/withIosSceneLifecycle.cjs",
   ],
   extra: {
     appVariant: APP_VARIANT,
@@ -174,3 +176,20 @@ const config: ExpoConfig = {
 };
 
 export default config;
+
+function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant: AppVariant) {
+  const baseBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_IDENTIFIER_BASE?.trim();
+
+  if (!baseBundleIdentifier) {
+    return defaultBundleIdentifier;
+  }
+
+  switch (appVariant) {
+    case "development":
+      return `${baseBundleIdentifier}.dev`;
+    case "preview":
+      return `${baseBundleIdentifier}.preview`;
+    case "production":
+      return baseBundleIdentifier;
+  }
+}
