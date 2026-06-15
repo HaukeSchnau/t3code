@@ -32,6 +32,15 @@ The build environment sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to nixpkgs'
 Rust-side build tooling initializes an HTTP client during `vp build`; without an explicit CA bundle, sandboxed
 Nix builds can inherit `/no-cert-file.crt` and abort before the web bundle is produced.
 
+## Hash refresh workflow
+
+When `pnpm-lock.yaml` changes, the fixed-output `pnpmDeps` hash in `flake.nix` can drift. Use:
+
+- `just prefetch-pnpm-deps`
+
+The helper intentionally runs the derivation with `lib.fakeHash`, then prints the new `sha256-...` value from
+the Nix error output so the hash refresh stays reproducible and copy/paste-free.
+
 ## Service behavior
 
 The NixOS module runs `t3 serve` as a dedicated system user. By default it binds to `127.0.0.1:3773`, stores

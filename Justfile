@@ -9,6 +9,10 @@ agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE
 default:
     @just --list
 
+# Print the pnpmDeps SRI for flake.nix by forcing a fake-hash Nix build and extracting the "got" value.
+prefetch-pnpm-deps:
+    ./scripts/prefetch-pnpm-deps.sh
+
 # Build and install the iOS development app on the configured device.
 mobile-dev:
     just _mobile-ios development Debug T3CodeDev
