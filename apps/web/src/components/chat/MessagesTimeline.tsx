@@ -643,6 +643,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         <ChatMarkdown
           text={messageText}
           cwd={ctx.markdownCwd}
+          environmentId={ctx.activeThreadEnvironmentId}
           isStreaming={Boolean(row.message.streaming)}
           skills={ctx.skills}
         />
@@ -1019,6 +1020,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
   markdownCwd: string | undefined;
   footer?: ReactNode;
 }) {
+  const ctx = use(TimelineRowCtx);
   const [expanded, setExpanded] = useState(false);
   const hasVisibleBody = props.text.trim().length > 0 || props.terminalContexts.length > 0;
   const canCollapse = hasVisibleBody && shouldCollapseUserMessage(props.text);
@@ -1047,6 +1049,7 @@ const CollapsibleUserMessageBody = memo(function CollapsibleUserMessageBody(prop
             terminalContexts={props.terminalContexts}
             skills={props.skills}
             markdownCwd={props.markdownCwd}
+            environmentId={ctx.activeThreadEnvironmentId}
           />
         </div>
       ) : null}
@@ -1085,6 +1088,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
   terminalContexts: ParsedTerminalContextEntry[];
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   markdownCwd: string | undefined;
+  environmentId: EnvironmentId;
 }) {
   const renderInlineMarkdownSegment = (text: string, key: string) => {
     const leadingWhitespace = /^\s+/.exec(text)?.[0] ?? "";
@@ -1102,6 +1106,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           <ChatMarkdown
             text={content}
             cwd={props.markdownCwd}
+            environmentId={props.environmentId}
             skills={props.skills}
             className="text-foreground"
             lineBreaks
@@ -1123,6 +1128,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
                 <ChatMarkdown
                   text={segment.text.trim()}
                   cwd={props.markdownCwd}
+                  environmentId={props.environmentId}
                   skills={props.skills}
                   className="text-foreground"
                   lineBreaks
@@ -1210,6 +1216,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
           key="user-message-terminal-context-inline-text"
           text={props.text}
           cwd={props.markdownCwd}
+          environmentId={props.environmentId}
           skills={props.skills}
           className="text-foreground"
           lineBreaks
@@ -1234,6 +1241,7 @@ const UserMessageBody = memo(function UserMessageBody(props: {
     <ChatMarkdown
       text={props.text}
       cwd={props.markdownCwd}
+      environmentId={props.environmentId}
       skills={props.skills}
       className="text-foreground"
       lineBreaks

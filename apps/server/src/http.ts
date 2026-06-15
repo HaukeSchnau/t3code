@@ -37,6 +37,7 @@ import {
   resolveObservedMediaRelativePath,
 } from "./observedMediaPaths.ts";
 import { resolveObservedMediaPathById } from "./observedMediaStore.ts";
+import { SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 import { BrowserTraceCollector } from "./observability/Services/BrowserTraceCollector.ts";
 import { ProjectFaviconResolver } from "./project/Services/ProjectFaviconResolver.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
@@ -51,6 +52,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 
 const PROJECT_FAVICON_CACHE_CONTROL = "public, max-age=3600";
 const FALLBACK_PROJECT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="#6b728080" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" data-fallback="project-favicon"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8l-2-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>`;
+const LOCAL_IMAGE_ROUTE_PATH = "/local-image";
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
 
@@ -283,6 +285,60 @@ export const observedMediaRouteLayer = HttpRouter.add(
       status: 200,
       headers: {
         "Cache-Control": "public, max-age=31536000, immutable",
+      },
+    }).pipe(
+      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
+    );
+  }).pipe(
+    Effect.catchTags({
+      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
+      EnvironmentInternalError: HttpServerRespondable.toResponse,
+      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
+    }),
+  ),
+);
+
+export const localImageRouteLayer = HttpRouter.add(
+  "GET",
+  LOCAL_IMAGE_ROUTE_PATH,
+  Effect.gen(function* () {
+    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
+    const request = yield* HttpServerRequest.HttpServerRequest;
+    const url = HttpServerRequest.toURL(request);
+    if (Option.isNone(url)) {
+      return HttpServerResponse.text("Bad Request", { status: 400 });
+    }
+
+    const filePath = url.value.searchParams.get("path");
+    if (!filePath || filePath.includes("\0")) {
+      return HttpServerResponse.text("Missing image path", { status: 400 });
+    }
+
+    const path = yield* Path.Path;
+    if (!path.isAbsolute(filePath)) {
+      return HttpServerResponse.text("Invalid image path", { status: 400 });
+    }
+
+    const extension = path.extname(filePath).toLowerCase();
+    if (!SAFE_IMAGE_FILE_EXTENSIONS.has(extension)) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const contentType = Mime.getType(filePath) ?? "application/octet-stream";
+    if (!contentType.toLowerCase().startsWith("image/")) {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    const fileSystem = yield* FileSystem.FileSystem;
+    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
+    if (!fileInfo || fileInfo.type !== "File") {
+      return HttpServerResponse.text("Not Found", { status: 404 });
+    }
+
+    return yield* HttpServerResponse.file(filePath, {
+      status: 200,
+      headers: {
+        "Cache-Control": "private, max-age=60",
       },
     }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  resolveMarkdownImageFileSource,
   resolveMarkdownFileLinkMeta,
   resolveMarkdownFileLinkTarget,
   rewriteMarkdownFileUriHref,
@@ -116,5 +117,33 @@ describe("resolveMarkdownFileLinkTarget", () => {
 
   it("does not treat app routes as file links", () => {
     expect(resolveMarkdownFileLinkTarget("/chat/settings")).toBeNull();
+  });
+});
+
+describe("resolveMarkdownImageFileSource", () => {
+  it("resolves absolute local image paths", () => {
+    expect(resolveMarkdownImageFileSource("/Users/julius/.codex/generated_images/result.png")).toBe(
+      "/Users/julius/.codex/generated_images/result.png",
+    );
+  });
+
+  it("resolves relative local image paths against cwd", () => {
+    expect(resolveMarkdownImageFileSource("screenshots/result.webp", "/Users/julius/project")).toBe(
+      "/Users/julius/project/screenshots/result.webp",
+    );
+  });
+
+  it("resolves file uri image paths", () => {
+    expect(resolveMarkdownImageFileSource("file:///Users/julius/project/screenshot.png")).toBe(
+      "/Users/julius/project/screenshot.png",
+    );
+  });
+
+  it("ignores non-image file paths", () => {
+    expect(resolveMarkdownImageFileSource("/Users/julius/project/notes.md")).toBeNull();
+  });
+
+  it("ignores external image urls", () => {
+    expect(resolveMarkdownImageFileSource("https://example.com/image.png")).toBeNull();
   });
 });

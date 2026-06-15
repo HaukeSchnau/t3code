@@ -8,7 +8,7 @@ import {
   Minimize2Icon,
   WrapTextIcon,
 } from "lucide-react";
-import type { ServerProviderSkill } from "@t3tools/contracts";
+import type { EnvironmentId, ServerProviderSkill } from "@t3tools/contracts";
 import React, {
   Children,
   Suspense,
@@ -57,9 +57,11 @@ import {
 } from "../markdown-clipboard";
 import {
   normalizeMarkdownLinkDestination,
+  resolveMarkdownImageFileSource,
   resolveMarkdownFileLinkMeta,
   rewriteMarkdownFileUriHref,
 } from "../markdown-links";
+import { resolveEnvironmentHttpUrl } from "../environments/runtime";
 import { readLocalApi } from "../localApi";
 import { cn } from "../lib/utils";
 
@@ -87,6 +89,7 @@ class CodeHighlightErrorBoundary extends React.Component<
 interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
+  environmentId?: EnvironmentId | undefined;
   isStreaming?: boolean;
   skills?: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   className?: string;
@@ -753,6 +756,7 @@ function normalizeMarkdownLinkHrefKey(href: string): string {
 }
 
 const MARKDOWN_LINK_FAVICON_CLASS_NAME = "block size-full shrink-0 select-none";
+const LOCAL_MARKDOWN_IMAGE_ROUTE_PATH = "/local-image";
 
 /** Hosts whose favicon request already failed this session — skip straight to the globe. */
 const failedFaviconHosts = new Set<string>();
@@ -763,6 +767,25 @@ function resolveExternalLinkHost(href: string | undefined): string | null {
     const url = new URL(href);
     if (url.protocol !== "http:" && url.protocol !== "https:") return null;
     return url.hostname || null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveLocalMarkdownImageUrl(input: {
+  readonly src: string | undefined;
+  readonly cwd: string | undefined;
+  readonly environmentId: EnvironmentId | undefined;
+}): string | null {
+  if (!input.environmentId) return null;
+  const filePath = resolveMarkdownImageFileSource(input.src, input.cwd);
+  if (!filePath) return null;
+  try {
+    return resolveEnvironmentHttpUrl({
+      environmentId: input.environmentId,
+      pathname: LOCAL_MARKDOWN_IMAGE_ROUTE_PATH,
+      searchParams: { path: filePath },
+    });
   } catch {
     return null;
   }
@@ -1081,6 +1104,7 @@ function areMarkdownFileLinkPropsEqual(
 function ChatMarkdown({
   text,
   cwd,
+  environmentId,
   isStreaming = false,
   skills = EMPTY_MARKDOWN_SKILLS,
   className,
@@ -1128,6 +1152,19 @@ function ChatMarkdown({
       },
       li({ node: _node, children, ...props }) {
         return <li {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</li>;
+      },
+      img({ node: _node, src, alt, ...props }) {
+        const resolvedSrc = resolveLocalMarkdownImageUrl({ src, cwd, environmentId }) ?? src;
+        return (
+          <img
+            {...props}
+            src={resolvedSrc}
+            alt={alt ?? ""}
+            className={cn("chat-markdown-image", props.className)}
+            loading="lazy"
+            draggable={false}
+          />
+        );
       },
       a({ node, href, children, ...props }) {
         const normalizedHref = href ? normalizeMarkdownLinkHrefKey(href) : "";
@@ -1235,6 +1272,8 @@ function ChatMarkdown({
     }),
     [
       diffThemeName,
+      cwd,
+      environmentId,
       fileLinkParentSuffixByPath,
       isStreaming,
       markdownFileLinkMetaByHref,

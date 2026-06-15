@@ -1,16 +1,28 @@
 import "../index.css";
 
+import { EnvironmentId } from "@t3tools/contracts";
 import { page } from "vite-plus/test/browser";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { render } from "vitest-browser-react";
 
-const { openInPreferredEditorMock, readLocalApiMock } = vi.hoisted(() => ({
-  openInPreferredEditorMock: vi.fn(async () => "vscode"),
-  readLocalApiMock: vi.fn(() => ({
-    server: { getConfig: vi.fn(async () => ({ availableEditors: ["vscode"] })) },
-    shell: { openInEditor: vi.fn(async () => undefined) },
-  })),
-}));
+const { openInPreferredEditorMock, readLocalApiMock, resolveEnvironmentHttpUrlMock } = vi.hoisted(
+  () => ({
+    openInPreferredEditorMock: vi.fn(async () => "vscode"),
+    readLocalApiMock: vi.fn(() => ({
+      server: { getConfig: vi.fn(async () => ({ availableEditors: ["vscode"] })) },
+      shell: { openInEditor: vi.fn(async () => undefined) },
+    })),
+    resolveEnvironmentHttpUrlMock: vi.fn(
+      (input: { pathname: string; searchParams?: Record<string, string> }) => {
+        const url = new URL(input.pathname, "http://localhost:3000");
+        if (input.searchParams) {
+          url.search = new URLSearchParams(input.searchParams).toString();
+        }
+        return url.toString();
+      },
+    ),
+  }),
+);
 
 vi.mock("../editorPreferences", () => ({
   openInPreferredEditor: openInPreferredEditorMock,
@@ -21,6 +33,10 @@ vi.mock("../localApi", () => ({
     throw new Error("ensureLocalApi not implemented in browser test");
   }),
   readLocalApi: readLocalApiMock,
+}));
+
+vi.mock("../environments/runtime", () => ({
+  resolveEnvironmentHttpUrl: resolveEnvironmentHttpUrlMock,
 }));
 
 import ChatMarkdown from "./ChatMarkdown";
@@ -198,6 +214,30 @@ describe("ChatMarkdown", () => {
       expect(getComputedStyle(element!).textDecorationLine).toBe("none");
       expect(getComputedStyle(element!).borderStyle).toBe("solid");
       expect(getComputedStyle(element!).userSelect).not.toBe("none");
+    } finally {
+      await screen.unmount();
+    }
+  });
+
+  it("renders absolute local markdown images through the authenticated image route", async () => {
+    const imagePath = "/Users/julius/.codex/generated_images/result.png";
+    const screen = await render(
+      <ChatMarkdown
+        text={`![Generated coding workspace](${imagePath})`}
+        cwd="/repo/project"
+        environmentId={EnvironmentId.make("environment-local")}
+      />,
+    );
+
+    try {
+      const image = page.getByRole("img", { name: "Generated coding workspace" });
+      await expect.element(image).toBeInTheDocument();
+      await expect
+        .element(image)
+        .toHaveAttribute(
+          "src",
+          `http://localhost:3000/local-image?path=${encodeURIComponent(imagePath)}`,
+        );
     } finally {
       await screen.unmount();
     }

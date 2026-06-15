@@ -7,6 +7,7 @@ import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 import { ServerConfig } from "./config.ts";
 import {
   attachmentsRouteLayer,
+  localImageRouteLayer,
   observedMediaRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,
@@ -336,6 +337,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     Layer.provide(environmentAuthenticatedAuthLayer),
   ),
   attachmentsRouteLayer,
+  localImageRouteLayer,
   observedMediaRouteLayer,
   otlpTracesProxyRouteLayer,
   projectFaviconRouteLayer,

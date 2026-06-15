@@ -3918,6 +3918,43 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves authenticated local image files by absolute path", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+
+      const config = yield* buildAppUnderTest();
+      const imagePath = path.join(config.stateDir, "generated-image.png");
+      yield* fileSystem.writeFileString(imagePath, "local-image-ok");
+
+      const response = yield* HttpClient.get(`/local-image?path=${encodeURIComponent(imagePath)}`, {
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(yield* response.text, "local-image-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not serve non-image local files", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+
+      const config = yield* buildAppUnderTest();
+      const textPath = path.join(config.stateDir, "notes.txt");
+      yield* fileSystem.writeFileString(textPath, "not an image");
+
+      const response = yield* HttpClient.get(`/local-image?path=${encodeURIComponent(textPath)}`, {
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+        },
+      });
+      assert.equal(response.status, 404);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("proxies browser OTLP trace exports through the server", () =>
     Effect.gen(function* () {
       const upstreamRequests: Array<{

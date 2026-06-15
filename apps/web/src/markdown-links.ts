@@ -9,6 +9,20 @@ const RELATIVE_FILE_PATH_PATTERN = /^[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)+(?::\d
 const RELATIVE_FILE_NAME_PATTERN = /^[A-Za-z0-9._-]+\.[A-Za-z0-9_-]+(?::\d+){0,2}$/;
 const POSITION_SUFFIX_PATTERN = /:\d+(?::\d+)?$/;
 const POSITION_ONLY_PATTERN = /^\d+(?::\d+)?$/;
+const MARKDOWN_IMAGE_FILE_EXTENSIONS = new Set([
+  ".avif",
+  ".bmp",
+  ".gif",
+  ".heic",
+  ".heif",
+  ".ico",
+  ".jpeg",
+  ".jpg",
+  ".png",
+  ".svg",
+  ".tiff",
+  ".webp",
+]);
 const POSIX_FILE_ROOT_PREFIXES = [
   "/Users/",
   "/home/",
@@ -167,6 +181,47 @@ export function resolveMarkdownFileLinkTarget(
 
   if (!cwd) return null;
   return resolvePathLinkTarget(pathWithPosition, cwd);
+}
+
+function hasMarkdownImageExtension(path: string): boolean {
+  const normalizedPath = path.replaceAll("\\", "/");
+  const basename = normalizedPath.slice(normalizedPath.lastIndexOf("/") + 1);
+  const extensionMatch = /\.([A-Za-z0-9]{1,8})$/.exec(basename);
+  return extensionMatch
+    ? MARKDOWN_IMAGE_FILE_EXTENSIONS.has(`.${extensionMatch[1]!.toLowerCase()}`)
+    : false;
+}
+
+export function resolveMarkdownImageFileSource(
+  src: string | undefined,
+  cwd?: string,
+): string | null {
+  if (!src) return null;
+  const rawSrc = normalizeMarkdownLinkDestination(src);
+  if (rawSrc.length === 0 || rawSrc.startsWith("#")) return null;
+
+  const fileUrlTarget = rawSrc.toLowerCase().startsWith("file:") ? parseFileUrlHref(rawSrc) : null;
+  const source = fileUrlTarget ?? stripSearchAndHash(rawSrc);
+  const decodedPath = normalizeWindowsDrivePath(
+    fileUrlTarget ? source.path.trim() : safeDecode(source.path.trim()),
+  );
+
+  if (decodedPath.length === 0) return null;
+  if (
+    !WINDOWS_DRIVE_PATH_PATTERN.test(decodedPath) &&
+    !WINDOWS_UNC_PATH_PATTERN.test(decodedPath) &&
+    hasExternalScheme(decodedPath)
+  ) {
+    return null;
+  }
+  if (!isLikelyPathCandidate(decodedPath) || !hasMarkdownImageExtension(decodedPath)) {
+    return null;
+  }
+  if (!isRelativePath(decodedPath)) {
+    return decodedPath;
+  }
+  if (!cwd) return null;
+  return resolvePathLinkTarget(decodedPath, cwd);
 }
 
 function basenameOfPath(path: string): string {
