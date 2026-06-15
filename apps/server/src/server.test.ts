@@ -70,6 +70,7 @@ import type { ServerConfigShape } from "./config.ts";
 import { deriveServerPaths, ServerConfig } from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
+import { resolveObservedMediaPath } from "./observedMediaStore.ts";
 import {
   CheckpointDiffQuery,
   type CheckpointDiffQueryShape,
@@ -3887,6 +3888,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(response.status, 200);
       assert.equal(yield* response.text, "attachment-encoded-ok");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves observed image files from state dir by media id", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const mediaId = "thread-11111111-1111-4111-8111-111111111111";
+
+      const config = yield* buildAppUnderTest();
+      const observedMediaPath = resolveObservedMediaPath({
+        observedMediaDir: config.observedMediaDir,
+        mediaId,
+        extension: ".png",
+      });
+      assert.isNotNull(observedMediaPath, "Observed media path should be resolvable");
+
+      yield* fileSystem.makeDirectory(path.dirname(observedMediaPath), { recursive: true });
+      yield* fileSystem.writeFileString(observedMediaPath, "observed-image-ok");
+
+      const response = yield* HttpClient.get(`/observed-media/${mediaId}`, {
+        headers: {
+          cookie: yield* getAuthenticatedSessionCookieHeader(),
+        },
+      });
+      assert.equal(response.status, 200);
+      assert.equal(yield* response.text, "observed-image-ok");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

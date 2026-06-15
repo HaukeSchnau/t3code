@@ -94,6 +94,7 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
+import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -128,6 +129,25 @@ const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
+const OBSERVED_MEDIA_ROUTE_PREFIX = "/observed-media";
+
+function observedMediaPreviewRoutePath(storageId: string): string {
+  return `${OBSERVED_MEDIA_ROUTE_PREFIX}/${encodeURIComponent(storageId)}`;
+}
+
+function resolveObservedMediaPreviewUrl(
+  environmentId: EnvironmentId,
+  storageId: string,
+): string | undefined {
+  try {
+    return resolveEnvironmentHttpUrl({
+      environmentId,
+      pathname: observedMediaPreviewRoutePath(storageId),
+    });
+  } catch {
+    return undefined;
+  }
+}
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 
 export interface UserMessageEditingController {
@@ -1387,13 +1407,19 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
 }
 
 function workEntryPreview(
-  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles" | "subagent">,
+  workEntry: Pick<TimelineWorkEntry, "detail" | "command" | "changedFiles" | "subagent" | "media">,
   workspaceRoot: string | undefined,
 ) {
   if (workEntry.subagent?.prompt) return workEntry.subagent.prompt;
   if (workEntry.subagent?.lastActivity) return workEntry.subagent.lastActivity;
   if (workEntry.command) return workEntry.command;
   if (workEntry.detail) return workEntry.detail;
+  if ((workEntry.media?.length ?? 0) > 0) {
+    const [firstMedia] = workEntry.media ?? [];
+    return workEntry.media!.length === 1
+      ? (firstMedia?.name ?? "Image")
+      : `${firstMedia?.name ?? "Image"} +${workEntry.media!.length - 1} more`;
+  }
   if ((workEntry.changedFiles?.length ?? 0) === 0) return null;
   const [firstPath] = workEntry.changedFiles ?? [];
   if (!firstPath) return null;
@@ -1492,11 +1518,31 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   workEntry: TimelineWorkEntry;
   workspaceRoot: string | undefined;
 }) {
-  const { onOpenSubagentInspector } = use(TimelineRowCtx);
+  const ctx = use(TimelineRowCtx);
+  const { onOpenSubagentInspector } = ctx;
   const { workEntry, workspaceRoot } = props;
   const subagent = workEntry.subagent;
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
+  const observedMediaPreviews = useMemo(
+    () =>
+      (workEntry.media ?? []).flatMap((media) => {
+        const previewUrl = resolveObservedMediaPreviewUrl(
+          ctx.activeThreadEnvironmentId,
+          media.storageId,
+        );
+        return previewUrl
+          ? [
+              {
+                id: media.id,
+                name: media.name,
+                previewUrl,
+              },
+            ]
+          : [];
+      }),
+    [ctx.activeThreadEnvironmentId, workEntry.media],
+  );
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const entryIconName = showWarningIndicator ? "x" : workEntryIconName(workEntry);
@@ -1510,7 +1556,8 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       : rawPreview;
   const displayText = preview ? `${heading} - ${preview}` : heading;
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
-  const canExpand = expandedBody !== null;
+  const hasObservedMediaPreviews = observedMediaPreviews.length > 0;
+  const canExpand = expandedBody !== null || hasObservedMediaPreviews;
   const subagentStatus = subagent ? formatSubagentStatus(subagent.status) : null;
   const showFailedIndicator = workEntryIndicatesToolFailure(workEntry);
   const showDestructiveRowStyle =
@@ -1640,15 +1687,53 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
           </div>
         </div>
       </div>
-      {expanded && canExpand && expandedBody ? (
+      {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
-            {expandedBody}
-          </pre>
+          {expandedBody ? (
+            <pre className="max-h-64 cursor-text overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-muted-foreground select-text">
+              {expandedBody}
+            </pre>
+          ) : null}
+          {hasObservedMediaPreviews ? (
+            <div
+              className={cn(
+                "grid gap-2",
+                expandedBody && "mt-2",
+                observedMediaPreviews.length === 1
+                  ? "max-w-64 grid-cols-1"
+                  : "max-w-md grid-cols-2",
+              )}
+            >
+              {observedMediaPreviews.map((media) => (
+                <button
+                  key={media.id}
+                  type="button"
+                  className="group relative aspect-[4/3] overflow-hidden rounded-md border border-border/60 bg-muted/25 transition-colors hover:border-border focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/65"
+                  title={media.name}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    const preview = buildExpandedImagePreview(observedMediaPreviews, media.id);
+                    if (preview) {
+                      ctx.onImageExpand(preview);
+                    }
+                  }}
+                  onPointerDown={stopRowToggle}
+                >
+                  <img
+                    src={media.previewUrl}
+                    alt={media.name}
+                    className="size-full object-contain transition-transform duration-200 group-hover:scale-[1.015]"
+                    loading="lazy"
+                    draggable={false}
+                  />
+                </button>
+              ))}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

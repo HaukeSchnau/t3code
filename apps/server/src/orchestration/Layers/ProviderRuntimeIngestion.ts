@@ -15,17 +15,21 @@ import {
   type OrchestrationCheckpointSummary,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
+  type OrchestrationActivityImageMedia,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
+import Mime from "@effect/platform-node/Mime";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
@@ -40,6 +44,9 @@ import {
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { ServerConfig } from "../../config.ts";
+import { inferImageExtension } from "../../imageMime.ts";
+import { createObservedMediaId, resolveObservedMediaPath } from "../../observedMediaStore.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -341,6 +348,69 @@ function asString(value: unknown): string | null {
 
 function asBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
+}
+
+function observedImageSourcePathFromActivity(activity: OrchestrationThreadActivity): string | null {
+  const payload = asRecord(activity.payload);
+  if (payload?.itemType !== "image_view") {
+    return null;
+  }
+
+  const data = asRecord(payload.data);
+  const item = asRecord(data?.item);
+  return (
+    asString(item?.path) ??
+    asString(item?.savedPath) ??
+    asString(data?.path) ??
+    asString(data?.savedPath) ??
+    asString(payload.detail)
+  );
+}
+
+function isLocalObservedImagePath(sourcePath: string): boolean {
+  const normalizedPath = sourcePath.trim().toLowerCase();
+  return (
+    normalizedPath.length > 0 &&
+    !normalizedPath.startsWith("data:") &&
+    !normalizedPath.startsWith("http://") &&
+    !normalizedPath.startsWith("https://")
+  );
+}
+
+function existingObservedActivityMedia(
+  payload: Record<string, unknown>,
+): ReadonlyArray<OrchestrationActivityImageMedia> {
+  const rawMedia = payload.media;
+  if (!Array.isArray(rawMedia)) {
+    return [];
+  }
+
+  return rawMedia.flatMap((item): ReadonlyArray<OrchestrationActivityImageMedia> => {
+    const record = asRecord(item);
+    const type = record?.type;
+    const id = asString(record?.id);
+    const name = asString(record?.name);
+    const mimeType = asString(record?.mimeType);
+    const storageId = asString(record?.storageId);
+    if (type !== "image" || !id || !name || !mimeType || !storageId) {
+      return [];
+    }
+    return [
+      {
+        type: "image",
+        id,
+        name,
+        mimeType,
+        storageId,
+        ...(asFiniteNumber(record?.sizeBytes) !== null
+          ? { sizeBytes: asFiniteNumber(record?.sizeBytes)! }
+          : {}),
+        ...(asString(record?.originalPath)
+          ? { originalPath: asString(record?.originalPath)! }
+          : {}),
+      },
+    ];
+  });
 }
 
 function normalizeRateLimitResetTimestamp(value: unknown): string | null {
@@ -930,6 +1000,9 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const serverConfig = yield* ServerConfig;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -1163,21 +1236,87 @@ const make = Effect.gen(function* () {
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
 
+  const enrichObservedImageActivity = (input: {
+    readonly activity: OrchestrationThreadActivity;
+    readonly threadId: ThreadId;
+  }): Effect.Effect<OrchestrationThreadActivity> =>
+    Effect.gen(function* () {
+      const payload = asRecord(input.activity.payload);
+      const sourcePath = observedImageSourcePathFromActivity(input.activity);
+      if (!payload || !sourcePath || !isLocalObservedImagePath(sourcePath)) {
+        return input.activity;
+      }
+
+      const mimeType = Mime.getType(sourcePath);
+      if (!mimeType?.toLowerCase().startsWith("image/")) {
+        return input.activity;
+      }
+
+      const mediaId = createObservedMediaId(input.threadId);
+      if (!mediaId) {
+        return input.activity;
+      }
+
+      const bytes = yield* fileSystem.readFile(sourcePath);
+      const extension = inferImageExtension({ mimeType, fileName: sourcePath });
+      const targetPath = resolveObservedMediaPath({
+        observedMediaDir: serverConfig.observedMediaDir,
+        mediaId,
+        extension,
+      });
+      if (!targetPath) {
+        return input.activity;
+      }
+
+      yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
+      yield* fileSystem.writeFile(targetPath, bytes);
+
+      const observedMedia: OrchestrationActivityImageMedia = {
+        type: "image",
+        id: mediaId,
+        name: path.basename(sourcePath) || "image",
+        mimeType,
+        storageId: mediaId,
+        sizeBytes: bytes.byteLength,
+        originalPath: sourcePath,
+      };
+
+      return {
+        ...input.activity,
+        payload: {
+          ...payload,
+          media: [...existingObservedActivityMedia(payload), observedMedia],
+        },
+      };
+    }).pipe(
+      Effect.tapError((cause) =>
+        Effect.logWarning("Failed to persist observed image for work-log preview", {
+          cause,
+          activityId: input.activity.id,
+        }),
+      ),
+      Effect.orElseSucceed(() => input.activity),
+    );
+
   const appendActivities = (
     event: ProviderRuntimeEvent,
     threadId: ThreadId,
     activities: ReadonlyArray<OrchestrationThreadActivity>,
   ) =>
     Effect.forEach(activities, (activity) =>
-      providerCommandId(event, "thread-activity-append").pipe(
-        Effect.flatMap((commandId) =>
-          orchestrationEngine.dispatch({
-            type: "thread.activity.append",
-            commandId,
-            threadId,
-            activity,
-            createdAt: activity.createdAt,
-          }),
+      enrichObservedImageActivity({ activity, threadId }).pipe(
+        Effect.flatMap((enrichedActivity) =>
+          providerCommandId(event, "thread-activity-append").pipe(
+            Effect.flatMap((commandId) =>
+              orchestrationEngine.dispatch({
+                type: "thread.activity.append",
+                commandId,
+                threadId,
+                activity: enrichedActivity,
+                createdAt: enrichedActivity.createdAt,
+              }),
+            ),
+          ),
         ),
       ),
     ).pipe(Effect.asVoid);

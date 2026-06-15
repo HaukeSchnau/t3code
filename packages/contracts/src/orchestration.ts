@@ -316,6 +316,20 @@ export const OrchestrationThreadActivityTone = Schema.Literals([
 ]);
 export type OrchestrationThreadActivityTone = typeof OrchestrationThreadActivityTone.Type;
 
+export const OrchestrationActivityImageMedia = Schema.Struct({
+  type: Schema.Literal("image"),
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
+  storageId: TrimmedNonEmptyString,
+  sizeBytes: Schema.optional(NonNegativeInt),
+  originalPath: Schema.optional(TrimmedNonEmptyString),
+});
+export type OrchestrationActivityImageMedia = typeof OrchestrationActivityImageMedia.Type;
+
+export const OrchestrationActivityMedia = Schema.Union([OrchestrationActivityImageMedia]);
+export type OrchestrationActivityMedia = typeof OrchestrationActivityMedia.Type;
+
 export const OrchestrationThreadActivity = Schema.Struct({
   id: EventId,
   tone: OrchestrationThreadActivityTone,

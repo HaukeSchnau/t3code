@@ -4,6 +4,7 @@ import {
   ApprovalRequestId,
   isToolLifecycleItemType,
   type OrchestrationLatestTurn,
+  type OrchestrationActivityImageMedia,
   type OrchestrationThreadActivity,
   type OrchestrationProposedPlanId,
   ProviderDriverKind,
@@ -75,6 +76,7 @@ export interface WorkLogEntry {
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   subagent?: SubagentWorkEntry;
+  media?: ReadonlyArray<OrchestrationActivityImageMedia>;
   /** From runtime item / task payload `status` when present (e.g. tool.updated). */
   toolLifecycleStatus?: WorkLogToolLifecycleStatus;
   /** Originating orchestration activity kind (e.g. `user-input.requested`) for row chrome. */
@@ -678,6 +680,50 @@ function extractWorkLogToolLifecycleStatus(
   return undefined;
 }
 
+function extractWorkLogMedia(
+  payload: Record<string, unknown> | null,
+): ReadonlyArray<OrchestrationActivityImageMedia> {
+  const media = payload?.media;
+  if (!Array.isArray(media)) {
+    return [];
+  }
+  return media.flatMap((item): ReadonlyArray<OrchestrationActivityImageMedia> => {
+    if (!item || typeof item !== "object") {
+      return [];
+    }
+    const record = item as Record<string, unknown>;
+    if (
+      record.type !== "image" ||
+      typeof record.id !== "string" ||
+      typeof record.name !== "string" ||
+      typeof record.mimeType !== "string" ||
+      typeof record.storageId !== "string" ||
+      !record.mimeType.toLowerCase().startsWith("image/")
+    ) {
+      return [];
+    }
+    const sizeBytes =
+      typeof record.sizeBytes === "number" && Number.isFinite(record.sizeBytes)
+        ? record.sizeBytes
+        : undefined;
+    const originalPath =
+      typeof record.originalPath === "string" && record.originalPath.length > 0
+        ? record.originalPath
+        : undefined;
+    return [
+      {
+        type: "image",
+        id: record.id,
+        name: record.name,
+        mimeType: record.mimeType,
+        storageId: record.storageId,
+        ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+        ...(originalPath !== undefined ? { originalPath } : {}),
+      },
+    ];
+  });
+}
+
 function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWorkLogEntry {
   const payload =
     activity.payload && typeof activity.payload === "object"
@@ -724,6 +770,7 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   const itemType = extractWorkLogItemType(payload);
   const requestKind = extractWorkLogRequestKind(payload);
   const subagent = extractSubagentWorkEntryFromPayload(payload);
+  const media = extractWorkLogMedia(payload);
   if (detail) {
     entry.detail = detail;
   }
@@ -747,6 +794,9 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   }
   if (subagent) {
     entry.subagent = subagent;
+  }
+  if (media.length > 0) {
+    entry.media = media;
   }
   if (toolCallId) {
     entry.toolCallId = toolCallId;
@@ -819,6 +869,7 @@ function mergeDerivedWorkLogEntries(
   const collapseKey = next.collapseKey ?? previous.collapseKey;
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
+  const media = mergeWorkLogMedia(previous.media, next.media);
   return {
     ...previous,
     ...next,
@@ -832,7 +883,25 @@ function mergeDerivedWorkLogEntries(
     ...(collapseKey ? { collapseKey } : {}),
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
+    ...(media.length > 0 ? { media } : {}),
   };
+}
+
+function mergeWorkLogMedia(
+  previous: ReadonlyArray<OrchestrationActivityImageMedia> | undefined,
+  next: ReadonlyArray<OrchestrationActivityImageMedia> | undefined,
+): ReadonlyArray<OrchestrationActivityImageMedia> {
+  const merged: OrchestrationActivityImageMedia[] = [];
+  const seen = new Set<string>();
+  for (const media of [...(previous ?? []), ...(next ?? [])]) {
+    const key = media.storageId || media.id;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(media);
+  }
+  return merged;
 }
 
 function mergeChangedFiles(

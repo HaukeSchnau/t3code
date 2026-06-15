@@ -711,6 +711,51 @@ describe("deriveWorkLogEntries", () => {
     expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
+  it("derives observed image media from tool activity payloads", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "image-view-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Viewed image",
+        kind: "tool.completed",
+        payload: {
+          itemType: "image_view",
+          media: [
+            {
+              type: "image",
+              id: "media-1",
+              name: "screenshot.png",
+              mimeType: "image/png",
+              storageId: "thread-11111111-1111-4111-8111-111111111111",
+              sizeBytes: 123,
+              originalPath: "/tmp/screenshot.png",
+            },
+            {
+              type: "file",
+              id: "ignored",
+              name: "not-image.txt",
+              mimeType: "text/plain",
+              storageId: "ignored",
+            },
+          ],
+        },
+      }),
+    ];
+
+    const [entry] = deriveWorkLogEntries(activities);
+    expect(entry?.media).toEqual([
+      {
+        type: "image",
+        id: "media-1",
+        name: "screenshot.png",
+        mimeType: "image/png",
+        storageId: "thread-11111111-1111-4111-8111-111111111111",
+        sizeBytes: 123,
+        originalPath: "/tmp/screenshot.png",
+      },
+    ]);
+  });
+
   it("derives clickable subagent entries and omits subagent transcript projections", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({
