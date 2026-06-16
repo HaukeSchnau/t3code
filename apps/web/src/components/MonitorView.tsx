@@ -1,0 +1,919 @@
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  Clock3Icon,
+  LoaderCircleIcon,
+  MessageSquareTextIcon,
+  PauseIcon,
+  PinIcon,
+  SendIcon,
+  ShieldCheckIcon,
+  XIcon,
+} from "lucide-react";
+import { Link } from "@tanstack/react-router";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+import {
+  type ApprovalRequestId,
+  type ProviderApprovalDecision,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type LegendListRef } from "@legendapp/list/react";
+import { useShallow } from "zustand/react/shallow";
+
+import {
+  deriveActiveWorkStartedAt,
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  deriveTimelineEntries,
+  deriveWorkLogEntries,
+  isLatestTurnSettled,
+  type PendingApproval,
+  type PendingUserInput,
+} from "../session-logic";
+import { readEnvironmentApi } from "../environmentApi";
+import { retainThreadDetailSubscription } from "../environments/runtime/service";
+import { useSettings } from "../hooks/useSettings";
+import { useTheme } from "../hooks/useTheme";
+import { cn, newCommandId, newMessageId } from "../lib/utils";
+import {
+  buildPendingUserInputAnswers,
+  togglePendingUserInputOptionSelection,
+  type PendingUserInputDraftAnswer,
+} from "../pendingUserInput";
+import { selectProjectByRef, selectSidebarThreadsAcrossEnvironments, useStore } from "../store";
+import { createThreadSelectorByRef } from "../storeSelectors";
+import type { SidebarThreadSummary, Thread } from "../types";
+import { Button } from "./ui/button";
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
+import { Textarea } from "./ui/textarea";
+import { SidebarInset, SidebarTrigger } from "./ui/sidebar";
+import { MessagesTimeline } from "./chat/MessagesTimeline";
+
+const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
+const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
+const EMPTY_TURN_DIFFS = new Map();
+const EMPTY_REVERT_COUNTS = new Map();
+const EMPTY_SKILLS: [] = [];
+
+type MonitorThreadReason = "actionable" | "error" | "running" | "recent" | "pinned";
+
+interface MonitorThreadCandidate {
+  thread: SidebarThreadSummary;
+  key: string;
+  reason: MonitorThreadReason;
+  priority: number;
+  timestamp: number;
+}
+
+function readStoredOrder(): string[] {
+  if (typeof window === "undefined") return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(MONITOR_ORDER_STORAGE_KEY) ?? "[]");
+    return Array.isArray(parsed)
+      ? parsed.filter((value): value is string => typeof value === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredOrder(order: readonly string[]): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(MONITOR_ORDER_STORAGE_KEY, JSON.stringify(order));
+}
+
+function toTimestamp(value: string | null | undefined): number {
+  if (!value) return Number.NEGATIVE_INFINITY;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
+}
+
+function isSessionRunning(thread: SidebarThreadSummary): boolean {
+  const status = thread.session?.orchestrationStatus;
+  return Boolean(status && status !== "idle" && status !== "stopped");
+}
+
+function resolveThreadCandidate(
+  thread: SidebarThreadSummary,
+  now: number,
+): MonitorThreadCandidate | null {
+  if (thread.archivedAt !== null) return null;
+
+  const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+  const latestTurn = thread.latestTurn;
+  const completedAt = toTimestamp(latestTurn?.completedAt);
+  const recentlyCompleted =
+    latestTurn?.state === "completed" &&
+    Number.isFinite(completedAt) &&
+    now - completedAt <= RECENTLY_COMPLETED_WINDOW_MS;
+
+  const actionable =
+    thread.hasPendingApprovals || thread.hasPendingUserInput || thread.hasActionableProposedPlan;
+  const hasError =
+    latestTurn?.state === "error" ||
+    latestTurn?.state === "interrupted" ||
+    thread.session?.orchestrationStatus === "error";
+  const running = latestTurn?.state === "running" || isSessionRunning(thread);
+
+  if (!actionable && !hasError && !running && !recentlyCompleted) {
+    return null;
+  }
+
+  const reason: MonitorThreadReason = actionable
+    ? "actionable"
+    : hasError
+      ? "error"
+      : running
+        ? "running"
+        : "recent";
+  const priority =
+    reason === "actionable" ? 0 : reason === "error" ? 1 : reason === "running" ? 2 : 3;
+  const timestamp = Math.max(
+    toTimestamp(thread.latestUserMessageAt),
+    toTimestamp(latestTurn?.startedAt),
+    toTimestamp(latestTurn?.completedAt),
+    toTimestamp(thread.updatedAt),
+    toTimestamp(thread.createdAt),
+  );
+
+  return { thread, key, reason, priority, timestamp };
+}
+
+function sortCandidatesForInitialPlacement(
+  candidates: readonly MonitorThreadCandidate[],
+): MonitorThreadCandidate[] {
+  return [...candidates].sort((left, right) => {
+    if (left.priority !== right.priority) return left.priority - right.priority;
+    if (left.timestamp !== right.timestamp) return right.timestamp - left.timestamp;
+    return left.key.localeCompare(right.key);
+  });
+}
+
+function formatElapsed(startedAt: string | null | undefined): string | null {
+  if (!startedAt) return null;
+  const elapsed = Date.now() - Date.parse(startedAt);
+  if (!Number.isFinite(elapsed) || elapsed < 0) return null;
+  const minutes = Math.floor(elapsed / 60_000);
+  if (minutes < 1) return "now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function reasonLabel(reason: MonitorThreadReason): string {
+  switch (reason) {
+    case "actionable":
+      return "Needs input";
+    case "error":
+      return "Blocked";
+    case "running":
+      return "Running";
+    case "recent":
+      return "Complete";
+    case "pinned":
+      return "Pinned";
+  }
+}
+
+function reasonClassName(reason: MonitorThreadReason): string {
+  switch (reason) {
+    case "actionable":
+      return "border-amber-400/40 bg-amber-500/10 text-amber-700 dark:text-amber-200";
+    case "error":
+      return "border-red-400/40 bg-red-500/10 text-red-700 dark:text-red-200";
+    case "running":
+      return "border-sky-400/40 bg-sky-500/10 text-sky-700 dark:text-sky-200";
+    case "recent":
+      return "border-emerald-400/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
+    case "pinned":
+      return "border-violet-400/40 bg-violet-500/10 text-violet-700 dark:text-violet-200";
+  }
+}
+
+function useStableMonitorCandidates(threads: readonly SidebarThreadSummary[]) {
+  const [order, setOrder] = useState<string[]>(() => readStoredOrder());
+  const candidates = useMemo(() => {
+    const now = Date.now();
+    return threads.flatMap((thread) => {
+      const candidate = resolveThreadCandidate(thread, now);
+      return candidate ? [candidate] : [];
+    });
+  }, [threads]);
+
+  useEffect(() => {
+    setOrder((existing) => {
+      const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+      const retained = existing.filter((key) => candidateByKey.has(key));
+      const retainedSet = new Set(retained);
+      const added = sortCandidatesForInitialPlacement(candidates)
+        .map((candidate) => candidate.key)
+        .filter((key) => !retainedSet.has(key));
+      const next = [...retained, ...added];
+      if (next.length === existing.length && next.every((key, index) => key === existing[index])) {
+        return existing;
+      }
+      writeStoredOrder(next);
+      return next;
+    });
+  }, [candidates]);
+
+  return useMemo(() => {
+    const candidateByKey = new Map(candidates.map((candidate) => [candidate.key, candidate]));
+    if (order.length === 0) {
+      return sortCandidatesForInitialPlacement(candidates);
+    }
+    return order.flatMap((key) => {
+      const candidate = candidateByKey.get(key);
+      return candidate ? [candidate] : [];
+    });
+  }, [candidates, order]);
+}
+
+function useTileVisibility() {
+  const ref = useRef<HTMLElement | null>(null);
+  const [visible, setVisible] = useState(false);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setVisible(Boolean(entry?.isIntersecting));
+      },
+      { root: null, rootMargin: "280px" },
+    );
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  return [ref, visible] as const;
+}
+
+function useRetainedThreadDetail(threadRef: ScopedThreadRef, enabled: boolean): Thread | undefined {
+  useEffect(() => {
+    if (!enabled) return;
+    return retainThreadDetailSubscription(threadRef.environmentId, threadRef.threadId);
+  }, [enabled, threadRef.environmentId, threadRef.threadId]);
+  return useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
+}
+
+function MonitorHeader({ count }: { count: number }) {
+  return (
+    <header className="drag-region flex h-12 shrink-0 items-center gap-3 border-b border-border/70 px-3 sm:h-[52px] sm:px-5">
+      <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold text-foreground">Monitor</span>
+          <span className="rounded-md border border-border/60 bg-muted/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            {count} live
+          </span>
+        </div>
+        <p className="mt-0.5 hidden text-[11px] text-muted-foreground/65 sm:block">
+          Stable-order compact grid across all environments.
+        </p>
+      </div>
+    </header>
+  );
+}
+
+export function MonitorView() {
+  const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const candidates = useStableMonitorCandidates(sidebarThreads);
+
+  return (
+    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+      <div className="flex min-h-0 flex-1 flex-col">
+        <MonitorHeader count={candidates.length} />
+        {candidates.length === 0 ? (
+          <Empty className="flex-1">
+            <EmptyHeader>
+              <EmptyTitle>No active threads</EmptyTitle>
+              <EmptyDescription>
+                Running, blocked, actionable, and recently completed threads will appear here.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <div className="monitor-grid min-h-0 flex-1 overflow-auto p-2 sm:p-3">
+            <div className="grid min-h-full auto-rows-[clamp(18rem,31dvh,28rem)] grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-2">
+              {candidates.map((candidate) => (
+                <MonitorThreadTile key={candidate.key} candidate={candidate} />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </SidebarInset>
+  );
+}
+
+const MonitorThreadTile = memo(function MonitorThreadTile({
+  candidate,
+}: {
+  candidate: MonitorThreadCandidate;
+}) {
+  const threadRef = useMemo(
+    () => scopeThreadRef(candidate.thread.environmentId, candidate.thread.id),
+    [candidate.thread.environmentId, candidate.thread.id],
+  );
+  const [tileRef, tileVisible] = useTileVisibility();
+  const thread = useRetainedThreadDetail(threadRef, tileVisible);
+  const project = useStore(
+    useMemo(
+      () => (state) =>
+        selectProjectByRef(
+          state,
+          thread ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
+        ),
+      [thread],
+    ),
+  );
+  const routeThreadKey = scopedThreadKey(threadRef);
+  const running = candidate.reason === "running";
+  const latestTurnSettled = isLatestTurnSettled(
+    thread?.latestTurn ?? candidate.thread.latestTurn,
+    thread?.session ?? candidate.thread.session,
+  );
+  const activeTurnStartedAt = deriveActiveWorkStartedAt(
+    thread?.latestTurn ?? candidate.thread.latestTurn,
+    thread?.session ?? candidate.thread.session,
+    null,
+  );
+  const elapsed = formatElapsed(activeTurnStartedAt);
+
+  return (
+    <section
+      ref={tileRef}
+      className={cn(
+        "group/tile flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card/48 shadow-sm/5",
+        candidate.reason === "actionable"
+          ? "border-amber-400/35"
+          : candidate.reason === "error"
+            ? "border-red-400/35"
+            : "border-border/70",
+      )}
+      data-testid="monitor-thread-tile"
+    >
+      <div className="flex min-h-11 shrink-0 items-center gap-2 border-b border-border/60 px-2.5 py-2">
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1 rounded-md border px-1.5 py-0.5 text-[10px] font-medium",
+            reasonClassName(candidate.reason),
+          )}
+        >
+          {running ? <LoaderCircleIcon className="size-3 animate-spin" /> : null}
+          {reasonLabel(candidate.reason)}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-medium text-foreground/92">
+            {candidate.thread.title}
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/60">
+            <span className="truncate">{project?.name ?? "Unknown project"}</span>
+            {elapsed ? (
+              <>
+                <span className="text-muted-foreground/30">/</span>
+                <span className="inline-flex items-center gap-1 tabular-nums">
+                  <Clock3Icon className="size-3" />
+                  {elapsed}
+                </span>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <Button
+          render={
+            <Link
+              to="/$environmentId/$threadId"
+              params={{
+                environmentId: candidate.thread.environmentId,
+                threadId: candidate.thread.id,
+              }}
+            />
+          }
+          size="icon-xs"
+          variant="ghost"
+          aria-label="Open full thread"
+        >
+          <ArrowRightIcon className="size-3.5" />
+        </Button>
+      </div>
+
+      <MonitorThreadBody
+        thread={thread}
+        shellThread={candidate.thread}
+        visible={tileVisible}
+        threadRef={threadRef}
+        routeThreadKey={routeThreadKey}
+        isWorking={running}
+        activeTurnInProgress={running || !latestTurnSettled}
+        activeTurnStartedAt={activeTurnStartedAt}
+        projectCwd={project?.cwd}
+      />
+
+      <MonitorThreadActions
+        thread={thread}
+        fallbackThread={candidate.thread}
+        threadRef={threadRef}
+      />
+    </section>
+  );
+});
+
+function MonitorThreadBody({
+  thread,
+  shellThread,
+  visible,
+  threadRef,
+  routeThreadKey,
+  isWorking,
+  activeTurnInProgress,
+  activeTurnStartedAt,
+  projectCwd,
+}: {
+  thread: Thread | undefined;
+  shellThread: SidebarThreadSummary;
+  visible: boolean;
+  threadRef: ScopedThreadRef;
+  routeThreadKey: string;
+  isWorking: boolean;
+  activeTurnInProgress: boolean;
+  activeTurnStartedAt: string | null;
+  projectCwd: string | undefined;
+}) {
+  const listRef = useRef<LegendListRef | null>(null);
+  const timestampFormat = useSettings((settings) => settings.timestampFormat);
+  const { resolvedTheme } = useTheme();
+  const timelineEntries = useMemo(
+    () =>
+      thread
+        ? deriveTimelineEntries(
+            thread.messages,
+            thread.proposedPlans,
+            deriveWorkLogEntries(thread.activities),
+          )
+        : [],
+    [thread],
+  );
+  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
+    if (!thread) return EMPTY_TURN_DIFFS;
+    return new Map(
+      thread.turnDiffSummaries.flatMap((summary) =>
+        summary.assistantMessageId ? [[summary.assistantMessageId, summary] as const] : [],
+      ),
+    );
+  }, [thread]);
+
+  if (!visible) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col justify-between p-3 text-xs text-muted-foreground/70">
+        <div>
+          <p className="font-medium text-foreground/75">{shellThread.title}</p>
+          <p className="mt-1">Thread detail will hydrate when this tile scrolls into view.</p>
+        </div>
+        <div className="rounded-md border border-border/60 bg-muted/25 px-2 py-1 text-[11px]">
+          {shellThread.latestTurn?.state ?? shellThread.session?.orchestrationStatus ?? "idle"}
+        </div>
+      </div>
+    );
+  }
+
+  if (!thread) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground/65">
+        Loading thread...
+      </div>
+    );
+  }
+
+  return (
+    <div className="monitor-tile-transcript relative min-h-0 flex-1 text-[12px]">
+      <MessagesTimeline
+        isWorking={isWorking}
+        activeTurnInProgress={activeTurnInProgress}
+        activeTurnStartedAt={activeTurnStartedAt}
+        listRef={listRef}
+        timelineEntries={timelineEntries}
+        latestTurn={thread.latestTurn}
+        turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
+        routeThreadKey={routeThreadKey}
+        onOpenTurnDiff={() => undefined}
+        revertTurnCountByUserMessageId={EMPTY_REVERT_COUNTS}
+        onRevertUserMessage={() => undefined}
+        isRevertingCheckpoint={false}
+        onImageExpand={() => undefined}
+        activeThreadEnvironmentId={threadRef.environmentId}
+        markdownCwd={thread.worktreePath ?? projectCwd}
+        resolvedTheme={resolvedTheme}
+        timestampFormat={timestampFormat}
+        workspaceRoot={projectCwd}
+        skills={EMPTY_SKILLS}
+        onIsAtEndChange={() => undefined}
+      />
+    </div>
+  );
+}
+
+function MonitorThreadActions({
+  thread,
+  fallbackThread,
+  threadRef,
+}: {
+  thread: Thread | undefined;
+  fallbackThread: SidebarThreadSummary;
+  threadRef: ScopedThreadRef;
+}) {
+  const pendingApprovals = useMemo(
+    () => (thread ? derivePendingApprovals(thread.activities) : []),
+    [thread],
+  );
+  const pendingUserInputs = useMemo(
+    () => (thread ? derivePendingUserInputs(thread.activities) : []),
+    [thread],
+  );
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canSend = Boolean(thread && draft.trim().length > 0 && !busy);
+  const isRunning =
+    thread?.latestTurn?.state === "running" ||
+    fallbackThread.latestTurn?.state === "running" ||
+    thread?.session?.orchestrationStatus === "running" ||
+    fallbackThread.session?.orchestrationStatus === "running";
+
+  const send = useCallback(async () => {
+    if (!thread || !canSend) return;
+    const api = readEnvironmentApi(threadRef.environmentId);
+    if (!api) return;
+    const text = draft.trim();
+    setBusy(true);
+    setError(null);
+    try {
+      await api.orchestration.dispatchCommand({
+        type: isRunning ? "thread.message.queue" : "thread.turn.start",
+        commandId: newCommandId(),
+        threadId: threadRef.threadId,
+        message: {
+          messageId: newMessageId(),
+          role: "user",
+          text,
+          attachments: [],
+        },
+        modelSelection: thread.modelSelection,
+        titleSeed: thread.title,
+        runtimeMode: thread.runtimeMode,
+        interactionMode: thread.interactionMode,
+        createdAt: new Date().toISOString(),
+      });
+      setDraft("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to send follow-up.");
+    } finally {
+      setBusy(false);
+    }
+  }, [canSend, draft, isRunning, thread, threadRef.environmentId, threadRef.threadId]);
+
+  const interrupt = useCallback(async () => {
+    const api = readEnvironmentApi(threadRef.environmentId);
+    if (!api) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.orchestration.dispatchCommand({
+        type: "thread.turn.interrupt",
+        commandId: newCommandId(),
+        threadId: threadRef.threadId,
+        createdAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to interrupt thread.");
+    } finally {
+      setBusy(false);
+    }
+  }, [threadRef.environmentId, threadRef.threadId]);
+
+  return (
+    <div className="shrink-0 border-t border-border/60 bg-background/72 p-2">
+      <MonitorPendingActions
+        threadRef={threadRef}
+        fallbackThread={fallbackThread}
+        pendingApprovals={pendingApprovals}
+        pendingUserInputs={pendingUserInputs}
+        disabled={busy}
+        onError={setError}
+      />
+      {error ? (
+        <div className="mt-2 rounded-md border border-red-400/25 bg-red-500/8 px-2 py-1 text-[11px] text-red-700 dark:text-red-200">
+          {error}
+        </div>
+      ) : null}
+      <div className="mt-2 flex items-end gap-1.5">
+        <Textarea
+          unstyled
+          value={draft}
+          disabled={!thread || busy}
+          onChange={(event) => setDraft(event.currentTarget.value)}
+          onKeyDown={(event) => {
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+              event.preventDefault();
+              void send();
+            }
+          }}
+          placeholder={isRunning ? "Queue a follow-up..." : "Send a follow-up..."}
+          className="min-w-0 flex-1 rounded-md border border-border/70 bg-background/80 text-xs"
+        />
+        {isRunning ? (
+          <Button
+            type="button"
+            size="icon-sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void interrupt()}
+            aria-label="Interrupt thread"
+          >
+            <PauseIcon className="size-3.5" />
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          size="icon-sm"
+          disabled={!canSend}
+          onClick={() => void send()}
+          aria-label={isRunning ? "Queue follow-up" : "Send follow-up"}
+        >
+          <SendIcon className="size-3.5" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function MonitorPendingActions({
+  threadRef,
+  fallbackThread,
+  pendingApprovals,
+  pendingUserInputs,
+  disabled,
+  onError,
+}: {
+  threadRef: ScopedThreadRef;
+  fallbackThread: SidebarThreadSummary;
+  pendingApprovals: readonly PendingApproval[];
+  pendingUserInputs: readonly PendingUserInput[];
+  disabled: boolean;
+  onError: (message: string | null) => void;
+}) {
+  const approval = pendingApprovals[0] ?? null;
+  const userInput = pendingUserInputs[0] ?? null;
+  const [draftAnswers, setDraftAnswers] = useState<Record<string, PendingUserInputDraftAnswer>>({});
+  const [respondingRequestId, setRespondingRequestId] = useState<ApprovalRequestId | null>(null);
+  const responseDisabled = disabled || respondingRequestId !== null;
+
+  const respondToApproval = useCallback(
+    async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
+      const api = readEnvironmentApi(threadRef.environmentId);
+      if (!api) return;
+      setRespondingRequestId(requestId);
+      onError(null);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.approval.respond",
+          commandId: newCommandId(),
+          threadId: threadRef.threadId,
+          requestId,
+          decision,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        onError(err instanceof Error ? err.message : "Failed to submit approval decision.");
+      } finally {
+        setRespondingRequestId(null);
+      }
+    },
+    [onError, threadRef.environmentId, threadRef.threadId],
+  );
+
+  const respondToUserInput = useCallback(
+    async (requestId: ApprovalRequestId, answers: Record<string, string | string[]>) => {
+      const api = readEnvironmentApi(threadRef.environmentId);
+      if (!api) return;
+      setRespondingRequestId(requestId);
+      onError(null);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.user-input.respond",
+          commandId: newCommandId(),
+          threadId: threadRef.threadId,
+          requestId,
+          answers,
+          createdAt: new Date().toISOString(),
+        });
+        setDraftAnswers({});
+      } catch (err) {
+        onError(err instanceof Error ? err.message : "Failed to submit user input.");
+      } finally {
+        setRespondingRequestId(null);
+      }
+    },
+    [onError, threadRef.environmentId, threadRef.threadId],
+  );
+
+  if (!approval && !userInput && !fallbackThread.hasActionableProposedPlan) return null;
+
+  return (
+    <div className="space-y-1.5 rounded-md border border-amber-400/25 bg-amber-500/8 p-2">
+      {approval ? (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-100">
+            <ShieldCheckIcon className="size-3.5" />
+            {approval.requestKind} approval
+          </div>
+          {approval.detail ? (
+            <p className="line-clamp-2 text-[11px] text-muted-foreground">{approval.detail}</p>
+          ) : null}
+          <div className="flex gap-1">
+            <Button
+              type="button"
+              size="xs"
+              disabled={responseDisabled}
+              onClick={() => void respondToApproval(approval.requestId, "accept")}
+            >
+              <CheckIcon className="size-3" />
+              Allow
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              disabled={responseDisabled}
+              onClick={() => void respondToApproval(approval.requestId, "acceptForSession")}
+            >
+              <PinIcon className="size-3" />
+              Session
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={responseDisabled}
+              onClick={() => void respondToApproval(approval.requestId, "decline")}
+            >
+              <XIcon className="size-3" />
+              Decline
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {userInput ? (
+        <MonitorUserInputPrompt
+          prompt={userInput}
+          draftAnswers={draftAnswers}
+          setDraftAnswers={setDraftAnswers}
+          onRespond={respondToUserInput}
+          disabled={responseDisabled}
+          threadRef={threadRef}
+        />
+      ) : null}
+      {!approval && !userInput && fallbackThread.hasActionableProposedPlan ? (
+        <div className="flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="text-[11px] font-medium text-amber-800 dark:text-amber-100">
+              Plan ready
+            </div>
+            <p className="truncate text-[10px] text-muted-foreground/70">
+              Open the full thread to inspect or implement it.
+            </p>
+          </div>
+          <Button
+            render={
+              <Link
+                to="/$environmentId/$threadId"
+                params={{
+                  environmentId: threadRef.environmentId,
+                  threadId: threadRef.threadId,
+                }}
+              />
+            }
+            size="xs"
+            variant="outline"
+          >
+            Open
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function MonitorUserInputPrompt({
+  prompt,
+  draftAnswers,
+  setDraftAnswers,
+  onRespond,
+  disabled,
+  threadRef,
+}: {
+  prompt: PendingUserInput;
+  draftAnswers: Record<string, PendingUserInputDraftAnswer>;
+  setDraftAnswers: (
+    updater: (
+      answers: Record<string, PendingUserInputDraftAnswer>,
+    ) => Record<string, PendingUserInputDraftAnswer>,
+  ) => void;
+  onRespond: (
+    requestId: ApprovalRequestId,
+    answers: Record<string, string | string[]>,
+  ) => Promise<void>;
+  disabled: boolean;
+  threadRef: ScopedThreadRef;
+}) {
+  const question = prompt.questions[0] ?? null;
+  if (!question) return null;
+  const completeAnswers = buildPendingUserInputAnswers(prompt.questions, draftAnswers);
+  const isMultiQuestion = prompt.questions.length > 1;
+  const hasHiddenOptions = question.options.length > 4;
+  const requiresFullThread = isMultiQuestion || hasHiddenOptions;
+
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-100">
+        <MessageSquareTextIcon className="size-3.5" />
+        {question.header}
+        {isMultiQuestion ? (
+          <span className="text-[10px] text-muted-foreground">1/{prompt.questions.length}</span>
+        ) : null}
+      </div>
+      <p className="text-[11px] text-foreground/85">{question.question}</p>
+      {!requiresFullThread ? (
+        <div className="grid gap-1">
+          {question.options.map((option) => {
+            const selected = draftAnswers[question.id]?.selectedOptionLabels?.includes(
+              option.label,
+            );
+            return (
+              <button
+                key={option.label}
+                type="button"
+                disabled={disabled}
+                className={cn(
+                  "rounded-md border px-2 py-1 text-left text-[11px] transition-colors",
+                  selected
+                    ? "border-primary/35 bg-primary/10 text-foreground"
+                    : "border-border/55 bg-background/50 text-muted-foreground hover:text-foreground",
+                )}
+                onClick={() => {
+                  setDraftAnswers((answers) => ({
+                    ...answers,
+                    [question.id]: togglePendingUserInputOptionSelection(
+                      question,
+                      answers[question.id],
+                      option.label,
+                    ),
+                  }));
+                }}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] text-muted-foreground/65">
+          {requiresFullThread
+            ? "This prompt needs the full thread form."
+            : "Select an option, then submit."}
+        </span>
+        {requiresFullThread ? (
+          <Button
+            render={
+              <Link
+                to="/$environmentId/$threadId"
+                params={{
+                  environmentId: threadRef.environmentId,
+                  threadId: threadRef.threadId,
+                }}
+              />
+            }
+            size="xs"
+            variant="outline"
+          >
+            Open
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            size="xs"
+            disabled={disabled || !completeAnswers}
+            onClick={() => {
+              if (completeAnswers) void onRespond(prompt.requestId, completeAnswers);
+            }}
+          >
+            Submit
+          </Button>
+        )}
+      </div>
+    </div>
+  );
+}
