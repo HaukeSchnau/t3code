@@ -205,6 +205,10 @@ export function resolveWorkspaceVpCommand(
   return path.join(repoRoot, "node_modules", ".bin", hostPlatform === "win32" ? "vp.cmd" : "vp");
 }
 
+export function getStageInstallArgs(): ReadonlyArray<string> {
+  return ["install", "--prod"];
+}
+
 const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -953,13 +957,15 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  const installCommand = yield* resolveSpawnCommand("vp", ["install", "--prod", "--no-optional"]);
+  // Some desktop runtime packages load native platform binaries published as optional dependencies.
+  const stageInstallArgs = getStageInstallArgs();
+  const installCommand = yield* resolveSpawnCommand("vp", stageInstallArgs);
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: stageAppDir,
       shell: installCommand.shell,
     }),
-    { label: "vp install --prod --no-optional", verbose: options.verbose },
+    { label: `vp ${stageInstallArgs.join(" ")}`, verbose: options.verbose },
   );
 
   // electron-builder treats several set-but-empty variables (e.g. CSC_LINK="")

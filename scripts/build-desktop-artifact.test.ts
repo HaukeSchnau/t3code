@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 
 import {
   createStagePnpmConfig,
+  getStageInstallArgs,
   resolveDesktopRuntimeDependencies,
   resolveBuildOptions,
   resolveDesktopBuildIconAssets,
@@ -117,6 +118,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         effect: "4.0.0-beta.59",
       },
     );
+  });
+
+  it("keeps platform optional dependencies in staged desktop installs", () => {
+    assert.deepStrictEqual(getStageInstallArgs(), ["install", "--prod"]);
   });
 
   it("carries only staged dependency patch metadata into staged desktop installs", () => {
