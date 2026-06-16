@@ -40,6 +40,9 @@ const gitStatusListeners = new Set<(event: VcsStatusResult) => void>();
 
 const rpcClientMock = {
   dispose: vi.fn(),
+  codex: {
+    resumeThread: vi.fn(),
+  },
   terminal: {
     open: vi.fn(),
     attach: vi.fn((_input: unknown, listener: (event: TerminalAttachStreamEvent) => void) =>

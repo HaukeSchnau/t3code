@@ -190,6 +190,8 @@ describe("createEnvironmentConnection", () => {
       syncShellSnapshot: vi.fn(),
     });
 
+    await connection.ensureBootstrapped();
+
     expect(() => emitWelcome(EnvironmentId.make("env-2"))).toThrow(
       "Environment connection env-1 changed identity to env-2 via server lifecycle welcome.",
     );

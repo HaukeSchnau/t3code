@@ -47,14 +47,16 @@ describe("AssetAccess", () => {
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const separatorIndex = suffix.indexOf("/");
       const token = suffix.slice(0, separatorIndex);
+      const canonicalHtmlPath = yield* fileSystem.realPath(htmlPath);
+      const canonicalCssPath = yield* fileSystem.realPath(cssPath);
 
       expect(yield* resolveAsset(token, "report.html")).toEqual({
         kind: "file",
-        path: htmlPath,
+        path: canonicalHtmlPath,
       });
       expect(yield* resolveAsset(token, "report.css")).toEqual({
         kind: "file",
-        path: cssPath,
+        path: canonicalCssPath,
       });
       expect(yield* resolveAsset(token, "../secret.txt")).toBeNull();
       expect(yield* resolveAsset(token, ".env")).toBeNull();
@@ -126,12 +128,13 @@ describe("AssetAccess", () => {
       });
       const faviconSuffix = faviconResult.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
       const faviconSeparatorIndex = faviconSuffix.indexOf("/");
+      const canonicalFaviconPath = yield* fileSystem.realPath(faviconPath);
       expect(
         yield* resolveAsset(
           faviconSuffix.slice(0, faviconSeparatorIndex),
           faviconSuffix.slice(faviconSeparatorIndex + 1),
         ),
-      ).toEqual({ kind: "file", path: faviconPath });
+      ).toEqual({ kind: "file", path: canonicalFaviconPath });
 
       yield* fileSystem.remove(faviconPath);
       const fallbackResult = yield* issueAssetUrl({

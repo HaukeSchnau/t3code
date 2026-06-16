@@ -214,6 +214,24 @@ describe("mobile remote environment registry effects", () => {
           connection: mocks.environmentConnection,
         }),
       );
+      const createConnectionCalls = mocks.createEnvironmentConnection.mock
+        .calls as unknown as ReadonlyArray<readonly [unknown]>;
+      const createConnectionInput = createConnectionCalls[0]?.[0] as {
+        readonly onConfigSnapshot?: (serverConfig: {
+          readonly environment: {
+            readonly capabilities: {
+              readonly terminalMetadata: boolean;
+            };
+          };
+        }) => void;
+      };
+      createConnectionInput.onConfigSnapshot?.({
+        environment: {
+          capabilities: {
+            terminalMetadata: true,
+          },
+        },
+      });
       expect(mocks.subscribeTerminalMetadata).toHaveBeenCalledWith(
         expect.objectContaining({ environmentId: connection.environmentId }),
       );
