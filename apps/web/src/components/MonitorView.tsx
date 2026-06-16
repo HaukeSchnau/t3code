@@ -9,11 +9,15 @@ import {
   XIcon,
 } from "lucide-react";
 import { Link } from "@tanstack/react-router";
-import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
 import {
   type ApprovalRequestId,
+  defaultInstanceIdForDriver,
+  ProviderDriverKind,
+  type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ScopedThreadRef,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import { type CSSProperties, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
@@ -34,27 +38,48 @@ import { retainThreadDetailSubscription } from "../environments/runtime/service"
 import { useSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { cn, newCommandId, newMessageId } from "../lib/utils";
+import { appendElementContextsToPrompt, type ElementContextDraft } from "../lib/elementContext";
+import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
+import { appendTerminalContextsToPrompt, type TerminalContextDraft } from "../lib/terminalContext";
+import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
+import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   buildPendingUserInputAnswers,
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import { selectProjectByRef, selectSidebarThreadsAcrossEnvironments, useStore } from "../store";
+import {
+  type AppState,
+  selectProjectByRef,
+  selectSidebarThreadsAcrossEnvironments,
+  selectThreadsForEnvironment,
+  useStore,
+} from "../store";
 import { createThreadSelectorByRef } from "../storeSelectors";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
 import type { SidebarThreadSummary, Thread } from "../types";
+import {
+  getStartedThreadModelChangeBlockReason,
+  deriveComposerSendState,
+  readFileAsDataUrl,
+} from "./ChatView.logic";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
-import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
-import { ComposerPrimaryActions } from "./chat/ComposerPrimaryActions";
+import { type ComposerImageAttachment, useComposerDraftStore } from "../composerDraftStore";
+import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
+import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { useServerConfig, useServerKeybindings } from "../rpc/serverState";
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
 const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
 const EMPTY_TURN_DIFFS = new Map();
 const EMPTY_REVERT_COUNTS = new Map();
-const EMPTY_TERMINAL_CONTEXTS: [] = [];
 const EMPTY_PROVIDER_SKILLS: [] = [];
+const EMPTY_RESPONDING_REQUEST_IDS: [] = [];
+const EMPTY_PENDING_DRAFT_ANSWERS = {};
 const MONITOR_GRID_GAP_PX = 8;
 const MONITOR_TILE_TARGET_MIN_WIDTH_PX = 420;
 const MONITOR_TILE_TARGET_ASPECT_RATIO = 1.3;
@@ -612,24 +637,202 @@ function MonitorThreadActions({
     () => (thread ? derivePendingUserInputs(thread.activities) : []),
     [thread],
   );
-  const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
-  const [draft, setDraft] = useState({ text: "", cursor: 0 });
+  const settings = useSettings();
+  const { resolvedTheme } = useTheme();
+  const serverConfig = useServerConfig();
+  const keybindings = useServerKeybindings();
+  const providerStatuses = useMemo<ServerProvider[]>(
+    () => [...(serverConfig?.providers ?? [])],
+    [serverConfig?.providers],
+  );
+  const activeProject = useStore(
+    useMemo(
+      (): ((state: AppState) => ReturnType<typeof selectProjectByRef>) =>
+        thread
+          ? (state) =>
+              selectProjectByRef(state, scopeProjectRef(thread.environmentId, thread.projectId))
+          : () => undefined,
+      [thread],
+    ),
+  );
+  const environmentThreads = useStore(
+    useShallow((state) => selectThreadsForEnvironment(state, threadRef.environmentId)),
+  );
+  const providerDriverByInstanceId = useMemo(
+    () => new Map(providerStatuses.map((status) => [status.instanceId, status.driver])),
+    [providerStatuses],
+  );
+  const activeUsageLimits = useMemo(
+    () =>
+      deriveLatestUsageLimitsSnapshotForSources(
+        environmentThreads.map((sourceThread) => ({
+          provider:
+            providerDriverByInstanceId.get(sourceThread.modelSelection.instanceId) ??
+            (sourceThread.modelSelection.instanceId ===
+            defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
+              ? ProviderDriverKind.make("codex")
+              : null),
+          activities: sourceThread.activities,
+        })),
+        ProviderDriverKind.make("codex"),
+      ),
+    [environmentThreads, providerDriverByInstanceId],
+  );
+  const composerRuntimeMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(threadRef)?.runtimeMode ?? null,
+  );
+  const composerInteractionMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(threadRef)?.interactionMode ?? null,
+  );
+  const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
+  const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
+  const setComposerDraftInteractionMode = useComposerDraftStore(
+    (store) => store.setInteractionMode,
+  );
+  const clearComposerDraftContent = useComposerDraftStore((store) => store.clearComposerContent);
+  const setStickyComposerModelSelection = useComposerDraftStore(
+    (store) => store.setStickyModelSelection,
+  );
+  const promptRef = useRef("");
+  const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
+  const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
+  const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
+  const composerRef = useRef<ChatComposerHandle | null>(null);
+  const shouldAutoScrollRef = useRef(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const promptHasText = draft.text.trim().length > 0;
-  const hasSendableContent = Boolean(thread && promptHasText);
+  const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const runtimeMode = composerRuntimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const interactionMode =
+    composerInteractionMode ?? thread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isRunning =
     isThreadSessionLive(thread?.session ?? null) || isThreadSessionLive(fallbackThread.session);
+  const phase = isRunning ? "running" : "ready";
+
+  const focusComposer = useCallback(() => {
+    window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
+  }, []);
+
+  const handleRuntimeModeChange = useCallback(
+    (mode: typeof runtimeMode) => {
+      setComposerDraftRuntimeMode(threadRef, mode);
+      focusComposer();
+    },
+    [focusComposer, setComposerDraftRuntimeMode, threadRef],
+  );
+
+  const handleInteractionModeChange = useCallback(
+    (mode: typeof interactionMode) => {
+      setComposerDraftInteractionMode(threadRef, mode);
+      focusComposer();
+    },
+    [focusComposer, setComposerDraftInteractionMode, threadRef],
+  );
+
+  const toggleInteractionMode = useCallback(() => {
+    handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
+  }, [handleInteractionModeChange, interactionMode]);
+
+  const getModelDisabledReason = useCallback(
+    (instanceId: ProviderInstanceId, model: string): string | null => {
+      if (!thread) return null;
+      const reason = getStartedThreadModelChangeBlockReason({
+        providers: providerStatuses,
+        hasStartedSession: thread.session !== null,
+        currentModelSelection: thread.modelSelection,
+        currentProviderInstanceId: thread.session?.providerInstanceId ?? null,
+        nextModelSelection: { instanceId, model },
+      });
+      return reason ? `${reason.description} Start a new thread to use this model.` : null;
+    },
+    [providerStatuses, thread],
+  );
+
+  const onProviderModelSelect = useCallback(
+    (instanceId: ProviderInstanceId, model: string) => {
+      if (!thread) return;
+      const resolvedModel = resolveAppModelSelectionForInstance(
+        instanceId,
+        settings,
+        providerStatuses,
+        model,
+      );
+      if (!resolvedModel) {
+        focusComposer();
+        return;
+      }
+      const nextModelSelection = { instanceId, model: resolvedModel };
+      const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
+        providers: providerStatuses,
+        hasStartedSession: thread.session !== null,
+        currentModelSelection: thread.modelSelection,
+        currentProviderInstanceId: thread.session?.providerInstanceId ?? null,
+        nextModelSelection,
+      });
+      if (modelChangeBlockReason) {
+        setError(`${modelChangeBlockReason.title}: ${modelChangeBlockReason.description}`);
+        focusComposer();
+        return;
+      }
+      setError(null);
+      setComposerDraftModelSelection(threadRef, nextModelSelection);
+      setStickyComposerModelSelection(nextModelSelection);
+      focusComposer();
+    },
+    [
+      focusComposer,
+      providerStatuses,
+      setComposerDraftModelSelection,
+      setStickyComposerModelSelection,
+      settings,
+      thread,
+      threadRef,
+    ],
+  );
 
   const send = useCallback(async () => {
-    const prompt = composerEditorRef.current?.readSnapshot().value ?? draft.text;
-    const text = prompt.trim();
-    if (!thread || text.length === 0 || busy) return;
+    if (!thread || busy) return;
+    const sendContext = composerRef.current?.getSendContext();
+    if (!sendContext) return;
+    const {
+      images,
+      terminalContexts,
+      elementContexts,
+      previewAnnotations,
+      selectedModelSelection,
+    } = sendContext;
+    const promptForSend = sendContext.prompt;
+    const { trimmedPrompt, sendableTerminalContexts, hasSendableContent } = deriveComposerSendState(
+      {
+        prompt: promptForSend,
+        imageCount: images.length,
+        terminalContexts,
+        elementContextCount: elementContexts.length + previewAnnotations.length,
+      },
+    );
+    if (!hasSendableContent) return;
     const api = readEnvironmentApi(threadRef.environmentId);
     if (!api) return;
     setBusy(true);
     setError(null);
     try {
+      const messageTextWithContexts = appendElementContextsToPrompt(
+        appendTerminalContextsToPrompt(promptForSend, sendableTerminalContexts),
+        elementContexts,
+      );
+      const messageText = previewAnnotations.reduce(
+        (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
+        messageTextWithContexts,
+      );
+      const attachments = await Promise.all(
+        images.map(async (image) => ({
+          type: "image" as const,
+          name: image.name,
+          mimeType: image.mimeType,
+          sizeBytes: image.sizeBytes,
+          dataUrl: await readFileAsDataUrl(image.file),
+        })),
+      );
       await api.orchestration.dispatchCommand({
         type: isRunning ? "thread.message.queue" : "thread.turn.start",
         commandId: newCommandId(),
@@ -637,23 +840,24 @@ function MonitorThreadActions({
         message: {
           messageId: newMessageId(),
           role: "user",
-          text,
-          attachments: [],
+          text: messageText,
+          attachments,
         },
-        modelSelection: thread.modelSelection,
-        titleSeed: thread.title,
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
+        modelSelection: selectedModelSelection,
+        titleSeed: trimmedPrompt || thread.title,
+        runtimeMode,
+        interactionMode,
         createdAt: new Date().toISOString(),
       });
-      setDraft({ text: "", cursor: 0 });
-      composerEditorRef.current?.focusAt(0);
+      promptRef.current = "";
+      clearComposerDraftContent(threadRef);
+      composerRef.current?.resetCursorState();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send follow-up.");
     } finally {
       setBusy(false);
     }
-  }, [busy, draft.text, isRunning, thread, threadRef.environmentId, threadRef.threadId]);
+  }, [busy, clearComposerDraftContent, interactionMode, isRunning, runtimeMode, thread, threadRef]);
 
   const interrupt = useCallback(async () => {
     const api = readEnvironmentApi(threadRef.environmentId);
@@ -689,80 +893,88 @@ function MonitorThreadActions({
           {error}
         </div>
       ) : null}
-      <form
-        className="mt-2 w-full min-w-0"
-        data-monitor-composer="true"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void send();
-        }}
-      >
-        <div className="group rounded-xl p-px transition-colors duration-200">
-          <div className="rounded-xl border border-border bg-card transition-colors duration-200 has-focus-visible:border-ring/45">
-            <div className="relative px-3 pb-2 pt-3">
-              <ComposerPromptEditor
-                editorRef={composerEditorRef}
-                value={draft.text}
-                cursor={draft.cursor}
-                terminalContexts={EMPTY_TERMINAL_CONTEXTS}
-                skills={EMPTY_PROVIDER_SKILLS}
-                disabled={!thread || busy}
-                placeholder={
-                  thread
-                    ? isRunning
-                      ? "Queue a follow-up..."
-                      : "Ask a follow-up..."
-                    : "Loading thread..."
-                }
-                className="max-h-24 min-h-11 text-[13px] leading-5 sm:text-[13px]"
-                onRemoveTerminalContext={() => undefined}
-                onChange={(nextValue, nextCursor) => {
-                  setDraft({ text: nextValue, cursor: nextCursor });
-                }}
-                onCommandKeyDown={(key, event) => {
-                  if (key === "Enter" && !event.shiftKey) {
-                    void send();
-                    return true;
-                  }
-                  return false;
-                }}
-                onPaste={() => undefined}
-              />
-            </div>
-            <div
-              data-chat-composer-footer="true"
-              data-chat-composer-footer-compact="true"
-              className="flex min-w-0 flex-nowrap items-center justify-between gap-2 border-t border-border/60 px-2.5 py-2"
-            >
-              <div className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/65">
-                {thread ? (isRunning ? "Active" : "Ready") : "Loading"}
-              </div>
-              <div
-                data-chat-composer-actions="right"
-                data-chat-composer-primary-actions-compact="true"
-                className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
-              >
-                <ComposerPrimaryActions
-                  compact
-                  pendingAction={null}
-                  isRunning={isRunning}
-                  showPlanFollowUpPrompt={false}
-                  promptHasText={promptHasText}
-                  isSendBusy={busy}
-                  isConnecting={false}
-                  isEnvironmentUnavailable={!thread}
-                  isPreparingWorktree={false}
-                  hasSendableContent={hasSendableContent}
-                  preserveComposerFocusOnPointerDown
-                  onPreviousPendingQuestion={() => undefined}
-                  onInterrupt={() => void interrupt()}
-                  onImplementPlanInNewThread={() => undefined}
-                />
-              </div>
-            </div>
-          </div>
+      {thread ? (
+        <div className="mt-2" data-monitor-composer="full">
+          <ChatComposer
+            composerRef={composerRef}
+            composerDraftTarget={threadRef}
+            environmentId={threadRef.environmentId}
+            routeKind="server"
+            routeThreadRef={threadRef}
+            draftId={null}
+            activeThreadId={thread.id}
+            activeThreadEnvironmentId={thread.environmentId}
+            activeThread={thread}
+            isServerThread
+            isLocalDraftThread={false}
+            phase={phase}
+            isConnecting={false}
+            isSendBusy={busy}
+            isPreparingWorktree={false}
+            environmentUnavailable={null}
+            activePendingApproval={null}
+            pendingApprovals={[]}
+            pendingUserInputs={[]}
+            activePendingProgress={null}
+            activePendingResolvedAnswers={null}
+            activePendingIsResponding={false}
+            activePendingDraftAnswers={EMPTY_PENDING_DRAFT_ANSWERS}
+            activePendingQuestionIndex={0}
+            respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
+            showPlanFollowUpPrompt={false}
+            activeProposedPlan={null}
+            activePlan={null}
+            sidebarProposedPlan={null}
+            planSidebarLabel="Plan"
+            planSidebarOpen={false}
+            runtimeMode={runtimeMode}
+            interactionMode={interactionMode}
+            lockedProvider={null}
+            providerStatuses={providerStatuses}
+            activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
+            activeThreadModelSelection={thread.modelSelection}
+            activeThreadActivities={thread.activities}
+            activeUsageLimits={activeUsageLimits}
+            resolvedTheme={resolvedTheme}
+            settings={settings}
+            keybindings={keybindings}
+            terminalOpen={false}
+            gitCwd={activeProject?.cwd ?? null}
+            promptRef={promptRef}
+            composerImagesRef={composerImagesRef}
+            composerTerminalContextsRef={composerTerminalContextsRef}
+            composerElementContextsRef={composerElementContextsRef}
+            shouldAutoScrollRef={shouldAutoScrollRef}
+            scheduleStickToBottom={() => undefined}
+            onSend={send}
+            onInterrupt={interrupt}
+            onImplementPlanInNewThread={() => undefined}
+            onRespondToApproval={async () => undefined}
+            onSelectActivePendingUserInputOption={() => undefined}
+            onAdvanceActivePendingUserInput={() => undefined}
+            onPreviousActivePendingUserInputQuestion={() => undefined}
+            onChangeActivePendingUserInputCustomAnswer={() => undefined}
+            onProviderModelSelect={onProviderModelSelect}
+            getModelDisabledReason={getModelDisabledReason}
+            toggleInteractionMode={toggleInteractionMode}
+            handleRuntimeModeChange={handleRuntimeModeChange}
+            handleInteractionModeChange={handleInteractionModeChange}
+            togglePlanSidebar={() => undefined}
+            focusComposer={focusComposer}
+            scheduleComposerFocus={focusComposer}
+            setThreadError={(_threadId, message) => setError(message)}
+            onExpandImage={setExpandedImage}
+            variant="inline"
+          />
         </div>
-      </form>
+      ) : (
+        <div className="mt-2 rounded-xl border border-border/70 bg-card/70 px-3 py-3 text-xs text-muted-foreground">
+          Loading composer...
+        </div>
+      )}
+      {expandedImage ? (
+        <ExpandedImageDialog preview={expandedImage} onClose={() => setExpandedImage(null)} />
+      ) : null}
     </div>
   );
 }
