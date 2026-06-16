@@ -36,6 +36,7 @@ import {
   formatTerminalContextLabel,
   type TerminalContextDraft,
 } from "../../lib/terminalContext";
+import { type ElementContextDraft } from "../../lib/elementContext";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import { type Project, type ChatMessage, type SessionPhase, type Thread } from "../../types";
 import { newCommandId, newDraftId, newMessageId } from "~/lib/utils";
@@ -219,6 +220,7 @@ export function usePreviousMessageEditing({
   const editPromptRef = useRef("");
   const editComposerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const editComposerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
+  const editComposerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const editComposerRef = useRef<ChatComposerHandle | null>(null);
   const activeThreadSnapshotRef = useRef<Thread | undefined>(undefined);
   activeThreadSnapshotRef.current = activeThread;
@@ -253,6 +255,7 @@ export function usePreviousMessageEditing({
     editPromptRef.current = "";
     editComposerImagesRef.current = [];
     editComposerTerminalContextsRef.current = [];
+    editComposerElementContextsRef.current = [];
     setEditingUserMessage(null);
   }, []);
 
@@ -761,6 +764,7 @@ export function usePreviousMessageEditing({
         promptRef={editPromptRef}
         composerImagesRef={editComposerImagesRef}
         composerTerminalContextsRef={editComposerTerminalContextsRef}
+        composerElementContextsRef={editComposerElementContextsRef}
         shouldAutoScrollRef={shouldAutoScrollRef}
         scheduleStickToBottom={scheduleStickToBottom}
         onSend={onSendEditedMessage}

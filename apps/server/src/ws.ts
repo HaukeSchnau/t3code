@@ -27,6 +27,7 @@ import {
   CodexSettings,
   CodexThreadResumeError,
   CommandId,
+  type DiscoveredLocalServerList,
   EventId,
   MessageId,
   type OrchestrationCommand,
@@ -39,12 +40,15 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   ORCHESTRATION_WS_METHODS,
+  ProjectListEntriesError,
+  ProjectReadFileError,
   ProjectSearchEntriesError,
   ProjectWriteFileError,
   RelayClientInstallFailedError,
   type RelayClientInstallProgressEvent,
   OrchestrationReplayEventsError,
   FilesystemBrowseError,
+  AssetAccessError,
   EnvironmentAuthorizationError,
   ProjectId,
   ProviderDriverKind,
@@ -60,9 +64,11 @@ import {
 } from "@t3tools/contracts";
 import { clamp } from "effect/Number";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
+import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery.ts";
 import { ServerConfig } from "./config.ts";
@@ -89,7 +95,11 @@ import { ServerLifecycleEvents } from "./serverLifecycleEvents.ts";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup.ts";
 import { redactServerSettingsForClient, ServerSettingsService } from "./serverSettings.ts";
 import { TerminalManager } from "./terminal/Services/Manager.ts";
-import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries.ts";
+import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
+import * as PreviewManager from "./preview/Manager.ts";
+import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import * as PortScanner from "./preview/PortScanner.ts";
+import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import { WorkspaceFileSystem } from "./workspace/Services/WorkspaceFileSystem.ts";
 import { WorkspacePathOutsideRootError } from "./workspace/Services/WorkspacePaths.ts";
 import { VcsStatusBroadcaster } from "./vcs/VcsStatusBroadcaster.ts";
@@ -184,10 +194,13 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
   [WS_METHODS.sourceControlCloneRepository, AuthOrchestrationOperateScope],
   [WS_METHODS.sourceControlPublishRepository, AuthOrchestrationOperateScope],
+  [WS_METHODS.projectsListEntries, AuthOrchestrationReadScope],
+  [WS_METHODS.projectsReadFile, AuthOrchestrationReadScope],
   [WS_METHODS.projectsSearchEntries, AuthOrchestrationReadScope],
   [WS_METHODS.projectsWriteFile, AuthOrchestrationOperateScope],
   [WS_METHODS.shellOpenInEditor, AuthOrchestrationOperateScope],
   [WS_METHODS.filesystemBrowse, AuthOrchestrationReadScope],
+  [WS_METHODS.assetsCreateUrl, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeVcsStatus, AuthOrchestrationReadScope],
   [WS_METHODS.vcsRefreshStatus, AuthOrchestrationReadScope],
   [WS_METHODS.vcsPull, AuthOrchestrationOperateScope],
@@ -210,6 +223,18 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.terminalClose, AuthTerminalOperateScope],
   [WS_METHODS.subscribeTerminalEvents, AuthTerminalOperateScope],
   [WS_METHODS.subscribeTerminalMetadata, AuthTerminalOperateScope],
+  [WS_METHODS.previewOpen, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewNavigate, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewRefresh, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewClose, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewList, AuthOrchestrationReadScope],
+  [WS_METHODS.previewReportStatus, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewAutomationConnect, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewAutomationRespond, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewAutomationReportOwner, AuthOrchestrationOperateScope],
+  [WS_METHODS.previewAutomationClearOwner, AuthOrchestrationOperateScope],
+  [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
@@ -361,6 +386,9 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const vcsProvisioning = yield* VcsProvisioningService;
       const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
       const terminalManager = yield* TerminalManager;
+      const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+      const previewManager = yield* PreviewManager.PreviewManager;
+      const portDiscovery = yield* PortScanner.PortDiscovery;
       const providerRegistry = yield* ProviderRegistry;
       const providerSessionDirectory = yield* ProviderSessionDirectory;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
@@ -368,7 +396,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       const lifecycleEvents = yield* ServerLifecycleEvents;
       const serverSettings = yield* ServerSettingsService;
       const startup = yield* ServerRuntimeStartup;
-      const workspaceEntries = yield* WorkspaceEntries;
+      const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner;
       const repositoryIdentityResolver = yield* RepositoryIdentityResolver;
@@ -854,17 +882,24 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
       }) =>
         Effect.scoped(
           Effect.gen(function* () {
-            const clientContext = yield* Layer.build(
-              CodexClient.layerCommand({
-                command: input.binaryPath,
-                args: ["app-server"],
+            const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+            const env = {
+              ...input.environment,
+              ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
+            };
+            const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, ["app-server"], {
+              env,
+              extendEnv: false,
+            });
+            const child = yield* spawner.spawn(
+              ChildProcess.make(spawnCommand.command, spawnCommand.args, {
                 cwd: config.cwd,
-                env: {
-                  ...input.environment,
-                  ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-                },
+                env,
+                extendEnv: false,
+                shell: spawnCommand.shell,
               }),
             );
+            const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
             const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
               Effect.provide(clientContext),
             );
@@ -1067,7 +1102,7 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: ExternalLauncher.resolveAvailableEditors(),
+          availableEditors: yield* externalLauncher.resolveAvailableEditors(),
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1482,6 +1517,33 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.projectsListEntries]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsListEntries,
+            workspaceEntries.list(input).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectListEntriesError({
+                    message: `Failed to list workspace entries: ${cause.detail}`,
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.projectsReadFile]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.projectsReadFile,
+            workspaceFileSystem.readFile(input).pipe(
+              Effect.mapError((cause) => {
+                const message = isWorkspacePathOutsideRootError(cause)
+                  ? "Workspace file path must stay within the project root."
+                  : `Failed to read workspace file: ${cause.detail}`;
+                return new ProjectReadFileError({ message, cause });
+              }),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
         [WS_METHODS.projectsWriteFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsWriteFile,
@@ -1514,6 +1576,52 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
                   }),
               ),
             ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.assetsCreateUrl]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.assetsCreateUrl,
+            Effect.gen(function* () {
+              if (input.resource._tag !== "workspace-file") {
+                return yield* issueAssetUrl({ resource: input.resource });
+              }
+              const thread = yield* projectionSnapshotQuery
+                .getThreadShellById(input.resource.threadId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AssetAccessError({
+                        message: "Failed to resolve workspace context.",
+                        cause,
+                      }),
+                  ),
+                );
+              if (Option.isNone(thread)) {
+                return yield* new AssetAccessError({
+                  message: "Workspace context was not found.",
+                });
+              }
+              const project = yield* projectionSnapshotQuery
+                .getProjectShellById(thread.value.projectId)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AssetAccessError({
+                        message: "Failed to resolve workspace context.",
+                        cause,
+                      }),
+                  ),
+                );
+              if (Option.isNone(project)) {
+                return yield* new AssetAccessError({
+                  message: "Workspace context was not found.",
+                });
+              }
+              return yield* issueAssetUrl({
+                resource: input.resource,
+                workspaceRoot: thread.value.worktreePath ?? project.value.workspaceRoot,
+              });
+            }),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.subscribeVcsStatus]: (input) =>
@@ -1682,6 +1790,80 @@ const makeWsRpcLayer = (currentSession: AuthenticatedSession) =>
             ),
             { "rpc.aggregate": "terminal" },
           ),
+        [WS_METHODS.previewOpen]: (input) =>
+          observeRpcEffect(WS_METHODS.previewOpen, previewManager.open(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewNavigate]: (input) =>
+          observeRpcEffect(WS_METHODS.previewNavigate, previewManager.navigate(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewRefresh]: (input) =>
+          observeRpcEffect(WS_METHODS.previewRefresh, previewManager.refresh(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewClose]: (input) =>
+          observeRpcEffect(WS_METHODS.previewClose, previewManager.close(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewList]: (input) =>
+          observeRpcEffect(WS_METHODS.previewList, previewManager.list(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewReportStatus]: (input) =>
+          observeRpcEffect(WS_METHODS.previewReportStatus, previewManager.reportStatus(input), {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.previewAutomationConnect]: (input) =>
+          observeRpcStreamEffect(
+            WS_METHODS.previewAutomationConnect,
+            previewAutomationBroker.connect(input.clientId),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationRespond]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationRespond,
+            previewAutomationBroker.respond(input),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationReportOwner]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationReportOwner,
+            previewAutomationBroker.reportOwner(input),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.previewAutomationClearOwner]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.previewAutomationClearOwner,
+            previewAutomationBroker.clearOwner(input.clientId),
+            { "rpc.aggregate": "preview-automation" },
+          ),
+        [WS_METHODS.subscribePreviewEvents]: (_input) =>
+          observeRpcStream(WS_METHODS.subscribePreviewEvents, previewManager.events, {
+            "rpc.aggregate": "preview",
+          }),
+        [WS_METHODS.subscribeDiscoveredLocalServers]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeDiscoveredLocalServers,
+            Stream.callback<DiscoveredLocalServerList>((queue) =>
+              Effect.gen(function* () {
+                yield* portDiscovery.retain;
+                const initial = yield* portDiscovery.scan();
+                const initialScannedAt = DateTime.formatIso(yield* DateTime.now);
+                yield* Queue.offer(queue, {
+                  servers: initial,
+                  scannedAt: initialScannedAt,
+                });
+                yield* portDiscovery.subscribe((servers) =>
+                  Effect.gen(function* () {
+                    const scannedAt = DateTime.formatIso(yield* DateTime.now);
+                    yield* Queue.offer(queue, { servers, scannedAt });
+                  }),
+                );
+              }),
+            ),
+            { "rpc.aggregate": "preview" },
+          ),
         [WS_METHODS.subscribeServerConfig]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
@@ -1805,6 +1987,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provide(PreviewAutomationBroker.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscoveryLayer.layer.pipe(

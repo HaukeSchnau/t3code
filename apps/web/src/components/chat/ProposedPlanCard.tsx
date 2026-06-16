@@ -1,5 +1,5 @@
 import { memo, useState, useId } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import {
   buildCollapsedProposedPlanPreviewMarkdown,
   buildProposedPlanMarkdownFilename,
@@ -31,11 +31,13 @@ import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 export const ProposedPlanCard = memo(function ProposedPlanCard({
   planMarkdown,
   environmentId,
+  threadRef,
   cwd,
   workspaceRoot,
 }: {
   planMarkdown: string;
   environmentId: EnvironmentId;
+  threadRef?: ScopedThreadRef | undefined;
   cwd: string | undefined;
   workspaceRoot: string | undefined;
 }) {
@@ -167,6 +169,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               text={collapsedPreview ?? ""}
               cwd={cwd}
               environmentId={environmentId}
+              threadRef={threadRef}
               isStreaming={false}
             />
           ) : (
@@ -174,6 +177,7 @@ export const ProposedPlanCard = memo(function ProposedPlanCard({
               text={displayedPlanMarkdown}
               cwd={cwd}
               environmentId={environmentId}
+              threadRef={threadRef}
               isStreaming={false}
             />
           )}

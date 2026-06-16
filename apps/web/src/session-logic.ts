@@ -73,6 +73,7 @@ export interface WorkLogEntry {
   changedFiles?: ReadonlyArray<string>;
   tone: "thinking" | "tool" | "info" | "error";
   toolTitle?: string;
+  toolData?: unknown;
   itemType?: ToolLifecycleItemType;
   requestKind?: PendingApproval["requestKind"];
   subagent?: SubagentWorkEntry;
@@ -786,6 +787,12 @@ function toDerivedWorkLogEntry(activity: OrchestrationThreadActivity): DerivedWo
   if (title) {
     entry.toolTitle = title;
   }
+  if (itemType === "mcp_tool_call") {
+    const data = asRecord(payload?.data);
+    if (data?.item !== undefined) {
+      entry.toolData = data.item;
+    }
+  }
   if (itemType) {
     entry.itemType = itemType;
   }
@@ -870,6 +877,7 @@ function mergeDerivedWorkLogEntries(
   const toolCallId = next.toolCallId ?? previous.toolCallId;
   const toolLifecycleStatus = next.toolLifecycleStatus ?? previous.toolLifecycleStatus;
   const media = mergeWorkLogMedia(previous.media, next.media);
+  const toolData = next.toolData ?? previous.toolData;
   return {
     ...previous,
     ...next,
@@ -884,6 +892,7 @@ function mergeDerivedWorkLogEntries(
     ...(toolCallId ? { toolCallId } : {}),
     ...(toolLifecycleStatus !== undefined ? { toolLifecycleStatus } : {}),
     ...(media.length > 0 ? { media } : {}),
+    ...(toolData !== undefined ? { toolData } : {}),
   };
 }
 
