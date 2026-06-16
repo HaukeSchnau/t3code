@@ -47,7 +47,7 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { Textarea } from "./ui/textarea";
-import { SidebarInset, SidebarTrigger } from "./ui/sidebar";
+import { SidebarInset } from "./ui/sidebar";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
@@ -341,25 +341,6 @@ function useRetainedThreadDetail(threadRef: ScopedThreadRef, enabled: boolean): 
   return useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
 }
 
-function MonitorHeader({ count }: { count: number }) {
-  return (
-    <header className="drag-region flex h-12 shrink-0 items-center gap-3 border-b border-border/70 px-3 sm:h-[52px] sm:px-5">
-      <SidebarTrigger className="size-7 shrink-0 md:hidden" />
-      <div className="min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-foreground">Monitor</span>
-          <span className="rounded-md border border-border/60 bg-muted/35 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
-            {count} live
-          </span>
-        </div>
-        <p className="mt-0.5 hidden text-[11px] text-muted-foreground/65 sm:block">
-          Stable-order compact grid across all environments.
-        </p>
-      </div>
-    </header>
-  );
-}
-
 export function MonitorView() {
   const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const candidates = useStableMonitorCandidates(sidebarThreads);
@@ -372,7 +353,6 @@ export function MonitorView() {
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
       <div className="flex min-h-0 flex-1 flex-col">
-        <MonitorHeader count={candidates.length} />
         {candidates.length === 0 ? (
           <Empty className="flex-1">
             <EmptyHeader>

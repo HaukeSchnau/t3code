@@ -23,6 +23,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   packing so active sets use the available monitor viewport instead of leaving a mostly blank
   canvas. Medium sets should avoid sparse last rows such as a five-plus-one layout when a balanced
   three-by-two wall fits.
+- The monitor route should not render its own title/header bar; the sidebar already provides
+  navigation context, and the grid should receive the full route viewport.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
 
