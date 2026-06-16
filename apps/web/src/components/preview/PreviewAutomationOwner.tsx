@@ -23,6 +23,25 @@ import {
 
 import { previewBridge } from "./previewBridge";
 
+interface PreviewAutomationOwnerReportInput {
+  readonly clientId: string;
+  readonly environmentId: ScopedThreadRef["environmentId"];
+  readonly threadId: ScopedThreadRef["threadId"];
+  readonly tabId: string | null;
+  readonly visible: boolean;
+  readonly supportsAutomation: boolean;
+}
+
+const buildPreviewAutomationOwnerReportKey = (input: PreviewAutomationOwnerReportInput): string =>
+  JSON.stringify({
+    clientId: input.clientId,
+    environmentId: input.environmentId,
+    supportsAutomation: input.supportsAutomation,
+    tabId: input.tabId,
+    threadId: input.threadId,
+    visible: input.visible,
+  });
+
 const waitForDesktopOverlay = async (
   threadRef: ScopedThreadRef,
   timeoutMs: number,
@@ -117,9 +136,39 @@ export function PreviewAutomationOwner(props: {
   const handlerRef = useRef<(request: PreviewAutomationRequest) => Promise<unknown>>(
     async () => undefined,
   );
+  const lastReportedOwnerKeyRef = useRef<string | null>(null);
   useEffect(() => {
     ownerStateRef.current = { threadRef, visible };
   }, [threadRef, visible]);
+
+  const reportOwner = useCallback(
+    (options: { readonly force?: boolean } = {}) => {
+      const api = ensureEnvironmentApi(threadRef.environmentId);
+      const ownerState = ownerStateRef.current;
+      const state = selectThreadPreviewState(
+        usePreviewStateStore.getState().byThreadKey,
+        ownerState.threadRef,
+      );
+      const owner = {
+        clientId: automationClientId,
+        environmentId: ownerState.threadRef.environmentId,
+        threadId: ownerState.threadRef.threadId,
+        tabId: state.snapshot?.tabId ?? null,
+        visible: ownerState.visible,
+        supportsAutomation: Boolean(previewBridge?.automation),
+      } satisfies PreviewAutomationOwnerReportInput;
+      const reportKey = buildPreviewAutomationOwnerReportKey(owner);
+      if (!options.force && lastReportedOwnerKeyRef.current === reportKey) {
+        return;
+      }
+      lastReportedOwnerKeyRef.current = reportKey;
+      void api.preview.automation.reportOwner({
+        ...owner,
+        focusedAt: new Date().toISOString(),
+      });
+    },
+    [automationClientId, threadRef.environmentId],
+  );
 
   const handleRequest = useCallback(
     async (request: PreviewAutomationRequest): Promise<unknown> => {
@@ -256,56 +305,38 @@ export function PreviewAutomationOwner(props: {
       },
       {
         onResubscribe: () => {
-          const ownerState = ownerStateRef.current;
-          const state = selectThreadPreviewState(
-            usePreviewStateStore.getState().byThreadKey,
-            ownerState.threadRef,
-          );
-          void api.preview.automation.reportOwner({
-            clientId: automationClientId,
-            environmentId: ownerState.threadRef.environmentId,
-            threadId: ownerState.threadRef.threadId,
-            tabId: state.snapshot?.tabId ?? null,
-            visible: ownerState.visible,
-            supportsAutomation: Boolean(previewBridge?.automation),
-            focusedAt: new Date().toISOString(),
-          });
+          reportOwner();
         },
       },
     );
-  }, [automationClientId, threadRef.environmentId]);
+  }, [automationClientId, reportOwner, threadRef.environmentId]);
 
   useEffect(() => {
-    const api = ensureEnvironmentApi(threadRef.environmentId);
-    const report = () => {
-      const state = selectThreadPreviewState(
-        usePreviewStateStore.getState().byThreadKey,
-        threadRef,
-      );
-      void api.preview.automation.reportOwner({
-        clientId: automationClientId,
-        environmentId: threadRef.environmentId,
-        threadId: threadRef.threadId,
-        tabId: state.snapshot?.tabId ?? null,
-        visible,
-        supportsAutomation: Boolean(previewBridge?.automation),
-        focusedAt: new Date().toISOString(),
-      });
-    };
-    report();
-    window.addEventListener("focus", report);
+    reportOwner();
+  }, [reportOwner, threadRef, visible]);
+
+  useEffect(() => {
+    const handleFocus = () => reportOwner({ force: true });
+    window.addEventListener("focus", handleFocus);
     const unsubscribe = usePreviewStateStore.subscribe((state, previous) => {
       const key = scopedThreadKey(threadRef);
       if (state.byThreadKey[key]?.snapshot?.tabId !== previous.byThreadKey[key]?.snapshot?.tabId) {
-        report();
+        reportOwner();
       }
     });
     return () => {
-      window.removeEventListener("focus", report);
+      window.removeEventListener("focus", handleFocus);
       unsubscribe();
+    };
+  }, [reportOwner, threadRef]);
+
+  useEffect(() => {
+    const api = ensureEnvironmentApi(threadRef.environmentId);
+    return () => {
+      lastReportedOwnerKeyRef.current = null;
       void api.preview.automation.clearOwner({ clientId: automationClientId });
     };
-  }, [automationClientId, threadRef, visible]);
+  }, [automationClientId, threadRef.environmentId]);
 
   return null;
 }

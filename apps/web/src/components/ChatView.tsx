@@ -1316,7 +1316,7 @@ function ChatViewContent(props: ChatViewProps) {
   const reconcileTerminalIds = useTerminalUiStateStore((state) => state.reconcileTerminalIds);
   const activeThreadRef = useMemo(
     () => (activeThread ? scopeThreadRef(activeThread.environmentId, activeThread.id) : null),
-    [activeThread],
+    [activeThread?.environmentId, activeThread?.id],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const activeRightPanelKind = useRightPanelStore((store) =>
