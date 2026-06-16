@@ -16,6 +16,10 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - The view is global across environments and projects.
 - Full thread detail subscriptions should be retained only for visible or near-visible tiles to
   avoid making the monitor a global full-history render surface.
+- Running/live badges should only reflect active session statuses (`starting` or `running`). Idle
+  ready sessions and stale running latest-turn rows must not keep tiles marked as running.
+- Tiles should favor skimmable chat transcripts over maximum density: use larger responsive cells,
+  tight gutters, and a compact but full-featured quick-follow-up composer.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
 

@@ -89,9 +89,16 @@ function toTimestamp(value: string | null | undefined): number {
   return Number.isFinite(ms) ? ms : Number.NEGATIVE_INFINITY;
 }
 
-function isSessionRunning(thread: SidebarThreadSummary): boolean {
-  const status = thread.session?.orchestrationStatus;
-  return Boolean(status && status !== "idle" && status !== "stopped");
+function isLiveSessionStatus(
+  status: NonNullable<SidebarThreadSummary["session"]>["orchestrationStatus"] | undefined,
+): boolean {
+  return status === "starting" || status === "running";
+}
+
+function isThreadSessionLive(
+  session: Thread["session"] | SidebarThreadSummary["session"],
+): boolean {
+  return isLiveSessionStatus(session?.orchestrationStatus);
 }
 
 function resolveThreadCandidate(
@@ -110,11 +117,13 @@ function resolveThreadCandidate(
 
   const actionable =
     thread.hasPendingApprovals || thread.hasPendingUserInput || thread.hasActionableProposedPlan;
+  const sessionStatus = thread.session?.orchestrationStatus;
   const hasError =
     latestTurn?.state === "error" ||
     latestTurn?.state === "interrupted" ||
-    thread.session?.orchestrationStatus === "error";
-  const running = latestTurn?.state === "running" || isSessionRunning(thread);
+    sessionStatus === "error" ||
+    sessionStatus === "interrupted";
+  const running = isLiveSessionStatus(sessionStatus);
 
   if (!actionable && !hasError && !running && !recentlyCompleted) {
     return null;
@@ -296,7 +305,7 @@ export function MonitorView() {
           </Empty>
         ) : (
           <div className="monitor-grid min-h-0 flex-1 overflow-auto p-2 sm:p-3">
-            <div className="grid min-h-full auto-rows-[clamp(18rem,31dvh,28rem)] grid-cols-[repeat(auto-fit,minmax(min(100%,20rem),1fr))] gap-2">
+            <div className="grid min-h-full auto-rows-[clamp(23rem,34dvh,30rem)] grid-cols-[repeat(auto-fit,minmax(min(100%,25rem),1fr))] gap-1.5 sm:gap-2">
               {candidates.map((candidate) => (
                 <MonitorThreadTile key={candidate.key} candidate={candidate} />
               ))}
@@ -330,16 +339,22 @@ const MonitorThreadTile = memo(function MonitorThreadTile({
     ),
   );
   const routeThreadKey = scopedThreadKey(threadRef);
-  const running = candidate.reason === "running";
+  const running =
+    isThreadSessionLive(thread?.session ?? null) || isThreadSessionLive(candidate.thread.session);
+  const activitySession = isThreadSessionLive(thread?.session ?? null)
+    ? (thread?.session ?? null)
+    : candidate.thread.session;
   const latestTurnSettled = isLatestTurnSettled(
     thread?.latestTurn ?? candidate.thread.latestTurn,
-    thread?.session ?? candidate.thread.session,
+    activitySession,
   );
-  const activeTurnStartedAt = deriveActiveWorkStartedAt(
-    thread?.latestTurn ?? candidate.thread.latestTurn,
-    thread?.session ?? candidate.thread.session,
-    null,
-  );
+  const activeTurnStartedAt = running
+    ? deriveActiveWorkStartedAt(
+        thread?.latestTurn ?? candidate.thread.latestTurn,
+        activitySession,
+        null,
+      )
+    : null;
   const elapsed = formatElapsed(activeTurnStartedAt);
 
   return (
@@ -407,7 +422,7 @@ const MonitorThreadTile = memo(function MonitorThreadTile({
         threadRef={threadRef}
         routeThreadKey={routeThreadKey}
         isWorking={running}
-        activeTurnInProgress={running || !latestTurnSettled}
+        activeTurnInProgress={running && !latestTurnSettled}
         activeTurnStartedAt={activeTurnStartedAt}
         projectCwd={project?.cwd}
       />
@@ -467,13 +482,13 @@ function MonitorThreadBody({
 
   if (!visible) {
     return (
-      <div className="flex min-h-0 flex-1 flex-col justify-between p-3 text-xs text-muted-foreground/70">
+      <div className="flex min-h-0 flex-1 flex-col justify-between p-2.5 text-xs text-muted-foreground/70">
         <div>
           <p className="font-medium text-foreground/75">{shellThread.title}</p>
           <p className="mt-1">Thread detail will hydrate when this tile scrolls into view.</p>
         </div>
         <div className="rounded-md border border-border/60 bg-muted/25 px-2 py-1 text-[11px]">
-          {shellThread.latestTurn?.state ?? shellThread.session?.orchestrationStatus ?? "idle"}
+          {shellThread.session?.orchestrationStatus ?? shellThread.latestTurn?.state ?? "idle"}
         </div>
       </div>
     );
@@ -537,10 +552,7 @@ function MonitorThreadActions({
   const [error, setError] = useState<string | null>(null);
   const canSend = Boolean(thread && draft.trim().length > 0 && !busy);
   const isRunning =
-    thread?.latestTurn?.state === "running" ||
-    fallbackThread.latestTurn?.state === "running" ||
-    thread?.session?.orchestrationStatus === "running" ||
-    fallbackThread.session?.orchestrationStatus === "running";
+    isThreadSessionLive(thread?.session ?? null) || isThreadSessionLive(fallbackThread.session);
 
   const send = useCallback(async () => {
     if (!thread || !canSend) return;
@@ -594,7 +606,7 @@ function MonitorThreadActions({
   }, [threadRef.environmentId, threadRef.threadId]);
 
   return (
-    <div className="shrink-0 border-t border-border/60 bg-background/72 p-2">
+    <div className="shrink-0 border-t border-border/60 bg-background/80 p-2">
       <MonitorPendingActions
         threadRef={threadRef}
         fallbackThread={fallbackThread}
@@ -608,7 +620,7 @@ function MonitorThreadActions({
           {error}
         </div>
       ) : null}
-      <div className="mt-2 flex items-end gap-1.5">
+      <div className="mt-2 rounded-lg border border-border/70 bg-card/70 p-1.5 shadow-xs/5 transition-colors focus-within:border-ring/45 focus-within:ring-2 focus-within:ring-ring/15">
         <Textarea
           unstyled
           value={draft}
@@ -621,29 +633,42 @@ function MonitorThreadActions({
             }
           }}
           placeholder={isRunning ? "Queue a follow-up..." : "Send a follow-up..."}
-          className="min-w-0 flex-1 rounded-md border border-border/70 bg-background/80 text-xs"
+          className="max-h-24 min-h-12 w-full resize-none bg-transparent px-1 py-0.5 text-xs leading-5 outline-none placeholder:text-muted-foreground/55 disabled:cursor-not-allowed"
         />
-        {isRunning ? (
-          <Button
-            type="button"
-            size="icon-sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() => void interrupt()}
-            aria-label="Interrupt thread"
-          >
-            <PauseIcon className="size-3.5" />
-          </Button>
-        ) : null}
-        <Button
-          type="button"
-          size="icon-sm"
-          disabled={!canSend}
-          onClick={() => void send()}
-          aria-label={isRunning ? "Queue follow-up" : "Send follow-up"}
-        >
-          <SendIcon className="size-3.5" />
-        </Button>
+        <div className="mt-1 flex items-center justify-between gap-2 border-t border-border/45 pt-1.5">
+          <div className="min-w-0 truncate text-[10px] text-muted-foreground/65">
+            {thread
+              ? isRunning
+                ? "Queues while the thread is active"
+                : "Starts a follow-up turn"
+              : "Loading thread"}
+          </div>
+          <div className="flex shrink-0 items-center gap-1">
+            {isRunning ? (
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={busy}
+                onClick={() => void interrupt()}
+                aria-label="Interrupt thread"
+              >
+                <PauseIcon className="size-3.5" />
+                Interrupt
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              size="xs"
+              disabled={!canSend}
+              onClick={() => void send()}
+              aria-label={isRunning ? "Queue follow-up" : "Send follow-up"}
+            >
+              <SendIcon className="size-3.5" />
+              {isRunning ? "Queue" : "Send"}
+            </Button>
+          </div>
+        </div>
       </div>
     </div>
   );
