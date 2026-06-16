@@ -4,9 +4,7 @@ import {
   Clock3Icon,
   LoaderCircleIcon,
   MessageSquareTextIcon,
-  PauseIcon,
   PinIcon,
-  SendIcon,
   ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
@@ -46,15 +44,17 @@ import { createThreadSelectorByRef } from "../storeSelectors";
 import type { SidebarThreadSummary, Thread } from "../types";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
-import { Textarea } from "./ui/textarea";
 import { SidebarInset } from "./ui/sidebar";
+import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
+import { ComposerPrimaryActions } from "./chat/ComposerPrimaryActions";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
 const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
 const EMPTY_TURN_DIFFS = new Map();
 const EMPTY_REVERT_COUNTS = new Map();
-const EMPTY_SKILLS: [] = [];
+const EMPTY_TERMINAL_CONTEXTS: [] = [];
+const EMPTY_PROVIDER_SKILLS: [] = [];
 const MONITOR_GRID_GAP_PX = 8;
 const MONITOR_TILE_TARGET_MIN_WIDTH_PX = 420;
 const MONITOR_TILE_TARGET_ASPECT_RATIO = 1.3;
@@ -588,7 +588,7 @@ function MonitorThreadBody({
         resolvedTheme={resolvedTheme}
         timestampFormat={timestampFormat}
         workspaceRoot={projectCwd}
-        skills={EMPTY_SKILLS}
+        skills={EMPTY_PROVIDER_SKILLS}
         onIsAtEndChange={() => undefined}
       />
     </div>
@@ -612,18 +612,21 @@ function MonitorThreadActions({
     () => (thread ? derivePendingUserInputs(thread.activities) : []),
     [thread],
   );
-  const [draft, setDraft] = useState("");
+  const composerEditorRef = useRef<ComposerPromptEditorHandle>(null);
+  const [draft, setDraft] = useState({ text: "", cursor: 0 });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const canSend = Boolean(thread && draft.trim().length > 0 && !busy);
+  const promptHasText = draft.text.trim().length > 0;
+  const hasSendableContent = Boolean(thread && promptHasText);
   const isRunning =
     isThreadSessionLive(thread?.session ?? null) || isThreadSessionLive(fallbackThread.session);
 
   const send = useCallback(async () => {
-    if (!thread || !canSend) return;
+    const prompt = composerEditorRef.current?.readSnapshot().value ?? draft.text;
+    const text = prompt.trim();
+    if (!thread || text.length === 0 || busy) return;
     const api = readEnvironmentApi(threadRef.environmentId);
     if (!api) return;
-    const text = draft.trim();
     setBusy(true);
     setError(null);
     try {
@@ -643,13 +646,14 @@ function MonitorThreadActions({
         interactionMode: thread.interactionMode,
         createdAt: new Date().toISOString(),
       });
-      setDraft("");
+      setDraft({ text: "", cursor: 0 });
+      composerEditorRef.current?.focusAt(0);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send follow-up.");
     } finally {
       setBusy(false);
     }
-  }, [canSend, draft, isRunning, thread, threadRef.environmentId, threadRef.threadId]);
+  }, [busy, draft.text, isRunning, thread, threadRef.environmentId, threadRef.threadId]);
 
   const interrupt = useCallback(async () => {
     const api = readEnvironmentApi(threadRef.environmentId);
@@ -685,56 +689,80 @@ function MonitorThreadActions({
           {error}
         </div>
       ) : null}
-      <div className="mt-2 rounded-lg border border-border/70 bg-card/70 p-1.5 shadow-xs/5 transition-colors focus-within:border-ring/45 focus-within:ring-2 focus-within:ring-ring/15">
-        <Textarea
-          unstyled
-          value={draft}
-          disabled={!thread || busy}
-          onChange={(event) => setDraft(event.currentTarget.value)}
-          onKeyDown={(event) => {
-            if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
-              event.preventDefault();
-              void send();
-            }
-          }}
-          placeholder={isRunning ? "Queue a follow-up..." : "Send a follow-up..."}
-          className="max-h-24 min-h-12 w-full resize-none bg-transparent px-1 py-0.5 text-xs leading-5 outline-none placeholder:text-muted-foreground/55 disabled:cursor-not-allowed"
-        />
-        <div className="mt-1 flex items-center justify-between gap-2 border-t border-border/45 pt-1.5">
-          <div className="min-w-0 truncate text-[10px] text-muted-foreground/65">
-            {thread
-              ? isRunning
-                ? "Queues while the thread is active"
-                : "Starts a follow-up turn"
-              : "Loading thread"}
-          </div>
-          <div className="flex shrink-0 items-center gap-1">
-            {isRunning ? (
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={busy}
-                onClick={() => void interrupt()}
-                aria-label="Interrupt thread"
-              >
-                <PauseIcon className="size-3.5" />
-                Interrupt
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              size="xs"
-              disabled={!canSend}
-              onClick={() => void send()}
-              aria-label={isRunning ? "Queue follow-up" : "Send follow-up"}
+      <form
+        className="mt-2 w-full min-w-0"
+        data-monitor-composer="true"
+        onSubmit={(event) => {
+          event.preventDefault();
+          void send();
+        }}
+      >
+        <div className="group rounded-xl p-px transition-colors duration-200">
+          <div className="rounded-xl border border-border bg-card transition-colors duration-200 has-focus-visible:border-ring/45">
+            <div className="relative px-3 pb-2 pt-3">
+              <ComposerPromptEditor
+                editorRef={composerEditorRef}
+                value={draft.text}
+                cursor={draft.cursor}
+                terminalContexts={EMPTY_TERMINAL_CONTEXTS}
+                skills={EMPTY_PROVIDER_SKILLS}
+                disabled={!thread || busy}
+                placeholder={
+                  thread
+                    ? isRunning
+                      ? "Queue a follow-up..."
+                      : "Ask a follow-up..."
+                    : "Loading thread..."
+                }
+                className="max-h-24 min-h-11 text-[13px] leading-5 sm:text-[13px]"
+                onRemoveTerminalContext={() => undefined}
+                onChange={(nextValue, nextCursor) => {
+                  setDraft({ text: nextValue, cursor: nextCursor });
+                }}
+                onCommandKeyDown={(key, event) => {
+                  if (key === "Enter" && !event.shiftKey) {
+                    void send();
+                    return true;
+                  }
+                  return false;
+                }}
+                onPaste={() => undefined}
+              />
+            </div>
+            <div
+              data-chat-composer-footer="true"
+              data-chat-composer-footer-compact="true"
+              className="flex min-w-0 flex-nowrap items-center justify-between gap-2 border-t border-border/60 px-2.5 py-2"
             >
-              <SendIcon className="size-3.5" />
-              {isRunning ? "Queue" : "Send"}
-            </Button>
+              <div className="min-w-0 flex-1 truncate text-[10px] text-muted-foreground/65">
+                {thread ? (isRunning ? "Active" : "Ready") : "Loading"}
+              </div>
+              <div
+                data-chat-composer-actions="right"
+                data-chat-composer-primary-actions-compact="true"
+                className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
+              >
+                <ComposerPrimaryActions
+                  compact
+                  pendingAction={null}
+                  isRunning={isRunning}
+                  showPlanFollowUpPrompt={false}
+                  promptHasText={promptHasText}
+                  isSendBusy={busy}
+                  isConnecting={false}
+                  isEnvironmentUnavailable={!thread}
+                  isPreparingWorktree={false}
+                  hasSendableContent={hasSendableContent}
+                  preserveComposerFocusOnPointerDown
+                  onPreviousPendingQuestion={() => undefined}
+                  onInterrupt={() => void interrupt()}
+                  onImplementPlanInNewThread={() => undefined}
+                />
+              </div>
+            </div>
           </div>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

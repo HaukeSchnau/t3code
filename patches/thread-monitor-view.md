@@ -25,6 +25,9 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   three-by-two wall fits.
 - The monitor route should not render its own title/header bar; the sidebar already provides
   navigation context, and the grid should receive the full route viewport.
+- Tile follow-up composers should reuse the shared chat composer editor/action primitives where
+  practical, trimming only global controls such as model selection and attachments that are unsafe
+  in the compact monitor surface.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
 
