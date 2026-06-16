@@ -30,7 +30,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   actions. The composer stays collapsed by default in monitor tiles, expands inline on explicit
   follow-up intent, and remains open while a draft/error/busy state needs the full surface.
 - Queued follow-up messages must be visible in monitor tiles and use the shared queued-message
-  strip/actions so users can steer or remove queued work without opening the full thread.
+  strip/actions so users can steer or remove queued work without opening the full thread. Keep the
+  strip's standard inset/layering relative to the collapsed or expanded composer surface.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
 

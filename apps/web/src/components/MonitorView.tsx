@@ -1092,11 +1092,10 @@ function MonitorThreadActions({
           className="relative isolate mt-2"
           data-monitor-composer={showComposer ? "full" : "collapsed"}
         >
-          <div onClickCapture={handleQueuedStripClick}>
+          <div className="relative z-0" onClickCapture={handleQueuedStripClick}>
             <QueuedMessagesStrip
               queuedMessages={thread.queuedMessages ?? []}
               isRunning={isRunning}
-              className="mx-0 w-full max-w-none sm:w-full"
               onDispatch={(message) => void dispatchQueuedMessage(message)}
               onDelete={(message) => void deleteQueuedMessage(message)}
             />
