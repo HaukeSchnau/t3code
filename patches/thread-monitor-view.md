@@ -19,7 +19,10 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Running/live badges should only reflect active session statuses (`starting` or `running`). Idle
   ready sessions and stale running latest-turn rows must not keep tiles marked as running.
 - Tiles should favor skimmable chat transcripts over maximum density: use larger responsive cells,
-  tight gutters, and a compact but full-featured quick-follow-up composer.
+  tight gutters, a compact but full-featured quick-follow-up composer, and count-aware row/column
+  packing so active sets use the available monitor viewport instead of leaving a mostly blank
+  canvas. Medium sets should avoid sparse last rows such as a five-plus-one layout when a balanced
+  three-by-two wall fits.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
 

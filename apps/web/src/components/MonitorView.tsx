@@ -17,7 +17,7 @@ import {
   type ProviderApprovalDecision,
   type ScopedThreadRef,
 } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -55,6 +55,9 @@ const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
 const EMPTY_TURN_DIFFS = new Map();
 const EMPTY_REVERT_COUNTS = new Map();
 const EMPTY_SKILLS: [] = [];
+const MONITOR_GRID_GAP_PX = 8;
+const MONITOR_TILE_TARGET_MIN_WIDTH_PX = 420;
+const MONITOR_TILE_TARGET_ASPECT_RATIO = 1.3;
 
 type MonitorThreadReason = "actionable" | "error" | "running" | "recent" | "pinned";
 
@@ -65,6 +68,10 @@ interface MonitorThreadCandidate {
   priority: number;
   timestamp: number;
 }
+
+type MonitorGridStyle = CSSProperties & {
+  "--monitor-grid-columns": number;
+};
 
 function readStoredOrder(): string[] {
   if (typeof window === "undefined") return [];
@@ -200,6 +207,73 @@ function reasonClassName(reason: MonitorThreadReason): string {
   }
 }
 
+function pickMonitorGridColumnCount(count: number, width: number, height: number): number {
+  if (count <= 1 || width <= 0 || height <= 0) return 1;
+
+  const maxColumns = Math.max(
+    1,
+    Math.min(
+      count,
+      Math.floor(
+        (width + MONITOR_GRID_GAP_PX) / (MONITOR_TILE_TARGET_MIN_WIDTH_PX + MONITOR_GRID_GAP_PX),
+      ),
+    ),
+  );
+  let bestColumns = 1;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  for (let columns = 1; columns <= maxColumns; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const emptyCells = columns * rows - count;
+    const tileWidth = (width - MONITOR_GRID_GAP_PX * (columns - 1)) / columns;
+    const tileHeight = (height - MONITOR_GRID_GAP_PX * (rows - 1)) / rows;
+    const aspectRatio = tileWidth / Math.max(1, tileHeight);
+    const aspectScore = Math.abs(Math.log(aspectRatio / MONITOR_TILE_TARGET_ASPECT_RATIO));
+    const sparseLastRowScore = emptyCells * 1.4;
+    const singleColumnScore = columns === 1 && count > 1 ? 0.5 : 0;
+    const score = aspectScore + sparseLastRowScore + singleColumnScore;
+
+    if (score < bestScore) {
+      bestScore = score;
+      bestColumns = columns;
+    }
+  }
+
+  return bestColumns;
+}
+
+function useMonitorGridColumns(count: number) {
+  const ref = useRef<HTMLDivElement | null>(null);
+  const [columns, setColumns] = useState(1);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+
+    const updateColumns = () => {
+      const nextColumns = pickMonitorGridColumnCount(
+        count,
+        element.clientWidth,
+        element.clientHeight,
+      );
+      setColumns((current) => (current === nextColumns ? current : nextColumns));
+    };
+
+    updateColumns();
+
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", updateColumns);
+      return () => window.removeEventListener("resize", updateColumns);
+    }
+
+    const observer = new ResizeObserver(updateColumns);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [count]);
+
+  return [ref, columns] as const;
+}
+
 function useStableMonitorCandidates(threads: readonly SidebarThreadSummary[]) {
   const [order, setOrder] = useState<string[]>(() => readStoredOrder());
   const candidates = useMemo(() => {
@@ -289,6 +363,11 @@ function MonitorHeader({ count }: { count: number }) {
 export function MonitorView() {
   const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
   const candidates = useStableMonitorCandidates(sidebarThreads);
+  const [gridViewportRef, gridColumns] = useMonitorGridColumns(candidates.length);
+  const gridStyle = useMemo<MonitorGridStyle>(
+    () => ({ "--monitor-grid-columns": gridColumns }),
+    [gridColumns],
+  );
 
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
@@ -304,8 +383,14 @@ export function MonitorView() {
             </EmptyHeader>
           </Empty>
         ) : (
-          <div className="monitor-grid min-h-0 flex-1 overflow-auto p-2 sm:p-3">
-            <div className="grid min-h-full auto-rows-[clamp(23rem,34dvh,30rem)] grid-cols-[repeat(auto-fit,minmax(min(100%,25rem),1fr))] gap-1.5 sm:gap-2">
+          <div
+            ref={gridViewportRef}
+            className="monitor-grid min-h-0 flex-1 overflow-auto p-2 sm:p-3"
+          >
+            <div
+              className="grid h-full min-h-full auto-rows-[minmax(22rem,1fr)] grid-cols-[repeat(var(--monitor-grid-columns),minmax(0,1fr))] gap-1.5 sm:gap-2"
+              style={gridStyle}
+            >
               {candidates.map((candidate) => (
                 <MonitorThreadTile key={candidate.key} candidate={candidate} />
               ))}
