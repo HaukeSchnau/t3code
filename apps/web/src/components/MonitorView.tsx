@@ -19,7 +19,18 @@ import {
   type ScopedThreadRef,
   type ServerProvider,
 } from "@t3tools/contracts";
-import { type CSSProperties, memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type CSSProperties,
+  type FocusEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { type LegendListRef } from "@legendapp/list/react";
 import { useShallow } from "zustand/react/shallow";
 
@@ -66,7 +77,12 @@ import {
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
-import { type ComposerImageAttachment, useComposerDraftStore } from "../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type ComposerThreadDraftState,
+  useComposerDraftStore,
+  useComposerThreadDraft,
+} from "../composerDraftStore";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
@@ -99,6 +115,31 @@ interface MonitorThreadCandidate {
 type MonitorGridStyle = CSSProperties & {
   "--monitor-grid-columns": number;
 };
+
+function hasMonitorComposerDraftContent(draft: ComposerThreadDraftState): boolean {
+  return (
+    draft.prompt.trim().length > 0 ||
+    draft.images.length > 0 ||
+    draft.persistedAttachments.length > 0 ||
+    draft.terminalContexts.length > 0 ||
+    draft.elementContexts.length > 0 ||
+    draft.previewAnnotations.length > 0
+  );
+}
+
+function hasOpenFloatingComposerControl(): boolean {
+  if (typeof document === "undefined") return false;
+  return Boolean(
+    document.querySelector(
+      [
+        '[role="listbox"]',
+        '[role="menu"]',
+        "[data-floating-ui-portal]",
+        "[data-radix-popper-content-wrapper]",
+      ].join(","),
+    ),
+  );
+}
 
 function readStoredOrder(): string[] {
   if (typeof window === "undefined") return [];
@@ -686,6 +727,8 @@ function MonitorThreadActions({
   const composerInteractionMode = useComposerDraftStore(
     (store) => store.getComposerDraft(threadRef)?.interactionMode ?? null,
   );
+  const composerDraft = useComposerThreadDraft(threadRef);
+  const composerHasDraftContent = hasMonitorComposerDraftContent(composerDraft);
   const setComposerDraftModelSelection = useComposerDraftStore((store) => store.setModelSelection);
   const setComposerDraftRuntimeMode = useComposerDraftStore((store) => store.setRuntimeMode);
   const setComposerDraftInteractionMode = useComposerDraftStore(
@@ -700,9 +743,16 @@ function MonitorThreadActions({
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
   const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const composerRef = useRef<ChatComposerHandle | null>(null);
+  const composerShellRef = useRef<HTMLDivElement | null>(null);
+  const collapsedComposerButtonRef = useRef<HTMLButtonElement | null>(null);
+  const composerHasDraftContentRef = useRef(composerHasDraftContent);
+  const busyRef = useRef(false);
+  const errorRef = useRef<string | null>(null);
+  const focusComposerAfterExpandRef = useRef(false);
   const shouldAutoScrollRef = useRef(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const runtimeMode = composerRuntimeMode ?? thread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
   const interactionMode =
@@ -710,10 +760,109 @@ function MonitorThreadActions({
   const isRunning =
     isThreadSessionLive(thread?.session ?? null) || isThreadSessionLive(fallbackThread.session);
   const phase = isRunning ? "running" : "ready";
+  const forceComposerExpanded = composerHasDraftContent || busy || error !== null;
+  const showComposer = composerExpanded || forceComposerExpanded;
+
+  useEffect(() => {
+    composerHasDraftContentRef.current = composerHasDraftContent;
+  }, [composerHasDraftContent]);
+
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+
+  useEffect(() => {
+    errorRef.current = error;
+  }, [error]);
 
   const focusComposer = useCallback(() => {
     window.requestAnimationFrame(() => composerRef.current?.focusAtEnd());
   }, []);
+
+  useEffect(() => {
+    focusComposerAfterExpandRef.current = false;
+    setComposerExpanded(false);
+  }, [threadRef.environmentId, threadRef.threadId]);
+
+  useEffect(() => {
+    if (forceComposerExpanded) {
+      setComposerExpanded(true);
+    }
+  }, [forceComposerExpanded]);
+
+  useEffect(() => {
+    if (!showComposer || !focusComposerAfterExpandRef.current) return;
+    focusComposerAfterExpandRef.current = false;
+    focusComposer();
+  }, [focusComposer, showComposer]);
+
+  const expandComposer = useCallback(
+    (options: { focus?: boolean } = {}) => {
+      focusComposerAfterExpandRef.current = options.focus ?? true;
+      setComposerExpanded(true);
+      if (showComposer && focusComposerAfterExpandRef.current) {
+        focusComposerAfterExpandRef.current = false;
+        focusComposer();
+      }
+    },
+    [focusComposer, showComposer],
+  );
+
+  const collapseComposerIfIdle = useCallback((options: { restoreFocus?: boolean } = {}) => {
+    if (composerHasDraftContentRef.current || busyRef.current || errorRef.current) return;
+    if (composerRef.current?.isModelPickerOpen()) return;
+    if (hasOpenFloatingComposerControl()) return;
+    focusComposerAfterExpandRef.current = false;
+    setComposerExpanded(false);
+    if (options.restoreFocus) {
+      window.requestAnimationFrame(() => collapsedComposerButtonRef.current?.focus());
+    }
+  }, []);
+
+  const scheduleCollapseComposerIfIdle = useCallback(() => {
+    window.setTimeout(() => {
+      const shell = composerShellRef.current;
+      const activeElement = document.activeElement;
+      if (shell && activeElement instanceof Node && shell.contains(activeElement)) return;
+      collapseComposerIfIdle();
+    }, 120);
+  }, [collapseComposerIfIdle]);
+
+  const handleExpandedComposerBlur = useCallback(
+    (event: FocusEvent<HTMLDivElement>) => {
+      const nextTarget = event.relatedTarget;
+      if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+      scheduleCollapseComposerIfIdle();
+    },
+    [scheduleCollapseComposerIfIdle],
+  );
+
+  const handleExpandedComposerKeyDown = useCallback(
+    (event: KeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const wasExpanded = composerExpanded;
+      collapseComposerIfIdle({ restoreFocus: true });
+      if (
+        wasExpanded &&
+        !composerHasDraftContentRef.current &&
+        !busyRef.current &&
+        !errorRef.current
+      ) {
+        event.stopPropagation();
+      }
+    },
+    [collapseComposerIfIdle, composerExpanded],
+  );
+
+  const handleQueuedStripClick = useCallback(
+    (event: MouseEvent<HTMLDivElement>) => {
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      if (target.closest("button,a,input,textarea,select,[role='button']")) return;
+      expandComposer();
+    },
+    [expandComposer],
+  );
 
   const handleRuntimeModeChange = useCallback(
     (mode: typeof runtimeMode) => {
@@ -854,6 +1003,7 @@ function MonitorThreadActions({
       promptRef.current = "";
       clearComposerDraftContent(threadRef);
       composerRef.current?.resetCursorState();
+      setComposerExpanded(false);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send follow-up.");
     } finally {
@@ -938,87 +1088,112 @@ function MonitorThreadActions({
         </div>
       ) : null}
       {thread ? (
-        <div className="relative isolate mt-2" data-monitor-composer="full">
-          <QueuedMessagesStrip
-            queuedMessages={thread.queuedMessages ?? []}
-            isRunning={isRunning}
-            className="mx-0 w-full max-w-none sm:w-full"
-            onDispatch={(message) => void dispatchQueuedMessage(message)}
-            onDelete={(message) => void deleteQueuedMessage(message)}
-          />
-          <div className="relative z-10">
-            <ChatComposer
-              composerRef={composerRef}
-              composerDraftTarget={threadRef}
-              environmentId={threadRef.environmentId}
-              routeKind="server"
-              routeThreadRef={threadRef}
-              draftId={null}
-              activeThreadId={thread.id}
-              activeThreadEnvironmentId={thread.environmentId}
-              activeThread={thread}
-              isServerThread
-              isLocalDraftThread={false}
-              phase={phase}
-              isConnecting={false}
-              isSendBusy={busy}
-              isPreparingWorktree={false}
-              environmentUnavailable={null}
-              activePendingApproval={null}
-              pendingApprovals={[]}
-              pendingUserInputs={[]}
-              activePendingProgress={null}
-              activePendingResolvedAnswers={null}
-              activePendingIsResponding={false}
-              activePendingDraftAnswers={EMPTY_PENDING_DRAFT_ANSWERS}
-              activePendingQuestionIndex={0}
-              respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
-              showPlanFollowUpPrompt={false}
-              activeProposedPlan={null}
-              activePlan={null}
-              sidebarProposedPlan={null}
-              planSidebarLabel="Plan"
-              planSidebarOpen={false}
-              runtimeMode={runtimeMode}
-              interactionMode={interactionMode}
-              lockedProvider={null}
-              providerStatuses={providerStatuses}
-              activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-              activeThreadModelSelection={thread.modelSelection}
-              activeThreadActivities={thread.activities}
-              activeUsageLimits={activeUsageLimits}
-              resolvedTheme={resolvedTheme}
-              settings={settings}
-              keybindings={keybindings}
-              terminalOpen={false}
-              gitCwd={activeProject?.cwd ?? null}
-              promptRef={promptRef}
-              composerImagesRef={composerImagesRef}
-              composerTerminalContextsRef={composerTerminalContextsRef}
-              composerElementContextsRef={composerElementContextsRef}
-              shouldAutoScrollRef={shouldAutoScrollRef}
-              scheduleStickToBottom={() => undefined}
-              onSend={send}
-              onInterrupt={interrupt}
-              onImplementPlanInNewThread={() => undefined}
-              onRespondToApproval={async () => undefined}
-              onSelectActivePendingUserInputOption={() => undefined}
-              onAdvanceActivePendingUserInput={() => undefined}
-              onPreviousActivePendingUserInputQuestion={() => undefined}
-              onChangeActivePendingUserInputCustomAnswer={() => undefined}
-              onProviderModelSelect={onProviderModelSelect}
-              getModelDisabledReason={getModelDisabledReason}
-              toggleInteractionMode={toggleInteractionMode}
-              handleRuntimeModeChange={handleRuntimeModeChange}
-              handleInteractionModeChange={handleInteractionModeChange}
-              togglePlanSidebar={() => undefined}
-              focusComposer={focusComposer}
-              scheduleComposerFocus={focusComposer}
-              setThreadError={(_threadId, message) => setError(message)}
-              onExpandImage={setExpandedImage}
-              variant="inline"
+        <div
+          className="relative isolate mt-2"
+          data-monitor-composer={showComposer ? "full" : "collapsed"}
+        >
+          <div onClickCapture={handleQueuedStripClick}>
+            <QueuedMessagesStrip
+              queuedMessages={thread.queuedMessages ?? []}
+              isRunning={isRunning}
+              className="mx-0 w-full max-w-none sm:w-full"
+              onDispatch={(message) => void dispatchQueuedMessage(message)}
+              onDelete={(message) => void deleteQueuedMessage(message)}
             />
           </div>
+          {showComposer ? (
+            <div
+              ref={composerShellRef}
+              className="relative z-10"
+              onBlurCapture={handleExpandedComposerBlur}
+              onKeyDown={handleExpandedComposerKeyDown}
+            >
+              <ChatComposer
+                composerRef={composerRef}
+                composerDraftTarget={threadRef}
+                environmentId={threadRef.environmentId}
+                routeKind="server"
+                routeThreadRef={threadRef}
+                draftId={null}
+                activeThreadId={thread.id}
+                activeThreadEnvironmentId={thread.environmentId}
+                activeThread={thread}
+                isServerThread
+                isLocalDraftThread={false}
+                phase={phase}
+                isConnecting={false}
+                isSendBusy={busy}
+                isPreparingWorktree={false}
+                environmentUnavailable={null}
+                activePendingApproval={null}
+                pendingApprovals={[]}
+                pendingUserInputs={[]}
+                activePendingProgress={null}
+                activePendingResolvedAnswers={null}
+                activePendingIsResponding={false}
+                activePendingDraftAnswers={EMPTY_PENDING_DRAFT_ANSWERS}
+                activePendingQuestionIndex={0}
+                respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
+                showPlanFollowUpPrompt={false}
+                activeProposedPlan={null}
+                activePlan={null}
+                sidebarProposedPlan={null}
+                planSidebarLabel="Plan"
+                planSidebarOpen={false}
+                runtimeMode={runtimeMode}
+                interactionMode={interactionMode}
+                lockedProvider={null}
+                providerStatuses={providerStatuses}
+                activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
+                activeThreadModelSelection={thread.modelSelection}
+                activeThreadActivities={thread.activities}
+                activeUsageLimits={activeUsageLimits}
+                resolvedTheme={resolvedTheme}
+                settings={settings}
+                keybindings={keybindings}
+                terminalOpen={false}
+                gitCwd={activeProject?.cwd ?? null}
+                promptRef={promptRef}
+                composerImagesRef={composerImagesRef}
+                composerTerminalContextsRef={composerTerminalContextsRef}
+                composerElementContextsRef={composerElementContextsRef}
+                shouldAutoScrollRef={shouldAutoScrollRef}
+                scheduleStickToBottom={() => undefined}
+                onSend={send}
+                onInterrupt={interrupt}
+                onImplementPlanInNewThread={() => undefined}
+                onRespondToApproval={async () => undefined}
+                onSelectActivePendingUserInputOption={() => undefined}
+                onAdvanceActivePendingUserInput={() => undefined}
+                onPreviousActivePendingUserInputQuestion={() => undefined}
+                onChangeActivePendingUserInputCustomAnswer={() => undefined}
+                onProviderModelSelect={onProviderModelSelect}
+                getModelDisabledReason={getModelDisabledReason}
+                toggleInteractionMode={toggleInteractionMode}
+                handleRuntimeModeChange={handleRuntimeModeChange}
+                handleInteractionModeChange={handleInteractionModeChange}
+                togglePlanSidebar={() => undefined}
+                focusComposer={focusComposer}
+                scheduleComposerFocus={focusComposer}
+                setThreadError={(_threadId, message) => setError(message)}
+                onExpandImage={setExpandedImage}
+                variant="inline"
+              />
+            </div>
+          ) : (
+            <button
+              ref={collapsedComposerButtonRef}
+              type="button"
+              className="relative z-10 flex min-h-10 w-full items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 text-left text-sm shadow-xs/5 outline-none transition-colors hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+              data-monitor-composer-trigger="true"
+              onClick={() => expandComposer()}
+            >
+              <MessageSquareTextIcon className="size-4 text-muted-foreground" />
+              <span className="shrink-0 font-medium text-foreground">Follow up</span>
+              <span className="min-w-0 flex-1 truncate text-muted-foreground">Ask anything</span>
+              <ArrowRightIcon className="size-3.5 text-muted-foreground" />
+            </button>
+          )}
         </div>
       ) : (
         <div className="mt-2 rounded-xl border border-border/70 bg-card/70 px-3 py-3 text-xs text-muted-foreground">

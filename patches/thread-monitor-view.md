@@ -27,7 +27,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   navigation context, and the grid should receive the full route viewport.
 - Tile follow-up composers intentionally mount the full shared chat composer as the baseline
   experience, including model/runtime controls, attachment support, usage meters, and primary
-  actions. Strip controls only after validating the full surface in the monitor grid.
+  actions. The composer stays collapsed by default in monitor tiles, expands inline on explicit
+  follow-up intent, and remains open while a draft/error/busy state needs the full surface.
 - Queued follow-up messages must be visible in monitor tiles and use the shared queued-message
   strip/actions so users can steer or remove queued work without opening the full thread.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
