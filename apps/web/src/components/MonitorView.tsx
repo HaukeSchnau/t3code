@@ -71,7 +71,9 @@ import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
+import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { useServerConfig, useServerKeybindings } from "../rpc/serverState";
+import type { QueuedMessage } from "../types";
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
 const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
@@ -878,6 +880,48 @@ function MonitorThreadActions({
     }
   }, [threadRef.environmentId, threadRef.threadId]);
 
+  const dispatchQueuedMessage = useCallback(
+    async (message: QueuedMessage) => {
+      if (!thread) return;
+      const api = readEnvironmentApi(threadRef.environmentId);
+      if (!api) return;
+      setError(null);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-message.dispatch",
+          commandId: newCommandId(),
+          threadId: thread.id,
+          messageId: message.messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to send queued message.");
+      }
+    },
+    [thread, threadRef.environmentId],
+  );
+
+  const deleteQueuedMessage = useCallback(
+    async (message: QueuedMessage) => {
+      if (!thread) return;
+      const api = readEnvironmentApi(threadRef.environmentId);
+      if (!api) return;
+      setError(null);
+      try {
+        await api.orchestration.dispatchCommand({
+          type: "thread.queued-message.delete",
+          commandId: newCommandId(),
+          threadId: thread.id,
+          messageId: message.messageId,
+          createdAt: new Date().toISOString(),
+        });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to remove queued message.");
+      }
+    },
+    [thread, threadRef.environmentId],
+  );
+
   return (
     <div className="shrink-0 border-t border-border/60 bg-background/80 p-2">
       <MonitorPendingActions
@@ -894,78 +938,87 @@ function MonitorThreadActions({
         </div>
       ) : null}
       {thread ? (
-        <div className="mt-2" data-monitor-composer="full">
-          <ChatComposer
-            composerRef={composerRef}
-            composerDraftTarget={threadRef}
-            environmentId={threadRef.environmentId}
-            routeKind="server"
-            routeThreadRef={threadRef}
-            draftId={null}
-            activeThreadId={thread.id}
-            activeThreadEnvironmentId={thread.environmentId}
-            activeThread={thread}
-            isServerThread
-            isLocalDraftThread={false}
-            phase={phase}
-            isConnecting={false}
-            isSendBusy={busy}
-            isPreparingWorktree={false}
-            environmentUnavailable={null}
-            activePendingApproval={null}
-            pendingApprovals={[]}
-            pendingUserInputs={[]}
-            activePendingProgress={null}
-            activePendingResolvedAnswers={null}
-            activePendingIsResponding={false}
-            activePendingDraftAnswers={EMPTY_PENDING_DRAFT_ANSWERS}
-            activePendingQuestionIndex={0}
-            respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
-            showPlanFollowUpPrompt={false}
-            activeProposedPlan={null}
-            activePlan={null}
-            sidebarProposedPlan={null}
-            planSidebarLabel="Plan"
-            planSidebarOpen={false}
-            runtimeMode={runtimeMode}
-            interactionMode={interactionMode}
-            lockedProvider={null}
-            providerStatuses={providerStatuses}
-            activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
-            activeThreadModelSelection={thread.modelSelection}
-            activeThreadActivities={thread.activities}
-            activeUsageLimits={activeUsageLimits}
-            resolvedTheme={resolvedTheme}
-            settings={settings}
-            keybindings={keybindings}
-            terminalOpen={false}
-            gitCwd={activeProject?.cwd ?? null}
-            promptRef={promptRef}
-            composerImagesRef={composerImagesRef}
-            composerTerminalContextsRef={composerTerminalContextsRef}
-            composerElementContextsRef={composerElementContextsRef}
-            shouldAutoScrollRef={shouldAutoScrollRef}
-            scheduleStickToBottom={() => undefined}
-            onSend={send}
-            onInterrupt={interrupt}
-            onImplementPlanInNewThread={() => undefined}
-            onRespondToApproval={async () => undefined}
-            onSelectActivePendingUserInputOption={() => undefined}
-            onAdvanceActivePendingUserInput={() => undefined}
-            onPreviousActivePendingUserInputQuestion={() => undefined}
-            onChangeActivePendingUserInputCustomAnswer={() => undefined}
-            onProviderModelSelect={onProviderModelSelect}
-            getModelDisabledReason={getModelDisabledReason}
-            toggleInteractionMode={toggleInteractionMode}
-            handleRuntimeModeChange={handleRuntimeModeChange}
-            handleInteractionModeChange={handleInteractionModeChange}
-            togglePlanSidebar={() => undefined}
-            focusComposer={focusComposer}
-            scheduleComposerFocus={focusComposer}
-            setThreadError={(_threadId, message) => setError(message)}
-            onExpandImage={setExpandedImage}
-            variant="inline"
+        <div className="relative isolate mt-2" data-monitor-composer="full">
+          <QueuedMessagesStrip
+            queuedMessages={thread.queuedMessages ?? []}
+            isRunning={isRunning}
+            className="mx-0 w-full max-w-none sm:w-full"
+            onDispatch={(message) => void dispatchQueuedMessage(message)}
+            onDelete={(message) => void deleteQueuedMessage(message)}
           />
+          <div className="relative z-10">
+            <ChatComposer
+              composerRef={composerRef}
+              composerDraftTarget={threadRef}
+              environmentId={threadRef.environmentId}
+              routeKind="server"
+              routeThreadRef={threadRef}
+              draftId={null}
+              activeThreadId={thread.id}
+              activeThreadEnvironmentId={thread.environmentId}
+              activeThread={thread}
+              isServerThread
+              isLocalDraftThread={false}
+              phase={phase}
+              isConnecting={false}
+              isSendBusy={busy}
+              isPreparingWorktree={false}
+              environmentUnavailable={null}
+              activePendingApproval={null}
+              pendingApprovals={[]}
+              pendingUserInputs={[]}
+              activePendingProgress={null}
+              activePendingResolvedAnswers={null}
+              activePendingIsResponding={false}
+              activePendingDraftAnswers={EMPTY_PENDING_DRAFT_ANSWERS}
+              activePendingQuestionIndex={0}
+              respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
+              showPlanFollowUpPrompt={false}
+              activeProposedPlan={null}
+              activePlan={null}
+              sidebarProposedPlan={null}
+              planSidebarLabel="Plan"
+              planSidebarOpen={false}
+              runtimeMode={runtimeMode}
+              interactionMode={interactionMode}
+              lockedProvider={null}
+              providerStatuses={providerStatuses}
+              activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
+              activeThreadModelSelection={thread.modelSelection}
+              activeThreadActivities={thread.activities}
+              activeUsageLimits={activeUsageLimits}
+              resolvedTheme={resolvedTheme}
+              settings={settings}
+              keybindings={keybindings}
+              terminalOpen={false}
+              gitCwd={activeProject?.cwd ?? null}
+              promptRef={promptRef}
+              composerImagesRef={composerImagesRef}
+              composerTerminalContextsRef={composerTerminalContextsRef}
+              composerElementContextsRef={composerElementContextsRef}
+              shouldAutoScrollRef={shouldAutoScrollRef}
+              scheduleStickToBottom={() => undefined}
+              onSend={send}
+              onInterrupt={interrupt}
+              onImplementPlanInNewThread={() => undefined}
+              onRespondToApproval={async () => undefined}
+              onSelectActivePendingUserInputOption={() => undefined}
+              onAdvanceActivePendingUserInput={() => undefined}
+              onPreviousActivePendingUserInputQuestion={() => undefined}
+              onChangeActivePendingUserInputCustomAnswer={() => undefined}
+              onProviderModelSelect={onProviderModelSelect}
+              getModelDisabledReason={getModelDisabledReason}
+              toggleInteractionMode={toggleInteractionMode}
+              handleRuntimeModeChange={handleRuntimeModeChange}
+              handleInteractionModeChange={handleInteractionModeChange}
+              togglePlanSidebar={() => undefined}
+              focusComposer={focusComposer}
+              scheduleComposerFocus={focusComposer}
+              setThreadError={(_threadId, message) => setError(message)}
+              onExpandImage={setExpandedImage}
+              variant="inline"
+            />
+          </div>
         </div>
       ) : (
         <div className="mt-2 rounded-xl border border-border/70 bg-card/70 px-3 py-3 text-xs text-muted-foreground">
