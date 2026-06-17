@@ -19,7 +19,6 @@ import {
   setSidebarViewMode,
   setTagColor,
   setTagExpanded,
-  setThreadChangedFilesExpanded,
   setThreadPinned,
   renameTag,
   syncProjects,
@@ -33,7 +32,6 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadPinnedAtById: {},
-    threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
     sidebarViewMode: "projects",
     tagById: {},
@@ -542,14 +540,6 @@ describe("uiStateStore pure functions", () => {
         [thread1]: "2026-02-25T12:35:00.000Z",
         [thread2]: "2026-02-25T12:36:00.000Z",
       },
-      threadChangedFilesExpandedById: {
-        [thread1]: {
-          "turn-1": false,
-        },
-        [thread2]: {
-          "turn-2": false,
-        },
-      },
       threadPinnedAtById: {
         [thread1]: "2026-02-25T12:37:00.000Z",
         [thread2]: "2026-02-25T12:38:00.000Z",
@@ -572,11 +562,6 @@ describe("uiStateStore pure functions", () => {
 
     expect(next.threadLastVisitedAtById).toEqual({
       [thread1]: "2026-02-25T12:35:00.000Z",
-    });
-    expect(next.threadChangedFilesExpandedById).toEqual({
-      [thread1]: {
-        "turn-1": false,
-      },
     });
     expect(next.threadPinnedAtById).toEqual({
       [thread1]: "2026-02-25T12:37:00.000Z",
@@ -624,11 +609,6 @@ describe("uiStateStore pure functions", () => {
       threadLastVisitedAtById: {
         [thread1]: "2026-02-25T12:35:00.000Z",
       },
-      threadChangedFilesExpandedById: {
-        [thread1]: {
-          "turn-1": false,
-        },
-      },
       threadPinnedAtById: {
         [thread1]: "2026-02-25T12:37:00.000Z",
       },
@@ -648,38 +628,9 @@ describe("uiStateStore pure functions", () => {
     const next = clearThreadUi(initialState, thread1);
 
     expect(next.threadLastVisitedAtById).toEqual({});
-    expect(next.threadChangedFilesExpandedById).toEqual({});
     expect(next.threadPinnedAtById).toEqual({});
     expect(next.threadTagIdsByThreadKey).toEqual({});
     expect(next.tagById.work).toBeDefined();
-  });
-
-  it("setThreadChangedFilesExpanded stores collapsed turns per thread", () => {
-    const thread1 = ThreadId.make("thread-1");
-    const initialState = makeUiState();
-
-    const next = setThreadChangedFilesExpanded(initialState, thread1, "turn-1", false);
-
-    expect(next.threadChangedFilesExpandedById).toEqual({
-      [thread1]: {
-        "turn-1": false,
-      },
-    });
-  });
-
-  it("setThreadChangedFilesExpanded removes thread overrides when expanded again", () => {
-    const thread1 = ThreadId.make("thread-1");
-    const initialState = makeUiState({
-      threadChangedFilesExpandedById: {
-        [thread1]: {
-          "turn-1": false,
-        },
-      },
-    });
-
-    const next = setThreadChangedFilesExpanded(initialState, thread1, "turn-1", true);
-
-    expect(next.threadChangedFilesExpandedById).toEqual({});
   });
 });
 
