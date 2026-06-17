@@ -102,9 +102,9 @@ const MONITOR_GRID_GAP_PX = 8;
 const MONITOR_TILE_TARGET_MIN_WIDTH_PX = 420;
 const MONITOR_TILE_TARGET_ASPECT_RATIO = 1.3;
 
-type MonitorThreadReason = "actionable" | "error" | "running" | "recent" | "pinned";
+export type MonitorThreadReason = "actionable" | "error" | "running" | "plan" | "recent" | "pinned";
 
-interface MonitorThreadCandidate {
+export interface MonitorThreadCandidate {
   thread: SidebarThreadSummary;
   key: string;
   reason: MonitorThreadReason;
@@ -176,7 +176,39 @@ function isThreadSessionLive(
   return isLiveSessionStatus(session?.orchestrationStatus);
 }
 
-function resolveThreadCandidate(
+function isSupersededSessionError(
+  session: Thread["session"] | SidebarThreadSummary["session"],
+  latestTurn: SidebarThreadSummary["latestTurn"],
+): boolean {
+  if (!session || latestTurn?.state !== "completed" || !latestTurn.completedAt) {
+    return false;
+  }
+  const sessionUpdatedAt = toTimestamp(session.updatedAt);
+  const turnCompletedAt = toTimestamp(latestTurn.completedAt);
+  return Number.isFinite(sessionUpdatedAt) && turnCompletedAt > sessionUpdatedAt;
+}
+
+function isActiveSessionError(
+  session: Thread["session"] | SidebarThreadSummary["session"],
+  latestTurn: SidebarThreadSummary["latestTurn"],
+): boolean {
+  const status = session?.orchestrationStatus;
+  if (status !== "error" && status !== "interrupted") {
+    return false;
+  }
+  return !isSupersededSessionError(session, latestTurn);
+}
+
+function hasPlanReadyPrompt(thread: SidebarThreadSummary): boolean {
+  return (
+    !thread.hasPendingUserInput &&
+    thread.interactionMode === "plan" &&
+    isLatestTurnSettled(thread.latestTurn, thread.session) &&
+    thread.hasActionableProposedPlan
+  );
+}
+
+export function resolveMonitorThreadCandidate(
   thread: SidebarThreadSummary,
   now: number,
 ): MonitorThreadCandidate | null {
@@ -190,17 +222,16 @@ function resolveThreadCandidate(
     Number.isFinite(completedAt) &&
     now - completedAt <= RECENTLY_COMPLETED_WINDOW_MS;
 
-  const actionable =
-    thread.hasPendingApprovals || thread.hasPendingUserInput || thread.hasActionableProposedPlan;
-  const sessionStatus = thread.session?.orchestrationStatus;
+  const actionable = thread.hasPendingApprovals || thread.hasPendingUserInput;
+  const planReady = hasPlanReadyPrompt(thread);
   const hasError =
     latestTurn?.state === "error" ||
     latestTurn?.state === "interrupted" ||
-    sessionStatus === "error" ||
-    sessionStatus === "interrupted";
+    isActiveSessionError(thread.session, latestTurn);
+  const sessionStatus = thread.session?.orchestrationStatus;
   const running = isLiveSessionStatus(sessionStatus);
 
-  if (!actionable && !hasError && !running && !recentlyCompleted) {
+  if (!actionable && !hasError && !running && !planReady && !recentlyCompleted) {
     return null;
   }
 
@@ -210,9 +241,19 @@ function resolveThreadCandidate(
       ? "error"
       : running
         ? "running"
-        : "recent";
+        : planReady
+          ? "plan"
+          : "recent";
   const priority =
-    reason === "actionable" ? 0 : reason === "error" ? 1 : reason === "running" ? 2 : 3;
+    reason === "actionable"
+      ? 0
+      : reason === "error"
+        ? 1
+        : reason === "running"
+          ? 2
+          : reason === "plan"
+            ? 3
+            : 4;
   const timestamp = Math.max(
     toTimestamp(thread.latestUserMessageAt),
     toTimestamp(latestTurn?.startedAt),
@@ -253,6 +294,8 @@ function reasonLabel(reason: MonitorThreadReason): string {
       return "Blocked";
     case "running":
       return "Running";
+    case "plan":
+      return "Plan ready";
     case "recent":
       return "Complete";
     case "pinned":
@@ -268,6 +311,8 @@ function reasonClassName(reason: MonitorThreadReason): string {
       return "border-red-400/40 bg-red-500/10 text-red-700 dark:text-red-200";
     case "running":
       return "border-sky-400/40 bg-sky-500/10 text-sky-700 dark:text-sky-200";
+    case "plan":
+      return "border-violet-400/40 bg-violet-500/10 text-violet-700 dark:text-violet-200";
     case "recent":
       return "border-emerald-400/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
     case "pinned":
@@ -347,7 +392,7 @@ function useStableMonitorCandidates(threads: readonly SidebarThreadSummary[]) {
   const candidates = useMemo(() => {
     const now = Date.now();
     return threads.flatMap((thread) => {
-      const candidate = resolveThreadCandidate(thread, now);
+      const candidate = resolveMonitorThreadCandidate(thread, now);
       return candidate ? [candidate] : [];
     });
   }, [threads]);
@@ -1223,6 +1268,7 @@ function MonitorPendingActions({
 }) {
   const approval = pendingApprovals[0] ?? null;
   const userInput = pendingUserInputs[0] ?? null;
+  const planReady = hasPlanReadyPrompt(fallbackThread);
   const [draftAnswers, setDraftAnswers] = useState<Record<string, PendingUserInputDraftAnswer>>({});
   const [respondingRequestId, setRespondingRequestId] = useState<ApprovalRequestId | null>(null);
   const responseDisabled = disabled || respondingRequestId !== null;
@@ -1276,7 +1322,7 @@ function MonitorPendingActions({
     [onError, threadRef.environmentId, threadRef.threadId],
   );
 
-  if (!approval && !userInput && !fallbackThread.hasActionableProposedPlan) return null;
+  if (!approval && !userInput && !planReady) return null;
 
   return (
     <div className="space-y-1.5 rounded-md border border-amber-400/25 bg-amber-500/8 p-2">
@@ -1332,7 +1378,7 @@ function MonitorPendingActions({
           threadRef={threadRef}
         />
       ) : null}
-      {!approval && !userInput && fallbackThread.hasActionableProposedPlan ? (
+      {!approval && !userInput && planReady ? (
         <div className="flex items-center justify-between gap-2">
           <div className="min-w-0">
             <div className="text-[11px] font-medium text-amber-800 dark:text-amber-100">
