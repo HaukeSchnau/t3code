@@ -30,6 +30,7 @@ function hasRateLimitSnapshotFields(value: Record<string, unknown>): boolean {
   return (
     value.primary !== undefined ||
     value.secondary !== undefined ||
+    value.individualLimit !== undefined ||
     value.limitId !== undefined ||
     value.limitName !== undefined ||
     value.planType !== undefined ||
@@ -144,6 +145,33 @@ function normalizeWindow(value: unknown): UsageLimitWindowSnapshot | null {
     resetsAt: normalizeResetAt(record?.resetsAt),
     windowDurationMins: asFiniteNumber(record?.windowDurationMins),
   };
+}
+
+function normalizeIndividualLimitWindow(value: unknown): UsageLimitWindowSnapshot | null {
+  const record = asRecord(value);
+  const remainingPercent = asFiniteNumber(record?.remainingPercent);
+  if (remainingPercent === null) {
+    return null;
+  }
+
+  return {
+    usedPercent: Math.max(0, Math.min(100, 100 - remainingPercent)),
+    resetsAt: normalizeResetAt(record?.resetsAt),
+    windowDurationMins: null,
+  };
+}
+
+function selectSecondaryWindow(
+  secondary: UsageLimitWindowSnapshot | null,
+  individualLimit: UsageLimitWindowSnapshot | null,
+): UsageLimitWindowSnapshot | null {
+  if (!secondary) {
+    return individualLimit;
+  }
+  if (secondary.usedPercent === 0 && individualLimit && individualLimit.usedPercent > 0) {
+    return individualLimit;
+  }
+  return secondary;
 }
 
 function parseTimestampMs(value: string | null): number | null {
@@ -375,7 +403,10 @@ function activityToUsageLimitsSnapshot(
 
   const payload = unwrapRateLimitsPayload(activity.payload);
   const primary = normalizeWindow(payload?.primary);
-  const secondary = normalizeWindow(payload?.secondary);
+  const secondary = selectSecondaryWindow(
+    normalizeWindow(payload?.secondary),
+    normalizeIndividualLimitWindow(payload?.individualLimit),
+  );
   if (primary === null && secondary === null) {
     return null;
   }

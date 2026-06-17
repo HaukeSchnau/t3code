@@ -113,6 +113,50 @@ describe("usageLimits", () => {
     expect(snapshot?.primary?.resetsAt).toBe("2025-04-30T22:40:00.000Z");
   });
 
+  it("uses individual limit remaining percentage for the weekly window", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: {
+          usedPercent: 24,
+          resetsAt: "2026-03-23T05:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        individualLimit: {
+          remainingPercent: 63,
+          resetsAt: 1_774_224_000,
+          limit: "100",
+          used: "37",
+        },
+      }),
+    ]);
+
+    expect(snapshot?.secondary?.usedPercent).toBe(37);
+    expect(snapshot?.secondary?.resetsAt).toBe("2026-03-23T00:00:00.000Z");
+    expect(snapshot?.secondary?.windowDurationMins).toBeNull();
+  });
+
+  it("repairs a stale zero weekly window from individual limit usage", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        secondary: {
+          usedPercent: 0,
+          resetsAt: "2026-03-30T00:00:00.000Z",
+          windowDurationMins: 10080,
+        },
+        individualLimit: {
+          remainingPercent: 82,
+          resetsAt: "2026-03-30T00:00:00.000Z",
+          limit: "100",
+          used: "18",
+        },
+      }),
+    ]);
+
+    expect(snapshot?.secondary?.usedPercent).toBe(18);
+  });
+
   it("derives duration labels and pace status", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(2026, 2, 23, 12, 30));

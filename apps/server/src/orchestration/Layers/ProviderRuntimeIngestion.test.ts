@@ -2853,6 +2853,61 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
+  it("projects Codex individual limits into the weekly usage window", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits-individual"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        rateLimits: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            resetsAt: "2026-01-01T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
+          secondary: {
+            usedPercent: 0,
+            resetsAt: "2026-01-08T00:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+          individualLimit: {
+            remainingPercent: 73,
+            resetsAt: 1_767_830_400,
+            limit: "100",
+            used: "27",
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    );
+
+    const usageActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+    );
+    expect(usageActivity?.payload).toMatchObject({
+      limitId: "codex",
+      primary: {
+        usedPercent: 25,
+      },
+      secondary: {
+        usedPercent: 27,
+        resetsAt: "2026-01-08T00:00:00.000Z",
+        windowDurationMins: null,
+      },
+    });
+  });
+
   it("projects Codex camelCase token usage payloads into normalized thread activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

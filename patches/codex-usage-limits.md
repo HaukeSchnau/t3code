@@ -34,6 +34,9 @@ with reset timing and a simple forecast of whether current usage will last until
   normalized fields: `limitId`, `limitName`, `planType`, `rateLimitReachedType`, `credits`,
   `primary`, and `secondary`.
 - Each window should normalize `usedPercent`, `resetsAt`, and `windowDurationMins`.
+- When Codex supplies a 7d usage limit as `individualLimit` with `remainingPercent`, normalize it
+  into the `secondary` display window as `100 - remainingPercent`. Use it when `secondary` is
+  absent or when `secondary.usedPercent` is still the stale zero value.
 - Treat numeric `resetsAt` values defensively: large epoch values are milliseconds, smaller epoch
   values are seconds.
 - Ignore malformed or empty usage-limit payloads instead of appending noisy activities.

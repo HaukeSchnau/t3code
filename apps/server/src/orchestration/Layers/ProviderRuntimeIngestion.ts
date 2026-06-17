@@ -451,10 +451,54 @@ function normalizeRateLimitWindow(value: unknown): {
   };
 }
 
+function normalizeSpendControlLimitWindow(value: unknown): {
+  readonly usedPercent: number;
+  readonly resetsAt: string | null;
+  readonly windowDurationMins: number | null;
+} | null {
+  const record = asRecord(value);
+  const remainingPercent = asFiniteNumber(record?.remainingPercent);
+  if (remainingPercent === null) {
+    return null;
+  }
+
+  return {
+    usedPercent: Math.max(0, Math.min(100, 100 - remainingPercent)),
+    resetsAt: normalizeRateLimitResetTimestamp(record?.resetsAt),
+    windowDurationMins: null,
+  };
+}
+
+function selectSecondaryRateLimitWindow(
+  secondary: {
+    readonly usedPercent: number;
+    readonly resetsAt: string | null;
+    readonly windowDurationMins: number | null;
+  } | null,
+  individualLimit: {
+    readonly usedPercent: number;
+    readonly resetsAt: string | null;
+    readonly windowDurationMins: number | null;
+  } | null,
+): {
+  readonly usedPercent: number;
+  readonly resetsAt: string | null;
+  readonly windowDurationMins: number | null;
+} | null {
+  if (!secondary) {
+    return individualLimit;
+  }
+  if (secondary.usedPercent === 0 && individualLimit && individualLimit.usedPercent > 0) {
+    return individualLimit;
+  }
+  return secondary;
+}
+
 function hasRateLimitSnapshotFields(value: Record<string, unknown>): boolean {
   return (
     value.primary !== undefined ||
     value.secondary !== undefined ||
+    value.individualLimit !== undefined ||
     value.limitId !== undefined ||
     value.limitName !== undefined ||
     value.planType !== undefined ||
@@ -526,7 +570,10 @@ function buildUsageLimitsActivityPayload(event: ProviderRuntimeEvent):
       : null;
 
   const primary = normalizeRateLimitWindow(rateLimits.primary);
-  const secondary = normalizeRateLimitWindow(rateLimits.secondary);
+  const secondary = selectSecondaryRateLimitWindow(
+    normalizeRateLimitWindow(rateLimits.secondary),
+    normalizeSpendControlLimitWindow(rateLimits.individualLimit),
+  );
   if (
     primary === null &&
     secondary === null &&
