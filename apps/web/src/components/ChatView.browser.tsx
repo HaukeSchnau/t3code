@@ -6106,6 +6106,78 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("collapses and expands the app sidebar from the configured shortcut and trigger", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-sidebar-toggle-shortcut-test" as MessageId,
+        targetText: "sidebar toggle shortcut test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "sidebar.toggle",
+              shortcut: {
+                key: "b",
+                metaKey: true,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: false,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      await waitForServerConfigToApply();
+      const sidebarRoot = await waitForElement(
+        () => document.querySelector<HTMLElement>('[data-slot="sidebar"][data-state]'),
+        "Unable to find desktop sidebar root.",
+      );
+      expect(sidebarRoot.getAttribute("data-state")).toBe("expanded");
+
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "b",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(sidebarRoot.getAttribute("data-state")).toBe("collapsed");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+
+      const trigger = await waitForElement(
+        () => document.querySelector<HTMLButtonElement>('button[aria-label="Expand sidebar"]'),
+        "Unable to find collapsed sidebar trigger.",
+      );
+      trigger.click();
+
+      await vi.waitFor(
+        () => {
+          expect(sidebarRoot.getAttribute("data-state")).toBe("expanded");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("renders the configurable shortcut and runs a command from the sidebar trigger", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,
