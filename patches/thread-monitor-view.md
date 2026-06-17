@@ -34,6 +34,10 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   strip's standard inset/layering relative to the collapsed or expanded composer surface.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
+- Recently completed threads depend on `projection_threads.latest_turn_id` continuing to reference
+  the latest concrete turn after a session leaves `running`. A final `thread.session-set` with
+  `activeTurnId: null` must not clear that pointer, or completed threads disappear from the monitor
+  before the recent-complete window expires.
 
 ## Maintenance Notes
 
@@ -41,6 +45,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Main UI: `apps/web/src/components/MonitorView.tsx`
 - Sidebar entry: `apps/web/src/components/Sidebar.tsx`
 - Generated TanStack route tree must include `/monitor`.
+- Migration `034_BackfillProjectionThreadLatestTurnId` repairs existing projection rows whose
+  `latest_turn_id` was cleared even though concrete turn rows still exist.
 
 When syncing upstream, keep this patch if upstream lacks a comparable multi-thread monitor. If an
 upstream implementation appears, prefer it only if it preserves stable order, global scope, compact

@@ -206,6 +206,31 @@ function deriveHasActionableProposedPlan(input: {
   return latestPlan !== null && latestPlan.implementedAt === null;
 }
 
+function deriveLatestConcreteTurnId(
+  turns: ReadonlyArray<ProjectionTurn>,
+): ProjectionTurn["turnId"] {
+  let latestTurnId: ProjectionTurn["turnId"] = null;
+  let latestTurnAt: string | null = null;
+
+  for (const turn of turns) {
+    if (turn.turnId === null) {
+      continue;
+    }
+
+    const turnAt = turn.completedAt ?? turn.startedAt ?? turn.requestedAt;
+    if (
+      latestTurnAt === null ||
+      turnAt > latestTurnAt ||
+      (turnAt === latestTurnAt && (latestTurnId === null || turn.turnId > latestTurnId))
+    ) {
+      latestTurnAt = turnAt;
+      latestTurnId = turn.turnId;
+    }
+  }
+
+  return latestTurnId;
+}
+
 function retainProjectionMessagesAfterRevert(
   messages: ReadonlyArray<ProjectionThreadMessage>,
   turns: ReadonlyArray<ProjectionTurn>,
@@ -743,9 +768,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          let latestTurnId = event.payload.session.activeTurnId ?? existingRow.value.latestTurnId;
+          if (latestTurnId === null) {
+            latestTurnId = deriveLatestConcreteTurnId(
+              yield* projectionTurnRepository.listByThreadId({
+                threadId: event.payload.threadId,
+              }),
+            );
+          }
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
-            latestTurnId: event.payload.session.activeTurnId,
+            latestTurnId,
             updatedAt: event.occurredAt,
           });
           yield* refreshThreadShellSummary(event.payload.threadId);
