@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe, it } from "vite-plus/test";
-import { ThreadId } from "@t3tools/contracts";
+import { ThreadId, TurnId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 
@@ -13,10 +13,13 @@ import {
 } from "../CodexDeveloperInstructions.ts";
 import {
   buildTurnStartParams,
+  formatCodexTurnStartupTimeoutMessage,
+  getCodexTurnStartupTimeout,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
   selectInitialCodexRateLimitSnapshot,
+  type CodexTurnStartupState,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -174,6 +177,59 @@ describe("hasConfiguredMcpServer", () => {
     assert.equal(
       hasConfiguredMcpServer(["-c", 'mcp_servers.t3-code.url="http://127.0.0.1/mcp"']),
       true,
+    );
+  });
+});
+
+describe("Codex turn startup watchdog", () => {
+  const baseState = {
+    providerThreadId: "provider-thread-1",
+    turnId: TurnId.make("turn-1"),
+    startedAtEpochSeconds: 1_797_420_000,
+    observedTurnActivity: false,
+    timedOut: false,
+    mcpServers: {},
+  } satisfies CodexTurnStartupState;
+
+  it("times out startup with pending MCP servers", () => {
+    const timeout = getCodexTurnStartupTimeout({
+      ...baseState,
+      mcpServers: {
+        "t3-code": "ready",
+        creative_production_mcp: "starting",
+        node_repl: "ready",
+      },
+    });
+
+    assert.deepStrictEqual(timeout, {
+      pendingMcpServerNames: ["creative_production_mcp"],
+    });
+  });
+
+  it("keeps active turns alive after real turn activity", () => {
+    assert.equal(
+      getCodexTurnStartupTimeout({
+        ...baseState,
+        observedTurnActivity: true,
+        mcpServers: {
+          creative_production_mcp: "starting",
+        },
+      }),
+      null,
+    );
+  });
+
+  it("does not time out before pending MCP startup is observed", () => {
+    assert.equal(getCodexTurnStartupTimeout(baseState), null);
+  });
+
+  it("formats a legible pending-MCP timeout message", () => {
+    assert.equal(
+      formatCodexTurnStartupTimeoutMessage({
+        timeoutLabel: "90 seconds",
+        pendingMcpServerNames: ["creative_production_mcp"],
+      }),
+      "Codex turn produced no activity within 90 seconds; MCP startup is still pending for creative_production_mcp. The turn was interrupted to avoid leaving the thread stuck.",
     );
   });
 });

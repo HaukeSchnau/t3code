@@ -1134,6 +1134,25 @@ function mapToRuntimeEvents(
     ];
   }
 
+  if (event.method === "mcpServer/startupStatus/updated") {
+    const payload = readPayload(
+      EffectCodexSchema.V2McpServerStatusUpdatedNotification,
+      event.payload,
+    );
+    if (!payload) {
+      return [];
+    }
+    return [
+      {
+        type: "mcp.status.updated",
+        ...runtimeEventBase(event, canonicalThreadId),
+        payload: {
+          status: payload,
+        },
+      },
+    ];
+  }
+
   if (event.method === "mcpServer/oauthLogin/completed") {
     const payload = readPayload(
       EffectCodexSchema.V2McpServerOauthLoginCompletedNotification,

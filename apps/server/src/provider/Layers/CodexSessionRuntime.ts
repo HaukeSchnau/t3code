@@ -18,9 +18,11 @@ import {
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -55,6 +57,8 @@ const BENIGN_ERROR_LOG_SNIPPETS = [
   "state db record_discrepancy: find_thread_path_by_id_str_in_subdir, falling_back",
 ];
 const CODEX_APP_SERVER_FORCE_KILL_AFTER = "2 seconds" as const;
+const CODEX_TURN_STARTUP_TIMEOUT = Duration.seconds(90);
+const CODEX_TURN_STARTUP_TIMEOUT_LABEL = "90 seconds";
 const RECOVERABLE_THREAD_RESUME_ERROR_SNIPPETS = [
   "not found",
   "missing thread",
@@ -94,9 +98,23 @@ const formatSchemaIssue = SchemaIssue.makeFormatterDefault();
 
 export type CodexResumeCursor = typeof CodexResumeCursorSchema.Type;
 type CodexServiceTier = NonNullable<EffectCodexSchema.V2ThreadStartParams["serviceTier"]>;
+type CodexMcpStartupStatus = EffectCodexSchema.V2McpServerStatusUpdatedNotification["status"];
 type CodexThreadItem =
   | EffectCodexSchema.V2ThreadReadResponse["thread"]["turns"][number]["items"][number]
   | EffectCodexSchema.V2ThreadRollbackResponse["thread"]["turns"][number]["items"][number];
+
+export interface CodexTurnStartupState {
+  readonly providerThreadId: string;
+  readonly turnId: TurnId;
+  readonly startedAtEpochSeconds: number | undefined;
+  readonly observedTurnActivity: boolean;
+  readonly timedOut: boolean;
+  readonly mcpServers: Readonly<Record<string, CodexMcpStartupStatus>>;
+}
+
+export interface CodexTurnStartupTimeout {
+  readonly pendingMcpServerNames: ReadonlyArray<string>;
+}
 
 export interface CodexSessionRuntimeOptions {
   readonly threadId: ThreadId;
@@ -110,6 +128,7 @@ export interface CodexSessionRuntimeOptions {
   readonly serviceTier?: CodexServiceTier | undefined;
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
+  readonly turnStartupTimeout?: Duration.Duration;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -503,6 +522,41 @@ export function selectInitialCodexRateLimitSnapshot(
   return entries.length === 1 ? entries[0] : undefined;
 }
 
+function sameTurnId(left: TurnId | undefined, right: TurnId | undefined): boolean {
+  return left !== undefined && right !== undefined && String(left) === String(right);
+}
+
+export function getCodexTurnStartupTimeout(
+  state: CodexTurnStartupState,
+): CodexTurnStartupTimeout | null {
+  if (state.observedTurnActivity || state.timedOut) {
+    return null;
+  }
+
+  const pendingMcpServerNames = Object.entries(state.mcpServers)
+    .filter(([, status]) => status === "starting")
+    .map(([name]) => name)
+    .sort();
+
+  if (pendingMcpServerNames.length === 0) {
+    return null;
+  }
+
+  return { pendingMcpServerNames };
+}
+
+export function formatCodexTurnStartupTimeoutMessage(input: {
+  readonly timeoutLabel: string;
+  readonly pendingMcpServerNames: ReadonlyArray<string>;
+}): string {
+  const pendingServers = input.pendingMcpServerNames.join(", ");
+  if (pendingServers.length === 0) {
+    return `Codex turn produced no activity within ${input.timeoutLabel}; interrupting it to avoid leaving the thread stuck.`;
+  }
+
+  return `Codex turn produced no activity within ${input.timeoutLabel}; MCP startup is still pending for ${pendingServers}. The turn was interrupted to avoid leaving the thread stuck.`;
+}
+
 function readNotificationThreadId(notification: CodexServerNotification): string | undefined {
   switch (notification.method) {
     case "thread/started":
@@ -546,6 +600,8 @@ function readNotificationThreadId(notification: CodexServerNotification): string
     case "thread/realtime/error":
     case "thread/realtime/closed":
       return notification.params.threadId;
+    case "mcpServer/startupStatus/updated":
+      return notification.params.threadId ?? undefined;
     default:
       return undefined;
   }
@@ -730,6 +786,7 @@ export const makeCodexSessionRuntime = (
     const approvalCorrelationsRef = yield* Ref.make(new Map<string, ApprovalCorrelation>());
     const pendingUserInputsRef = yield* Ref.make(new Map<ApprovalRequestId, PendingUserInput>());
     const collabReceiverTurnsRef = yield* Ref.make(new Map<string, TurnId>());
+    const turnStartupRef = yield* Ref.make<CodexTurnStartupState | null>(null);
     const closedRef = yield* Ref.make(false);
 
     // `~` is not shell-expanded when env vars are set via
@@ -821,6 +878,177 @@ export const makeCodexSessionRuntime = (
         message,
       });
 
+    const nowEpochSeconds = Effect.map(Clock.currentTimeMillis, (millis) =>
+      Math.floor(millis / 1000),
+    );
+    const turnStartupTimeout = options.turnStartupTimeout ?? CODEX_TURN_STARTUP_TIMEOUT;
+    const startTurnStartupWatchdog = (input: {
+      readonly providerThreadId: string;
+      readonly turnId: TurnId;
+      readonly startedAtEpochSeconds?: number | null | undefined;
+    }) =>
+      Effect.gen(function* () {
+        const fallbackStartedAt = yield* nowEpochSeconds;
+        yield* Ref.update(turnStartupRef, (state) => {
+          const startedAtEpochSeconds = input.startedAtEpochSeconds ?? fallbackStartedAt;
+          if (
+            state !== null &&
+            state.providerThreadId === input.providerThreadId &&
+            sameTurnId(state.turnId, input.turnId)
+          ) {
+            return {
+              ...state,
+              startedAtEpochSeconds: state.startedAtEpochSeconds ?? startedAtEpochSeconds,
+            };
+          }
+
+          return {
+            providerThreadId: input.providerThreadId,
+            turnId: input.turnId,
+            startedAtEpochSeconds,
+            observedTurnActivity: false,
+            timedOut: false,
+            mcpServers: {},
+          };
+        });
+
+        yield* Effect.sleep(turnStartupTimeout).pipe(
+          Effect.flatMap(() =>
+            Ref.modify(turnStartupRef, (state) => {
+              if (
+                state === null ||
+                state.providerThreadId !== input.providerThreadId ||
+                !sameTurnId(state.turnId, input.turnId)
+              ) {
+                return [null, state] as const;
+              }
+
+              const timeout = getCodexTurnStartupTimeout(state);
+              if (timeout === null) {
+                return [null, state] as const;
+              }
+
+              return [
+                { state, timeout },
+                { ...state, timedOut: true },
+              ] as const;
+            }),
+          ),
+          Effect.flatMap((result) => {
+            if (result === null) {
+              return Effect.void;
+            }
+
+            return Effect.gen(function* () {
+              const completedAt = yield* nowEpochSeconds;
+              const message = formatCodexTurnStartupTimeoutMessage({
+                timeoutLabel: CODEX_TURN_STARTUP_TIMEOUT_LABEL,
+                pendingMcpServerNames: result.timeout.pendingMcpServerNames,
+              });
+              yield* Ref.set(turnStartupRef, null);
+              yield* updateSession(sessionRef, {
+                status: "error",
+                activeTurnId: undefined,
+                lastError: message,
+              });
+              const durationMs =
+                result.state.startedAtEpochSeconds !== undefined
+                  ? Math.max(0, (completedAt - result.state.startedAtEpochSeconds) * 1000)
+                  : undefined;
+              yield* emitEvent({
+                kind: "notification",
+                threadId: options.threadId,
+                method: "turn/completed",
+                turnId: result.state.turnId,
+                payload: {
+                  threadId: result.state.providerThreadId,
+                  turn: {
+                    id: result.state.turnId,
+                    items: [],
+                    status: "failed",
+                    completedAt,
+                    ...(result.state.startedAtEpochSeconds !== undefined
+                      ? { startedAt: result.state.startedAtEpochSeconds }
+                      : {}),
+                    ...(durationMs !== undefined ? { durationMs } : {}),
+                    error: {
+                      message,
+                    },
+                  },
+                } satisfies EffectCodexSchema.V2TurnCompletedNotification,
+              });
+              yield* client
+                .request("turn/interrupt", {
+                  threadId: result.state.providerThreadId,
+                  turnId: result.state.turnId,
+                })
+                .pipe(
+                  Effect.timeout(Duration.seconds(5)),
+                  Effect.catch((cause) =>
+                    Effect.logWarning("Failed to interrupt stalled Codex turn startup.", {
+                      cause,
+                      turnId: result.state.turnId,
+                    }),
+                  ),
+                  Effect.forkIn(runtimeScope),
+                  Effect.asVoid,
+                );
+            });
+          }),
+          Effect.catch((cause) =>
+            Effect.logError("Codex turn startup watchdog failed.", { cause }),
+          ),
+          Effect.forkIn(runtimeScope),
+          Effect.asVoid,
+        );
+      });
+
+    const recordTurnStartupNotification = (
+      notification: CodexServerNotification,
+      providerThreadId: string | undefined,
+      turnId: TurnId | undefined,
+    ) =>
+      Ref.update(turnStartupRef, (state) => {
+        if (state === null) {
+          return state;
+        }
+
+        if (providerThreadId !== undefined && providerThreadId !== state.providerThreadId) {
+          return state;
+        }
+
+        if (notification.method === "mcpServer/startupStatus/updated") {
+          if (providerThreadId !== state.providerThreadId) {
+            return state;
+          }
+
+          return {
+            ...state,
+            mcpServers: {
+              ...state.mcpServers,
+              [notification.params.name]: notification.params.status,
+            },
+          };
+        }
+
+        if (!sameTurnId(turnId, state.turnId)) {
+          return state;
+        }
+
+        if (notification.method === "turn/completed") {
+          return null;
+        }
+
+        if (notification.method === "turn/started") {
+          return state;
+        }
+
+        return {
+          ...state,
+          observedTurnActivity: true,
+        };
+      });
+
     const settlePendingApprovals = (decision: ProviderApprovalDecision) =>
       Ref.get(pendingApprovalsRef).pipe(
         Effect.flatMap((pendingApprovals) =>
@@ -891,6 +1119,7 @@ export const makeCodexSessionRuntime = (
                 parentTurnId: childParentTurnId,
               }
             : undefined;
+        yield* recordTurnStartupNotification(notification, providerConversationId, turnId);
         yield* emitEvent({
           kind: "notification",
           threadId: options.threadId,
@@ -928,10 +1157,19 @@ export const makeCodexSessionRuntime = (
           if (providerThreadId && payload.threadId !== providerThreadId) {
             return Effect.void;
           }
-          return updateSession(sessionRef, {
-            status: "running",
-            activeTurnId: TurnId.make(payload.turn.id),
-          });
+          const turnId = TurnId.make(payload.turn.id);
+          return startTurnStartupWatchdog({
+            providerThreadId: payload.threadId,
+            turnId,
+            startedAtEpochSeconds: payload.turn.startedAt,
+          }).pipe(
+            Effect.andThen(
+              updateSession(sessionRef, {
+                status: "running",
+                activeTurnId: turnId,
+              }),
+            ),
+          );
         }),
       ),
     );
@@ -1382,6 +1620,11 @@ export const makeCodexSessionRuntime = (
             ),
           );
           const turnId = TurnId.make(response.turn.id);
+          yield* startTurnStartupWatchdog({
+            providerThreadId,
+            turnId,
+            startedAtEpochSeconds: response.turn.startedAt,
+          });
           yield* updateSession(sessionRef, {
             status: "running",
             activeTurnId: turnId,
