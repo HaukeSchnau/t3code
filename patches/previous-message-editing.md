@@ -2,18 +2,19 @@
 
 ## Summary
 
-The web client lets a user edit an earlier user message by rendering the normal composer inline at that message. Submitting the edit dispatches `thread.checkpoint.revert` to roll the Codex App Server conversation back to the checkpoint before that message, waits until the local projection has pruned the old message and later history, then starts a normal `thread.turn.start` with the edited prompt and attachments.
+The web client lets a user edit an earlier user message by rendering the normal composer inline at that message. Submitting the edit dispatches `thread.history.prune`, rolls the provider conversation back by the number of provider turns being discarded, waits until the local projection has pruned the old message and later history, then starts a normal `thread.turn.start` with the edited prompt and attachments.
 
 ## Requirements
 
-- Editing is available only for user messages that already have a rollback checkpoint.
+- Editing is available for prior server-thread user messages without requiring filesystem checkpoints.
 - The inline editor reuses `ChatComposer`, including image attachments, model selection, runtime mode, interaction mode, slash commands, and the send button.
 - Submitting an edit discards all later conversation history by design.
-- If rollback succeeds but the replacement turn fails to start, the edited content is restored into the main composer so the user does not lose it after the original row has been pruned.
+- Editing does not restore or mutate workspace files. The separate checkpoint revert button remains responsible for filesystem rollback when checkpoint data exists.
+- If history pruning succeeds but the replacement turn fails to start, the edited content is restored into the main composer so the user does not lose it after the original row has been pruned.
 
 ## Maintenance Notes
 
-- The server-side rollback primitive lives in the existing `thread.checkpoint.revert` command path and Codex App Server `thread/rollback` adapter call. This patch should not need custom server behavior unless the upstream rollback protocol changes.
+- The server-side edit primitive is `thread.history.prune` -> `thread.history-prune-requested` -> `thread.history.prune.complete` -> `thread.history-pruned`. The provider reactor uses `ProviderService.rollbackConversation` for conversation context only; it must not restore checkpoint refs or workspace files.
 - Keep the inline editor on `ChatComposer` rather than adding a second composer implementation. The feature depends on having one composer surface with isolated draft targets.
 - The fork-owned implementation lives in `apps/web/src/components/chat/usePreviousMessageEditing.tsx`, `InlineMessageEditor.tsx`, and `previousMessageEditing.ts`. `ChatView` should keep only the hook call and timeline controller wiring so upstream sync conflicts stay small.
-- `MessagesTimeline` exposes this feature through the optional `userMessageEditing` controller prop. Prefer extending that controller over adding more top-level timeline props.
+- `MessagesTimeline` receives edit eligibility separately from checkpoint revert counts. Do not gate the edit button on `revertTurnCountByUserMessageId`; that map is only for the filesystem checkpoint revert button.

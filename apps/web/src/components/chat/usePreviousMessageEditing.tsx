@@ -95,7 +95,7 @@ interface UsePreviousMessageEditingInput {
   composerTerminalContextsRef: RefObject<TerminalContextDraft[]>;
   shouldAutoScrollRef: RefObject<boolean>;
   sendInFlightRef: RefObject<boolean>;
-  revertTurnCountByUserMessageId: Map<MessageId, number>;
+  editableUserMessageIds: ReadonlySet<MessageId>;
   setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
   prepareTimelineForOptimisticMessage: () => Promise<void>;
@@ -178,7 +178,7 @@ export function usePreviousMessageEditing({
   composerTerminalContextsRef,
   shouldAutoScrollRef,
   sendInFlightRef,
-  revertTurnCountByUserMessageId,
+  editableUserMessageIds,
   setOptimisticUserMessages,
   setThreadError,
   prepareTimelineForOptimisticMessage,
@@ -227,12 +227,11 @@ export function usePreviousMessageEditing({
 
   const [editingUserMessage, setEditingUserMessage] = useState<{
     messageId: MessageId;
-    turnCount: number;
     draftTarget: DraftId;
   } | null>(null);
   const [isPreparingEdit, setIsPreparingEdit] = useState(false);
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
-  const [isEditRevertingCheckpoint, setIsEditRevertingCheckpoint] = useState(false);
+  const [isEditPruningHistory, setIsEditPruningHistory] = useState(false);
 
   const clearEditDraft = useCallback(
     (draftTarget: DraftId) => {
@@ -377,16 +376,15 @@ export function usePreviousMessageEditing({
         isPreparingEdit ||
         isSubmittingEdit ||
         isExternalRevertingCheckpoint ||
-        isEditRevertingCheckpoint ||
+        isEditPruningHistory ||
         isWorking
       ) {
         return;
       }
-      const targetTurnCount = revertTurnCountByUserMessageId.get(messageId);
       const message = activeThread.messages.find(
         (entry) => entry.id === messageId && entry.role === "user",
       );
-      if (typeof targetTurnCount !== "number" || !message) {
+      if (!editableUserMessageIds.has(messageId) || !message) {
         return;
       }
 
@@ -405,7 +403,7 @@ export function usePreviousMessageEditing({
           setComposerDraftModelSelection(draftTarget, activeThread.modelSelection);
           setComposerDraftRuntimeMode(draftTarget, activeThread.runtimeMode);
           setComposerDraftInteractionMode(draftTarget, activeThread.interactionMode);
-          setEditingUserMessage({ messageId, turnCount: targetTurnCount, draftTarget });
+          setEditingUserMessage({ messageId, draftTarget });
           scheduleEditComposerFocus();
         } catch (err) {
           clearEditDraft(draftTarget);
@@ -422,13 +420,13 @@ export function usePreviousMessageEditing({
       activeThread,
       addComposerDraftImages,
       clearEditDraft,
-      isEditRevertingCheckpoint,
+      editableUserMessageIds,
+      isEditPruningHistory,
       isExternalRevertingCheckpoint,
       isPreparingEdit,
       isServerThread,
       isSubmittingEdit,
       isWorking,
-      revertTurnCountByUserMessageId,
       scheduleEditComposerFocus,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
@@ -547,25 +545,25 @@ export function usePreviousMessageEditing({
 
       sendInFlightRef.current = true;
       setIsSubmittingEdit(true);
-      setIsEditRevertingCheckpoint(true);
+      setIsEditPruningHistory(true);
       setThreadError(threadIdForSend, null);
 
-      let rollbackSucceeded = false;
+      let historyPruneSucceeded = false;
       let turnStartSucceeded = false;
       try {
         await api.orchestration.dispatchCommand({
-          type: "thread.checkpoint.revert",
+          type: "thread.history.prune",
           commandId: newCommandId(),
           threadId: threadIdForSend,
-          turnCount: editingUserMessage.turnCount,
+          messageId: editingUserMessage.messageId,
           createdAt: new Date().toISOString(),
         });
         await waitForMessagePrunedFromThread({
           messageId: editingUserMessage.messageId,
           readThread: () => activeThreadSnapshotRef.current,
         });
-        rollbackSucceeded = true;
-        setIsEditRevertingCheckpoint(false);
+        historyPruneSucceeded = true;
+        setIsEditPruningHistory(false);
 
         await prepareTimelineForOptimisticMessage();
 
@@ -649,7 +647,7 @@ export function usePreviousMessageEditing({
         clearComposerDraftContent(editingUserMessage.draftTarget);
         resetEditState();
       } catch (err) {
-        if (rollbackSucceeded && !turnStartSucceeded) {
+        if (historyPruneSucceeded && !turnStartSucceeded) {
           setOptimisticUserMessages((existing) => {
             const removed = existing.filter((message) => message.id === messageIdForSend);
             for (const message of removed) {
@@ -682,7 +680,7 @@ export function usePreviousMessageEditing({
       } finally {
         sendInFlightRef.current = false;
         setIsSubmittingEdit(false);
-        setIsEditRevertingCheckpoint(false);
+        setIsEditPruningHistory(false);
         if (!turnStartSucceeded) {
           resetLocalDispatch();
         }
@@ -746,7 +744,7 @@ export function usePreviousMessageEditing({
         isSendBusy={isSendBusy}
         isSubmitting={isSubmittingEdit}
         isPreparing={isPreparingEdit}
-        isRevertingCheckpoint={isEditRevertingCheckpoint}
+        isRevertingCheckpoint={isEditPruningHistory}
         environmentUnavailable={environmentUnavailableState}
         planSidebarLabel={planSidebarLabel}
         planSidebarOpen={planSidebarOpen}
@@ -811,7 +809,7 @@ export function usePreviousMessageEditing({
     handleEditRuntimeModeChange,
     interactionMode,
     isConnecting,
-    isEditRevertingCheckpoint,
+    isEditPruningHistory,
     isPreparingEdit,
     isSendBusy,
     isServerThread,
@@ -856,7 +854,7 @@ export function usePreviousMessageEditing({
 
   return {
     isEditing: editingUserMessage !== null,
-    isRevertingCheckpoint: isEditRevertingCheckpoint,
+    isRevertingCheckpoint: isEditPruningHistory,
     timelineController,
   };
 }

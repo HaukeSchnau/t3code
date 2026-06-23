@@ -161,6 +161,7 @@ function resolveObservedMediaPreviewUrl(
   }
 }
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
+const EMPTY_EDITABLE_USER_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 
 export interface UserMessageEditingController {
   editingUserMessageId: MessageId | null;
@@ -189,6 +190,7 @@ interface MessagesTimelineProps {
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   onOpenSubagentInspector?: (providerThreadId: string) => void;
+  editableUserMessageIds?: ReadonlySet<MessageId>;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
   userMessageEditing?: UserMessageEditingController;
@@ -219,6 +221,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   routeThreadKey,
   onOpenTurnDiff,
   onOpenSubagentInspector,
+  editableUserMessageIds = EMPTY_EDITABLE_USER_MESSAGE_IDS,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
   userMessageEditing = EMPTY_USER_MESSAGE_EDITING,
@@ -311,6 +314,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         activeTurnStartedAt,
         turnDiffSummaryByAssistantMessageId,
         revertTurnCountByUserMessageId,
+        editableUserMessageIds,
       }),
     [
       timelineEntries,
@@ -318,6 +322,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedTurnIds,
       isWorking,
       activeTurnStartedAt,
+      editableUserMessageIds,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
     ],
@@ -508,6 +513,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   ];
   const previewImages = userImages.filter((image) => image.name.startsWith("preview-annotation-"));
   const regularImages = userImages.filter((image) => !image.name.startsWith("preview-annotation-"));
+  const canEditUserMessage = row.canEditUserMessage;
   const canRevertAgentWork = typeof row.revertTurnCount === "number";
   const isEditing = ctx.userMessageEditing.editingUserMessageId === row.message.id;
 
@@ -592,7 +598,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             </TooltipPopup>
           </Tooltip>
           <div className="flex items-center gap-0.5">
-            {canRevertAgentWork && <EditUserMessageButton messageId={row.message.id} />}
+            {canEditUserMessage && <EditUserMessageButton messageId={row.message.id} />}
             {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
             {displayedUserMessage.copyText && (
               <MessageCopyButton text={displayedUserMessage.copyText} variant="ghost" />

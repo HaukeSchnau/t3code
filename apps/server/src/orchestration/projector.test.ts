@@ -783,6 +783,158 @@ describe("orchestration projector", () => {
     expect(thread?.latestTurn?.turnId).toBe("turn-1");
   });
 
+  it("prunes edited-away message history without checkpoint summaries", async () => {
+    const createdAt = "2026-02-27T12:00:00.000Z";
+    const model = createEmptyReadModel(createdAt);
+
+    const afterCreate = await Effect.runPromise(
+      projectEvent(
+        model,
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-history-prune",
+          occurredAt: createdAt,
+          commandId: "cmd-create-history-prune",
+          payload: {
+            threadId: "thread-history-prune",
+            projectId: "project-1",
+            title: "demo",
+            modelSelection: {
+              provider: ProviderDriverKind.make("codex"),
+              model: "gpt-5-codex",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt,
+            updatedAt: createdAt,
+          },
+        }),
+      ),
+    );
+
+    const events: ReadonlyArray<OrchestrationEvent> = [
+      makeEvent({
+        sequence: 2,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:01.000Z",
+        commandId: "cmd-user-keep",
+        payload: {
+          threadId: "thread-history-prune",
+          messageId: "user-keep",
+          role: "user",
+          text: "kept",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-02-27T12:00:01.000Z",
+          updatedAt: "2026-02-27T12:00:01.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 3,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:02.000Z",
+        commandId: "cmd-assistant-keep",
+        payload: {
+          threadId: "thread-history-prune",
+          messageId: "assistant-keep",
+          role: "assistant",
+          text: "kept response",
+          turnId: "turn-keep",
+          streaming: false,
+          createdAt: "2026-02-27T12:00:02.000Z",
+          updatedAt: "2026-02-27T12:00:02.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 4,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:03.000Z",
+        commandId: "cmd-user-remove",
+        payload: {
+          threadId: "thread-history-prune",
+          messageId: "user-remove",
+          role: "user",
+          text: "remove",
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-02-27T12:00:03.000Z",
+          updatedAt: "2026-02-27T12:00:03.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 5,
+        type: "thread.message-sent",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:04.000Z",
+        commandId: "cmd-assistant-remove",
+        payload: {
+          threadId: "thread-history-prune",
+          messageId: "assistant-remove",
+          role: "assistant",
+          text: "removed response",
+          turnId: "turn-remove",
+          streaming: false,
+          createdAt: "2026-02-27T12:00:04.000Z",
+          updatedAt: "2026-02-27T12:00:04.000Z",
+        },
+      }),
+      makeEvent({
+        sequence: 6,
+        type: "thread.activity-appended",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:04.500Z",
+        commandId: "cmd-activity-remove",
+        payload: {
+          threadId: "thread-history-prune",
+          activity: {
+            id: "activity-remove",
+            tone: "tool",
+            kind: "tool.completed",
+            summary: "removed activity",
+            payload: {},
+            turnId: "turn-remove",
+            createdAt: "2026-02-27T12:00:04.500Z",
+          },
+        },
+      }),
+      makeEvent({
+        sequence: 7,
+        type: "thread.history-pruned",
+        aggregateKind: "thread",
+        aggregateId: "thread-history-prune",
+        occurredAt: "2026-02-27T12:00:05.000Z",
+        commandId: "cmd-history-prune",
+        payload: {
+          threadId: "thread-history-prune",
+          messageId: "user-remove",
+          pruneFromCreatedAt: "2026-02-27T12:00:03.000Z",
+          prunedTurnIds: ["turn-remove"],
+        },
+      }),
+    ];
+
+    const afterPrune = await events.reduce<Promise<ReturnType<typeof createEmptyReadModel>>>(
+      (statePromise, event) =>
+        statePromise.then((state) => Effect.runPromise(projectEvent(state, event))),
+      Promise.resolve(afterCreate),
+    );
+
+    const thread = afterPrune.threads[0];
+    expect(thread?.messages.map((message) => message.id)).toEqual(["user-keep", "assistant-keep"]);
+    expect(thread?.activities).toEqual([]);
+  });
+
   it("does not fallback-retain messages tied to removed turn IDs", async () => {
     const createdAt = "2026-02-26T12:00:00.000Z";
     const model = createEmptyReadModel(createdAt);

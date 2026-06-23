@@ -2170,6 +2170,18 @@ function ChatViewContent(props: ChatViewProps) {
 
     return byUserMessageId;
   }, [inferredCheckpointTurnCountByTurnId, timelineEntries, turnDiffSummaryByAssistantMessageId]);
+  const editableUserMessageIds = useMemo(() => {
+    const messageIds = new Set<MessageId>();
+    if (!isServerThread) {
+      return messageIds;
+    }
+    for (const entry of timelineEntries) {
+      if (entry.kind === "message" && entry.message.role === "user") {
+        messageIds.add(entry.message.id);
+      }
+    }
+    return messageIds;
+  }, [isServerThread, timelineEntries]);
 
   const gitCwd = activeProject
     ? projectScriptCwd({
@@ -4820,7 +4832,7 @@ function ChatViewContent(props: ChatViewProps) {
     composerTerminalContextsRef,
     shouldAutoScrollRef: isAtEndRef,
     sendInFlightRef,
-    revertTurnCountByUserMessageId,
+    editableUserMessageIds,
     setOptimisticUserMessages,
     setThreadError,
     prepareTimelineForOptimisticMessage,
@@ -5022,6 +5034,7 @@ function ChatViewContent(props: ChatViewProps) {
                 routeThreadKey={routeThreadKey}
                 onOpenTurnDiff={onOpenTurnDiff}
                 onOpenSubagentInspector={openSubagentInspector}
+                editableUserMessageIds={editableUserMessageIds}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
                 userMessageEditing={previousMessageEditing.timelineController}

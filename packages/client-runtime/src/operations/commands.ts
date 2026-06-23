@@ -43,6 +43,7 @@ export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
+export type PruneThreadHistoryInput = CommandInput<"thread.history.prune">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
@@ -242,6 +243,18 @@ export const revertThreadCheckpoint: (input: RevertThreadCheckpointInput) => Com
       createdAt: metadata.createdAt,
     });
   });
+
+export const pruneThreadHistory: (input: PruneThreadHistoryInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.pruneThreadHistory",
+)(function* (input) {
+  const metadata = yield* timestampedCommandMetadata(input);
+  return yield* dispatch({
+    ...input,
+    type: "thread.history.prune",
+    commandId: metadata.commandId,
+    createdAt: metadata.createdAt,
+  });
+});
 
 export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.stopThreadSession",

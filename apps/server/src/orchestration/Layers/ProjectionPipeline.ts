@@ -355,6 +355,56 @@ function retainProjectionProposedPlansAfterRevert(
   );
 }
 
+function retainProjectionMessagesAfterHistoryPrune(
+  messages: ReadonlyArray<ProjectionThreadMessage>,
+  messageId: string,
+): ReadonlyArray<ProjectionThreadMessage> | null {
+  const orderedMessages = [...messages].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) ||
+      left.messageId.localeCompare(right.messageId),
+  );
+  const targetIndex = orderedMessages.findIndex(
+    (message) => message.messageId === messageId && message.role === "user",
+  );
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  const retainedMessageIds = new Set<string>();
+  for (let index = 0; index < orderedMessages.length; index += 1) {
+    const message = orderedMessages[index]!;
+    if (message.role === "system" || index < targetIndex) {
+      retainedMessageIds.add(message.messageId);
+    }
+  }
+  return messages.filter((message) => retainedMessageIds.has(message.messageId));
+}
+
+function retainProjectionActivitiesAfterHistoryPrune(
+  activities: ReadonlyArray<ProjectionThreadActivity>,
+  prunedTurnIds: ReadonlySet<string>,
+  pruneFromCreatedAt: string,
+): ReadonlyArray<ProjectionThreadActivity> {
+  return activities.filter((activity) =>
+    activity.turnId === null
+      ? activity.createdAt < pruneFromCreatedAt
+      : !prunedTurnIds.has(activity.turnId),
+  );
+}
+
+function retainProjectionProposedPlansAfterHistoryPrune(
+  proposedPlans: ReadonlyArray<ProjectionThreadProposedPlan>,
+  prunedTurnIds: ReadonlySet<string>,
+  pruneFromCreatedAt: string,
+): ReadonlyArray<ProjectionThreadProposedPlan> {
+  return proposedPlans.filter((proposedPlan) =>
+    proposedPlan.turnId === null
+      ? proposedPlan.createdAt < pruneFromCreatedAt
+      : !prunedTurnIds.has(proposedPlan.turnId),
+  );
+}
+
 function collectThreadAttachmentRelativePaths(
   threadId: string,
   messages: ReadonlyArray<ProjectionThreadMessage>,
@@ -839,6 +889,25 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.history-pruned": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          const retainedTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            latestTurnId: deriveLatestConcreteTurnId(retainedTurns),
+            updatedAt: event.occurredAt,
+          });
+          yield* refreshThreadShellSummary(event.payload.threadId);
+          return;
+        }
+
         default:
           return;
       }
@@ -906,6 +975,35 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             event.payload.turnCount,
           );
           if (keptRows.length === existingRows.length) {
+            return;
+          }
+
+          yield* projectionThreadMessageRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadMessageRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          attachmentSideEffects.prunedThreadRelativePaths.set(
+            event.payload.threadId,
+            collectThreadAttachmentRelativePaths(event.payload.threadId, keptRows),
+          );
+          return;
+        }
+
+        case "thread.history-pruned": {
+          const existingRows = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+
+          const keptRows = retainProjectionMessagesAfterHistoryPrune(
+            existingRows,
+            event.payload.messageId,
+          );
+          if (keptRows === null || keptRows.length === existingRows.length) {
             return;
           }
 
@@ -1015,6 +1113,32 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
         }
 
+        case "thread.history-pruned": {
+          const existingRows = yield* projectionThreadProposedPlanRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+
+          const keptRows = retainProjectionProposedPlansAfterHistoryPrune(
+            existingRows,
+            new Set<string>(event.payload.prunedTurnIds),
+            event.payload.pruneFromCreatedAt,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+
+          yield* projectionThreadProposedPlanRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadProposedPlanRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
         default:
           return;
       }
@@ -1054,6 +1178,30 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             existingRows,
             existingTurns,
             event.payload.turnCount,
+          );
+          if (keptRows.length === existingRows.length) {
+            return;
+          }
+          yield* projectionThreadActivityRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert, {
+            concurrency: 1,
+          }).pipe(Effect.asVoid);
+          return;
+        }
+
+        case "thread.history-pruned": {
+          const existingRows = yield* projectionThreadActivityRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          if (existingRows.length === 0) {
+            return;
+          }
+          const keptRows = retainProjectionActivitiesAfterHistoryPrune(
+            existingRows,
+            new Set<string>(event.payload.prunedTurnIds),
+            event.payload.pruneFromCreatedAt,
           );
           if (keptRows.length === existingRows.length) {
             return;
@@ -1394,6 +1542,34 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               turn.checkpointTurnCount !== null &&
               turn.checkpointTurnCount <= event.payload.turnCount,
           );
+          yield* projectionTurnRepository.deleteByThreadId({
+            threadId: event.payload.threadId,
+          });
+          yield* Effect.forEach(
+            keptTurns,
+            (turn) =>
+              turn.turnId === null
+                ? Effect.void
+                : projectionTurnRepository.upsertByTurnId({
+                    ...turn,
+                    turnId: turn.turnId,
+                  }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
+          return;
+        }
+
+        case "thread.history-pruned": {
+          const existingTurns = yield* projectionTurnRepository.listByThreadId({
+            threadId: event.payload.threadId,
+          });
+          const prunedTurnIds = new Set<string>(event.payload.prunedTurnIds);
+          const keptTurns = existingTurns.filter(
+            (turn) => turn.turnId !== null && !prunedTurnIds.has(turn.turnId),
+          );
+          if (keptTurns.length === existingTurns.length) {
+            return;
+          }
           yield* projectionTurnRepository.deleteByThreadId({
             threadId: event.payload.threadId,
           });

@@ -13,6 +13,10 @@ describe("isThreadDetailEvent", () => {
     expect(isThreadDetailEvent(eventWithType("thread.queued-message-dispatched"))).toBe(true);
   });
 
+  it("streams completed history prune events to active thread subscribers", () => {
+    expect(isThreadDetailEvent(eventWithType("thread.history-pruned"))).toBe(true);
+  });
+
   it("keeps non-detail orchestration events out of thread detail streams", () => {
     expect(isThreadDetailEvent(eventWithType("thread.turn-start-requested"))).toBe(false);
   });

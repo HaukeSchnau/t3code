@@ -61,5 +61,5 @@ export async function waitForMessagePrunedFromThread(input: {
     }
     await new Promise((resolve) => window.setTimeout(resolve, 50));
   }
-  throw new Error("Timed out waiting for the thread to roll back.");
+  throw new Error("Timed out waiting for the thread history to update.");
 }

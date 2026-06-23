@@ -455,6 +455,53 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.history-pruned": {
+      const pruned = pruneMessagesFromHistoryTarget(thread.messages, event.payload.messageId);
+      if (!pruned) {
+        return { kind: "unchanged" };
+      }
+      const prunedTurnIds = new Set<string>(event.payload.prunedTurnIds);
+      const pruneFromCreatedAt = event.payload.pruneFromCreatedAt;
+      const checkpoints = pipe(
+        thread.checkpoints,
+        Arr.filter((entry) => !prunedTurnIds.has(entry.turnId)),
+        Arr.sort(checkpointOrder),
+      );
+      const proposedPlans = pipe(
+        thread.proposedPlans,
+        Arr.filter((plan) =>
+          plan.turnId === null
+            ? plan.createdAt < pruneFromCreatedAt
+            : !prunedTurnIds.has(plan.turnId),
+        ),
+      );
+      const activities = pipe(
+        thread.activities,
+        Arr.filter((activity) =>
+          activity.turnId === null
+            ? activity.createdAt < pruneFromCreatedAt
+            : !prunedTurnIds.has(activity.turnId),
+        ),
+      );
+      const latestTurn =
+        thread.latestTurn === null || !prunedTurnIds.has(thread.latestTurn.turnId)
+          ? thread.latestTurn
+          : null;
+
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          checkpoints,
+          messages: pruned.messages,
+          proposedPlans,
+          activities,
+          latestTurn,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
       const activities = pipe(
@@ -474,6 +521,7 @@ export function applyThreadDetailEvent(
     case "thread.approval-response-requested":
     case "thread.user-input-response-requested":
     case "thread.checkpoint-revert-requested":
+    case "thread.history-prune-requested":
       return { kind: "unchanged" };
   }
 
@@ -544,4 +592,39 @@ function retainMessagesAfterRevert(
     }
     return retainedTurnIds.has(message.turnId);
   });
+}
+
+function pruneMessagesFromHistoryTarget(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  messageId: MessageId,
+): {
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly prunedTurnIds: ReadonlySet<string>;
+  readonly pruneFromCreatedAt: string;
+} | null {
+  const targetIndex = messages.findIndex(
+    (message) => message.id === messageId && message.role === "user",
+  );
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  const prunedTurnIds = new Set<string>();
+  const retainedMessages: OrchestrationMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (message.role === "system" || index < targetIndex) {
+      retainedMessages.push(message);
+      continue;
+    }
+    if (message.turnId !== null) {
+      prunedTurnIds.add(message.turnId);
+    }
+  }
+
+  return {
+    messages: retainedMessages,
+    prunedTurnIds,
+    pruneFromCreatedAt: messages[targetIndex]!.createdAt,
+  };
 }

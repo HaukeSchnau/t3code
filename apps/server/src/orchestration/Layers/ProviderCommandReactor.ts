@@ -2,6 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
+  type MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   ProviderDriverKind,
@@ -53,6 +54,7 @@ type ProviderIntentEvent = Extract<
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
+      | "thread.history-prune-requested"
       | "thread.session-stop-requested";
   }
 >;
@@ -221,6 +223,7 @@ const make = Effect.gen(function* () {
       | "provider.turn.interrupt.failed"
       | "provider.approval.respond.failed"
       | "provider.user-input.respond.failed"
+      | "provider.history.prune.failed"
       | "provider.session.stop.failed";
     readonly summary: string;
     readonly detail: string;
@@ -971,6 +974,73 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const collectHistoryPruneFacts = Effect.fnUntraced(function* (input: {
+    readonly threadId: ThreadId;
+    readonly messageId: MessageId;
+    readonly requestedAt: string;
+  }) {
+    const thread = yield* resolveThread(input.threadId);
+    if (!thread) {
+      return {
+        pruneFromCreatedAt: input.requestedAt,
+        prunedTurnIds: [] as TurnId[],
+      };
+    }
+
+    const targetIndex = thread.messages.findIndex(
+      (message) => message.id === input.messageId && message.role === "user",
+    );
+    if (targetIndex < 0) {
+      return {
+        pruneFromCreatedAt: input.requestedAt,
+        prunedTurnIds: [] as TurnId[],
+      };
+    }
+
+    const prunedTurnIds: TurnId[] = [];
+    const seenTurnIds = new Set<string>();
+    for (let index = targetIndex; index < thread.messages.length; index += 1) {
+      const message = thread.messages[index];
+      if (!message?.turnId || seenTurnIds.has(message.turnId)) {
+        continue;
+      }
+      seenTurnIds.add(message.turnId);
+      prunedTurnIds.push(message.turnId);
+    }
+
+    return {
+      pruneFromCreatedAt: thread.messages[targetIndex]!.createdAt,
+      prunedTurnIds,
+    };
+  });
+
+  const processHistoryPruneRequested = Effect.fn("processHistoryPruneRequested")(function* (
+    event: Extract<ProviderIntentEvent, { type: "thread.history-prune-requested" }>,
+  ) {
+    const facts = yield* collectHistoryPruneFacts({
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+      requestedAt: event.payload.createdAt,
+    });
+
+    if (facts.prunedTurnIds.length > 0) {
+      yield* providerService.rollbackConversation({
+        threadId: event.payload.threadId,
+        numTurns: facts.prunedTurnIds.length,
+      });
+    }
+
+    yield* orchestrationEngine.dispatch({
+      type: "thread.history.prune.complete",
+      commandId: yield* serverCommandId("history-prune-complete"),
+      threadId: event.payload.threadId,
+      messageId: event.payload.messageId,
+      pruneFromCreatedAt: facts.pruneFromCreatedAt,
+      prunedTurnIds: facts.prunedTurnIds,
+      createdAt: event.payload.createdAt,
+    });
+  });
+
   const processSessionStopRequested = Effect.fn("processSessionStopRequested")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.session-stop-requested" }>,
   ) {
@@ -1039,6 +1109,21 @@ const make = Effect.gen(function* () {
       case "thread.user-input-response-requested":
         yield* processUserInputResponseRequested(event);
         return;
+      case "thread.history-prune-requested":
+        yield* processHistoryPruneRequested(event).pipe(
+          Effect.catchCause((cause) => {
+            const detail = formatFailureDetail(cause);
+            return appendProviderFailureActivity({
+              threadId: event.payload.threadId,
+              kind: "provider.history.prune.failed",
+              summary: "Failed to edit message history",
+              detail,
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            });
+          }),
+        );
+        return;
       case "thread.session-stop-requested":
         yield* processSessionStopRequested(event);
         return;
@@ -1068,6 +1153,7 @@ const make = Effect.gen(function* () {
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||
         event.type === "thread.user-input-response-requested" ||
+        event.type === "thread.history-prune-requested" ||
         event.type === "thread.session-stop-requested"
       ) {
         return yield* worker.enqueue(event);

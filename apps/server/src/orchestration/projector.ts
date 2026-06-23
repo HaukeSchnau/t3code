@@ -28,6 +28,7 @@ import {
   ThreadRuntimeModeSetPayload,
   ThreadUnarchivedPayload,
   ThreadRevertedPayload,
+  ThreadHistoryPrunedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
 } from "./Schemas.ts";
@@ -163,6 +164,41 @@ function retainThreadProposedPlansAfterRevert(
   return proposedPlans.filter(
     (proposedPlan) => proposedPlan.turnId === null || retainedTurnIds.has(proposedPlan.turnId),
   );
+}
+
+function pruneThreadMessagesFromHistoryTarget(
+  messages: ReadonlyArray<OrchestrationMessage>,
+  messageId: string,
+): {
+  readonly messages: ReadonlyArray<OrchestrationMessage>;
+  readonly prunedTurnIds: ReadonlySet<string>;
+  readonly pruneFromCreatedAt: string;
+} | null {
+  const targetIndex = messages.findIndex(
+    (message) => message.id === messageId && message.role === "user",
+  );
+  if (targetIndex < 0) {
+    return null;
+  }
+
+  const prunedTurnIds = new Set<string>();
+  const retainedMessages: OrchestrationMessage[] = [];
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index]!;
+    if (message.role === "system" || index < targetIndex) {
+      retainedMessages.push(message);
+      continue;
+    }
+    if (message.turnId !== null) {
+      prunedTurnIds.add(message.turnId);
+    }
+  }
+
+  return {
+    messages: retainedMessages,
+    prunedTurnIds,
+    pruneFromCreatedAt: messages[targetIndex]!.createdAt,
+  };
 }
 
 function compareThreadActivities(
@@ -749,6 +785,55 @@ export function projectEvent(
             threads: updateThread(nextBase.threads, payload.threadId, {
               checkpoints,
               messages,
+              proposedPlans,
+              activities,
+              latestTurn,
+              updatedAt: event.occurredAt,
+            }),
+          };
+        }),
+      );
+
+    case "thread.history-pruned":
+      return decodeForEvent(ThreadHistoryPrunedPayload, event.payload, event.type, "payload").pipe(
+        Effect.map((payload) => {
+          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+          if (!thread) {
+            return nextBase;
+          }
+          const pruned = pruneThreadMessagesFromHistoryTarget(thread.messages, payload.messageId);
+          if (!pruned) {
+            return nextBase;
+          }
+
+          const prunedTurnIds = new Set<string>(payload.prunedTurnIds);
+          const pruneFromCreatedAt = payload.pruneFromCreatedAt;
+          const checkpoints = thread.checkpoints
+            .filter((entry) => !prunedTurnIds.has(entry.turnId))
+            .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
+            .slice(-MAX_THREAD_CHECKPOINTS);
+          const proposedPlans = thread.proposedPlans
+            .filter((plan) =>
+              plan.turnId === null
+                ? plan.createdAt < pruneFromCreatedAt
+                : !prunedTurnIds.has(plan.turnId),
+            )
+            .slice(-200);
+          const activities = thread.activities.filter((activity) =>
+            activity.turnId === null
+              ? activity.createdAt < pruneFromCreatedAt
+              : !prunedTurnIds.has(activity.turnId),
+          );
+          const latestTurn =
+            thread.latestTurn === null || !prunedTurnIds.has(thread.latestTurn.turnId)
+              ? thread.latestTurn
+              : null;
+
+          return {
+            ...nextBase,
+            threads: updateThread(nextBase.threads, payload.threadId, {
+              checkpoints,
+              messages: pruned.messages.slice(-MAX_THREAD_MESSAGES),
               proposedPlans,
               activities,
               latestTurn,

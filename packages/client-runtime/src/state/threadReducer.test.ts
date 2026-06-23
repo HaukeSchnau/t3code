@@ -678,6 +678,103 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.history-pruned", () => {
+    it("removes the target user message and later history without requiring checkpoints", () => {
+      const threadWithData: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: TurnId.make("turn-2"),
+          state: "completed",
+          requestedAt: "2026-04-01T03:00:00.000Z",
+          startedAt: "2026-04-01T03:00:01.000Z",
+          completedAt: "2026-04-01T03:00:10.000Z",
+          assistantMessageId: MessageId.make("msg-4"),
+        },
+        messages: [
+          {
+            id: MessageId.make("msg-1"),
+            role: "user",
+            text: "Keep",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T01:00:00.000Z",
+            updatedAt: "2026-04-01T01:00:00.000Z",
+          },
+          {
+            id: MessageId.make("msg-2"),
+            role: "assistant",
+            text: "Kept response",
+            turnId: TurnId.make("turn-1"),
+            streaming: false,
+            createdAt: "2026-04-01T02:00:00.000Z",
+            updatedAt: "2026-04-01T02:00:00.000Z",
+          },
+          {
+            id: MessageId.make("msg-3"),
+            role: "user",
+            text: "Remove",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-04-01T03:00:00.000Z",
+            updatedAt: "2026-04-01T03:00:00.000Z",
+          },
+          {
+            id: MessageId.make("msg-4"),
+            role: "assistant",
+            text: "Removed response",
+            turnId: TurnId.make("turn-2"),
+            streaming: false,
+            createdAt: "2026-04-01T03:00:10.000Z",
+            updatedAt: "2026-04-01T03:00:10.000Z",
+          },
+        ],
+        activities: [
+          {
+            id: EventId.make("activity-1"),
+            tone: "tool",
+            kind: "tool.completed",
+            summary: "kept",
+            payload: {},
+            turnId: TurnId.make("turn-1"),
+            createdAt: "2026-04-01T02:00:00.000Z",
+          },
+          {
+            id: EventId.make("activity-2"),
+            tone: "tool",
+            kind: "tool.completed",
+            summary: "removed",
+            payload: {},
+            turnId: TurnId.make("turn-2"),
+            createdAt: "2026-04-01T03:00:10.000Z",
+          },
+        ],
+        checkpoints: [],
+      };
+
+      const result = applyThreadDetailEvent(threadWithData, {
+        ...baseEventFields,
+        sequence: 15,
+        occurredAt: "2026-04-01T04:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.history-pruned",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-3"),
+          pruneFromCreatedAt: "2026-04-01T03:00:00.000Z",
+          prunedTurnIds: [TurnId.make("turn-2")],
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
+        expect(result.thread.activities.map((activity) => activity.id)).toEqual(["activity-1"]);
+        expect(result.thread.latestTurn).toBeNull();
+      }
+    });
+  });
+
   describe("no-op events", () => {
     it("returns unchanged for approval-response-requested", () => {
       const result = applyThreadDetailEvent(baseThread, {
