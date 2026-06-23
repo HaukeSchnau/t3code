@@ -108,6 +108,7 @@ import {
 import {
   PreviewAutomationError,
   PreviewAutomationOwner,
+  PreviewAutomationOwnerIdentity,
   PreviewAutomationRequest,
   PreviewAutomationResponse,
 } from "./previewAutomation.ts";
@@ -559,7 +560,7 @@ export const WsPreviewReportStatusRpc = Rpc.make(WS_METHODS.previewReportStatus,
 });
 
 export const WsPreviewAutomationConnectRpc = Rpc.make(WS_METHODS.previewAutomationConnect, {
-  payload: Schema.Struct({ clientId: Schema.String }),
+  payload: PreviewAutomationOwner,
   success: PreviewAutomationRequest,
   error: Schema.Union([PreviewAutomationError, EnvironmentAuthorizationError]),
   stream: true,
@@ -576,7 +577,7 @@ export const WsPreviewAutomationReportOwnerRpc = Rpc.make(WS_METHODS.previewAuto
 });
 
 export const WsPreviewAutomationClearOwnerRpc = Rpc.make(WS_METHODS.previewAutomationClearOwner, {
-  payload: Schema.Struct({ clientId: Schema.String }),
+  payload: PreviewAutomationOwnerIdentity,
   error: Schema.Union([PreviewAutomationError, EnvironmentAuthorizationError]),
 });
 

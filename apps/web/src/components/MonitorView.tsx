@@ -8,8 +8,13 @@ import {
   ShieldCheckIcon,
   XIcon,
 } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import { Link } from "@tanstack/react-router";
-import { scopedThreadKey, scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type {
+  EnvironmentThread,
+  EnvironmentThreadShell,
+} from "@t3tools/client-runtime/state/shell";
 import {
   type ApprovalRequestId,
   defaultInstanceIdForDriver,
@@ -32,7 +37,6 @@ import {
   useState,
 } from "react";
 import { type LegendListRef } from "@legendapp/list/react";
-import { useShallow } from "zustand/react/shallow";
 
 import {
   deriveActiveWorkStartedAt,
@@ -45,8 +49,7 @@ import {
   type PendingUserInput,
 } from "../session-logic";
 import { readEnvironmentApi } from "../environmentApi";
-import { retainThreadDetailSubscription } from "../environments/runtime/service";
-import { useSettings } from "../hooks/useSettings";
+import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { cn, newCommandId, newMessageId } from "../lib/utils";
 import { appendElementContextsToPrompt, type ElementContextDraft } from "../lib/elementContext";
@@ -59,16 +62,8 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import {
-  type AppState,
-  selectProjectByRef,
-  selectSidebarThreadsAcrossEnvironments,
-  selectThreadsForEnvironment,
-  useStore,
-} from "../store";
-import { createThreadSelectorByRef } from "../storeSelectors";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
-import type { SidebarThreadSummary, Thread } from "../types";
+import type { QueuedMessage } from "../types";
 import {
   getStartedThreadModelChangeBlockReason,
   deriveComposerSendState,
@@ -88,8 +83,11 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
-import { useServerConfig, useServerKeybindings } from "../rpc/serverState";
-import type { QueuedMessage } from "../types";
+import { useProjects, useThread, useThreadShells } from "../state/entities";
+import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
+
+type SidebarThreadSummary = EnvironmentThreadShell;
+type Thread = EnvironmentThread;
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
 const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
@@ -165,7 +163,7 @@ function toTimestamp(value: string | null | undefined): number {
 }
 
 function isLiveSessionStatus(
-  status: NonNullable<SidebarThreadSummary["session"]>["orchestrationStatus"] | undefined,
+  status: NonNullable<SidebarThreadSummary["session"]>["status"] | undefined,
 ): boolean {
   return status === "starting" || status === "running";
 }
@@ -173,7 +171,7 @@ function isLiveSessionStatus(
 function isThreadSessionLive(
   session: Thread["session"] | SidebarThreadSummary["session"],
 ): boolean {
-  return isLiveSessionStatus(session?.orchestrationStatus);
+  return isLiveSessionStatus(session?.status);
 }
 
 function isSupersededSessionError(
@@ -192,7 +190,7 @@ function isActiveSessionError(
   session: Thread["session"] | SidebarThreadSummary["session"],
   latestTurn: SidebarThreadSummary["latestTurn"],
 ): boolean {
-  const status = session?.orchestrationStatus;
+  const status = session?.status;
   if (status !== "error" && status !== "interrupted") {
     return false;
   }
@@ -228,7 +226,7 @@ export function resolveMonitorThreadCandidate(
     latestTurn?.state === "error" ||
     latestTurn?.state === "interrupted" ||
     isActiveSessionError(thread.session, latestTurn);
-  const sessionStatus = thread.session?.orchestrationStatus;
+  const sessionStatus = thread.session?.status;
   const running = isLiveSessionStatus(sessionStatus);
 
   if (!actionable && !hasError && !running && !planReady && !recentlyCompleted) {
@@ -447,15 +445,12 @@ function useTileVisibility() {
 }
 
 function useRetainedThreadDetail(threadRef: ScopedThreadRef, enabled: boolean): Thread | undefined {
-  useEffect(() => {
-    if (!enabled) return;
-    return retainThreadDetailSubscription(threadRef.environmentId, threadRef.threadId);
-  }, [enabled, threadRef.environmentId, threadRef.threadId]);
-  return useStore(useMemo(() => createThreadSelectorByRef(threadRef), [threadRef]));
+  const thread = useThread(enabled ? threadRef : null);
+  return thread ?? undefined;
 }
 
 export function MonitorView() {
-  const sidebarThreads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const sidebarThreads = useThreadShells();
   const candidates = useStableMonitorCandidates(sidebarThreads);
   const [gridViewportRef, gridColumns] = useMonitorGridColumns(candidates.length);
   const gridStyle = useMemo<MonitorGridStyle>(
@@ -506,15 +501,16 @@ const MonitorThreadTile = memo(function MonitorThreadTile({
   );
   const [tileRef, tileVisible] = useTileVisibility();
   const thread = useRetainedThreadDetail(threadRef, tileVisible);
-  const project = useStore(
-    useMemo(
-      () => (state) =>
-        selectProjectByRef(
-          state,
-          thread ? { environmentId: thread.environmentId, projectId: thread.projectId } : null,
-        ),
-      [thread],
-    ),
+  const projects = useProjects();
+  const project = useMemo(
+    () =>
+      thread
+        ? projects.find(
+            (candidate) =>
+              candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
+          )
+        : undefined,
+    [projects, thread],
   );
   const routeThreadKey = scopedThreadKey(threadRef);
   const running =
@@ -563,7 +559,7 @@ const MonitorThreadTile = memo(function MonitorThreadTile({
             {candidate.thread.title}
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-muted-foreground/60">
-            <span className="truncate">{project?.name ?? "Unknown project"}</span>
+            <span className="truncate">{project?.title ?? "Unknown project"}</span>
             {elapsed ? (
               <>
                 <span className="text-muted-foreground/30">/</span>
@@ -602,7 +598,7 @@ const MonitorThreadTile = memo(function MonitorThreadTile({
         isWorking={running}
         activeTurnInProgress={running && !latestTurnSettled}
         activeTurnStartedAt={activeTurnStartedAt}
-        projectCwd={project?.cwd}
+        projectCwd={project?.workspaceRoot}
       />
 
       <MonitorThreadActions
@@ -636,7 +632,10 @@ function MonitorThreadBody({
   projectCwd: string | undefined;
 }) {
   const listRef = useRef<LegendListRef | null>(null);
-  const timestampFormat = useSettings((settings) => settings.timestampFormat);
+  const timestampFormat = useEnvironmentSettings(
+    threadRef.environmentId,
+    (settings) => settings.timestampFormat,
+  );
   const { resolvedTheme } = useTheme();
   const timelineEntries = useMemo(
     () =>
@@ -649,14 +648,7 @@ function MonitorThreadBody({
         : [],
     [thread],
   );
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    if (!thread) return EMPTY_TURN_DIFFS;
-    return new Map(
-      thread.turnDiffSummaries.flatMap((summary) =>
-        summary.assistantMessageId ? [[summary.assistantMessageId, summary] as const] : [],
-      ),
-    );
-  }, [thread]);
+  const turnDiffSummaryByAssistantMessageId = EMPTY_TURN_DIFFS;
 
   if (!visible) {
     return (
@@ -666,7 +658,7 @@ function MonitorThreadBody({
           <p className="mt-1">Thread detail will hydrate when this tile scrolls into view.</p>
         </div>
         <div className="rounded-md border border-border/60 bg-muted/25 px-2 py-1 text-[11px]">
-          {shellThread.session?.orchestrationStatus ?? shellThread.latestTurn?.state ?? "idle"}
+          {shellThread.session?.status ?? shellThread.latestTurn?.state ?? "idle"}
         </div>
       </div>
     );
@@ -725,26 +717,24 @@ function MonitorThreadActions({
     () => (thread ? derivePendingUserInputs(thread.activities) : []),
     [thread],
   );
-  const settings = useSettings();
+  const settings = useEnvironmentSettings(threadRef.environmentId);
   const { resolvedTheme } = useTheme();
-  const serverConfig = useServerConfig();
-  const keybindings = useServerKeybindings();
+  const serverConfig = useAtomValue(primaryServerConfigAtom);
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const providerStatuses = useMemo<ServerProvider[]>(
     () => [...(serverConfig?.providers ?? [])],
     [serverConfig?.providers],
   );
-  const activeProject = useStore(
-    useMemo(
-      (): ((state: AppState) => ReturnType<typeof selectProjectByRef>) =>
-        thread
-          ? (state) =>
-              selectProjectByRef(state, scopeProjectRef(thread.environmentId, thread.projectId))
-          : () => undefined,
-      [thread],
-    ),
-  );
-  const environmentThreads = useStore(
-    useShallow((state) => selectThreadsForEnvironment(state, threadRef.environmentId)),
+  const projects = useProjects();
+  const activeProject = useMemo(
+    () =>
+      thread
+        ? projects.find(
+            (candidate) =>
+              candidate.environmentId === thread.environmentId && candidate.id === thread.projectId,
+          )
+        : undefined,
+    [projects, thread],
   );
   const providerDriverByInstanceId = useMemo(
     () => new Map(providerStatuses.map((status) => [status.instanceId, status.driver])),
@@ -753,18 +743,22 @@ function MonitorThreadActions({
   const activeUsageLimits = useMemo(
     () =>
       deriveLatestUsageLimitsSnapshotForSources(
-        environmentThreads.map((sourceThread) => ({
-          provider:
-            providerDriverByInstanceId.get(sourceThread.modelSelection.instanceId) ??
-            (sourceThread.modelSelection.instanceId ===
-            defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
-              ? ProviderDriverKind.make("codex")
-              : null),
-          activities: sourceThread.activities,
-        })),
+        thread
+          ? [
+              {
+                provider:
+                  providerDriverByInstanceId.get(thread.modelSelection.instanceId) ??
+                  (thread.modelSelection.instanceId ===
+                  defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
+                    ? ProviderDriverKind.make("codex")
+                    : null),
+                activities: thread.activities,
+              },
+            ]
+          : [],
         ProviderDriverKind.make("codex"),
       ),
-    [environmentThreads, providerDriverByInstanceId],
+    [thread, providerDriverByInstanceId],
   );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(threadRef)?.runtimeMode ?? null,
@@ -1196,7 +1190,7 @@ function MonitorThreadActions({
                 settings={settings}
                 keybindings={keybindings}
                 terminalOpen={false}
-                gitCwd={activeProject?.cwd ?? null}
+                gitCwd={activeProject?.workspaceRoot ?? null}
                 promptRef={promptRef}
                 composerImagesRef={composerImagesRef}
                 composerTerminalContextsRef={composerTerminalContextsRef}

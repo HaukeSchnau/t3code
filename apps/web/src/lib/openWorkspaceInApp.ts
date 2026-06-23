@@ -1,10 +1,9 @@
 import {
   buildProjectCreateCommand,
-  findProjectByPath,
   resolveAddProjectPath,
-  scopeProjectRef,
-  scopeThreadRef,
-} from "@t3tools/client-runtime";
+} from "@t3tools/client-runtime/operations";
+import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { findProjectByPath } from "@t3tools/client-runtime/state/projects";
 import type {
   CommandId,
   EnvironmentId,
@@ -21,7 +20,7 @@ import { getLatestThreadForProject, type ThreadSortInput } from "./threadSort";
 interface WorkspaceProjectLike {
   readonly id: ProjectId;
   readonly environmentId: EnvironmentId;
-  readonly cwd: string;
+  readonly workspaceRoot: string;
 }
 
 interface WorkspaceThreadLike extends ThreadSortInput {
@@ -44,7 +43,7 @@ export interface OpenWorkspaceInAppInput {
   readonly newProjectId: () => ProjectId;
   readonly dispatchCreateProject: (
     command: ReturnType<typeof buildProjectCreateCommand>,
-  ) => Promise<void>;
+  ) => Promise<unknown>;
   readonly handleNewThread: (
     projectRef: ScopedProjectRef,
     options?: { envMode?: DraftThreadEnvMode },

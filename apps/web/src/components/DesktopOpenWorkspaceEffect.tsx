@@ -1,20 +1,15 @@
 import { useEffect, useEffectEvent, useRef } from "react";
-import { scopeThreadRef } from "@t3tools/client-runtime";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { DesktopOpenWorkspaceRequest } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { useShallow } from "zustand/react/shallow";
 
 import { readEnvironmentApi } from "../environmentApi";
-import { usePrimaryEnvironmentId } from "../environments/primary";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useSettings } from "../hooks/useSettings";
+import { usePrimarySettings } from "../hooks/useSettings";
 import { newCommandId, newProjectId } from "../lib/utils";
 import { openWorkspaceInApp } from "../lib/openWorkspaceInApp";
-import {
-  selectProjectsAcrossEnvironments,
-  selectSidebarThreadsAcrossEnvironments,
-  useStore,
-} from "../store";
+import { usePrimaryEnvironmentId } from "../state/environments";
+import { useProjects, useThreadShells } from "../state/entities";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
@@ -25,18 +20,14 @@ function buildDesktopOpenWorkspaceErrorMessage(error: unknown): string {
 export function DesktopOpenWorkspaceEffect() {
   const navigate = useNavigate();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const bootstrapComplete = useStore((state) =>
-    primaryEnvironmentId
-      ? (state.environmentStateById[primaryEnvironmentId]?.bootstrapComplete ?? false)
-      : false,
-  );
+  const bootstrapComplete = primaryEnvironmentId !== null;
   const { handleNewThread } = useHandleNewThread();
-  const settings = useSettings((state) => ({
+  const settings = usePrimarySettings((state) => ({
     defaultThreadEnvMode: state.defaultThreadEnvMode,
     sidebarThreadSortOrder: state.sidebarThreadSortOrder,
   }));
-  const projects = useStore(useShallow(selectProjectsAcrossEnvironments));
-  const threads = useStore(useShallow(selectSidebarThreadsAcrossEnvironments));
+  const projects = useProjects();
+  const threads = useThreadShells();
   const consumedInitialRequestsRef = useRef(false);
   const requestQueueRef = useRef(Promise.resolve());
 

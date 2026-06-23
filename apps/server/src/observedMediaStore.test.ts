@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 
 import { describe, expect, it } from "vite-plus/test";
 
@@ -29,7 +29,9 @@ describe("observedMediaStore", () => {
   });
 
   it("resolves observed media path by id using the extension that exists on disk", () => {
-    const observedMediaDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-observed-media-"));
+    const observedMediaDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-observed-media-"),
+    );
     try {
       const mediaId = "thread-11111111-1111-4111-8111-111111111111";
       const pngPath = resolveObservedMediaPath({
@@ -41,7 +43,7 @@ describe("observedMediaStore", () => {
       if (!pngPath) {
         return;
       }
-      fs.writeFileSync(pngPath, Buffer.from("hello"));
+      NodeFS.writeFileSync(pngPath, Buffer.from("hello"));
 
       const resolved = resolveObservedMediaPathById({
         observedMediaDir,
@@ -49,12 +51,14 @@ describe("observedMediaStore", () => {
       });
       expect(resolved).toBe(pngPath);
     } finally {
-      fs.rmSync(observedMediaDir, { recursive: true, force: true });
+      NodeFS.rmSync(observedMediaDir, { recursive: true, force: true });
     }
   });
 
   it("rejects invalid observed media ids and extensions", () => {
-    const observedMediaDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3code-observed-media-"));
+    const observedMediaDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-observed-media-"),
+    );
     try {
       expect(
         resolveObservedMediaPath({
@@ -71,7 +75,7 @@ describe("observedMediaStore", () => {
         }),
       ).toBeNull();
     } finally {
-      fs.rmSync(observedMediaDir, { recursive: true, force: true });
+      NodeFS.rmSync(observedMediaDir, { recursive: true, force: true });
     }
   });
 });

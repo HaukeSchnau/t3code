@@ -1,6 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
+import * as NodeCrypto from "node:crypto";
+import * as NodeFS from "node:fs";
 
 import { SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
 import {
@@ -35,7 +35,7 @@ export function createObservedMediaId(threadId: string): string | null {
   if (!threadSegment) {
     return null;
   }
-  return `${threadSegment}-${randomUUID()}`;
+  return `${threadSegment}-${NodeCrypto.randomUUID()}`;
 }
 
 export function observedMediaRelativePath(input: {
@@ -93,7 +93,7 @@ export function resolveObservedMediaPathById(input: {
       observedMediaDir: input.observedMediaDir,
       relativePath: `${normalizedId}${extension}`,
     });
-    if (maybePath && existsSync(maybePath)) {
+    if (maybePath && NodeFS.existsSync(maybePath)) {
       return maybePath;
     }
   }

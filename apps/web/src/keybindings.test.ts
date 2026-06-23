@@ -85,11 +85,7 @@ function compile(bindings: TestBinding[]): ResolvedKeybindingsConfig {
 }
 
 const DEFAULT_BINDINGS = compile([
-  {
-    shortcut: modShortcut("b"),
-    command: "sidebar.toggle",
-    whenAst: whenNot(whenIdentifier("terminalFocus")),
-  },
+  { shortcut: modShortcut("b"), command: "sidebar.toggle" },
   { shortcut: modShortcut("j"), command: "terminal.toggle" },
   { shortcut: modShortcut("b", { altKey: true }), command: "rightPanel.toggle" },
   {

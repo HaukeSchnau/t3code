@@ -27,7 +27,9 @@ function makeInput(overrides: Partial<Parameters<typeof openWorkspaceInApp>[0]> 
 describe("openWorkspaceInApp", () => {
   it("navigates to the latest active thread for an existing project", async () => {
     const input = makeInput({
-      projects: [{ id: ProjectId.make("project-1"), environmentId: ENVIRONMENT_ID, cwd: "/repo" }],
+      projects: [
+        { id: ProjectId.make("project-1"), environmentId: ENVIRONMENT_ID, workspaceRoot: "/repo" },
+      ],
       threads: [
         {
           id: ThreadId.make("thread-old"),
@@ -60,7 +62,9 @@ describe("openWorkspaceInApp", () => {
 
   it("opens a draft thread for an existing project without active threads", async () => {
     const input = makeInput({
-      projects: [{ id: ProjectId.make("project-1"), environmentId: ENVIRONMENT_ID, cwd: "/repo" }],
+      projects: [
+        { id: ProjectId.make("project-1"), environmentId: ENVIRONMENT_ID, workspaceRoot: "/repo" },
+      ],
       threads: [
         {
           id: ThreadId.make("thread-archived"),

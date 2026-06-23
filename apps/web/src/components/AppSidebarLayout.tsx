@@ -1,25 +1,26 @@
-import { useEffect, type ReactNode } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { useEffect, type CSSProperties, type ReactNode } from "react";
 import { useLocation, useNavigate } from "@tanstack/react-router";
 
-import { useCommandPaletteStore } from "../commandPaletteStore";
+import { isCommandPaletteOpen } from "../commandPaletteContext";
+import { isElectron } from "../env";
+import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import { isTerminalFocused } from "../lib/terminalFocus";
+import { isMacPlatform } from "../lib/utils";
+import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../monitorNavigation";
+import { primaryServerKeybindingsAtom } from "../state/server";
 import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
 import ThreadSidebar from "./Sidebar";
-import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "./ui/sidebar";
-import { resolveShortcutCommand } from "../keybindings";
-import { isTerminalFocused } from "../lib/terminalFocus";
-import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../monitorNavigation";
-import { useServerKeybindings } from "../rpc/serverState";
-import {
-  clearShortcutModifierState,
-  syncShortcutModifierStateFromKeyboardEvent,
-} from "../shortcutModifierState";
+import { Sidebar, SidebarProvider, SidebarRail, SidebarTrigger, useSidebar } from "./ui/sidebar";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
 const THREAD_SIDEBAR_WIDTH_STORAGE_KEY = "chat_thread_sidebar_width";
 const THREAD_SIDEBAR_MIN_WIDTH = 13 * 16;
 const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
+const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
 
-function AppSidebarKeyboardShortcuts() {
-  const keybindings = useServerKeybindings();
+function SidebarControl() {
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { toggleSidebar } = useSidebar();
   const navigate = useNavigate();
   const location = useLocation({
@@ -29,14 +30,15 @@ function AppSidebarKeyboardShortcuts() {
       hash: loc.hash,
     }),
   });
+  const shortcutLabel = shortcutLabelForCommand(keybindings, "sidebar.toggle");
 
   useEffect(() => {
     rememberMonitorReturnLocation(location);
-  }, [location.pathname, location.searchStr, location.hash]);
+  }, [location]);
 
   useEffect(() => {
-    const onWindowKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.repeat || useCommandPaletteStore.getState().open) {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isCommandPaletteOpen()) {
         return;
       }
 
@@ -57,45 +59,41 @@ function AppSidebarKeyboardShortcuts() {
         return;
       }
 
-      const target = resolveMonitorToggleTarget(location.pathname);
       event.preventDefault();
       event.stopPropagation();
+      const target = resolveMonitorToggleTarget(location.pathname);
       void navigate({ to: target.to as never, replace: target.replace });
     };
 
-    window.addEventListener("keydown", onWindowKeyDown);
-    return () => {
-      window.removeEventListener("keydown", onWindowKeyDown);
-    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
   }, [keybindings, location.pathname, navigate, toggleSidebar]);
 
-  return null;
+  return (
+    <div
+      className="pointer-events-none fixed left-[var(--workspace-controls-left)] top-[var(--workspace-controls-top)] z-50 flex h-[var(--workspace-topbar-height)] items-center"
+      data-sidebar-control=""
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <SidebarTrigger className="pointer-events-auto" aria-label="Toggle main sidebar" />
+          }
+        />
+        <TooltipPopup side="bottom">
+          Toggle main sidebar{shortcutLabel ? ` (${shortcutLabel})` : ""}
+        </TooltipPopup>
+      </Tooltip>
+    </div>
+  );
 }
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
-
-  useEffect(() => {
-    const onWindowKeyDown = (event: KeyboardEvent) => {
-      syncShortcutModifierStateFromKeyboardEvent(event);
-    };
-    const onWindowKeyUp = (event: KeyboardEvent) => {
-      syncShortcutModifierStateFromKeyboardEvent(event);
-    };
-    const onWindowBlur = () => {
-      clearShortcutModifierState();
-    };
-
-    window.addEventListener("keydown", onWindowKeyDown, true);
-    window.addEventListener("keyup", onWindowKeyUp, true);
-    window.addEventListener("blur", onWindowBlur);
-
-    return () => {
-      window.removeEventListener("keydown", onWindowKeyDown, true);
-      window.removeEventListener("keyup", onWindowKeyUp, true);
-      window.removeEventListener("blur", onWindowBlur);
-    };
-  }, []);
+  const macosWindowControlsStyle =
+    isElectron && isMacPlatform(navigator.platform)
+      ? ({ "--workspace-controls-left": MACOS_TRAFFIC_LIGHTS_LEFT_INSET } as CSSProperties)
+      : undefined;
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
@@ -115,8 +113,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
   }, [navigate]);
 
   return (
-    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen>
-      <AppSidebarKeyboardShortcuts />
+    <SidebarProvider className="h-dvh! min-h-0!" defaultOpen style={macosWindowControlsStyle}>
       <DesktopOpenWorkspaceEffect />
       <Sidebar
         side="left"
@@ -133,6 +130,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         <SidebarRail />
       </Sidebar>
       {children}
+      <SidebarControl />
     </SidebarProvider>
   );
 }

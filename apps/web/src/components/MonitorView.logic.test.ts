@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
+  DEFAULT_MODEL,
   EnvironmentId,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   TurnId,
@@ -35,11 +35,13 @@ function makeSession(
   overrides: Partial<NonNullable<SidebarThreadSummary["session"]>> = {},
 ): NonNullable<SidebarThreadSummary["session"]> {
   return {
-    provider: ProviderDriverKind.make("codex"),
+    threadId: ThreadId.make("thread-1"),
     providerInstanceId: ProviderInstanceId.make("codex"),
     status: "ready",
-    orchestrationStatus: "ready",
-    createdAt: "2026-06-16T19:31:17.871Z",
+    providerName: "Codex",
+    runtimeMode: "full-access",
+    activeTurnId: null,
+    lastError: null,
     updatedAt: "2026-06-16T19:42:44.451Z",
     ...overrides,
   };
@@ -51,6 +53,11 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     environmentId,
     projectId,
     title: "Thread",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: DEFAULT_MODEL,
+    },
+    runtimeMode: "full-access",
     interactionMode: "default",
     session: null,
     createdAt: "2026-06-16T19:30:00.000Z",
@@ -98,7 +105,6 @@ describe("resolveMonitorThreadCandidate", () => {
       makeThread({
         session: makeSession({
           status: "error",
-          orchestrationStatus: "error",
           activeTurnId: turnId,
           lastError: "Codex stream disconnected after exhausting reconnect attempts.",
           updatedAt: "2026-06-16T19:34:27.275Z",
@@ -115,7 +121,6 @@ describe("resolveMonitorThreadCandidate", () => {
       makeThread({
         session: makeSession({
           status: "error",
-          orchestrationStatus: "error",
           activeTurnId: turnId,
           lastError: "Codex stream disconnected after exhausting reconnect attempts.",
           updatedAt: "2026-06-16T19:45:00.000Z",

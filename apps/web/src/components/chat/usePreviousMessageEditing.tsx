@@ -576,7 +576,9 @@ export function usePreviousMessageEditing({
             role: "user",
             text: outgoingMessageText,
             ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+            turnId: null,
             createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
             streaming: false,
           },
         ]);

@@ -1,5 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
-import NodePath from "node:path";
+import * as NodePath from "node:path";
 
 export const OBSERVED_MEDIA_ROUTE_PREFIX = "/observed-media";
 
