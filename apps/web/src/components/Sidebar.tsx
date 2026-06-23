@@ -3644,9 +3644,14 @@ const SidebarChromeHeader = memo(function SidebarChromeHeader({
   );
 });
 
-const SidebarChromeFooter = memo(function SidebarChromeFooter() {
+const SidebarChromeFooter = memo(function SidebarChromeFooter({
+  monitorShortcutLabel,
+}: {
+  monitorShortcutLabel: string | null;
+}) {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const monitorLabel = monitorShortcutLabel ? `Monitor (${monitorShortcutLabel})` : "Monitor";
   const handleMonitorClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -3666,14 +3671,22 @@ const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarUpdatePill />
       <SidebarMenu>
         <SidebarMenuItem>
-          <SidebarMenuButton
-            size="sm"
-            className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
-            onClick={handleMonitorClick}
-          >
-            <LayoutDashboardIcon className="size-3.5" />
-            <span className="text-xs">Monitor</span>
-          </SidebarMenuButton>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <SidebarMenuButton
+                  size="sm"
+                  className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                  onClick={handleMonitorClick}
+                  aria-label={monitorLabel}
+                >
+                  <LayoutDashboardIcon className="size-3.5" />
+                  <span className="text-xs">Monitor</span>
+                </SidebarMenuButton>
+              }
+            />
+            <TooltipPopup side="right">{monitorLabel}</TooltipPopup>
+          </Tooltip>
         </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton
@@ -4235,6 +4248,11 @@ export default function Sidebar() {
   const newThreadShortcutLabel =
     shortcutLabelForCommand(keybindings, "chat.newLocal", newThreadShortcutLabelOptions) ??
     shortcutLabelForCommand(keybindings, "chat.new", newThreadShortcutLabelOptions);
+  const monitorShortcutLabel = shortcutLabelForCommand(
+    keybindings,
+    "monitor.toggle",
+    newThreadShortcutLabelOptions,
+  );
 
   const navigateToThread = useCallback(
     (threadRef: ScopedThreadRef) => {
@@ -5227,7 +5245,7 @@ export default function Sidebar() {
           />
 
           <SidebarSeparator />
-          <SidebarChromeFooter />
+          <SidebarChromeFooter monitorShortcutLabel={monitorShortcutLabel} />
         </>
       )}
     </>

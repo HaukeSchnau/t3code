@@ -1,5 +1,5 @@
 import { useEffect, type ReactNode } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useCommandPaletteStore } from "../commandPaletteStore";
 import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
@@ -7,6 +7,7 @@ import ThreadSidebar from "./Sidebar";
 import { Sidebar, SidebarProvider, SidebarRail, useSidebar } from "./ui/sidebar";
 import { resolveShortcutCommand } from "../keybindings";
 import { isTerminalFocused } from "../lib/terminalFocus";
+import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../monitorNavigation";
 import { useServerKeybindings } from "../rpc/serverState";
 import {
   clearShortcutModifierState,
@@ -20,6 +21,18 @@ const THREAD_MAIN_CONTENT_MIN_WIDTH = 40 * 16;
 function AppSidebarKeyboardShortcuts() {
   const keybindings = useServerKeybindings();
   const { toggleSidebar } = useSidebar();
+  const navigate = useNavigate();
+  const location = useLocation({
+    select: (loc) => ({
+      pathname: loc.pathname,
+      searchStr: loc.searchStr,
+      hash: loc.hash,
+    }),
+  });
+
+  useEffect(() => {
+    rememberMonitorReturnLocation(location);
+  }, [location.pathname, location.searchStr, location.hash]);
 
   useEffect(() => {
     const onWindowKeyDown = (event: KeyboardEvent) => {
@@ -33,20 +46,28 @@ function AppSidebarKeyboardShortcuts() {
         },
       });
 
-      if (command !== "sidebar.toggle") {
+      if (command === "sidebar.toggle") {
+        event.preventDefault();
+        event.stopPropagation();
+        toggleSidebar();
         return;
       }
 
+      if (command !== "monitor.toggle") {
+        return;
+      }
+
+      const target = resolveMonitorToggleTarget(location.pathname);
       event.preventDefault();
       event.stopPropagation();
-      toggleSidebar();
+      void navigate({ to: target.to as never, replace: target.replace });
     };
 
     window.addEventListener("keydown", onWindowKeyDown);
     return () => {
       window.removeEventListener("keydown", onWindowKeyDown);
     };
-  }, [keybindings, toggleSidebar]);
+  }, [keybindings, location.pathname, navigate, toggleSidebar]);
 
   return null;
 }

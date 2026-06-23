@@ -10,7 +10,7 @@ import {
   type SourceControlRepositoryInfo,
 } from "@t3tools/contracts";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowDownIcon,
@@ -19,6 +19,7 @@ import {
   CornerLeftUpIcon,
   FolderIcon,
   FolderPlusIcon,
+  LayoutDashboardIcon,
   LinkIcon,
   MessageSquareIcon,
   SettingsIcon,
@@ -101,6 +102,7 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { useServerKeybindings } from "../rpc/serverState";
 import { resolveShortcutCommand } from "../keybindings";
+import { resolveMonitorToggleTarget } from "../monitorNavigation";
 import {
   Command,
   CommandDialog,
@@ -389,6 +391,7 @@ function CommandPaletteDialog() {
 
 function OpenCommandPaletteDialog() {
   const navigate = useNavigate();
+  const pathname = useLocation({ select: (loc) => loc.pathname });
   const setOpen = useCommandPaletteStore((store) => store.setOpen);
   const openIntent = useCommandPaletteStore((store) => store.openIntent);
   const clearOpenIntent = useCommandPaletteStore((store) => store.clearOpenIntent);
@@ -1031,6 +1034,19 @@ function OpenCommandPaletteDialog() {
     keepOpen: true,
     run: async () => {
       openAddProjectFlow();
+    },
+  });
+
+  actionItems.push({
+    kind: "action",
+    value: "action:monitor",
+    searchTerms: ["monitor", "grid", "dashboard", "threads", "watch", "status"],
+    title: "Toggle Monitor",
+    icon: <LayoutDashboardIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "monitor.toggle",
+    run: async () => {
+      const target = resolveMonitorToggleTarget(pathname);
+      await navigate({ to: target.to as never, replace: target.replace });
     },
   });
 

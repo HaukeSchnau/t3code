@@ -25,6 +25,10 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   three-by-two wall fits.
 - The monitor route should not render its own title/header bar; the sidebar already provides
   navigation context, and the grid should receive the full route viewport.
+- The Monitor must be accessible via the configurable `monitor.toggle` keybinding. The default is
+  `mod+alt+g` outside terminal focus. Triggering it away from `/monitor` opens the Monitor;
+  triggering it on `/monitor` returns to the most recent non-monitor app route, preserving search
+  params and hash where possible.
 - Tile follow-up composers intentionally mount the full shared chat composer as the baseline
   experience, including model/runtime controls, attachment support, usage meters, and primary
   actions. The composer stays collapsed by default in monitor tiles, expands inline on explicit
@@ -44,6 +48,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Route: `apps/web/src/routes/_chat.monitor.tsx`
 - Main UI: `apps/web/src/components/MonitorView.tsx`
 - Sidebar entry: `apps/web/src/components/Sidebar.tsx`
+- Shortcut handling: `apps/web/src/components/AppSidebarLayout.tsx`
+- Navigation memory: `apps/web/src/monitorNavigation.ts`
 - Generated TanStack route tree must include `/monitor`.
 - Migration `034_BackfillProjectionThreadLatestTurnId` repairs existing projection rows whose
   `latest_turn_id` was cleared even though concrete turn rows still exist.
