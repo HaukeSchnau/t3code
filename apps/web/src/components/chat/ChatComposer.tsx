@@ -160,6 +160,14 @@ const COMPOSER_FLOATING_LAYER_SELECTOR = [
   '[data-slot="autocomplete-popup"]',
 ].join(",");
 
+export function shouldDisableComposerPromptEditor(input: {
+  readonly isConnecting: boolean;
+  readonly isComposerApprovalState: boolean;
+  readonly isEnvironmentUnavailable: boolean;
+}): boolean {
+  return input.isConnecting || input.isComposerApprovalState;
+}
+
 const extendReplacementRangeForTrailingSpace = (
   text: string,
   rangeEnd: number,
@@ -1980,8 +1988,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           text.length === 0 ||
           isConnecting ||
           isComposerApprovalState ||
-          pendingUserInputs.length > 0 ||
-          (environmentUnavailable !== null && activePendingProgress === null)
+          pendingUserInputs.length > 0
         ) {
           return false;
         }
@@ -2485,11 +2492,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ? "Ask for follow-up changes or attach images"
                             : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
-                disabled={
-                  isConnecting ||
-                  isComposerApprovalState ||
-                  (environmentUnavailable !== null && activePendingProgress === null)
-                }
+                disabled={shouldDisableComposerPromptEditor({
+                  isConnecting,
+                  isComposerApprovalState,
+                  isEnvironmentUnavailable: environmentUnavailable !== null,
+                })}
               />
               {showMobilePendingAnswerActions ? (
                 <div
