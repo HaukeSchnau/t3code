@@ -174,18 +174,43 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
 );
 
+const ServerSettingsLayerLive = ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer));
+const ProviderEventLoggersLayerLive = ProviderEventLoggers.ProviderEventLoggersLive;
+const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeLive;
+
+const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationLive.pipe(
+  Layer.provideMerge(ProviderEventLoggersLayerLive),
+  Layer.provideMerge(OpenCodeRuntimeLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
+);
+
 // `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
 // by looking up the default `ProviderInstance` per driver in the instance
 // registry. Adapter construction itself moved inside each driver's
 // `create()`; `ProviderEventLoggersLive` owns the shared native/canonical
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
+const ProviderAdapterRegistryLayerLive = ProviderAdapterRegistryLive.pipe(
+  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
+);
+
 const ProviderLayerLive = ProviderServiceLive.pipe(
-  Layer.provide(ProviderAdapterRegistryLive),
+  Layer.provide(ProviderAdapterRegistryLayerLive),
   Layer.provideMerge(ProviderSessionDirectoryLayerLive),
 );
 
+const TextGenerationLayerLive = TextGeneration.layer.pipe(
+  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
+);
+
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
+
+const RepositoryIdentityResolverLayerLive = RepositoryIdentityResolver.layer;
+
+const OrchestrationRuntimeLayerLive = OrchestrationLayerLive.pipe(
+  Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(RepositoryIdentityResolverLayerLive),
+);
 
 const VcsDriverRegistryLayerLive = VcsDriverRegistry.layer.pipe(
   Layer.provide(VcsProjectConfig.layer),
@@ -203,7 +228,7 @@ const GitManagerLayerLive = GitManager.layer.pipe(
   Layer.provideMerge(ProjectSetupScriptRunner.layer),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
-  Layer.provideMerge(TextGeneration.layer),
+  Layer.provideMerge(TextGenerationLayerLive),
 );
 
 const GitLayerLive = Layer.empty.pipe(
@@ -290,16 +315,20 @@ const CloudManagedEndpointRuntimeLive = Layer.mergeAll(
 
 const ProviderRuntimeLayerLive = ProviderSessionReaperLive.pipe(
   Layer.provideMerge(ProviderLayerLive),
-  Layer.provideMerge(OrchestrationLayerLive),
+  Layer.provideMerge(OrchestrationRuntimeLayerLive),
 );
 
-const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
+const RuntimeCoreServicesLive = ReactorLayerLive.pipe(
   // Core Services
+  Layer.provideMerge(OrchestrationRuntimeLayerLive),
   Layer.provideMerge(CheckpointingLayerLive),
   Layer.provideMerge(SourceControlProviderRegistryLayerLive),
   Layer.provideMerge(GitLayerLive),
   Layer.provideMerge(VcsLayerLive),
   Layer.provideMerge(ProviderRuntimeLayerLive),
+);
+
+const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   Layer.provideMerge(Layer.mergeAll(TerminalLayerLive, PreviewLayerLive)),
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(Keybindings.layer),
@@ -309,25 +338,25 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
+  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // drivers (native stream, written from inside each `<X>Adapter`) and
   // `ProviderService` (canonical stream, written after event normalization).
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggers.ProviderEventLoggersLive),
+  Layer.provideMerge(ProviderEventLoggersLayerLive),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and
   // no longer transitively provides it. Exposing it at the runtime level
   // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
-  Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
+  Layer.provideMerge(OpenCodeRuntimeLayerLive),
+  Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provideMerge(
     Layer.mergeAll(WorkspaceLayerLive, ThreadWorkspaceLayerLive, JjAutomaticChangeService.layer),
   ),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
-  Layer.provideMerge(RepositoryIdentityResolver.layer),
+  Layer.provideMerge(RepositoryIdentityResolverLayerLive),
   Layer.provideMerge(ServerEnvironment.layer),
   Layer.provideMerge(AuthLayerLive),
   Layer.provideMerge(ServerSecretStore.layer),
@@ -352,6 +381,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
 
 const RuntimeServicesLive = ServerRuntimeStartup.layer.pipe(
   Layer.provideMerge(RuntimeDependenciesLive),
+  Layer.provideMerge(OrchestrationRuntimeLayerLive),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
@@ -493,6 +523,9 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(RuntimeServicesLive),
+      Layer.provideMerge(RuntimeDependenciesLive),
+      Layer.provideMerge(TerminalLayerLive),
+      Layer.provideMerge(OrchestrationRuntimeLayerLive),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
       Layer.provide(ObservabilityLive),
