@@ -107,6 +107,7 @@ import * as PortScanner from "./preview/PortScanner.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as ThreadWorkspaceService from "./workspace/ThreadWorkspaceService.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
 import * as VcsProvisioningService from "./vcs/VcsProvisioningService.ts";
 import * as GitWorkflowService from "./git/GitWorkflowService.ts";
@@ -534,6 +535,7 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
+      const threadWorkspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
@@ -804,7 +806,9 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
           const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
-          let targetProjectCwd = bootstrap?.prepareWorktree?.projectCwd;
+          let targetProjectCwd =
+            bootstrap?.prepareWorkspace?.roots.find((root) => root.role === "primary")
+              ?.sourcePath ?? bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
 
           const cleanupCreatedThread = () =>
@@ -949,41 +953,62 @@ const makeWsRpcLayer = (currentSession: EnvironmentAuth.AuthenticatedSession) =>
                 interactionMode: bootstrap.createThread.interactionMode,
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
+                workspaceId: bootstrap.createThread.workspaceId ?? null,
                 createdAt: bootstrap.createThread.createdAt,
               });
               createdThread = true;
             }
 
-            if (bootstrap?.prepareWorktree) {
-              let worktreeBaseRef = bootstrap.prepareWorktree.baseBranch;
-              if (bootstrap.prepareWorktree.startFromOrigin) {
-                yield* gitWorkflow.fetchRemote({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
-                  remoteName: "origin",
-                });
-                const resolvedRemoteBase = yield* gitWorkflow.resolveRemoteTrackingCommit({
-                  cwd: bootstrap.prepareWorktree.projectCwd,
-                  refName: bootstrap.prepareWorktree.baseBranch,
-                  fallbackRemoteName: "origin",
-                });
-                worktreeBaseRef = resolvedRemoteBase.commitSha;
-              }
-              const worktree = yield* gitWorkflow.createWorktree({
-                cwd: bootstrap.prepareWorktree.projectCwd,
-                refName: worktreeBaseRef,
-                newRefName: bootstrap.prepareWorktree.branch,
-                baseRefName: bootstrap.prepareWorktree.baseBranch,
-                path: null,
+            const prepareWorkspace =
+              bootstrap?.prepareWorkspace ??
+              (bootstrap?.prepareWorktree && targetProjectId
+                ? {
+                    kind: "git-detached" as const,
+                    roots: [
+                      {
+                        projectId: targetProjectId,
+                        sourcePath: bootstrap.prepareWorktree.projectCwd,
+                        role: "primary" as const,
+                        baseRevision: bootstrap.prepareWorktree.baseBranch,
+                        ...(bootstrap.prepareWorktree.startFromOrigin
+                          ? { startFromOrigin: true }
+                          : {}),
+                      },
+                    ],
+                    retentionPolicy: "explicit-delete" as const,
+                  }
+                : undefined);
+
+            if (prepareWorkspace) {
+              const preparedWorkspace = yield* threadWorkspaceService.prepareWorkspace({
+                threadId: command.threadId,
+                kind: prepareWorkspace.kind ?? "auto",
+                roots: prepareWorkspace.roots.map((root) => ({
+                  projectId: root.projectId,
+                  sourcePath: root.sourcePath,
+                  role: root.role,
+                  ...(root.baseRevision !== undefined ? { baseRevision: root.baseRevision } : {}),
+                  ...(root.startFromOrigin !== undefined
+                    ? { startFromOrigin: root.startFromOrigin }
+                    : {}),
+                })),
+                ...(bootstrap?.createThread?.title
+                  ? { displayNameSeed: bootstrap.createThread.title }
+                  : {}),
+                retentionPolicy: prepareWorkspace.retentionPolicy ?? "explicit-delete",
               });
-              targetWorktreePath = worktree.worktree.path;
+              targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;
               yield* orchestrationEngine.dispatch({
                 type: "thread.meta.update",
                 commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
                 threadId: command.threadId,
-                branch: worktree.worktree.refName,
+                branch: preparedWorkspace.compatibilityBranch,
                 worktreePath: targetWorktreePath,
+                workspaceId: preparedWorkspace.workspace.id,
               });
-              yield* refreshGitStatus(targetWorktreePath);
+              if (targetWorktreePath) {
+                yield* refreshGitStatus(targetWorktreePath);
+              }
             }
 
             yield* runSetupProgram();

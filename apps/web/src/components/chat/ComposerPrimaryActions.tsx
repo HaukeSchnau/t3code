@@ -222,7 +222,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           : isConnecting
             ? "Connecting"
             : isPreparingWorktree
-              ? "Preparing worktree"
+              ? "Preparing workspace"
               : isSendBusy
                 ? "Sending"
                 : "Send message"

@@ -17,10 +17,12 @@ import {
   ProjectId,
   ProviderItemId,
   ThreadId,
+  ThreadWorkspaceId,
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
+import { ThreadWorkspaceRetentionPolicy, ThreadWorkspaceRootRole } from "./workspace.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -383,6 +385,7 @@ export const OrchestrationThread = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -430,6 +433,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -535,6 +539,7 @@ const ThreadCreateCommand = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   createdAt: IsoDateTime,
 });
 
@@ -564,6 +569,7 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
 });
 
 const ThreadRuntimeModeSetCommand = Schema.Struct({
@@ -590,6 +596,7 @@ const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   createdAt: IsoDateTime,
 });
 
@@ -600,8 +607,26 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
+const ThreadTurnStartBootstrapPrepareWorkspace = Schema.Struct({
+  kind: Schema.optional(
+    Schema.Literals(["auto", "git-detached", "jj-workspace", "directory-copy"]),
+  ),
+  roots: Schema.Array(
+    Schema.Struct({
+      projectId: ProjectId,
+      sourcePath: TrimmedNonEmptyString,
+      role: ThreadWorkspaceRootRole,
+      baseRevision: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+      startFromOrigin: Schema.optional(Schema.Boolean),
+    }),
+  ),
+  displayNameSeed: Schema.optional(TrimmedNonEmptyString),
+  retentionPolicy: Schema.optional(ThreadWorkspaceRetentionPolicy),
+});
+
 const ThreadTurnStartBootstrap = Schema.Struct({
   createThread: Schema.optional(ThreadTurnStartBootstrapCreateThread),
+  prepareWorkspace: Schema.optional(ThreadTurnStartBootstrapPrepareWorkspace),
   prepareWorktree: Schema.optional(ThreadTurnStartBootstrapPrepareWorktree),
   runSetupScript: Schema.optional(Schema.Boolean),
 });
@@ -974,6 +999,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   ),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
 });
@@ -1000,6 +1026,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   modelSelection: Schema.optional(ModelSelection),
   branch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   updatedAt: IsoDateTime,
 });
 

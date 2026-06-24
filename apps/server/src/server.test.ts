@@ -26,6 +26,8 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ResolvedKeybindingRule,
+  ThreadWorkspaceId,
+  ThreadWorkspaceRootId,
   ThreadId,
   WS_METHODS,
   WsRpcGroup,
@@ -100,6 +102,7 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import { ThreadWorkspaceService } from "./workspace/ThreadWorkspaceService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriver from "./vcs/VcsDriver.ts";
 import * as VcsStatusBroadcaster from "./vcs/VcsStatusBroadcaster.ts";
@@ -345,6 +348,7 @@ const buildAppUnderTest = (options?: {
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
     serverRuntimeStartup?: Partial<ServerRuntimeStartup.ServerRuntimeStartup["Service"]>;
     serverEnvironment?: Partial<ServerEnvironment.ServerEnvironment["Service"]>;
+    threadWorkspaceService?: Partial<ThreadWorkspaceService["Service"]>;
     repositoryIdentityResolver?: Partial<
       RepositoryIdentityResolver.RepositoryIdentityResolver["Service"]
     >;
@@ -661,6 +665,57 @@ const buildAppUnderTest = (options?: {
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: () => Effect.succeed({ status: "no-script" as const }),
           ...options?.layers?.projectSetupScriptRunner,
+        }),
+      ),
+      Layer.provide(
+        Layer.succeed(ThreadWorkspaceService, {
+          prepareWorkspace: (input) => {
+            const root = input.roots[0];
+            if (!root) {
+              return Effect.die("prepareWorkspace test input had no roots");
+            }
+            const workspaceId = ThreadWorkspaceId.make(`test-workspace:${input.threadId}`);
+            const rootId = ThreadWorkspaceRootId.make(`test-workspace-root:${input.threadId}`);
+            const checkoutPath = "/tmp/bootstrap-worktree";
+            return Effect.succeed({
+              workspace: {
+                id: workspaceId,
+                kind: input.kind === "jj-workspace" ? "jj-workspace" : "git-detached",
+                lifecycle: "active",
+                displayName: input.displayNameSeed ?? "Test Workspace",
+                managed: true,
+                primaryRootId: rootId,
+                roots: [
+                  {
+                    id: rootId,
+                    workspaceId,
+                    projectId: root.projectId,
+                    role: root.role,
+                    sourcePath: root.sourcePath,
+                    checkoutPath,
+                    vcsKind: "git",
+                    repositoryRoot: root.sourcePath,
+                    baseRevision: root.baseRevision ?? null,
+                    headRevision: null,
+                    metadata: {},
+                  },
+                ],
+                createdForThreadId: input.threadId,
+                retentionPolicy: input.retentionPolicy ?? "explicit-delete",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                deletedAt: null,
+                failureDetail: null,
+                metadata: {},
+              },
+              primaryCwd: checkoutPath,
+              compatibilityWorktreePath: checkoutPath,
+              compatibilityBranch: null,
+            });
+          },
+          resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+          deleteWorkspace: () => Effect.die("deleteWorkspace should not be called in this test"),
+          ...options?.layers?.threadWorkspaceService,
         }),
       ),
       Layer.provide(
@@ -6164,7 +6219,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
-        const bootstrapGitOperations: string[] = [];
         const refreshStatus = vi.fn((_: string) =>
           Effect.succeed({
             isRepo: true,
@@ -6183,34 +6237,48 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             pr: null,
           }),
         );
-        const fetchRemote = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"]>[0]) =>
-            Effect.sync(() => {
-              bootstrapGitOperations.push("fetch");
-            }),
-        );
-        const fetchedOriginCommit = "0123456789abcdef0123456789abcdef01234567";
-        const resolveRemoteTrackingCommit = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["resolveRemoteTrackingCommit"]>[0]) =>
-            Effect.sync(() => {
-              bootstrapGitOperations.push("resolve-remote-commit");
-              return {
-                commitSha: fetchedOriginCommit,
-                remoteRefName: "origin/main",
-              };
-            }),
-        );
-        const createWorktree = vi.fn(
-          (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
-            Effect.sync(() => {
-              bootstrapGitOperations.push("create-worktree");
-              return {
-                worktree: {
-                  refName: "t3code/bootstrap-refName",
-                  path: "/tmp/bootstrap-worktree",
-                },
-              };
-            }),
+        const prepareWorkspace = vi.fn<ThreadWorkspaceService["Service"]["prepareWorkspace"]>(
+          (input) => {
+            const root = input.roots[0];
+            assert.ok(root);
+            const workspaceId = ThreadWorkspaceId.make(`test-workspace:${input.threadId}`);
+            const rootId = ThreadWorkspaceRootId.make(`test-workspace-root:${input.threadId}`);
+            return Effect.succeed({
+              workspace: {
+                id: workspaceId,
+                kind: "git-detached",
+                lifecycle: "active",
+                displayName: input.displayNameSeed ?? "Bootstrap Thread",
+                managed: true,
+                primaryRootId: rootId,
+                roots: [
+                  {
+                    id: rootId,
+                    workspaceId,
+                    projectId: root.projectId,
+                    role: root.role,
+                    sourcePath: root.sourcePath,
+                    checkoutPath: "/tmp/bootstrap-worktree",
+                    vcsKind: "git",
+                    repositoryRoot: root.sourcePath,
+                    baseRevision: root.baseRevision ?? null,
+                    headRevision: null,
+                    metadata: {},
+                  },
+                ],
+                createdForThreadId: input.threadId,
+                retentionPolicy: input.retentionPolicy ?? "explicit-delete",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                deletedAt: null,
+                failureDetail: null,
+                metadata: {},
+              },
+              primaryCwd: "/tmp/bootstrap-worktree",
+              compatibilityWorktreePath: "/tmp/bootstrap-worktree",
+              compatibilityBranch: null,
+            });
+          },
         );
         const runForThread = vi.fn(
           (
@@ -6229,11 +6297,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         yield* buildAppUnderTest({
           layers: {
-            gitVcsDriver: {
-              fetchRemote,
-              resolveRemoteTrackingCommit,
-              createWorktree,
-            },
+            threadWorkspaceService: { prepareWorkspace },
             vcsStatusBroadcaster: {
               refreshStatus,
             },
@@ -6303,27 +6367,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             "thread.turn.start",
           ],
         );
-        assert.deepEqual(createWorktree.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: fetchedOriginCommit,
-          newRefName: "t3code/bootstrap-refName",
-          baseRefName: "main",
-          path: null,
+        assert.deepEqual(prepareWorkspace.mock.calls[0]?.[0], {
+          threadId: ThreadId.make("thread-bootstrap"),
+          kind: "git-detached",
+          roots: [
+            {
+              projectId: defaultProjectId,
+              sourcePath: "/tmp/project",
+              role: "primary",
+              baseRevision: "main",
+              startFromOrigin: true,
+            },
+          ],
+          displayNameSeed: "Bootstrap Thread",
+          retentionPolicy: "explicit-delete",
         });
-        assert.deepEqual(fetchRemote.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          remoteName: "origin",
-        });
-        assert.deepEqual(resolveRemoteTrackingCommit.mock.calls[0]?.[0], {
-          cwd: "/tmp/project",
-          refName: "main",
-          fallbackRemoteName: "origin",
-        });
-        assert.deepEqual(bootstrapGitOperations, [
-          "fetch",
-          "resolve-remote-commit",
-          "create-worktree",
-        ]);
         assert.deepEqual(runForThread.mock.calls[0]?.[0], {
           threadId: ThreadId.make("thread-bootstrap"),
           projectId: defaultProjectId,
@@ -6576,19 +6634,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cleans up created bootstrap threads when worktree creation defects", () =>
+  it.effect("cleans up created bootstrap threads when workspace preparation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const createWorktree = vi.fn(
-        (_: Parameters<GitVcsDriver.GitVcsDriver["Service"]["createWorktree"]>[0]) =>
-          Effect.die(new Error("worktree exploded")),
+      const prepareWorkspace = vi.fn<ThreadWorkspaceService["Service"]["prepareWorkspace"]>(() =>
+        Effect.die(new Error("workspace exploded")),
       );
 
       yield* buildAppUnderTest({
         layers: {
-          gitVcsDriver: {
-            createWorktree,
-          },
+          threadWorkspaceService: { prepareWorkspace },
           orchestrationEngine: {
             dispatch: (command) =>
               Effect.sync(() => {
@@ -6642,7 +6697,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assertTrue(result._tag === "Failure");
       assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
-      assert.include(result.failure.message, "worktree exploded");
+      assert.include(result.failure.message, "workspace exploded");
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
         ["thread.create", "thread.delete"],

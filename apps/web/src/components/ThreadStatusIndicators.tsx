@@ -107,8 +107,8 @@ export function ThreadWorktreeIndicator({
 
   const displayPath = formatWorktreePathForDisplay(worktreePath);
   const tooltip = thread.branch
-    ? `Worktree: ${displayPath} (${thread.branch})`
-    : `Worktree: ${displayPath}`;
+    ? `Workspace: ${displayPath} (${thread.branch})`
+    : `Workspace: ${displayPath}`;
 
   return (
     <Tooltip>

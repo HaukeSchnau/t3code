@@ -42,6 +42,7 @@ import {
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
+import { ThreadWorkspaceService } from "../../workspace/ThreadWorkspaceService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -195,6 +196,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
+  const threadWorkspaceService = yield* ThreadWorkspaceService;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;
   const serverSettingsService = yield* ServerSettingsService;
@@ -469,10 +471,17 @@ const make = Effect.gen(function* () {
       }
     }
     const project = yield* resolveProject(thread.projectId);
-    const effectiveCwd = resolveThreadWorkspaceCwd({
-      thread,
-      projects: project ? [project] : [],
+    const workspaceCwd = yield* threadWorkspaceService.resolvePrimaryCwd({
+      threadId,
+      projectId: thread.projectId,
+      workspaceId: thread.workspaceId ?? null,
     });
+    const effectiveCwd =
+      workspaceCwd ??
+      resolveThreadWorkspaceCwd({
+        thread,
+        projects: project ? [project] : [],
+      });
 
     const startProviderSession = (input?: {
       readonly resumeCursor?: unknown;
@@ -777,11 +786,18 @@ const make = Effect.gen(function* () {
       thread.messages.filter((entry) => entry.role === "user").length === 1;
     if (isFirstUserMessageTurn) {
       const project = yield* resolveProject(thread.projectId);
+      const workspaceCwd = yield* threadWorkspaceService.resolvePrimaryCwd({
+        threadId: event.payload.threadId,
+        projectId: thread.projectId,
+        workspaceId: thread.workspaceId ?? null,
+      });
       const generationCwd =
+        workspaceCwd ??
         resolveThreadWorkspaceCwd({
           thread,
           projects: project ? [project] : [],
-        }) ?? process.cwd();
+        }) ??
+        process.cwd();
       const generationInput = {
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),

@@ -324,6 +324,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          workspaceId: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -455,6 +456,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           runtimeMode: "full-access",
           branch: null,
           worktreePath: null,
+          workspaceId: null,
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -898,6 +900,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           threadId: ThreadId.make("thread-context"),
           projectId: asProjectId("project-context"),
           workspaceRoot: "/tmp/context-workspace",
+          workspaceId: null,
           worktreePath: "/tmp/context-worktree",
           checkpoints: [
             {

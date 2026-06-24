@@ -60,6 +60,7 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
+import { ThreadWorkspaceService } from "../../workspace/ThreadWorkspaceService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
 const asApprovalRequestId = (value: string): ApprovalRequestId => ApprovalRequestId.make(value);
@@ -352,6 +353,13 @@ describe("ProviderCommandReactor", () => {
         Layer.mock(GitWorkflowService.GitWorkflowService)({
           renameBranch,
         } satisfies Partial<GitWorkflowService.GitWorkflowService["Service"]>),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadWorkspaceService, {
+          prepareWorkspace: () => Effect.die("prepareWorkspace should not be called in this test"),
+          resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+          deleteWorkspace: () => Effect.die("deleteWorkspace should not be called in this test"),
+        }),
       ),
       Layer.provideMerge(
         Layer.succeed(VcsStatusBroadcaster, {

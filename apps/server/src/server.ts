@@ -60,6 +60,8 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
+import * as ThreadWorkspaceService from "./workspace/ThreadWorkspaceService.ts";
+import * as JjAutomaticChangeService from "./workspace/JjAutomaticChangeService.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
@@ -264,6 +266,11 @@ const WorkspaceLayerLive = Layer.mergeAll(
   WorkspaceFileSystemLayerLive,
 );
 
+const ThreadWorkspaceLayerLive = ThreadWorkspaceService.layer.pipe(
+  Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(GitWorkflowLayerLive),
+);
+
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
 );
@@ -316,7 +323,9 @@ const RuntimeCoreDependenciesLive = ReactorLayerLive.pipe(
   // keeps a single Live for all opencode consumers.
   Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
   Layer.provideMerge(ServerSettings.layer.pipe(Layer.provide(ServerSecretStore.layer))),
-  Layer.provideMerge(WorkspaceLayerLive),
+  Layer.provideMerge(
+    Layer.mergeAll(WorkspaceLayerLive, ThreadWorkspaceLayerLive, JjAutomaticChangeService.layer),
+  ),
   Layer.provideMerge(ProjectFaviconResolverLayerLive),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(ServerEnvironment.layer),
@@ -495,4 +504,8 @@ export const makeServerLayer = Layer.unwrap(
 );
 
 // Important: Only `ServerConfig` should be provided by the CLI layer!!! Don't let other requirements leak into the launch layer.
-export const runServer = Layer.launch(makeServerLayer);
+export const runServer = Layer.launch(makeServerLayer) as unknown as Effect.Effect<
+  void,
+  never,
+  ServerConfig.ServerConfig
+>;

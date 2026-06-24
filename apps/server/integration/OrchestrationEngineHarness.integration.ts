@@ -73,6 +73,7 @@ import {
 import { deriveServerPaths, ServerConfig } from "../src/config.ts";
 import * as WorkspaceEntries from "../src/workspace/WorkspaceEntries.ts";
 import * as WorkspacePaths from "../src/workspace/WorkspacePaths.ts";
+import { ThreadWorkspaceService } from "../src/workspace/ThreadWorkspaceService.ts";
 import * as VcsDriverRegistry from "../src/vcs/VcsDriverRegistry.ts";
 import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
@@ -326,6 +327,13 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),
+      Layer.provideMerge(
+        Layer.succeed(ThreadWorkspaceService, {
+          prepareWorkspace: () => Effect.die("prepareWorkspace should not be called in this test"),
+          resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+          deleteWorkspace: () => Effect.die("deleteWorkspace should not be called in this test"),
+        }),
+      ),
       Layer.provideMerge(serverSettingsLayer),
     );
     const checkpointReactorLayer = CheckpointReactorLive.pipe(
