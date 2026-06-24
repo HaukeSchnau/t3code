@@ -3780,23 +3780,13 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
-    const baseBranchForWorktree =
-      isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath
-        ? activeThreadBranch
-        : null;
-
-    // In worktree mode, require an explicit base branch so we don't silently
-    // fall back to local execution when branch selection is missing.
-    const shouldCreateWorktree =
+    const shouldPrepareWorkspace =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
-    if (shouldCreateWorktree && !activeThreadBranch) {
-      setThreadError(threadIdForSend, "Select a base branch before sending in Workspace mode.");
-      return;
-    }
+    const baseRevisionForWorkspace = shouldPrepareWorkspace ? activeThreadBranch : null;
 
     sendInFlightRef.current = true;
     if (!shouldQueueMessage) {
-      beginLocalDispatch({ preparingWorktree: Boolean(baseBranchForWorktree) });
+      beginLocalDispatch({ preparingWorktree: shouldPrepareWorkspace });
     }
 
     const composerImagesSnapshot = [...composerImages];
@@ -3946,7 +3936,7 @@ function ChatViewContent(props: ChatViewProps) {
     let sendOrQueueSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        isLocalDraftThread || shouldPrepareWorkspace
           ? {
               ...(isLocalDraftThread
                 ? {
@@ -3963,7 +3953,7 @@ function ChatViewContent(props: ChatViewProps) {
                     },
                   }
                 : {}),
-              ...(baseBranchForWorktree
+              ...(shouldPrepareWorkspace
                 ? {
                     prepareWorkspace: {
                       kind: "auto" as const,
@@ -3972,7 +3962,9 @@ function ChatViewContent(props: ChatViewProps) {
                           projectId: activeProject.id,
                           sourcePath: activeProject.workspaceRoot,
                           role: "primary" as const,
-                          baseRevision: baseBranchForWorktree,
+                          ...(baseRevisionForWorkspace
+                            ? { baseRevision: baseRevisionForWorkspace }
+                            : {}),
                           ...(startFromOrigin ? { startFromOrigin: true } : {}),
                         },
                       ],
@@ -5078,9 +5070,7 @@ function ChatViewContent(props: ChatViewProps) {
             <div
               className={cn(
                 "pl-[calc(env(safe-area-inset-left)+0.75rem)] pr-[calc(env(safe-area-inset-right)+0.75rem)] pt-1.5 sm:pl-[calc(env(safe-area-inset-left)+1.25rem)] sm:pr-[calc(env(safe-area-inset-right)+1.25rem)] sm:pt-2",
-                isGitRepo
-                  ? "pb-[calc(env(safe-area-inset-bottom)+0.25rem)]"
-                  : "pb-[calc(env(safe-area-inset-bottom)+0.75rem)] sm:pb-[calc(env(safe-area-inset-bottom)+1rem)]",
+                "pb-[calc(env(safe-area-inset-bottom)+0.25rem)]",
               )}
             >
               <div className="relative isolate">
@@ -5172,30 +5162,29 @@ function ChatViewContent(props: ChatViewProps) {
                   )}
                 </div>
               </div>
-              {isGitRepo && (
-                <BranchToolbar
-                  environmentId={activeThread.environmentId}
-                  threadId={activeThread.id}
-                  {...(routeKind === "draft" && draftId ? { draftId } : {})}
-                  onEnvModeChange={onEnvModeChange}
-                  startFromOrigin={startFromOrigin}
-                  onStartFromOriginChange={onStartFromOriginChange}
-                  {...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {})}
-                  {...(canOverrideServerThreadEnvMode
-                    ? {
-                        activeThreadBranchOverride: activeThreadBranch,
-                        onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
-                      }
-                    : {})}
-                  envLocked={envLocked}
-                  onComposerFocusRequest={scheduleComposerFocus}
-                  {...(canCheckoutPullRequestIntoThread
-                    ? { onCheckoutPullRequestRequest: openPullRequestDialog }
-                    : {})}
-                  {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
-                  availableEnvironments={logicalProjectEnvironments}
-                />
-              )}
+              <BranchToolbar
+                environmentId={activeThread.environmentId}
+                threadId={activeThread.id}
+                {...(routeKind === "draft" && draftId ? { draftId } : {})}
+                onEnvModeChange={onEnvModeChange}
+                startFromOrigin={startFromOrigin}
+                onStartFromOriginChange={onStartFromOriginChange}
+                {...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {})}
+                {...(canOverrideServerThreadEnvMode
+                  ? {
+                      activeThreadBranchOverride: activeThreadBranch,
+                      onActiveThreadBranchOverrideChange: setPendingServerThreadBranch,
+                    }
+                  : {})}
+                envLocked={envLocked}
+                onComposerFocusRequest={scheduleComposerFocus}
+                {...(canCheckoutPullRequestIntoThread
+                  ? { onCheckoutPullRequestRequest: openPullRequestDialog }
+                  : {})}
+                {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
+                availableEnvironments={logicalProjectEnvironments}
+                showBranchSelector={isGitRepo}
+              />
             </div>
 
             {pullRequestDialogState ? (

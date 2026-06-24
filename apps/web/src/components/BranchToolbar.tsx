@@ -52,6 +52,7 @@ interface BranchToolbarProps {
   onComposerFocusRequest?: () => void;
   availableEnvironments?: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  showBranchSelector?: boolean;
 }
 
 interface MobileRunContextSelectorProps {
@@ -205,6 +206,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   onComposerFocusRequest,
   availableEnvironments,
   onEnvironmentChange,
+  showBranchSelector = true,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -274,20 +276,22 @@ export const BranchToolbar = memo(function BranchToolbar({
         </div>
       )}
 
-      <BranchToolbarBranchSelector
-        className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
-        environmentId={environmentId}
-        threadId={threadId}
-        {...(draftId ? { draftId } : {})}
-        envLocked={envLocked}
-        {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
-        {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
-        {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
-        startFromOrigin={startFromOrigin}
-        onStartFromOriginChange={onStartFromOriginChange}
-        {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
-        {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
-      />
+      {showBranchSelector ? (
+        <BranchToolbarBranchSelector
+          className="min-w-0 flex-1 justify-end md:ml-auto md:flex-none"
+          environmentId={environmentId}
+          threadId={threadId}
+          {...(draftId ? { draftId } : {})}
+          envLocked={envLocked}
+          {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+          {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
+          {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
+          startFromOrigin={startFromOrigin}
+          onStartFromOriginChange={onStartFromOriginChange}
+          {...(onCheckoutPullRequestRequest ? { onCheckoutPullRequestRequest } : {})}
+          {...(onComposerFocusRequest ? { onComposerFocusRequest } : {})}
+        />
+      ) : null}
     </div>
   );
 });

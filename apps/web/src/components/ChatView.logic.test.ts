@@ -223,9 +223,9 @@ describe("getStartedThreadModelChangeBlockReason", () => {
 });
 
 describe("resolveSendEnvMode", () => {
-  it("keeps worktree mode only for git repositories", () => {
+  it("keeps workspace mode for git and non-git repositories", () => {
     expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
-    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("worktree");
   });
 });
 

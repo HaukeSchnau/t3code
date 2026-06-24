@@ -179,7 +179,7 @@ export function resolveSendEnvMode(input: {
   requestedEnvMode: DraftThreadEnvMode;
   isGitRepo: boolean;
 }): DraftThreadEnvMode {
-  return input.isGitRepo ? input.requestedEnvMode : "local";
+  return input.requestedEnvMode;
 }
 
 export function cloneComposerImageForRetry(

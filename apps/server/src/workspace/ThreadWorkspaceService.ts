@@ -166,6 +166,17 @@ function runCommand(input: {
   return result.stdout.trim();
 }
 
+function runCommandResult(input: {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly cwd: string;
+}): NodeChildProcess.SpawnSyncReturns<string> {
+  return NodeChildProcess.spawnSync(input.command, input.args, {
+    cwd: input.cwd,
+    encoding: "utf8",
+  });
+}
+
 function commandSucceeds(command: string, args: ReadonlyArray<string>, cwd: string): boolean {
   const result = NodeChildProcess.spawnSync(command, args, {
     cwd,
@@ -178,6 +189,39 @@ function commandSucceeds(command: string, args: ReadonlyArray<string>, cwd: stri
 function parseJsonObject(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value);
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function resolveJjRevision(cwd: string, revision: string | null | undefined): string | null {
+  const trimmed = revision?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const result = runCommandResult({
+    command: "jj",
+    args: ["log", "-r", trimmed, "--no-graph", "-T", "commit_id"],
+    cwd,
+  });
+  if (result.error || result.status !== 0 || result.stdout.trim().length === 0) {
+    return null;
+  }
+  return trimmed;
+}
+
+function cleanupFailedJjWorkspace(input: {
+  readonly sourcePath: string;
+  readonly workspaceName: string;
+  readonly checkoutPath: string;
+}): void {
+  try {
+    runCommand({
+      command: "jj",
+      args: ["workspace", "forget", input.workspaceName],
+      cwd: input.sourcePath,
+    });
+  } catch {
+    // TODO: Replace best-effort cleanup logging with structured workspace activity.
+  }
+  NodeFS.rmSync(input.checkoutPath, { recursive: true, force: true });
 }
 
 function workspaceFromRows(workspace: WorkspaceRow, roots: ReadonlyArray<WorkspaceRootRow>) {
@@ -360,6 +404,7 @@ export const make = Effect.gen(function* () {
     readonly metadata?: Record<string, unknown>;
     readonly rootMetadata?: Record<string, unknown>;
     readonly headRevision?: string | null;
+    readonly baseRevision?: string | null;
   }) => {
     const root = primaryRoot(input.request);
     const workspaceId = makeWorkspaceId(input.request.threadId);
@@ -383,7 +428,8 @@ export const make = Effect.gen(function* () {
           checkoutPath: input.checkoutPath,
           vcsKind: input.vcsKind,
           repositoryRoot: root.sourcePath,
-          baseRevision: root.baseRevision ?? null,
+          baseRevision:
+            "baseRevision" in input ? (input.baseRevision ?? null) : (root.baseRevision ?? null),
           headRevision: input.headRevision ?? null,
           metadata: input.rootMetadata ?? {},
         },
@@ -448,6 +494,7 @@ export const make = Effect.gen(function* () {
     const repoName = slug(NodePath.basename(root.sourcePath));
     const workspaceName = `t3code-${shortId(input.threadId)}`;
     const checkoutPath = NodePath.join(workspacesDir, repoName, workspaceName);
+    const resolvedBaseRevision = resolveJjRevision(root.sourcePath, root.baseRevision);
     NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
     yield* Effect.try({
       try: () => {
@@ -458,10 +505,19 @@ export const make = Effect.gen(function* () {
           workspaceName,
           "-m",
           `wip: ${input.displayNameSeed?.trim() || "t3 workspace"}`,
-          ...(root.baseRevision ? ["--revision", root.baseRevision] : []),
+          ...(resolvedBaseRevision ? ["--revision", resolvedBaseRevision] : []),
           checkoutPath,
         ];
-        runCommand({ command: "jj", args, cwd: root.sourcePath });
+        try {
+          runCommand({ command: "jj", args, cwd: root.sourcePath });
+        } catch (cause) {
+          cleanupFailedJjWorkspace({
+            sourcePath: root.sourcePath,
+            workspaceName,
+            checkoutPath,
+          });
+          throw cause;
+        }
       },
       catch: (cause) =>
         new ThreadWorkspaceError({
@@ -487,11 +543,15 @@ export const make = Effect.gen(function* () {
       checkoutPath,
       vcsKind: "jj",
       headRevision: initialChangeId || null,
+      baseRevision: resolvedBaseRevision,
       metadata: { provisioner: "jj-workspace" },
       rootMetadata: {
         jjWorkspaceName: workspaceName,
         initialChangeId,
         automaticChangePolicy: "per-turn",
+        ...(root.baseRevision && root.baseRevision !== resolvedBaseRevision
+          ? { requestedBaseRevision: root.baseRevision, baseRevisionSkipped: true }
+          : {}),
       },
     });
     yield* persistWorkspace(workspace);
