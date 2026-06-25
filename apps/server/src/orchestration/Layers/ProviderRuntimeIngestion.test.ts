@@ -360,6 +360,134 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("dispatches the oldest queued message when the active turn completes", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-for-queue"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-queue-active"),
+    });
+
+    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.queue",
+        commandId: CommandId.make("cmd-queue-message-for-completed-turn"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-queued-after-complete"),
+          role: "user",
+          text: "queued follow-up after completion",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-for-queue-dispatch"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-queue-active"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        (entry.queuedMessages ?? []).length === 0 &&
+        entry.messages.some((message) => message.id === "message-queued-after-complete"),
+    );
+    expect(thread.queuedMessages ?? []).toEqual([]);
+    expect(thread.messages.map((message) => message.id)).toContain("message-queued-after-complete");
+  });
+
+  it("clears active turn state on turn.aborted without dropping queued messages", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-abort"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-aborted-active"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-aborted-active",
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.queue",
+        commandId: CommandId.make("cmd-queue-message-before-abort"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-queued-before-abort"),
+          role: "user",
+          text: "queued follow-up before abort",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
+
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-turn-aborted-with-queue"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-aborted-active"),
+      payload: {
+        reason: "Interrupted by user.",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        entry.session.activeTurnId === null &&
+        entry.session.lastError === "Interrupted by user." &&
+        (entry.queuedMessages ?? []).length === 1,
+    );
+    expect(thread.queuedMessages?.[0]?.messageId).toBe("message-queued-before-abort");
+    expect(thread.messages.some((message) => message.id === "message-queued-before-abort")).toBe(
+      false,
+    );
+  });
+
   it("applies provider session.state.changed transitions directly", async () => {
     const harness = await createHarness();
     const waitingAt = "2026-01-01T00:00:00.000Z";
@@ -2005,7 +2133,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resumedMessage?.text).toBe(" second half");
     expect(resumedMessage?.streaming).toBe(false);
 
-    const events = await Effect.runPromise(
+    const events = await runtime!.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
       ),

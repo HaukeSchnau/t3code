@@ -1802,6 +1802,7 @@ const make = Effect.gen(function* () {
       const conflictsWithActiveTurn =
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
+      const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -1832,6 +1833,7 @@ const make = Effect.gen(function* () {
           case "turn.started":
             return !conflictsWithActiveTurn || conflictingTurnStartIsPendingTurnStart;
           case "turn.completed":
+          case "turn.aborted":
             if (conflictsWithActiveTurn || missingTurnForActiveTurn) {
               return false;
             }
@@ -1856,12 +1858,12 @@ const make = Effect.gen(function* () {
         event.type === "session.exited" ||
         event.type === "thread.started" ||
         event.type === "turn.started" ||
-        event.type === "turn.completed"
+        isTerminalTurnEvent
       ) {
         const nextActiveTurnId =
           event.type === "turn.started"
             ? (eventTurnId ?? null)
-            : event.type === "turn.completed" || event.type === "session.exited"
+            : isTerminalTurnEvent || event.type === "session.exited"
               ? null
               : activeTurnId;
         const status = (() => {
@@ -1876,6 +1878,8 @@ const make = Effect.gen(function* () {
               return normalizeRuntimeTurnState(event.payload.state) === "failed"
                 ? "error"
                 : "ready";
+            case "turn.aborted":
+              return "ready";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
@@ -1883,15 +1887,24 @@ const make = Effect.gen(function* () {
               return activeTurnId !== null ? "running" : "ready";
           }
         })();
-        const lastError =
-          event.type === "session.state.changed" && event.payload.state === "error"
-            ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")
-            : event.type === "turn.completed" &&
-                normalizeRuntimeTurnState(event.payload.state) === "failed"
-              ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-              : status === "ready"
-                ? null
-                : (thread.session?.lastError ?? null);
+        const lastError = (() => {
+          if (event.type === "session.state.changed" && event.payload.state === "error") {
+            return event.payload.reason ?? thread.session?.lastError ?? "Provider session error";
+          }
+          if (
+            event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "failed"
+          ) {
+            return event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed";
+          }
+          if (event.type === "turn.aborted") {
+            return event.payload.reason;
+          }
+          if (status === "ready") {
+            return null;
+          }
+          return thread.session?.lastError ?? null;
+        })();
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -2116,7 +2129,7 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (event.type === "turn.completed") {
+      if (isTerminalTurnEvent) {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
@@ -2153,6 +2166,7 @@ const make = Effect.gen(function* () {
 
         if (
           shouldApplyThreadLifecycle &&
+          event.type === "turn.completed" &&
           normalizeRuntimeTurnState(event.payload.state) === "completed"
         ) {
           const queuedMessage = detailedThread?.queuedMessages?.[0];
