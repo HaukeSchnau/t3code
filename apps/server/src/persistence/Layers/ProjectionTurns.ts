@@ -18,6 +18,7 @@ import {
   ProjectionTurn,
   ProjectionTurnById,
   ProjectionTurnRepository,
+  SettleProjectionPendingTurnStartInput,
   type ProjectionTurnRepositoryShape,
 } from "../Services/ProjectionTurns.ts";
 
@@ -101,6 +102,22 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     execute: ({ threadId }) =>
       sql`
         DELETE FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id IS NULL
+          AND state = 'pending'
+          AND checkpoint_turn_count IS NULL
+      `,
+  });
+
+  const settlePendingProjectionTurnsByThread = SqlSchema.void({
+    Request: SettleProjectionPendingTurnStartInput,
+    execute: ({ threadId, state, completedAt }) =>
+      sql`
+        UPDATE projection_turns
+        SET
+          state = ${state},
+          started_at = COALESCE(started_at, requested_at),
+          completed_at = COALESCE(completed_at, ${completedAt})
         WHERE thread_id = ${threadId}
           AND turn_id IS NULL
           AND state = 'pending'
@@ -296,6 +313,17 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
         ),
       );
 
+  const settlePendingTurnStartByThreadId: ProjectionTurnRepositoryShape["settlePendingTurnStartByThreadId"] =
+    (input) =>
+      settlePendingProjectionTurnsByThread(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionTurnRepository.settlePendingTurnStartByThreadId:query",
+            "ProjectionTurnRepository.settlePendingTurnStartByThreadId:encodeRequest",
+          ),
+        ),
+      );
+
   const listByThreadId: ProjectionTurnRepositoryShape["listByThreadId"] = (input) =>
     listProjectionTurnsByThread(input).pipe(
       Effect.mapError(
@@ -342,6 +370,7 @@ const makeProjectionTurnRepository = Effect.gen(function* () {
     replacePendingTurnStart,
     getPendingTurnStartByThreadId,
     deletePendingTurnStartByThreadId,
+    settlePendingTurnStartByThreadId,
     listByThreadId,
     getByTurnId,
     clearCheckpointTurnConflict,

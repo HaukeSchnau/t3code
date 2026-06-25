@@ -96,6 +96,23 @@ function settledTurnStateForSessionStatus(
   }
 }
 
+function settledPendingTurnStateForSessionStatus(
+  status: OrchestrationSessionStatus,
+): "interrupted" | "error" | null {
+  switch (status) {
+    case "error":
+      return "error";
+    case "idle":
+    case "interrupted":
+    case "ready":
+    case "stopped":
+      return "interrupted";
+    case "starting":
+    case "running":
+      return null;
+  }
+}
+
 interface ProjectorDefinition {
   readonly name: ProjectorName;
   readonly apply: (
@@ -1286,6 +1303,16 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                     }),
               { concurrency: 1 },
             );
+            const pendingTurnState = settledPendingTurnStateForSessionStatus(
+              event.payload.session.status,
+            );
+            if (pendingTurnState !== null) {
+              yield* projectionTurnRepository.settlePendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+                state: pendingTurnState,
+                completedAt: event.payload.session.updatedAt,
+              });
+            }
             return;
           }
 

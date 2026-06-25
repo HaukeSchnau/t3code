@@ -185,6 +185,49 @@ function truncateDetail(value: string, limit = 180): string {
   return value.length > limit ? `${value.slice(0, limit - 3)}...` : value;
 }
 
+const MAX_ACTIVITY_DATA_STRING_CHARS = 12_000;
+const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 200;
+const MAX_ACTIVITY_DATA_OBJECT_KEYS = 100;
+
+function compactActivityData(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") {
+    if (value.length <= MAX_ACTIVITY_DATA_STRING_CHARS) {
+      return value;
+    }
+    return `${value.slice(0, MAX_ACTIVITY_DATA_STRING_CHARS)}\n[truncated ${
+      value.length - MAX_ACTIVITY_DATA_STRING_CHARS
+    } chars]`;
+  }
+
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+
+  if (depth >= 6) {
+    return "[truncated nested activity data]";
+  }
+
+  if (Array.isArray(value)) {
+    const compacted = value
+      .slice(0, MAX_ACTIVITY_DATA_ARRAY_ITEMS)
+      .map((entry) => compactActivityData(entry, depth + 1));
+    if (value.length > MAX_ACTIVITY_DATA_ARRAY_ITEMS) {
+      compacted.push(`[truncated ${value.length - MAX_ACTIVITY_DATA_ARRAY_ITEMS} items]`);
+    }
+    return compacted;
+  }
+
+  const compacted: Record<string, unknown> = {};
+  const entries = Object.entries(value);
+  for (const [key, entryValue] of entries.slice(0, MAX_ACTIVITY_DATA_OBJECT_KEYS)) {
+    compacted[key] = compactActivityData(entryValue, depth + 1);
+  }
+  if (entries.length > MAX_ACTIVITY_DATA_OBJECT_KEYS) {
+    compacted.__truncatedKeys = entries.length - MAX_ACTIVITY_DATA_OBJECT_KEYS;
+  }
+  return compacted;
+}
+
 function subagentActivityId(providerThreadId: string): EventId {
   return EventId.make(`subagent:${providerThreadId.replace(/[^a-zA-Z0-9_.:-]/g, "_")}`);
 }
@@ -982,7 +1025,9 @@ function runtimeEventToActivities(
             itemType: event.payload.itemType,
             ...(event.payload.status ? { status: event.payload.status } : {}),
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...(event.payload.data !== undefined
+              ? { data: compactActivityData(event.payload.data) }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1004,7 +1049,9 @@ function runtimeEventToActivities(
           payload: {
             itemType: event.payload.itemType,
             ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
-            ...(event.payload.data !== undefined ? { data: event.payload.data } : {}),
+            ...(event.payload.data !== undefined
+              ? { data: compactActivityData(event.payload.data) }
+              : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,

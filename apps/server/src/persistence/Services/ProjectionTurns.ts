@@ -94,6 +94,14 @@ export const GetProjectionPendingTurnStartInput = Schema.Struct({
 });
 export type GetProjectionPendingTurnStartInput = typeof GetProjectionPendingTurnStartInput.Type;
 
+export const SettleProjectionPendingTurnStartInput = Schema.Struct({
+  threadId: ThreadId,
+  state: Schema.Literals(["interrupted", "error"]),
+  completedAt: IsoDateTime,
+});
+export type SettleProjectionPendingTurnStartInput =
+  typeof SettleProjectionPendingTurnStartInput.Type;
+
 export const DeleteProjectionTurnsByThreadInput = Schema.Struct({
   threadId: ThreadId,
 });
@@ -133,6 +141,13 @@ export interface ProjectionTurnRepositoryShape {
    */
   readonly deletePendingTurnStartByThreadId: (
     input: GetProjectionPendingTurnStartInput,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
+
+  /**
+   * Settles pending-start placeholder rows when the provider session is no longer running but no concrete turn id was projected.
+   */
+  readonly settlePendingTurnStartByThreadId: (
+    input: SettleProjectionPendingTurnStartInput,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
 
   /**

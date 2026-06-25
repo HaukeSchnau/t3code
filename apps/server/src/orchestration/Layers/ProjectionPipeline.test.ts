@@ -2659,6 +2659,89 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
   ),
 );
 
+it.effect("settles orphaned pending turn starts when the session is no longer running", () =>
+  Effect.gen(function* () {
+    const projectionPipeline = yield* OrchestrationProjectionPipeline;
+    const eventStore = yield* OrchestrationEventStore;
+    const sql = yield* SqlClient.SqlClient;
+
+    const threadId = ThreadId.make("thread-orphaned-pending");
+    const messageId = MessageId.make("message-orphaned-pending");
+    const requestedAt = "2026-02-26T15:00:00.000Z";
+    const settledAt = "2026-02-26T15:01:00.000Z";
+
+    yield* eventStore.append({
+      type: "thread.turn-start-requested",
+      eventId: EventId.make("evt-orphaned-pending-1"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: requestedAt,
+      commandId: CommandId.make("cmd-orphaned-pending-1"),
+      causationEventId: null,
+      correlationId: CorrelationId.make("cmd-orphaned-pending-1"),
+      metadata: {},
+      payload: {
+        threadId,
+        messageId,
+        runtimeMode: "approval-required",
+        createdAt: requestedAt,
+      },
+    });
+    yield* eventStore.append({
+      type: "thread.session-set",
+      eventId: EventId.make("evt-orphaned-pending-2"),
+      aggregateKind: "thread",
+      aggregateId: threadId,
+      occurredAt: settledAt,
+      commandId: CommandId.make("cmd-orphaned-pending-2"),
+      causationEventId: null,
+      correlationId: CorrelationId.make("cmd-orphaned-pending-2"),
+      metadata: {},
+      payload: {
+        threadId,
+        session: {
+          threadId,
+          status: "ready",
+          providerName: "codex",
+          runtimeMode: "approval-required",
+          activeTurnId: null,
+          lastError: null,
+          updatedAt: settledAt,
+        },
+      },
+    });
+
+    yield* projectionPipeline.bootstrap;
+
+    const rows = yield* sql<{
+      readonly turnId: string | null;
+      readonly pendingMessageId: string | null;
+      readonly state: string;
+      readonly startedAt: string | null;
+      readonly completedAt: string | null;
+    }>`
+      SELECT
+        turn_id AS "turnId",
+        pending_message_id AS "pendingMessageId",
+        state,
+        started_at AS "startedAt",
+        completed_at AS "completedAt"
+      FROM projection_turns
+      WHERE thread_id = ${threadId}
+    `;
+
+    assert.deepEqual(rows, [
+      {
+        turnId: null,
+        pendingMessageId: "message-orphaned-pending",
+        state: "interrupted",
+        startedAt: requestedAt,
+        completedAt: settledAt,
+      },
+    ]);
+  }).pipe(Effect.provide(BaseTestLayer)),
+);
+
 const engineLayer = it.layer(
   OrchestrationEngineLive.pipe(
     Layer.provide(OrchestrationProjectionSnapshotQueryLive),

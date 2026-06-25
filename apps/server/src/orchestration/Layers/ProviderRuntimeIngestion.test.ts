@@ -1002,6 +1002,60 @@ describe("ProviderRuntimeIngestion", () => {
     expect(rawOutput?.content).toBe('import * as Effect from "effect/Effect"\n');
   });
 
+  it("compacts large completed tool payloads before projecting activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const largeOutput = "x".repeat(20_000);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-tool-completed-large-data"),
+      provider: ProviderDriverKind.make("cursor"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tool-completed-large"),
+      itemId: asItemId("item-tool-completed-large"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        data: {
+          toolCallId: "tool-command-large",
+          rawOutput: {
+            content: largeOutput,
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-tool-completed-large-data",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-tool-completed-large-data",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    const data =
+      payload?.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const rawOutput =
+      data?.rawOutput && typeof data.rawOutput === "object"
+        ? (data.rawOutput as Record<string, unknown>)
+        : undefined;
+    const rawOutputContent = rawOutput?.content;
+
+    expect(typeof rawOutputContent).toBe("string");
+    expect((rawOutputContent as string).length).toBeLessThan(largeOutput.length);
+    expect(rawOutputContent).toContain("[truncated 8000 chars]");
+    expect(data?.toolCallId).toBe("tool-command-large");
+  });
+
   it("normalizes command execution activities to ran-command summaries", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
