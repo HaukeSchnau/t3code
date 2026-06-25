@@ -1,6 +1,7 @@
 import {
   EnvironmentId,
   EventId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ProviderInstanceId,
@@ -196,6 +197,35 @@ const titleUpdated = (title: string, sequence = 2): OrchestrationThreadStreamIte
   },
 });
 
+const queuedMessage = (sequence = 2): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make("event-queued-message"),
+    sequence,
+    occurredAt: "2026-04-01T01:00:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.message-queued",
+    payload: {
+      threadId: THREAD_ID,
+      queuedMessage: {
+        messageId: MessageId.make("message-queued-1"),
+        threadId: THREAD_ID,
+        text: "Queued follow-up",
+        attachments: [],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-04-01T01:00:00.000Z",
+        updatedAt: "2026-04-01T01:00:00.000Z",
+      },
+    },
+  },
+});
+
 const deleted = (): OrchestrationThreadStreamItem => ({
   kind: "event",
   event: {
@@ -248,6 +278,26 @@ describe("EnvironmentThreads", () => {
 
       expect(Option.getOrThrow(state.data).title).toBe("Live title");
       expect((yield* Ref.get(harness.savedThreads)).at(-1)?.title).toBe("Live title");
+    }),
+  );
+
+  it.effect("applies queued message events to live thread state", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* Queue.offer(harness.inputs, queuedMessage());
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          (value.data.value.queuedMessages ?? []).length === 1,
+      );
+
+      const thread = Option.getOrThrow(state.data);
+      expect(thread.queuedMessages?.[0]?.messageId).toBe("message-queued-1");
+      expect(thread.queuedMessages?.[0]?.text).toBe("Queued follow-up");
     }),
   );
 

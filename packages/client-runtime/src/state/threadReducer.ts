@@ -35,6 +35,11 @@ const activityOrder = O.combineAll<OrchestrationThreadActivity>([
   O.mapInput(O.String, (a) => a.id),
 ]);
 
+const queuedMessageOrder = O.combine<NonNullable<OrchestrationThread["queuedMessages"]>[number]>(
+  O.mapInput(O.String, (message) => message.createdAt),
+  O.mapInput(O.String, (message) => message.messageId),
+);
+
 /**
  * Apply a single orchestration event to an `OrchestrationThread`, returning
  * the updated thread, a deletion signal, or an "unchanged" marker when the
@@ -137,6 +142,43 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    // ── Queued messages ────────────────────────────────────────────
+    case "thread.message-queued": {
+      const queuedMessage = event.payload.queuedMessage;
+      const queuedMessages = pipe(
+        thread.queuedMessages ?? [],
+        Arr.filter((entry) => entry.messageId !== queuedMessage.messageId),
+        Arr.append(queuedMessage),
+        Arr.sort(queuedMessageOrder),
+      );
+
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
+    case "thread.queued-message-deleted":
+    case "thread.queued-message-dispatched": {
+      const queuedMessages = pipe(
+        thread.queuedMessages ?? [],
+        Arr.filter((entry) => entry.messageId !== event.payload.messageId),
+      );
+
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          queuedMessages,
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
 
     // ── Turn lifecycle ──────────────────────────────────────────────
     case "thread.turn-start-requested":

@@ -42,6 +42,24 @@ const baseThread: OrchestrationThread = {
   session: null,
 };
 
+function makeQueuedMessage(input: {
+  readonly messageId: string;
+  readonly text: string;
+  readonly createdAt: string;
+  readonly updatedAt?: string;
+}): NonNullable<OrchestrationThread["queuedMessages"]>[number] {
+  return {
+    messageId: MessageId.make(input.messageId),
+    threadId: ThreadId.make("thread-1"),
+    text: input.text,
+    attachments: [],
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    createdAt: input.createdAt,
+    updatedAt: input.updatedAt ?? input.createdAt,
+  };
+}
+
 describe("applyThreadDetailEvent", () => {
   describe("project events", () => {
     it("returns unchanged for project.created", () => {
@@ -191,11 +209,151 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("queued messages", () => {
+    it("adds queued messages from live events in display order", () => {
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          queuedMessages: [
+            makeQueuedMessage({
+              messageId: "msg-queued-2",
+              text: "Second queued message",
+              createdAt: "2026-04-01T06:02:00.000Z",
+            }),
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 6,
+          occurredAt: "2026-04-01T06:03:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.message-queued",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            queuedMessage: makeQueuedMessage({
+              messageId: "msg-queued-1",
+              text: "First queued message",
+              createdAt: "2026-04-01T06:01:00.000Z",
+            }),
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.queuedMessages?.map((message) => message.messageId)).toEqual([
+          "msg-queued-1",
+          "msg-queued-2",
+        ]);
+        expect(result.thread.queuedMessages?.[0]?.text).toBe("First queued message");
+        expect(result.thread.updatedAt).toBe("2026-04-01T06:03:00.000Z");
+      }
+    });
+
+    it("replaces an existing queued message with the same id", () => {
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          queuedMessages: [
+            makeQueuedMessage({
+              messageId: "msg-queued-1",
+              text: "Draft text",
+              createdAt: "2026-04-01T06:01:00.000Z",
+            }),
+          ],
+        },
+        {
+          ...baseEventFields,
+          sequence: 7,
+          occurredAt: "2026-04-01T06:04:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.message-queued",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            queuedMessage: makeQueuedMessage({
+              messageId: "msg-queued-1",
+              text: "Updated text",
+              createdAt: "2026-04-01T06:01:00.000Z",
+              updatedAt: "2026-04-01T06:04:00.000Z",
+            }),
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.queuedMessages).toHaveLength(1);
+        expect(result.thread.queuedMessages?.[0]?.text).toBe("Updated text");
+      }
+    });
+
+    it("removes queued messages after delete and dispatch events", () => {
+      const threadWithQueuedMessages: OrchestrationThread = {
+        ...baseThread,
+        queuedMessages: [
+          makeQueuedMessage({
+            messageId: "msg-queued-1",
+            text: "Delete me",
+            createdAt: "2026-04-01T06:01:00.000Z",
+          }),
+          makeQueuedMessage({
+            messageId: "msg-queued-2",
+            text: "Dispatch me",
+            createdAt: "2026-04-01T06:02:00.000Z",
+          }),
+        ],
+      };
+
+      const afterDelete = applyThreadDetailEvent(threadWithQueuedMessages, {
+        ...baseEventFields,
+        sequence: 8,
+        occurredAt: "2026-04-01T06:05:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.queued-message-deleted",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-queued-1"),
+          deletedAt: "2026-04-01T06:05:00.000Z",
+        },
+      });
+
+      expect(afterDelete.kind).toBe("updated");
+      if (afterDelete.kind !== "updated") {
+        return;
+      }
+      expect(afterDelete.thread.queuedMessages?.map((message) => message.messageId)).toEqual([
+        "msg-queued-2",
+      ]);
+
+      const afterDispatch = applyThreadDetailEvent(afterDelete.thread, {
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T06:06:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.queued-message-dispatched",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("msg-queued-2"),
+          dispatchedAt: "2026-04-01T06:06:00.000Z",
+        },
+      });
+
+      expect(afterDispatch.kind).toBe("updated");
+      if (afterDispatch.kind === "updated") {
+        expect(afterDispatch.thread.queuedMessages).toEqual([]);
+      }
+    });
+  });
+
   describe("thread.message-sent", () => {
     it("appends a new message", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
-        sequence: 6,
+        sequence: 10,
         occurredAt: "2026-04-01T06:00:00.000Z",
         aggregateKind: "thread",
         aggregateId: ThreadId.make("thread-1"),
