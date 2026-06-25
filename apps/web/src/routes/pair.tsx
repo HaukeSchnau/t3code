@@ -5,13 +5,22 @@ import {
   PairingPendingSurface,
   PairingRouteSurface,
 } from "../components/auth/PairingRouteSurface";
+import { hasHostedPairingRequest } from "../hostedPairing";
 
 export const Route = createFileRoute("/pair")({
-  beforeLoad: async ({ context }) => {
+  beforeLoad: async ({ context, location }) => {
     const { authGateState } = context;
-    if (authGateState.status === "hosted-pairing") {
+    const currentUrl = new URL(location.href, window.location.origin);
+    const browserUrl = new URL(window.location.href);
+    if (
+      authGateState.status === "hosted-pairing" ||
+      hasHostedPairingRequest(currentUrl) ||
+      hasHostedPairingRequest(browserUrl)
+    ) {
       return {
-        authGateState,
+        authGateState: {
+          status: "hosted-pairing",
+        } as const,
       };
     }
 

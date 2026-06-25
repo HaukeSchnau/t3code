@@ -54,7 +54,12 @@ import {
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
+    const currentUrl = new URL(location.href, window.location.origin);
+    const browserUrl = new URL(window.location.href);
+    if (
+      location.pathname === "/pair" &&
+      (hasHostedPairingRequest(currentUrl) || hasHostedPairingRequest(browserUrl))
+    ) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -62,7 +67,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (isHostedStaticApp(new URL(window.location.href))) {
+    if (isHostedStaticApp(currentUrl)) {
       return {
         authGateState: {
           status: "hosted-static",

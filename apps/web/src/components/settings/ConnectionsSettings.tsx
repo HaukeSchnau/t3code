@@ -540,10 +540,11 @@ function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
 function resolveAdvertisedEndpointPairingUrl(
   endpoint: AdvertisedEndpoint,
   credential: string,
+  environmentId: EnvironmentId | null,
 ): string {
   if (endpoint.compatibility.hostedHttpsApp === "compatible") {
     return (
-      resolveHostedPairingUrl(endpoint.httpBaseUrl, credential) ??
+      resolveHostedPairingUrl(endpoint.httpBaseUrl, credential, environmentId) ??
       resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential)
     );
   }
@@ -566,6 +567,7 @@ function isHostedAppPairingUrl(value: string): boolean {
 
 type PairingLinkListRowProps = {
   pairingLink: ServerPairingLinkRecord;
+  environmentId: EnvironmentId | null;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -576,6 +578,7 @@ type PairingLinkListRowProps = {
 
 const PairingLinkListRow = memo(function PairingLinkListRow({
   pairingLink,
+  environmentId,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -597,14 +600,16 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
   const hostedPairingUrl = useMemo(
     () =>
       endpointUrl != null && endpointUrl !== ""
-        ? resolveHostedPairingUrl(endpointUrl, pairingLink.credential)
+        ? resolveHostedPairingUrl(endpointUrl, pairingLink.credential, environmentId)
         : null,
-    [endpointUrl, pairingLink.credential],
+    [endpointUrl, environmentId, pairingLink.credential],
   );
   const endpointPairingUrl = useMemo(() => {
     const endpoint = selectPairingEndpoint(endpoints, defaultEndpointKey);
-    return endpoint ? resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential) : null;
-  }, [defaultEndpointKey, endpoints, pairingLink.credential]);
+    return endpoint
+      ? resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential, environmentId)
+      : null;
+  }, [defaultEndpointKey, endpoints, environmentId, pairingLink.credential]);
   const endpointCopyOptions = useMemo(() => {
     const options: Array<{
       readonly key: string;
@@ -616,7 +621,11 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       if (endpoint.status === "unavailable") {
         continue;
       }
-      const url = resolveAdvertisedEndpointPairingUrl(endpoint, pairingLink.credential);
+      const url = resolveAdvertisedEndpointPairingUrl(
+        endpoint,
+        pairingLink.credential,
+        environmentId,
+      );
       options.push({
         key: endpointDefaultPreferenceKey(endpoint),
         label: endpoint.label,
@@ -1204,6 +1213,7 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 });
 
 type PairingClientsListProps = {
+  environmentId: EnvironmentId | null;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -1218,6 +1228,7 @@ type PairingClientsListProps = {
 };
 
 const PairingClientsList = memo(function PairingClientsList({
+  environmentId,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -1236,6 +1247,7 @@ const PairingClientsList = memo(function PairingClientsList({
         <PairingLinkListRow
           key={pairingLink.id}
           pairingLink={pairingLink}
+          environmentId={environmentId}
           endpointUrl={endpointUrl}
           endpoints={endpoints}
           defaultEndpointKey={defaultEndpointKey}
@@ -2829,6 +2841,7 @@ export function ConnectionsSettings() {
         </div>
       ) : null}
       <PairingClientsList
+        environmentId={primaryEnvironmentId}
         endpointUrl={desktopServerExposureState?.endpointUrl}
         endpoints={visibleDesktopAdvertisedEndpoints}
         defaultEndpointKey={defaultDesktopAdvertisedEndpointKey}

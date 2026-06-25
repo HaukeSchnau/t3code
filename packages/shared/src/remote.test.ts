@@ -5,6 +5,7 @@ import {
   RemoteBackendUrlMissingError,
   RemotePairingTokenMissingError,
   RemotePairingUrlInvalidError,
+  readHostedPairingRequest,
   resolveRemotePairingTarget,
 } from "./remote.ts";
 
@@ -43,6 +44,21 @@ describe("remote", () => {
       credential: "pairing-token",
       httpBaseUrl: "https://desktop.tailnet.ts.net:44342/",
       wsBaseUrl: "wss://desktop.tailnet.ts.net:44342/",
+    });
+  });
+
+  it("preserves hosted pairing environment ids for relay-aware clients", () => {
+    expect(
+      readHostedPairingRequest(
+        new URL(
+          "https://app.t3.codes/pair?host=https%3A%2F%2Fdesktop.tailnet.ts.net&environmentId=environment-123#token=pairing-token",
+        ),
+      ),
+    ).toEqual({
+      host: "https://desktop.tailnet.ts.net",
+      token: "pairing-token",
+      label: "",
+      environmentId: "environment-123",
     });
   });
 

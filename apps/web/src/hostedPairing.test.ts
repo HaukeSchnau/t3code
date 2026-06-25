@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  buildDirectHostedPairingUrl,
   buildHostedChannelSelectionUrl,
   buildHostedPairingUrl,
   hasHostedPairingRequest,
+  isHostedPairingBrowserNetworkDenied,
   isHostedStaticApp,
   readHostedPairingRequest,
 } from "./hostedPairing";
@@ -20,6 +22,7 @@ describe("hostedPairing", () => {
       host: "100.64.1.2:3773",
       token: "ABCD1234",
       label: "",
+      environmentId: null,
     });
     expect(hasHostedPairingRequest(url)).toBe(true);
   });
@@ -32,15 +35,42 @@ describe("hostedPairing", () => {
         host: "https://backend.example.com:3773",
         token: "pairing-token",
         label: "Workstation",
+        environmentId: "environment-123",
       }),
     );
 
     expect(url.origin).toBe("https://preview.t3.codes");
     expect(url.pathname).toBe("/pair");
     expect(url.searchParams.get("host")).toBe("https://backend.example.com:3773");
+    expect(url.searchParams.get("environmentId")).toBe("environment-123");
     expect(url.searchParams.get("label")).toBe("Workstation");
     expect(url.searchParams.has("token")).toBe(false);
     expect(url.hash).toBe("#token=pairing-token");
+  });
+
+  it("builds direct backend pairing URLs for hosted fallbacks", () => {
+    const url = new URL(
+      buildDirectHostedPairingUrl({
+        host: "t3.schnau.dev",
+        token: "pairing-token",
+      }) ?? "",
+    );
+
+    expect(url.origin).toBe("https://t3.schnau.dev");
+    expect(url.pathname).toBe("/pair");
+    expect(url.search).toBe("");
+    expect(url.hash).toBe("#token=pairing-token");
+  });
+
+  it("detects browser local-network policy denial errors", () => {
+    const error = new Error("Pairing failed.", {
+      cause: new Error(
+        "Access to fetch at 'https://t3.schnau.dev/.well-known/t3/environment' was blocked: LocalNetworkAccessPermissionDenied",
+      ),
+    });
+
+    expect(isHostedPairingBrowserNetworkDenied(error)).toBe(true);
+    expect(isHostedPairingBrowserNetworkDenied(new Error("The server returned 500."))).toBe(false);
   });
 
   it("builds hosted channel selection URLs through the configured router origin", () => {

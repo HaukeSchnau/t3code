@@ -1,15 +1,27 @@
-import type { AuthSessionState } from "@t3tools/contracts";
+import { EnvironmentId, type AuthSessionState } from "@t3tools/contracts";
+import {
+  RelayConnectionRegistration,
+  RelayConnectionTarget,
+} from "@t3tools/client-runtime/connection";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
+import { environmentCatalog } from "../../connection/catalog";
 import { connectPairing } from "../../connection/onboarding";
 import {
   peekPairingTokenFromUrl,
   stripPairingTokenFromUrl,
   submitServerAuthCredential,
 } from "../../environments/primary";
-import { readHostedPairingRequest } from "../../hostedPairing";
+import {
+  buildDirectHostedPairingUrl,
+  isHostedPairingBrowserNetworkDenied,
+  readHostedPairingRequest,
+  type HostedPairingRequest,
+} from "../../hostedPairing";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { relayEnvironmentDiscovery } from "../../state/relay";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -167,6 +179,12 @@ export function HostedPairingRouteSurface() {
   const connectPairingEnvironment = useAtomCommand(connectPairing, {
     reportFailure: false,
   });
+  const registerEnvironment = useAtomCommand(environmentCatalog.register, {
+    reportFailure: false,
+  });
+  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
+    reportFailure: false,
+  });
   const hostedPairingRequestRef = useRef(readHostedPairingRequest());
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(() =>
     hostedPairingRequestRef.current ? "pairing" : "error",
@@ -176,9 +194,55 @@ export function HostedPairingRouteSurface() {
       ? "Connecting to this backend."
       : "This pairing link is missing its backend host or token.",
   );
+  const [directPairingUrl, setDirectPairingUrl] = useState(() =>
+    hostedPairingRequestRef.current
+      ? buildDirectHostedPairingUrl(hostedPairingRequestRef.current)
+      : null,
+  );
   const [canRetry, setCanRetry] = useState(false);
   const submitAttemptedRef = useRef(false);
   const tokenSubmittedRef = useRef(false);
+
+  const tryRegisterRelayEnvironment = useCallback(
+    async (request: HostedPairingRequest): Promise<boolean> => {
+      const environmentId = request.environmentId;
+      if (!environmentId) {
+        return false;
+      }
+
+      setMessage("Checking T3 Connect for this environment.");
+      const refreshResult = await refreshRelayEnvironments();
+      if (refreshResult._tag !== "Success") {
+        return false;
+      }
+
+      const discoveryState = appAtomRegistry.get(relayEnvironmentDiscovery.stateValueAtom);
+      const discovered = discoveryState.environments.get(EnvironmentId.make(environmentId));
+      if (!discovered || discovered.availability !== "online") {
+        return false;
+      }
+
+      setMessage("Saving this T3 Connect environment.");
+      const registerResult = await registerEnvironment(
+        new RelayConnectionRegistration({
+          target: new RelayConnectionTarget({
+            environmentId: discovered.environment.environmentId,
+            label: discovered.environment.label || request.label || "Remote environment",
+          }),
+        }),
+      );
+      if (registerResult._tag !== "Success") {
+        return false;
+      }
+
+      setStatus("paired");
+      setMessage(
+        `${discovered.environment.label || request.label || "The environment"} is saved through T3 Connect.`,
+      );
+      return true;
+    },
+    [refreshRelayEnvironments, registerEnvironment],
+  );
 
   const submitHostedPairingRequest = useCallback(async () => {
     const request = hostedPairingRequestRef.current;
@@ -198,8 +262,19 @@ export function HostedPairingRouteSurface() {
     }
 
     setStatus("pairing");
-    setMessage("Connecting to this backend.");
+    setMessage(
+      request.environmentId
+        ? "Looking for this environment in T3 Connect."
+        : "Connecting to this backend.",
+    );
     setCanRetry(false);
+    setDirectPairingUrl(buildDirectHostedPairingUrl(request));
+
+    if (await tryRegisterRelayEnvironment(request)) {
+      return;
+    }
+
+    setMessage("Connecting to this backend.");
     tokenSubmittedRef.current = true;
 
     const result = await connectPairingEnvironment({
@@ -213,12 +288,16 @@ export function HostedPairingRouteSurface() {
     }
 
     tokenSubmittedRef.current = false;
+    const cause = squashAtomCommandFailure(result);
+    const browserDenied = isHostedPairingBrowserNetworkDenied(cause);
     setStatus("error");
-    setCanRetry(true);
+    setCanRetry(!browserDenied);
     setMessage(
-      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} If the backend accepted this one-time token, request a new pairing link before retrying.`,
+      browserDenied
+        ? "This browser blocked the hosted app from contacting the backend directly. Open the backend-hosted app instead, or link the environment to T3 Connect."
+        : `${errorMessageFromUnknown(cause)} If the backend accepted this one-time token, request a new pairing link before retrying.`,
     );
-  }, [connectPairingEnvironment]);
+  }, [connectPairingEnvironment, tryRegisterRelayEnvironment]);
 
   useEffect(() => {
     if (submitAttemptedRef.current) {
@@ -261,8 +340,9 @@ export function HostedPairingRouteSurface() {
 
         {status === "error" ? (
           <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-            Verify the backend is reachable from this browser, supports CORS for hosted clients, and
-            is served over HTTPS when opening this page from HTTPS.
+            {directPairingUrl
+              ? "The direct backend page uses the backend origin, so browser private-network and CORS policy do not block it."
+              : "Verify the backend is reachable from this browser, supports CORS for hosted clients, and is served over HTTPS when opening this page from HTTPS."}
           </div>
         ) : null}
 
@@ -279,6 +359,17 @@ export function HostedPairingRouteSurface() {
           {status === "paired" ? (
             <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
               Open app
+            </Button>
+          ) : null}
+          {status === "error" && directPairingUrl ? (
+            <Button
+              size="sm"
+              variant={canRetry ? "outline" : "default"}
+              onClick={() => {
+                window.location.href = directPairingUrl;
+              }}
+            >
+              Open backend directly
             </Button>
           ) : null}
         </div>
