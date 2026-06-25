@@ -694,6 +694,8 @@ function MonitorThreadBody({
         timestampFormat={timestampFormat}
         workspaceRoot={projectCwd}
         skills={EMPTY_PROVIDER_SKILLS}
+        anchorMessageId={null}
+        contentInsetEndAdjustment={0}
         onIsAtEndChange={() => undefined}
       />
     </div>
@@ -788,7 +790,6 @@ function MonitorThreadActions({
   const busyRef = useRef(false);
   const errorRef = useRef<string | null>(null);
   const focusComposerAfterExpandRef = useRef(false);
-  const shouldAutoScrollRef = useRef(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -1195,8 +1196,6 @@ function MonitorThreadActions({
                 composerImagesRef={composerImagesRef}
                 composerTerminalContextsRef={composerTerminalContextsRef}
                 composerElementContextsRef={composerElementContextsRef}
-                shouldAutoScrollRef={shouldAutoScrollRef}
-                scheduleStickToBottom={() => undefined}
                 onSend={send}
                 onInterrupt={interrupt}
                 onImplementPlanInNewThread={() => undefined}

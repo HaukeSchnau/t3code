@@ -93,7 +93,6 @@ interface UsePreviousMessageEditingInput {
   promptRef: RefObject<string>;
   composerImagesRef: RefObject<ComposerImageAttachment[]>;
   composerTerminalContextsRef: RefObject<TerminalContextDraft[]>;
-  shouldAutoScrollRef: RefObject<boolean>;
   sendInFlightRef: RefObject<boolean>;
   editableUserMessageIds: ReadonlySet<MessageId>;
   setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
@@ -109,7 +108,6 @@ interface UsePreviousMessageEditingInput {
     interactionMode: ProviderInteractionMode;
   }) => Promise<void>;
   scheduleComposerFocus: () => void;
-  scheduleStickToBottom: () => void;
   onInterrupt: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: ChatComposerProps["onRespondToApproval"];
@@ -176,7 +174,6 @@ export function usePreviousMessageEditing({
   promptRef,
   composerImagesRef,
   composerTerminalContextsRef,
-  shouldAutoScrollRef,
   sendInFlightRef,
   editableUserMessageIds,
   setOptimisticUserMessages,
@@ -186,7 +183,6 @@ export function usePreviousMessageEditing({
   resetLocalDispatch,
   persistThreadSettingsForNextTurn,
   scheduleComposerFocus,
-  scheduleStickToBottom,
   onInterrupt,
   onImplementPlanInNewThread,
   onRespondToApproval,
@@ -765,8 +761,6 @@ export function usePreviousMessageEditing({
         composerImagesRef={editComposerImagesRef}
         composerTerminalContextsRef={editComposerTerminalContextsRef}
         composerElementContextsRef={editComposerElementContextsRef}
-        shouldAutoScrollRef={shouldAutoScrollRef}
-        scheduleStickToBottom={scheduleStickToBottom}
         onSend={onSendEditedMessage}
         onInterrupt={onInterrupt}
         onImplementPlanInNewThread={onImplementPlanInNewThread}
@@ -835,10 +829,8 @@ export function usePreviousMessageEditing({
     routeThreadRef,
     runtimeMode,
     scheduleEditComposerFocus,
-    scheduleStickToBottom,
     setThreadErrorFromEditor,
     settings,
-    shouldAutoScrollRef,
     terminalOpen,
     togglePlanSidebar,
   ]);
