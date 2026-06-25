@@ -43,6 +43,42 @@ type InitialConfigError = Effect.Error<
   ReturnType<WsRpcProtocolClient[typeof WS_METHODS.serverGetConfig]>
 >;
 
+interface WebSocketCloseDiagnostics {
+  readonly code: number;
+  readonly reason: string | null;
+}
+
+const MAX_CLOSE_REASON_LENGTH = 160;
+
+function normalizeCloseReason(reason: string | undefined): string | null {
+  const normalized = reason?.trim() ?? "";
+  if (normalized.length === 0) {
+    return null;
+  }
+  if (normalized.length <= MAX_CLOSE_REASON_LENGTH) {
+    return normalized;
+  }
+  return `${normalized.slice(0, MAX_CLOSE_REASON_LENGTH)}...`;
+}
+
+function formatDisconnectDetail(
+  label: string,
+  wasConnected: boolean,
+  closeDiagnostics: WebSocketCloseDiagnostics | null,
+): string {
+  const base = wasConnected
+    ? `${label} disconnected.`
+    : `${label} could not establish a WebSocket connection.`;
+
+  if (closeDiagnostics === null) {
+    return base;
+  }
+
+  const reason =
+    closeDiagnostics.reason === null ? "" : `, reason ${JSON.stringify(closeDiagnostics.reason)}`;
+  return `${base} WebSocket close code ${closeDiagnostics.code}${reason}.`;
+}
+
 function mapInitialConfigError(error: InitialConfigError): ConnectionAttemptError {
   switch (error._tag) {
     case "EnvironmentAuthorizationError":
@@ -74,6 +110,25 @@ export const make = Effect.gen(function* () {
 
     const connected = yield* Deferred.make<void>();
     const disconnected = yield* Deferred.make<never, ConnectionTransientError>();
+    let closeDiagnostics: WebSocketCloseDiagnostics | null = null;
+    const diagnosticWebSocketConstructor: typeof webSocketConstructor = (url, protocols) => {
+      const socket = webSocketConstructor(url, protocols);
+      socket.addEventListener(
+        "close",
+        (event) => {
+          const reason = normalizeCloseReason(event.reason);
+          if (event.code === 1000 && reason === null) {
+            return;
+          }
+          closeDiagnostics = {
+            code: event.code,
+            reason,
+          };
+        },
+        { once: true },
+      );
+      return socket;
+    };
     const hooks = RpcClient.ConnectionHooks.of({
       onConnect: Deferred.succeed(connected, undefined).pipe(Effect.asVoid),
       onDisconnect: Deferred.isDone(connected).pipe(
@@ -82,9 +137,7 @@ export const make = Effect.gen(function* () {
             disconnected,
             new ConnectionTransientErrorClass({
               reason: "transport",
-              detail: wasConnected
-                ? `${connection.label} disconnected.`
-                : `${connection.label} could not establish a WebSocket connection.`,
+              detail: formatDisconnectDetail(connection.label, wasConnected, closeDiagnostics),
             }),
           ),
         ),
@@ -93,7 +146,9 @@ export const make = Effect.gen(function* () {
     });
     const socketLayer = Socket.layerWebSocket(connection.socketUrl, {
       openTimeout: SOCKET_OPEN_TIMEOUT,
-    }).pipe(Layer.provide(Layer.succeed(Socket.WebSocketConstructor, webSocketConstructor)));
+    }).pipe(
+      Layer.provide(Layer.succeed(Socket.WebSocketConstructor, diagnosticWebSocketConstructor)),
+    );
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({

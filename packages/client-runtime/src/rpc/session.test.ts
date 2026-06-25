@@ -224,10 +224,30 @@ describe("RpcSessionFactory", () => {
       expect(error).toBeInstanceOf(ConnectionTransientError);
       expect(error).toMatchObject({
         reason: "transport",
-        message: "Test environment disconnected.",
+        message:
+          'Test environment disconnected. WebSocket close code 1012, reason "service restart".',
       });
       yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
+    }),
+  );
+
+  it.effect("includes websocket close diagnostics when the connection drops before ready", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(Effect.flip(session.ready));
+      const socket = yield* awaitSocket(sockets);
+
+      socket.close(1006, "");
+      const error = yield* Fiber.join(readyFiber);
+
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({
+        reason: "transport",
+        message:
+          "Test environment could not establish a WebSocket connection. WebSocket close code 1006.",
+      });
     }),
   );
 

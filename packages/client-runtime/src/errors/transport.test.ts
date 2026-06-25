@@ -23,7 +23,17 @@ describe("isTransportConnectionErrorMessage", () => {
     expect(isTransportConnectionErrorMessage("Test environment disconnected.")).toBe(true);
     expect(
       isTransportConnectionErrorMessage(
+        'Test environment disconnected. WebSocket close code 1012, reason "service restart".',
+      ),
+    ).toBe(true);
+    expect(
+      isTransportConnectionErrorMessage(
         "Test environment could not establish a WebSocket connection.",
+      ),
+    ).toBe(true);
+    expect(
+      isTransportConnectionErrorMessage(
+        "Test environment could not establish a WebSocket connection. WebSocket close code 1006.",
       ),
     ).toBe(true);
     expect(isTransportConnectionErrorMessage("Test environment is not connected.")).toBe(true);
