@@ -681,6 +681,7 @@ function MonitorThreadBody({
         listRef={listRef}
         timelineEntries={timelineEntries}
         latestTurn={thread.latestTurn}
+        runningTurnId={thread.latestTurn?.state === "running" ? thread.latestTurn.turnId : null}
         turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
         routeThreadKey={routeThreadKey}
         onOpenTurnDiff={() => undefined}
@@ -695,6 +696,8 @@ function MonitorThreadBody({
         workspaceRoot={projectCwd}
         skills={EMPTY_PROVIDER_SKILLS}
         anchorMessageId={null}
+        onAnchorReady={() => undefined}
+        onAnchorSizeChanged={() => undefined}
         contentInsetEndAdjustment={0}
         onIsAtEndChange={() => undefined}
       />
