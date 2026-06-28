@@ -161,6 +161,12 @@ describe("parsePersistedState", () => {
         invalid: "not-a-date",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarViewMode: "projects",
+      threadPinnedAtById: {},
+      tagById: {},
+      threadTagIdsByThreadKey: {},
+      projectTagIdsByProjectKey: {},
+      tagExpandedById: {},
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -178,6 +184,12 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarViewMode: "projects",
+      threadPinnedAtById: {},
+      tagById: {},
+      threadTagIdsByThreadKey: {},
+      projectTagIdsByProjectKey: {},
+      tagExpandedById: {},
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -284,6 +296,12 @@ describe("uiStateStore persistence", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      sidebarViewMode: "projects",
+      threadPinnedAtById: {},
+      tagById: {},
+      threadTagIdsByThreadKey: {},
+      projectTagIdsByProjectKey: {},
+      tagExpandedById: {},
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
