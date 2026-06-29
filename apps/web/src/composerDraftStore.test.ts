@@ -60,6 +60,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
+  hasComposerDraftSnapshotState,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThread,
   markPromotedDraftThreadByRef,
@@ -129,6 +130,7 @@ function resetComposerDraftStore() {
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
+    promptStashesByProjectKey: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
   });
@@ -254,6 +256,184 @@ describe("composerDraftStore addImages", () => {
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft?.images.map((image) => image.id)).toEqual(["img-shared"]);
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:shared");
+  });
+});
+
+describe("composerDraftStore prompt stashes", () => {
+  const sourceThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-stash-source"));
+  const targetThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-stash-target"));
+  const otherThreadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-stash-other"));
+  const projectKey = "project:t3code";
+  const otherProjectKey = "project:other";
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("stashes the full composer snapshot under one project and clears the source composer", () => {
+    const selection = modelSelection(CODEX_DRIVER, "gpt-5.4", { reasoningEffort: "high" });
+
+    useComposerDraftStore.getState().setPrompt(sourceThreadRef, "Refactor the queue handling");
+    useComposerDraftStore.getState().setModelSelection(sourceThreadRef, selection);
+    useComposerDraftStore.getState().setRuntimeMode(sourceThreadRef, "full-access");
+    useComposerDraftStore.getState().setInteractionMode(sourceThreadRef, "plan");
+
+    const stash = useComposerDraftStore.getState().stashComposerDraft(projectKey, sourceThreadRef, {
+      createdAt: "2026-06-29T10:00:00.000Z",
+    });
+
+    expect(stash?.draft.prompt).toBe("Refactor the queue handling");
+    expect(stash?.draft.runtimeMode).toBe("full-access");
+    expect(stash?.draft.interactionMode).toBe("plan");
+    expect(stash?.draft.modelSelectionByProvider[CODEX_INSTANCE]?.model).toBe("gpt-5.4");
+    expect(useComposerDraftStore.getState().getComposerDraft(sourceThreadRef)).toBeNull();
+    expect(useComposerDraftStore.getState().listPromptStashes(projectKey)).toHaveLength(1);
+    expect(useComposerDraftStore.getState().listPromptStashes(otherProjectKey)).toEqual([]);
+  });
+
+  it("does not create an empty stash", () => {
+    const stash = useComposerDraftStore.getState().stashComposerDraft(projectKey, sourceThreadRef);
+
+    expect(stash).toBeNull();
+    expect(useComposerDraftStore.getState().listPromptStashes(projectKey)).toEqual([]);
+  });
+
+  it("applies a stash by replacing the target composer and keeping the stash", () => {
+    useComposerDraftStore.getState().setPrompt(sourceThreadRef, "Build the stash menu");
+    useComposerDraftStore.getState().setRuntimeMode(sourceThreadRef, "auto-accept-edits");
+    const stash = useComposerDraftStore.getState().stashComposerDraft(projectKey, sourceThreadRef);
+    expect(stash).not.toBeNull();
+
+    useComposerDraftStore.getState().setPrompt(targetThreadRef, "Existing composer text");
+    useComposerDraftStore.getState().setRuntimeMode(targetThreadRef, "approval-required");
+
+    const applied = useComposerDraftStore
+      .getState()
+      .applyPromptStash(projectKey, stash!.id, targetThreadRef);
+
+    const targetDraft = useComposerDraftStore.getState().getComposerDraft(targetThreadRef);
+    expect(applied).toBe(true);
+    expect(targetDraft?.prompt).toBe("Build the stash menu");
+    expect(targetDraft?.runtimeMode).toBe("auto-accept-edits");
+    expect(useComposerDraftStore.getState().listPromptStashes(projectKey)).toHaveLength(1);
+  });
+
+  it("pops a stash by replacing the target composer and removing only that project stash", () => {
+    useComposerDraftStore.getState().setPrompt(sourceThreadRef, "Project-scoped prompt");
+    const projectStash = useComposerDraftStore
+      .getState()
+      .stashComposerDraft(projectKey, sourceThreadRef);
+
+    useComposerDraftStore.getState().setPrompt(otherThreadRef, "Other project prompt");
+    const otherProjectStash = useComposerDraftStore
+      .getState()
+      .stashComposerDraft(otherProjectKey, otherThreadRef);
+
+    expect(projectStash).not.toBeNull();
+    expect(otherProjectStash).not.toBeNull();
+
+    const popped = useComposerDraftStore
+      .getState()
+      .applyPromptStash(projectKey, projectStash!.id, targetThreadRef, { remove: true });
+
+    expect(popped).toBe(true);
+    expect(useComposerDraftStore.getState().getComposerDraft(targetThreadRef)?.prompt).toBe(
+      "Project-scoped prompt",
+    );
+    expect(useComposerDraftStore.getState().listPromptStashes(projectKey)).toEqual([]);
+    expect(useComposerDraftStore.getState().listPromptStashes(otherProjectKey)).toHaveLength(1);
+  });
+
+  it("applies a project stash into a draft thread before the server thread exists", () => {
+    const draftId = DraftId.make("draft-stash-target");
+    const projectRef = scopeProjectRef(TEST_ENVIRONMENT_ID, ProjectId.make("project-stash"));
+    useComposerDraftStore
+      .getState()
+      .setLogicalProjectDraftThreadId(projectKey, projectRef, draftId, {
+        threadId: ThreadId.make("thread-draft-stash-target"),
+      });
+    useComposerDraftStore.getState().setPrompt(sourceThreadRef, "Start this in a new thread");
+    const stash = useComposerDraftStore.getState().stashComposerDraft(projectKey, sourceThreadRef);
+
+    expect(stash).not.toBeNull();
+
+    const applied = useComposerDraftStore
+      .getState()
+      .applyPromptStash(projectKey, stash!.id, draftId);
+
+    expect(applied).toBe(true);
+    expect(useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt).toBe(
+      "Start this in a new thread",
+    );
+  });
+
+  it("persists and hydrates stashes with image attachments", () => {
+    const image = makeImage({
+      id: "stash-image",
+      previewUrl: "blob:stash-image",
+      name: "stash.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+    });
+    const persistedAttachment = {
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      dataUrl: "data:image/png;base64,AQID",
+    };
+    useComposerDraftStore.getState().setPrompt(sourceThreadRef, "Inspect this screenshot");
+    useComposerDraftStore.getState().addImage(sourceThreadRef, image);
+    const stash = useComposerDraftStore.getState().stashComposerDraft(projectKey, sourceThreadRef, {
+      persistedAttachments: [persistedAttachment],
+    });
+
+    expect(stash).not.toBeNull();
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      promptStashesByProjectKey?: Record<
+        string,
+        Array<{ draft: { attachments: Array<{ id: string; dataUrl: string }> } }>
+      >;
+    };
+
+    expect(
+      persistedState.promptStashesByProjectKey?.[projectKey]?.[0]?.draft.attachments,
+    ).toMatchObject([{ id: "stash-image", dataUrl: "data:image/png;base64,AQID" }]);
+
+    const mergedState = persistApi
+      .getOptions()
+      .merge(persistedState, useComposerDraftStore.getInitialState());
+
+    expect(mergedState.promptStashesByProjectKey[projectKey]?.[0]?.draft.images).toMatchObject([
+      {
+        id: "stash-image",
+        name: "stash.png",
+        mimeType: "image/png",
+        previewUrl: "data:image/png;base64,AQID",
+      },
+    ]);
+  });
+
+  it("treats model and mode changes as replace-worthy composer state", () => {
+    useComposerDraftStore
+      .getState()
+      .setModelSelection(sourceThreadRef, modelSelection(CODEX_DRIVER, "gpt-5.4"));
+
+    expect(
+      hasComposerDraftSnapshotState(
+        useComposerDraftStore.getState().getComposerDraft(sourceThreadRef),
+      ),
+    ).toBe(true);
   });
 });
 

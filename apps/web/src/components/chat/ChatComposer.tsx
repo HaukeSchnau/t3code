@@ -46,7 +46,10 @@ import { deriveComposerSendState, readFileAsDataUrl } from "../ChatView.logic";
 import {
   type ComposerImageAttachment,
   type DraftId,
+  hasComposerDraftSnapshotState,
   type PersistedComposerImageAttachment,
+  type PromptStash,
+  type PromptStashId,
   useComposerDraftStore,
   useComposerThreadDraft,
   useEffectiveComposerModelState,
@@ -72,6 +75,7 @@ import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommand
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { PromptStashMenu } from "./PromptStashMenu";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
@@ -90,6 +94,15 @@ import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
 import { Button } from "../ui/button";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
@@ -411,6 +424,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   );
 });
 
+const EMPTY_PROMPT_STASHES: PromptStash[] = [];
+
 // --------------------------------------------------------------------------
 // Handle exposed to ChatView
 // --------------------------------------------------------------------------
@@ -459,6 +474,7 @@ export interface ChatComposerHandle {
 
 export interface ChatComposerProps {
   composerDraftTarget: ScopedThreadRef | DraftId;
+  composerProjectKey?: string | null;
   environmentId: EnvironmentId;
   routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
@@ -578,6 +594,7 @@ export interface ChatComposerProps {
 export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps) {
   const {
     composerDraftTarget,
+    composerProjectKey = null,
     environmentId,
     routeKind,
     routeThreadRef,
@@ -691,6 +708,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     (store) => store.syncPersistedAttachments,
   );
   const getComposerDraft = useComposerDraftStore((store) => store.getComposerDraft);
+  const promptStashes = useComposerDraftStore((store) =>
+    composerProjectKey ? store.listPromptStashes(composerProjectKey) : EMPTY_PROMPT_STASHES,
+  );
+  const stashComposerDraft = useComposerDraftStore((store) => store.stashComposerDraft);
+  const applyPromptStash = useComposerDraftStore((store) => store.applyPromptStash);
+  const dropPromptStash = useComposerDraftStore((store) => store.dropPromptStash);
 
   // ------------------------------------------------------------------
   // Model state
@@ -922,6 +945,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
+  const [pendingPromptStashRestore, setPendingPromptStashRestore] = useState<{
+    stashId: PromptStashId;
+    remove: boolean;
+  } | null>(null);
   const isMobileViewport = useMediaQuery("max-sm");
   const isComposerCollapsedMobile = !isInlineComposer && isMobileViewport && !isComposerFocused;
 
@@ -1182,6 +1209,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     phase === "running" ? "Queue message" : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
+  const canUsePromptStash =
+    inlineEdit === undefined &&
+    pendingUserInputs.length === 0 &&
+    !isComposerApprovalState &&
+    activePendingProgress === null &&
+    composerProjectKey !== null &&
+    composerProjectKey.trim().length > 0;
+  const canStashCurrentPrompt =
+    canUsePromptStash && hasComposerDraftSnapshotState(composerDraft) && !isSendBusy;
 
   // ------------------------------------------------------------------
   // Prompt helpers
@@ -1212,6 +1248,146 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       removeComposerDraftImage(composerDraftTarget, imageId);
     },
     [composerDraftTarget, removeComposerDraftImage],
+  );
+
+  const buildPersistedComposerAttachments = useCallback(async () => {
+    const existingPersistedById = new Map(
+      composerDraft.persistedAttachments.map((attachment) => [attachment.id, attachment]),
+    );
+    const persistedAttachments: PersistedComposerImageAttachment[] = [];
+    await Promise.all(
+      composerDraft.images.map(async (image) => {
+        try {
+          persistedAttachments.push({
+            id: image.id,
+            name: image.name,
+            mimeType: image.mimeType,
+            sizeBytes: image.sizeBytes,
+            dataUrl: await readFileAsDataUrl(image.file),
+          });
+        } catch {
+          const existingPersisted = existingPersistedById.get(image.id);
+          if (existingPersisted) {
+            persistedAttachments.push(existingPersisted);
+          }
+        }
+      }),
+    );
+    return persistedAttachments;
+  }, [composerDraft.images, composerDraft.persistedAttachments]);
+
+  const resetComposerPromptCursor = useCallback(
+    (nextPrompt: string) => {
+      promptRef.current = nextPrompt;
+      const nextCursor = collapseExpandedComposerCursor(nextPrompt, nextPrompt.length);
+      setComposerCursor(nextCursor);
+      setComposerTrigger(null);
+      setComposerHighlightedItemId(null);
+      window.requestAnimationFrame(() => composerEditorRef.current?.focusAt(nextCursor));
+    },
+    [promptRef],
+  );
+
+  const handleStashCurrentPrompt = useCallback(async () => {
+    if (!composerProjectKey || !canStashCurrentPrompt) {
+      return;
+    }
+    const imageIdsAtStart = composerDraft.images.map((image) => image.id);
+    const persistedAttachments = await buildPersistedComposerAttachments();
+    const currentImageIds =
+      getComposerDraft(composerDraftTarget)?.images.map((image) => image.id) ?? [];
+    if (
+      imageIdsAtStart.length !== currentImageIds.length ||
+      imageIdsAtStart.some((imageId, index) => imageId !== currentImageIds[index])
+    ) {
+      toastManager.add({
+        type: "error",
+        title: "Images changed while stashing",
+        description: "Try stashing again after attachments finish updating.",
+      });
+      return;
+    }
+    const stash = stashComposerDraft(composerProjectKey, composerDraftTarget, {
+      persistedAttachments,
+    });
+    if (!stash) {
+      toastManager.add({
+        type: "error",
+        title: "Could not stash prompt",
+      });
+      return;
+    }
+    resetComposerPromptCursor("");
+    toastManager.add({
+      type: "success",
+      title: "Stashed prompt",
+    });
+  }, [
+    buildPersistedComposerAttachments,
+    canStashCurrentPrompt,
+    composerDraft.images,
+    composerDraftTarget,
+    composerProjectKey,
+    getComposerDraft,
+    resetComposerPromptCursor,
+    stashComposerDraft,
+  ]);
+
+  const restorePromptStash = useCallback(
+    (stashId: PromptStashId, remove: boolean) => {
+      if (!composerProjectKey) {
+        return;
+      }
+      const stash = promptStashes.find((entry) => entry.id === stashId);
+      const restored = applyPromptStash(composerProjectKey, stashId, composerDraftTarget, {
+        remove,
+      });
+      if (!restored) {
+        toastManager.add({
+          type: "error",
+          title: remove ? "Could not pop prompt" : "Could not apply prompt",
+        });
+        return;
+      }
+      resetComposerPromptCursor(stash?.draft.prompt ?? "");
+      toastManager.add({
+        type: "success",
+        title: remove ? "Popped prompt" : "Applied prompt",
+      });
+    },
+    [
+      applyPromptStash,
+      composerDraftTarget,
+      composerProjectKey,
+      promptStashes,
+      resetComposerPromptCursor,
+    ],
+  );
+
+  const requestPromptStashRestore = useCallback(
+    (stashId: PromptStashId, remove: boolean) => {
+      if (hasComposerDraftSnapshotState(composerDraft)) {
+        setPendingPromptStashRestore({ stashId, remove });
+        return;
+      }
+      restorePromptStash(stashId, remove);
+    },
+    [composerDraft, restorePromptStash],
+  );
+
+  const handleDropPromptStash = useCallback(
+    (stashId: PromptStashId) => {
+      if (!composerProjectKey) {
+        return;
+      }
+      if (dropPromptStash(composerProjectKey, stashId)) {
+        toastManager.add({
+          type: "success",
+          title: "Dropped stashed prompt",
+        });
+      }
+    },
+    [composerProjectKey, dropPromptStash],
   );
 
   const removeComposerTerminalContextFromDraft = useCallback(
@@ -2590,6 +2766,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 }
                 className="flex shrink-0 flex-nowrap items-center justify-end gap-2"
               >
+                {canUsePromptStash ? (
+                  <PromptStashMenu
+                    stashes={promptStashes}
+                    canStashCurrent={canStashCurrentPrompt}
+                    disabled={isConnecting || isPreparingWorktree}
+                    onStashCurrent={() => void handleStashCurrentPrompt()}
+                    onApply={(stashId) => requestPromptStashRestore(stashId, false)}
+                    onPop={(stashId) => requestPromptStashRestore(stashId, true)}
+                    onDrop={handleDropPromptStash}
+                  />
+                ) : null}
                 {inlineEdit !== undefined ? (
                   <Button
                     type="button"
@@ -2626,6 +2813,41 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           )}
         </div>
       </div>
+      <AlertDialog
+        open={pendingPromptStashRestore !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setPendingPromptStashRestore(null);
+          }
+        }}
+      >
+        <AlertDialogPopup className="max-w-sm">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Replace composer?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will replace the current prompt, attachments, model, and mode with the stashed
+              prompt.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button type="button" variant="ghost" />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              type="button"
+              onClick={() => {
+                const pending = pendingPromptStashRestore;
+                setPendingPromptStashRestore(null);
+                if (pending) {
+                  restorePromptStash(pending.stashId, pending.remove);
+                }
+              }}
+            >
+              Replace
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </form>
   );
 });

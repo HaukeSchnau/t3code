@@ -1508,6 +1508,11 @@ function ChatViewContent(props: ChatViewProps) {
     [retryEnvironment],
   );
   const projectGroupingSettings = selectProjectGroupingSettings(settings);
+  const composerProjectKey =
+    draftThread?.logicalProjectKey ??
+    (activeProject
+      ? deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings)
+      : null);
   const logicalProjectEnvironments = useMemo(() => {
     if (!activeProject) return [];
     const logicalKey = deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings);
@@ -5208,6 +5213,7 @@ function ChatViewContent(props: ChatViewProps) {
                       <ChatComposer
                         composerRef={composerRef}
                         composerDraftTarget={composerDraftTarget}
+                        composerProjectKey={composerProjectKey}
                         environmentId={environmentId}
                         routeKind={routeKind}
                         routeThreadRef={routeThreadRef}
