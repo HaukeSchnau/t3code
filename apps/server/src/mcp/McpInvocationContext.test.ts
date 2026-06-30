@@ -1,10 +1,5 @@
 import { expect, it } from "@effect/vitest";
-import {
-  EnvironmentId,
-  PreviewAutomationUnavailableError,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as McpInvocationContext from "./McpInvocationContext.ts";
@@ -26,7 +21,7 @@ it.effect("reports the scoped credential context when preview capability is unav
       Effect.flip,
     );
 
-    expect(error).toBeInstanceOf(PreviewAutomationUnavailableError);
+    expect(error).toBeInstanceOf(McpInvocationContext.McpCapabilityUnavailableError);
     expect(error).toMatchObject({
       capability: "preview",
       environmentId: invocation.environmentId,

@@ -1,6 +1,7 @@
 import * as Effect from "effect/Effect";
 import type {
   PreviewAutomationOperation,
+  PreviewAutomationUnavailableError,
   PreviewAutomationRecordingArtifact,
   PreviewAutomationRecordingStatus,
   PreviewAutomationResizeResult,
@@ -8,6 +9,7 @@ import type {
   PreviewAutomationStatus,
   PreviewTabId,
 } from "@t3tools/contracts";
+import { PreviewAutomationUnavailableError as PreviewAutomationUnavailableErrorValue } from "@t3tools/contracts";
 
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "../../PreviewAutomationBroker.ts";
@@ -23,7 +25,18 @@ const invoke = Effect.fn("PreviewToolkit.invoke")(function* <A>(
   import("@t3tools/contracts").PreviewAutomationError,
   McpInvocationContext.McpInvocationContext | PreviewAutomationBroker.PreviewAutomationBroker
 > {
-  const scope = yield* McpInvocationContext.requireMcpCapability("preview");
+  const scope = yield* McpInvocationContext.requireMcpCapability("preview").pipe(
+    Effect.mapError(
+      (cause): PreviewAutomationUnavailableError =>
+        new PreviewAutomationUnavailableErrorValue({
+          capability: "preview",
+          environmentId: cause.environmentId,
+          threadId: cause.threadId,
+          providerSessionId: cause.providerSessionId,
+          providerInstanceId: cause.providerInstanceId,
+        }),
+    ),
+  );
   const broker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
   return yield* broker.invoke<A>({
     scope,

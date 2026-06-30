@@ -22,6 +22,9 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
+import { ThreadOrchestrationToolkitHandlersLive } from "./toolkits/thread-orchestration/handlers.ts";
+import { layer as ThreadOrchestrationServiceLive } from "./toolkits/thread-orchestration/service.ts";
+import { ThreadOrchestrationToolkit } from "./toolkits/thread-orchestration/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -203,6 +206,13 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
   Layer.provide(PreviewSnapshotToolkitHandlersLive),
 );
 
+const ThreadOrchestrationToolkitRegistrationLive = McpServer.toolkit(
+  ThreadOrchestrationToolkit,
+).pipe(
+  Layer.provide(ThreadOrchestrationToolkitHandlersLive),
+  Layer.provide(ThreadOrchestrationServiceLive),
+);
+
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
@@ -214,4 +224,9 @@ const McpTransportLive = McpServer.layerHttp({
   path: "/mcp",
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const layer = PreviewToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const McpToolkitRegistrationLive = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  ThreadOrchestrationToolkitRegistrationLive,
+);
+
+export const layer = McpToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

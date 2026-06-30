@@ -1,0 +1,169 @@
+import * as Schema from "effect/Schema";
+
+import {
+  IsoDateTime,
+  NonNegativeInt,
+  PositiveInt,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+} from "./baseSchemas.ts";
+import {
+  ModelSelection,
+  OrchestrationMessage,
+  OrchestrationThreadActivity,
+  ProviderInteractionMode,
+  RuntimeMode,
+} from "./orchestration.ts";
+
+export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrchestrationError>()(
+  "ThreadOrchestrationError",
+  {
+    operation: TrimmedNonEmptyString,
+    message: TrimmedNonEmptyString,
+    threadId: Schema.optional(ThreadId),
+    projectId: Schema.optional(ProjectId),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export const ThreadOrchestrationProjectSummary = Schema.Struct({
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  workspaceRoot: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+export type ThreadOrchestrationProjectSummary = typeof ThreadOrchestrationProjectSummary.Type;
+
+export const ThreadOrchestrationListProjectsResult = Schema.Struct({
+  projects: Schema.Array(ThreadOrchestrationProjectSummary),
+});
+export type ThreadOrchestrationListProjectsResult =
+  typeof ThreadOrchestrationListProjectsResult.Type;
+
+export const ThreadOrchestrationListThreadsInput = Schema.Struct({
+  query: Schema.optional(TrimmedNonEmptyString),
+  limit: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationListThreadsInput = typeof ThreadOrchestrationListThreadsInput.Type;
+
+export const ThreadOrchestrationThreadSummary = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  title: TrimmedNonEmptyString,
+  projectTitle: TrimmedNonEmptyString,
+  status: TrimmedNonEmptyString,
+  modelSelection: ModelSelection,
+  runtimeMode: RuntimeMode,
+  interactionMode: ProviderInteractionMode,
+  workspaceRoot: TrimmedNonEmptyString,
+  worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadOrchestrationThreadSummary = typeof ThreadOrchestrationThreadSummary.Type;
+
+export const ThreadOrchestrationListThreadsResult = Schema.Struct({
+  threads: Schema.Array(ThreadOrchestrationThreadSummary),
+});
+export type ThreadOrchestrationListThreadsResult = typeof ThreadOrchestrationListThreadsResult.Type;
+
+export const ThreadOrchestrationReadThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  turnLimit: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationReadThreadInput = typeof ThreadOrchestrationReadThreadInput.Type;
+
+export const ThreadOrchestrationThreadDetail = Schema.Struct({
+  thread: ThreadOrchestrationThreadSummary,
+  messages: Schema.Array(OrchestrationMessage),
+  activities: Schema.Array(OrchestrationThreadActivity),
+  queuedMessageCount: NonNegativeInt,
+});
+export type ThreadOrchestrationThreadDetail = typeof ThreadOrchestrationThreadDetail.Type;
+
+export const ThreadOrchestrationCreateEnvironment = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("local") }),
+  Schema.Struct({ type: Schema.Literal("worktree") }),
+]);
+export type ThreadOrchestrationCreateEnvironment = typeof ThreadOrchestrationCreateEnvironment.Type;
+
+export const ThreadOrchestrationCreateTarget = Schema.Struct({
+  type: Schema.Literal("project"),
+  projectId: ProjectId,
+  environment: ThreadOrchestrationCreateEnvironment,
+});
+export type ThreadOrchestrationCreateTarget = typeof ThreadOrchestrationCreateTarget.Type;
+
+export const ThreadOrchestrationCreateThreadInput = Schema.Struct({
+  prompt: TrimmedNonEmptyString,
+  target: ThreadOrchestrationCreateTarget,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+  title: Schema.optional(TrimmedNonEmptyString),
+});
+export type ThreadOrchestrationCreateThreadInput = typeof ThreadOrchestrationCreateThreadInput.Type;
+
+export const ThreadOrchestrationCreateThreadResult = Schema.Struct({
+  thread: ThreadOrchestrationThreadSummary,
+  promptSubmitted: Schema.Boolean,
+});
+export type ThreadOrchestrationCreateThreadResult =
+  typeof ThreadOrchestrationCreateThreadResult.Type;
+
+export const ThreadOrchestrationForkThreadInput = Schema.Struct({
+  threadId: Schema.optional(ThreadId),
+  environment: Schema.optional(
+    Schema.Union([
+      Schema.Struct({ type: Schema.Literal("same-directory") }),
+      Schema.Struct({ type: Schema.Literal("worktree") }),
+    ]),
+  ),
+});
+export type ThreadOrchestrationForkThreadInput = typeof ThreadOrchestrationForkThreadInput.Type;
+
+export const ThreadOrchestrationForkThreadResult = Schema.Struct({
+  thread: ThreadOrchestrationThreadSummary,
+  transcriptCloned: Schema.Boolean,
+});
+export type ThreadOrchestrationForkThreadResult = typeof ThreadOrchestrationForkThreadResult.Type;
+
+export const ThreadOrchestrationSendMessageInput = Schema.Struct({
+  threadId: ThreadId,
+  prompt: TrimmedNonEmptyString,
+  modelSelection: Schema.optional(ModelSelection),
+  runtimeMode: Schema.optional(RuntimeMode),
+  interactionMode: Schema.optional(ProviderInteractionMode),
+});
+export type ThreadOrchestrationSendMessageInput = typeof ThreadOrchestrationSendMessageInput.Type;
+
+export const ThreadOrchestrationSendMessageResult = Schema.Struct({
+  thread: ThreadOrchestrationThreadSummary,
+  queued: Schema.Boolean,
+});
+export type ThreadOrchestrationSendMessageResult = typeof ThreadOrchestrationSendMessageResult.Type;
+
+export const ThreadOrchestrationSetThreadTitleInput = Schema.Struct({
+  threadId: ThreadId,
+  title: TrimmedNonEmptyString,
+});
+export type ThreadOrchestrationSetThreadTitleInput =
+  typeof ThreadOrchestrationSetThreadTitleInput.Type;
+
+export const ThreadOrchestrationRelationshipKind = Schema.Literals([
+  "createdBy",
+  "forkedFrom",
+  "readBy",
+  "messagedBy",
+  "renamedBy",
+]);
+export type ThreadOrchestrationRelationshipKind = typeof ThreadOrchestrationRelationshipKind.Type;
+
+export const ThreadOrchestrationRelationship = Schema.Struct({
+  kind: ThreadOrchestrationRelationshipKind,
+  actorThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  createdAt: IsoDateTime,
+});
+export type ThreadOrchestrationRelationship = typeof ThreadOrchestrationRelationship.Type;
