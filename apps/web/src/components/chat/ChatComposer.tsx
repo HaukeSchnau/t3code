@@ -2262,7 +2262,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     <form
       ref={composerFormRef}
       onSubmit={submitComposer}
-      className={cn("w-full min-w-0", isInlineComposer ? "max-w-none" : "mx-auto max-w-208")}
+      className={cn("w-full min-w-0", isInlineComposer ? "max-w-none" : "mx-auto max-w-3xl")}
       data-chat-composer-form="true"
       data-chat-composer-variant={variant}
     >

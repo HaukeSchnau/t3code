@@ -704,6 +704,7 @@ function MonitorThreadBody({
         onAnchorSizeChanged={() => undefined}
         contentInsetEndAdjustment={0}
         onIsAtEndChange={() => undefined}
+        onManualNavigation={() => undefined}
       />
     </div>
   );
