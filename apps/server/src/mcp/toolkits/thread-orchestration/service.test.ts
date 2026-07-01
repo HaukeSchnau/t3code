@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
+  ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
   type OrchestrationCommand,
@@ -19,8 +20,10 @@ import * as Stream from "effect/Stream";
 
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationCommandInvariantError } from "../../../orchestration/Errors.ts";
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { ThreadOrchestrationService, layer as ThreadOrchestrationServiceLive } from "./service.ts";
 
 const actorThreadId = ThreadId.make("thread-actor");
@@ -86,9 +89,22 @@ const readModel: OrchestrationReadModel = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
+const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
+  fork: (input) =>
+    Effect.fail(
+      new ThreadOrchestrationError({
+        operation: "fork_thread.codex",
+        code: "unsupported_source",
+        message: `Thread '${input.sourceThread.id}' is not backed by Codex.`,
+        threadId: input.sourceThread.id,
+      }),
+    ),
+});
+
 it.effect("queues cross-thread messages and records relationship activities", () => {
   const dispatched: OrchestrationCommand[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -165,6 +181,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
 it.effect("creates threads before starting their initial turn", () => {
   const dispatched: OrchestrationCommand[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -255,6 +272,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
     ThreadWorkspaceService.ThreadWorkspaceService["Service"]["prepareWorkspace"]
   >[0][] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -361,6 +379,278 @@ it.effect("prepares requested worktrees for forked threads", () => {
   }).pipe(Effect.provide(testLayer));
 });
 
+it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () => {
+  const deletedWorkspaceIds: ThreadWorkspaceId[] = [];
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () =>
+          Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: "thread.create",
+              detail: "Dispatch failed.",
+            }),
+          ),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: (input) =>
+          Effect.succeed({
+            workspace: {
+              id: workspaceId,
+              kind: "jj-workspace",
+              lifecycle: "active",
+              displayName: "Fork of Target",
+              managed: true,
+              primaryRootId: workspaceRootId,
+              roots: [],
+              createdForThreadId: input.threadId,
+              retentionPolicy: "explicit-delete",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              deletedAt: null,
+              failureDetail: null,
+              metadata: {},
+            },
+            primaryCwd: "/repo/project-worktree",
+            compatibilityWorktreePath: "/repo/project-worktree",
+            compatibilityBranch: "feature/fork",
+          }),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: (input) =>
+          Effect.sync(() => {
+            deletedWorkspaceIds.push(input.workspaceId);
+          }),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const error = yield* service
+      .forkThread(scope, {
+        threadId: targetThreadId,
+        environment: { type: "worktree" },
+      })
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({ operation: "fork_thread.dispatch" });
+    expect(deletedWorkspaceIds).toEqual([workspaceId]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const importerInputs: Parameters<CodexThreadForkImporter["Service"]["fork"]>[0][] = [];
+  const codexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
+    fork: (input) =>
+      Effect.sync(() => {
+        importerInputs.push(input);
+        return {
+          thread: {
+            threadId: input.threadId,
+            projectId: input.project.id,
+            title: input.title,
+            projectTitle: input.project.title,
+            status: "idle" as const,
+            modelSelection: input.sourceThread.modelSelection,
+            runtimeMode: input.sourceThread.runtimeMode,
+            interactionMode: input.sourceThread.interactionMode,
+            workspaceRoot: input.project.workspaceRoot,
+            worktreePath: input.sourceThread.worktreePath,
+            createdAt: input.createdAt,
+            updatedAt: input.createdAt,
+          },
+          sourceProviderThreadId: "provider-source-thread",
+          providerThreadId: "provider-fork-thread",
+          importedMessageCount: 2,
+        };
+      }),
+  });
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(codexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.forkThread(scope, { threadId: targetThreadId });
+
+    expect(importerInputs).toMatchObject([
+      {
+        sourceThread: { id: targetThreadId },
+        project: { id: projectId },
+        title: "Fork of Target",
+      },
+    ]);
+    expect(result.transcriptCloned).toBe(true);
+    expect(dispatched.map((command) => command.type)).toEqual(["thread.activity.append"]);
+    expect(dispatched[0]).toMatchObject({
+      type: "thread.activity.append",
+      threadId: result.thread.threadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "forkedFrom",
+          actorThreadId,
+          targetThreadId: result.thread.threadId,
+        },
+      },
+    });
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const deletedWorkspaceIds: ThreadWorkspaceId[] = [];
+  const codexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
+    fork: () =>
+      Effect.fail(
+        new ThreadOrchestrationError({
+          operation: "fork_thread.codex_fork",
+          code: "operation_failed",
+          message: "Codex App Server fork failed.",
+          threadId: targetThreadId,
+          projectId,
+        }),
+      ),
+  });
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(codexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: (input) =>
+          Effect.succeed({
+            workspace: {
+              id: workspaceId,
+              kind: "jj-workspace",
+              lifecycle: "active",
+              displayName: "Fork of Target",
+              managed: true,
+              primaryRootId: workspaceRootId,
+              roots: [],
+              createdForThreadId: input.threadId,
+              retentionPolicy: "explicit-delete",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              deletedAt: null,
+              failureDetail: null,
+              metadata: {},
+            },
+            primaryCwd: "/repo/project-worktree",
+            compatibilityWorktreePath: "/repo/project-worktree",
+            compatibilityBranch: "feature/fork",
+          }),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: (input) =>
+          Effect.sync(() => {
+            deletedWorkspaceIds.push(input.workspaceId);
+          }),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const error = yield* service
+      .forkThread(scope, {
+        threadId: targetThreadId,
+        environment: { type: "worktree" },
+      })
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({ operation: "fork_thread.codex_fork" });
+    expect(deletedWorkspaceIds).toEqual([workspaceId]);
+    expect(dispatched).toEqual([]);
+  }).pipe(Effect.provide(testLayer));
+});
+
 it.effect("reads compact thread results without recording read relationships", () => {
   const dispatched: OrchestrationCommand[] = [];
   const assistantMessage = {
@@ -395,6 +685,7 @@ it.effect("reads compact thread results without recording read relationships", (
     ],
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -447,6 +738,7 @@ it.effect("reads compact thread results without recording read relationships", (
 it.effect("awaits idle threads without polling side effects", () => {
   const dispatched: OrchestrationCommand[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
@@ -544,6 +836,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
     ],
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,

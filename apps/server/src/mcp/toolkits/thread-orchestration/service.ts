@@ -45,6 +45,7 @@ import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceServi
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
+import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
@@ -125,6 +126,9 @@ const notFoundError = (
     ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
     ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
   });
+
+const isUnsupportedCodexForkSource = (error: ThreadOrchestrationError) =>
+  error.operation === "fork_thread.codex" && error.code === "unsupported_source";
 
 const compareUpdatedDesc = (
   left: { readonly updatedAt: string },
@@ -262,6 +266,7 @@ const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const workspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+  const codexThreadForkImporter = yield* CodexThreadForkImporter;
   const crypto = yield* Crypto.Crypto;
 
   const snapshot = snapshotQuery
@@ -757,6 +762,45 @@ const make = Effect.gen(function* () {
               )
           : undefined;
 
+      const cleanupPreparedWorkspace =
+        prepared === undefined
+          ? Effect.void
+          : workspaceService
+              .deleteWorkspace({ workspaceId: prepared.workspace.id, force: true })
+              .pipe(Effect.catch(() => Effect.void));
+
+      const codexFork = yield* codexThreadForkImporter
+        .fork({
+          threadId: nextThreadId,
+          sourceThread,
+          project,
+          title,
+          createdAt,
+          ...(prepared !== undefined ? { preparedWorkspace: prepared } : {}),
+        })
+        .pipe(
+          Effect.map((result) => ({ _tag: "Success" as const, result })),
+          Effect.catch((error) =>
+            isUnsupportedCodexForkSource(error)
+              ? Effect.succeed({ _tag: "Unsupported" as const })
+              : cleanupPreparedWorkspace.pipe(Effect.flatMap(() => Effect.fail(error))),
+          ),
+        );
+
+      if (codexFork._tag === "Success") {
+        yield* appendRelationship({
+          scope,
+          kind: "forkedFrom",
+          targetThreadId: nextThreadId,
+          summary: `Forked from thread ${sourceThreadId} by thread ${scope.threadId}.`,
+          createdAt,
+        });
+        return {
+          thread: codexFork.result.thread,
+          transcriptCloned: true,
+        };
+      }
+
       yield* engine
         .dispatch({
           type: "thread.create",
@@ -778,6 +822,9 @@ const make = Effect.gen(function* () {
               threadId: nextThreadId,
               projectId: project.id,
             }),
+          ),
+          Effect.catch((error) =>
+            cleanupPreparedWorkspace.pipe(Effect.flatMap(() => Effect.fail(error))),
           ),
         );
       yield* appendRelationship({

@@ -23,6 +23,7 @@ import {
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
 import { ThreadOrchestrationToolkitHandlersLive } from "./toolkits/thread-orchestration/handlers.ts";
+import { CodexThreadForkImporterLive } from "./toolkits/thread-orchestration/CodexThreadForkImporter.ts";
 import { layer as ThreadOrchestrationServiceLive } from "./toolkits/thread-orchestration/service.ts";
 import { ThreadOrchestrationToolkit } from "./toolkits/thread-orchestration/tools.ts";
 
@@ -210,7 +211,7 @@ const ThreadOrchestrationToolkitRegistrationLive = McpServer.toolkit(
   ThreadOrchestrationToolkit,
 ).pipe(
   Layer.provide(ThreadOrchestrationToolkitHandlersLive),
-  Layer.provide(ThreadOrchestrationServiceLive),
+  Layer.provide(ThreadOrchestrationServiceLive.pipe(Layer.provide(CodexThreadForkImporterLive))),
 );
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(

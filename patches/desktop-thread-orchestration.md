@@ -30,6 +30,8 @@ Desktop-style orchestration power rather than a same-project-only subagent
 boundary. The boundary is therefore the issued per-thread MCP credential, not
 the project graph.
 
-Known limitation: `fork_thread` creates a related child T3 Code thread and
-records the `forkedFrom` relationship, but it does not yet clone completed
-transcript history like Codex Desktop provider-level forks can.
+Codex-backed `fork_thread` calls now follow the official Codex fork semantics:
+T3 Code asks Codex App Server to run `thread/fork`, imports the returned copied
+history into the new T3 Code thread, binds that thread back to the forked Codex
+provider thread, and records the `forkedFrom` relationship. Non-Codex source
+threads still fall back to a related child thread without transcript cloning.

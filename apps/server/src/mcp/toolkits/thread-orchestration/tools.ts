@@ -120,7 +120,7 @@ export const CreateThreadTool = mutatingTool(
 export const ForkThreadTool = mutatingTool(
   Tool.make("fork_thread", {
     description:
-      "Create a related child T3 Code thread from an existing thread or the calling thread. The current T3 implementation records the relationship but does not clone completed transcript history yet.",
+      "Create a related child T3 Code thread from an existing thread or the calling thread. Codex-backed source threads are forked through Codex App Server and include copied completed transcript history; unsupported sources fall back to a related empty thread.",
     parameters: ThreadOrchestrationForkThreadInput,
     success: ThreadOrchestrationForkThreadResult,
     failure: ThreadOrchestrationError,
