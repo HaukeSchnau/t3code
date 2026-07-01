@@ -1,6 +1,7 @@
 # Documentation
 
 - [Getting started](./getting-started/quick-start.md)
+- [Ideas](./ideas/README.md)
 - [Architecture](./architecture/overview.md)
 - [T3 Connect](./cloud/t3-connect-clerk.md)
 - [Integrations](./integrations/source-control-providers.md)
