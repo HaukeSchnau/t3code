@@ -1,17 +1,14 @@
 import {
   CodexSettings,
   CommandId,
-  MessageId,
   ProviderDriverKind,
   ThreadId,
   ThreadOrchestrationError,
-  TurnId,
   defaultInstanceIdForDriver,
   type OrchestrationProject,
   type OrchestrationThread,
   type ThreadOrchestrationThreadSummary,
 } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -19,18 +16,18 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import * as CodexClient from "effect-codex-app-server/client";
-import * as EffectCodexSchema from "effect-codex-app-server/schema";
-import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../../config.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { buildCodexInitializeParams } from "../../../provider/Layers/CodexProvider.ts";
 import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
 } from "../../../provider/Drivers/CodexHomeLayout.ts";
+import {
+  codexThreadMessages,
+  forkCodexProviderThread,
+} from "../../../provider/CodexThreadBridge.ts";
 import { mergeProviderInstanceEnvironment } from "../../../provider/ProviderInstanceEnvironment.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
@@ -166,16 +163,16 @@ const make = Effect.gen(function* () {
         Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_home")),
       );
 
-      const forkResponse = yield* forkProviderThread({
+      const forkResponse = yield* forkCodexProviderThread({
         providerThreadId: sourceProviderThreadId,
         binaryPath: codexConfig.binaryPath,
+        configCwd: config.cwd,
+        spawner,
         ...(input.preparedWorkspace !== undefined
           ? { cwd: input.preparedWorkspace.primaryCwd }
           : {}),
         ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
         environment: processEnv,
-        configCwd: config.cwd,
-        spawner,
       }).pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_fork")));
 
       yield* engine
@@ -308,112 +305,3 @@ function toThreadOrchestrationError(input: CodexThreadForkImportInput, operation
       cause,
     });
 }
-
-function codexThreadTimestamp(value: number | null | undefined, fallback: string): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Option.match(DateTime.make(value * 1000), {
-    onNone: () => fallback,
-    onSome: DateTime.formatIso,
-  });
-}
-
-function codexUserInputText(input: EffectCodexSchema.V2ThreadForkResponse__UserInput): string {
-  switch (input.type) {
-    case "text":
-      return input.text;
-    case "mention":
-      return `@${input.name}`;
-    case "skill":
-      return `$${input.name}`;
-    case "image":
-    case "localImage":
-      return "";
-  }
-}
-
-function codexThreadMessages(input: {
-  readonly thread: EffectCodexSchema.V2ThreadForkResponse__Thread;
-  readonly importedAt: string;
-}) {
-  const messages = [];
-  for (const turn of input.thread.turns) {
-    const timestamp = codexThreadTimestamp(turn.startedAt, input.importedAt);
-    for (const item of turn.items) {
-      if (item.type === "userMessage") {
-        const text = item.content.map(codexUserInputText).join("\n").trim();
-        if (!text) {
-          continue;
-        }
-        messages.push({
-          id: MessageId.make(`codex:${input.thread.id}:${turn.id}:${item.id}`),
-          role: "user" as const,
-          text,
-          turnId: null,
-          streaming: false,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
-        continue;
-      }
-
-      if (item.type === "agentMessage") {
-        const text = item.text.trim();
-        if (!text) {
-          continue;
-        }
-        messages.push({
-          id: MessageId.make(`codex:${input.thread.id}:${turn.id}:${item.id}`),
-          role: "assistant" as const,
-          text,
-          turnId: TurnId.make(turn.id),
-          streaming: false,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-        });
-      }
-    }
-  }
-  return messages;
-}
-
-const forkProviderThread = (input: {
-  readonly providerThreadId: string;
-  readonly binaryPath: string;
-  readonly cwd?: string;
-  readonly homePath?: string;
-  readonly environment: NodeJS.ProcessEnv;
-  readonly configCwd: string;
-  readonly spawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
-}) =>
-  Effect.scoped(
-    Effect.gen(function* () {
-      const env = {
-        ...input.environment,
-        ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-      };
-      const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, ["app-server"], {
-        env,
-        extendEnv: false,
-      });
-      const child = yield* input.spawner.spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          cwd: input.configCwd,
-          env,
-          extendEnv: false,
-          shell: spawnCommand.shell,
-        }),
-      );
-      const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
-      const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-        Effect.provide(clientContext),
-      );
-      yield* client.request("initialize", buildCodexInitializeParams());
-      yield* client.notify("initialized", undefined);
-      return yield* client.request("thread/fork", {
-        threadId: input.providerThreadId,
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-      });
-    }),
-  );
