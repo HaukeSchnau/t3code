@@ -216,6 +216,28 @@ export class CodexThreadResumeError extends Schema.TaggedErrorClass<CodexThreadR
   },
 ) {}
 
+export const CodexThreadForkInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type CodexThreadForkInput = typeof CodexThreadForkInput.Type;
+
+export const CodexThreadForkResult = Schema.Struct({
+  threadId: ThreadId,
+  projectId: ProjectId,
+  sourceThreadId: ThreadId,
+  providerThreadId: TrimmedNonEmptyString,
+  importedMessageCount: NonNegativeInt,
+});
+export type CodexThreadForkResult = typeof CodexThreadForkResult.Type;
+
+export class CodexThreadForkError extends Schema.TaggedErrorClass<CodexThreadForkError>()(
+  "CodexThreadForkError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
 /**
  * Treat the optional `availability` as "available" when absent. This is
  * the rule legacy producers (which omit the field) and new producers

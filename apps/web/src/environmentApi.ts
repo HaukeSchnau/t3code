@@ -2,6 +2,8 @@ import {
   ORCHESTRATION_WS_METHODS,
   WS_METHODS,
   type ClientOrchestrationCommand,
+  type CodexThreadForkInput,
+  type CodexThreadForkResult,
   type CodexThreadResumeInput,
   type CodexThreadResumeResult,
   type EnvironmentApi,
@@ -17,7 +19,7 @@ import { connectionAtomRuntime } from "./connection/runtime";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 
 type MinimalEnvironmentApi = {
-  readonly codex: Pick<EnvironmentApi["codex"], "resumeThread">;
+  readonly codex: Pick<EnvironmentApi["codex"], "forkThread" | "resumeThread">;
   readonly orchestration: Pick<EnvironmentApi["orchestration"], "dispatchCommand">;
 };
 
@@ -29,6 +31,11 @@ const dispatchCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
 const resumeCodexThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-api:codex:resume-thread",
   tag: WS_METHODS.codexResumeThread,
+});
+
+const forkCodexThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-api:codex:fork-thread",
+  tag: WS_METHODS.codexForkThread,
 });
 
 const environmentApiOverridesForTests = new Map<EnvironmentId, EnvironmentApi>();
@@ -49,6 +56,15 @@ async function unwrapEnvironmentCommand<A>(
 function createMinimalEnvironmentApi(environmentId: EnvironmentId): MinimalEnvironmentApi {
   return {
     codex: {
+      forkThread: (input: CodexThreadForkInput): Promise<CodexThreadForkResult> =>
+        unwrapEnvironmentCommand(
+          runAtomCommand(
+            appAtomRegistry,
+            forkCodexThread,
+            { environmentId, input },
+            { reportFailure: false },
+          ),
+        ),
       resumeThread: (input: CodexThreadResumeInput): Promise<CodexThreadResumeResult> =>
         unwrapEnvironmentCommand(
           runAtomCommand(

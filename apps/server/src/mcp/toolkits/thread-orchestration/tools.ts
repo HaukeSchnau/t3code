@@ -2,16 +2,22 @@ import {
   ThreadOrchestrationCreateThreadInput,
   ThreadOrchestrationCreateThreadResult,
   ThreadOrchestrationError,
+  ThreadOrchestrationAwaitThreadInput,
+  ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationForkThreadInput,
   ThreadOrchestrationForkThreadResult,
   ThreadOrchestrationListProjectsResult,
   ThreadOrchestrationListThreadsInput,
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationReadThreadInput,
+  ThreadOrchestrationReadThreadResultInput,
   ThreadOrchestrationSendMessageInput,
   ThreadOrchestrationSendMessageResult,
   ThreadOrchestrationSetThreadTitleInput,
+  ThreadOrchestrationThreadGraphInput,
+  ThreadOrchestrationThreadGraphResult,
   ThreadOrchestrationThreadDetail,
+  ThreadOrchestrationThreadResult,
   ThreadOrchestrationThreadSummary,
 } from "@t3tools/contracts";
 import { Tool, Toolkit } from "effect/unstable/ai";
@@ -67,6 +73,39 @@ export const ReadThreadTool = orchestrationTool(
     .annotate(Tool.Destructive, false),
 );
 
+export const ReadThreadResultTool = readonlyTool(
+  Tool.make("read_thread_result", {
+    description:
+      "Read compact status, queue count, latest message, and latest assistant result for a T3 Code thread without loading the full transcript or recording a read relationship.",
+    parameters: ThreadOrchestrationReadThreadResultInput,
+    success: ThreadOrchestrationThreadResult,
+    failure: ThreadOrchestrationError,
+    dependencies,
+  }).annotate(Tool.Title, "Read thread result"),
+);
+
+export const AwaitThreadTool = readonlyTool(
+  Tool.make("await_thread", {
+    description:
+      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result. This is passive and does not record a read relationship.",
+    parameters: ThreadOrchestrationAwaitThreadInput,
+    success: ThreadOrchestrationAwaitThreadResult,
+    failure: ThreadOrchestrationError,
+    dependencies,
+  }).annotate(Tool.Title, "Await thread"),
+);
+
+export const GetThreadGraphTool = readonlyTool(
+  Tool.make("get_thread_graph", {
+    description:
+      "Read the automatic relationship graph between T3 Code threads. Provide rootThreadId/depth for a bounded neighborhood. Read edges are excluded by default; set includeReadEdges=true when auditing inspection history.",
+    parameters: ThreadOrchestrationThreadGraphInput,
+    success: ThreadOrchestrationThreadGraphResult,
+    failure: ThreadOrchestrationError,
+    dependencies,
+  }).annotate(Tool.Title, "Get thread graph"),
+);
+
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
@@ -115,6 +154,9 @@ export const ThreadOrchestrationToolkit = Toolkit.make(
   ListProjectsTool,
   ListThreadsTool,
   ReadThreadTool,
+  ReadThreadResultTool,
+  AwaitThreadTool,
+  GetThreadGraphTool,
   CreateThreadTool,
   ForkThreadTool,
   SendMessageToThreadTool,

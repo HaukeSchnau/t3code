@@ -5,11 +5,14 @@ import {
   type ProjectId,
   ThreadId,
   ThreadOrchestrationError,
+  type OrchestrationMessage,
   type OrchestrationProject,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
+  type ThreadOrchestrationAwaitThreadInput,
+  type ThreadOrchestrationAwaitThreadResult,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
   type ThreadOrchestrationForkThreadInput,
@@ -18,16 +21,23 @@ import {
   type ThreadOrchestrationListThreadsInput,
   type ThreadOrchestrationListThreadsResult,
   type ThreadOrchestrationReadThreadInput,
+  type ThreadOrchestrationReadThreadResultInput,
+  type ThreadOrchestrationRelationship,
   type ThreadOrchestrationRelationshipKind,
   type ThreadOrchestrationSendMessageInput,
   type ThreadOrchestrationSendMessageResult,
   type ThreadOrchestrationSetThreadTitleInput,
+  type ThreadOrchestrationThreadGraphInput,
+  type ThreadOrchestrationThreadGraphResult,
   type ThreadOrchestrationThreadDetail,
+  type ThreadOrchestrationThreadResult,
   type ThreadOrchestrationThreadSummary,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -38,6 +48,10 @@ import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
+const DEFAULT_AWAIT_TIMEOUT_MS = 30_000;
+const MAX_AWAIT_TIMEOUT_MS = 120_000;
+const DEFAULT_AWAIT_POLL_INTERVAL_MS = 1_000;
+const MIN_AWAIT_POLL_INTERVAL_MS = 100;
 
 export class ThreadOrchestrationService extends Context.Service<
   ThreadOrchestrationService,
@@ -53,6 +67,15 @@ export class ThreadOrchestrationService extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationReadThreadInput,
     ) => Effect.Effect<ThreadOrchestrationThreadDetail, ThreadOrchestrationError>;
+    readonly readThreadResult: (
+      input: ThreadOrchestrationReadThreadResultInput,
+    ) => Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError>;
+    readonly awaitThread: (
+      input: ThreadOrchestrationAwaitThreadInput,
+    ) => Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError>;
+    readonly getThreadGraph: (
+      input: ThreadOrchestrationThreadGraphInput,
+    ) => Effect.Effect<ThreadOrchestrationThreadGraphResult, ThreadOrchestrationError>;
     readonly createThread: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCreateThreadInput,
@@ -80,11 +103,28 @@ const toThreadOrchestrationError =
   (cause: unknown) =>
     new ThreadOrchestrationError({
       operation,
+      code: "operation_failed",
       message: `Thread orchestration operation '${operation}' failed.`,
       ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
       ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
       cause,
     });
+
+const notFoundError = (
+  operation: string,
+  resourceType: "thread" | "project",
+  resourceId: string,
+  input: { readonly threadId?: ThreadId; readonly projectId?: ProjectId } = {},
+) =>
+  new ThreadOrchestrationError({
+    operation,
+    code: "not_found",
+    message: `${resourceType === "thread" ? "Thread" : "Project"} '${resourceId}' was not found.`,
+    resourceType,
+    resourceId,
+    ...(input.threadId !== undefined ? { threadId: input.threadId } : {}),
+    ...(input.projectId !== undefined ? { projectId: input.projectId } : {}),
+  });
 
 const compareUpdatedDesc = (
   left: { readonly updatedAt: string },
@@ -160,6 +200,64 @@ function trimMessagesForTurns(
   return thread.messages.slice(startIndex);
 }
 
+function latestMessage(messages: ReadonlyArray<OrchestrationMessage>): OrchestrationMessage | null {
+  return messages[messages.length - 1] ?? null;
+}
+
+function latestAssistantMessage(
+  messages: ReadonlyArray<OrchestrationMessage>,
+): OrchestrationMessage | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role === "assistant") {
+      return message;
+    }
+  }
+  return null;
+}
+
+function relationshipFromActivity(
+  activity: OrchestrationThreadActivity,
+): ThreadOrchestrationRelationship | null {
+  if (activity.kind !== "thread-orchestration.relationship") {
+    return null;
+  }
+  const payload = activity.payload;
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const candidate = payload as Partial<ThreadOrchestrationRelationship>;
+  if (
+    typeof candidate.kind !== "string" ||
+    typeof candidate.actorThreadId !== "string" ||
+    typeof candidate.targetThreadId !== "string" ||
+    typeof candidate.createdAt !== "string"
+  ) {
+    return null;
+  }
+  return {
+    kind: candidate.kind as ThreadOrchestrationRelationshipKind,
+    actorThreadId: ThreadId.make(candidate.actorThreadId),
+    targetThreadId: ThreadId.make(candidate.targetThreadId),
+    createdAt: candidate.createdAt,
+  };
+}
+
+function awaitSatisfied(
+  thread: OrchestrationThread,
+  until: "idle" | "completed" | "queueDrained",
+): boolean {
+  const queuedMessageCount = thread.queuedMessages?.length ?? 0;
+  switch (until) {
+    case "idle":
+      return !["running", "starting"].includes(statusForThread(thread));
+    case "completed":
+      return thread.latestTurn?.state === "completed";
+    case "queueDrained":
+      return queuedMessageCount === 0 && !["running", "starting"].includes(statusForThread(thread));
+  }
+}
+
 const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -218,9 +316,7 @@ const make = Effect.gen(function* () {
       const model = yield* snapshot;
       const thread = findThread(model.threads, targetThreadId);
       if (!thread) {
-        return yield* new ThreadOrchestrationError({
-          operation: "thread.resolve",
-          message: `Thread '${targetThreadId}' was not found.`,
+        return yield* notFoundError("thread.resolve", "thread", targetThreadId, {
           threadId: targetThreadId,
         });
       }
@@ -228,12 +324,57 @@ const make = Effect.gen(function* () {
       if (!project) {
         return yield* new ThreadOrchestrationError({
           operation: "thread.resolve",
+          code: "not_found",
           message: `Project '${thread.projectId}' for thread '${targetThreadId}' was not found.`,
           threadId: targetThreadId,
           projectId: thread.projectId,
+          resourceType: "project",
+          resourceId: thread.projectId,
         });
       }
       return summaryForThread(thread, project);
+    });
+
+  const threadResultFromModel = (
+    model: {
+      readonly threads: ReadonlyArray<OrchestrationThread>;
+      readonly projects: ReadonlyArray<OrchestrationProject>;
+    },
+    targetThreadId: ThreadId,
+    operation: string,
+  ): Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError> =>
+    Effect.gen(function* () {
+      const thread = findThread(model.threads, targetThreadId);
+      if (!thread) {
+        return yield* notFoundError(operation, "thread", targetThreadId, {
+          threadId: targetThreadId,
+        });
+      }
+      const project = findProject(model.projects, thread.projectId);
+      if (!project) {
+        return yield* new ThreadOrchestrationError({
+          operation,
+          code: "not_found",
+          message: `Project '${thread.projectId}' for thread '${targetThreadId}' was not found.`,
+          threadId: targetThreadId,
+          projectId: thread.projectId,
+          resourceType: "project",
+          resourceId: thread.projectId,
+        });
+      }
+      return {
+        thread: summaryForThread(thread, project),
+        latestMessage: latestMessage(thread.messages),
+        latestAssistantMessage: latestAssistantMessage(thread.messages),
+        queuedMessageCount: thread.queuedMessages?.length ?? 0,
+        activityCount: thread.activities.length,
+      };
+    });
+
+  const readThreadResult = (input: ThreadOrchestrationReadThreadResultInput) =>
+    Effect.gen(function* () {
+      const model = yield* snapshot;
+      return yield* threadResultFromModel(model, input.threadId, "read_thread_result");
     });
 
   const listProjects = () =>
@@ -284,9 +425,7 @@ const make = Effect.gen(function* () {
       const model = yield* snapshot;
       const thread = findThread(model.threads, input.threadId);
       if (!thread) {
-        return yield* new ThreadOrchestrationError({
-          operation: "read_thread",
-          message: `Thread '${input.threadId}' was not found.`,
+        return yield* notFoundError("read_thread", "thread", input.threadId, {
           threadId: input.threadId,
         });
       }
@@ -294,9 +433,12 @@ const make = Effect.gen(function* () {
       if (!project) {
         return yield* new ThreadOrchestrationError({
           operation: "read_thread",
+          code: "not_found",
           message: `Project '${thread.projectId}' for thread '${input.threadId}' was not found.`,
           threadId: input.threadId,
           projectId: thread.projectId,
+          resourceType: "project",
+          resourceId: thread.projectId,
         });
       }
       const createdAt = yield* nowIso;
@@ -317,6 +459,107 @@ const make = Effect.gen(function* () {
       };
     });
 
+  const awaitThread = (input: ThreadOrchestrationAwaitThreadInput) =>
+    Effect.gen(function* () {
+      const until = input.until ?? "idle";
+      const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, MAX_AWAIT_TIMEOUT_MS);
+      const pollIntervalMs = Math.max(
+        input.pollIntervalMs ?? DEFAULT_AWAIT_POLL_INTERVAL_MS,
+        MIN_AWAIT_POLL_INTERVAL_MS,
+      );
+      const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
+
+      const poll: Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError> =
+        Effect.gen(function* () {
+          const model = yield* snapshot;
+          const thread = findThread(model.threads, input.threadId);
+          if (!thread) {
+            return yield* notFoundError("await_thread", "thread", input.threadId, {
+              threadId: input.threadId,
+            });
+          }
+          const result = yield* threadResultFromModel(model, input.threadId, "await_thread");
+          const satisfied = awaitSatisfied(thread, until);
+          if (satisfied) {
+            return { result, satisfied, timedOut: false };
+          }
+          if ((yield* Clock.currentTimeMillis) >= deadline) {
+            return { result, satisfied: false, timedOut: true };
+          }
+          yield* Effect.sleep(Duration.millis(pollIntervalMs));
+          return yield* poll;
+        });
+
+      return yield* poll;
+    });
+
+  const getThreadGraph = (input: ThreadOrchestrationThreadGraphInput) =>
+    Effect.gen(function* () {
+      const model = yield* snapshot;
+      const includeReadEdges = input.includeReadEdges ?? false;
+      const edgeLimit = Math.min(input.limit ?? MAX_THREAD_LIMIT, MAX_THREAD_LIMIT);
+      const depthLimit = input.depth ?? Number.POSITIVE_INFINITY;
+      const summaries = new Map<ThreadId, ThreadOrchestrationThreadSummary>();
+      for (const thread of model.threads) {
+        const project = findProject(model.projects, thread.projectId);
+        if (project && thread.deletedAt === null) {
+          summaries.set(thread.id, summaryForThread(thread, project));
+        }
+      }
+      if (input.rootThreadId !== undefined && !summaries.has(input.rootThreadId)) {
+        return yield* notFoundError("get_thread_graph", "thread", input.rootThreadId, {
+          threadId: input.rootThreadId,
+        });
+      }
+
+      const allEdges = model.threads
+        .flatMap((thread) =>
+          thread.activities.flatMap((activity) => relationshipFromActivity(activity) ?? []),
+        )
+        .filter((edge) => includeReadEdges || edge.kind !== "readBy")
+        .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
+      const includedThreadIds = new Set<ThreadId>();
+      const includedEdges: Array<ThreadOrchestrationRelationship> = [];
+
+      if (input.rootThreadId === undefined) {
+        for (const edge of allEdges.slice(0, edgeLimit)) {
+          includedEdges.push(edge);
+          includedThreadIds.add(edge.actorThreadId);
+          includedThreadIds.add(edge.targetThreadId);
+        }
+      } else {
+        includedThreadIds.add(input.rootThreadId);
+        let frontier = new Set<ThreadId>([input.rootThreadId]);
+        let depth = 0;
+        while (frontier.size > 0 && depth < depthLimit && includedEdges.length < edgeLimit) {
+          const nextFrontier = new Set<ThreadId>();
+          for (const edge of allEdges) {
+            if (!frontier.has(edge.actorThreadId) && !frontier.has(edge.targetThreadId)) {
+              continue;
+            }
+            if (includedEdges.some((candidate) => candidate === edge)) {
+              continue;
+            }
+            includedEdges.push(edge);
+            includedThreadIds.add(edge.actorThreadId);
+            includedThreadIds.add(edge.targetThreadId);
+            nextFrontier.add(edge.actorThreadId);
+            nextFrontier.add(edge.targetThreadId);
+            if (includedEdges.length >= edgeLimit) {
+              break;
+            }
+          }
+          frontier = nextFrontier;
+          depth += 1;
+        }
+      }
+
+      return {
+        nodes: [...includedThreadIds].flatMap((threadId) => summaries.get(threadId) ?? []),
+        edges: includedEdges,
+      };
+    });
+
   const createThread = (
     scope: McpInvocationContext.McpInvocationScope,
     input: ThreadOrchestrationCreateThreadInput,
@@ -325,9 +568,7 @@ const make = Effect.gen(function* () {
       const model = yield* snapshot;
       const project = findProject(model.projects, input.target.projectId);
       if (!project) {
-        return yield* new ThreadOrchestrationError({
-          operation: "create_thread",
-          message: `Project '${input.target.projectId}' was not found.`,
+        return yield* notFoundError("create_thread", "project", input.target.projectId, {
           projectId: input.target.projectId,
         });
       }
@@ -339,8 +580,11 @@ const make = Effect.gen(function* () {
       if (selectedModel === null) {
         return yield* new ThreadOrchestrationError({
           operation: "create_thread",
+          code: "missing_default_model",
           message: `Project '${project.id}' does not have a default model selection.`,
           projectId: project.id,
+          resourceType: "project",
+          resourceId: project.id,
         });
       }
 
@@ -468,9 +712,7 @@ const make = Effect.gen(function* () {
       const model = yield* snapshot;
       const sourceThread = findThread(model.threads, sourceThreadId);
       if (!sourceThread) {
-        return yield* new ThreadOrchestrationError({
-          operation: "fork_thread",
-          message: `Thread '${sourceThreadId}' was not found.`,
+        return yield* notFoundError("fork_thread", "thread", sourceThreadId, {
           threadId: sourceThreadId,
         });
       }
@@ -478,9 +720,12 @@ const make = Effect.gen(function* () {
       if (!project) {
         return yield* new ThreadOrchestrationError({
           operation: "fork_thread",
+          code: "not_found",
           message: `Project '${sourceThread.projectId}' for thread '${sourceThreadId}' was not found.`,
           threadId: sourceThreadId,
           projectId: sourceThread.projectId,
+          resourceType: "project",
+          resourceId: sourceThread.projectId,
         });
       }
       const createdAt = yield* nowIso;
@@ -640,6 +885,9 @@ const make = Effect.gen(function* () {
     listProjects,
     listThreads,
     readThread,
+    readThreadResult,
+    awaitThread,
+    getThreadGraph,
     createThread,
     forkThread,
     sendMessageToThread,

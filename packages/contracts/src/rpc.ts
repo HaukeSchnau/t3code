@@ -116,6 +116,9 @@ import {
 import {
   ServerConfigStreamEvent,
   ServerConfig,
+  CodexThreadForkError,
+  CodexThreadForkInput,
+  CodexThreadForkResult,
   CodexThreadResumeError,
   CodexThreadResumeInput,
   CodexThreadResumeResult,
@@ -205,6 +208,7 @@ export const WS_METHODS = {
 
   // Server meta
   codexResumeThread: "codex.resumeThread",
+  codexForkThread: "codex.forkThread",
   serverGetConfig: "server.getConfig",
   serverRefreshProviders: "server.refreshProviders",
   serverUpdateProvider: "server.updateProvider",
@@ -260,6 +264,12 @@ export const WsCodexResumeThreadRpc = Rpc.make(WS_METHODS.codexResumeThread, {
   payload: CodexThreadResumeInput,
   success: CodexThreadResumeResult,
   error: Schema.Union([CodexThreadResumeError, EnvironmentAuthorizationError]),
+});
+
+export const WsCodexForkThreadRpc = Rpc.make(WS_METHODS.codexForkThread, {
+  payload: CodexThreadForkInput,
+  success: CodexThreadForkResult,
+  error: Schema.Union([CodexThreadForkError, EnvironmentAuthorizationError]),
 });
 
 export const WsServerRefreshProvidersRpc = Rpc.make(WS_METHODS.serverRefreshProviders, {
@@ -693,6 +703,7 @@ export const WsSubscribeAuthAccessRpc = Rpc.make(WS_METHODS.subscribeAuthAccess,
 
 export const WsRpcGroup = RpcGroup.make(
   WsCodexResumeThreadRpc,
+  WsCodexForkThreadRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,
   WsServerUpdateProviderRpc,

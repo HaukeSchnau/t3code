@@ -37,6 +37,26 @@ const handlers = {
         ),
       ),
     ),
+  read_thread_result: (input) =>
+    requireThreadScope.pipe(
+      Effect.flatMap(() =>
+        ThreadOrchestrationService.pipe(
+          Effect.flatMap((service) => service.readThreadResult(input)),
+        ),
+      ),
+    ),
+  await_thread: (input) =>
+    requireThreadScope.pipe(
+      Effect.flatMap(() =>
+        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.awaitThread(input))),
+      ),
+    ),
+  get_thread_graph: (input) =>
+    requireThreadScope.pipe(
+      Effect.flatMap(() =>
+        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.getThreadGraph(input))),
+      ),
+    ),
   create_thread: (input) =>
     requireThreadScope.pipe(
       Effect.flatMap((scope) =>

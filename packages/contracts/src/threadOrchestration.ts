@@ -20,9 +20,12 @@ export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrch
   "ThreadOrchestrationError",
   {
     operation: TrimmedNonEmptyString,
+    code: Schema.optional(TrimmedNonEmptyString),
     message: TrimmedNonEmptyString,
     threadId: Schema.optional(ThreadId),
     projectId: Schema.optional(ProjectId),
+    resourceType: Schema.optional(TrimmedNonEmptyString),
+    resourceId: Schema.optional(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {}
@@ -81,6 +84,39 @@ export const ThreadOrchestrationThreadDetail = Schema.Struct({
   queuedMessageCount: NonNegativeInt,
 });
 export type ThreadOrchestrationThreadDetail = typeof ThreadOrchestrationThreadDetail.Type;
+
+export const ThreadOrchestrationReadThreadResultInput = Schema.Struct({
+  threadId: ThreadId,
+});
+export type ThreadOrchestrationReadThreadResultInput =
+  typeof ThreadOrchestrationReadThreadResultInput.Type;
+
+export const ThreadOrchestrationThreadResult = Schema.Struct({
+  thread: ThreadOrchestrationThreadSummary,
+  latestMessage: Schema.NullOr(OrchestrationMessage),
+  latestAssistantMessage: Schema.NullOr(OrchestrationMessage),
+  queuedMessageCount: NonNegativeInt,
+  activityCount: NonNegativeInt,
+});
+export type ThreadOrchestrationThreadResult = typeof ThreadOrchestrationThreadResult.Type;
+
+export const ThreadOrchestrationAwaitUntil = Schema.Literals(["idle", "completed", "queueDrained"]);
+export type ThreadOrchestrationAwaitUntil = typeof ThreadOrchestrationAwaitUntil.Type;
+
+export const ThreadOrchestrationAwaitThreadInput = Schema.Struct({
+  threadId: ThreadId,
+  until: Schema.optional(ThreadOrchestrationAwaitUntil),
+  timeoutMs: Schema.optional(PositiveInt),
+  pollIntervalMs: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationAwaitThreadInput = typeof ThreadOrchestrationAwaitThreadInput.Type;
+
+export const ThreadOrchestrationAwaitThreadResult = Schema.Struct({
+  result: ThreadOrchestrationThreadResult,
+  satisfied: Schema.Boolean,
+  timedOut: Schema.Boolean,
+});
+export type ThreadOrchestrationAwaitThreadResult = typeof ThreadOrchestrationAwaitThreadResult.Type;
 
 export const ThreadOrchestrationCreateEnvironment = Schema.Union([
   Schema.Struct({ type: Schema.Literal("local") }),
@@ -167,3 +203,17 @@ export const ThreadOrchestrationRelationship = Schema.Struct({
   createdAt: IsoDateTime,
 });
 export type ThreadOrchestrationRelationship = typeof ThreadOrchestrationRelationship.Type;
+
+export const ThreadOrchestrationThreadGraphInput = Schema.Struct({
+  rootThreadId: Schema.optional(ThreadId),
+  includeReadEdges: Schema.optional(Schema.Boolean),
+  depth: Schema.optional(PositiveInt),
+  limit: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationThreadGraphInput = typeof ThreadOrchestrationThreadGraphInput.Type;
+
+export const ThreadOrchestrationThreadGraphResult = Schema.Struct({
+  nodes: Schema.Array(ThreadOrchestrationThreadSummary),
+  edges: Schema.Array(ThreadOrchestrationRelationship),
+});
+export type ThreadOrchestrationThreadGraphResult = typeof ThreadOrchestrationThreadGraphResult.Type;

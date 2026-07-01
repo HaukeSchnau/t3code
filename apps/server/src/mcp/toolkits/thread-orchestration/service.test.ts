@@ -360,3 +360,246 @@ it.effect("prepares requested worktrees for forked threads", () => {
     });
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect("reads compact thread results without recording read relationships", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const assistantMessage = {
+    id: "message-assistant" as OrchestrationThread["messages"][number]["id"],
+    role: "assistant" as const,
+    text: "The review is complete.",
+    turnId: null,
+    streaming: false,
+    createdAt: "2026-01-01T00:01:00.000Z",
+    updatedAt: "2026-01-01T00:01:00.000Z",
+  };
+  const model: OrchestrationReadModel = {
+    ...readModel,
+    threads: [
+      makeThread(actorThreadId),
+      {
+        ...makeThread(targetThreadId),
+        messages: [
+          {
+            id: "message-user" as OrchestrationThread["messages"][number]["id"],
+            role: "user",
+            text: "Please review.",
+            attachments: [],
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          assistantMessage,
+        ],
+      },
+    ],
+  };
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(model),
+        getSnapshot: () => Effect.succeed(model),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.readThreadResult({ threadId: targetThreadId });
+
+    expect(result.thread.threadId).toBe(targetThreadId);
+    expect(result.latestAssistantMessage).toEqual(assistantMessage);
+    expect(result.queuedMessageCount).toBe(0);
+    expect(dispatched).toEqual([]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("awaits idle threads without polling side effects", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.awaitThread({
+      threadId: targetThreadId,
+      until: "idle",
+      timeoutMs: 100,
+      pollIntervalMs: 100,
+    });
+
+    expect(result.satisfied).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.result.thread.threadId).toBe(targetThreadId);
+    expect(dispatched).toEqual([]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("reads relationship graphs without adding read edges", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const createdAt = "2026-01-01T00:02:00.000Z";
+  const model: OrchestrationReadModel = {
+    ...readModel,
+    threads: [
+      makeThread(actorThreadId),
+      {
+        ...makeThread(targetThreadId),
+        activities: [
+          {
+            id: "activity-message" as OrchestrationThread["activities"][number]["id"],
+            tone: "tool",
+            kind: "thread-orchestration.relationship",
+            summary: "Messaged by actor.",
+            payload: {
+              kind: "messagedBy",
+              actorThreadId,
+              targetThreadId,
+              createdAt,
+            },
+            turnId: null,
+            createdAt,
+          },
+          {
+            id: "activity-read" as OrchestrationThread["activities"][number]["id"],
+            tone: "tool",
+            kind: "thread-orchestration.relationship",
+            summary: "Read by actor.",
+            payload: {
+              kind: "readBy",
+              actorThreadId,
+              targetThreadId,
+              createdAt,
+            },
+            turnId: null,
+            createdAt,
+          },
+        ],
+      },
+    ],
+  };
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(model),
+        getSnapshot: () => Effect.succeed(model),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const graph = yield* service.getThreadGraph({
+      rootThreadId: actorThreadId,
+      depth: 1,
+    });
+
+    expect(graph.nodes.map((node) => node.threadId).toSorted()).toEqual(
+      [actorThreadId, targetThreadId].toSorted(),
+    );
+    expect(graph.edges).toEqual([
+      {
+        kind: "messagedBy",
+        actorThreadId,
+        targetThreadId,
+        createdAt,
+      },
+    ]);
+    expect(dispatched).toEqual([]);
+  }).pipe(Effect.provide(testLayer));
+});

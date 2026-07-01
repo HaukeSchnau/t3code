@@ -39,6 +39,8 @@ import type {
   ServerProcessResourceHistoryResult,
   ServerProviderUpdateInput,
   ServerProviderUpdatedPayload,
+  CodexThreadForkInput,
+  CodexThreadForkResult,
   CodexThreadResumeInput,
   CodexThreadResumeResult,
   ServerRemoveKeybindingResult,
@@ -1150,6 +1152,7 @@ export interface LocalApi {
  */
 export interface EnvironmentApi {
   codex: {
+    forkThread: (input: CodexThreadForkInput) => Promise<CodexThreadForkResult>;
     resumeThread: (input: CodexThreadResumeInput) => Promise<CodexThreadResumeResult>;
   };
   terminal: {
