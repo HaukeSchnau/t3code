@@ -13,7 +13,9 @@ const T3_CODE_THREAD_ORCHESTRATION_TOOL_INSTRUCTIONS = `
 
 ## T3 Code thread orchestration
 
-The \`t3-code\` MCP server may expose Desktop-style thread orchestration tools: \`list_projects\`, \`create_thread\`, \`list_threads\`, \`read_thread\`, \`fork_thread\`, \`send_message_to_thread\`, and \`set_thread_title\`.
+The \`t3-code\` MCP server may expose Desktop-style thread orchestration tools: \`list_execution_targets\`, \`list_projects\`, \`create_thread\`, \`list_threads\`, \`read_thread\`, \`read_thread_result\`, \`await_thread\`, \`get_thread_graph\`, \`fork_thread\`, \`send_message_to_thread\`, and \`set_thread_title\`.
+
+Use \`list_execution_targets\` before provider fanout. It shows the current host/environment, projects, configured provider instances such as Codex, Cursor, or OpenCode, and exact \`modelSelection\` values that can be passed to \`create_thread.modelSelection\`. Provider choice is normally a new-thread decision; do not assume an existing thread can switch provider instances after it has started.
 
 Use these tools when additional T3 Code threads would materially help the task: independent research, implementation work packets, critical review, or background validation. Thread relationship facts such as create, fork, read, message, and rename are recorded automatically for observability; there is no separate graph-edit workflow.
 
