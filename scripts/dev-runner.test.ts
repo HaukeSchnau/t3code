@@ -321,6 +321,105 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.equal(env.VITE_WS_URL, "ws://localhost:13773");
       }),
     );
+
+    it.effect("uses the Portless app port and URL when launched by agent-service on macOS", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {
+            PORT: "4691",
+            PORTLESS_URL: "https://t3code-message-fork.localhost",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.PORT, "4691");
+        assert.equal(env.VITE_DEV_SERVER_URL, "https://t3code-message-fork.localhost/");
+        assert.equal(env.T3CODE_PORT, "13773");
+        assert.equal(env.VITE_HTTP_URL, "http://localhost:13773");
+        assert.equal(env.VITE_WS_URL, "ws://localhost:13773");
+      }),
+    );
+
+    it.effect("uses the Linux agent-service app port without requiring a public URL", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {
+            PORT: "19042",
+            AGENT_SERVICE_PORT: "19042",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.PORT, "19042");
+        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:19042");
+        assert.equal(env.T3CODE_PORT, "13773");
+      }),
+    );
+
+    it.effect("ignores an ambient PORT when it is not from agent-service", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {
+            PORT: "4999",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.PORT, "5733");
+        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:5733");
+      }),
+    );
+
+    it.effect("prefers an explicit dev-url over the Portless URL", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {
+            PORT: "4691",
+            PORTLESS_URL: "https://t3code-message-fork.localhost",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: new URL("https://override.localhost"),
+        });
+
+        assert.equal(env.PORT, "4691");
+        assert.equal(env.VITE_DEV_SERVER_URL, "https://override.localhost/");
+      }),
+    );
   });
 
   describe("findFirstAvailableOffset", () => {
@@ -425,6 +524,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev",
           startOffset: 0,
           hasExplicitServerPort: false,
+          hasExplicitWebPort: false,
           hasExplicitDevUrl: false,
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
@@ -440,6 +540,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev:web",
           startOffset: 0,
           hasExplicitServerPort: false,
+          hasExplicitWebPort: false,
           hasExplicitDevUrl: false,
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
@@ -455,6 +556,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev:server",
           startOffset: 0,
           hasExplicitServerPort: false,
+          hasExplicitWebPort: false,
           hasExplicitDevUrl: false,
           checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
@@ -469,6 +571,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev:web",
           startOffset: 0,
           hasExplicitServerPort: false,
+          hasExplicitWebPort: false,
           hasExplicitDevUrl: true,
           checkPortAvailability: () => Effect.succeed(false),
         });
@@ -483,8 +586,25 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           mode: "dev:server",
           startOffset: 0,
           hasExplicitServerPort: true,
+          hasExplicitWebPort: false,
           hasExplicitDevUrl: false,
           checkPortAvailability: () => Effect.succeed(false),
+        });
+
+        assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
+      }),
+    );
+
+    it.effect("does not probe web ports when agent-service provides the app port", () =>
+      Effect.gen(function* () {
+        const taken = new Set([5733]);
+        const offsets = yield* resolveModePortOffsets({
+          mode: "dev",
+          startOffset: 0,
+          hasExplicitServerPort: false,
+          hasExplicitWebPort: true,
+          hasExplicitDevUrl: false,
+          checkPortAvailability: (port) => Effect.succeed(!taken.has(port)),
         });
 
         assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
