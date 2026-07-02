@@ -43,7 +43,10 @@ const projectDefaultModelSelection = {
 const actorModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
   model: "gpt-5.5",
+  options: [{ id: "reasoningEffort", value: "high" }] as const,
 };
+const actorRuntimeMode = "auto-accept-edits" as const;
+const actorInteractionMode = "plan" as const;
 
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -71,8 +74,8 @@ const makeThread = (id: typeof targetThreadId): OrchestrationThread => ({
   projectId,
   title: id === actorThreadId ? "Actor" : "Target",
   modelSelection: id === actorThreadId ? actorModelSelection : projectDefaultModelSelection,
-  runtimeMode: "full-access",
-  interactionMode: "default",
+  runtimeMode: id === actorThreadId ? actorRuntimeMode : "full-access",
+  interactionMode: id === actorThreadId ? actorInteractionMode : "default",
   branch: null,
   worktreePath: null,
   workspaceId: null,
@@ -217,29 +220,33 @@ const providerSnapshots: ServerProvider[] = [
   },
 ];
 
-const testExecutionTargetDependencies = Layer.mergeAll(
-  NodeServices.layer,
-  remoteThreadOrchestrationClientLayer,
-  Layer.succeed(ServerEnvironment.ServerEnvironment, {
-    getEnvironmentId: Effect.succeed(scope.environmentId),
-    getDescriptor: Effect.succeed({
-      environmentId: scope.environmentId,
-      label: "MacBook",
-      platform: { os: "darwin", arch: "arm64" },
-      serverVersion: "0.0.0-test",
-      capabilities: { repositoryIdentity: true },
-    } as const),
-  }),
-  Layer.succeed(ProviderRegistry, {
-    getProviders: Effect.succeed(providerSnapshots),
-    refresh: () => Effect.succeed(providerSnapshots),
-    refreshInstance: () => Effect.succeed(providerSnapshots),
-    getProviderMaintenanceCapabilitiesForInstance: () =>
-      Effect.die("unused provider maintenance capabilities"),
-    setProviderMaintenanceActionState: () => Effect.succeed(providerSnapshots),
-    streamChanges: Stream.empty,
-  }),
-);
+const makeTestExecutionTargetDependencies = (
+  remoteClientLayer: Layer.Layer<RemoteThreadOrchestrationClient> = remoteThreadOrchestrationClientLayer,
+) =>
+  Layer.mergeAll(
+    NodeServices.layer,
+    remoteClientLayer,
+    Layer.succeed(ServerEnvironment.ServerEnvironment, {
+      getEnvironmentId: Effect.succeed(scope.environmentId),
+      getDescriptor: Effect.succeed({
+        environmentId: scope.environmentId,
+        label: "MacBook",
+        platform: { os: "darwin", arch: "arm64" },
+        serverVersion: "0.0.0-test",
+        capabilities: { repositoryIdentity: true },
+      } as const),
+    }),
+    Layer.succeed(ProviderRegistry, {
+      getProviders: Effect.succeed(providerSnapshots),
+      refresh: () => Effect.succeed(providerSnapshots),
+      refreshInstance: () => Effect.succeed(providerSnapshots),
+      getProviderMaintenanceCapabilitiesForInstance: () =>
+        Effect.die("unused provider maintenance capabilities"),
+      setProviderMaintenanceActionState: () => Effect.succeed(providerSnapshots),
+      streamChanges: Stream.empty,
+    }),
+  );
+const testExecutionTargetDependencies = makeTestExecutionTargetDependencies();
 
 it.effect("lists execution targets with provider model selections and project defaults", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(
@@ -516,11 +523,16 @@ it.effect("creates threads before starting their initial turn", () => {
       projectId,
       title: "Reviewer",
       modelSelection: actorModelSelection,
+      runtimeMode: actorRuntimeMode,
+      interactionMode: actorInteractionMode,
     });
     expect(dispatched[1]).toMatchObject({
       type: "thread.turn.start",
       threadId: result.thread.threadId,
       message: { text: "Please review the implementation." },
+      modelSelection: actorModelSelection,
+      runtimeMode: actorRuntimeMode,
+      interactionMode: actorInteractionMode,
     });
     expect(dispatched[1]).not.toHaveProperty("bootstrap");
     expect(dispatched[2]).toMatchObject({
@@ -535,6 +547,118 @@ it.effect("creates threads before starting their initial turn", () => {
         },
       },
     });
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("resolves actor defaults before routing remote thread creation", () => {
+  const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+  const remoteProjectId = "remote-project" as OrchestrationProject["id"];
+  const remoteInputs: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[1][] =
+    [];
+  const remoteScopes: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[0][] =
+    [];
+  const remoteClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
+    listExecutionTargets: () => Effect.succeed({ targets: [] }),
+    listThreads: () => Effect.die("unused remote listThreads"),
+    readThread: () => Effect.die("unused remote readThread"),
+    readThreadResult: () => Effect.die("unused remote readThreadResult"),
+    awaitThread: () => Effect.die("unused remote awaitThread"),
+    getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
+    createThread: (remoteScope, input) =>
+      Effect.sync(() => {
+        remoteScopes.push(remoteScope);
+        remoteInputs.push(input);
+        return {
+          thread: {
+            environmentId: remoteEnvironmentId,
+            threadId: ThreadId.make("remote-thread"),
+            projectId: remoteProjectId,
+            title: input.title ?? "Remote Reviewer",
+            projectTitle: "Remote Project",
+            status: "running" as const,
+            modelSelection: input.modelSelection ?? projectDefaultModelSelection,
+            runtimeMode: input.runtimeMode ?? "full-access",
+            interactionMode: input.interactionMode ?? "default",
+            workspaceRoot: "/srv/project",
+            worktreePath: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          promptSubmitted: true,
+        };
+      }),
+    sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
+    setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
+  });
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("unused"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(makeTestExecutionTargetDependencies(remoteClientLayer)),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.createThread(scope, {
+      prompt: "Please review the remote implementation.",
+      target: {
+        environmentId: remoteEnvironmentId,
+        projectId: remoteProjectId,
+      },
+      title: "Remote Reviewer",
+    });
+
+    expect(result.thread.environmentId).toBe(remoteEnvironmentId);
+    expect(remoteScopes).toEqual([
+      {
+        environmentId: scope.environmentId,
+        threadId: scope.threadId,
+        providerSessionId: scope.providerSessionId,
+        providerInstanceId: scope.providerInstanceId,
+      },
+    ]);
+    expect(remoteInputs).toEqual([
+      {
+        prompt: "Please review the remote implementation.",
+        target: {
+          environmentId: remoteEnvironmentId,
+          projectId: remoteProjectId,
+        },
+        title: "Remote Reviewer",
+        modelSelection: actorModelSelection,
+        runtimeMode: actorRuntimeMode,
+        interactionMode: actorInteractionMode,
+      },
+    ]);
   }).pipe(Effect.provide(testLayer));
 });
 
