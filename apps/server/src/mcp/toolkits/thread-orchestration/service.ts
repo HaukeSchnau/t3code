@@ -1,5 +1,6 @@
 import {
   CommandId,
+  EnvironmentId,
   EventId,
   MessageId,
   type ProjectId,
@@ -13,6 +14,7 @@ import {
   type OrchestrationThreadShell,
   type ThreadOrchestrationAwaitThreadInput,
   type ThreadOrchestrationAwaitThreadResult,
+  type ThreadOrchestrationActorScope,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
   type ThreadOrchestrationForkThreadInput,
@@ -49,6 +51,7 @@ import { ProjectionSnapshotQuery } from "../../../orchestration/Services/Project
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
+import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
@@ -69,6 +72,7 @@ export class ThreadOrchestrationService extends Context.Service<
       ThreadOrchestrationError
     >;
     readonly listThreads: (
+      scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationListThreadsInput,
     ) => Effect.Effect<ThreadOrchestrationListThreadsResult, ThreadOrchestrationError>;
     readonly readThread: (
@@ -76,12 +80,15 @@ export class ThreadOrchestrationService extends Context.Service<
       input: ThreadOrchestrationReadThreadInput,
     ) => Effect.Effect<ThreadOrchestrationThreadDetail, ThreadOrchestrationError>;
     readonly readThreadResult: (
+      scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationReadThreadResultInput,
     ) => Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError>;
     readonly awaitThread: (
+      scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationAwaitThreadInput,
     ) => Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError>;
     readonly getThreadGraph: (
+      scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationThreadGraphInput,
     ) => Effect.Effect<ThreadOrchestrationThreadGraphResult, ThreadOrchestrationError>;
     readonly createThread: (
@@ -164,8 +171,10 @@ function statusForThread(thread: ThreadSummarySource): string {
 function summaryForThread(
   thread: ThreadSummarySource,
   project: ProjectSummarySource,
+  environmentId: EnvironmentId,
 ): ThreadOrchestrationThreadSummary {
   return {
+    environmentId,
     threadId: thread.id,
     projectId: thread.projectId,
     title: thread.title,
@@ -248,7 +257,13 @@ function relationshipFromActivity(
   }
   return {
     kind: candidate.kind as ThreadOrchestrationRelationshipKind,
+    ...(typeof candidate.actorEnvironmentId === "string"
+      ? { actorEnvironmentId: EnvironmentId.make(candidate.actorEnvironmentId) }
+      : {}),
     actorThreadId: ThreadId.make(candidate.actorThreadId),
+    ...(typeof candidate.targetEnvironmentId === "string"
+      ? { targetEnvironmentId: EnvironmentId.make(candidate.targetEnvironmentId) }
+      : {}),
     targetThreadId: ThreadId.make(candidate.targetThreadId),
     createdAt: candidate.createdAt,
   };
@@ -276,6 +291,7 @@ const make = Effect.gen(function* () {
   const codexThreadForkImporter = yield* CodexThreadForkImporter;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const providerRegistry = yield* ProviderRegistry;
+  const remoteClient = yield* RemoteThreadOrchestrationClient;
   const crypto = yield* Crypto.Crypto;
 
   const snapshot = snapshotQuery
@@ -289,6 +305,25 @@ const make = Effect.gen(function* () {
   const eventId = (tag: string) => makeId(crypto, `mcp:${tag}`, EventId.make);
   const messageId = (tag: string) => makeId(crypto, `mcp:${tag}`, MessageId.make);
   const threadId = (tag: string) => makeId(crypto, `mcp:${tag}`, ThreadId.make);
+  const localEnvironmentId = serverEnvironment.getDescriptor.pipe(
+    Effect.map((descriptor) => descriptor.environmentId),
+    Effect.mapError(toThreadOrchestrationError("environment.resolve")),
+  );
+
+  const scopeForRemote = (
+    scope: McpInvocationContext.McpInvocationScope,
+  ): ThreadOrchestrationActorScope => ({
+    environmentId: scope.environmentId,
+    threadId: scope.threadId,
+    providerSessionId: scope.providerSessionId,
+    providerInstanceId: scope.providerInstanceId,
+  });
+
+  const shouldRouteRemote = (environmentId: EnvironmentId | undefined) =>
+    Effect.gen(function* () {
+      if (environmentId === undefined) return false;
+      return environmentId !== (yield* localEnvironmentId);
+    });
 
   const appendRelationship = (input: {
     readonly scope: McpInvocationContext.McpInvocationScope;
@@ -305,7 +340,9 @@ const make = Effect.gen(function* () {
         summary: input.summary,
         payload: {
           kind: input.kind,
+          actorEnvironmentId: input.scope.environmentId,
           actorThreadId: input.scope.threadId,
+          targetEnvironmentId: yield* localEnvironmentId,
           targetThreadId: input.targetThreadId,
           createdAt: input.createdAt,
         },
@@ -346,7 +383,7 @@ const make = Effect.gen(function* () {
           resourceId: thread.projectId,
         });
       }
-      return summaryForThread(thread, project);
+      return summaryForThread(thread, project, yield* localEnvironmentId);
     });
 
   const threadResultFromModel = (
@@ -377,7 +414,7 @@ const make = Effect.gen(function* () {
         });
       }
       return {
-        thread: summaryForThread(thread, project),
+        thread: summaryForThread(thread, project, yield* localEnvironmentId),
         latestMessage: latestMessage(thread.messages),
         latestAssistantMessage: latestAssistantMessage(thread.messages),
         queuedMessageCount: thread.queuedMessages?.length ?? 0,
@@ -385,8 +422,14 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const readThreadResult = (input: ThreadOrchestrationReadThreadResultInput) =>
+  const readThreadResult = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationReadThreadResultInput,
+  ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.readThreadResult(scopeForRemote(scope), input);
+      }
       const model = yield* snapshot;
       return yield* threadResultFromModel(model, input.threadId, "read_thread_result");
     });
@@ -427,81 +470,106 @@ const make = Effect.gen(function* () {
         updatedAt: project.updatedAt,
       }));
 
+      const localTarget = {
+        environment: descriptor,
+        hostId: descriptor.environmentId,
+        remoteRouting: "currentEnvironmentOnly" as const,
+        canCreateLocalThreads: true,
+        canCreateWorktreeThreads: true,
+        providers: providers.map((provider) => ({
+          instanceId: provider.instanceId,
+          driver: provider.driver,
+          ...(provider.displayName !== undefined ? { displayName: provider.displayName } : {}),
+          enabled: provider.enabled,
+          installed: provider.installed,
+          status: provider.status,
+          authStatus: provider.auth.status,
+          availability: provider.availability ?? "available",
+          requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange ?? false,
+          models: provider.models.map((model) => ({
+            slug: model.slug,
+            name: model.name,
+            ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
+            ...(model.subProvider !== undefined ? { subProvider: model.subProvider } : {}),
+            isCustom: model.isCustom,
+            capabilities: model.capabilities,
+            modelSelection: {
+              instanceId: provider.instanceId,
+              model: model.slug,
+            },
+          })),
+        })),
+        projects,
+        notes: [
+          "Pass a provider model's modelSelection directly to create_thread.modelSelection to choose that provider/model for a new thread.",
+          "Omit environmentId to use the calling thread's current host. Pass a returned remote environmentId to create/read/manage threads on a registered remote host.",
+          "Provider instance changes after a thread starts may be rejected; use provider fanout by creating separate threads.",
+        ],
+      };
+      const remoteTargets = yield* remoteClient.listExecutionTargets();
+
       return {
         targets: [
-          {
-            environment: descriptor,
-            hostId: descriptor.environmentId,
-            remoteRouting: "currentEnvironmentOnly" as const,
-            canCreateLocalThreads: true,
-            canCreateWorktreeThreads: true,
-            providers: providers.map((provider) => ({
-              instanceId: provider.instanceId,
-              driver: provider.driver,
-              ...(provider.displayName !== undefined ? { displayName: provider.displayName } : {}),
-              enabled: provider.enabled,
-              installed: provider.installed,
-              status: provider.status,
-              authStatus: provider.auth.status,
-              availability: provider.availability ?? "available",
-              requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange ?? false,
-              models: provider.models.map((model) => ({
-                slug: model.slug,
-                name: model.name,
-                ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
-                ...(model.subProvider !== undefined ? { subProvider: model.subProvider } : {}),
-                isCustom: model.isCustom,
-                capabilities: model.capabilities,
-                modelSelection: {
-                  instanceId: provider.instanceId,
-                  model: model.slug,
-                },
-              })),
-            })),
-            projects,
+          localTarget,
+          ...remoteTargets.targets.map((target) => ({
+            ...target,
             notes: [
-              "Pass a provider model's modelSelection directly to create_thread.modelSelection to choose that provider/model for a new thread.",
-              "This MCP server can create and inspect threads only in its current execution environment. To create on another host, use a thread whose provider session is running on that host.",
-              "Provider instance changes after a thread starts may be rejected; use provider fanout by creating separate threads.",
+              ...target.notes,
+              "This registered remote target can be selected by passing its environment.environmentId as environmentId on orchestration tool inputs.",
             ],
-          },
+          })),
         ],
       };
     });
 
-  const listThreads = (input: ThreadOrchestrationListThreadsInput) =>
-    shellSnapshot.pipe(
-      Effect.map((model) => {
-        const query = input.query?.toLowerCase();
-        const limit = Math.min(input.limit ?? DEFAULT_THREAD_LIMIT, MAX_THREAD_LIMIT);
-        return {
-          threads: model.threads
-            .filter((thread) => thread.archivedAt === null)
-            .flatMap((thread) => {
-              const project = model.projects.find((candidate) => candidate.id === thread.projectId);
-              if (!project) return [];
-              const summary = summaryForThread(thread, project);
-              if (
-                query &&
-                !summary.title.toLowerCase().includes(query) &&
-                !summary.projectTitle.toLowerCase().includes(query) &&
-                !summary.workspaceRoot.toLowerCase().includes(query)
-              ) {
-                return [];
-              }
-              return [summary];
-            })
-            .toSorted(compareUpdatedDesc)
-            .slice(0, limit),
-        };
-      }),
-    );
+  const listThreads = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationListThreadsInput,
+  ) =>
+    Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.listThreads(scopeForRemote(scope), input);
+      }
+      const currentEnvironmentId = yield* localEnvironmentId;
+      return yield* shellSnapshot.pipe(
+        Effect.map((model) => {
+          const environmentId = input.environmentId ?? currentEnvironmentId;
+          const query = input.query?.toLowerCase();
+          const limit = Math.min(input.limit ?? DEFAULT_THREAD_LIMIT, MAX_THREAD_LIMIT);
+          return {
+            threads: model.threads
+              .filter((thread) => thread.archivedAt === null)
+              .flatMap((thread) => {
+                const project = model.projects.find(
+                  (candidate) => candidate.id === thread.projectId,
+                );
+                if (!project) return [];
+                const summary = summaryForThread(thread, project, environmentId);
+                if (
+                  query &&
+                  !summary.title.toLowerCase().includes(query) &&
+                  !summary.projectTitle.toLowerCase().includes(query) &&
+                  !summary.workspaceRoot.toLowerCase().includes(query)
+                ) {
+                  return [];
+                }
+                return [summary];
+              })
+              .toSorted(compareUpdatedDesc)
+              .slice(0, limit),
+          };
+        }),
+      );
+    });
 
   const readThread = (
     scope: McpInvocationContext.McpInvocationScope,
     input: ThreadOrchestrationReadThreadInput,
   ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.readThread(scopeForRemote(scope), input);
+      }
       const model = yield* snapshot;
       const thread = findThread(model.threads, input.threadId);
       if (!thread) {
@@ -532,15 +600,21 @@ const make = Effect.gen(function* () {
         });
       }
       return {
-        thread: summaryForThread(thread, project),
+        thread: summaryForThread(thread, project, yield* localEnvironmentId),
         messages: trimMessagesForTurns(thread, input.turnLimit),
         activities: thread.activities,
         queuedMessageCount: thread.queuedMessages?.length ?? 0,
       };
     });
 
-  const awaitThread = (input: ThreadOrchestrationAwaitThreadInput) =>
+  const awaitThread = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationAwaitThreadInput,
+  ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.awaitThread(scopeForRemote(scope), input);
+      }
       const until = input.until ?? "idle";
       const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, MAX_AWAIT_TIMEOUT_MS);
       const pollIntervalMs = Math.max(
@@ -573,9 +647,16 @@ const make = Effect.gen(function* () {
       return yield* poll;
     });
 
-  const getThreadGraph = (input: ThreadOrchestrationThreadGraphInput) =>
+  const getThreadGraph = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationThreadGraphInput,
+  ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.getThreadGraph(scopeForRemote(scope), input);
+      }
       const model = yield* snapshot;
+      const currentEnvironmentId = yield* localEnvironmentId;
       const includeReadEdges = input.includeReadEdges ?? false;
       const edgeLimit = Math.min(input.limit ?? MAX_THREAD_LIMIT, MAX_THREAD_LIMIT);
       const depthLimit = input.depth ?? Number.POSITIVE_INFINITY;
@@ -583,7 +664,7 @@ const make = Effect.gen(function* () {
       for (const thread of model.threads) {
         const project = findProject(model.projects, thread.projectId);
         if (project && thread.deletedAt === null) {
-          summaries.set(thread.id, summaryForThread(thread, project));
+          summaries.set(thread.id, summaryForThread(thread, project, currentEnvironmentId));
         }
       }
       if (input.rootThreadId !== undefined && !summaries.has(input.rootThreadId)) {
@@ -645,15 +726,27 @@ const make = Effect.gen(function* () {
     input: ThreadOrchestrationCreateThreadInput,
   ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.target?.environmentId)) {
+        return yield* remoteClient.createThread(scopeForRemote(scope), input);
+      }
       const model = yield* snapshot;
       const sourceThread = findThread(model.threads, scope.threadId);
-      if (!sourceThread) {
+      if (!sourceThread && input.target?.projectId === undefined) {
         return yield* notFoundError("create_thread", "thread", scope.threadId, {
           threadId: scope.threadId,
         });
       }
 
-      const projectId = input.target?.projectId ?? sourceThread.projectId;
+      const projectId = input.target?.projectId ?? sourceThread?.projectId;
+      if (projectId === undefined) {
+        return yield* new ThreadOrchestrationError({
+          operation: "create_thread",
+          code: "project_required",
+          message:
+            "create_thread requires target.projectId when the actor thread is not present in this environment.",
+          threadId: scope.threadId,
+        });
+      }
       const project = findProject(model.projects, projectId);
       if (!project) {
         return yield* notFoundError("create_thread", "project", projectId, {
@@ -664,7 +757,17 @@ const make = Effect.gen(function* () {
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("thread");
       const title = input.title ?? input.prompt.slice(0, 80);
-      const selectedModel = input.modelSelection ?? sourceThread.modelSelection;
+      const selectedModel = input.modelSelection ?? sourceThread?.modelSelection;
+      if (selectedModel === undefined) {
+        return yield* new ThreadOrchestrationError({
+          operation: "create_thread",
+          code: "model_selection_required",
+          message:
+            "create_thread requires modelSelection when the actor thread is not present in this environment.",
+          threadId: scope.threadId,
+          projectId: project.id,
+        });
+      }
 
       const environment = input.target?.environment ?? ({ type: "local" } as const);
       const prepared =
@@ -765,6 +868,7 @@ const make = Effect.gen(function* () {
 
       return {
         thread: {
+          environmentId: yield* localEnvironmentId,
           threadId: nextThreadId,
           projectId: project.id,
           title,
@@ -910,6 +1014,7 @@ const make = Effect.gen(function* () {
       });
       return {
         thread: {
+          environmentId: yield* localEnvironmentId,
           threadId: nextThreadId,
           projectId: project.id,
           title,
@@ -932,6 +1037,9 @@ const make = Effect.gen(function* () {
     input: ThreadOrchestrationSendMessageInput,
   ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.sendMessageToThread(scopeForRemote(scope), input);
+      }
       const createdAt = yield* nowIso;
       yield* engine
         .dispatch({
@@ -974,6 +1082,9 @@ const make = Effect.gen(function* () {
     input: ThreadOrchestrationSetThreadTitleInput,
   ) =>
     Effect.gen(function* () {
+      if (yield* shouldRouteRemote(input.environmentId)) {
+        return yield* remoteClient.setThreadTitle(scopeForRemote(scope), input);
+      }
       const createdAt = yield* nowIso;
       yield* engine
         .dispatch({

@@ -14,13 +14,16 @@ environment, and current provider/model. Supplying
 `target.environment.type: "worktree"` or an explicit `modelSelection` is reserved for intentional
 isolation or provider/model fanout.
 
-Remote host orchestration is represented explicitly but conservatively:
-`remoteRouting: "currentEnvironmentOnly"` means this MCP server can create and
-inspect threads only on the host that issued the provider-scoped MCP credential.
-T3 Code's web client can route by `environmentId`, but the server-side MCP layer
-does not yet own a backend-to-backend environment connection registry. When that
-exists, `list_execution_targets` is the intended place to surface routable remote
-hosts before adding remote create/read/send behavior.
+Remote host orchestration is represented explicitly through `environmentId`.
+The local T3 server owns a backend-to-backend remote orchestration registry,
+persisting non-secret remote metadata in `remote-orchestration-environments.json`
+and storing bearer access tokens in `ServerSecretStore`. `t3 remote register`
+can exchange a one-time remote pairing token for an orchestration-scoped bearer
+session and register the remote host. `list_execution_targets` returns both the
+current environment and registered remotes; agents pass the returned
+`environment.environmentId` to the existing thread tools rather than using a
+separate remote-only tool family. Omitting `environmentId` preserves the current
+host/current project/current provider defaults.
 
 This fork-specific patch extends the existing MCP thread toolkit with compact passive
 observability tools:

@@ -33,8 +33,10 @@ const handlers = {
     ),
   list_threads: (input) =>
     requireThreadScope.pipe(
-      Effect.flatMap(() =>
-        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.listThreads(input))),
+      Effect.flatMap((scope) =>
+        ThreadOrchestrationService.pipe(
+          Effect.flatMap((service) => service.listThreads(scope, input)),
+        ),
       ),
     ),
   read_thread: (input) =>
@@ -47,22 +49,26 @@ const handlers = {
     ),
   read_thread_result: (input) =>
     requireThreadScope.pipe(
-      Effect.flatMap(() =>
+      Effect.flatMap((scope) =>
         ThreadOrchestrationService.pipe(
-          Effect.flatMap((service) => service.readThreadResult(input)),
+          Effect.flatMap((service) => service.readThreadResult(scope, input)),
         ),
       ),
     ),
   await_thread: (input) =>
     requireThreadScope.pipe(
-      Effect.flatMap(() =>
-        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.awaitThread(input))),
+      Effect.flatMap((scope) =>
+        ThreadOrchestrationService.pipe(
+          Effect.flatMap((service) => service.awaitThread(scope, input)),
+        ),
       ),
     ),
   get_thread_graph: (input) =>
     requireThreadScope.pipe(
-      Effect.flatMap(() =>
-        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.getThreadGraph(input))),
+      Effect.flatMap((scope) =>
+        ThreadOrchestrationService.pipe(
+          Effect.flatMap((service) => service.getThreadGraph(scope, input)),
+        ),
       ),
     ),
   create_thread: (input) =>
