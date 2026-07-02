@@ -18,7 +18,6 @@ import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
 import { useNewThreadHandler } from "./useHandleNewThread";
 import { refreshArchivedThreadsForEnvironment } from "../lib/archivedThreadsState";
-import { readEnvironmentApi } from "../environmentApi";
 import { readLocalApi } from "../localApi";
 import { readEnvironmentThreadRefs, readProject, readThreadShell } from "../state/entities";
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -374,48 +373,13 @@ export function useThreadActions() {
     [confirmThreadDelete, deleteThread, resolveThreadTarget],
   );
 
-  const forkThread = useCallback(
-    async (target: ScopedThreadRef) => {
-      const resolved = resolveThreadTarget(target);
-      if (!resolved) return AsyncResult.success(undefined);
-      const api = readEnvironmentApi(target.environmentId);
-      if (!api) {
-        return AsyncResult.failure(Cause.fail(new Error("Environment API not found.")));
-      }
-      const result = await settlePromise(() => api.codex.forkThread({ threadId: target.threadId }));
-      if (result._tag === "Failure") {
-        return result;
-      }
-      const forkedThreadRef = scopeThreadRef(target.environmentId, result.value.threadId);
-      const navigationResult = await settlePromise(() =>
-        router.navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(forkedThreadRef),
-        }),
-      );
-      if (navigationResult._tag === "Failure") {
-        return navigationResult;
-      }
-      toastManager.add(
-        stackedThreadToast({
-          type: "success",
-          title: "Thread forked",
-          description: "Opened the fork with cloned Codex history.",
-        }),
-      );
-      return AsyncResult.success(result.value);
-    },
-    [resolveThreadTarget, router],
-  );
-
   return useMemo(
     () => ({
       archiveThread,
       unarchiveThread,
       deleteThread,
       confirmAndDeleteThread,
-      forkThread,
     }),
-    [archiveThread, confirmAndDeleteThread, deleteThread, forkThread, unarchiveThread],
+    [archiveThread, confirmAndDeleteThread, deleteThread, unarchiveThread],
   );
 }
