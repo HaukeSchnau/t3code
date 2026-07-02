@@ -9,6 +9,9 @@ import { resolveSpawnCommand } from "@t3tools/shared/shell";
 
 import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
 
+export const CODEX_THREAD_BRIDGE_APP_SERVER_ARGS = ["app-server"] as const;
+const CODEX_THREAD_BRIDGE_FORCE_KILL_AFTER = "2 seconds" as const;
+
 type CodexThread = {
   readonly id: string;
   readonly turns: ReadonlyArray<{
@@ -35,6 +38,7 @@ export interface CodexProviderThreadRequest {
 
 export interface CodexProviderThreadForkRequest extends CodexProviderThreadRequest {
   readonly cwd?: string;
+  readonly lastTurnId?: string | null;
 }
 
 export function codexThreadTitle(input: {
@@ -124,11 +128,44 @@ export const readCodexProviderThread = (input: CodexProviderThreadRequest) =>
 
 export const forkCodexProviderThread = (input: CodexProviderThreadForkRequest) =>
   withCodexAppServerClient(input, (client) =>
-    client.request("thread/fork", {
-      threadId: input.providerThreadId,
-      ...(input.cwd ? { cwd: input.cwd } : {}),
+    Effect.gen(function* () {
+      const forkResponse = yield* client.request("thread/fork", codexThreadForkParams(input));
+      const extraTurnCount = codexTrailingTurnCountAfter(
+        forkResponse.thread.turns,
+        input.lastTurnId,
+      );
+      if (extraTurnCount === 0) {
+        return forkResponse;
+      }
+      return yield* client.request("thread/rollback", {
+        threadId: forkResponse.thread.id,
+        numTurns: extraTurnCount,
+      });
     }),
   );
+
+export function codexThreadForkParams(input: {
+  readonly providerThreadId: string;
+  readonly cwd?: string;
+  readonly lastTurnId?: string | null;
+}) {
+  return {
+    threadId: input.providerThreadId,
+    ...(input.lastTurnId ? { lastTurnId: input.lastTurnId } : {}),
+    ...(input.cwd ? { cwd: input.cwd } : {}),
+  };
+}
+
+export function codexTrailingTurnCountAfter(
+  turns: ReadonlyArray<{ readonly id: string }>,
+  lastTurnId: string | null | undefined,
+): number {
+  if (!lastTurnId) {
+    return 0;
+  }
+  const turnIndex = turns.findIndex((turn) => turn.id === lastTurnId);
+  return turnIndex === -1 ? 0 : Math.max(0, turns.length - turnIndex - 1);
+}
 
 function codexUserInputText(input: unknown): string {
   if (!input || typeof input !== "object" || !("type" in input)) {
@@ -159,15 +196,20 @@ function withCodexAppServerClient<A, E>(
         ...input.environment,
         ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
       };
-      const spawnCommand = yield* resolveSpawnCommand(input.binaryPath, ["app-server"], {
-        env,
-        extendEnv: false,
-      });
+      const spawnCommand = yield* resolveSpawnCommand(
+        input.binaryPath,
+        CODEX_THREAD_BRIDGE_APP_SERVER_ARGS,
+        {
+          env,
+          extendEnv: false,
+        },
+      );
       const child = yield* input.spawner.spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {
           cwd: input.configCwd,
           env,
           extendEnv: false,
+          forceKillAfter: CODEX_THREAD_BRIDGE_FORCE_KILL_AFTER,
           shell: spawnCommand.shell,
         }),
       );

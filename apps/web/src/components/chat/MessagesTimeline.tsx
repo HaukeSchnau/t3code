@@ -46,6 +46,7 @@ import {
   ChevronRightIcon,
   CircleAlertIcon,
   EyeIcon,
+  GitForkIcon,
   GlobeIcon,
   HammerIcon,
   LoaderCircleIcon,
@@ -130,6 +131,7 @@ interface TimelineRowSharedState {
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onForkAssistantMessage: (messageId: MessageId, turnId: TurnId) => void;
   userMessageEditing: UserMessageEditingController;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -201,6 +203,7 @@ interface MessagesTimelineProps {
   editableUserMessageIds?: ReadonlySet<MessageId>;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
+  onForkAssistantMessage?: (messageId: MessageId, turnId: TurnId) => void;
   userMessageEditing?: UserMessageEditingController;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
@@ -238,6 +241,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   editableUserMessageIds = EMPTY_EDITABLE_USER_MESSAGE_IDS,
   revertTurnCountByUserMessageId,
   onRevertUserMessage,
+  onForkAssistantMessage,
   userMessageEditing = EMPTY_USER_MESSAGE_EDITING,
   isRevertingCheckpoint,
   onImageExpand,
@@ -461,6 +465,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onForkAssistantMessage: onForkAssistantMessage ?? (() => {}),
       userMessageEditing,
       onImageExpand,
       onOpenTurnDiff,
@@ -477,6 +482,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       skills,
       activeThreadEnvironmentId,
       onRevertUserMessage,
+      onForkAssistantMessage,
       userMessageEditing,
       onImageExpand,
       onOpenTurnDiff,
@@ -1097,6 +1103,7 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
             <AssistantCopyButton row={row} />
+            <AssistantForkButton row={row} />
             {!row.message.streaming && (
               <Tooltip>
                 <TooltipTrigger
@@ -1128,6 +1135,33 @@ function AssistantCopyButton({ row }: { row: Extract<TimelineRow, { kind: "messa
   }
 
   return <MessageCopyButton text={assistantCopyState.text ?? ""} variant="ghost" />;
+}
+
+function AssistantForkButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
+  const ctx = use(TimelineRowCtx);
+  const turnId = row.message.turnId;
+  if (!turnId) {
+    return null;
+  }
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            onClick={() => ctx.onForkAssistantMessage(row.message.id, turnId)}
+            aria-label="Fork from here"
+          />
+        }
+      >
+        <GitForkIcon className="size-3" />
+      </TooltipTrigger>
+      <TooltipPopup side="top">Fork from here</TooltipPopup>
+    </Tooltip>
+  );
 }
 
 function ProposedPlanTimelineRow({

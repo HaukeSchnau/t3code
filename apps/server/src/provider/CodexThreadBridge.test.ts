@@ -1,11 +1,18 @@
 import { expect, it } from "@effect/vitest";
 
 import {
+  CODEX_THREAD_BRIDGE_APP_SERVER_ARGS,
+  codexTrailingTurnCountAfter,
+  codexThreadForkParams,
   codexThreadMessages,
   codexThreadTimestamp,
   codexThreadTitle,
   pathBasename,
 } from "./CodexThreadBridge.ts";
+
+it("uses release-compatible helper Codex app-server args", () => {
+  expect(CODEX_THREAD_BRIDGE_APP_SERVER_ARGS).toEqual(["app-server"]);
+});
 
 it("derives Codex thread titles from explicit names, previews, or cwd", () => {
   expect(
@@ -95,4 +102,36 @@ it("maps Codex thread turns into imported orchestration messages", () => {
 it("falls back for invalid Codex timestamps", () => {
   expect(codexThreadTimestamp(null, "fallback")).toBe("fallback");
   expect(codexThreadTimestamp(Number.NaN, "fallback")).toBe("fallback");
+});
+
+it("passes optional fork turn bounds to Codex app-server", () => {
+  expect(
+    codexThreadForkParams({
+      providerThreadId: "codex-thread-1",
+      cwd: "/repo",
+      lastTurnId: "turn-2",
+    }),
+  ).toEqual({
+    threadId: "codex-thread-1",
+    cwd: "/repo",
+    lastTurnId: "turn-2",
+  });
+
+  expect(
+    codexThreadForkParams({
+      providerThreadId: "codex-thread-1",
+      lastTurnId: null,
+    }),
+  ).toEqual({
+    threadId: "codex-thread-1",
+  });
+});
+
+it("counts fork turns that need compatibility rollback after a turn boundary", () => {
+  const turns = [{ id: "turn-1" }, { id: "turn-2" }, { id: "turn-3" }];
+
+  expect(codexTrailingTurnCountAfter(turns, "turn-2")).toBe(1);
+  expect(codexTrailingTurnCountAfter(turns, "turn-3")).toBe(0);
+  expect(codexTrailingTurnCountAfter(turns, "missing")).toBe(0);
+  expect(codexTrailingTurnCountAfter(turns, null)).toBe(0);
 });
