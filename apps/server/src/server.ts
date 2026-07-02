@@ -295,6 +295,7 @@ const WorkspaceLayerLive = Layer.mergeAll(
 const ThreadWorkspaceLayerLive = ThreadWorkspaceService.layer.pipe(
   Layer.provideMerge(PersistenceLayerLive),
   Layer.provideMerge(GitWorkflowLayerLive),
+  Layer.provide(ProcessRunner.layer),
 );
 
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(

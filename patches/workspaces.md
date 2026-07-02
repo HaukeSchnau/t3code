@@ -31,6 +31,17 @@ support non-Git backends.
   starting the filesystem copy, then marks it `active` on success or `failed`
   with `failureDetail` if provisioning fails. This keeps long-running or stuck
   non-VCS copies visible to diagnostics and cleanup tooling.
+- Directory-copy provisioning refuses sources whose checkout path would be
+  created inside the source tree, refuses sensitive roots such as the user's home
+  directory and T3's workspace storage, measures source size before copying, and
+  fails sources larger than `T3CODE_DIRECTORY_COPY_MAX_BYTES` (default 5 GiB).
+- Directory-copy filesystem work runs through the async process runner with
+  bounded `du` and copy timeouts, so long copies do not block the server event
+  loop. Metadata exposes `preparationStatus`, copy timing, source size, free
+  space, and copy strategy while provisioning is in progress.
+- On macOS, directory-copy workspaces use APFS clone-on-write via `cp -cR`
+  before falling back to `rsync`; other platforms use recursive `cp` before the
+  same fallback.
 - Cwd resolution prefers the workspace primary root checkout path, then falls
   back to legacy `worktreePath`, then the project root.
 - Git workspaces are created with `git worktree add --detach`.
