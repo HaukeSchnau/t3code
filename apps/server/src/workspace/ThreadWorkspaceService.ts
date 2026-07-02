@@ -12,10 +12,13 @@ import {
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
   type ThreadWorkspaceKind,
+  type ThreadWorkspaceLifecycle,
   type ThreadWorkspaceRetentionPolicy,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
@@ -77,7 +80,7 @@ interface WorkspaceRootRow {
 interface WorkspaceRow {
   readonly id: string;
   readonly kind: ThreadWorkspaceKind;
-  readonly lifecycle: "active" | "deleting" | "deleted" | "failed";
+  readonly lifecycle: ThreadWorkspaceLifecycle;
   readonly display_name: string;
   readonly managed: 0 | 1;
   readonly primary_root_id: string;
@@ -189,6 +192,13 @@ function commandSucceeds(command: string, args: ReadonlyArray<string>, cwd: stri
 function parseJsonObject(value: string): Record<string, unknown> {
   const parsed = JSON.parse(value);
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+}
+
+function failureDetailFromCause(cause: unknown): string {
+  if (cause instanceof Error && cause.message.trim().length > 0) {
+    return cause.message;
+  }
+  return String(cause);
 }
 
 function resolveJjRevision(cwd: string, revision: string | null | undefined): string | null {
@@ -401,20 +411,24 @@ export const make = Effect.gen(function* () {
     readonly kind: Exclude<ThreadWorkspaceKind, "local">;
     readonly checkoutPath: string;
     readonly vcsKind: "git" | "jj" | "unknown";
+    readonly lifecycle?: ThreadWorkspaceLifecycle;
     readonly metadata?: Record<string, unknown>;
     readonly rootMetadata?: Record<string, unknown>;
     readonly headRevision?: string | null;
     readonly baseRevision?: string | null;
+    readonly createdAt?: string;
+    readonly updatedAt?: string;
+    readonly failureDetail?: string | null;
   }) => {
     const root = primaryRoot(input.request);
     const workspaceId = makeWorkspaceId(input.request.threadId);
     const rootId = makeRootId(input.request.threadId, 0);
-    const createdAt = nowIso();
+    const createdAt = input.createdAt ?? nowIso();
     const displayName = input.request.displayNameSeed?.trim() || NodePath.basename(root.sourcePath);
     return ThreadWorkspace.make({
       id: workspaceId,
       kind: input.kind,
-      lifecycle: "active",
+      lifecycle: input.lifecycle ?? "active",
       displayName: displayName || shortId(input.request.threadId),
       managed: true,
       primaryRootId: rootId,
@@ -437,9 +451,9 @@ export const make = Effect.gen(function* () {
       createdForThreadId: input.request.threadId,
       retentionPolicy: input.request.retentionPolicy ?? "explicit-delete",
       createdAt,
-      updatedAt: createdAt,
+      updatedAt: input.updatedAt ?? createdAt,
       deletedAt: null,
-      failureDetail: null,
+      failureDetail: input.failureDetail ?? null,
       metadata: input.metadata ?? {},
     });
   };
@@ -569,37 +583,98 @@ export const make = Effect.gen(function* () {
     const root = primaryRoot(input);
     const projectName = slug(NodePath.basename(root.sourcePath));
     const checkoutPath = NodePath.join(workspacesDir, projectName, shortId(input.threadId));
-    NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
-    yield* Effect.try({
-      try: () => {
-        try {
-          runCommand({
-            command: "/bin/cp",
-            args: ["-cR", root.sourcePath, checkoutPath],
-            cwd: "/",
-          });
-        } catch {
-          NodeFS.mkdirSync(checkoutPath, { recursive: true });
-          runCommand({
-            command: "rsync",
-            args: ["-a", `${root.sourcePath.replace(/\/$/, "")}/`, `${checkoutPath}/`],
-            cwd: "/",
-          });
-        }
+    const startedAt = nowIso();
+    const preparingWorkspace = makeWorkspace({
+      request: input,
+      kind: "directory-copy",
+      checkoutPath,
+      vcsKind: "unknown",
+      lifecycle: "preparing",
+      createdAt: startedAt,
+      updatedAt: startedAt,
+      metadata: {
+        provisioner: "directory-copy",
+        preparationStatus: "preparing",
+        preparationStartedAt: startedAt,
       },
+    });
+    yield* persistWorkspace(preparingWorkspace);
+    NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
+    const copyDirectory = Effect.try({
+      try: () =>
+        runCommand({
+          command: "/bin/cp",
+          args: ["-cR", root.sourcePath, checkoutPath],
+          cwd: "/",
+        }),
       catch: (cause) =>
         new ThreadWorkspaceError({
-          operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
-          detail: "Failed to copy project directory.",
+          operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.cp",
+          detail: "Failed to copy project directory with cp.",
           cause,
         }),
-    });
+    }).pipe(
+      Effect.catch(() =>
+        Effect.try({
+          try: () => {
+            NodeFS.mkdirSync(checkoutPath, { recursive: true });
+            return runCommand({
+              command: "rsync",
+              args: ["-a", `${root.sourcePath.replace(/\/$/, "")}/`, `${checkoutPath}/`],
+              cwd: "/",
+            });
+          },
+          catch: (cause) =>
+            new ThreadWorkspaceError({
+              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.rsync",
+              detail: "Failed to copy project directory with rsync.",
+              cause,
+            }),
+        }),
+      ),
+    );
+    const copyExit = yield* Effect.exit(copyDirectory);
+    if (Exit.isFailure(copyExit)) {
+      const cause = Cause.squash(copyExit.cause);
+      const failedAt = nowIso();
+      yield* persistWorkspace(
+        makeWorkspace({
+          request: input,
+          kind: "directory-copy",
+          checkoutPath,
+          vcsKind: "unknown",
+          lifecycle: "failed",
+          createdAt: startedAt,
+          updatedAt: failedAt,
+          failureDetail: failureDetailFromCause(cause),
+          metadata: {
+            provisioner: "directory-copy",
+            preparationStatus: "failed",
+            preparationStartedAt: startedAt,
+            preparationFailedAt: failedAt,
+          },
+        }),
+      );
+      return yield* new ThreadWorkspaceError({
+        operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
+        detail: "Failed to copy project directory.",
+        cause,
+      });
+    }
+    const completedAt = nowIso();
     const workspace = makeWorkspace({
       request: input,
       kind: "directory-copy",
       checkoutPath,
       vcsKind: "unknown",
-      metadata: { provisioner: "directory-copy" },
+      createdAt: startedAt,
+      updatedAt: completedAt,
+      metadata: {
+        provisioner: "directory-copy",
+        preparationStatus: "ready",
+        preparationStartedAt: startedAt,
+        preparationCompletedAt: completedAt,
+      },
     });
     yield* persistWorkspace(workspace);
     return {
