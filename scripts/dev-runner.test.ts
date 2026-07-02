@@ -17,6 +17,7 @@ import {
   createDevRunnerEnv,
   findFirstAvailableOffset,
   getDevRunnerModeArgs,
+  removeAgentServiceForwardedViteArgs,
   resolveModePortOffsets,
   resolveOffset,
   runDevRunnerWithInput,
@@ -322,13 +323,13 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("uses the Portless app port and URL when launched by agent-service on macOS", () =>
+    it.effect("uses the agent-service URL and app port on macOS", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {
             PORT: "4691",
-            PORTLESS_URL: "https://t3code-message-fork.localhost",
+            AGENT_SERVICE_URL: "https://t3code-message-fork.localhost",
           },
           serverOffset: 0,
           webOffset: 0,
@@ -349,13 +350,14 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("uses the Linux agent-service app port without requiring a public URL", () =>
+    it.effect("uses the agent-service URL and app port on Linux", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {
             PORT: "19042",
             AGENT_SERVICE_PORT: "19042",
+            AGENT_SERVICE_URL: "https://t3.schnau.dev",
           },
           serverOffset: 0,
           webOffset: 0,
@@ -369,7 +371,7 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.PORT, "19042");
-        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:19042");
+        assert.equal(env.VITE_DEV_SERVER_URL, "https://t3.schnau.dev/");
         assert.equal(env.T3CODE_PORT, "13773");
       }),
     );
@@ -397,13 +399,37 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
-    it.effect("prefers an explicit dev-url over the Portless URL", () =>
+    it.effect("ignores the old Portless URL signal without the agent-service URL", () =>
       Effect.gen(function* () {
         const env = yield* createDevRunnerEnv({
           mode: "dev",
           baseEnv: {
             PORT: "4691",
             PORTLESS_URL: "https://t3code-message-fork.localhost",
+          },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          noBrowser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.PORT, "5733");
+        assert.equal(env.VITE_DEV_SERVER_URL, "http://localhost:5733");
+      }),
+    );
+
+    it.effect("prefers an explicit dev-url over the agent-service URL", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: {
+            PORT: "4691",
+            AGENT_SERVICE_URL: "https://t3code-message-fork.localhost",
           },
           serverOffset: 0,
           webOffset: 0,
@@ -610,6 +636,35 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.deepStrictEqual(offsets, { serverOffset: 0, webOffset: 0 });
       }),
     );
+  });
+
+  describe("removeAgentServiceForwardedViteArgs", () => {
+    it("removes Portless-forwarded Vite flags from shared dev graph args", () => {
+      assert.deepStrictEqual(
+        removeAgentServiceForwardedViteArgs([
+          "--port",
+          "4857",
+          "--strictPort",
+          "--host=127.0.0.1",
+          "--inspect",
+          "secret-token-value",
+        ]),
+        ["--inspect", "secret-token-value"],
+      );
+    });
+
+    it("removes equals-form port and host args", () => {
+      assert.deepStrictEqual(
+        removeAgentServiceForwardedViteArgs([
+          "--port=4857",
+          "--host",
+          "127.0.0.1",
+          "--log-level",
+          "debug",
+        ]),
+        ["--log-level", "debug"],
+      );
+    });
   });
 
   describe("runDevRunnerWithInput", () => {

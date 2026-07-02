@@ -83,7 +83,7 @@ function resolveDevProxyTarget(wsUrl: string | undefined): string | undefined {
 const devProxyTarget = resolveDevProxyTarget(configuredWsUrl);
 
 function resolveDevServerHmrConfig() {
-  if (process.env.AGENT_SERVICE_PORT?.trim() && !process.env.PORTLESS_URL?.trim()) {
+  if (process.env.AGENT_SERVICE_PORT?.trim() && !process.env.AGENT_SERVICE_URL?.trim()) {
     return undefined;
   }
 
