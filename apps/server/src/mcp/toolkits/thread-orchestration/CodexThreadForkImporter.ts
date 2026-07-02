@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   ThreadId,
   ThreadOrchestrationError,
+  type TurnId,
   defaultInstanceIdForDriver,
   type OrchestrationProject,
   type OrchestrationThread,
@@ -45,6 +46,7 @@ export interface CodexThreadForkImportInput {
   readonly title: string;
   readonly createdAt: string;
   readonly preparedWorkspace?: PreparedThreadWorkspace;
+  readonly lastTurnId?: TurnId | null;
 }
 
 export interface CodexThreadForkImportResult {
@@ -173,6 +175,7 @@ const make = Effect.gen(function* () {
           : {}),
         ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
         environment: processEnv,
+        ...(input.lastTurnId !== undefined ? { lastTurnId: input.lastTurnId } : {}),
       }).pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_fork")));
 
       yield* engine

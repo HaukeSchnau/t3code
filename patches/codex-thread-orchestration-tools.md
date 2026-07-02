@@ -21,3 +21,13 @@ agent `fork_thread` calls through Codex App Server. Forking asks Codex App Serve
 `thread/fork`, then imports the returned copied history into T3 Code and binds the new
 T3 thread to the forked Codex provider thread. This keeps transcript cloning semantics owned
 by Codex App Server instead of reimplementing them in T3 Code.
+
+Assistant messages also expose a message-level "Fork from here" action. This is a UI affordance
+over Codex App Server's `thread/fork.lastTurnId` parameter: T3 Code validates that the selected
+message is a completed assistant message with a Codex turn id, passes that turn id to Codex, then
+imports the terminal-prefix fork that Codex returns. The vendored `effect-codex-app-server`
+schema is patched to include `thread/fork.lastTurnId`; otherwise its JSON-RPC request encoder
+drops the field before it reaches Codex. For older installed Codex binaries that accept but ignore
+`lastTurnId`, T3 Code rolls the newly forked provider thread back by the extra trailing turns before
+importing and binding it. The sidebar/header fork remains a latest-thread fork because it omits
+`lastTurnId`.

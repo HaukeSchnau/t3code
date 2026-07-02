@@ -35226,6 +35226,7 @@ export type V2ThreadForkParams = {
   readonly cwd?: string | null;
   readonly developerInstructions?: string | null;
   readonly ephemeral?: boolean;
+  readonly lastTurnId?: string | null;
   readonly model?: string | null;
   readonly modelProvider?: string | null;
   readonly sandbox?: V2ThreadForkParams__SandboxMode | null;
@@ -35250,6 +35251,15 @@ export const V2ThreadForkParams = Schema.Struct({
   cwd: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
   developerInstructions: Schema.optionalKey(Schema.Union([Schema.String, Schema.Null])),
   ephemeral: Schema.optionalKey(Schema.Boolean),
+  lastTurnId: Schema.optionalKey(
+    Schema.Union([
+      Schema.String.annotate({
+        description:
+          "Optional last turn id to fork through, inclusive. When specified, turns after this id are omitted from the fork.",
+      }),
+      Schema.Null,
+    ]),
+  ),
   model: Schema.optionalKey(
     Schema.Union([
       Schema.String.annotate({

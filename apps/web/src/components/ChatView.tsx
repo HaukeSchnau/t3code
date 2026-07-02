@@ -161,7 +161,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { buildDraftThreadRouteParams } from "../threadRoutes";
+import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
 import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
@@ -5131,6 +5131,71 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
+  const onForkAssistantMessage = useCallback(
+    async (messageId: MessageId, turnId: TurnId) => {
+      if (!activeThreadRef) {
+        return;
+      }
+      const api = readEnvironmentApi(activeThreadRef.environmentId);
+      if (!api) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not fork from message",
+            description: "Environment API unavailable.",
+          }),
+        );
+        return;
+      }
+
+      const result = await settlePromise(() =>
+        api.codex.forkThread({
+          threadId: activeThreadRef.threadId,
+          lastTurnId: turnId,
+          sourceMessageId: messageId,
+        }),
+      );
+      if (result._tag === "Failure") {
+        const error = squashAtomCommandFailure(result);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Could not fork from message",
+            description: error instanceof Error ? error.message : "Failed to create fork.",
+          }),
+        );
+        return;
+      }
+
+      const forkedThreadRef = scopeThreadRef(activeThreadRef.environmentId, result.value.threadId);
+      const navigateResult = await settlePromise(() =>
+        navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(forkedThreadRef),
+        }),
+      );
+      if (navigateResult._tag === "Failure") {
+        const error = squashAtomCommandFailure(navigateResult);
+        toastManager.add(
+          stackedThreadToast({
+            type: "error",
+            title: "Fork created, but could not open it",
+            description: error instanceof Error ? error.message : "Navigation failed.",
+          }),
+        );
+        return;
+      }
+
+      toastManager.add(
+        stackedThreadToast({
+          type: "success",
+          title: "Forked from message",
+          description: "Opened the fork with history up to that response.",
+        }),
+      );
+    },
+    [activeThreadRef, navigate],
+  );
 
   const prepareTimelineForOptimisticMessage = useCallback(async () => {
     isAtEndRef.current = true;
@@ -5379,6 +5444,7 @@ function ChatViewContent(props: ChatViewProps) {
                 editableUserMessageIds={editableUserMessageIds}
                 revertTurnCountByUserMessageId={revertTurnCountByUserMessageId}
                 onRevertUserMessage={onRevertUserMessage}
+                onForkAssistantMessage={onForkAssistantMessage}
                 userMessageEditing={previousMessageEditing.timelineController}
                 isRevertingCheckpoint={
                   isRevertingCheckpoint || previousMessageEditing.isRevertingCheckpoint

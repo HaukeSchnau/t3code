@@ -4,10 +4,12 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { ServerAuthDescriptor } from "./auth.ts";
 import {
   IsoDateTime,
+  MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
   ThreadId,
+  TurnId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
@@ -218,6 +220,8 @@ export class CodexThreadResumeError extends Schema.TaggedErrorClass<CodexThreadR
 
 export const CodexThreadForkInput = Schema.Struct({
   threadId: ThreadId,
+  lastTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  sourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
 });
 export type CodexThreadForkInput = typeof CodexThreadForkInput.Type;
 
