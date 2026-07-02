@@ -192,6 +192,23 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  it("uses the vite proxy for localhost subdomain descriptor requests during local dev", async () => {
+    vi.stubEnv("VITE_DEV_SERVER_URL", "https://t3code-message-fork.localhost");
+    vi.stubEnv("VITE_HTTP_URL", "http://localhost:13773");
+    vi.stubGlobal("window", {
+      location: new URL("https://t3code-message-fork.localhost/"),
+      history: {
+        replaceState: vi.fn(),
+      },
+    });
+    await installDescriptorApi();
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
+      "https://t3code-message-fork.localhost/.well-known/t3/environment",
+    );
+  });
+
   it("retains the URL parser cause without exposing the configured URL in its message", () => {
     vi.stubEnv("VITE_HTTP_URL", "http://[");
 
