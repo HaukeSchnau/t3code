@@ -26,6 +26,10 @@ export const portFlag = Flag.integer("port").pipe(
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
 );
+const strictPortFlag = Flag.boolean("strictPort").pipe(
+  Flag.withDescription("Accepted for Vite/Portless dev flag forwarding; ignored by the server."),
+  Flag.optional,
+);
 export const hostFlag = Flag.string("host").pipe(
   Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
   Flag.optional,
@@ -162,6 +166,7 @@ export const projectLocationFlags = {
 export const sharedServerCommandFlags = {
   mode: modeFlag,
   port: portFlag,
+  strictPort: strictPortFlag,
   host: hostFlag,
   baseDir: baseDirFlag,
   cwd: Argument.string("cwd").pipe(

@@ -232,12 +232,12 @@ function parseAmbientPort(value: string | undefined): number | undefined {
 function readAgentServiceWebPort(baseEnv: NodeJS.ProcessEnv): number | undefined {
   return (
     parseAmbientPort(baseEnv.AGENT_SERVICE_PORT) ??
-    (baseEnv.PORTLESS_URL?.trim() ? parseAmbientPort(baseEnv.PORT) : undefined)
+    (baseEnv.AGENT_SERVICE_URL?.trim() ? parseAmbientPort(baseEnv.PORT) : undefined)
   );
 }
 
 function readAgentServiceDevUrl(baseEnv: NodeJS.ProcessEnv): URL | undefined {
-  const rawUrl = baseEnv.PORTLESS_URL?.trim();
+  const rawUrl = baseEnv.AGENT_SERVICE_URL?.trim();
   if (!rawUrl) {
     return undefined;
   }
@@ -247,6 +247,29 @@ function readAgentServiceDevUrl(baseEnv: NodeJS.ProcessEnv): URL | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function removeAgentServiceForwardedViteArgs(
+  runArgs: ReadonlyArray<string>,
+): ReadonlyArray<string> {
+  const filtered: Array<string> = [];
+
+  for (let index = 0; index < runArgs.length; index += 1) {
+    const arg = runArgs[index];
+    if (arg === undefined) {
+      continue;
+    }
+    if (arg === "--strictPort" || arg.startsWith("--port=") || arg.startsWith("--host=")) {
+      continue;
+    }
+    if (arg === "--port" || arg === "--host") {
+      index += 1;
+      continue;
+    }
+    filtered.push(arg);
+  }
+
+  return filtered;
 }
 
 interface CreateDevRunnerEnvInput {
@@ -576,7 +599,12 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
 
     const spawnCommand = yield* resolveSpawnCommand(
       "vp",
-      [...MODE_ARGS[input.mode], ...input.runArgs],
+      [
+        ...MODE_ARGS[input.mode],
+        ...(hasAgentServiceDevUrl
+          ? removeAgentServiceForwardedViteArgs(input.runArgs)
+          : input.runArgs),
+      ],
       { env },
     );
     const processContext = {

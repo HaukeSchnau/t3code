@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch",
-    "dev": "node scripts/dev-runner.ts dev --no-browser",
+    "dev": "node scripts/dev-runner.ts dev --no-browser --",
     "dev:open": "node scripts/dev-runner.ts dev --no-browser=false",
     "dev:server": "node scripts/dev-runner.ts dev:server",
     "dev:web": "node scripts/dev-runner.ts dev:web",
