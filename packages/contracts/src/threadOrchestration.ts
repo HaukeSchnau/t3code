@@ -26,12 +26,14 @@ export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrch
     operation: TrimmedNonEmptyString,
     code: Schema.optional(TrimmedNonEmptyString),
     message: TrimmedNonEmptyString,
+    environmentId: Schema.optional(EnvironmentId),
     threadId: Schema.optional(ThreadId),
     projectId: Schema.optional(ProjectId),
     resourceType: Schema.optional(TrimmedNonEmptyString),
     resourceId: Schema.optional(TrimmedNonEmptyString),
     cause: Schema.optional(Schema.Defect()),
   },
+  { httpApiStatus: 400 },
 ) {}
 
 export const ThreadOrchestrationProjectSummary = Schema.Struct({
@@ -78,7 +80,7 @@ export type ThreadOrchestrationProviderSummary = typeof ThreadOrchestrationProvi
 export const ThreadOrchestrationExecutionTarget = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   hostId: EnvironmentId,
-  remoteRouting: Schema.Literal("currentEnvironmentOnly"),
+  remoteRouting: Schema.Literals(["currentEnvironmentOnly", "registeredRemote"]),
   canCreateLocalThreads: Schema.Boolean,
   canCreateWorktreeThreads: Schema.Boolean,
   providers: Schema.Array(ThreadOrchestrationProviderSummary),
@@ -94,12 +96,14 @@ export type ThreadOrchestrationListExecutionTargetsResult =
   typeof ThreadOrchestrationListExecutionTargetsResult.Type;
 
 export const ThreadOrchestrationListThreadsInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   query: Schema.optional(TrimmedNonEmptyString),
   limit: Schema.optional(PositiveInt),
 });
 export type ThreadOrchestrationListThreadsInput = typeof ThreadOrchestrationListThreadsInput.Type;
 
 export const ThreadOrchestrationThreadSummary = Schema.Struct({
+  environmentId: EnvironmentId,
   threadId: ThreadId,
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
@@ -121,6 +125,7 @@ export const ThreadOrchestrationListThreadsResult = Schema.Struct({
 export type ThreadOrchestrationListThreadsResult = typeof ThreadOrchestrationListThreadsResult.Type;
 
 export const ThreadOrchestrationReadThreadInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   turnLimit: Schema.optional(PositiveInt),
 });
@@ -135,6 +140,7 @@ export const ThreadOrchestrationThreadDetail = Schema.Struct({
 export type ThreadOrchestrationThreadDetail = typeof ThreadOrchestrationThreadDetail.Type;
 
 export const ThreadOrchestrationReadThreadResultInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
 });
 export type ThreadOrchestrationReadThreadResultInput =
@@ -153,6 +159,7 @@ export const ThreadOrchestrationAwaitUntil = Schema.Literals(["idle", "completed
 export type ThreadOrchestrationAwaitUntil = typeof ThreadOrchestrationAwaitUntil.Type;
 
 export const ThreadOrchestrationAwaitThreadInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   until: Schema.optional(ThreadOrchestrationAwaitUntil),
   timeoutMs: Schema.optional(PositiveInt),
@@ -175,6 +182,7 @@ export type ThreadOrchestrationCreateEnvironment = typeof ThreadOrchestrationCre
 
 export const ThreadOrchestrationCreateTarget = Schema.Struct({
   type: Schema.optional(Schema.Literal("project")),
+  environmentId: Schema.optional(EnvironmentId),
   projectId: Schema.optional(ProjectId),
   environment: Schema.optional(ThreadOrchestrationCreateEnvironment),
 });
@@ -215,6 +223,7 @@ export const ThreadOrchestrationForkThreadResult = Schema.Struct({
 export type ThreadOrchestrationForkThreadResult = typeof ThreadOrchestrationForkThreadResult.Type;
 
 export const ThreadOrchestrationSendMessageInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   prompt: TrimmedNonEmptyString,
   modelSelection: Schema.optional(ModelSelection),
@@ -230,6 +239,7 @@ export const ThreadOrchestrationSendMessageResult = Schema.Struct({
 export type ThreadOrchestrationSendMessageResult = typeof ThreadOrchestrationSendMessageResult.Type;
 
 export const ThreadOrchestrationSetThreadTitleInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   title: TrimmedNonEmptyString,
 });
@@ -247,13 +257,16 @@ export type ThreadOrchestrationRelationshipKind = typeof ThreadOrchestrationRela
 
 export const ThreadOrchestrationRelationship = Schema.Struct({
   kind: ThreadOrchestrationRelationshipKind,
+  actorEnvironmentId: Schema.optional(EnvironmentId),
   actorThreadId: ThreadId,
+  targetEnvironmentId: Schema.optional(EnvironmentId),
   targetThreadId: ThreadId,
   createdAt: IsoDateTime,
 });
 export type ThreadOrchestrationRelationship = typeof ThreadOrchestrationRelationship.Type;
 
 export const ThreadOrchestrationThreadGraphInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
   rootThreadId: Schema.optional(ThreadId),
   includeReadEdges: Schema.optional(Schema.Boolean),
   depth: Schema.optional(PositiveInt),
@@ -266,3 +279,67 @@ export const ThreadOrchestrationThreadGraphResult = Schema.Struct({
   edges: Schema.Array(ThreadOrchestrationRelationship),
 });
 export type ThreadOrchestrationThreadGraphResult = typeof ThreadOrchestrationThreadGraphResult.Type;
+
+export const ThreadOrchestrationActorScope = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  providerSessionId: TrimmedNonEmptyString,
+  providerInstanceId: ProviderInstanceId,
+});
+export type ThreadOrchestrationActorScope = typeof ThreadOrchestrationActorScope.Type;
+
+export const ThreadOrchestrationScopedListThreadsInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationListThreadsInput,
+});
+export type ThreadOrchestrationScopedListThreadsInput =
+  typeof ThreadOrchestrationScopedListThreadsInput.Type;
+
+export const ThreadOrchestrationScopedReadThreadInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReadThreadInput,
+});
+export type ThreadOrchestrationScopedReadThreadInput =
+  typeof ThreadOrchestrationScopedReadThreadInput.Type;
+
+export const ThreadOrchestrationScopedReadThreadResultInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReadThreadResultInput,
+});
+export type ThreadOrchestrationScopedReadThreadResultInput =
+  typeof ThreadOrchestrationScopedReadThreadResultInput.Type;
+
+export const ThreadOrchestrationScopedAwaitThreadInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationAwaitThreadInput,
+});
+export type ThreadOrchestrationScopedAwaitThreadInput =
+  typeof ThreadOrchestrationScopedAwaitThreadInput.Type;
+
+export const ThreadOrchestrationScopedThreadGraphInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationThreadGraphInput,
+});
+export type ThreadOrchestrationScopedThreadGraphInput =
+  typeof ThreadOrchestrationScopedThreadGraphInput.Type;
+
+export const ThreadOrchestrationScopedCreateThreadInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCreateThreadInput,
+});
+export type ThreadOrchestrationScopedCreateThreadInput =
+  typeof ThreadOrchestrationScopedCreateThreadInput.Type;
+
+export const ThreadOrchestrationScopedSendMessageInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationSendMessageInput,
+});
+export type ThreadOrchestrationScopedSendMessageInput =
+  typeof ThreadOrchestrationScopedSendMessageInput.Type;
+
+export const ThreadOrchestrationScopedSetThreadTitleInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationSetThreadTitleInput,
+});
+export type ThreadOrchestrationScopedSetThreadTitleInput =
+  typeof ThreadOrchestrationScopedSetThreadTitleInput.Type;

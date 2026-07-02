@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../../config.ts";
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import {
   materializeCodexShadowHome,
@@ -71,6 +72,7 @@ const make = Effect.gen(function* () {
   const providerSessionDirectory = yield* ProviderSessionDirectory;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -251,6 +253,7 @@ const make = Effect.gen(function* () {
 
       return {
         thread: {
+          environmentId: (yield* environment.getDescriptor).environmentId,
           threadId: input.threadId,
           projectId: input.project.id,
           title: input.title,

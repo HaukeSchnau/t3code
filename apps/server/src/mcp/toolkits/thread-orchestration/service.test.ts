@@ -28,6 +28,7 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
+import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
 import { ThreadOrchestrationService, layer as ThreadOrchestrationServiceLive } from "./service.ts";
 
 const actorThreadId = ThreadId.make("thread-actor");
@@ -137,6 +138,18 @@ const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter,
     ),
 });
 
+const remoteThreadOrchestrationClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
+  listExecutionTargets: () => Effect.succeed({ targets: [] }),
+  listThreads: () => Effect.die("unused remote listThreads"),
+  readThread: () => Effect.die("unused remote readThread"),
+  readThreadResult: () => Effect.die("unused remote readThreadResult"),
+  awaitThread: () => Effect.die("unused remote awaitThread"),
+  getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
+  createThread: () => Effect.die("unused remote createThread"),
+  sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
+  setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
+});
+
 const providerSnapshots: ServerProvider[] = [
   {
     instanceId: ProviderInstanceId.make("codex"),
@@ -206,6 +219,7 @@ const providerSnapshots: ServerProvider[] = [
 
 const testExecutionTargetDependencies = Layer.mergeAll(
   NodeServices.layer,
+  remoteThreadOrchestrationClientLayer,
   Layer.succeed(ServerEnvironment.ServerEnvironment, {
     getEnvironmentId: Effect.succeed(scope.environmentId),
     getDescriptor: Effect.succeed({
@@ -728,6 +742,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         importerInputs.push(input);
         return {
           thread: {
+            environmentId: scope.environmentId,
             threadId: input.threadId,
             projectId: input.project.id,
             title: input.title,
@@ -984,7 +999,7 @@ it.effect("reads compact thread results without recording read relationships", (
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.readThreadResult({ threadId: targetThreadId });
+    const result = yield* service.readThreadResult(scope, { threadId: targetThreadId });
 
     expect(result.thread.threadId).toBe(targetThreadId);
     expect(result.latestAssistantMessage).toEqual(assistantMessage);
@@ -1037,7 +1052,7 @@ it.effect("awaits idle threads without polling side effects", () => {
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.awaitThread({
+    const result = yield* service.awaitThread(scope, {
       threadId: targetThreadId,
       until: "idle",
       timeoutMs: 100,
@@ -1135,7 +1150,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const graph = yield* service.getThreadGraph({
+    const graph = yield* service.getThreadGraph(scope, {
       rootThreadId: actorThreadId,
       depth: 1,
     });

@@ -53,7 +53,7 @@ export const ListProjectsTool = readonlyTool(
 export const ListExecutionTargetsTool = readonlyTool(
   Tool.make("list_execution_targets", {
     description:
-      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing Codex, Cursor, OpenCode, or another configured provider. A returned provider model's modelSelection can be passed directly to create_thread.modelSelection. remoteRouting='currentEnvironmentOnly' means this MCP server can create threads only on its own host; run from another connected environment to create threads there.",
+      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing a host, Codex, Cursor, OpenCode, or another configured provider. A returned environment.environmentId can be passed to create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, and get_thread_graph.environmentId. A returned provider model's modelSelection can be passed directly to create_thread.modelSelection.",
     success: ThreadOrchestrationListExecutionTargetsResult,
     failure: ThreadOrchestrationError,
     dependencies,
@@ -63,7 +63,7 @@ export const ListExecutionTargetsTool = readonlyTool(
 export const ListThreadsTool = readonlyTool(
   Tool.make("list_threads", {
     description:
-      "List recent T3 Code threads available for orchestration. Optional query searches title, project, and workspace root; limit caps the number of returned summaries.",
+      "List recent T3 Code threads available for orchestration. Omit environmentId for the current host, or pass an environmentId returned by list_execution_targets to list threads on a registered remote host. Optional query searches title, project, and workspace root; limit caps the number of returned summaries.",
     parameters: ThreadOrchestrationListThreadsInput,
     success: ThreadOrchestrationListThreadsResult,
     failure: ThreadOrchestrationError,
@@ -74,7 +74,7 @@ export const ListThreadsTool = readonlyTool(
 export const ReadThreadTool = orchestrationTool(
   Tool.make("read_thread", {
     description:
-      "Read recent messages, activities, queued-message count, and status for a T3 Code thread. Reading another thread records an automatic relationship fact for the orchestration graph.",
+      "Read recent messages, activities, queued-message count, and status for a T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. Reading another thread records an automatic relationship fact for the orchestration graph.",
     parameters: ThreadOrchestrationReadThreadInput,
     success: ThreadOrchestrationThreadDetail,
     failure: ThreadOrchestrationError,
@@ -87,7 +87,7 @@ export const ReadThreadTool = orchestrationTool(
 export const ReadThreadResultTool = readonlyTool(
   Tool.make("read_thread_result", {
     description:
-      "Read compact status, queue count, latest message, and latest assistant result for a T3 Code thread without loading the full transcript or recording a read relationship.",
+      "Read compact status, queue count, latest message, and latest assistant result for a T3 Code thread without loading the full transcript or recording a read relationship. Pass environmentId to read a registered remote host.",
     parameters: ThreadOrchestrationReadThreadResultInput,
     success: ThreadOrchestrationThreadResult,
     failure: ThreadOrchestrationError,
@@ -98,7 +98,7 @@ export const ReadThreadResultTool = readonlyTool(
 export const AwaitThreadTool = readonlyTool(
   Tool.make("await_thread", {
     description:
-      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result. This is passive and does not record a read relationship.",
+      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result. This is passive and does not record a read relationship. Pass environmentId to wait on a registered remote host.",
     parameters: ThreadOrchestrationAwaitThreadInput,
     success: ThreadOrchestrationAwaitThreadResult,
     failure: ThreadOrchestrationError,
@@ -109,7 +109,7 @@ export const AwaitThreadTool = readonlyTool(
 export const GetThreadGraphTool = readonlyTool(
   Tool.make("get_thread_graph", {
     description:
-      "Read the automatic relationship graph between T3 Code threads. Provide rootThreadId/depth for a bounded neighborhood. Read edges are excluded by default; set includeReadEdges=true when auditing inspection history.",
+      "Read the automatic relationship graph between T3 Code threads in one environment. Omit environmentId for the current host, or pass a registered remote environmentId. Provide rootThreadId/depth for a bounded neighborhood. Read edges are excluded by default; set includeReadEdges=true when auditing inspection history.",
     parameters: ThreadOrchestrationThreadGraphInput,
     success: ThreadOrchestrationThreadGraphResult,
     failure: ThreadOrchestrationError,
@@ -120,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current environment, and current provider/model. Set target.projectId for another project, target.environment.type='worktree' for an isolated managed workspace, or modelSelection from list_execution_targets to choose another provider/model such as Codex, Cursor, or OpenCode. Provider choice is normally a new-thread decision; later provider changes may be rejected once the target thread has a bound provider session.",
+      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model. Set target.environmentId to create on a registered remote host, target.projectId for another project, target.environment.type='worktree' for an isolated managed workspace on that host, or modelSelection from list_execution_targets to choose another provider/model such as Codex, Cursor, or OpenCode. For remote creates, pass the remote projectId and modelSelection from list_execution_targets.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,
@@ -142,7 +142,7 @@ export const ForkThreadTool = mutatingTool(
 export const SendMessageToThreadTool = mutatingTool(
   Tool.make("send_message_to_thread", {
     description:
-      "Send or queue a user message to another T3 Code thread. The target thread decides whether the turn starts immediately or waits behind active work. modelSelection may request a model on the existing provider, but switching provider instances after a thread has started can be rejected; prefer create_thread for provider fanout.",
+      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. modelSelection may request a model on the existing provider, but switching provider instances after a thread has started can be rejected; prefer create_thread for provider fanout.",
     parameters: ThreadOrchestrationSendMessageInput,
     success: ThreadOrchestrationSendMessageResult,
     failure: ThreadOrchestrationError,
@@ -153,7 +153,7 @@ export const SendMessageToThreadTool = mutatingTool(
 export const SetThreadTitleTool = mutatingTool(
   Tool.make("set_thread_title", {
     description:
-      "Rename a T3 Code thread. Renaming another thread records an automatic relationship fact for the orchestration graph.",
+      "Rename a T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. Renaming another thread records an automatic relationship fact for the orchestration graph.",
     parameters: ThreadOrchestrationSetThreadTitleInput,
     success: ThreadOrchestrationThreadSummary,
     failure: ThreadOrchestrationError,

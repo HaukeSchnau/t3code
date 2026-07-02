@@ -24,6 +24,8 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { ThreadOrchestrationToolkitHandlersLive } from "./toolkits/thread-orchestration/handlers.ts";
 import { CodexThreadForkImporterLive } from "./toolkits/thread-orchestration/CodexThreadForkImporter.ts";
+import { layer as RemoteEnvironmentRegistryLive } from "./toolkits/thread-orchestration/RemoteEnvironmentRegistry.ts";
+import { layer as RemoteThreadOrchestrationClientLive } from "./toolkits/thread-orchestration/RemoteThreadOrchestrationClient.ts";
 import { layer as ThreadOrchestrationServiceLive } from "./toolkits/thread-orchestration/service.ts";
 import { ThreadOrchestrationToolkit } from "./toolkits/thread-orchestration/tools.ts";
 
@@ -211,7 +213,13 @@ const ThreadOrchestrationToolkitRegistrationLive = McpServer.toolkit(
   ThreadOrchestrationToolkit,
 ).pipe(
   Layer.provide(ThreadOrchestrationToolkitHandlersLive),
-  Layer.provide(ThreadOrchestrationServiceLive.pipe(Layer.provide(CodexThreadForkImporterLive))),
+  Layer.provide(
+    ThreadOrchestrationServiceLive.pipe(
+      Layer.provide(CodexThreadForkImporterLive),
+      Layer.provide(RemoteThreadOrchestrationClientLive),
+      Layer.provide(RemoteEnvironmentRegistryLive),
+    ),
+  ),
 );
 
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(

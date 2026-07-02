@@ -94,6 +94,11 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { threadOrchestrationHttpApiLayer } from "./mcp/toolkits/thread-orchestration/http.ts";
+import { CodexThreadForkImporterLive } from "./mcp/toolkits/thread-orchestration/CodexThreadForkImporter.ts";
+import { layer as RemoteEnvironmentRegistryLive } from "./mcp/toolkits/thread-orchestration/RemoteEnvironmentRegistry.ts";
+import { layer as RemoteThreadOrchestrationClientLive } from "./mcp/toolkits/thread-orchestration/RemoteThreadOrchestrationClient.ts";
+import { layer as ThreadOrchestrationServiceLive } from "./mcp/toolkits/thread-orchestration/service.ts";
 import * as NetService from "@t3tools/shared/Net";
 import * as RelayClient from "@t3tools/shared/relayClient";
 import { disableTailscaleServe, ensureTailscaleServe } from "@t3tools/tailscale";
@@ -392,6 +397,17 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(
+        threadOrchestrationHttpApiLayer.pipe(
+          Layer.provide(
+            ThreadOrchestrationServiceLive.pipe(
+              Layer.provide(CodexThreadForkImporterLive),
+              Layer.provide(RemoteThreadOrchestrationClientLive),
+              Layer.provide(RemoteEnvironmentRegistryLive),
+            ),
+          ),
+        ),
+      ),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
     ),

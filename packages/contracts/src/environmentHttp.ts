@@ -32,6 +32,26 @@ import {
   OrchestrationReadModel,
 } from "./orchestration.ts";
 import {
+  ThreadOrchestrationAwaitThreadResult,
+  ThreadOrchestrationCreateThreadResult,
+  ThreadOrchestrationError,
+  ThreadOrchestrationListExecutionTargetsResult,
+  ThreadOrchestrationListThreadsResult,
+  ThreadOrchestrationScopedAwaitThreadInput,
+  ThreadOrchestrationScopedCreateThreadInput,
+  ThreadOrchestrationScopedListThreadsInput,
+  ThreadOrchestrationScopedReadThreadInput,
+  ThreadOrchestrationScopedReadThreadResultInput,
+  ThreadOrchestrationScopedSendMessageInput,
+  ThreadOrchestrationScopedSetThreadTitleInput,
+  ThreadOrchestrationScopedThreadGraphInput,
+  ThreadOrchestrationSendMessageResult,
+  ThreadOrchestrationThreadDetail,
+  ThreadOrchestrationThreadGraphResult,
+  ThreadOrchestrationThreadResult,
+  ThreadOrchestrationThreadSummary,
+} from "./threadOrchestration.ts";
+import {
   RelayCloudEnvironmentHealthRequest,
   RelayCloudMintCredentialRequest,
   RelayEnvironmentConfigRequest,
@@ -274,6 +294,17 @@ const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentThreadOrchestrationReadErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+  ThreadOrchestrationError,
+] as const;
+const EnvironmentThreadOrchestrationOperateErrors = [
+  EnvironmentRequestInvalidError,
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+  ThreadOrchestrationError,
+] as const;
 
 export interface EnvironmentSessionPrincipalShape {
   readonly sessionId: AuthSessionId;
@@ -439,6 +470,79 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("threadOrchestration")
+  .add(
+    HttpApiEndpoint.get("listExecutionTargets", "/api/thread-orchestration/execution-targets", {
+      headers: OptionalBearerHeaders,
+      success: ThreadOrchestrationListExecutionTargetsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("listThreads", "/api/thread-orchestration/list-threads", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedListThreadsInput,
+      success: ThreadOrchestrationListThreadsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readThread", "/api/thread-orchestration/read-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadThreadInput,
+      success: ThreadOrchestrationThreadDetail,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readThreadResult", "/api/thread-orchestration/read-thread-result", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadThreadResultInput,
+      success: ThreadOrchestrationThreadResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("awaitThread", "/api/thread-orchestration/await-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedAwaitThreadInput,
+      success: ThreadOrchestrationAwaitThreadResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("getThreadGraph", "/api/thread-orchestration/graph", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedThreadGraphInput,
+      success: ThreadOrchestrationThreadGraphResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createThread", "/api/thread-orchestration/create-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCreateThreadInput,
+      success: ThreadOrchestrationCreateThreadResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("sendMessageToThread", "/api/thread-orchestration/send-message", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedSendMessageInput,
+      success: ThreadOrchestrationSendMessageResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("setThreadTitle", "/api/thread-orchestration/set-title", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedSetThreadTitleInput,
+      success: ThreadOrchestrationThreadSummary,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
+
 export class EnvironmentConnectHttpApi extends HttpApiGroup.make("connect")
   .add(
     HttpApiEndpoint.post("linkProof", "/api/connect/link-proof", {
@@ -504,4 +608,5 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentThreadOrchestrationHttpApi)
   .add(EnvironmentConnectHttpApi) {}
