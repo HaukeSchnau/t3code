@@ -20,6 +20,7 @@ export const ThreadWorkspaceKind = Schema.Literals([
 export type ThreadWorkspaceKind = typeof ThreadWorkspaceKind.Type;
 
 export const ThreadWorkspaceLifecycle = Schema.Literals([
+  "preparing",
   "active",
   "deleting",
   "deleted",

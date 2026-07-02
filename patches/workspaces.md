@@ -27,6 +27,10 @@ support non-Git backends.
   `worktreePath` fields.
 - Managed workspace records live in `projection_thread_workspaces` and
   `projection_thread_workspace_roots`.
+- Directory-copy workspace preparation persists a `preparing` workspace row before
+  starting the filesystem copy, then marks it `active` on success or `failed`
+  with `failureDetail` if provisioning fails. This keeps long-running or stuck
+  non-VCS copies visible to diagnostics and cleanup tooling.
 - Cwd resolution prefers the workspace primary root checkout path, then falls
   back to legacy `worktreePath`, then the project root.
 - Git workspaces are created with `git worktree add --detach`.
