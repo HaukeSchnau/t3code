@@ -2,6 +2,21 @@
 
 T3 Code exposes Desktop-style thread orchestration primitives to Codex-backed agents.
 
+The patch exposes `list_execution_targets` as the discovery entrypoint for
+orchestrators. It returns the current environment descriptor, host id, routability
+state, projects, provider instances, models, model capabilities, and exact
+`modelSelection` objects that can be passed to `create_thread.modelSelection`.
+This lets agents fan out across configured providers such as Codex, Cursor, and
+OpenCode without guessing provider instance ids or model slugs.
+
+Remote host orchestration is represented explicitly but conservatively:
+`remoteRouting: "currentEnvironmentOnly"` means this MCP server can create and
+inspect threads only on the host that issued the provider-scoped MCP credential.
+T3 Code's web client can route by `environmentId`, but the server-side MCP layer
+does not yet own a backend-to-backend environment connection registry. When that
+exists, `list_execution_targets` is the intended place to surface routable remote
+hosts before adding remote create/read/send behavior.
+
 This fork-specific patch extends the existing MCP thread toolkit with compact passive
 observability tools:
 

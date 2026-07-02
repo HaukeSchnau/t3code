@@ -17,6 +17,7 @@ import {
   type ThreadOrchestrationCreateThreadResult,
   type ThreadOrchestrationForkThreadInput,
   type ThreadOrchestrationForkThreadResult,
+  type ThreadOrchestrationListExecutionTargetsResult,
   type ThreadOrchestrationListProjectsResult,
   type ThreadOrchestrationListThreadsInput,
   type ThreadOrchestrationListThreadsResult,
@@ -42,8 +43,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 
@@ -59,6 +62,10 @@ export class ThreadOrchestrationService extends Context.Service<
   {
     readonly listProjects: () => Effect.Effect<
       ThreadOrchestrationListProjectsResult,
+      ThreadOrchestrationError
+    >;
+    readonly listExecutionTargets: () => Effect.Effect<
+      ThreadOrchestrationListExecutionTargetsResult,
       ThreadOrchestrationError
     >;
     readonly listThreads: (
@@ -267,6 +274,8 @@ const make = Effect.gen(function* () {
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const workspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
   const codexThreadForkImporter = yield* CodexThreadForkImporter;
+  const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
+  const providerRegistry = yield* ProviderRegistry;
   const crypto = yield* Crypto.Crypto;
 
   const snapshot = snapshotQuery
@@ -389,10 +398,76 @@ const make = Effect.gen(function* () {
           projectId: project.id,
           title: project.title,
           workspaceRoot: project.workspaceRoot,
+          defaultModelSelection: project.defaultModelSelection,
           updatedAt: project.updatedAt,
         })),
       })),
     );
+
+  const listExecutionTargets = () =>
+    Effect.gen(function* () {
+      const [model, descriptor, providers] = yield* Effect.all(
+        [
+          shellSnapshot,
+          serverEnvironment.getDescriptor.pipe(
+            Effect.mapError(toThreadOrchestrationError("list_execution_targets.environment")),
+          ),
+          providerRegistry.getProviders.pipe(
+            Effect.mapError(toThreadOrchestrationError("list_execution_targets.providers")),
+          ),
+        ],
+        { concurrency: "unbounded" },
+      );
+
+      const projects = model.projects.toSorted(compareUpdatedDesc).map((project) => ({
+        projectId: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        defaultModelSelection: project.defaultModelSelection,
+        updatedAt: project.updatedAt,
+      }));
+
+      return {
+        targets: [
+          {
+            environment: descriptor,
+            hostId: descriptor.environmentId,
+            remoteRouting: "currentEnvironmentOnly" as const,
+            canCreateLocalThreads: true,
+            canCreateWorktreeThreads: true,
+            providers: providers.map((provider) => ({
+              instanceId: provider.instanceId,
+              driver: provider.driver,
+              ...(provider.displayName !== undefined ? { displayName: provider.displayName } : {}),
+              enabled: provider.enabled,
+              installed: provider.installed,
+              status: provider.status,
+              authStatus: provider.auth.status,
+              availability: provider.availability ?? "available",
+              requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange ?? false,
+              models: provider.models.map((model) => ({
+                slug: model.slug,
+                name: model.name,
+                ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
+                ...(model.subProvider !== undefined ? { subProvider: model.subProvider } : {}),
+                isCustom: model.isCustom,
+                capabilities: model.capabilities,
+                modelSelection: {
+                  instanceId: provider.instanceId,
+                  model: model.slug,
+                },
+              })),
+            })),
+            projects,
+            notes: [
+              "Pass a provider model's modelSelection directly to create_thread.modelSelection to choose that provider/model for a new thread.",
+              "This MCP server can create and inspect threads only in its current execution environment. To create on another host, use a thread whose provider session is running on that host.",
+              "Provider instance changes after a thread starts may be rejected; use provider fanout by creating separate threads.",
+            ],
+          },
+        ],
+      };
+    });
 
   const listThreads = (input: ThreadOrchestrationListThreadsInput) =>
     shellSnapshot.pipe(
@@ -930,6 +1005,7 @@ const make = Effect.gen(function* () {
 
   return ThreadOrchestrationService.of({
     listProjects,
+    listExecutionTargets,
     listThreads,
     readThread,
     readThreadResult,

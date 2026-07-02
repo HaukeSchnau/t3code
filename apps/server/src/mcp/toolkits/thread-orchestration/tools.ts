@@ -6,6 +6,7 @@ import {
   ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationForkThreadInput,
   ThreadOrchestrationForkThreadResult,
+  ThreadOrchestrationListExecutionTargetsResult,
   ThreadOrchestrationListProjectsResult,
   ThreadOrchestrationListThreadsInput,
   ThreadOrchestrationListThreadsResult,
@@ -42,11 +43,21 @@ const readonlyTool = <T extends Tool.Any>(tool: T): T =>
 export const ListProjectsTool = readonlyTool(
   Tool.make("list_projects", {
     description:
-      "List T3 Code projects that can host background agent threads. Use a returned projectId with create_thread.",
+      "List T3 Code projects in this execution environment that can host background agent threads. Use list_execution_targets first when choosing between providers/models.",
     success: ThreadOrchestrationListProjectsResult,
     failure: ThreadOrchestrationError,
     dependencies,
   }).annotate(Tool.Title, "List projects"),
+);
+
+export const ListExecutionTargetsTool = readonlyTool(
+  Tool.make("list_execution_targets", {
+    description:
+      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing Codex, Cursor, OpenCode, or another configured provider. A returned provider model's modelSelection can be passed directly to create_thread.modelSelection. remoteRouting='currentEnvironmentOnly' means this MCP server can create threads only on its own host; run from another connected environment to create threads there.",
+    success: ThreadOrchestrationListExecutionTargetsResult,
+    failure: ThreadOrchestrationError,
+    dependencies,
+  }).annotate(Tool.Title, "List execution targets"),
 );
 
 export const ListThreadsTool = readonlyTool(
@@ -109,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a T3 Code thread in a project and submit its first prompt. Use target.environment.type='local' for the project checkout or 'worktree' for an isolated managed workspace.",
+      "Create a T3 Code thread in a project and submit its first prompt. Use target.environment.type='local' for the project checkout or 'worktree' for an isolated managed workspace. To choose a provider/model such as Codex, Cursor, or OpenCode, pass a modelSelection returned by list_execution_targets. Provider choice is normally a new-thread decision; later provider changes may be rejected once the target thread has a bound provider session.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,
@@ -131,7 +142,7 @@ export const ForkThreadTool = mutatingTool(
 export const SendMessageToThreadTool = mutatingTool(
   Tool.make("send_message_to_thread", {
     description:
-      "Send or queue a user message to another T3 Code thread. The target thread decides whether the turn starts immediately or waits behind active work.",
+      "Send or queue a user message to another T3 Code thread. The target thread decides whether the turn starts immediately or waits behind active work. modelSelection may request a model on the existing provider, but switching provider instances after a thread has started can be rejected; prefer create_thread for provider fanout.",
     parameters: ThreadOrchestrationSendMessageInput,
     success: ThreadOrchestrationSendMessageResult,
     failure: ThreadOrchestrationError,
@@ -151,6 +162,7 @@ export const SetThreadTitleTool = mutatingTool(
 );
 
 export const ThreadOrchestrationToolkit = Toolkit.make(
+  ListExecutionTargetsTool,
   ListProjectsTool,
   ListThreadsTool,
   ReadThreadTool,

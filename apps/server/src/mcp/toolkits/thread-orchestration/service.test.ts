@@ -8,9 +8,11 @@ import {
   ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
+  type ServerProvider,
   type OrchestrationCommand,
   type OrchestrationProject,
   type OrchestrationReadModel,
+  type OrchestrationShellSnapshot,
   type OrchestrationThread,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -21,6 +23,8 @@ import * as Stream from "effect/Stream";
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationCommandInvariantError } from "../../../orchestration/Errors.ts";
+import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
+import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
@@ -89,6 +93,36 @@ const readModel: OrchestrationReadModel = {
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
+const makeThreadShell = (
+  thread: OrchestrationThread,
+): OrchestrationShellSnapshot["threads"][number] => ({
+  id: thread.id,
+  projectId: thread.projectId,
+  title: thread.title,
+  modelSelection: thread.modelSelection,
+  runtimeMode: thread.runtimeMode,
+  interactionMode: thread.interactionMode,
+  branch: thread.branch,
+  worktreePath: thread.worktreePath,
+  workspaceId: thread.workspaceId,
+  latestTurn: thread.latestTurn,
+  createdAt: thread.createdAt,
+  updatedAt: thread.updatedAt,
+  archivedAt: thread.archivedAt,
+  session: thread.session,
+  latestUserMessageAt: null,
+  hasPendingApprovals: false,
+  hasPendingUserInput: false,
+  hasActionableProposedPlan: false,
+});
+
+const shellSnapshot: OrchestrationShellSnapshot = {
+  snapshotSequence: readModel.snapshotSequence,
+  projects: readModel.projects.map(({ deletedAt: _deletedAt, ...project }) => project),
+  threads: readModel.threads.map(makeThreadShell),
+  updatedAt: readModel.updatedAt,
+};
+
 const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
   fork: (input) =>
     Effect.fail(
@@ -99,6 +133,233 @@ const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter,
         threadId: input.sourceThread.id,
       }),
     ),
+});
+
+const providerSnapshots: ServerProvider[] = [
+  {
+    instanceId: ProviderInstanceId.make("codex"),
+    driver: "codex" as ServerProvider["driver"],
+    displayName: "Codex",
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [
+      {
+        slug: "gpt-5.4",
+        name: "GPT-5.4",
+        isCustom: false,
+        capabilities: null,
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  },
+  {
+    instanceId: ProviderInstanceId.make("cursor"),
+    driver: "cursor" as ServerProvider["driver"],
+    displayName: "Cursor",
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    requiresNewThreadForModelChange: true,
+    models: [
+      {
+        slug: "composer-2",
+        name: "Composer 2",
+        isCustom: false,
+        capabilities: null,
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  },
+  {
+    instanceId: ProviderInstanceId.make("opencode"),
+    driver: "opencode" as ServerProvider["driver"],
+    displayName: "OpenCode",
+    enabled: true,
+    installed: true,
+    version: "1.0.0",
+    status: "ready",
+    auth: { status: "authenticated" },
+    checkedAt: "2026-01-01T00:00:00.000Z",
+    models: [
+      {
+        slug: "openai/gpt-5",
+        name: "OpenAI GPT-5",
+        isCustom: false,
+        capabilities: null,
+      },
+    ],
+    slashCommands: [],
+    skills: [],
+  },
+];
+
+const testExecutionTargetDependencies = Layer.mergeAll(
+  NodeServices.layer,
+  Layer.succeed(ServerEnvironment.ServerEnvironment, {
+    getEnvironmentId: Effect.succeed(scope.environmentId),
+    getDescriptor: Effect.succeed({
+      environmentId: scope.environmentId,
+      label: "MacBook",
+      platform: { os: "darwin", arch: "arm64" },
+      serverVersion: "0.0.0-test",
+      capabilities: { repositoryIdentity: true },
+    } as const),
+  }),
+  Layer.succeed(ProviderRegistry, {
+    getProviders: Effect.succeed(providerSnapshots),
+    refresh: () => Effect.succeed(providerSnapshots),
+    refreshInstance: () => Effect.succeed(providerSnapshots),
+    getProviderMaintenanceCapabilitiesForInstance: () =>
+      Effect.die("unused provider maintenance capabilities"),
+    setProviderMaintenanceActionState: () => Effect.succeed(providerSnapshots),
+    streamChanges: Stream.empty,
+  }),
+);
+
+it.effect("lists execution targets with provider model selections and project defaults", () => {
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("unused"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.succeed(shellSnapshot),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testExecutionTargetDependencies),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.listExecutionTargets();
+
+    expect(result.targets).toHaveLength(1);
+    expect(result.targets[0]).toMatchObject({
+      hostId: scope.environmentId,
+      remoteRouting: "currentEnvironmentOnly",
+      environment: {
+        environmentId: scope.environmentId,
+        label: "MacBook",
+      },
+      canCreateLocalThreads: true,
+      canCreateWorktreeThreads: true,
+      projects: [
+        {
+          projectId,
+          defaultModelSelection: project.defaultModelSelection,
+        },
+      ],
+    });
+    expect(
+      result.targets[0]?.providers.map((provider) => ({
+        instanceId: provider.instanceId,
+        driver: provider.driver,
+        models: provider.models.map((model) => model.modelSelection),
+      })),
+    ).toEqual([
+      {
+        instanceId: ProviderInstanceId.make("codex"),
+        driver: "codex",
+        models: [{ instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" }],
+      },
+      {
+        instanceId: ProviderInstanceId.make("cursor"),
+        driver: "cursor",
+        models: [{ instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" }],
+      },
+      {
+        instanceId: ProviderInstanceId.make("opencode"),
+        driver: "opencode",
+        models: [{ instanceId: ProviderInstanceId.make("opencode"), model: "openai/gpt-5" }],
+      },
+    ]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("lists projects with default model selections", () => {
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("unused"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.succeed(shellSnapshot),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testExecutionTargetDependencies),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.listProjects();
+
+    expect(result.projects).toEqual([
+      {
+        projectId,
+        title: "Project",
+        workspaceRoot: "/repo/project",
+        defaultModelSelection: project.defaultModelSelection,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ]);
+  }).pipe(Effect.provide(testLayer));
 });
 
 it.effect("queues cross-thread messages and records relationship activities", () => {
@@ -140,7 +401,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -217,7 +478,7 @@ it.effect("creates threads before starting their initial turn", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -332,7 +593,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -444,7 +705,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
           }),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -526,7 +787,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -633,7 +894,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
           }),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -721,7 +982,7 @@ it.effect("reads compact thread results without recording read relationships", (
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -774,7 +1035,7 @@ it.effect("awaits idle threads without polling side effects", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
@@ -872,7 +1133,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provide(testExecutionTargetDependencies),
   );
 
   return Effect.gen(function* () {
