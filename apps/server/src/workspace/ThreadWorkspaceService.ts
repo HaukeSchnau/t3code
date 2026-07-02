@@ -3,8 +3,10 @@
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   ProjectId,
   ThreadId,
@@ -25,6 +27,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import type {
   PrepareThreadWorkspaceInput,
   PrepareThreadWorkspaceRootInput,
@@ -61,6 +64,19 @@ export interface PreparedThreadWorkspace {
   readonly primaryCwd: string;
   readonly compatibilityWorktreePath: string | null;
   readonly compatibilityBranch: string | null;
+}
+
+interface DirectoryCopyPreflight {
+  readonly sourceBytes: number;
+  readonly maxSourceBytes: number;
+  readonly availableBytes: number;
+  readonly requiredAvailableBytes: number;
+}
+
+interface DirectoryCopyCommand {
+  readonly command: string;
+  readonly args: ReadonlyArray<string>;
+  readonly strategy: "copy-on-write" | "recursive-copy" | "rsync";
 }
 
 interface WorkspaceRootRow {
@@ -201,6 +217,145 @@ function failureDetailFromCause(cause: unknown): string {
   return String(cause);
 }
 
+const DIRECTORY_COPY_MAX_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024;
+const DIRECTORY_COPY_MIN_FREE_BYTES = 1024 * 1024 * 1024;
+const DIRECTORY_COPY_DU_TIMEOUT = "30 seconds";
+const DIRECTORY_COPY_TIMEOUT = "20 minutes";
+
+function directoryCopyMaxBytes(): number {
+  const raw = process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES;
+  if (raw === undefined) {
+    return DIRECTORY_COPY_MAX_BYTES_DEFAULT;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DIRECTORY_COPY_MAX_BYTES_DEFAULT;
+}
+
+function formatBytes(bytes: number): string {
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"] as const;
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
+}
+
+function normalizePathForComparison(path: string, platform: NodeJS.Platform): string {
+  const resolved = NodePath.resolve(path);
+  return platform === "win32" ? resolved.toLowerCase() : resolved;
+}
+
+function realpathForPotentialPath(path: string): string {
+  const resolvedPath = NodePath.resolve(path);
+  const missingSegments: string[] = [];
+  let existingAncestor = resolvedPath;
+  while (!NodeFS.existsSync(existingAncestor)) {
+    const parent = NodePath.dirname(existingAncestor);
+    if (parent === existingAncestor) {
+      return resolvedPath;
+    }
+    missingSegments.unshift(NodePath.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  try {
+    return NodePath.join(NodeFS.realpathSync.native(existingAncestor), ...missingSegments);
+  } catch {
+    return resolvedPath;
+  }
+}
+
+function isSameOrDescendantPath(
+  candidatePath: string,
+  parentPath: string,
+  platform: NodeJS.Platform,
+): boolean {
+  const candidate = normalizePathForComparison(candidatePath, platform);
+  const parent = normalizePathForComparison(parentPath, platform);
+  const relative = NodePath.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (relative.length > 0 && !relative.startsWith("..") && !NodePath.isAbsolute(relative))
+  );
+}
+
+function safeRealpath(path: string): string {
+  try {
+    return NodeFS.realpathSync.native(path);
+  } catch {
+    return NodePath.resolve(path);
+  }
+}
+
+function pathEquals(left: string, right: string, platform: NodeJS.Platform): boolean {
+  return normalizePathForComparison(left, platform) === normalizePathForComparison(right, platform);
+}
+
+function sensitiveDirectoryCopyRootReason(input: {
+  readonly sourcePath: string;
+  readonly checkoutPath: string;
+  readonly baseDir: string;
+  readonly workspacesDir: string;
+  readonly platform: NodeJS.Platform;
+}): string | null {
+  if (isSameOrDescendantPath(input.checkoutPath, input.sourcePath, input.platform)) {
+    return `Directory-copy checkout '${input.checkoutPath}' would be created inside source '${input.sourcePath}'.`;
+  }
+
+  const homeDir = NodeOS.homedir();
+  const sensitiveRoots = [
+    NodePath.parse(input.sourcePath).root,
+    homeDir,
+    safeRealpath(input.baseDir),
+    safeRealpath(input.workspacesDir),
+    NodePath.join(homeDir, ".t3"),
+    NodePath.join(homeDir, ".codex"),
+    NodePath.join(homeDir, ".ssh"),
+    NodePath.join(homeDir, "Library"),
+  ];
+  const matched = sensitiveRoots.find((sensitiveRoot) =>
+    pathEquals(input.sourcePath, sensitiveRoot, input.platform),
+  );
+  return matched
+    ? `Directory-copy workspaces cannot be created from sensitive root '${matched}'.`
+    : null;
+}
+
+function availableBytesForPath(path: string): number {
+  const stat = NodeFS.statfsSync(path);
+  return Number(stat.bavail) * Number(stat.bsize);
+}
+
+function primaryDirectoryCopyCommand(
+  sourcePath: string,
+  checkoutPath: string,
+  platform: NodeJS.Platform,
+): DirectoryCopyCommand {
+  if (platform === "darwin") {
+    return {
+      command: "/bin/cp",
+      args: ["-cR", sourcePath, checkoutPath],
+      strategy: "copy-on-write",
+    };
+  }
+  return {
+    command: "cp",
+    args: ["-R", sourcePath, checkoutPath],
+    strategy: "recursive-copy",
+  };
+}
+
+function rsyncDirectoryCopyCommand(sourcePath: string, checkoutPath: string): DirectoryCopyCommand {
+  return {
+    command: "rsync",
+    args: ["-a", `${sourcePath.replace(/\/$/, "")}/`, `${checkoutPath}/`],
+    strategy: "rsync",
+  };
+}
+
 function resolveJjRevision(cwd: string, revision: string | null | undefined): string | null {
   const trimmed = revision?.trim();
   if (!trimmed) {
@@ -271,6 +426,8 @@ export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const config = yield* ServerConfig.ServerConfig;
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
+  const processRunner = yield* ProcessRunner.ProcessRunner;
+  const hostPlatform = yield* HostProcessPlatform;
 
   const workspacesDir = NodePath.join(config.baseDir, "workspaces");
 
@@ -458,6 +615,159 @@ export const make = Effect.gen(function* () {
     });
   };
 
+  const measureDirectoryBytes = Effect.fn("ThreadWorkspaceService.measureDirectoryBytes")(
+    function* (sourcePath: string) {
+      const result = yield* processRunner
+        .run({
+          command: "du",
+          args: ["-sk", sourcePath],
+          cwd: "/",
+          timeout: DIRECTORY_COPY_DU_TIMEOUT,
+          maxOutputBytes: 1024,
+          outputMode: "truncate",
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ThreadWorkspaceError({
+                operation: "ThreadWorkspaceService.measureDirectoryBytes",
+                detail: `Failed to measure directory size for '${sourcePath}'.`,
+                cause,
+              }),
+          ),
+        );
+      if (result.code !== 0) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.measureDirectoryBytes",
+          detail:
+            result.stderr.trim() ||
+            `du exited with ${result.code ?? "no exit code"} while measuring '${sourcePath}'.`,
+        });
+      }
+      const kibibytes = Number.parseInt(result.stdout.trim().split(/\s+/)[0] ?? "", 10);
+      if (!Number.isFinite(kibibytes)) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.measureDirectoryBytes",
+          detail: `du returned an unparseable size for '${sourcePath}'.`,
+        });
+      }
+      return kibibytes * 1024;
+    },
+  );
+
+  const preflightDirectoryCopy = Effect.fn("ThreadWorkspaceService.preflightDirectoryCopy")(
+    function* (input: {
+      readonly sourcePath: string;
+      readonly checkoutPath: string;
+    }): Effect.fn.Return<DirectoryCopyPreflight, ThreadWorkspaceError> {
+      const sourcePath = yield* Effect.try({
+        try: () => NodeFS.realpathSync.native(input.sourcePath),
+        catch: (cause) =>
+          new ThreadWorkspaceError({
+            operation: "ThreadWorkspaceService.preflightDirectoryCopy.realpath",
+            detail: `Directory-copy source '${input.sourcePath}' could not be resolved.`,
+            cause,
+          }),
+      });
+      const sourceStat = yield* Effect.try({
+        try: () => NodeFS.statSync(sourcePath),
+        catch: (cause) =>
+          new ThreadWorkspaceError({
+            operation: "ThreadWorkspaceService.preflightDirectoryCopy.stat",
+            detail: `Directory-copy source '${sourcePath}' could not be inspected.`,
+            cause,
+          }),
+      });
+      if (!sourceStat.isDirectory()) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.preflightDirectoryCopy",
+          detail: `Directory-copy source '${sourcePath}' is not a directory.`,
+        });
+      }
+      const checkoutPath = realpathForPotentialPath(input.checkoutPath);
+      const unsafeRootReason = sensitiveDirectoryCopyRootReason({
+        sourcePath,
+        checkoutPath,
+        baseDir: config.baseDir,
+        workspacesDir,
+        platform: hostPlatform,
+      });
+      if (unsafeRootReason) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.preflightDirectoryCopy",
+          detail: unsafeRootReason,
+        });
+      }
+      if (NodeFS.existsSync(input.checkoutPath)) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.preflightDirectoryCopy",
+          detail: `Directory-copy checkout '${input.checkoutPath}' already exists.`,
+        });
+      }
+
+      NodeFS.mkdirSync(NodePath.dirname(input.checkoutPath), { recursive: true });
+      const sourceBytes = yield* measureDirectoryBytes(sourcePath);
+      const maxSourceBytes = directoryCopyMaxBytes();
+      if (sourceBytes > maxSourceBytes) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.preflightDirectoryCopy",
+          detail: `Directory-copy source '${sourcePath}' is ${formatBytes(sourceBytes)}, exceeding the ${formatBytes(maxSourceBytes)} limit.`,
+        });
+      }
+
+      const availableBytes = availableBytesForPath(NodePath.dirname(input.checkoutPath));
+      const requiredAvailableBytes = Math.max(
+        DIRECTORY_COPY_MIN_FREE_BYTES,
+        Math.ceil(sourceBytes * 1.1),
+      );
+      if (availableBytes < requiredAvailableBytes) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.preflightDirectoryCopy",
+          detail: `Directory-copy checkout '${input.checkoutPath}' needs ${formatBytes(requiredAvailableBytes)} free but only ${formatBytes(availableBytes)} is available.`,
+        });
+      }
+
+      return {
+        sourceBytes,
+        maxSourceBytes,
+        availableBytes,
+        requiredAvailableBytes,
+      };
+    },
+  );
+
+  const runDirectoryCopyCommand = Effect.fn("ThreadWorkspaceService.runDirectoryCopyCommand")(
+    function* (copyCommand: DirectoryCopyCommand) {
+      const result = yield* processRunner
+        .run({
+          command: copyCommand.command,
+          args: copyCommand.args,
+          cwd: "/",
+          timeout: DIRECTORY_COPY_TIMEOUT,
+          maxOutputBytes: 256 * 1024,
+          outputMode: "truncate",
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ThreadWorkspaceError({
+                operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${copyCommand.strategy}`,
+                detail: `Directory-copy ${copyCommand.strategy} process failed.`,
+                cause,
+              }),
+          ),
+        );
+      if (result.code !== 0) {
+        return yield* new ThreadWorkspaceError({
+          operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${copyCommand.strategy}`,
+          detail:
+            result.stderr.trim() ||
+            `${copyCommand.command} exited with ${result.code ?? "no exit code"}.`,
+        });
+      }
+    },
+  );
+
   const prepareGitWorkspace = Effect.fn("ThreadWorkspaceService.prepareGitWorkspace")(function* (
     input: PrepareThreadWorkspaceInput,
   ) {
@@ -599,39 +909,75 @@ export const make = Effect.gen(function* () {
       },
     });
     yield* persistWorkspace(preparingWorkspace);
-    NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
-    const copyDirectory = Effect.try({
-      try: () =>
-        runCommand({
-          command: "/bin/cp",
-          args: ["-cR", root.sourcePath, checkoutPath],
-          cwd: "/",
-        }),
-      catch: (cause) =>
-        new ThreadWorkspaceError({
-          operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.cp",
-          detail: "Failed to copy project directory with cp.",
-          cause,
-        }),
-    }).pipe(
-      Effect.catch(() =>
-        Effect.try({
-          try: () => {
-            NodeFS.mkdirSync(checkoutPath, { recursive: true });
-            return runCommand({
-              command: "rsync",
-              args: ["-a", `${root.sourcePath.replace(/\/$/, "")}/`, `${checkoutPath}/`],
-              cwd: "/",
-            });
+    const preflightExit = yield* Effect.exit(
+      preflightDirectoryCopy({
+        sourcePath: root.sourcePath,
+        checkoutPath,
+      }),
+    );
+    if (Exit.isFailure(preflightExit)) {
+      const cause = Cause.squash(preflightExit.cause);
+      const failedAt = nowIso();
+      yield* persistWorkspace(
+        makeWorkspace({
+          request: input,
+          kind: "directory-copy",
+          checkoutPath,
+          vcsKind: "unknown",
+          lifecycle: "failed",
+          createdAt: startedAt,
+          updatedAt: failedAt,
+          failureDetail: failureDetailFromCause(cause),
+          metadata: {
+            provisioner: "directory-copy",
+            preparationStatus: "failed",
+            preparationStartedAt: startedAt,
+            preparationFailedAt: failedAt,
           },
-          catch: (cause) =>
-            new ThreadWorkspaceError({
-              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.rsync",
-              detail: "Failed to copy project directory with rsync.",
-              cause,
-            }),
         }),
-      ),
+      );
+      return yield* new ThreadWorkspaceError({
+        operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
+        detail: failureDetailFromCause(cause),
+        cause,
+      });
+    }
+
+    const preflight = preflightExit.value;
+    const primaryCopyCommand = primaryDirectoryCopyCommand(
+      root.sourcePath,
+      checkoutPath,
+      hostPlatform,
+    );
+    const copyingAt = nowIso();
+    yield* persistWorkspace(
+      makeWorkspace({
+        request: input,
+        kind: "directory-copy",
+        checkoutPath,
+        vcsKind: "unknown",
+        lifecycle: "preparing",
+        createdAt: startedAt,
+        updatedAt: copyingAt,
+        metadata: {
+          provisioner: "directory-copy",
+          preparationStatus: "copying",
+          preparationStartedAt: startedAt,
+          copyStartedAt: copyingAt,
+          copyStrategy: primaryCopyCommand.strategy,
+          sourceBytes: preflight.sourceBytes,
+          maxSourceBytes: preflight.maxSourceBytes,
+          availableBytes: preflight.availableBytes,
+          requiredAvailableBytes: preflight.requiredAvailableBytes,
+        },
+      }),
+    );
+
+    const copyDirectory = runDirectoryCopyCommand(primaryCopyCommand).pipe(
+      Effect.catch(() => {
+        NodeFS.mkdirSync(checkoutPath, { recursive: true });
+        return runDirectoryCopyCommand(rsyncDirectoryCopyCommand(root.sourcePath, checkoutPath));
+      }),
     );
     const copyExit = yield* Effect.exit(copyDirectory);
     if (Exit.isFailure(copyExit)) {
@@ -651,7 +997,13 @@ export const make = Effect.gen(function* () {
             provisioner: "directory-copy",
             preparationStatus: "failed",
             preparationStartedAt: startedAt,
+            copyStartedAt: copyingAt,
             preparationFailedAt: failedAt,
+            attemptedCopyStrategy: primaryCopyCommand.strategy,
+            sourceBytes: preflight.sourceBytes,
+            maxSourceBytes: preflight.maxSourceBytes,
+            availableBytes: preflight.availableBytes,
+            requiredAvailableBytes: preflight.requiredAvailableBytes,
           },
         }),
       );
@@ -674,6 +1026,12 @@ export const make = Effect.gen(function* () {
         preparationStatus: "ready",
         preparationStartedAt: startedAt,
         preparationCompletedAt: completedAt,
+        copyStartedAt: copyingAt,
+        copyStrategy: primaryCopyCommand.strategy,
+        sourceBytes: preflight.sourceBytes,
+        maxSourceBytes: preflight.maxSourceBytes,
+        availableBytes: preflight.availableBytes,
+        requiredAvailableBytes: preflight.requiredAvailableBytes,
       },
     });
     yield* persistWorkspace(workspace);
