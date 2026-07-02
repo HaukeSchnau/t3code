@@ -209,6 +209,27 @@ describe("environmentBootstrap", () => {
     );
   });
 
+  it("uses the public current origin for loopback targets behind a reverse proxy", async () => {
+    vi.stubEnv("VITE_HTTP_URL", "http://localhost:13773");
+    vi.stubEnv("VITE_WS_URL", "ws://localhost:13773");
+    vi.stubGlobal("window", {
+      location: new URL("https://t3code.example.com/"),
+      history: {
+        replaceState: vi.fn(),
+      },
+    });
+    await installDescriptorApi();
+
+    await expect(resolveInitialPrimaryEnvironmentDescriptor()).resolves.toEqual(BASE_ENVIRONMENT);
+    expect(resolvePrimaryEnvironmentHttpUrl("/.well-known/t3/environment")).toBe(
+      "https://t3code.example.com/.well-known/t3/environment",
+    );
+    expect(readPrimaryEnvironmentTarget().target).toEqual({
+      httpBaseUrl: "https://t3code.example.com/",
+      wsBaseUrl: "wss://t3code.example.com/",
+    });
+  });
+
   it("retains the URL parser cause without exposing the configured URL in its message", () => {
     vi.stubEnv("VITE_HTTP_URL", "http://[");
 

@@ -146,23 +146,46 @@ export function isLoopbackHostname(hostname: string): boolean {
   );
 }
 
-function resolveHttpRequestBaseUrl(primaryTarget: PrimaryEnvironmentTarget): string {
-  const httpBaseUrl = primaryTarget.target.httpBaseUrl;
-  const configuredDevServerUrl = import.meta.env.VITE_DEV_SERVER_URL?.trim();
-  if (!configuredDevServerUrl) {
-    return httpBaseUrl;
-  }
-
-  const currentUrl = parseTargetUrl({
-    rawValue: window.location.href,
+function readWindowLocationUrl(): URL {
+  return parseTargetUrl({
+    rawValue: window.location.href || window.location.origin,
     source: "window-origin",
     urlKind: "window-location-url",
   });
-  const targetUrl = parseTargetUrl({
-    rawValue: httpBaseUrl,
-    source: primaryTarget.source,
-    urlKind: "http-base-url",
-  });
+}
+
+function webSocketBaseUrlFromHttpOrigin(currentUrl: URL): string {
+  const wsUrl = new URL(currentUrl.origin);
+  if (wsUrl.protocol === "http:") {
+    wsUrl.protocol = "ws:";
+  } else if (wsUrl.protocol === "https:") {
+    wsUrl.protocol = "wss:";
+  }
+  return wsUrl.toString();
+}
+
+function shouldRouteLoopbackTargetThroughWindowOrigin(input: {
+  readonly currentUrl: URL;
+  readonly targetUrl: URL;
+}): boolean {
+  const { currentUrl, targetUrl } = input;
+  if (
+    (currentUrl.protocol !== "http:" && currentUrl.protocol !== "https:") ||
+    currentUrl.origin === targetUrl.origin ||
+    !isLoopbackHostname(targetUrl.hostname)
+  ) {
+    return false;
+  }
+
+  if (!isLoopbackHostname(currentUrl.hostname)) {
+    return true;
+  }
+
+  const configuredDevServerUrl = import.meta.env.VITE_DEV_SERVER_URL?.trim();
+  if (!configuredDevServerUrl) {
+    return false;
+  }
+
   const devServerUrl = parseTargetUrl({
     rawValue: configuredDevServerUrl,
     baseUrl: currentUrl.origin,
@@ -170,20 +193,44 @@ function resolveHttpRequestBaseUrl(primaryTarget: PrimaryEnvironmentTarget): str
     urlKind: "development-server-url",
   });
 
-  const isCurrentOriginDevServer =
-    (currentUrl.protocol === "http:" || currentUrl.protocol === "https:") &&
-    currentUrl.origin === devServerUrl.origin;
+  return currentUrl.origin === devServerUrl.origin;
+}
 
-  if (
-    !isCurrentOriginDevServer ||
-    currentUrl.origin === targetUrl.origin ||
-    !isLoopbackHostname(currentUrl.hostname) ||
-    !isLoopbackHostname(targetUrl.hostname)
-  ) {
-    return httpBaseUrl;
+function resolveLoopbackTargetThroughWindowOrigin(
+  primaryTarget: PrimaryEnvironmentTarget,
+): PrimaryEnvironmentTarget {
+  const currentUrl = readWindowLocationUrl();
+  const targetUrl = parseTargetUrl({
+    rawValue: primaryTarget.target.httpBaseUrl,
+    source: primaryTarget.source,
+    urlKind: "http-base-url",
+  });
+
+  if (!shouldRouteLoopbackTargetThroughWindowOrigin({ currentUrl, targetUrl })) {
+    return primaryTarget;
   }
 
-  return currentUrl.origin;
+  return {
+    ...primaryTarget,
+    target: {
+      httpBaseUrl: new URL(currentUrl.origin).toString(),
+      wsBaseUrl: webSocketBaseUrlFromHttpOrigin(currentUrl),
+    },
+  };
+}
+
+function resolveHttpRequestBaseUrl(primaryTarget: PrimaryEnvironmentTarget): string {
+  const httpBaseUrl = primaryTarget.target.httpBaseUrl;
+  const currentUrl = readWindowLocationUrl();
+  const targetUrl = parseTargetUrl({
+    rawValue: httpBaseUrl,
+    source: primaryTarget.source,
+    urlKind: "http-base-url",
+  });
+
+  return shouldRouteLoopbackTargetThroughWindowOrigin({ currentUrl, targetUrl })
+    ? currentUrl.origin
+    : httpBaseUrl;
 }
 
 function resolveConfiguredPrimaryTarget(): PrimaryEnvironmentTarget | null {
@@ -291,9 +338,9 @@ export function resolvePrimaryEnvironmentHttpUrl(
 }
 
 export function readPrimaryEnvironmentTarget(): PrimaryEnvironmentTarget {
-  return (
+  const target =
     resolveDesktopPrimaryTarget() ??
     resolveConfiguredPrimaryTarget() ??
-    resolveWindowOriginPrimaryTarget()
-  );
+    resolveWindowOriginPrimaryTarget();
+  return resolveLoopbackTargetThroughWindowOrigin(target);
 }

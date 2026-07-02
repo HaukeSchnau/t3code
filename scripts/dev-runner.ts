@@ -215,6 +215,40 @@ function resolveBaseDir(baseDir: string | undefined): Effect.Effect<string, neve
   });
 }
 
+function parseAmbientPort(value: string | undefined): number | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > MAX_PORT) {
+    return undefined;
+  }
+
+  return port;
+}
+
+function readAgentServiceWebPort(baseEnv: NodeJS.ProcessEnv): number | undefined {
+  return (
+    parseAmbientPort(baseEnv.AGENT_SERVICE_PORT) ??
+    (baseEnv.PORTLESS_URL?.trim() ? parseAmbientPort(baseEnv.PORT) : undefined)
+  );
+}
+
+function readAgentServiceDevUrl(baseEnv: NodeJS.ProcessEnv): URL | undefined {
+  const rawUrl = baseEnv.PORTLESS_URL?.trim();
+  if (!rawUrl) {
+    return undefined;
+  }
+
+  try {
+    return new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+}
+
 interface CreateDevRunnerEnvInput {
   readonly mode: DevMode;
   readonly baseEnv: NodeJS.ProcessEnv;
@@ -244,15 +278,18 @@ export function createDevRunnerEnv({
 }: CreateDevRunnerEnvInput): Effect.Effect<NodeJS.ProcessEnv, never, Path.Path> {
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
-    const webPort = BASE_WEB_PORT + webOffset;
     const resolvedBaseDir = yield* resolveBaseDir(t3Home);
     const isDesktopMode = mode === "dev:desktop";
+    const agentServiceWebPort = isDesktopMode ? undefined : readAgentServiceWebPort(baseEnv);
+    const agentServiceDevUrl = isDesktopMode ? undefined : readAgentServiceDevUrl(baseEnv);
+    const webPort = agentServiceWebPort ?? BASE_WEB_PORT + webOffset;
+    const resolvedDevUrl = devUrl ?? agentServiceDevUrl;
 
     const output: NodeJS.ProcessEnv = {
       ...baseEnv,
       PORT: String(webPort),
       VITE_DEV_SERVER_URL:
-        devUrl?.toString() ??
+        resolvedDevUrl?.toString() ??
         `http://${isDesktopMode ? DESKTOP_DEV_LOOPBACK_HOST : "localhost"}:${webPort}`,
       T3CODE_HOME: resolvedBaseDir,
     };
@@ -408,6 +445,7 @@ interface ResolveModePortOffsetsInput<R = NetService.NetService> {
   readonly mode: DevMode;
   readonly startOffset: number;
   readonly hasExplicitServerPort: boolean;
+  readonly hasExplicitWebPort: boolean;
   readonly hasExplicitDevUrl: boolean;
   readonly checkPortAvailability?: PortAvailabilityCheck<R>;
 }
@@ -416,6 +454,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
   mode,
   startOffset,
   hasExplicitServerPort,
+  hasExplicitWebPort,
   hasExplicitDevUrl,
   checkPortAvailability,
 }: ResolveModePortOffsetsInput<R>): Effect.Effect<
@@ -426,9 +465,10 @@ export function resolveModePortOffsets<R = NetService.NetService>({
   return Effect.gen(function* () {
     const checkPort = (checkPortAvailability ??
       defaultCheckPortAvailability) as PortAvailabilityCheck<R>;
+    const hasExplicitWebEndpoint = hasExplicitWebPort || hasExplicitDevUrl;
 
     if (mode === "dev:web") {
-      if (hasExplicitDevUrl) {
+      if (hasExplicitWebEndpoint) {
         return { serverOffset: startOffset, webOffset: startOffset };
       }
 
@@ -458,7 +498,7 @@ export function resolveModePortOffsets<R = NetService.NetService>({
     const sharedOffset = yield* findFirstAvailableOffset({
       startOffset,
       requireServerPort: !hasExplicitServerPort,
-      requireWebPort: !hasExplicitDevUrl,
+      requireWebPort: !hasExplicitWebEndpoint,
       checkPortAvailability: checkPort,
     });
 
@@ -481,6 +521,7 @@ interface DevRunnerCliInput {
 
 export function runDevRunnerWithInput(input: DevRunnerCliInput) {
   return Effect.gen(function* () {
+    const hostEnvironment = yield* HostProcessEnvironment;
     const { portOffset, devInstance } = yield* OffsetConfig.pipe(
       Effect.mapError(
         (cause) =>
@@ -492,15 +533,20 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     );
 
     const { offset, source } = yield* resolveOffset({ portOffset, devInstance });
+    const isDesktopMode = input.mode === "dev:desktop";
+    const hasAgentServiceWebPort =
+      !isDesktopMode && readAgentServiceWebPort(hostEnvironment) !== undefined;
+    const hasAgentServiceDevUrl =
+      !isDesktopMode && readAgentServiceDevUrl(hostEnvironment) !== undefined;
 
     const { serverOffset, webOffset } = yield* resolveModePortOffsets({
       mode: input.mode,
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
-      hasExplicitDevUrl: input.devUrl !== undefined,
+      hasExplicitWebPort: hasAgentServiceWebPort,
+      hasExplicitDevUrl: input.devUrl !== undefined || hasAgentServiceDevUrl,
     });
 
-    const hostEnvironment = yield* HostProcessEnvironment;
     const env = yield* createDevRunnerEnv({
       mode: input.mode,
       baseEnv: hostEnvironment,
