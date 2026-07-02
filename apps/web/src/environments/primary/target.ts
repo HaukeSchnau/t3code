@@ -73,7 +73,7 @@ export interface PrimaryEnvironmentTarget {
   };
 }
 
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 
 function getDesktopLocalEnvironmentBootstrap(): DesktopEnvironmentBootstrap | null {
   // The primary (Windows-native) backend keeps the "primary" id. The
@@ -138,7 +138,12 @@ function normalizeHostname(hostname: string): string {
 }
 
 export function isLoopbackHostname(hostname: string): boolean {
-  return LOOPBACK_HOSTNAMES.has(normalizeHostname(hostname));
+  const normalizedHostname = normalizeHostname(hostname);
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname.endsWith(".localhost") ||
+    LOOPBACK_HOSTNAMES.has(normalizedHostname)
+  );
 }
 
 function resolveHttpRequestBaseUrl(primaryTarget: PrimaryEnvironmentTarget): string {

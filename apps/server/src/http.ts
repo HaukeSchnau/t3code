@@ -57,7 +57,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 
 const LOCAL_IMAGE_ROUTE_PATH = "/local-image";
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
-const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1", "localhost"]);
+const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 
 export const browserApiCorsLayer = Layer.unwrap(
@@ -82,7 +82,11 @@ export function isLoopbackHostname(hostname: string): boolean {
     .trim()
     .toLowerCase()
     .replace(/^\[(.*)\]$/, "$1");
-  return LOOPBACK_HOSTNAMES.has(normalizedHostname);
+  return (
+    normalizedHostname === "localhost" ||
+    normalizedHostname.endsWith(".localhost") ||
+    LOOPBACK_HOSTNAMES.has(normalizedHostname)
+  );
 }
 
 export function resolveDevRedirectUrl(devUrl: URL, requestUrl: URL): string {
