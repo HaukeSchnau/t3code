@@ -174,15 +174,15 @@ export const ThreadOrchestrationCreateEnvironment = Schema.Union([
 export type ThreadOrchestrationCreateEnvironment = typeof ThreadOrchestrationCreateEnvironment.Type;
 
 export const ThreadOrchestrationCreateTarget = Schema.Struct({
-  type: Schema.Literal("project"),
-  projectId: ProjectId,
-  environment: ThreadOrchestrationCreateEnvironment,
+  type: Schema.optional(Schema.Literal("project")),
+  projectId: Schema.optional(ProjectId),
+  environment: Schema.optional(ThreadOrchestrationCreateEnvironment),
 });
 export type ThreadOrchestrationCreateTarget = typeof ThreadOrchestrationCreateTarget.Type;
 
 export const ThreadOrchestrationCreateThreadInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
-  target: ThreadOrchestrationCreateTarget,
+  target: Schema.optional(ThreadOrchestrationCreateTarget),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
