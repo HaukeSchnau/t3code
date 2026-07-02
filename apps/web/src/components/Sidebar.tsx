@@ -7,7 +7,6 @@ import {
   ContainerIcon,
   FolderIcon,
   FolderPlusIcon,
-  GitForkIcon,
   ListIcon,
   MoreHorizontalIcon,
   PinIcon,
@@ -375,7 +374,6 @@ interface SidebarThreadRowProps {
   ) => Promise<void>;
   cancelRename: () => void;
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
-  forkThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
 }
 
@@ -414,7 +412,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     commitRename,
     cancelRename,
     attemptArchiveThread,
-    forkThread,
     openPrLink,
     thread,
   } = props;
@@ -715,14 +712,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
     },
     [attemptArchiveThread, threadRef],
   );
-  const handleForkClick = useCallback(
-    (event: React.MouseEvent<HTMLButtonElement>) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void forkThread(threadRef);
-    },
-    [forkThread, threadRef],
-  );
   const rowButtonRender = useMemo(() => <div role="button" tabIndex={0} />, []);
 
   return (
@@ -885,7 +874,7 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                 <Tooltip>
                   <TooltipTrigger
                     render={
-                      <div className="pointer-events-none absolute top-1/2 right-11.5 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
+                      <div className="pointer-events-none absolute top-1/2 right-6 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
                         <button
                           type="button"
                           data-thread-selection-safe
@@ -905,26 +894,6 @@ export const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThr
                     }
                   />
                   <TooltipPopup side="top">{isPinned ? "Unpin" : "Pin"}</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <div className="pointer-events-none absolute top-1/2 right-6 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
-                        <button
-                          type="button"
-                          data-thread-selection-safe
-                          data-testid={`thread-fork-${thread.id}`}
-                          aria-label={`Fork ${thread.title}`}
-                          className={SIDEBAR_ICON_ACTION_BUTTON_CLASS}
-                          onPointerDown={stopPropagationOnPointerDown}
-                          onClick={handleForkClick}
-                        >
-                          <GitForkIcon className="size-3.5" />
-                        </button>
-                      </div>
-                    }
-                  />
-                  <TooltipPopup side="top">Fork</TooltipPopup>
                 </Tooltip>
                 {appSettingsConfirmThreadArchive ? (
                   <div className="pointer-events-none absolute top-1/2 right-0.5 -translate-y-1/2 opacity-0 transition-opacity duration-150 max-sm:pointer-events-auto max-sm:opacity-100 group-hover/menu-sub-item:pointer-events-auto group-hover/menu-sub-item:opacity-100 group-focus-within/menu-sub-item:pointer-events-auto group-focus-within/menu-sub-item:opacity-100">
@@ -1073,7 +1042,6 @@ interface SidebarProjectThreadListProps {
   ) => Promise<void>;
   cancelRename: () => void;
   attemptArchiveThread: (threadRef: ScopedThreadRef) => Promise<void>;
-  forkThread: (threadRef: ScopedThreadRef) => Promise<void>;
   openPrLink: (event: React.MouseEvent<HTMLElement>, prUrl: string) => void;
   expandThreadListForProject: (projectKey: string) => void;
   collapseThreadListForProject: (projectKey: string) => void;
@@ -1114,7 +1082,6 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
     commitRename,
     cancelRename,
     attemptArchiveThread,
-    forkThread,
     openPrLink,
     expandThreadListForProject,
     collapseThreadListForProject,
@@ -1166,7 +1133,6 @@ const SidebarProjectThreadList = memo(function SidebarProjectThreadList(
               commitRename={commitRename}
               cancelRename={cancelRename}
               attemptArchiveThread={attemptArchiveThread}
-              forkThread={forkThread}
               openPrLink={openPrLink}
             />
           );
@@ -1217,7 +1183,6 @@ interface SidebarProjectItemProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
-  forkThread: ReturnType<typeof useThreadActions>["forkThread"];
   threadJumpLabelByKey: ReadonlyMap<string, string>;
   openThreadTagDialog: (threadKey: string, title: string) => void;
   openProjectTagDialog: (projectKey: string, title: string) => void;
@@ -1240,7 +1205,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     handleNewThread,
     archiveThread,
     deleteThread,
-    forkThread,
     threadJumpLabelByKey,
     openThreadTagDialog,
     openProjectTagDialog,
@@ -2219,23 +2183,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     [archiveThread],
   );
 
-  const attemptForkThread = useCallback(
-    async (threadRef: ScopedThreadRef) => {
-      const result = await forkThread(threadRef);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to fork thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
-    },
-    [forkThread],
-  );
-
   const cancelRename = useCallback(() => {
     setRenamingThreadKey(null);
     renamingInputRef.current = null;
@@ -2644,7 +2591,6 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
         commitRename={commitRename}
         cancelRename={cancelRename}
         attemptArchiveThread={attemptArchiveThread}
-        forkThread={attemptForkThread}
         openPrLink={openPrLink}
         expandThreadListForProject={expandThreadListForProject}
         collapseThreadListForProject={collapseThreadListForProject}
@@ -3142,7 +3088,6 @@ interface SidebarThreadSectionsListProps {
   appSettingsConfirmThreadDelete: boolean;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
-  forkThread: ReturnType<typeof useThreadActions>["forkThread"];
   attachThreadListAutoAnimateRef: (node: HTMLElement | null) => void;
 }
 
@@ -3163,7 +3108,6 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
     appSettingsConfirmThreadDelete,
     archiveThread,
     deleteThread,
-    forkThread,
     attachThreadListAutoAnimateRef,
   } = props;
   const router = useRouter();
@@ -3395,26 +3339,6 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
       }
     },
     [archiveThread],
-  );
-
-  const attemptForkThread = useCallback(
-    async (threadRef: ScopedThreadRef) => {
-      try {
-        const result = await forkThread(threadRef);
-        if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-          throw squashAtomCommandFailure(result);
-        }
-      } catch (error) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Failed to fork thread",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      }
-    },
-    [forkThread],
   );
 
   const cancelRename = useCallback(() => {
@@ -3670,7 +3594,6 @@ const SidebarThreadSectionsList = memo(function SidebarThreadSectionsList(
                   commitRename={commitRename}
                   cancelRename={cancelRename}
                   attemptArchiveThread={attemptArchiveThread}
-                  forkThread={attemptForkThread}
                   openPrLink={openPrLink}
                 />
               );
@@ -4036,7 +3959,6 @@ interface SidebarProjectsContentProps {
   handleNewThread: ReturnType<typeof useNewThreadHandler>;
   archiveThread: ReturnType<typeof useThreadActions>["archiveThread"];
   deleteThread: ReturnType<typeof useThreadActions>["deleteThread"];
-  forkThread: ReturnType<typeof useThreadActions>["forkThread"];
   sortedProjects: readonly SidebarProjectSnapshot[];
   expandedThreadListsByProject: ReadonlySet<string>;
   activeRouteProjectKey: string | null;
@@ -4084,7 +4006,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
     handleNewThread,
     archiveThread,
     deleteThread,
-    forkThread,
     sortedProjects,
     expandedThreadListsByProject,
     activeRouteProjectKey,
@@ -4311,7 +4232,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                           handleNewThread={handleNewThread}
                           archiveThread={archiveThread}
                           deleteThread={deleteThread}
-                          forkThread={forkThread}
                           threadJumpLabelByKey={threadJumpLabelByKey}
                           openThreadTagDialog={openThreadTagDialog}
                           openProjectTagDialog={openProjectTagDialog}
@@ -4346,7 +4266,6 @@ const SidebarProjectsContent = memo(function SidebarProjectsContent(
                   handleNewThread={handleNewThread}
                   archiveThread={archiveThread}
                   deleteThread={deleteThread}
-                  forkThread={forkThread}
                   threadJumpLabelByKey={threadJumpLabelByKey}
                   openThreadTagDialog={openThreadTagDialog}
                   openProjectTagDialog={openProjectTagDialog}
@@ -4402,7 +4321,7 @@ export default function Sidebar() {
   const appSettingsConfirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
   const updateSettings = useUpdateClientSettings();
   const handleNewThread = useNewThreadHandler();
-  const { archiveThread, deleteThread, forkThread } = useThreadActions();
+  const { archiveThread, deleteThread } = useThreadActions();
   const { isMobile, setOpenMobile } = useSidebar();
   const routeThreadRef = useParams({
     strict: false,
@@ -5276,7 +5195,6 @@ export default function Sidebar() {
         appSettingsConfirmThreadDelete={appSettingsConfirmThreadDelete}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
-        forkThread={forkThread}
         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
       />
     ),
@@ -5287,7 +5205,6 @@ export default function Sidebar() {
       archiveThread,
       attachThreadListAutoAnimateRef,
       deleteThread,
-      forkThread,
       openThreadTagDialog,
       pinnedThreads,
       projectMetaByThreadKey,
@@ -5391,7 +5308,6 @@ export default function Sidebar() {
         appSettingsConfirmThreadDelete={appSettingsConfirmThreadDelete}
         archiveThread={archiveThread}
         deleteThread={deleteThread}
-        forkThread={forkThread}
         attachThreadListAutoAnimateRef={attachThreadListAutoAnimateRef}
       />
     );
@@ -5401,7 +5317,6 @@ export default function Sidebar() {
     archiveThread,
     attachThreadListAutoAnimateRef,
     deleteThread,
-    forkThread,
     openThreadTagDialog,
     projectMetaByThreadKey,
     routeThreadKey,
@@ -5499,7 +5414,6 @@ export default function Sidebar() {
             handleNewThread={handleNewThread}
             archiveThread={archiveThread}
             deleteThread={deleteThread}
-            forkThread={forkThread}
             sortedProjects={sortedProjects}
             expandedThreadListsByProject={expandedThreadListsByProject}
             activeRouteProjectKey={activeRouteProjectKey}
