@@ -8,6 +8,11 @@ state, projects, provider instances, models, model capabilities, and exact
 `modelSelection` objects that can be passed to `create_thread.modelSelection`.
 This lets agents fan out across configured providers such as Codex, Cursor, and
 OpenCode without guessing provider instance ids or model slugs.
+For the common case, `create_thread` can omit both `target` and `modelSelection`;
+it defaults to a sibling thread in the calling thread's current project, current
+environment, and current provider/model. Supplying
+`target.environment.type: "worktree"` or an explicit `modelSelection` is reserved for intentional
+isolation or provider/model fanout.
 
 Remote host orchestration is represented explicitly but conservatively:
 `remoteRouting: "currentEnvironmentOnly"` means this MCP server can create and

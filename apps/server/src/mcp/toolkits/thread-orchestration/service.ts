@@ -646,30 +646,29 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const model = yield* snapshot;
-      const project = findProject(model.projects, input.target.projectId);
+      const sourceThread = findThread(model.threads, scope.threadId);
+      if (!sourceThread) {
+        return yield* notFoundError("create_thread", "thread", scope.threadId, {
+          threadId: scope.threadId,
+        });
+      }
+
+      const projectId = input.target?.projectId ?? sourceThread.projectId;
+      const project = findProject(model.projects, projectId);
       if (!project) {
-        return yield* notFoundError("create_thread", "project", input.target.projectId, {
-          projectId: input.target.projectId,
+        return yield* notFoundError("create_thread", "project", projectId, {
+          projectId,
         });
       }
 
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("thread");
       const title = input.title ?? input.prompt.slice(0, 80);
-      const selectedModel = input.modelSelection ?? project.defaultModelSelection;
-      if (selectedModel === null) {
-        return yield* new ThreadOrchestrationError({
-          operation: "create_thread",
-          code: "missing_default_model",
-          message: `Project '${project.id}' does not have a default model selection.`,
-          projectId: project.id,
-          resourceType: "project",
-          resourceId: project.id,
-        });
-      }
+      const selectedModel = input.modelSelection ?? sourceThread.modelSelection;
 
+      const environment = input.target?.environment ?? ({ type: "local" } as const);
       const prepared =
-        input.target.environment.type === "worktree"
+        environment.type === "worktree"
           ? yield* workspaceService
               .prepareWorkspace({
                 threadId: nextThreadId,

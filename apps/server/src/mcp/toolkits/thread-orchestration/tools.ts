@@ -120,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a T3 Code thread in a project and submit its first prompt. Use target.environment.type='local' for the project checkout or 'worktree' for an isolated managed workspace. To choose a provider/model such as Codex, Cursor, or OpenCode, pass a modelSelection returned by list_execution_targets. Provider choice is normally a new-thread decision; later provider changes may be rejected once the target thread has a bound provider session.",
+      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current environment, and current provider/model. Set target.projectId for another project, target.environment.type='worktree' for an isolated managed workspace, or modelSelection from list_execution_targets to choose another provider/model such as Codex, Cursor, or OpenCode. Provider choice is normally a new-thread decision; later provider changes may be rejected once the target thread has a bound provider session.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,

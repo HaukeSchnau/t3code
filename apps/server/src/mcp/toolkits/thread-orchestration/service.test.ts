@@ -35,6 +35,14 @@ const targetThreadId = ThreadId.make("thread-target");
 const projectId = "project-1" as OrchestrationProject["id"];
 const workspaceId = ThreadWorkspaceId.make("workspace-fork");
 const workspaceRootId = ThreadWorkspaceRootId.make("workspace-root-fork");
+const projectDefaultModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.4",
+};
+const actorModelSelection = {
+  instanceId: ProviderInstanceId.make("codex"),
+  model: "gpt-5.5",
+};
 
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -50,10 +58,7 @@ const project: OrchestrationProject = {
   id: projectId,
   title: "Project",
   workspaceRoot: "/repo/project",
-  defaultModelSelection: {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: "gpt-5.4",
-  },
+  defaultModelSelection: projectDefaultModelSelection,
   scripts: [],
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
@@ -64,10 +69,7 @@ const makeThread = (id: typeof targetThreadId): OrchestrationThread => ({
   id,
   projectId,
   title: id === actorThreadId ? "Actor" : "Target",
-  modelSelection: {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: "gpt-5.4",
-  },
+  modelSelection: id === actorThreadId ? actorModelSelection : projectDefaultModelSelection,
   runtimeMode: "full-access",
   interactionMode: "default",
   branch: null,
@@ -486,11 +488,6 @@ it.effect("creates threads before starting their initial turn", () => {
     const result = yield* service.createThread(scope, {
       prompt: "Please review the implementation.",
       title: "Reviewer",
-      target: {
-        type: "project",
-        projectId,
-        environment: { type: "local" },
-      },
     });
 
     expect(result.promptSubmitted).toBe(true);
@@ -504,7 +501,7 @@ it.effect("creates threads before starting their initial turn", () => {
       threadId: result.thread.threadId,
       projectId,
       title: "Reviewer",
-      modelSelection: project.defaultModelSelection,
+      modelSelection: actorModelSelection,
     });
     expect(dispatched[1]).toMatchObject({
       type: "thread.turn.start",
