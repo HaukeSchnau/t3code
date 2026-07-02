@@ -4,6 +4,7 @@ import {
   EventId,
   MessageId,
   type ProjectId,
+  type ModelSelection,
   ThreadId,
   ThreadOrchestrationError,
   type OrchestrationMessage,
@@ -17,6 +18,8 @@ import {
   type ThreadOrchestrationActorScope,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
+  type ProviderInteractionMode,
+  type RuntimeMode,
   type ThreadOrchestrationForkThreadInput,
   type ThreadOrchestrationForkThreadResult,
   type ThreadOrchestrationListExecutionTargetsResult,
@@ -59,6 +62,15 @@ const DEFAULT_AWAIT_TIMEOUT_MS = 30_000;
 const MAX_AWAIT_TIMEOUT_MS = 120_000;
 const DEFAULT_AWAIT_POLL_INTERVAL_MS = 1_000;
 const MIN_AWAIT_POLL_INTERVAL_MS = 100;
+
+type ResolvedCreateThreadInput = Omit<
+  ThreadOrchestrationCreateThreadInput,
+  "modelSelection" | "runtimeMode" | "interactionMode"
+> & {
+  readonly modelSelection: ModelSelection;
+  readonly runtimeMode: RuntimeMode;
+  readonly interactionMode: ProviderInteractionMode;
+};
 
 export class ThreadOrchestrationService extends Context.Service<
   ThreadOrchestrationService,
@@ -323,6 +335,31 @@ const make = Effect.gen(function* () {
     Effect.gen(function* () {
       if (environmentId === undefined) return false;
       return environmentId !== (yield* localEnvironmentId);
+    });
+
+  const resolveCreateInput = (
+    scope: McpInvocationContext.McpInvocationScope,
+    sourceThread: OrchestrationThread | undefined,
+    input: ThreadOrchestrationCreateThreadInput,
+  ): Effect.Effect<ResolvedCreateThreadInput, ThreadOrchestrationError> =>
+    Effect.gen(function* () {
+      const selectedModel = input.modelSelection ?? sourceThread?.modelSelection;
+      if (selectedModel === undefined) {
+        return yield* new ThreadOrchestrationError({
+          operation: "create_thread",
+          code: "model_selection_required",
+          message:
+            "create_thread requires modelSelection when the actor thread is not present in this environment.",
+          threadId: scope.threadId,
+          projectId: input.target?.projectId,
+        });
+      }
+      return {
+        ...input,
+        modelSelection: selectedModel,
+        runtimeMode: input.runtimeMode ?? sourceThread?.runtimeMode ?? "full-access",
+        interactionMode: input.interactionMode ?? sourceThread?.interactionMode ?? "default",
+      };
     });
 
   const appendRelationship = (input: {
@@ -726,11 +763,12 @@ const make = Effect.gen(function* () {
     input: ThreadOrchestrationCreateThreadInput,
   ) =>
     Effect.gen(function* () {
-      if (yield* shouldRouteRemote(input.target?.environmentId)) {
-        return yield* remoteClient.createThread(scopeForRemote(scope), input);
-      }
       const model = yield* snapshot;
       const sourceThread = findThread(model.threads, scope.threadId);
+      const resolvedInput = yield* resolveCreateInput(scope, sourceThread, input);
+      if (yield* shouldRouteRemote(input.target?.environmentId)) {
+        return yield* remoteClient.createThread(scopeForRemote(scope), resolvedInput);
+      }
       if (!sourceThread && input.target?.projectId === undefined) {
         return yield* notFoundError("create_thread", "thread", scope.threadId, {
           threadId: scope.threadId,
@@ -757,17 +795,6 @@ const make = Effect.gen(function* () {
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("thread");
       const title = input.title ?? input.prompt.slice(0, 80);
-      const selectedModel = input.modelSelection ?? sourceThread?.modelSelection;
-      if (selectedModel === undefined) {
-        return yield* new ThreadOrchestrationError({
-          operation: "create_thread",
-          code: "model_selection_required",
-          message:
-            "create_thread requires modelSelection when the actor thread is not present in this environment.",
-          threadId: scope.threadId,
-          projectId: project.id,
-        });
-      }
 
       const environment = input.target?.environment ?? ({ type: "local" } as const);
       const prepared =
@@ -813,9 +840,9 @@ const make = Effect.gen(function* () {
           threadId: nextThreadId,
           projectId: project.id,
           title,
-          modelSelection: selectedModel,
-          runtimeMode: input.runtimeMode ?? "full-access",
-          interactionMode: input.interactionMode ?? "default",
+          modelSelection: resolvedInput.modelSelection,
+          runtimeMode: resolvedInput.runtimeMode,
+          interactionMode: resolvedInput.interactionMode,
           branch: prepared?.compatibilityBranch ?? null,
           worktreePath: prepared?.compatibilityWorktreePath ?? null,
           workspaceId: prepared?.workspace.id ?? null,
@@ -844,9 +871,9 @@ const make = Effect.gen(function* () {
             text: input.prompt,
             attachments: [],
           },
-          ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          runtimeMode: input.runtimeMode ?? "full-access",
-          interactionMode: input.interactionMode ?? "default",
+          modelSelection: resolvedInput.modelSelection,
+          runtimeMode: resolvedInput.runtimeMode,
+          interactionMode: resolvedInput.interactionMode,
           createdAt,
         })
         .pipe(
@@ -874,9 +901,9 @@ const make = Effect.gen(function* () {
           title,
           projectTitle: project.title,
           status: "running",
-          modelSelection: selectedModel,
-          runtimeMode: input.runtimeMode ?? "full-access",
-          interactionMode: input.interactionMode ?? "default",
+          modelSelection: resolvedInput.modelSelection,
+          runtimeMode: resolvedInput.runtimeMode,
+          interactionMode: resolvedInput.interactionMode,
           workspaceRoot: project.workspaceRoot,
           worktreePath: prepared?.compatibilityWorktreePath ?? null,
           createdAt,

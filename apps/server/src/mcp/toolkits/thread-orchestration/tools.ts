@@ -53,7 +53,7 @@ export const ListProjectsTool = readonlyTool(
 export const ListExecutionTargetsTool = readonlyTool(
   Tool.make("list_execution_targets", {
     description:
-      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing a host, Codex, Cursor, OpenCode, or another configured provider. A returned environment.environmentId can be passed to create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, and get_thread_graph.environmentId. A returned provider model's modelSelection can be passed directly to create_thread.modelSelection.",
+      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing a host, Codex, Cursor, OpenCode, or another configured provider. A returned environment.environmentId can be passed to create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, and get_thread_graph.environmentId. Omit create_thread.modelSelection to inherit the calling thread's current provider/model/options; pass a returned provider model's modelSelection only when intentionally overriding that default.",
     success: ThreadOrchestrationListExecutionTargetsResult,
     failure: ThreadOrchestrationError,
     dependencies,
@@ -120,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model. Set target.environmentId to create on a registered remote host, target.projectId for another project, target.environment.type='worktree' for an isolated managed workspace on that host, or modelSelection from list_execution_targets to choose another provider/model such as Codex, Cursor, or OpenCode. For remote creates, pass the remote projectId and modelSelection from list_execution_targets.",
+      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model/options, runtime mode, and interaction mode. Set target.environmentId to create on a registered remote host, target.projectId for another project, or target.environment.type='worktree' for an isolated managed workspace on that host. Omit modelSelection, runtimeMode, and interactionMode when you want the child to inherit the calling thread's current setup, including for remote creates. Pass modelSelection from list_execution_targets only when intentionally choosing another provider/model such as Codex, Cursor, or OpenCode.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,
