@@ -1,6 +1,7 @@
 import type {
   OrchestrationEvent,
   OrchestrationReadModel,
+  ProviderInstanceId,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -57,8 +58,8 @@ interface CommandEnvelope {
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread";
-  readonly aggregateId: ProjectId | ThreadId;
+  readonly aggregateKind: "project" | "thread" | "provider";
+  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
 } {
   switch (command.type) {
     case "project.create":
@@ -67,6 +68,11 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
+      };
+    case "provider.usage-limits.update":
+      return {
+        aggregateKind: "provider",
+        aggregateId: command.providerInstanceId,
       };
     default:
       return {

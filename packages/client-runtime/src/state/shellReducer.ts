@@ -40,6 +40,18 @@ export function applyShellStreamEvent(
         threads: Arr.filter(snapshot.threads, (t) => t.id !== event.threadId),
         snapshotSequence: event.sequence,
       };
+    case "usage-limits-updated": {
+      const usageLimits = snapshot.usageLimits.some(
+        (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
+      )
+        ? Arr.map(snapshot.usageLimits, (entry) =>
+            entry.providerInstanceId === event.usageLimits.providerInstanceId
+              ? event.usageLimits
+              : entry,
+          )
+        : Arr.append(snapshot.usageLimits, event.usageLimits);
+      return { ...snapshot, usageLimits, snapshotSequence: event.sequence };
+    }
     default:
       return snapshot;
   }

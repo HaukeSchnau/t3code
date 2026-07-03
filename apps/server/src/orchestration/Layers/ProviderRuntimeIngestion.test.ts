@@ -167,6 +167,22 @@ type ProviderRuntimeTestProposedPlan = ProviderRuntimeTestThread["proposedPlans"
 type ProviderRuntimeTestActivity = ProviderRuntimeTestThread["activities"][number];
 type ProviderRuntimeTestCheckpoint = ProviderRuntimeTestThread["checkpoints"][number];
 
+async function waitForReadModel(
+  readModel: () => Promise<ProviderRuntimeTestReadModel>,
+  predicate: (snapshot: ProviderRuntimeTestReadModel) => boolean,
+  timeoutMs = 2000,
+) {
+  const maxAttempts = timeoutMs;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const snapshot = await readModel();
+    if (predicate(snapshot)) {
+      return snapshot;
+    }
+    await Promise.resolve();
+  }
+  throw new Error("Timed out waiting for read model state");
+}
+
 async function waitForThread(
   readModel: () => Promise<ProviderRuntimeTestReadModel>,
   predicate: (thread: ProviderRuntimeTestThread) => boolean,
@@ -2966,7 +2982,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
 
-  it("projects Codex rate limit updates into normalized thread activities", async () => {
+  it("projects Codex rate limit updates into provider usage limits", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
@@ -3003,20 +3019,18 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
-      ),
+    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
+      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
     );
 
-    const usageActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
-    );
-    expect(usageActivity).toBeDefined();
-    expect(usageActivity?.payload).toMatchObject({
+    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
+    expect(usageLimits).toBeDefined();
+    expect(usageLimits?.provider).toBe("codex");
+    expect(usageLimits?.usageLimits).toMatchObject({
       limitId: "codex",
       limitName: "Codex",
       planType: "plus",
+      updatedAt: now,
       credits: {
         balance: "12.50",
         hasCredits: true,
@@ -3033,6 +3047,11 @@ describe("ProviderRuntimeIngestion", () => {
         windowDurationMins: 10080,
       },
     });
+    expect(
+      readModel.threads[0]?.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    ).toBe(false);
   });
 
   it("projects Codex individual limits into the weekly usage window", async () => {
@@ -3068,16 +3087,12 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
 
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
-      ),
+    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
+      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
     );
 
-    const usageActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
-    );
-    expect(usageActivity?.payload).toMatchObject({
+    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
+    expect(usageLimits?.usageLimits).toMatchObject({
       limitId: "codex",
       primary: {
         usedPercent: 25,

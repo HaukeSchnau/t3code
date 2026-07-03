@@ -31,6 +31,7 @@ import {
   ThreadHistoryPrunedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
+  ProviderUsageLimitsUpdatedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -223,6 +224,7 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
     snapshotSequence: 0,
     projects: [],
     threads: [],
+    usageLimits: [],
     updatedAt: nowIso,
   };
 }
@@ -872,6 +874,30 @@ export function projectEvent(
               updatedAt: event.occurredAt,
             }),
           };
+        }),
+      );
+
+    case "provider.usage-limits-updated":
+      return decodeForEvent(
+        ProviderUsageLimitsUpdatedPayload,
+        event.payload,
+        event.type,
+        "payload",
+      ).pipe(
+        Effect.map((payload) => {
+          const nextUsageLimits = {
+            provider: payload.provider,
+            providerInstanceId: payload.providerInstanceId,
+            usageLimits: payload.usageLimits,
+          };
+          const usageLimits = nextBase.usageLimits.some(
+            (entry) => entry.providerInstanceId === payload.providerInstanceId,
+          )
+            ? nextBase.usageLimits.map((entry) =>
+                entry.providerInstanceId === payload.providerInstanceId ? nextUsageLimits : entry,
+              )
+            : [...nextBase.usageLimits, nextUsageLimits];
+          return { ...nextBase, usageLimits };
         }),
       );
 

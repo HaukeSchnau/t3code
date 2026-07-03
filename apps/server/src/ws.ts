@@ -702,6 +702,18 @@ const makeWsRpcLayer = (
               ),
               Effect.orElseSucceed(() => Option.none()),
             );
+          case "provider.usage-limits-updated":
+            return Effect.succeed(
+              Option.some({
+                kind: "usage-limits-updated" as const,
+                sequence: event.sequence,
+                usageLimits: {
+                  provider: event.payload.provider,
+                  providerInstanceId: event.payload.providerInstanceId,
+                  usageLimits: event.payload.usageLimits,
+                },
+              }),
+            );
           default:
             if (event.aggregateKind !== "thread") {
               return Effect.succeed(Option.none());

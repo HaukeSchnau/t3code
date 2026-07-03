@@ -96,6 +96,7 @@ const readModel: OrchestrationReadModel = {
   snapshotSequence: 1,
   projects: [project],
   threads: [makeThread(actorThreadId), makeThread(targetThreadId)],
+  usageLimits: [],
   updatedAt: "2026-01-01T00:00:00.000Z",
 };
 
@@ -126,6 +127,7 @@ const shellSnapshot: OrchestrationShellSnapshot = {
   snapshotSequence: readModel.snapshotSequence,
   projects: readModel.projects.map(({ deletedAt: _deletedAt, ...project }) => project),
   threads: readModel.threads.map(makeThreadShell),
+  usageLimits: readModel.usageLimits,
   updatedAt: readModel.updatedAt,
 };
 

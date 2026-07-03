@@ -198,6 +198,7 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
+  useProviderUsageLimits,
   useThread,
   useThreadProposedPlans,
   useThreadRefs,
@@ -1779,29 +1780,17 @@ function ChatViewContent(props: ChatViewProps) {
     selectedProviderByThreadId ?? threadProvider ?? ProviderDriverKind.make("codex"),
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
-  const providerDriverByInstanceId = useMemo(
-    () => new Map(providerStatuses.map((status) => [status.instanceId, status.driver])),
-    [providerStatuses],
-  );
+  const providerUsageLimits = useProviderUsageLimits(activeThread?.environmentId ?? null);
   const activeUsageLimits = useMemo(
     () =>
       deriveLatestUsageLimitsSnapshotForSources(
-        activeThread
-          ? [
-              {
-                provider:
-                  providerDriverByInstanceId.get(activeThread.modelSelection.instanceId) ??
-                  (activeThread.modelSelection.instanceId ===
-                  defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
-                    ? ProviderDriverKind.make("codex")
-                    : null),
-                activities: activeThread.activities,
-              },
-            ]
-          : [],
+        providerUsageLimits.map((entry) => ({
+          provider: entry.provider,
+          usageLimits: [entry.usageLimits],
+        })),
         ProviderDriverKind.make("codex"),
       ),
-    [activeThread, providerDriverByInstanceId],
+    [providerUsageLimits],
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
