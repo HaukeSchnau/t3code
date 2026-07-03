@@ -6,8 +6,8 @@ import {
   ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationForkThreadInput,
   ThreadOrchestrationForkThreadResult,
-  ThreadOrchestrationListExecutionTargetsResult,
   ThreadOrchestrationListProjectsResult,
+  ThreadOrchestrationListThreadModelsResult,
   ThreadOrchestrationListThreadsInput,
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationReadThreadInput,
@@ -43,27 +43,27 @@ const readonlyTool = <T extends Tool.Any>(tool: T): T =>
 export const ListProjectsTool = readonlyTool(
   Tool.make("list_projects", {
     description:
-      "List T3 Code projects in this execution environment that can host background agent threads. Use list_execution_targets first when choosing between providers/models.",
+      "List local and registered remote environments plus their projects for durable T3 Code thread orchestration. Use a returned environmentId with create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, or get_thread_graph.environmentId. This is the normal discovery tool before creating threads in another project or on another host.",
     success: ThreadOrchestrationListProjectsResult,
     failure: ThreadOrchestrationError,
     dependencies,
   }).annotate(Tool.Title, "List projects"),
 );
 
-export const ListExecutionTargetsTool = readonlyTool(
-  Tool.make("list_execution_targets", {
+export const ListThreadModelsTool = readonlyTool(
+  Tool.make("list_thread_models", {
     description:
-      "List execution targets available to this T3 Code agent: host/environment identity, routability, projects, provider instances, and modelSelection values. Use this before create_thread when choosing a host, Codex, Cursor, OpenCode, or another configured provider. A returned environment.environmentId can be passed to create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, and get_thread_graph.environmentId. Omit create_thread.modelSelection to inherit the calling thread's current provider/model/options; pass a returned provider model's modelSelection only when intentionally overriding that default.",
-    success: ThreadOrchestrationListExecutionTargetsResult,
+      "List curated provider/model choices and exact modelSelection values for creating T3 Code threads. Most agents should not call this for ordinary child threads: omit create_thread.modelSelection to inherit the current provider, model, and reasoning/options. Use this only when the user asks for a specific provider/model or when intentionally doing provider/model fanout such as comparing Codex, Cursor, and OpenCode. When using a model choice from another environment, also pass that choice's environmentId as create_thread.target.environmentId. Reasoning metadata is advisory; omit modelSelection options to use the listed model's default reasoning, or include a supported option only when intentionally overriding.",
+    success: ThreadOrchestrationListThreadModelsResult,
     failure: ThreadOrchestrationError,
     dependencies,
-  }).annotate(Tool.Title, "List execution targets"),
+  }).annotate(Tool.Title, "List thread models"),
 );
 
 export const ListThreadsTool = readonlyTool(
   Tool.make("list_threads", {
     description:
-      "List recent T3 Code threads available for orchestration. Omit environmentId for the current host, or pass an environmentId returned by list_execution_targets to list threads on a registered remote host. Optional query searches title, project, and workspace root; limit caps the number of returned summaries.",
+      "List recent T3 Code threads available for orchestration. Omit environmentId for the current host, or pass an environmentId returned by list_projects to list threads on a registered remote host. Optional query searches title, project, and workspace root; limit caps the number of returned summaries.",
     parameters: ThreadOrchestrationListThreadsInput,
     success: ThreadOrchestrationListThreadsResult,
     failure: ThreadOrchestrationError,
@@ -120,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model/options, runtime mode, and interaction mode. Set target.environmentId to create on a registered remote host, target.projectId for another project, or target.environment.type='worktree' for an isolated managed workspace on that host. Omit modelSelection, runtimeMode, and interactionMode when you want the child to inherit the calling thread's current setup, including for remote creates. Pass modelSelection from list_execution_targets only when intentionally choosing another provider/model such as Codex, Cursor, or OpenCode.",
+      "Create a durable T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model/options, runtime mode, and interaction mode. Do not specify modelSelection unless the user explicitly requests a provider/model or you are deliberately doing provider/model fanout; otherwise omit it so the child inherits the current model and reasoning/options. Set target.environmentId from list_projects to create on a registered remote host, target.projectId for another project, or target.environment.type='worktree' for an isolated managed workspace on that host. Use list_thread_models only when intentionally choosing another provider/model such as Codex, Cursor, or OpenCode.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,
@@ -131,7 +131,7 @@ export const CreateThreadTool = mutatingTool(
 export const ForkThreadTool = mutatingTool(
   Tool.make("fork_thread", {
     description:
-      "Create a related child T3 Code thread from an existing thread or the calling thread. Codex-backed source threads are forked through Codex App Server and include copied completed transcript history; unsupported sources fall back to a related empty thread.",
+      "Fork a T3 Code thread. Omit threadId to fork the calling thread, or pass threadId to fork a specific thread. Omit environment for a same-directory fork, or pass environment.type='worktree' for an isolated managed workspace. Codex-backed source threads are forked through Codex App Server and include copied completed transcript history only; active unfinished turns are not copied. If transcriptCloned is false, the child is a related empty thread and any needed context must be sent explicitly.",
     parameters: ThreadOrchestrationForkThreadInput,
     success: ThreadOrchestrationForkThreadResult,
     failure: ThreadOrchestrationError,
@@ -142,7 +142,7 @@ export const ForkThreadTool = mutatingTool(
 export const SendMessageToThreadTool = mutatingTool(
   Tool.make("send_message_to_thread", {
     description:
-      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. modelSelection may request a model on the existing provider, but switching provider instances after a thread has started can be rejected; prefer create_thread for provider fanout.",
+      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. Omit modelSelection, runtimeMode, and interactionMode to keep the target thread's current settings. Do not use this to switch providers; create a new thread for provider/model fanout.",
     parameters: ThreadOrchestrationSendMessageInput,
     success: ThreadOrchestrationSendMessageResult,
     failure: ThreadOrchestrationError,
@@ -162,8 +162,8 @@ export const SetThreadTitleTool = mutatingTool(
 );
 
 export const ThreadOrchestrationToolkit = Toolkit.make(
-  ListExecutionTargetsTool,
   ListProjectsTool,
+  ListThreadModelsTool,
   ListThreadsTool,
   ReadThreadTool,
   ReadThreadResultTool,

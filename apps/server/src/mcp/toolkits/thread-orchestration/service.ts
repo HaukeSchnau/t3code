@@ -22,12 +22,13 @@ import {
   type RuntimeMode,
   type ThreadOrchestrationForkThreadInput,
   type ThreadOrchestrationForkThreadResult,
-  type ThreadOrchestrationListExecutionTargetsResult,
   type ThreadOrchestrationListProjectsResult,
+  type ThreadOrchestrationListThreadModelsResult,
   type ThreadOrchestrationListThreadsInput,
   type ThreadOrchestrationListThreadsResult,
   type ThreadOrchestrationReadThreadInput,
   type ThreadOrchestrationReadThreadResultInput,
+  type ThreadOrchestrationReasoningOption,
   type ThreadOrchestrationRelationship,
   type ThreadOrchestrationRelationshipKind,
   type ThreadOrchestrationSendMessageInput,
@@ -36,8 +37,11 @@ import {
   type ThreadOrchestrationThreadGraphInput,
   type ThreadOrchestrationThreadGraphResult,
   type ThreadOrchestrationThreadDetail,
+  type ThreadOrchestrationThreadModelChoice,
   type ThreadOrchestrationThreadResult,
   type ThreadOrchestrationThreadSummary,
+  type ServerProvider,
+  type ServerProviderModel,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -63,6 +67,16 @@ const MAX_AWAIT_TIMEOUT_MS = 120_000;
 const DEFAULT_AWAIT_POLL_INTERVAL_MS = 1_000;
 const MIN_AWAIT_POLL_INTERVAL_MS = 100;
 
+const HIDDEN_THREAD_MODEL_SLUGS = new Set([
+  "gpt-5.3-codex-spark",
+  "gpt-5.4-mini",
+  "gpt-5.4-mini-fast",
+]);
+
+const HIDDEN_THREAD_MODEL_PATTERNS = [
+  /(?:^|[-_/])(deprecated|legacy|internal|experimental|spark|mini)(?:$|[-_/])/i,
+];
+
 type ResolvedCreateThreadInput = Omit<
   ThreadOrchestrationCreateThreadInput,
   "modelSelection" | "runtimeMode" | "interactionMode"
@@ -79,8 +93,16 @@ export class ThreadOrchestrationService extends Context.Service<
       ThreadOrchestrationListProjectsResult,
       ThreadOrchestrationError
     >;
-    readonly listExecutionTargets: () => Effect.Effect<
-      ThreadOrchestrationListExecutionTargetsResult,
+    readonly listThreadModels: () => Effect.Effect<
+      ThreadOrchestrationListThreadModelsResult,
+      ThreadOrchestrationError
+    >;
+    readonly listLocalProjects: () => Effect.Effect<
+      ThreadOrchestrationListProjectsResult,
+      ThreadOrchestrationError
+    >;
+    readonly listLocalThreadModels: () => Effect.Effect<
+      ThreadOrchestrationListThreadModelsResult,
       ThreadOrchestrationError
     >;
     readonly listThreads: (
@@ -104,6 +126,10 @@ export class ThreadOrchestrationService extends Context.Service<
       input: ThreadOrchestrationThreadGraphInput,
     ) => Effect.Effect<ThreadOrchestrationThreadGraphResult, ThreadOrchestrationError>;
     readonly createThread: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: ThreadOrchestrationCreateThreadInput,
+    ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
+    readonly createThreadFromRemote: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCreateThreadInput,
     ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
@@ -246,6 +272,87 @@ function latestAssistantMessage(
     }
   }
   return null;
+}
+
+function isHiddenThreadModel(model: string): boolean {
+  const slug = model.split("/").at(-1) ?? model;
+  if (HIDDEN_THREAD_MODEL_SLUGS.has(model) || HIDDEN_THREAD_MODEL_SLUGS.has(slug)) return true;
+  return HIDDEN_THREAD_MODEL_PATTERNS.some((pattern) => pattern.test(model) || pattern.test(slug));
+}
+
+function providerDisplayName(provider: ServerProvider): string {
+  return provider.displayName ?? provider.driver;
+}
+
+function providerIsSelectable(provider: ServerProvider): boolean {
+  return (
+    provider.enabled &&
+    provider.installed &&
+    provider.status !== "disabled" &&
+    provider.availability !== "unavailable" &&
+    provider.auth.status !== "unauthenticated"
+  );
+}
+
+function reasoningOptionForModel(
+  model: ServerProviderModel,
+): ThreadOrchestrationReasoningOption | undefined {
+  const descriptor = model.capabilities?.optionDescriptors?.find(
+    (descriptor) =>
+      descriptor.type === "select" &&
+      ["reasoningEffort", "reasoning", "effort"].includes(descriptor.id),
+  );
+  if (!descriptor || descriptor.type !== "select") return undefined;
+  const values = descriptor.options.map((option) => option.id);
+  if (values.length === 0) return undefined;
+  const defaultValue =
+    descriptor.currentValue ?? descriptor.options.find((option) => option.isDefault)?.id;
+  return {
+    optionId: descriptor.id,
+    values,
+    ...(defaultValue !== undefined ? { defaultValue } : {}),
+  };
+}
+
+function modelChoiceForProvider(
+  environmentId: EnvironmentId,
+  provider: ServerProvider,
+  model: ServerProviderModel,
+): ThreadOrchestrationThreadModelChoice | undefined {
+  if (!providerIsSelectable(provider) || isHiddenThreadModel(model.slug)) return undefined;
+  const reasoning = reasoningOptionForModel(model);
+  return {
+    environmentId,
+    provider: providerDisplayName(provider),
+    providerInstanceId: provider.instanceId,
+    driver: provider.driver,
+    model: model.slug,
+    name: model.name,
+    ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
+    ...(reasoning !== undefined ? { reasoning } : {}),
+    modelSelection: {
+      instanceId: provider.instanceId,
+      model: model.slug,
+    },
+  };
+}
+
+function assertExplicitModelSelectionAllowed(
+  operation: string,
+  modelSelection: ModelSelection | undefined,
+): Effect.Effect<void, ThreadOrchestrationError> {
+  if (modelSelection === undefined || !isHiddenThreadModel(modelSelection.model)) {
+    return Effect.void;
+  }
+  return Effect.fail(
+    new ThreadOrchestrationError({
+      operation,
+      code: "model_not_selectable",
+      message: `Model '${modelSelection.model}' is intentionally hidden from thread orchestration. Omit modelSelection to inherit the current thread's model, or choose a model returned by list_thread_models.`,
+      resourceType: "model",
+      resourceId: modelSelection.model,
+    }),
+  );
 }
 
 function relationshipFromActivity(
@@ -471,91 +578,84 @@ const make = Effect.gen(function* () {
       return yield* threadResultFromModel(model, input.threadId, "read_thread_result");
     });
 
-  const listProjects = () =>
-    shellSnapshot.pipe(
-      Effect.map((model) => ({
-        projects: model.projects.toSorted(compareUpdatedDesc).map((project) => ({
-          projectId: project.id,
-          title: project.title,
-          workspaceRoot: project.workspaceRoot,
-          defaultModelSelection: project.defaultModelSelection,
-          updatedAt: project.updatedAt,
-        })),
-      })),
-    );
-
-  const listExecutionTargets = () =>
+  const listLocalProjects = () =>
     Effect.gen(function* () {
-      const [model, descriptor, providers] = yield* Effect.all(
+      const [model, descriptor] = yield* Effect.all(
         [
           shellSnapshot,
           serverEnvironment.getDescriptor.pipe(
-            Effect.mapError(toThreadOrchestrationError("list_execution_targets.environment")),
+            Effect.mapError(toThreadOrchestrationError("list_projects.environment")),
           ),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const projects = model.projects.toSorted(compareUpdatedDesc).map((project) => ({
+        projectId: project.id,
+        title: project.title,
+        workspaceRoot: project.workspaceRoot,
+        updatedAt: project.updatedAt,
+      }));
+      return {
+        environments: [
+          {
+            environmentId: descriptor.environmentId,
+            label: descriptor.label,
+            remoteRouting: "currentEnvironmentOnly" as const,
+            canCreateLocalThreads: true,
+            canCreateWorktreeThreads: true,
+            projects,
+          },
+        ],
+      };
+    });
+
+  const listProjects = () =>
+    Effect.gen(function* () {
+      const [localProjects, remoteProjects] = yield* Effect.all(
+        [listLocalProjects(), remoteClient.listProjects()],
+        { concurrency: "unbounded" },
+      );
+      return {
+        environments: [
+          ...localProjects.environments,
+          ...remoteProjects.environments.map((environment) => ({
+            ...environment,
+            remoteRouting: "registeredRemote" as const,
+          })),
+        ],
+      };
+    });
+
+  const listLocalThreadModels = () =>
+    Effect.gen(function* () {
+      const [environmentId, providers] = yield* Effect.all(
+        [
+          localEnvironmentId,
           providerRegistry.getProviders.pipe(
-            Effect.mapError(toThreadOrchestrationError("list_execution_targets.providers")),
+            Effect.mapError(toThreadOrchestrationError("list_thread_models.providers")),
           ),
         ],
         { concurrency: "unbounded" },
       );
 
-      const projects = model.projects.toSorted(compareUpdatedDesc).map((project) => ({
-        projectId: project.id,
-        title: project.title,
-        workspaceRoot: project.workspaceRoot,
-        defaultModelSelection: project.defaultModelSelection,
-        updatedAt: project.updatedAt,
-      }));
-
-      const localTarget = {
-        environment: descriptor,
-        hostId: descriptor.environmentId,
-        remoteRouting: "currentEnvironmentOnly" as const,
-        canCreateLocalThreads: true,
-        canCreateWorktreeThreads: true,
-        providers: providers.map((provider) => ({
-          instanceId: provider.instanceId,
-          driver: provider.driver,
-          ...(provider.displayName !== undefined ? { displayName: provider.displayName } : {}),
-          enabled: provider.enabled,
-          installed: provider.installed,
-          status: provider.status,
-          authStatus: provider.auth.status,
-          availability: provider.availability ?? "available",
-          requiresNewThreadForModelChange: provider.requiresNewThreadForModelChange ?? false,
-          models: provider.models.map((model) => ({
-            slug: model.slug,
-            name: model.name,
-            ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
-            ...(model.subProvider !== undefined ? { subProvider: model.subProvider } : {}),
-            isCustom: model.isCustom,
-            capabilities: model.capabilities,
-            modelSelection: {
-              instanceId: provider.instanceId,
-              model: model.slug,
-            },
-          })),
-        })),
-        projects,
-        notes: [
-          "Pass a provider model's modelSelection directly to create_thread.modelSelection to choose that provider/model for a new thread.",
-          "Omit environmentId to use the calling thread's current host. Pass a returned remote environmentId to create/read/manage threads on a registered remote host.",
-          "Provider instance changes after a thread starts may be rejected; use provider fanout by creating separate threads.",
-        ],
-      };
-      const remoteTargets = yield* remoteClient.listExecutionTargets();
-
+      const localModels = providers.flatMap((provider) =>
+        provider.models.flatMap(
+          (model) => modelChoiceForProvider(environmentId, provider, model) ?? [],
+        ),
+      );
       return {
-        targets: [
-          localTarget,
-          ...remoteTargets.targets.map((target) => ({
-            ...target,
-            notes: [
-              ...target.notes,
-              "This registered remote target can be selected by passing its environment.environmentId as environmentId on orchestration tool inputs.",
-            ],
-          })),
-        ],
+        models: localModels,
+      };
+    });
+
+  const listThreadModels = () =>
+    Effect.gen(function* () {
+      const [localModels, remoteModels] = yield* Effect.all(
+        [listLocalThreadModels(), remoteClient.listThreadModels()],
+        { concurrency: "unbounded" },
+      );
+      return {
+        models: [...localModels.models, ...remoteModels.models],
       };
     });
 
@@ -758,14 +858,18 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const createThread = (
+  const createThreadInternal = (
     scope: McpInvocationContext.McpInvocationScope,
     input: ThreadOrchestrationCreateThreadInput,
+    options: { readonly modelSelectionIntent: "explicit" | "inherited" },
   ) =>
     Effect.gen(function* () {
       const model = yield* snapshot;
       const sourceThread = findThread(model.threads, scope.threadId);
       const resolvedInput = yield* resolveCreateInput(scope, sourceThread, input);
+      if (options.modelSelectionIntent === "explicit") {
+        yield* assertExplicitModelSelectionAllowed("create_thread", input.modelSelection);
+      }
       if (yield* shouldRouteRemote(input.target?.environmentId)) {
         return yield* remoteClient.createThread(scopeForRemote(scope), resolvedInput);
       }
@@ -911,6 +1015,22 @@ const make = Effect.gen(function* () {
         },
         promptSubmitted: true,
       };
+    });
+
+  const createThread = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationCreateThreadInput,
+  ) =>
+    createThreadInternal(scope, input, {
+      modelSelectionIntent: input.modelSelection === undefined ? "inherited" : "explicit",
+    });
+
+  const createThreadFromRemote = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationCreateThreadInput,
+  ) =>
+    createThreadInternal(scope, input, {
+      modelSelectionIntent: input.modelSelection === undefined ? "inherited" : "explicit",
     });
 
   const forkThread = (
@@ -1067,6 +1187,14 @@ const make = Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
         return yield* remoteClient.sendMessageToThread(scopeForRemote(scope), input);
       }
+      yield* assertExplicitModelSelectionAllowed("send_message_to_thread", input.modelSelection);
+      const model = yield* snapshot;
+      const targetThread = findThread(model.threads, input.threadId);
+      if (!targetThread) {
+        return yield* notFoundError("send_message_to_thread", "thread", input.threadId, {
+          threadId: input.threadId,
+        });
+      }
       const createdAt = yield* nowIso;
       yield* engine
         .dispatch({
@@ -1080,8 +1208,8 @@ const make = Effect.gen(function* () {
             attachments: [],
           },
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
-          runtimeMode: input.runtimeMode ?? "full-access",
-          interactionMode: input.interactionMode ?? "default",
+          runtimeMode: input.runtimeMode ?? targetThread.runtimeMode,
+          interactionMode: input.interactionMode ?? targetThread.interactionMode,
           createdAt,
         })
         .pipe(
@@ -1142,13 +1270,16 @@ const make = Effect.gen(function* () {
 
   return ThreadOrchestrationService.of({
     listProjects,
-    listExecutionTargets,
+    listThreadModels,
+    listLocalProjects,
+    listLocalThreadModels,
     listThreads,
     readThread,
     readThreadResult,
     awaitThread,
     getThreadGraph,
     createThread,
+    createThreadFromRemote,
     forkThread,
     sendMessageToThread,
     setThreadTitle,

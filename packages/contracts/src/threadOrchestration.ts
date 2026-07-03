@@ -9,7 +9,6 @@ import {
   ThreadId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
-import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   ModelSelection,
   OrchestrationMessage,
@@ -17,7 +16,6 @@ import {
   ProviderInteractionMode,
   RuntimeMode,
 } from "./orchestration.ts";
-import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
 export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrchestrationError>()(
@@ -40,60 +38,50 @@ export const ThreadOrchestrationProjectSummary = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
-  defaultModelSelection: Schema.NullOr(ModelSelection),
   updatedAt: IsoDateTime,
 });
 export type ThreadOrchestrationProjectSummary = typeof ThreadOrchestrationProjectSummary.Type;
 
 export const ThreadOrchestrationListProjectsResult = Schema.Struct({
-  projects: Schema.Array(ThreadOrchestrationProjectSummary),
+  environments: Schema.Array(
+    Schema.Struct({
+      environmentId: EnvironmentId,
+      label: TrimmedNonEmptyString,
+      remoteRouting: Schema.Literals(["currentEnvironmentOnly", "registeredRemote"]),
+      canCreateLocalThreads: Schema.Boolean,
+      canCreateWorktreeThreads: Schema.Boolean,
+      projects: Schema.Array(ThreadOrchestrationProjectSummary),
+    }),
+  ),
 });
 export type ThreadOrchestrationListProjectsResult =
   typeof ThreadOrchestrationListProjectsResult.Type;
 
-export const ThreadOrchestrationProviderModelSummary = Schema.Struct({
-  slug: TrimmedNonEmptyString,
+export const ThreadOrchestrationReasoningOption = Schema.Struct({
+  optionId: TrimmedNonEmptyString,
+  values: Schema.Array(TrimmedNonEmptyString),
+  defaultValue: Schema.optional(TrimmedNonEmptyString),
+});
+export type ThreadOrchestrationReasoningOption = typeof ThreadOrchestrationReasoningOption.Type;
+
+export const ThreadOrchestrationThreadModelChoice = Schema.Struct({
+  environmentId: EnvironmentId,
+  provider: TrimmedNonEmptyString,
+  providerInstanceId: ProviderInstanceId,
+  driver: ProviderDriverKind,
+  model: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   shortName: Schema.optional(TrimmedNonEmptyString),
-  subProvider: Schema.optional(TrimmedNonEmptyString),
-  isCustom: Schema.Boolean,
-  capabilities: Schema.NullOr(ModelCapabilities),
+  reasoning: Schema.optional(ThreadOrchestrationReasoningOption),
   modelSelection: ModelSelection,
 });
-export type ThreadOrchestrationProviderModelSummary =
-  typeof ThreadOrchestrationProviderModelSummary.Type;
+export type ThreadOrchestrationThreadModelChoice = typeof ThreadOrchestrationThreadModelChoice.Type;
 
-export const ThreadOrchestrationProviderSummary = Schema.Struct({
-  instanceId: ProviderInstanceId,
-  driver: ProviderDriverKind,
-  displayName: Schema.optional(TrimmedNonEmptyString),
-  enabled: Schema.Boolean,
-  installed: Schema.Boolean,
-  status: TrimmedNonEmptyString,
-  authStatus: TrimmedNonEmptyString,
-  availability: TrimmedNonEmptyString,
-  requiresNewThreadForModelChange: Schema.Boolean,
-  models: Schema.Array(ThreadOrchestrationProviderModelSummary),
+export const ThreadOrchestrationListThreadModelsResult = Schema.Struct({
+  models: Schema.Array(ThreadOrchestrationThreadModelChoice),
 });
-export type ThreadOrchestrationProviderSummary = typeof ThreadOrchestrationProviderSummary.Type;
-
-export const ThreadOrchestrationExecutionTarget = Schema.Struct({
-  environment: ExecutionEnvironmentDescriptor,
-  hostId: EnvironmentId,
-  remoteRouting: Schema.Literals(["currentEnvironmentOnly", "registeredRemote"]),
-  canCreateLocalThreads: Schema.Boolean,
-  canCreateWorktreeThreads: Schema.Boolean,
-  providers: Schema.Array(ThreadOrchestrationProviderSummary),
-  projects: Schema.Array(ThreadOrchestrationProjectSummary),
-  notes: Schema.Array(TrimmedNonEmptyString),
-});
-export type ThreadOrchestrationExecutionTarget = typeof ThreadOrchestrationExecutionTarget.Type;
-
-export const ThreadOrchestrationListExecutionTargetsResult = Schema.Struct({
-  targets: Schema.Array(ThreadOrchestrationExecutionTarget),
-});
-export type ThreadOrchestrationListExecutionTargetsResult =
-  typeof ThreadOrchestrationListExecutionTargetsResult.Type;
+export type ThreadOrchestrationListThreadModelsResult =
+  typeof ThreadOrchestrationListThreadModelsResult.Type;
 
 export const ThreadOrchestrationListThreadsInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId),

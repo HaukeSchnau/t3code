@@ -7,7 +7,8 @@ import {
   type ThreadOrchestrationAwaitThreadResult,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
-  type ThreadOrchestrationListExecutionTargetsResult,
+  type ThreadOrchestrationListProjectsResult,
+  type ThreadOrchestrationListThreadModelsResult,
   type ThreadOrchestrationListThreadsInput,
   type ThreadOrchestrationListThreadsResult,
   type ThreadOrchestrationReadThreadInput,
@@ -38,8 +39,12 @@ const isThreadOrchestrationError = Schema.is(ThreadOrchestrationError);
 export class RemoteThreadOrchestrationClient extends Context.Service<
   RemoteThreadOrchestrationClient,
   {
-    readonly listExecutionTargets: () => Effect.Effect<
-      ThreadOrchestrationListExecutionTargetsResult,
+    readonly listProjects: () => Effect.Effect<
+      ThreadOrchestrationListProjectsResult,
+      ThreadOrchestrationError
+    >;
+    readonly listThreadModels: () => Effect.Effect<
+      ThreadOrchestrationListThreadModelsResult,
       ThreadOrchestrationError
     >;
     readonly listThreads: (
@@ -144,52 +149,104 @@ const make = Effect.gen(function* () {
       baseUrl,
     });
 
-  const listExecutionTargets = () =>
+  const listProjects = () =>
     Effect.gen(function* () {
       const environments = yield* registry
         .list()
         .pipe(
           Effect.mapError((cause) =>
-            toThreadOrchestrationError("list_execution_targets.remote_registry")(cause),
+            toThreadOrchestrationError("list_projects.remote_registry")(cause),
           ),
         );
       const results = yield* Effect.forEach(
         environments,
         (environment) =>
           withTarget(
-            "list_execution_targets.remote",
+            "list_projects.remote",
             environment.environmentId,
             ({ baseUrl, authorization }) =>
               Effect.gen(function* () {
                 const client = yield* remoteClient(baseUrl);
-                return yield* client.threadOrchestration.listExecutionTargets({
+                return yield* client.threadOrchestration.listProjects({
+                  headers: { authorization },
+                });
+              }).pipe(
+                Effect.provide(FetchHttpClient.layer),
+                Effect.mapError(
+                  toThreadOrchestrationError("list_projects.remote", environment.environmentId),
+                ),
+              ),
+          ).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("Remote project discovery failed.", {
+                environmentId: environment.environmentId,
+                cause,
+              }).pipe(Effect.as({ environments: [] })),
+            ),
+          ),
+        { concurrency: 4 },
+      );
+      return {
+        environments: results.flatMap((result) =>
+          result.environments
+            .filter((target) =>
+              environments.some(
+                (environment) => environment.environmentId === target.environmentId,
+              ),
+            )
+            .map((target) => ({
+              ...target,
+              remoteRouting: "registeredRemote" as const,
+            })),
+        ),
+      };
+    });
+
+  const listThreadModels = () =>
+    Effect.gen(function* () {
+      const environments = yield* registry
+        .list()
+        .pipe(
+          Effect.mapError((cause) =>
+            toThreadOrchestrationError("list_thread_models.remote_registry")(cause),
+          ),
+        );
+      const results = yield* Effect.forEach(
+        environments,
+        (environment) =>
+          withTarget(
+            "list_thread_models.remote",
+            environment.environmentId,
+            ({ baseUrl, authorization }) =>
+              Effect.gen(function* () {
+                const client = yield* remoteClient(baseUrl);
+                return yield* client.threadOrchestration.listThreadModels({
                   headers: { authorization },
                 });
               }).pipe(
                 Effect.provide(FetchHttpClient.layer),
                 Effect.mapError(
                   toThreadOrchestrationError(
-                    "list_execution_targets.remote",
+                    "list_thread_models.remote",
                     environment.environmentId,
                   ),
                 ),
               ),
           ).pipe(
             Effect.catch((cause) =>
-              Effect.logWarning("Remote execution target discovery failed.", {
+              Effect.logWarning("Remote thread model discovery failed.", {
                 environmentId: environment.environmentId,
                 cause,
-              }).pipe(Effect.as({ targets: [] })),
+              }).pipe(Effect.as({ models: [] })),
             ),
           ),
         { concurrency: 4 },
       );
       return {
-        targets: results.flatMap((result) =>
-          result.targets.map((target) => ({
-            ...target,
-            remoteRouting: "registeredRemote" as const,
-          })),
+        models: results.flatMap((result) =>
+          result.models.filter((model) =>
+            environments.some((environment) => environment.environmentId === model.environmentId),
+          ),
         ),
       };
     });
@@ -346,7 +403,8 @@ const make = Effect.gen(function* () {
     );
 
   return RemoteThreadOrchestrationClient.of({
-    listExecutionTargets,
+    listProjects,
+    listThreadModels,
     listThreads,
     readThread,
     readThreadResult,

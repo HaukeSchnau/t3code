@@ -35,7 +35,8 @@ import {
   ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationCreateThreadResult,
   ThreadOrchestrationError,
-  ThreadOrchestrationListExecutionTargetsResult,
+  ThreadOrchestrationListProjectsResult,
+  ThreadOrchestrationListThreadModelsResult,
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationScopedAwaitThreadInput,
   ThreadOrchestrationScopedCreateThreadInput,
@@ -472,9 +473,16 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
 
 export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("threadOrchestration")
   .add(
-    HttpApiEndpoint.get("listExecutionTargets", "/api/thread-orchestration/execution-targets", {
+    HttpApiEndpoint.get("listProjects", "/api/thread-orchestration/projects", {
       headers: OptionalBearerHeaders,
-      success: ThreadOrchestrationListExecutionTargetsResult,
+      success: ThreadOrchestrationListProjectsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("listThreadModels", "/api/thread-orchestration/thread-models", {
+      headers: OptionalBearerHeaders,
+      success: ThreadOrchestrationListThreadModelsResult,
       error: EnvironmentThreadOrchestrationReadErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

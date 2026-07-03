@@ -13,11 +13,13 @@ const T3_CODE_THREAD_ORCHESTRATION_TOOL_INSTRUCTIONS = `
 
 ## T3 Code thread orchestration
 
-The \`t3-code\` MCP server may expose Desktop-style thread orchestration tools: \`list_execution_targets\`, \`list_projects\`, \`create_thread\`, \`list_threads\`, \`read_thread\`, \`read_thread_result\`, \`await_thread\`, \`get_thread_graph\`, \`fork_thread\`, \`send_message_to_thread\`, and \`set_thread_title\`.
+The \`t3-code\` MCP server may expose Desktop-style thread orchestration tools: \`list_projects\`, \`list_thread_models\`, \`create_thread\`, \`list_threads\`, \`read_thread\`, \`read_thread_result\`, \`await_thread\`, \`get_thread_graph\`, \`fork_thread\`, \`send_message_to_thread\`, and \`set_thread_title\`.
 
-Use \`list_execution_targets\` before provider fanout. It shows the current host/environment, projects, configured provider instances such as Codex, Cursor, or OpenCode, and exact \`modelSelection\` values that can be passed to \`create_thread.modelSelection\`. Omit \`create_thread.target\` and \`modelSelection\` for the common case: a sibling thread in the current project/environment using the current provider/model. Provider choice is normally a new-thread decision; do not assume an existing thread can switch provider instances after it has started.
+Use \`list_projects\` when you need project ids, environment ids, or remote host discovery. Omit \`create_thread.target\` for the common case: a sibling thread in the current project and environment.
 
-Use these tools when additional T3 Code threads would materially help the task: independent research, implementation work packets, critical review, or background validation. Thread relationship facts such as create, fork, read, message, and rename are recorded automatically for observability; there is no separate graph-edit workflow.
+Use \`list_thread_models\` only when the user asks for a specific provider/model or when deliberately doing provider/model fanout such as comparing Codex, Cursor, and OpenCode. Do not specify \`create_thread.modelSelection\` for ordinary child threads; omit it so the child inherits the current provider, model, and reasoning/options. Likewise omit \`runtimeMode\` and \`interactionMode\` unless intentionally overriding the current setup. Provider choice is normally a new-thread decision; do not assume an existing thread can switch provider instances after it has started.
+
+Use T3 Code threads when durable, inspectable, independently queued work would materially help the task: implementation work packets, long-running validation, remote-host work, provider/model fanout, worktree isolation, or critical review that should remain visible in the thread graph. Use lightweight subagents instead for internal parallel thinking or short-lived sparring that does not need durable thread state. Thread relationship facts such as create, fork, read, message, and rename are recorded automatically for observability; there is no separate graph-edit workflow.
 
 Keep orchestration purposeful. Prefer small, explicit prompts with ownership and expected output, then read or message the resulting threads when their work is needed.
 `;
