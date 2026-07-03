@@ -5,9 +5,13 @@ per-thread `t3-code` MCP server. Provider sessions receive the `threads`
 capability next to `preview`, which makes these tools available to agents:
 
 - `list_projects`
+- `list_thread_models`
 - `create_thread`
 - `list_threads`
 - `read_thread`
+- `read_thread_result`
+- `await_thread`
+- `get_thread_graph`
 - `fork_thread`
 - `send_message_to_thread`
 - `set_thread_title`

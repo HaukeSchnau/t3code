@@ -2,28 +2,34 @@
 
 T3 Code exposes Desktop-style thread orchestration primitives to Codex-backed agents.
 
-The patch exposes `list_execution_targets` as the discovery entrypoint for
-orchestrators. It returns the current environment descriptor, host id, routability
-state, projects, provider instances, models, model capabilities, and exact
-`modelSelection` objects that can be passed to `create_thread.modelSelection`.
-This lets agents fan out across configured providers such as Codex, Cursor, and
-OpenCode without guessing provider instance ids or model slugs.
+The patch exposes `list_projects` as the normal discovery entrypoint for
+orchestrators. It returns local and registered remote environments plus their
+projects, so agents can choose a `projectId` or `environmentId` without learning
+provider/model details.
 For the common case, `create_thread` can omit both `target` and `modelSelection`;
 it defaults to a sibling thread in the calling thread's current project, current
-environment, and current provider/model. Supplying
-`target.environment.type: "worktree"` or an explicit `modelSelection` is reserved for intentional
-isolation or provider/model fanout.
+environment, current provider/model/options, runtime mode, and interaction mode.
+Supplying `target.environment.type: "worktree"` or an explicit `modelSelection`
+is reserved for intentional isolation or provider/model fanout.
+
+Provider/model discovery is exposed separately through `list_thread_models`.
+That tool returns curated model choices with exact `modelSelection` objects that
+can be passed to `create_thread.modelSelection`, plus compact reasoning metadata
+when a provider exposes a reasoning selector. Agents are instructed not to call
+it for ordinary child threads. Hidden orchestration models such as small, stale,
+or internal models are omitted and cannot be explicitly selected via the
+orchestration tools, though existing threads may continue to inherit their
+current model settings.
 
 Remote host orchestration is represented explicitly through `environmentId`.
 The local T3 server owns a backend-to-backend remote orchestration registry,
 persisting non-secret remote metadata in `remote-orchestration-environments.json`
 and storing bearer access tokens in `ServerSecretStore`. `t3 remote register`
 can exchange a one-time remote pairing token for an orchestration-scoped bearer
-session and register the remote host. `list_execution_targets` returns both the
-current environment and registered remotes; agents pass the returned
-`environment.environmentId` to the existing thread tools rather than using a
-separate remote-only tool family. Omitting `environmentId` preserves the current
-host/current project/current provider defaults.
+session and register the remote host. `list_projects` returns both the current
+environment and registered remotes; agents pass the returned `environmentId` to the
+existing thread tools rather than using a separate remote-only tool family. Omitting
+`environmentId` preserves the current host/current project/current provider defaults.
 
 This fork-specific patch extends the existing MCP thread toolkit with compact passive
 observability tools:

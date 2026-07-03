@@ -144,7 +144,8 @@ const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter,
 });
 
 const remoteThreadOrchestrationClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
-  listExecutionTargets: () => Effect.succeed({ targets: [] }),
+  listProjects: () => Effect.succeed({ environments: [] }),
+  listThreadModels: () => Effect.succeed({ models: [] }),
   listThreads: () => Effect.die("unused remote listThreads"),
   readThread: () => Effect.die("unused remote readThread"),
   readThreadResult: () => Effect.die("unused remote readThreadResult"),
@@ -170,6 +171,27 @@ const providerSnapshots: ServerProvider[] = [
       {
         slug: "gpt-5.4",
         name: "GPT-5.4",
+        isCustom: false,
+        capabilities: {
+          optionDescriptors: [
+            {
+              id: "reasoningEffort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High", isDefault: true },
+                { id: "xhigh", label: "Extra High" },
+              ],
+              currentValue: "high",
+            },
+          ],
+        },
+      },
+      {
+        slug: "gpt-5.3-codex-spark",
+        name: "Spark",
         isCustom: false,
         capabilities: null,
       },
@@ -216,13 +238,25 @@ const providerSnapshots: ServerProvider[] = [
         isCustom: false,
         capabilities: null,
       },
+      {
+        slug: "openai/gpt-5.4-mini-fast",
+        name: "OpenAI GPT-5.4 Mini Fast",
+        isCustom: false,
+        capabilities: null,
+      },
+      {
+        slug: "openai/gpt-5.3-codex-spark",
+        name: "OpenAI GPT-5.3 Codex Spark",
+        isCustom: false,
+        capabilities: null,
+      },
     ],
     slashCommands: [],
     skills: [],
   },
 ];
 
-const makeTestExecutionTargetDependencies = (
+const makeTestThreadDiscoveryDependencies = (
   remoteClientLayer: Layer.Layer<RemoteThreadOrchestrationClient> = remoteThreadOrchestrationClientLayer,
 ) =>
   Layer.mergeAll(
@@ -248,9 +282,9 @@ const makeTestExecutionTargetDependencies = (
       streamChanges: Stream.empty,
     }),
   );
-const testExecutionTargetDependencies = makeTestExecutionTargetDependencies();
+const testThreadDiscoveryDependencies = makeTestThreadDiscoveryDependencies();
 
-it.effect("lists execution targets with provider model selections and project defaults", () => {
+it.effect("lists thread model choices with curated model selections and reasoning options", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
@@ -284,57 +318,51 @@ it.effect("lists execution targets with provider model selections and project de
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.listExecutionTargets();
+    const result = yield* service.listThreadModels();
 
-    expect(result.targets).toHaveLength(1);
-    expect(result.targets[0]).toMatchObject({
-      hostId: scope.environmentId,
-      remoteRouting: "currentEnvironmentOnly",
-      environment: {
+    expect(result.models).toEqual([
+      {
         environmentId: scope.environmentId,
-        label: "MacBook",
-      },
-      canCreateLocalThreads: true,
-      canCreateWorktreeThreads: true,
-      projects: [
-        {
-          projectId,
-          defaultModelSelection: project.defaultModelSelection,
-        },
-      ],
-    });
-    expect(
-      result.targets[0]?.providers.map((provider) => ({
-        instanceId: provider.instanceId,
-        driver: provider.driver,
-        models: provider.models.map((model) => model.modelSelection),
-      })),
-    ).toEqual([
-      {
-        instanceId: ProviderInstanceId.make("codex"),
+        provider: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
         driver: "codex",
-        models: [{ instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" }],
+        model: "gpt-5.4",
+        name: "GPT-5.4",
+        reasoning: {
+          optionId: "reasoningEffort",
+          values: ["low", "medium", "high", "xhigh"],
+          defaultValue: "high",
+        },
+        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
       },
       {
-        instanceId: ProviderInstanceId.make("cursor"),
+        environmentId: scope.environmentId,
+        provider: "Cursor",
+        providerInstanceId: ProviderInstanceId.make("cursor"),
         driver: "cursor",
-        models: [{ instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" }],
+        model: "composer-2",
+        name: "Composer 2",
+        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" },
       },
       {
-        instanceId: ProviderInstanceId.make("opencode"),
+        environmentId: scope.environmentId,
+        provider: "OpenCode",
+        providerInstanceId: ProviderInstanceId.make("opencode"),
         driver: "opencode",
-        models: [{ instanceId: ProviderInstanceId.make("opencode"), model: "openai/gpt-5" }],
+        model: "openai/gpt-5",
+        name: "OpenAI GPT-5",
+        modelSelection: { instanceId: ProviderInstanceId.make("opencode"), model: "openai/gpt-5" },
       },
     ]);
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("lists projects with default model selections", () => {
+it.effect("lists environments and projects without provider model metadata", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
@@ -368,27 +396,246 @@ it.effect("lists projects with default model selections", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
     const result = yield* service.listProjects();
 
-    expect(result.projects).toEqual([
+    expect(result.environments).toEqual([
       {
-        projectId,
-        title: "Project",
-        workspaceRoot: "/repo/project",
-        defaultModelSelection: project.defaultModelSelection,
-        updatedAt: "2026-01-01T00:00:00.000Z",
+        environmentId: scope.environmentId,
+        label: "MacBook",
+        remoteRouting: "currentEnvironmentOnly",
+        canCreateLocalThreads: true,
+        canCreateWorktreeThreads: true,
+        projects: [
+          {
+            projectId,
+            title: "Project",
+            workspaceRoot: "/repo/project",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
       },
+    ]);
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("keeps local discovery separate from aggregate remote discovery", () => {
+  const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+  const remoteClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
+    listProjects: () =>
+      Effect.succeed({
+        environments: [
+          {
+            environmentId: remoteEnvironmentId,
+            label: "srv-2",
+            remoteRouting: "registeredRemote" as const,
+            canCreateLocalThreads: true,
+            canCreateWorktreeThreads: true,
+            projects: [
+              {
+                projectId: "remote-project" as OrchestrationProject["id"],
+                title: "Remote Project",
+                workspaceRoot: "/srv/project",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+              },
+            ],
+          },
+        ],
+      }),
+    listThreadModels: () =>
+      Effect.succeed({
+        models: [
+          {
+            environmentId: remoteEnvironmentId,
+            provider: "Codex",
+            providerInstanceId: ProviderInstanceId.make("remote-codex"),
+            driver: providerSnapshots[0]!.driver,
+            model: "gpt-5.5",
+            name: "GPT-5.5",
+            modelSelection: {
+              instanceId: ProviderInstanceId.make("remote-codex"),
+              model: "gpt-5.5",
+            },
+          },
+        ],
+      }),
+    listThreads: () => Effect.die("unused remote listThreads"),
+    readThread: () => Effect.die("unused remote readThread"),
+    readThreadResult: () => Effect.die("unused remote readThreadResult"),
+    awaitThread: () => Effect.die("unused remote awaitThread"),
+    getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
+    createThread: () => Effect.die("unused remote createThread"),
+    sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
+    setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
+  });
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("unused"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.succeed(shellSnapshot),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(makeTestThreadDiscoveryDependencies(remoteClientLayer)),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const localProjects = yield* service.listLocalProjects();
+    const aggregateProjects = yield* service.listProjects();
+    const localModels = yield* service.listLocalThreadModels();
+    const aggregateModels = yield* service.listThreadModels();
+
+    expect(localProjects.environments.map((environment) => environment.environmentId)).toEqual([
+      scope.environmentId,
+    ]);
+    expect(aggregateProjects.environments.map((environment) => environment.environmentId)).toEqual([
+      scope.environmentId,
+      remoteEnvironmentId,
+    ]);
+    expect(localModels.models.map((model) => model.environmentId)).toEqual([
+      scope.environmentId,
+      scope.environmentId,
+      scope.environmentId,
+    ]);
+    expect(aggregateModels.models.map((model) => model.environmentId)).toEqual([
+      scope.environmentId,
+      scope.environmentId,
+      scope.environmentId,
+      remoteEnvironmentId,
     ]);
   }).pipe(Effect.provide(testLayer));
 });
 
 it.effect("queues cross-thread messages and records relationship activities", () => {
   const dispatched: OrchestrationCommand[] = [];
+  const model: OrchestrationReadModel = {
+    ...readModel,
+    threads: [
+      makeThread(actorThreadId),
+      {
+        ...makeThread(targetThreadId),
+        runtimeMode: "approval-required",
+        interactionMode: "default",
+      },
+    ],
+  };
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(model),
+        getSnapshot: () => Effect.succeed(model),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testThreadDiscoveryDependencies),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const result = yield* service.sendMessageToThread(scope, {
+      threadId: targetThreadId,
+      prompt: "Please review the plan.",
+    });
+
+    expect(result.thread.threadId).toBe(targetThreadId);
+    expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.message.queue",
+      "thread.activity.append",
+    ]);
+    expect(dispatched[0]).toMatchObject({
+      type: "thread.message.queue",
+      threadId: targetThreadId,
+      message: { text: "Please review the plan." },
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    });
+    expect(dispatched[1]).toMatchObject({
+      type: "thread.activity.append",
+      threadId: targetThreadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "messagedBy",
+          actorThreadId,
+          targetThreadId,
+        },
+      },
+    });
+    expect((dispatched[0] as { commandId: CommandId }).commandId).not.toBe(
+      (dispatched[1] as { commandId: CommandId }).commandId,
+    );
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("rejects explicitly hidden models while allowing implicit inheritance", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const hiddenModelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.3-codex-spark",
+  };
+  const providerQualifiedHiddenModelSelection = {
+    instanceId: ProviderInstanceId.make("opencode"),
+    model: "openai/gpt-5.4-mini-fast",
+  };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
@@ -426,41 +673,144 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.sendMessageToThread(scope, {
-      threadId: targetThreadId,
-      prompt: "Please review the plan.",
+    const error = yield* service
+      .createThread(scope, {
+        prompt: "Please review with the hidden model.",
+        modelSelection: hiddenModelSelection,
+      })
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      operation: "create_thread",
+      code: "model_not_selectable",
+      resourceType: "model",
+      resourceId: "gpt-5.3-codex-spark",
     });
 
-    expect(result.thread.threadId).toBe(targetThreadId);
+    const providerQualifiedError = yield* service
+      .createThread(scope, {
+        prompt: "Please review with the provider-qualified hidden model.",
+        modelSelection: providerQualifiedHiddenModelSelection,
+      })
+      .pipe(Effect.flip);
+
+    expect(providerQualifiedError).toMatchObject({
+      operation: "create_thread",
+      code: "model_not_selectable",
+      resourceType: "model",
+      resourceId: "openai/gpt-5.4-mini-fast",
+    });
+
+    const result = yield* service.createThread(scope, {
+      prompt: "Please review with inherited settings.",
+    });
+
+    expect(result.thread.modelSelection).toEqual(actorModelSelection);
     expect(dispatched.map((command) => command.type)).toEqual([
-      "thread.message.queue",
+      "thread.create",
+      "thread.turn.start",
       "thread.activity.append",
     ]);
-    expect(dispatched[0]).toMatchObject({
-      type: "thread.message.queue",
-      threadId: targetThreadId,
-      message: { text: "Please review the plan." },
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("rejects hidden model selections sent through remote creation", () => {
+  const remoteEnvironmentId = EnvironmentId.make("environment-remote");
+  const hiddenModelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.3-codex-spark",
+  };
+  const remoteInputs: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[1][] =
+    [];
+  const remoteClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
+    listProjects: () => Effect.succeed({ environments: [] }),
+    listThreadModels: () => Effect.succeed({ models: [] }),
+    listThreads: () => Effect.die("unused remote listThreads"),
+    readThread: () => Effect.die("unused remote readThread"),
+    readThreadResult: () => Effect.die("unused remote readThreadResult"),
+    awaitThread: () => Effect.die("unused remote awaitThread"),
+    getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
+    createThread: (_remoteScope, input) =>
+      Effect.sync(() => {
+        remoteInputs.push(input);
+        return {
+          thread: {
+            environmentId: remoteEnvironmentId,
+            threadId: ThreadId.make("remote-thread"),
+            projectId,
+            title: input.title ?? "Remote Reviewer",
+            projectTitle: "Remote Project",
+            status: "running" as const,
+            modelSelection: input.modelSelection ?? hiddenModelSelection,
+            runtimeMode: input.runtimeMode ?? "full-access",
+            interactionMode: input.interactionMode ?? "default",
+            workspaceRoot: "/srv/project",
+            worktreePath: null,
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+          promptSubmitted: true,
+        };
+      }),
+    sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
+    setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
+  });
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("unused"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.succeed(readModel),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(makeTestThreadDiscoveryDependencies(remoteClientLayer)),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const error = yield* service
+      .createThreadFromRemote(scope, {
+        prompt: "Please review remotely with hidden settings.",
+        target: { projectId },
+        modelSelection: hiddenModelSelection,
+      })
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      operation: "create_thread",
+      code: "model_not_selectable",
     });
-    expect(dispatched[1]).toMatchObject({
-      type: "thread.activity.append",
-      threadId: targetThreadId,
-      activity: {
-        kind: "thread-orchestration.relationship",
-        payload: {
-          kind: "messagedBy",
-          actorThreadId,
-          targetThreadId,
-        },
-      },
-    });
-    expect((dispatched[0] as { commandId: CommandId }).commandId).not.toBe(
-      (dispatched[1] as { commandId: CommandId }).commandId,
-    );
+    expect(remoteInputs).toHaveLength(0);
   }).pipe(Effect.provide(testLayer));
 });
 
@@ -503,7 +853,7 @@ it.effect("creates threads before starting their initial turn", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -560,7 +910,8 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
   const remoteScopes: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[0][] =
     [];
   const remoteClientLayer = Layer.succeed(RemoteThreadOrchestrationClient, {
-    listExecutionTargets: () => Effect.succeed({ targets: [] }),
+    listProjects: () => Effect.succeed({ environments: [] }),
+    listThreadModels: () => Effect.succeed({ models: [] }),
     listThreads: () => Effect.die("unused remote listThreads"),
     readThread: () => Effect.die("unused remote readThread"),
     readThreadResult: () => Effect.die("unused remote readThreadResult"),
@@ -625,7 +976,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(makeTestExecutionTargetDependencies(remoteClientLayer)),
+    Layer.provide(makeTestThreadDiscoveryDependencies(remoteClientLayer)),
   );
 
   return Effect.gen(function* () {
@@ -730,7 +1081,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -842,7 +1193,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
           }),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -925,7 +1276,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -1032,7 +1383,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
           }),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -1120,7 +1471,7 @@ it.effect("reads compact thread results without recording read relationships", (
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -1173,7 +1524,7 @@ it.effect("awaits idle threads without polling side effects", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {
@@ -1271,7 +1622,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
         deleteWorkspace: () => Effect.die("unused"),
       }),
     ),
-    Layer.provide(testExecutionTargetDependencies),
+    Layer.provide(testThreadDiscoveryDependencies),
   );
 
   return Effect.gen(function* () {

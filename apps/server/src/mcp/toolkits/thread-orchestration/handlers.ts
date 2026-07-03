@@ -17,12 +17,10 @@ const requireThreadScope = McpInvocationContext.requireMcpCapability("threads").
 );
 
 const handlers = {
-  list_execution_targets: () =>
+  list_thread_models: () =>
     requireThreadScope.pipe(
       Effect.flatMap(() =>
-        ThreadOrchestrationService.pipe(
-          Effect.flatMap((service) => service.listExecutionTargets()),
-        ),
+        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.listThreadModels())),
       ),
     ),
   list_projects: () =>
