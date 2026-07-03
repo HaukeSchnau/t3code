@@ -1070,6 +1070,23 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    case "provider.usage-limits.update": {
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "provider",
+          aggregateId: command.providerInstanceId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "provider.usage-limits-updated",
+        payload: {
+          provider: command.provider,
+          providerInstanceId: command.providerInstanceId,
+          usageLimits: command.usageLimits,
+        },
+      };
+    }
+
     default: {
       command satisfies never;
       const fallback = command as never as { type: string };

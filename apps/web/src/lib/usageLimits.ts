@@ -96,7 +96,8 @@ export interface UsageLimitsSnapshot {
 
 export interface UsageLimitsActivitySource {
   provider: string | null;
-  activities: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
+  usageLimits?: ReadonlyArray<UsageLimitsSnapshot> | null | undefined;
+  activities?: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
 }
 
 export type UsageLimitWindowStatus = "ok" | "atRisk" | "reached" | "unknown";
@@ -460,6 +461,20 @@ function collectUsageLimitsSnapshotCandidates(
   return candidates;
 }
 
+function collectUsageLimitsSnapshotCandidatesFromSnapshots(
+  snapshots: ReadonlyArray<UsageLimitsSnapshot>,
+): Array<UsageLimitsSnapshotCandidate> {
+  const candidates: Array<UsageLimitsSnapshotCandidate> = [];
+  for (const snapshot of snapshots) {
+    const updatedAtMs = Date.parse(snapshot.updatedAt);
+    if (!Number.isFinite(updatedAtMs)) {
+      continue;
+    }
+    candidates.push({ snapshot, updatedAtMs });
+  }
+  return candidates;
+}
+
 function makeWindowCandidate(
   candidate: UsageLimitsSnapshotCandidate,
   window: UsageLimitWindowSnapshot | null,
@@ -593,7 +608,10 @@ export function deriveLatestUsageLimitsSnapshotForSources(
       continue;
     }
 
-    candidates.push(...collectUsageLimitsSnapshotCandidates(source.activities ?? []));
+    candidates.push(
+      ...collectUsageLimitsSnapshotCandidatesFromSnapshots(source.usageLimits ?? []),
+      ...collectUsageLimitsSnapshotCandidates(source.activities ?? []),
+    );
   }
 
   return aggregateUsageLimitsSnapshots(candidates);

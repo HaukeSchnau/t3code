@@ -17,7 +17,6 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import {
   type ApprovalRequestId,
-  defaultInstanceIdForDriver,
   ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
@@ -87,7 +86,7 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
-import { useProjects, useThread, useThreadShells } from "../state/entities";
+import { useProjects, useProviderUsageLimits, useThread, useThreadShells } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 
 type SidebarThreadSummary = EnvironmentThreadShell;
@@ -750,29 +749,17 @@ function MonitorThreadActions({
   const composerProjectKey = activeProject
     ? deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings)
     : null;
-  const providerDriverByInstanceId = useMemo(
-    () => new Map(providerStatuses.map((status) => [status.instanceId, status.driver])),
-    [providerStatuses],
-  );
+  const providerUsageLimits = useProviderUsageLimits(threadRef.environmentId);
   const activeUsageLimits = useMemo(
     () =>
       deriveLatestUsageLimitsSnapshotForSources(
-        thread
-          ? [
-              {
-                provider:
-                  providerDriverByInstanceId.get(thread.modelSelection.instanceId) ??
-                  (thread.modelSelection.instanceId ===
-                  defaultInstanceIdForDriver(ProviderDriverKind.make("codex"))
-                    ? ProviderDriverKind.make("codex")
-                    : null),
-                activities: thread.activities,
-              },
-            ]
-          : [],
+        providerUsageLimits.map((entry) => ({
+          provider: entry.provider,
+          usageLimits: [entry.usageLimits],
+        })),
         ProviderDriverKind.make("codex"),
       ),
-    [thread, providerDriverByInstanceId],
+    [providerUsageLimits],
   );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(threadRef)?.runtimeMode ?? null,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ProjectId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import { ProjectId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
 
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -9,6 +9,7 @@ const baseSnapshot: OrchestrationShellSnapshot = {
   snapshotSequence: 0,
   projects: [],
   threads: [],
+  usageLimits: [],
   updatedAt: "2026-04-01T00:00:00.000Z",
 };
 
@@ -172,6 +173,39 @@ describe("applyShellStreamEvent", () => {
 
       expect(next.threads).toHaveLength(0);
       expect(next.snapshotSequence).toBe(6);
+    });
+  });
+
+  describe("usage-limits-updated", () => {
+    it("upserts provider usage limits without touching threads", () => {
+      const event: OrchestrationShellStreamEvent = {
+        kind: "usage-limits-updated",
+        sequence: 9,
+        usageLimits: {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          usageLimits: {
+            updatedAt: "2026-04-01T00:05:00.000Z",
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "plus",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: {
+              usedPercent: 42,
+              resetsAt: "2026-04-01T05:00:00.000Z",
+              windowDurationMins: 300,
+            },
+            secondary: null,
+          },
+        },
+      };
+
+      const next = applyShellStreamEvent(baseSnapshot, event);
+
+      expect(next.usageLimits).toEqual([event.usageLimits]);
+      expect(next.threads).toEqual([]);
+      expect(next.snapshotSequence).toBe(9);
     });
   });
 

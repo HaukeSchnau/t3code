@@ -18,6 +18,7 @@ import {
   type OrchestrationActivityImageMedia,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
+  defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
 import Mime from "@effect/platform-node/Mime";
 import * as Cache from "effect/Cache";
@@ -568,7 +569,7 @@ function unwrapRateLimitSnapshot(value: unknown): Record<string, unknown> | null
   return current;
 }
 
-function buildUsageLimitsActivityPayload(event: ProviderRuntimeEvent):
+function buildUsageLimitsSnapshot(event: ProviderRuntimeEvent):
   | {
       readonly limitId: string | null;
       readonly limitName: string | null;
@@ -589,6 +590,7 @@ function buildUsageLimitsActivityPayload(event: ProviderRuntimeEvent):
         readonly resetsAt: string | null;
         readonly windowDurationMins: number | null;
       } | null;
+      readonly updatedAt: string;
     }
   | undefined {
   if (event.type !== "account.rate-limits.updated") {
@@ -637,6 +639,7 @@ function buildUsageLimitsActivityPayload(event: ProviderRuntimeEvent):
     credits,
     primary,
     secondary,
+    updatedAt: event.createdAt,
   };
 }
 
@@ -983,26 +986,6 @@ function runtimeEventToActivities(
           tone: "info",
           kind: "context-window.updated",
           summary: "Context window updated",
-          payload,
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
-      ];
-    }
-
-    case "account.rate-limits.updated": {
-      const payload = buildUsageLimitsActivityPayload(event);
-      if (!payload) {
-        return [];
-      }
-
-      return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
-          kind: "account.rate-limits.updated",
-          summary: "Usage limits updated",
           payload,
           turnId: toTurnId(event.turnId) ?? null,
           ...maybeSequence,
@@ -1839,6 +1822,21 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+
+      if (event.type === "account.rate-limits.updated") {
+        const usageLimits = buildUsageLimitsSnapshot(event);
+        if (!usageLimits) return;
+        yield* orchestrationEngine.dispatch({
+          type: "provider.usage-limits.update",
+          commandId: yield* providerCommandId(event, "provider-usage-limits-update"),
+          provider: event.provider,
+          providerInstanceId:
+            event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider),
+          usageLimits,
+          createdAt: now,
+        });
+        return;
+      }
 
       if (isSubagentRuntimeEvent(event)) {
         yield* updateSubagentActivity({ event, threadId: thread.id });

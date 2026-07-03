@@ -7,6 +7,7 @@ import type {
 import { mergeEnvironmentThread } from "@t3tools/client-runtime/state/threads";
 import type {
   OrchestrationMessage,
+  OrchestrationProviderUsageLimits,
   OrchestrationProposedPlan,
   OrchestrationSession,
   OrchestrationThreadActivity,
@@ -20,6 +21,7 @@ import { useMemo } from "react";
 import { appAtomRegistry } from "../rpc/atomRegistry";
 import { environmentProjects } from "./projects";
 import { environmentServerConfigsAtom } from "./server";
+import { environmentSnapshotAtom } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
 const EMPTY_PROJECT_REFS: ReadonlyArray<ScopedProjectRef> = Object.freeze([]);
@@ -27,6 +29,7 @@ const EMPTY_THREAD_REFS: ReadonlyArray<ScopedThreadRef> = Object.freeze([]);
 const EMPTY_MESSAGES: ReadonlyArray<OrchestrationMessage> = Object.freeze([]);
 const EMPTY_ACTIVITIES: ReadonlyArray<OrchestrationThreadActivity> = Object.freeze([]);
 const EMPTY_PROPOSED_PLANS: ReadonlyArray<OrchestrationProposedPlan> = Object.freeze([]);
+const EMPTY_USAGE_LIMITS: ReadonlyArray<OrchestrationProviderUsageLimits> = Object.freeze([]);
 
 const EMPTY_PROJECT_ATOM = Atom.make<EnvironmentProject | null>(null).pipe(
   Atom.withLabel("web-project:empty"),
@@ -54,6 +57,15 @@ const EMPTY_PROPOSED_PLANS_ATOM = Atom.make(EMPTY_PROPOSED_PLANS).pipe(
 );
 const EMPTY_SESSION_ATOM = Atom.make<OrchestrationSession | null>(null).pipe(
   Atom.withLabel("web-thread-session:empty"),
+);
+const EMPTY_USAGE_LIMITS_ATOM = Atom.make(EMPTY_USAGE_LIMITS).pipe(
+  Atom.withLabel("web-provider-usage-limits:empty"),
+);
+const PROVIDER_USAGE_LIMITS_ATOM = Atom.family((environmentId: EnvironmentId) =>
+  Atom.make(
+    (get): ReadonlyArray<OrchestrationProviderUsageLimits> =>
+      get(environmentSnapshotAtom(environmentId))?.usageLimits ?? EMPTY_USAGE_LIMITS,
+  ).pipe(Atom.withLabel(`web-provider-usage-limits:${environmentId}`)),
 );
 
 export const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
@@ -107,6 +119,14 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
 
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
   return useAtomValue(environmentServerConfigsAtom);
+}
+
+export function useProviderUsageLimits(
+  environmentId: EnvironmentId | null,
+): ReadonlyArray<OrchestrationProviderUsageLimits> {
+  return useAtomValue(
+    environmentId === null ? EMPTY_USAGE_LIMITS_ATOM : PROVIDER_USAGE_LIMITS_ATOM(environmentId),
+  );
 }
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
