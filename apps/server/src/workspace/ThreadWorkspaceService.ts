@@ -1,10 +1,12 @@
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalDate:off
+// @effect-diagnostics globalTimers:off
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeTimers from "node:timers";
 
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
@@ -71,12 +73,23 @@ interface DirectoryCopyPreflight {
   readonly maxSourceBytes: number;
   readonly availableBytes: number;
   readonly requiredAvailableBytes: number;
+  readonly diskSpacePolicy: "full-copy" | "copy-on-write-guarded";
+  readonly copyOnWriteSupported: boolean;
+  readonly sourceDevice: number | null;
+  readonly destinationDevice: number | null;
+  readonly destinationFileSystemType: string | null;
 }
 
 interface DirectoryCopyCommand {
   readonly command: string;
   readonly args: ReadonlyArray<string>;
   readonly strategy: "copy-on-write" | "recursive-copy" | "rsync";
+}
+
+interface DirectoryCopyRunResult {
+  readonly initialAvailableBytes: number;
+  readonly finalAvailableBytes: number;
+  readonly peakConsumedBytes: number;
 }
 
 interface WorkspaceRootRow {
@@ -219,8 +232,12 @@ function failureDetailFromCause(cause: unknown): string {
 
 const DIRECTORY_COPY_MAX_BYTES_DEFAULT = 5 * 1024 * 1024 * 1024;
 const DIRECTORY_COPY_MIN_FREE_BYTES = 1024 * 1024 * 1024;
+const DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES = 2 * 1024 * 1024 * 1024;
+const DIRECTORY_COPY_MONITOR_INTERVAL_MS = 1000;
 const DIRECTORY_COPY_DU_TIMEOUT = "30 seconds";
 const DIRECTORY_COPY_TIMEOUT = "20 minutes";
+const DIRECTORY_COPY_TIMEOUT_MS = 20 * 60 * 1000;
+const DIRECTORY_COPY_MAX_OUTPUT_BYTES = 256 * 1024;
 
 function directoryCopyMaxBytes(): number {
   const raw = process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES;
@@ -329,6 +346,54 @@ function availableBytesForPath(path: string): number {
   return Number(stat.bavail) * Number(stat.bsize);
 }
 
+function fullCopyRequiredAvailableBytes(sourceBytes: number): number {
+  return Math.max(DIRECTORY_COPY_MIN_FREE_BYTES, Math.ceil(sourceBytes * 1.1));
+}
+
+function deviceForPath(path: string): number | null {
+  try {
+    return NodeFS.statSync(path).dev;
+  } catch {
+    return null;
+  }
+}
+
+function fileSystemTypeForPath(path: string, platform: NodeJS.Platform): string | null {
+  if (platform !== "darwin") {
+    return null;
+  }
+  try {
+    const stat = NodeFS.statfsSync(path);
+    return stat.type === 26 ? "apfs" : `type:${stat.type}`;
+  } catch {
+    return null;
+  }
+}
+
+function directoryCopyCapabilities(input: {
+  readonly sourcePath: string;
+  readonly checkoutPath: string;
+  readonly platform: NodeJS.Platform;
+}): Pick<
+  DirectoryCopyPreflight,
+  "copyOnWriteSupported" | "sourceDevice" | "destinationDevice" | "destinationFileSystemType"
+> {
+  const destinationParent = NodePath.dirname(input.checkoutPath);
+  const sourceDevice = deviceForPath(input.sourcePath);
+  const destinationDevice = deviceForPath(destinationParent);
+  const destinationFileSystemType = fileSystemTypeForPath(destinationParent, input.platform);
+  return {
+    sourceDevice,
+    destinationDevice,
+    destinationFileSystemType,
+    copyOnWriteSupported:
+      input.platform === "darwin" &&
+      sourceDevice !== null &&
+      sourceDevice === destinationDevice &&
+      destinationFileSystemType === "apfs",
+  };
+}
+
 function primaryDirectoryCopyCommand(
   sourcePath: string,
   checkoutPath: string,
@@ -354,6 +419,125 @@ function rsyncDirectoryCopyCommand(sourcePath: string, checkoutPath: string): Di
     args: ["-a", `${sourcePath.replace(/\/$/, "")}/`, `${checkoutPath}/`],
     strategy: "rsync",
   };
+}
+
+function appendOutputChunk(current: string, chunk: Buffer): string {
+  if (current.length >= DIRECTORY_COPY_MAX_OUTPUT_BYTES) {
+    return current;
+  }
+  return (current + chunk.toString("utf8")).slice(0, DIRECTORY_COPY_MAX_OUTPUT_BYTES);
+}
+
+function runMonitoredCommand(input: {
+  readonly copyCommand: DirectoryCopyCommand;
+  readonly checkoutPath: string;
+  readonly minimumAvailableBytes: number;
+  readonly maxTransientBytes: number;
+}): Promise<DirectoryCopyRunResult> {
+  return new Promise((resolve, reject) => {
+    const destinationParent = NodePath.dirname(input.checkoutPath);
+    const initialAvailableBytes = availableBytesForPath(destinationParent);
+    let peakConsumedBytes = 0;
+    let stdout = "";
+    let stderr = "";
+    let finished = false;
+    let childClosed = false;
+    let monitor: NodeJS.Timeout | undefined;
+    let timeout: NodeJS.Timeout | undefined;
+
+    const child = NodeChildProcess.spawn(input.copyCommand.command, input.copyCommand.args, {
+      cwd: "/",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const fail = (cause: Error) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (monitor) NodeTimers.clearInterval(monitor);
+      if (timeout) NodeTimers.clearTimeout(timeout);
+      if (!childClosed) {
+        child.kill("SIGTERM");
+        NodeTimers.setTimeout(() => {
+          if (!childClosed) {
+            child.kill("SIGKILL");
+          }
+        }, 1000).unref();
+      }
+      reject(cause);
+    };
+
+    monitor = NodeTimers.setInterval(() => {
+      try {
+        const availableBytes = availableBytesForPath(destinationParent);
+        const consumedBytes = Math.max(0, initialAvailableBytes - availableBytes);
+        peakConsumedBytes = Math.max(peakConsumedBytes, consumedBytes);
+        if (availableBytes < input.minimumAvailableBytes) {
+          fail(
+            new Error(
+              `Directory-copy ${input.copyCommand.strategy} stopped because available space fell below ${formatBytes(input.minimumAvailableBytes)}.`,
+            ),
+          );
+        } else if (consumedBytes > input.maxTransientBytes) {
+          fail(
+            new Error(
+              `Directory-copy ${input.copyCommand.strategy} stopped after consuming ${formatBytes(consumedBytes)} of transient space, exceeding the ${formatBytes(input.maxTransientBytes)} guard.`,
+            ),
+          );
+        }
+      } catch (cause) {
+        fail(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+    }, DIRECTORY_COPY_MONITOR_INTERVAL_MS);
+
+    timeout = NodeTimers.setTimeout(() => {
+      fail(
+        new Error(
+          `Directory-copy ${input.copyCommand.strategy} timed out after ${DIRECTORY_COPY_TIMEOUT}.`,
+        ),
+      );
+    }, DIRECTORY_COPY_TIMEOUT_MS);
+
+    child.stdout?.on("data", (chunk: Buffer) => {
+      stdout = appendOutputChunk(stdout, chunk);
+    });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr = appendOutputChunk(stderr, chunk);
+    });
+    child.on("error", (cause) => {
+      fail(cause);
+    });
+    child.on("close", (code) => {
+      childClosed = true;
+      if (finished) {
+        return;
+      }
+      finished = true;
+      if (monitor) NodeTimers.clearInterval(monitor);
+      if (timeout) NodeTimers.clearTimeout(timeout);
+      const finalAvailableBytes = availableBytesForPath(destinationParent);
+      peakConsumedBytes = Math.max(
+        peakConsumedBytes,
+        Math.max(0, initialAvailableBytes - finalAvailableBytes),
+      );
+      if (code !== 0) {
+        reject(
+          new Error(
+            stderr.trim() ||
+              stdout.trim() ||
+              `${input.copyCommand.command} exited with ${code ?? "no exit code"}.`,
+          ),
+        );
+        return;
+      }
+      resolve({
+        initialAvailableBytes,
+        finalAvailableBytes,
+        peakConsumedBytes,
+      });
+    });
+  });
 }
 
 function resolveJjRevision(cwd: string, revision: string | null | undefined): string | null {
@@ -387,6 +571,51 @@ function cleanupFailedJjWorkspace(input: {
     // TODO: Replace best-effort cleanup logging with structured workspace activity.
   }
   NodeFS.rmSync(input.checkoutPath, { recursive: true, force: true });
+}
+
+function makePathUserWritable(path: string): void {
+  const stack = [path];
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (!current) {
+      continue;
+    }
+    let stat: NodeFS.Stats;
+    try {
+      stat = NodeFS.lstatSync(current);
+    } catch {
+      continue;
+    }
+    if (stat.isSymbolicLink()) {
+      continue;
+    }
+    try {
+      NodeFS.chmodSync(current, stat.mode | (stat.isDirectory() ? 0o700 : 0o600));
+    } catch {
+      // Best effort: rmSync will surface any remaining permission problem.
+    }
+    if (!stat.isDirectory()) {
+      continue;
+    }
+    let entries: string[];
+    try {
+      entries = NodeFS.readdirSync(current);
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      stack.push(NodePath.join(current, entry));
+    }
+  }
+}
+
+function removeWorkspaceDirectory(path: string): void {
+  try {
+    NodeFS.rmSync(path, { recursive: true, force: true });
+  } catch {
+    makePathUserWritable(path);
+    NodeFS.rmSync(path, { recursive: true, force: true });
+  }
 }
 
 function workspaceFromRows(workspace: WorkspaceRow, roots: ReadonlyArray<WorkspaceRootRow>) {
@@ -706,9 +935,14 @@ export const make = Effect.gen(function* () {
       }
 
       NodeFS.mkdirSync(NodePath.dirname(input.checkoutPath), { recursive: true });
+      const capabilities = directoryCopyCapabilities({
+        sourcePath,
+        checkoutPath: input.checkoutPath,
+        platform: hostPlatform,
+      });
       const sourceBytes = yield* measureDirectoryBytes(sourcePath);
       const maxSourceBytes = directoryCopyMaxBytes();
-      if (sourceBytes > maxSourceBytes) {
+      if (!capabilities.copyOnWriteSupported && sourceBytes > maxSourceBytes) {
         return yield* new ThreadWorkspaceError({
           operation: "ThreadWorkspaceService.preflightDirectoryCopy",
           detail: `Directory-copy source '${sourcePath}' is ${formatBytes(sourceBytes)}, exceeding the ${formatBytes(maxSourceBytes)} limit.`,
@@ -716,10 +950,9 @@ export const make = Effect.gen(function* () {
       }
 
       const availableBytes = availableBytesForPath(NodePath.dirname(input.checkoutPath));
-      const requiredAvailableBytes = Math.max(
-        DIRECTORY_COPY_MIN_FREE_BYTES,
-        Math.ceil(sourceBytes * 1.1),
-      );
+      const requiredAvailableBytes = capabilities.copyOnWriteSupported
+        ? Math.max(DIRECTORY_COPY_MIN_FREE_BYTES, DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES)
+        : fullCopyRequiredAvailableBytes(sourceBytes);
       if (availableBytes < requiredAvailableBytes) {
         return yield* new ThreadWorkspaceError({
           operation: "ThreadWorkspaceService.preflightDirectoryCopy",
@@ -732,39 +965,72 @@ export const make = Effect.gen(function* () {
         maxSourceBytes,
         availableBytes,
         requiredAvailableBytes,
+        diskSpacePolicy: capabilities.copyOnWriteSupported ? "copy-on-write-guarded" : "full-copy",
+        ...capabilities,
       };
     },
   );
 
   const runDirectoryCopyCommand = Effect.fn("ThreadWorkspaceService.runDirectoryCopyCommand")(
-    function* (copyCommand: DirectoryCopyCommand) {
+    function* (input: {
+      readonly copyCommand: DirectoryCopyCommand;
+      readonly checkoutPath: string;
+      readonly preflight: DirectoryCopyPreflight;
+    }): Effect.fn.Return<DirectoryCopyRunResult, ThreadWorkspaceError> {
+      if (input.preflight.copyOnWriteSupported) {
+        return yield* Effect.tryPromise({
+          try: () =>
+            runMonitoredCommand({
+              copyCommand: input.copyCommand,
+              checkoutPath: input.checkoutPath,
+              minimumAvailableBytes: DIRECTORY_COPY_MIN_FREE_BYTES,
+              maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
+            }),
+          catch: (cause) =>
+            new ThreadWorkspaceError({
+              operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${input.copyCommand.strategy}`,
+              detail: `Directory-copy ${input.copyCommand.strategy} process failed.`,
+              cause,
+            }),
+        });
+      }
+
       const result = yield* processRunner
         .run({
-          command: copyCommand.command,
-          args: copyCommand.args,
+          command: input.copyCommand.command,
+          args: input.copyCommand.args,
           cwd: "/",
           timeout: DIRECTORY_COPY_TIMEOUT,
-          maxOutputBytes: 256 * 1024,
+          maxOutputBytes: DIRECTORY_COPY_MAX_OUTPUT_BYTES,
           outputMode: "truncate",
         })
         .pipe(
           Effect.mapError(
             (cause) =>
               new ThreadWorkspaceError({
-                operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${copyCommand.strategy}`,
-                detail: `Directory-copy ${copyCommand.strategy} process failed.`,
+                operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${input.copyCommand.strategy}`,
+                detail: `Directory-copy ${input.copyCommand.strategy} process failed.`,
                 cause,
               }),
           ),
         );
       if (result.code !== 0) {
         return yield* new ThreadWorkspaceError({
-          operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${copyCommand.strategy}`,
+          operation: `ThreadWorkspaceService.runDirectoryCopyCommand.${input.copyCommand.strategy}`,
           detail:
             result.stderr.trim() ||
-            `${copyCommand.command} exited with ${result.code ?? "no exit code"}.`,
+            `${input.copyCommand.command} exited with ${result.code ?? "no exit code"}.`,
         });
       }
+      return {
+        initialAvailableBytes: input.preflight.availableBytes,
+        finalAvailableBytes: availableBytesForPath(NodePath.dirname(input.checkoutPath)),
+        peakConsumedBytes: Math.max(
+          0,
+          input.preflight.availableBytes -
+            availableBytesForPath(NodePath.dirname(input.checkoutPath)),
+        ),
+      };
     },
   );
 
@@ -965,6 +1231,12 @@ export const make = Effect.gen(function* () {
           preparationStartedAt: startedAt,
           copyStartedAt: copyingAt,
           copyStrategy: primaryCopyCommand.strategy,
+          diskSpacePolicy: preflight.diskSpacePolicy,
+          copyOnWriteSupported: preflight.copyOnWriteSupported,
+          sourceDevice: preflight.sourceDevice,
+          destinationDevice: preflight.destinationDevice,
+          destinationFileSystemType: preflight.destinationFileSystemType,
+          maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
           sourceBytes: preflight.sourceBytes,
           maxSourceBytes: preflight.maxSourceBytes,
           availableBytes: preflight.availableBytes,
@@ -973,16 +1245,44 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-    const copyDirectory = runDirectoryCopyCommand(primaryCopyCommand).pipe(
-      Effect.catch(() => {
+    const copyDirectory = runDirectoryCopyCommand({
+      copyCommand: primaryCopyCommand,
+      checkoutPath,
+      preflight,
+    }).pipe(
+      Effect.catch((cause) => {
+        const fullCopyRequiredBytes = fullCopyRequiredAvailableBytes(preflight.sourceBytes);
+        if (
+          preflight.copyOnWriteSupported &&
+          (preflight.sourceBytes > preflight.maxSourceBytes ||
+            preflight.availableBytes < fullCopyRequiredBytes)
+        ) {
+          return Effect.fail(
+            new ThreadWorkspaceError({
+              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.fallback",
+              detail:
+                "Directory-copy copy-on-write failed and full-copy fallback is not safe for this source.",
+              cause,
+            }),
+          );
+        }
         NodeFS.mkdirSync(checkoutPath, { recursive: true });
-        return runDirectoryCopyCommand(rsyncDirectoryCopyCommand(root.sourcePath, checkoutPath));
+        return runDirectoryCopyCommand({
+          copyCommand: rsyncDirectoryCopyCommand(root.sourcePath, checkoutPath),
+          checkoutPath,
+          preflight: {
+            ...preflight,
+            copyOnWriteSupported: false,
+            diskSpacePolicy: "full-copy",
+          },
+        });
       }),
     );
     const copyExit = yield* Effect.exit(copyDirectory);
     if (Exit.isFailure(copyExit)) {
       const cause = Cause.squash(copyExit.cause);
       const failedAt = nowIso();
+      yield* Effect.sync(() => removeWorkspaceDirectory(checkoutPath)).pipe(Effect.ignore);
       yield* persistWorkspace(
         makeWorkspace({
           request: input,
@@ -1000,6 +1300,12 @@ export const make = Effect.gen(function* () {
             copyStartedAt: copyingAt,
             preparationFailedAt: failedAt,
             attemptedCopyStrategy: primaryCopyCommand.strategy,
+            diskSpacePolicy: preflight.diskSpacePolicy,
+            copyOnWriteSupported: preflight.copyOnWriteSupported,
+            sourceDevice: preflight.sourceDevice,
+            destinationDevice: preflight.destinationDevice,
+            destinationFileSystemType: preflight.destinationFileSystemType,
+            maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
             sourceBytes: preflight.sourceBytes,
             maxSourceBytes: preflight.maxSourceBytes,
             availableBytes: preflight.availableBytes,
@@ -1013,6 +1319,7 @@ export const make = Effect.gen(function* () {
         cause,
       });
     }
+    const copyResult = copyExit.value;
     const completedAt = nowIso();
     const workspace = makeWorkspace({
       request: input,
@@ -1028,6 +1335,15 @@ export const make = Effect.gen(function* () {
         preparationCompletedAt: completedAt,
         copyStartedAt: copyingAt,
         copyStrategy: primaryCopyCommand.strategy,
+        diskSpacePolicy: preflight.diskSpacePolicy,
+        copyOnWriteSupported: preflight.copyOnWriteSupported,
+        sourceDevice: preflight.sourceDevice,
+        destinationDevice: preflight.destinationDevice,
+        destinationFileSystemType: preflight.destinationFileSystemType,
+        maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
+        copyInitialAvailableBytes: copyResult.initialAvailableBytes,
+        copyFinalAvailableBytes: copyResult.finalAvailableBytes,
+        copyPeakConsumedBytes: copyResult.peakConsumedBytes,
         sourceBytes: preflight.sourceBytes,
         maxSourceBytes: preflight.maxSourceBytes,
         availableBytes: preflight.availableBytes,
@@ -1113,7 +1429,7 @@ export const make = Effect.gen(function* () {
           force: input.force ?? false,
         }),
       );
-      NodeFS.rmSync(primary.checkoutPath, { recursive: true, force: true });
+      removeWorkspaceDirectory(primary.checkoutPath);
     } else if (workspace.kind === "jj-workspace") {
       const workspaceName = String(primary.metadata.jjWorkspaceName ?? "");
       if (workspaceName) {
@@ -1129,9 +1445,9 @@ export const make = Effect.gen(function* () {
           }),
         );
       }
-      NodeFS.rmSync(primary.checkoutPath, { recursive: true, force: true });
+      removeWorkspaceDirectory(primary.checkoutPath);
     } else {
-      NodeFS.rmSync(primary.checkoutPath, { recursive: true, force: true });
+      removeWorkspaceDirectory(primary.checkoutPath);
     }
 
     const deletedAt = nowIso();

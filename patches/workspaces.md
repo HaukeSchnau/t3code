@@ -33,15 +33,27 @@ support non-Git backends.
   non-VCS copies visible to diagnostics and cleanup tooling.
 - Directory-copy provisioning refuses sources whose checkout path would be
   created inside the source tree, refuses sensitive roots such as the user's home
-  directory and T3's workspace storage, measures source size before copying, and
-  fails sources larger than `T3CODE_DIRECTORY_COPY_MAX_BYTES` (default 5 GiB).
-- Directory-copy filesystem work runs through the async process runner with
-  bounded `du` and copy timeouts, so long copies do not block the server event
-  loop. Metadata exposes `preparationStatus`, copy timing, source size, free
-  space, and copy strategy while provisioning is in progress.
+  directory and T3's workspace storage, and measures source size before copying.
+  Ordinary full-copy sources larger than `T3CODE_DIRECTORY_COPY_MAX_BYTES`
+  (default 5 GiB) still fail fast.
+- On macOS APFS, when source and checkout parent are on the same device,
+  directory-copy workspaces treat `cp -cR` as a guarded clone-on-write operation:
+  they bypass the logical source-size cap, require only bounded transient free
+  space, monitor free space while copying, and refuse unsafe full-copy fallback
+  when the logical source is too large.
+- Directory-copy filesystem work is asynchronous with bounded `du` and copy
+  timeouts, so long copies do not block the server event loop. Metadata exposes
+  `preparationStatus`, copy timing, source size, free space, and copy strategy
+  while provisioning is in progress. APFS clone-on-write copies use a direct
+  monitored process so they can be stopped if transient disk usage grows beyond
+  the guard.
 - On macOS, directory-copy workspaces use APFS clone-on-write via `cp -cR`
-  before falling back to `rsync`; other platforms use recursive `cp` before the
-  same fallback.
+  before falling back to `rsync` only when a full-copy fallback is safe; other
+  platforms use recursive `cp` before the same fallback.
+- Workspace deletion uses a hardened recursive removal path that first retries
+  normally, then makes copied files/directories user-writable before a final
+  remove attempt. This handles package caches that contain read-only files while
+  avoiding chmod of symlink targets.
 - Cwd resolution prefers the workspace primary root checkout path, then falls
   back to legacy `worktreePath`, then the project root.
 - Git workspaces are created with `git worktree add --detach`.

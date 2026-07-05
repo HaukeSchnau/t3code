@@ -34,10 +34,11 @@ afterEach(() => {
 const makeTestLayer = (
   options: {
     readonly baseDir?: string;
+    readonly platform?: NodeJS.Platform;
     readonly processRunner?: Partial<ProcessRunner.ProcessRunner["Service"]>;
   } = {},
-) =>
-  ThreadWorkspaceService.layer.pipe(
+) => {
+  const layer = ThreadWorkspaceService.layer.pipe(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(
       ServerConfig.layerTest(
@@ -51,13 +52,17 @@ const makeTestLayer = (
     Layer.provide(
       options.processRunner
         ? Layer.mock(ProcessRunner.ProcessRunner)({
-            run: () => Effect.die("unexpected process runner invocation"),
+            run: () => Effect.die(new Error("unexpected process runner invocation")),
             ...options.processRunner,
           })
         : ProcessRunner.layer,
     ),
     Layer.provideMerge(NodeServices.layer),
   );
+  return options.platform
+    ? layer.pipe(Layer.provideMerge(Layer.succeed(HostProcessPlatform, options.platform)))
+    : layer;
+};
 
 const layer = it.layer(Layer.fresh(makeTestLayer()));
 
@@ -252,6 +257,7 @@ layer("ThreadWorkspaceService", (it) => {
         Effect.provide(
           makeTestLayer({
             baseDir,
+            platform: "linux",
             processRunner: {
               run: (input) =>
                 input.command === "du"
@@ -260,6 +266,102 @@ layer("ThreadWorkspaceService", (it) => {
             },
           }),
         ),
+      );
+    }),
+  );
+
+  it.effect("allows APFS copy-on-write sources over the configured size limit", () =>
+    Effect.gen(function* () {
+      const hostPlatform = yield* HostProcessPlatform;
+      if (hostPlatform !== "darwin") {
+        return;
+      }
+      process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES = "1";
+      const sourcePath = makeTempDir("t3-directory-copy-apfs-large-source-");
+      NodeFS.writeFileSync(NodePath.join(sourcePath, "file.txt"), "too large for configured cap");
+      const baseDir = makeTempDir("t3-directory-copy-apfs-large-base-");
+
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+        const sql = yield* SqlClient.SqlClient;
+        const prepared = yield* service.prepareWorkspace({
+          threadId: ThreadId.make("thread-directory-copy-apfs-large-source"),
+          kind: "directory-copy",
+          roots: [
+            {
+              projectId: ProjectId.make("project-directory-copy-apfs-large-source"),
+              sourcePath,
+              role: "primary",
+            },
+          ],
+          retentionPolicy: "explicit-delete",
+        });
+
+        assert.equal(
+          NodeFS.readFileSync(NodePath.join(prepared.primaryCwd, "file.txt"), "utf8"),
+          "too large for configured cap",
+        );
+
+        const rows = yield* sql<{ readonly metadata_json: string }>`
+          SELECT metadata_json
+          FROM projection_thread_workspaces
+          WHERE id = ${"workspace:thread-directory-copy-apfs-large-source"}
+        `;
+        assert.equal(rows.length, 1);
+        assert.match(rows[0]?.metadata_json ?? "", /"diskSpacePolicy":"copy-on-write-guarded"/);
+        assert.match(rows[0]?.metadata_json ?? "", /"copyOnWriteSupported":true/);
+      }).pipe(Effect.provide(makeTestLayer({ baseDir })));
+    }),
+  );
+
+  it.effect("does not fall back to full copy when APFS clone fails for an oversized source", () =>
+    Effect.gen(function* () {
+      const hostPlatform = yield* HostProcessPlatform;
+      if (hostPlatform !== "darwin") {
+        return;
+      }
+      process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES = "1";
+      const sourcePath = makeTempDir("t3-directory-copy-apfs-fallback-source-");
+      const blockedFile = NodePath.join(sourcePath, "blocked.txt");
+      NodeFS.writeFileSync(blockedFile, "blocked");
+      NodeFS.chmodSync(blockedFile, 0o000);
+      const baseDir = makeTempDir("t3-directory-copy-apfs-fallback-base-");
+
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+        const exit = yield* Effect.exit(
+          service.prepareWorkspace({
+            threadId: ThreadId.make("thread-directory-copy-apfs-unsafe-fallback"),
+            kind: "directory-copy",
+            roots: [
+              {
+                projectId: ProjectId.make("project-directory-copy-apfs-unsafe-fallback"),
+                sourcePath,
+                role: "primary",
+              },
+            ],
+            retentionPolicy: "explicit-delete",
+          }),
+        );
+
+        assert.equal(Exit.isFailure(exit), true);
+        const sql = yield* SqlClient.SqlClient;
+        const rows = yield* sql<{
+          readonly lifecycle: string;
+          readonly failure_detail: string | null;
+        }>`
+          SELECT lifecycle, failure_detail
+          FROM projection_thread_workspaces
+          WHERE id = ${"workspace:thread-directory-copy-apfs-unsafe-fallback"}
+        `;
+        assert.equal(rows.length, 1);
+        assert.equal(rows[0]?.lifecycle, "failed");
+        assert.match(rows[0]?.failure_detail ?? "", /full-copy fallback is not safe/);
+      }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => NodeFS.chmodSync(blockedFile, 0o600)).pipe(Effect.ignore),
+        ),
+        Effect.provide(makeTestLayer({ baseDir })),
       );
     }),
   );
@@ -314,6 +416,7 @@ layer("ThreadWorkspaceService", (it) => {
         Effect.provide(
           makeTestLayer({
             baseDir,
+            platform: "linux",
             processRunner: {
               run: (input) => {
                 if (input.command === "du") {
@@ -330,6 +433,36 @@ layer("ThreadWorkspaceService", (it) => {
       );
 
       yield* effect;
+    }),
+  );
+
+  it.effect("deletes directory-copy workspaces containing read-only directories", () =>
+    Effect.gen(function* () {
+      const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+      const sourcePath = makeTempDir("t3-directory-copy-readonly-source-");
+      const readOnlyDir = NodePath.join(sourcePath, "readonly");
+      NodeFS.mkdirSync(readOnlyDir);
+      NodeFS.writeFileSync(NodePath.join(readOnlyDir, "file.txt"), "readonly");
+      NodeFS.chmodSync(readOnlyDir, 0o500);
+      const prepared = yield* service.prepareWorkspace({
+        threadId: ThreadId.make("thread-directory-copy-readonly-delete"),
+        kind: "directory-copy",
+        roots: [
+          {
+            projectId: ProjectId.make("project-directory-copy-readonly-delete"),
+            sourcePath,
+            role: "primary",
+          },
+        ],
+        retentionPolicy: "explicit-delete",
+      });
+
+      const checkoutPath = prepared.primaryCwd;
+      assert.equal(NodeFS.existsSync(checkoutPath), true);
+      yield* service.deleteWorkspace({ workspaceId: prepared.workspace.id, force: true });
+      assert.equal(NodeFS.existsSync(checkoutPath), false);
+
+      NodeFS.chmodSync(readOnlyDir, 0o700);
     }),
   );
 });
