@@ -5,13 +5,14 @@ import {
   type MessageId,
   type ModelSelection,
   type OrchestrationEvent,
+  type OrchestrationThread,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
-  type TurnId,
+  TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
@@ -33,6 +34,7 @@ import type { ProviderServiceError } from "../../provider/Errors.ts";
 import { TextGeneration } from "../../textGeneration/TextGeneration.ts";
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProviderRegistry } from "../../provider/Services/ProviderRegistry.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import {
@@ -90,6 +92,68 @@ const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
+
+export function collectPrunedProviderTurnIds(input: {
+  readonly thread: OrchestrationThread;
+  readonly targetMessageIndex: number;
+}): TurnId[] {
+  const targetMessage = input.thread.messages[input.targetMessageIndex];
+  if (!targetMessage) {
+    return [];
+  }
+
+  const prunedTurnIds: TurnId[] = [];
+  const seenTurnIds = new Set<string>();
+  const addTurnId = (turnId: TurnId | string | null | undefined) => {
+    if (!turnId || seenTurnIds.has(turnId)) {
+      return;
+    }
+    seenTurnIds.add(turnId);
+    prunedTurnIds.push(TurnId.make(turnId));
+  };
+  const isAtOrAfterPruneBoundary = (createdAt: string | null | undefined) =>
+    createdAt !== null && createdAt !== undefined && createdAt >= targetMessage.createdAt;
+
+  for (let index = input.targetMessageIndex; index < input.thread.messages.length; index += 1) {
+    addTurnId(input.thread.messages[index]?.turnId);
+  }
+
+  for (const checkpoint of input.thread.checkpoints) {
+    if (isAtOrAfterPruneBoundary(checkpoint.completedAt)) {
+      addTurnId(checkpoint.turnId);
+    }
+  }
+
+  for (const activity of input.thread.activities) {
+    if (isAtOrAfterPruneBoundary(activity.createdAt)) {
+      addTurnId(activity.turnId);
+    }
+  }
+
+  for (const proposedPlan of input.thread.proposedPlans) {
+    if (isAtOrAfterPruneBoundary(proposedPlan.createdAt)) {
+      addTurnId(proposedPlan.turnId);
+    }
+  }
+
+  if (
+    input.thread.latestTurn &&
+    (isAtOrAfterPruneBoundary(input.thread.latestTurn.requestedAt) ||
+      isAtOrAfterPruneBoundary(input.thread.latestTurn.startedAt) ||
+      isAtOrAfterPruneBoundary(input.thread.latestTurn.completedAt))
+  ) {
+    addTurnId(input.thread.latestTurn.turnId);
+  }
+
+  if (
+    input.thread.session?.activeTurnId &&
+    isAtOrAfterPruneBoundary(input.thread.session.updatedAt)
+  ) {
+    addTurnId(input.thread.session.activeTurnId);
+  }
+
+  return prunedTurnIds;
+}
 
 export function providerErrorLabel(value: string | undefined): string {
   const normalized = value?.trim();
@@ -193,6 +257,7 @@ const make = Effect.gen(function* () {
   const crypto = yield* Crypto.Crypto;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const projectionTurnRepository = yield* ProjectionTurnRepository;
   const providerService = yield* ProviderService;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
@@ -990,6 +1055,32 @@ const make = Effect.gen(function* () {
     },
   );
 
+  const collectProjectionPrunedProviderTurnIds = Effect.fnUntraced(function* (input: {
+    readonly thread: OrchestrationThread;
+    readonly targetMessageIndex: number;
+  }) {
+    const prunedTurnIds = collectPrunedProviderTurnIds(input);
+    const seenTurnIds = new Set<string>(prunedTurnIds);
+    const prunedMessageIds = new Set<string>(
+      input.thread.messages.slice(input.targetMessageIndex).map((message) => message.id),
+    );
+    const projectionTurns = yield* projectionTurnRepository.listByThreadId({
+      threadId: input.thread.id,
+    });
+    for (const turn of projectionTurns) {
+      if (
+        turn.turnId !== null &&
+        turn.pendingMessageId !== null &&
+        prunedMessageIds.has(turn.pendingMessageId) &&
+        !seenTurnIds.has(turn.turnId)
+      ) {
+        seenTurnIds.add(turn.turnId);
+        prunedTurnIds.push(turn.turnId);
+      }
+    }
+    return prunedTurnIds;
+  });
+
   const collectHistoryPruneFacts = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly messageId: MessageId;
@@ -1013,20 +1104,12 @@ const make = Effect.gen(function* () {
       };
     }
 
-    const prunedTurnIds: TurnId[] = [];
-    const seenTurnIds = new Set<string>();
-    for (let index = targetIndex; index < thread.messages.length; index += 1) {
-      const message = thread.messages[index];
-      if (!message?.turnId || seenTurnIds.has(message.turnId)) {
-        continue;
-      }
-      seenTurnIds.add(message.turnId);
-      prunedTurnIds.push(message.turnId);
-    }
-
     return {
       pruneFromCreatedAt: thread.messages[targetIndex]!.createdAt,
-      prunedTurnIds,
+      prunedTurnIds: yield* collectProjectionPrunedProviderTurnIds({
+        thread,
+        targetMessageIndex: targetIndex,
+      }),
     };
   });
 

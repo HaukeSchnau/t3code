@@ -99,6 +99,103 @@ it("maps Codex thread turns into imported orchestration messages", () => {
   ]);
 });
 
+it("does not import Codex turns after a retained T3 provider turn boundary", () => {
+  const messages = codexThreadMessages({
+    importedAt: "2026-01-01T00:00:00.000Z",
+    importThroughTurnId: "turn-retained",
+    thread: {
+      id: "codex-thread-1",
+      turns: [
+        {
+          id: "turn-retained",
+          startedAt: 1_767_225_600,
+          status: "completed",
+          items: [
+            {
+              id: "assistant-retained",
+              type: "agentMessage",
+              text: "Retained answer.",
+            },
+          ],
+        },
+        {
+          id: "turn-pruned-provider-only",
+          startedAt: 1_767_225_700,
+          status: "completed",
+          items: [
+            {
+              id: "user-pruned",
+              type: "userMessage",
+              content: [{ type: "text", text: "Pruned request" }],
+            },
+            {
+              id: "assistant-pruned",
+              type: "agentMessage",
+              text: "This should not come back.",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  expect(messages.map((message) => message.id)).toEqual([
+    "codex:codex-thread-1:turn-retained:assistant-retained",
+  ]);
+});
+
+it("imports no provider messages for an existing T3 thread with no retained provider turn", () => {
+  const messages = codexThreadMessages({
+    importedAt: "2026-01-01T00:00:00.000Z",
+    importThroughTurnId: null,
+    thread: {
+      id: "codex-thread-1",
+      turns: [
+        {
+          id: "turn-provider-only",
+          startedAt: 1_767_225_600,
+          status: "completed",
+          items: [
+            {
+              id: "assistant-provider-only",
+              type: "agentMessage",
+              text: "Provider-only answer.",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  expect(messages).toEqual([]);
+});
+
+it("imports no provider messages when an existing T3 boundary is absent from Codex history", () => {
+  const messages = codexThreadMessages({
+    importedAt: "2026-01-01T00:00:00.000Z",
+    importThroughTurnId: "turn-retained-locally",
+    thread: {
+      id: "codex-thread-1",
+      turns: [
+        {
+          id: "turn-provider-only",
+          startedAt: 1_767_225_600,
+          status: "completed",
+          items: [
+            {
+              id: "assistant-provider-only",
+              type: "agentMessage",
+              text: "Provider-only answer.",
+            },
+          ],
+        },
+      ],
+    },
+  });
+
+  expect(messages).toEqual([]);
+});
+
 it("falls back for invalid Codex timestamps", () => {
   expect(codexThreadTimestamp(null, "fallback")).toBe("fallback");
   expect(codexThreadTimestamp(Number.NaN, "fallback")).toBe("fallback");

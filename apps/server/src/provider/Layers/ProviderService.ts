@@ -993,6 +993,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         "provider.rollback_turns": input.numTurns,
       });
       yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
+      const activeSessions = yield* routed.adapter.listSessions();
+      const activeSession = activeSessions.find((session) => session.threadId === input.threadId);
+      if (activeSession) {
+        yield* upsertSessionBinding(
+          { ...activeSession, providerInstanceId: routed.instanceId },
+          input.threadId,
+          {
+            lastRuntimeEvent: "provider.rollbackConversation",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        );
+      } else {
+        yield* directory.upsert({
+          threadId: input.threadId,
+          provider: routed.adapter.provider,
+          providerInstanceId: routed.instanceId,
+          status: "stopped",
+          runtimePayload: {
+            lastRuntimeEvent: "provider.rollbackConversation",
+            lastRuntimeEventAt: yield* nowIso,
+          },
+        });
+      }
       yield* analytics.record("provider.conversation.rolled_back", {
         provider: routed.adapter.provider,
         turns: input.numTurns,

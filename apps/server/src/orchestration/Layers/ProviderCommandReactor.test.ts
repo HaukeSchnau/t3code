@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+/* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- These legacy reactor tests share a ManagedRuntime harness so they can drive the real event worker and projection pipeline from async test bodies. */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -13,6 +14,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import {
   ApprovalRequestId,
+  CheckpointRef,
   CommandId,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   EventId,
@@ -37,6 +39,8 @@ import { ProviderAdapterRequestError } from "../../provider/Errors.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
@@ -48,6 +52,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import {
+  collectPrunedProviderTurnIds,
   providerErrorLabel,
   providerErrorLabelFromInstanceHint,
   ProviderCommandReactorLive,
@@ -225,6 +230,9 @@ describe("ProviderCommandReactor", () => {
     const interruptTurn = vi.fn((_: unknown) => Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
     const respondToUserInput = vi.fn<ProviderServiceShape["respondToUserInput"]>(() => Effect.void);
+    const rollbackConversation = vi.fn<ProviderServiceShape["rollbackConversation"]>(
+      () => Effect.void,
+    );
     const stopSession = vi.fn((input: unknown) =>
       Effect.sync(() => {
         const threadId =
@@ -294,7 +302,6 @@ describe("ProviderCommandReactor", () => {
       },
     ];
 
-    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],
@@ -326,27 +333,32 @@ describe("ProviderCommandReactor", () => {
           },
         });
       },
-      rollbackConversation: () => unsupported(),
+      rollbackConversation,
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
       },
     };
 
+    const persistenceLayer = SqlitePersistenceMemory;
+    const projectionTurnRepositoryLayer = ProjectionTurnRepositoryLive.pipe(
+      Layer.provide(persistenceLayer),
+    );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
       Layer.provide(OrchestrationEventStoreLive),
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(persistenceLayer),
     );
     const projectionSnapshotLayer = OrchestrationProjectionSnapshotQueryLive.pipe(
       Layer.provide(RepositoryIdentityResolver.layer),
-      Layer.provide(SqlitePersistenceMemory),
+      Layer.provide(persistenceLayer),
     );
-    const layer = ProviderCommandReactorLive.pipe(
+    const reactorLayer = ProviderCommandReactorLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
+      Layer.provideMerge(projectionTurnRepositoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, service)),
       Layer.provideMerge(makeProviderRegistryLayer(providerSnapshots as never)),
       Layer.provideMerge(
@@ -380,10 +392,17 @@ describe("ProviderCommandReactor", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
+    const layer = Layer.merge(reactorLayer, projectionTurnRepositoryLayer);
     runtime = ManagedRuntime.make(layer);
 
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const runProjectionTurnRepositoryEffect = runtime.runPromise as unknown as <A, E>(
+      effect: Effect.Effect<A, E, ProjectionTurnRepository>,
+    ) => Promise<A>;
+    const projectionTurnRepository = await runProjectionTurnRepositoryEffect(
+      Effect.service(ProjectionTurnRepository),
+    );
     const reactor = await runtime.runPromise(Effect.service(ProviderCommandReactor));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
@@ -418,12 +437,14 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      projectionTurnRepository,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
       interruptTurn,
       respondToRequest,
       respondToUserInput,
+      rollbackConversation,
       stopSession,
       renameBranch,
       refreshStatus,
@@ -472,6 +493,189 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("rolls back an interrupted provider turn when pruning its user message", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const userMessageId = asMessageId("user-interrupted");
+    const interruptedTurnId = asTurnId("turn-interrupted");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-interrupted"),
+        threadId,
+        message: {
+          messageId: userMessageId,
+          role: "user",
+          text: "Give me the full transcript.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-interrupted"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: interruptedTurnId,
+          lastError: null,
+          updatedAt: "2026-01-01T00:00:01.000Z",
+        },
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.diff.complete",
+        commandId: CommandId.make("cmd-turn-diff-interrupted"),
+        threadId,
+        turnId: interruptedTurnId,
+        checkpointTurnCount: 1,
+        checkpointRef: CheckpointRef.make("refs/t3/checkpoints/thread-1/turn/1"),
+        status: "ready",
+        files: [],
+        completedAt: "2026-01-01T00:00:02.000Z",
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return (
+        thread !== undefined &&
+        thread.messages.some((message) => message.id === userMessageId) &&
+        thread.checkpoints.some((checkpoint) => checkpoint.turnId === interruptedTurnId)
+      );
+    });
+    const beforePrune = await harness.readModel();
+    const threadBeforePrune = beforePrune.threads.find((entry) => entry.id === threadId);
+    expect(threadBeforePrune).toBeDefined();
+    expect(
+      collectPrunedProviderTurnIds({
+        thread: threadBeforePrune!,
+        targetMessageIndex: threadBeforePrune!.messages.findIndex(
+          (message) => message.id === userMessageId,
+        ),
+      }),
+    ).toEqual([interruptedTurnId]);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.history.prune",
+        commandId: CommandId.make("cmd-history-prune-interrupted"),
+        threadId,
+        messageId: userMessageId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
+    expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      numTurns: 1,
+    });
+
+    await waitFor(async () => {
+      const readModel = await harness.readModel();
+      const thread = readModel.threads.find((entry) => entry.id === threadId);
+      return (
+        thread !== undefined &&
+        !thread.messages.some((message) => message.id === userMessageId) &&
+        !thread.checkpoints.some((checkpoint) => checkpoint.turnId === interruptedTurnId)
+      );
+    });
+  });
+
+  it("rolls back a provider turn linked only through the projection pending message", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const userMessageId = asMessageId("user-pending-only");
+    const pendingOnlyTurnId = asTurnId("turn-pending-only");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-pending-only"),
+        threadId,
+        message: {
+          messageId: userMessageId,
+          role: "user",
+          text: "This turn was interrupted before assistant output.",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+
+    await Effect.runPromise(
+      harness.projectionTurnRepository.upsertByTurnId({
+        threadId,
+        turnId: pendingOnlyTurnId,
+        pendingMessageId: userMessageId,
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        assistantMessageId: null,
+        state: "interrupted",
+        requestedAt: "2026-01-01T00:00:00.000Z",
+        startedAt: "2026-01-01T00:00:00.000Z",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        checkpointTurnCount: null,
+        checkpointRef: null,
+        checkpointStatus: null,
+        checkpointFiles: [],
+      }),
+    );
+
+    const beforePrune = await harness.readModel();
+    const threadBeforePrune = beforePrune.threads.find((entry) => entry.id === threadId);
+    expect(threadBeforePrune).toBeDefined();
+    expect(
+      collectPrunedProviderTurnIds({
+        thread: threadBeforePrune!,
+        targetMessageIndex: threadBeforePrune!.messages.findIndex(
+          (message) => message.id === userMessageId,
+        ),
+      }),
+    ).toEqual([]);
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.history.prune",
+        commandId: CommandId.make("cmd-history-prune-pending-only"),
+        threadId,
+        messageId: userMessageId,
+        createdAt: "2026-01-01T00:00:02.000Z",
+      }),
+    );
+
+    await waitFor(() => harness.rollbackConversation.mock.calls.length === 1);
+    expect(harness.rollbackConversation.mock.calls[0]?.[0]).toEqual({
+      threadId,
+      numTurns: 1,
+    });
+
+    await waitFor(async () => {
+      const turns = await Effect.runPromise(
+        harness.projectionTurnRepository.listByThreadId({ threadId }),
+      );
+      return !turns.some((turn) => turn.turnId === pendingOnlyTurnId);
+    });
   });
 
   it("generates a thread title on the first turn", async () => {
