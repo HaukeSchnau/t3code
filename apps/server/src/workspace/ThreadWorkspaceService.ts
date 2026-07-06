@@ -75,10 +75,14 @@ interface DirectoryCopyPreflight {
   readonly requiredAvailableBytes: number;
   readonly diskSpacePolicy: "full-copy" | "copy-on-write-guarded";
   readonly copyOnWriteSupported: boolean;
+  readonly copyOnWriteKind: DirectoryCopyCopyOnWriteKind | null;
   readonly sourceDevice: number | null;
   readonly destinationDevice: number | null;
+  readonly sourceFileSystemType: string | null;
   readonly destinationFileSystemType: string | null;
 }
+
+type DirectoryCopyCopyOnWriteKind = "apfs-clone" | "btrfs-reflink";
 
 interface DirectoryCopyCommand {
   readonly command: string;
@@ -238,6 +242,8 @@ const DIRECTORY_COPY_DU_TIMEOUT = "30 seconds";
 const DIRECTORY_COPY_TIMEOUT = "20 minutes";
 const DIRECTORY_COPY_TIMEOUT_MS = 20 * 60 * 1000;
 const DIRECTORY_COPY_MAX_OUTPUT_BYTES = 256 * 1024;
+const APFS_STATFS_TYPE = 26;
+const BTRFS_STATFS_TYPE = 0x9123683e;
 
 function directoryCopyMaxBytes(): number {
   const raw = process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES;
@@ -358,16 +364,59 @@ function deviceForPath(path: string): number | null {
   }
 }
 
-function fileSystemTypeForPath(path: string, platform: NodeJS.Platform): string | null {
-  if (platform !== "darwin") {
-    return null;
-  }
+function statfsTypeForPath(path: string): number | null {
   try {
     const stat = NodeFS.statfsSync(path);
-    return stat.type === 26 ? "apfs" : `type:${stat.type}`;
+    return Number(stat.type) >>> 0;
   } catch {
     return null;
   }
+}
+
+function fileSystemTypeFromStatfsType(
+  statfsType: number | null,
+  platform: NodeJS.Platform,
+): string | null {
+  if (statfsType === null) {
+    return null;
+  }
+  if (platform === "darwin") {
+    return statfsType === APFS_STATFS_TYPE ? "apfs" : `type:${statfsType}`;
+  }
+  if (platform === "linux") {
+    return statfsType === BTRFS_STATFS_TYPE ? "btrfs" : `type:${statfsType.toString(16)}`;
+  }
+  return null;
+}
+
+function fileSystemTypeForPath(path: string, platform: NodeJS.Platform): string | null {
+  return fileSystemTypeFromStatfsType(statfsTypeForPath(path), platform);
+}
+
+function copyOnWriteKindForCapabilities(input: {
+  readonly platform: NodeJS.Platform;
+  readonly sourceDevice: number | null;
+  readonly destinationDevice: number | null;
+  readonly sourceFileSystemType: string | null;
+  readonly destinationFileSystemType: string | null;
+}): DirectoryCopyCopyOnWriteKind | null {
+  if (
+    input.platform === "darwin" &&
+    input.sourceDevice !== null &&
+    input.sourceDevice === input.destinationDevice &&
+    input.sourceFileSystemType === "apfs" &&
+    input.destinationFileSystemType === "apfs"
+  ) {
+    return "apfs-clone";
+  }
+  if (
+    input.platform === "linux" &&
+    input.sourceFileSystemType === "btrfs" &&
+    input.destinationFileSystemType === "btrfs"
+  ) {
+    return "btrfs-reflink";
+  }
+  return null;
 }
 
 function directoryCopyCapabilities(input: {
@@ -376,33 +425,51 @@ function directoryCopyCapabilities(input: {
   readonly platform: NodeJS.Platform;
 }): Pick<
   DirectoryCopyPreflight,
-  "copyOnWriteSupported" | "sourceDevice" | "destinationDevice" | "destinationFileSystemType"
+  | "copyOnWriteSupported"
+  | "copyOnWriteKind"
+  | "sourceDevice"
+  | "destinationDevice"
+  | "sourceFileSystemType"
+  | "destinationFileSystemType"
 > {
   const destinationParent = NodePath.dirname(input.checkoutPath);
   const sourceDevice = deviceForPath(input.sourcePath);
   const destinationDevice = deviceForPath(destinationParent);
+  const sourceFileSystemType = fileSystemTypeForPath(input.sourcePath, input.platform);
   const destinationFileSystemType = fileSystemTypeForPath(destinationParent, input.platform);
+  const copyOnWriteKind = copyOnWriteKindForCapabilities({
+    platform: input.platform,
+    sourceDevice,
+    destinationDevice,
+    sourceFileSystemType,
+    destinationFileSystemType,
+  });
   return {
     sourceDevice,
     destinationDevice,
+    sourceFileSystemType,
     destinationFileSystemType,
-    copyOnWriteSupported:
-      input.platform === "darwin" &&
-      sourceDevice !== null &&
-      sourceDevice === destinationDevice &&
-      destinationFileSystemType === "apfs",
+    copyOnWriteKind,
+    copyOnWriteSupported: copyOnWriteKind !== null,
   };
 }
 
 function primaryDirectoryCopyCommand(
   sourcePath: string,
   checkoutPath: string,
-  platform: NodeJS.Platform,
+  copyOnWriteKind: DirectoryCopyCopyOnWriteKind | null,
 ): DirectoryCopyCommand {
-  if (platform === "darwin") {
+  if (copyOnWriteKind === "apfs-clone") {
     return {
       command: "/bin/cp",
       args: ["-cR", sourcePath, checkoutPath],
+      strategy: "copy-on-write",
+    };
+  }
+  if (copyOnWriteKind === "btrfs-reflink") {
+    return {
+      command: "cp",
+      args: ["-a", "--reflink=always", sourcePath, checkoutPath],
       strategy: "copy-on-write",
     };
   }
@@ -1213,7 +1280,7 @@ export const make = Effect.gen(function* () {
     const primaryCopyCommand = primaryDirectoryCopyCommand(
       root.sourcePath,
       checkoutPath,
-      hostPlatform,
+      preflight.copyOnWriteKind,
     );
     const copyingAt = nowIso();
     yield* persistWorkspace(
@@ -1233,8 +1300,10 @@ export const make = Effect.gen(function* () {
           copyStrategy: primaryCopyCommand.strategy,
           diskSpacePolicy: preflight.diskSpacePolicy,
           copyOnWriteSupported: preflight.copyOnWriteSupported,
+          copyOnWriteKind: preflight.copyOnWriteKind,
           sourceDevice: preflight.sourceDevice,
           destinationDevice: preflight.destinationDevice,
+          sourceFileSystemType: preflight.sourceFileSystemType,
           destinationFileSystemType: preflight.destinationFileSystemType,
           maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
           sourceBytes: preflight.sourceBytes,
@@ -1274,6 +1343,7 @@ export const make = Effect.gen(function* () {
             ...preflight,
             copyOnWriteSupported: false,
             diskSpacePolicy: "full-copy",
+            copyOnWriteKind: null,
           },
         });
       }),
@@ -1302,8 +1372,10 @@ export const make = Effect.gen(function* () {
             attemptedCopyStrategy: primaryCopyCommand.strategy,
             diskSpacePolicy: preflight.diskSpacePolicy,
             copyOnWriteSupported: preflight.copyOnWriteSupported,
+            copyOnWriteKind: preflight.copyOnWriteKind,
             sourceDevice: preflight.sourceDevice,
             destinationDevice: preflight.destinationDevice,
+            sourceFileSystemType: preflight.sourceFileSystemType,
             destinationFileSystemType: preflight.destinationFileSystemType,
             maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
             sourceBytes: preflight.sourceBytes,
@@ -1337,8 +1409,10 @@ export const make = Effect.gen(function* () {
         copyStrategy: primaryCopyCommand.strategy,
         diskSpacePolicy: preflight.diskSpacePolicy,
         copyOnWriteSupported: preflight.copyOnWriteSupported,
+        copyOnWriteKind: preflight.copyOnWriteKind,
         sourceDevice: preflight.sourceDevice,
         destinationDevice: preflight.destinationDevice,
+        sourceFileSystemType: preflight.sourceFileSystemType,
         destinationFileSystemType: preflight.destinationFileSystemType,
         maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
         copyInitialAvailableBytes: copyResult.initialAvailableBytes,
@@ -1468,3 +1542,10 @@ export const make = Effect.gen(function* () {
 });
 
 export const layer = Layer.effect(ThreadWorkspaceService, make);
+
+export const __testing = {
+  BTRFS_STATFS_TYPE,
+  copyOnWriteKindForCapabilities,
+  fileSystemTypeFromStatfsType,
+  primaryDirectoryCopyCommand,
+};

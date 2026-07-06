@@ -36,20 +36,21 @@ support non-Git backends.
   directory and T3's workspace storage, and measures source size before copying.
   Ordinary full-copy sources larger than `T3CODE_DIRECTORY_COPY_MAX_BYTES`
   (default 5 GiB) still fail fast.
-- On macOS APFS, when source and checkout parent are on the same device,
-  directory-copy workspaces treat `cp -cR` as a guarded clone-on-write operation:
-  they bypass the logical source-size cap, require only bounded transient free
-  space, monitor free space while copying, and refuse unsafe full-copy fallback
-  when the logical source is too large.
+- On macOS APFS and Linux BTRFS, directory-copy workspaces use a guarded
+  copy-on-write operation when the filesystem topology supports it: APFS uses
+  same-device `cp -cR`; BTRFS uses GNU `cp -a --reflink=always` when both source
+  and checkout parent are BTRFS. These paths bypass the logical source-size cap,
+  require only bounded transient free space, monitor free space while copying,
+  and refuse unsafe full-copy fallback when the logical source is too large.
 - Directory-copy filesystem work is asynchronous with bounded `du` and copy
   timeouts, so long copies do not block the server event loop. Metadata exposes
   `preparationStatus`, copy timing, source size, free space, and copy strategy
   while provisioning is in progress. APFS clone-on-write copies use a direct
   monitored process so they can be stopped if transient disk usage grows beyond
   the guard.
-- On macOS, directory-copy workspaces use APFS clone-on-write via `cp -cR`
-  before falling back to `rsync` only when a full-copy fallback is safe; other
-  platforms use recursive `cp` before the same fallback.
+- On CoW-capable filesystems, directory-copy workspaces use the filesystem clone
+  path before falling back to `rsync` only when a full-copy fallback is safe;
+  non-CoW paths use recursive `cp` before the same fallback.
 - Workspace deletion uses a hardened recursive removal path that first retries
   normally, then makes copied files/directories user-writable before a final
   remove attempt. This handles package caches that contain read-only files while
