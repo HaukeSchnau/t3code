@@ -1098,6 +1098,9 @@ const makeWsRpcLayer = (
           const importedMessages = codexThreadMessages({
             thread: providerThread,
             importedAt,
+            ...(existingThread
+              ? { importThroughTurnId: existingThread.latestTurn?.turnId ?? null }
+              : {}),
           });
           const existingMessageIds = new Set(existingThread?.messages.map((message) => message.id));
           const messagesToImport = importedMessages.filter(

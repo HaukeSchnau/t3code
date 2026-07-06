@@ -968,6 +968,73 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("persists the rolled-back provider resume cursor before the next recovered turn", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const runtimeRepository = yield* ProviderSessionRuntime.ProviderSessionRuntimeRepository;
+      const rolledBackResumeCursor = { threadId: "provider-thread-rolled-back" };
+
+      const initial = yield* provider.startSession(asThreadId("thread-rollback-cursor"), {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codexInstanceId,
+        threadId: asThreadId("thread-rollback-cursor"),
+        cwd: "/tmp/project-rollback-cursor",
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: "provider-thread-before-rollback" },
+      });
+
+      routing.codex.rollbackThread.mockImplementation((threadId, _numTurns) =>
+        Effect.sync(() => {
+          routing.codex.updateSession(threadId, (session) => ({
+            ...session,
+            status: "ready",
+            activeTurnId: undefined,
+            resumeCursor: rolledBackResumeCursor,
+          }));
+          return { threadId, turns: [] };
+        }),
+      );
+
+      yield* provider.rollbackConversation({
+        threadId: initial.threadId,
+        numTurns: 1,
+      });
+
+      const persistedAfterRollback = yield* runtimeRepository.getByThreadId({
+        threadId: initial.threadId,
+      });
+      assert.equal(Option.isSome(persistedAfterRollback), true);
+      if (Option.isSome(persistedAfterRollback)) {
+        assert.deepEqual(persistedAfterRollback.value.resumeCursor, rolledBackResumeCursor);
+      }
+
+      yield* provider.stopSession({ threadId: initial.threadId });
+      routing.codex.startSession.mockClear();
+      routing.codex.sendTurn.mockClear();
+
+      yield* provider.sendTurn({
+        threadId: initial.threadId,
+        input: "after rollback",
+        attachments: [],
+      });
+
+      assert.equal(routing.codex.startSession.mock.calls.length, 1);
+      const resumedStartInput = routing.codex.startSession.mock.calls[0]?.[0];
+      assert.equal(typeof resumedStartInput === "object" && resumedStartInput !== null, true);
+      if (resumedStartInput && typeof resumedStartInput === "object") {
+        const startPayload = resumedStartInput as {
+          cwd?: string;
+          resumeCursor?: unknown;
+          threadId?: string;
+        };
+        assert.equal(startPayload.cwd, "/tmp/project-rollback-cursor");
+        assert.deepEqual(startPayload.resumeCursor, rolledBackResumeCursor);
+        assert.equal(startPayload.threadId, initial.threadId);
+      }
+      assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("preserves the persisted binding when stopping a session", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

@@ -76,9 +76,16 @@ export function codexThreadTimestamp(value: number | null | undefined, fallback:
 export function codexThreadMessages(input: {
   readonly thread: CodexThread;
   readonly importedAt: string;
+  /**
+   * Bound imports for an already-known T3 thread to the last provider turn the
+   * orchestration projection still retains. `undefined` imports the whole
+   * Codex thread for first-time imports; `null` imports no provider turns.
+   */
+  readonly importThroughTurnId?: string | null;
 }) {
   const messages = [];
-  for (const turn of input.thread.turns) {
+  const turns = codexThreadTurnsWithinImportBoundary(input.thread.turns, input.importThroughTurnId);
+  for (const turn of turns) {
     const timestamp = codexThreadTimestamp(turn.startedAt, input.importedAt);
     for (const item of turn.items) {
       if (item.type === "userMessage" && item.id && item.content) {
@@ -116,6 +123,21 @@ export function codexThreadMessages(input: {
     }
   }
   return messages;
+}
+
+function codexThreadTurnsWithinImportBoundary(
+  turns: CodexThread["turns"],
+  importThroughTurnId: string | null | undefined,
+) {
+  if (importThroughTurnId === undefined) {
+    return turns;
+  }
+  if (importThroughTurnId === null) {
+    return [];
+  }
+
+  const turnIndex = turns.findIndex((turn) => turn.id === importThroughTurnId);
+  return turnIndex === -1 ? [] : turns.slice(0, turnIndex + 1);
 }
 
 export const readCodexProviderThread = (input: CodexProviderThreadRequest) =>

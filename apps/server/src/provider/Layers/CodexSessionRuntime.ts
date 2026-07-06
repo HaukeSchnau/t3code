@@ -1671,6 +1671,7 @@ export const makeCodexSessionRuntime = (
           yield* updateSession(sessionRef, {
             status: "ready",
             activeTurnId: undefined,
+            resumeCursor: { threadId: response.thread.id },
           });
           return parseThreadSnapshot(response);
         }),
