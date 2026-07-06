@@ -85,6 +85,94 @@ function makeProcessOutput(
 }
 
 layer("ThreadWorkspaceService", (it) => {
+  it("recognizes Linux BTRFS reflink directory-copy capabilities", () => {
+    const destinationFileSystemType = ThreadWorkspaceService.__testing.fileSystemTypeFromStatfsType(
+      ThreadWorkspaceService.__testing.BTRFS_STATFS_TYPE,
+      "linux",
+    );
+
+    const copyOnWriteKind = ThreadWorkspaceService.__testing.copyOnWriteKindForCapabilities({
+      platform: "linux",
+      sourceDevice: 49,
+      destinationDevice: 49,
+      sourceFileSystemType: destinationFileSystemType,
+      destinationFileSystemType,
+    });
+
+    assert.equal(destinationFileSystemType, "btrfs");
+    assert.equal(copyOnWriteKind, "btrfs-reflink");
+    assert.deepEqual(
+      ThreadWorkspaceService.__testing.primaryDirectoryCopyCommand(
+        "/home/haukeschnau/Code",
+        "/home/haukeschnau/.t3/workspaces/Code/thread",
+        copyOnWriteKind,
+      ),
+      {
+        command: "cp",
+        args: [
+          "-a",
+          "--reflink=always",
+          "/home/haukeschnau/Code",
+          "/home/haukeschnau/.t3/workspaces/Code/thread",
+        ],
+        strategy: "copy-on-write",
+      },
+    );
+  });
+
+  it("allows BTRFS reflink copy-on-write across subvolume devices", () => {
+    const copyOnWriteKind = ThreadWorkspaceService.__testing.copyOnWriteKindForCapabilities({
+      platform: "linux",
+      sourceDevice: 37,
+      destinationDevice: 49,
+      sourceFileSystemType: "btrfs",
+      destinationFileSystemType: "btrfs",
+    });
+
+    assert.equal(copyOnWriteKind, "btrfs-reflink");
+    assert.deepEqual(
+      ThreadWorkspaceService.__testing.primaryDirectoryCopyCommand(
+        "/srv/source",
+        "/home/haukeschnau/.t3/workspaces/source/thread",
+        copyOnWriteKind,
+      ),
+      {
+        command: "cp",
+        args: [
+          "-a",
+          "--reflink=always",
+          "/srv/source",
+          "/home/haukeschnau/.t3/workspaces/source/thread",
+        ],
+        strategy: "copy-on-write",
+      },
+    );
+  });
+
+  it("does not use BTRFS reflink copy-on-write when only the destination is BTRFS", () => {
+    const copyOnWriteKind = ThreadWorkspaceService.__testing.copyOnWriteKindForCapabilities({
+      platform: "linux",
+      sourceDevice: 37,
+      destinationDevice: 49,
+      sourceFileSystemType: "type:ef53",
+      destinationFileSystemType: "btrfs",
+    });
+
+    assert.equal(copyOnWriteKind, null);
+    assert.deepEqual(
+      ThreadWorkspaceService.__testing.primaryDirectoryCopyCommand(
+        "/mnt/ext4/source",
+        "/home/haukeschnau/.t3/workspaces/source/thread",
+        copyOnWriteKind,
+      ),
+      {
+        command: "cp",
+        args: ["-R", "/mnt/ext4/source", "/home/haukeschnau/.t3/workspaces/source/thread"],
+        strategy: "recursive-copy",
+      },
+    );
+  });
+
   it.effect("persists failed directory-copy provisioning for diagnostics", () =>
     Effect.gen(function* () {
       const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
