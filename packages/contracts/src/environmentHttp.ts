@@ -61,6 +61,7 @@ import {
   RelayEnvironmentMintResponse,
   RelayLinkProofRequest,
 } from "./relay.ts";
+import { ServerIdleStatus } from "./server.ts";
 
 const OptionalBearerHeaders = Schema.Struct({
   authorization: Schema.optionalKey(Schema.String),
@@ -295,6 +296,10 @@ const EnvironmentOrchestrationDispatchErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
 ] as const;
+const EnvironmentServerIdleStatusErrors = [
+  EnvironmentScopeRequiredError,
+  EnvironmentInternalError,
+] as const;
 const EnvironmentThreadOrchestrationReadErrors = [
   EnvironmentScopeRequiredError,
   EnvironmentInternalError,
@@ -471,6 +476,14 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
+export class EnvironmentServerHttpApi extends HttpApiGroup.make("server").add(
+  HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
+    headers: OptionalBearerHeaders,
+    success: ServerIdleStatus,
+    error: EnvironmentServerIdleStatusErrors,
+  }).middleware(EnvironmentAuthenticatedAuth),
+) {}
+
 export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("threadOrchestration")
   .add(
     HttpApiEndpoint.get("listProjects", "/api/thread-orchestration/projects", {
@@ -616,5 +629,6 @@ export class EnvironmentHttpApi extends HttpApi.make("environment")
   .add(EnvironmentMetadataHttpApi)
   .add(EnvironmentAuthHttpApi)
   .add(EnvironmentOrchestrationHttpApi)
+  .add(EnvironmentServerHttpApi)
   .add(EnvironmentThreadOrchestrationHttpApi)
   .add(EnvironmentConnectHttpApi) {}
