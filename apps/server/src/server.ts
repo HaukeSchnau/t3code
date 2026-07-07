@@ -95,6 +95,7 @@ import {
   persistServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import { orchestrationHttpApiLayer } from "./orchestration/http.ts";
+import { serverStatusHttpApiLayer } from "./status/http.ts";
 import { threadOrchestrationHttpApiLayer } from "./mcp/toolkits/thread-orchestration/http.ts";
 import { CodexThreadForkImporterLive } from "./mcp/toolkits/thread-orchestration/CodexThreadForkImporter.ts";
 import { layer as RemoteEnvironmentRegistryLive } from "./mcp/toolkits/thread-orchestration/RemoteEnvironmentRegistry.ts";
@@ -400,6 +401,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
+      Layer.provide(serverStatusHttpApiLayer),
       Layer.provide(
         threadOrchestrationHttpApiLayer.pipe(
           Layer.provide(

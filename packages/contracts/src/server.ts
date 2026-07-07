@@ -593,6 +593,43 @@ export const ServerLifecycleStreamEvent = Schema.Union([
 ]);
 export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 
+export const ServerIdleBusyReason = Schema.Literals([
+  "live-provider-active-turn",
+  "projected-active-turn",
+  "projected-session-starting",
+  "projected-latest-turn-running",
+  "queued-message",
+  "pending-approval",
+  "pending-user-input",
+]);
+export type ServerIdleBusyReason = typeof ServerIdleBusyReason.Type;
+
+export const ServerIdleBusyThread = Schema.Struct({
+  threadId: ThreadId,
+  reason: ServerIdleBusyReason,
+  source: Schema.Literals(["live-provider", "projection"]),
+  turnId: Schema.NullOr(TurnId),
+  status: Schema.optional(TrimmedNonEmptyString),
+  provider: Schema.optional(TrimmedNonEmptyString),
+  detail: Schema.optional(TrimmedNonEmptyString),
+});
+export type ServerIdleBusyThread = typeof ServerIdleBusyThread.Type;
+
+export const ServerIdleStatus = Schema.Struct({
+  idle: Schema.Boolean,
+  checkedAt: IsoDateTime,
+  busyThreadCount: Schema.Number,
+  liveActiveTurnCount: Schema.Number,
+  projectedActiveTurnCount: Schema.Number,
+  projectedStartingSessionCount: Schema.Number,
+  projectedRunningTurnCount: Schema.Number,
+  queuedMessageCount: Schema.Number,
+  pendingApprovalCount: Schema.Number,
+  pendingUserInputCount: Schema.Number,
+  busyThreads: Schema.Array(ServerIdleBusyThread),
+});
+export type ServerIdleStatus = typeof ServerIdleStatus.Type;
+
 export const ServerProviderUpdatedPayload = Schema.Struct({
   providers: ServerProviders,
 });
