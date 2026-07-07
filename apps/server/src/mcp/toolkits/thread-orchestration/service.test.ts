@@ -1128,6 +1128,86 @@ it.effect("prepares requested worktrees for forked threads", () => {
   }).pipe(Effect.provide(testLayer));
 });
 
+it.effect("rejects fork requests while the source thread is running", () => {
+  const runningReadModel: OrchestrationReadModel = {
+    ...readModel,
+    threads: readModel.threads.map((thread) =>
+      thread.id === targetThreadId
+        ? {
+            ...thread,
+            session: {
+              threadId: thread.id,
+              status: "running",
+              providerName: "Codex",
+              providerInstanceId: ProviderInstanceId.make("codex"),
+              runtimeMode: thread.runtimeMode,
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          }
+        : thread,
+    ),
+  };
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(
+      Layer.succeed(CodexThreadForkImporter, {
+        fork: () => Effect.die("fork importer should not be called for a running source thread"),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        dispatch: () => Effect.die("dispatch should not be called for a running source thread"),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(runningReadModel),
+        getSnapshot: () => Effect.succeed(runningReadModel),
+        getShellSnapshot: () => Effect.succeed(shellSnapshot),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: () => Effect.succeed(Option.none()),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadDetailById: () => Effect.succeed(Option.none()),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () =>
+          Effect.die("workspace preparation should not be called for a running source thread"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testThreadDiscoveryDependencies),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    const error = yield* service
+      .forkThread(scope, {
+        threadId: targetThreadId,
+        environment: { type: "worktree" },
+      })
+      .pipe(Effect.flip);
+
+    expect(error).toMatchObject({
+      operation: "fork_thread",
+      code: "source_busy",
+      threadId: targetThreadId,
+      projectId,
+    });
+  }).pipe(Effect.provide(testLayer));
+});
+
 it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () => {
   const deletedWorkspaceIds: ThreadWorkspaceId[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(

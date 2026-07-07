@@ -73,10 +73,12 @@ The message-level fork action is destination-aware. The fork button opens a menu
 The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
 archived sources, running latest turns, active provider turns, streaming messages, queued messages,
 pending approvals, and pending user-input requests before preparing any workspace or forking provider
-history. The public RPC only accepts `directory-copy` for this first workspace fork slice, because
-the feature promise is to preserve dirty and untracked file state rather than create a clean VCS
-worktree. If a prepared-workspace fork fails after creating a destination thread, T3 rolls the
-destination thread back before deleting the prepared workspace.
+history. The agent-facing thread orchestration `fork_thread` path also rejects busy sources before
+preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
+"source must be idle" rule. The public RPC only accepts `directory-copy` for this first workspace
+fork slice, because the feature promise is to preserve dirty and untracked file state rather than
+create a clean VCS worktree. If a prepared-workspace fork fails after creating a destination thread,
+T3 rolls the destination thread back before deleting the prepared workspace.
 
 On successful workspace forks, the destination T3 thread stores the prepared `workspaceId` and
 `worktreePath`, while Codex receives developer instructions that mark the destination cwd as
