@@ -15,12 +15,24 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
+import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
+import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
+import { getServerIdleStatus } from "../status/IdleStatus.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
 class StatusLiveServerUnavailableError extends Data.TaggedError(
   "StatusLiveServerUnavailableError",
 )<{
+  readonly reason: string;
+}> {
+  override get message(): string {
+    return this.reason;
+  }
+}
+
+class StatusOfflineUnavailableError extends Data.TaggedError("StatusOfflineUnavailableError")<{
   readonly reason: string;
 }> {
   override get message(): string {
@@ -56,6 +68,11 @@ const withStatusCliSessionToken = <A, E, R>(
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
   );
 
+const StatusOfflineRuntimeLive = OrchestrationProjectionSnapshotQueryLive.pipe(
+  Layer.provideMerge(RepositoryIdentityResolver.layer),
+  Layer.provideMerge(SqlitePersistenceLayerLive),
+);
+
 function formatIdleStatus(status: ServerIdleStatus, options: { readonly json: boolean }): string {
   if (options.json) {
     return JSON.stringify(status);
@@ -85,6 +102,39 @@ const setExitCode = (code: number) =>
   Effect.sync(() => {
     process.exitCode = code;
   });
+
+function failureMessage(failure: unknown): string {
+  if (
+    typeof failure === "object" &&
+    failure !== null &&
+    "message" in failure &&
+    typeof failure.message === "string"
+  ) {
+    return failure.message;
+  }
+  return "probe failed";
+}
+
+const queryOfflineIdleStatus = (flags: CliAuthLocationFlags) =>
+  Effect.gen(function* () {
+    const logLevel = yield* GlobalFlag.LogLevel;
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    return yield* getServerIdleStatus().pipe(
+      Effect.provide(
+        StatusOfflineRuntimeLive.pipe(
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, config.logLevel)),
+        ),
+      ),
+    );
+  }).pipe(
+    Effect.mapError(
+      (cause) =>
+        new StatusOfflineUnavailableError({
+          reason: failureMessage(cause),
+        }),
+    ),
+  );
 
 const queryLiveIdleStatus = (flags: CliAuthLocationFlags) =>
   Effect.gen(function* () {
@@ -126,19 +176,19 @@ const idleStatusCommand = Command.make("idle", {
   Command.withDescription("Report whether the running T3 Code server is safe to restart."),
   Command.withHandler((flags) =>
     Effect.gen(function* () {
-      const attempted = yield* Effect.result(queryLiveIdleStatus(flags));
+      const attemptedLive = yield* Effect.result(queryLiveIdleStatus(flags));
+      const attempted =
+        attemptedLive._tag === "Success"
+          ? attemptedLive
+          : yield* Effect.result(queryOfflineIdleStatus(flags));
       if (attempted._tag === "Failure") {
         yield* setExitCode(2);
         if (!flags.quiet) {
+          const liveFailure =
+            attemptedLive._tag === "Failure" ? `${failureMessage(attemptedLive.failure)}; ` : "";
           yield* Console.log(
             formatUnknownStatus({
-              reason:
-                typeof attempted.failure === "object" &&
-                attempted.failure !== null &&
-                "message" in attempted.failure &&
-                typeof attempted.failure.message === "string"
-                  ? attempted.failure.message
-                  : "probe failed",
+              reason: `${liveFailure}offline fallback failed: ${failureMessage(attempted.failure)}`,
               json: flags.json,
             }),
           );
