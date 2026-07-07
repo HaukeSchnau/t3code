@@ -60,3 +60,26 @@ drops the field before it reaches Codex. For older installed Codex binaries that
 `lastTurnId`, T3 Code rolls the newly forked provider thread back by the extra trailing turns before
 importing and binding it. T3 Code no longer exposes a separate user-facing latest-thread fork
 action in the sidebar; message-level forking is the user workflow.
+
+The message-level fork action is destination-aware. The fork button opens a menu with:
+
+- `Fork here`, preserving the existing same-workspace behavior.
+- `Fork into new workspace`, which asks `ThreadWorkspaceService` to create a managed
+  `directory-copy` workspace from the source thread's current cwd before calling Codex
+  App Server `thread/fork` with that copied cwd.
+- A disabled `Fork to host...` placeholder. Cross-host Codex continuation remains blocked
+  until provider-thread transfer/export semantics are proven.
+
+The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
+archived sources, running latest turns, active provider turns, streaming messages, queued messages,
+pending approvals, and pending user-input requests before preparing any workspace or forking provider
+history. The public RPC only accepts `directory-copy` for this first workspace fork slice, because
+the feature promise is to preserve dirty and untracked file state rather than create a clean VCS
+worktree. If a prepared-workspace fork fails after creating a destination thread, T3 rolls the
+destination thread back before deleting the prepared workspace.
+
+On successful workspace forks, the destination T3 thread stores the prepared `workspaceId` and
+`worktreePath`, while Codex receives developer instructions that mark the destination cwd as
+authoritative and explain that the conversation was forked from another T3 thread. T3 also records
+`thread.forked-to` and `thread.forked-from` activities so the relationship is visible to humans even
+before another model turn runs.

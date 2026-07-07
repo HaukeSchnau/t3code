@@ -182,6 +182,7 @@ function buildProps() {
     isRevertingCheckpoint: false,
     onImageExpand: () => {},
     activeThreadEnvironmentId: ACTIVE_THREAD_ENVIRONMENT_ID,
+    canForkAssistantMessage: true,
     markdownCwd: undefined,
     resolvedTheme: "light" as const,
     timestampFormat: "locale" as const,
@@ -435,6 +436,20 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('aria-label="Fork from here"');
     expect(markup).toContain("lucide-git-fork");
+  });
+
+  it("hides the fork action when message forks are unavailable", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        canForkAssistantMessage={false}
+        timelineEntries={[buildAssistantTimelineEntry("Done.")]}
+      />,
+    );
+
+    expect(markup).not.toContain('aria-label="Fork from here"');
+    expect(markup).not.toContain("lucide-git-fork");
   });
 
   it("renders context compaction entries in the normal work log", async () => {

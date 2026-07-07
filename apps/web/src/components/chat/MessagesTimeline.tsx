@@ -82,6 +82,7 @@ import {
   type TimelineLatestTurn,
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   deriveDisplayedUserMessageState,
@@ -130,8 +131,13 @@ interface TimelineRowSharedState {
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
   activeThreadEnvironmentId: EnvironmentId;
+  canForkAssistantMessage: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
-  onForkAssistantMessage: (messageId: MessageId, turnId: TurnId) => void;
+  onForkAssistantMessage: (
+    messageId: MessageId,
+    turnId: TurnId,
+    options?: { workspace?: "new" },
+  ) => void;
   userMessageEditing: UserMessageEditingController;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -203,11 +209,16 @@ interface MessagesTimelineProps {
   editableUserMessageIds?: ReadonlySet<MessageId>;
   revertTurnCountByUserMessageId: Map<MessageId, number>;
   onRevertUserMessage: (messageId: MessageId) => void;
-  onForkAssistantMessage?: (messageId: MessageId, turnId: TurnId) => void;
+  onForkAssistantMessage?: (
+    messageId: MessageId,
+    turnId: TurnId,
+    options?: { workspace?: "new" },
+  ) => void;
   userMessageEditing?: UserMessageEditingController;
   isRevertingCheckpoint: boolean;
   onImageExpand: (preview: ExpandedImagePreview) => void;
   activeThreadEnvironmentId: EnvironmentId;
+  canForkAssistantMessage: boolean;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
   timestampFormat: TimestampFormat;
@@ -246,6 +257,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   isRevertingCheckpoint,
   onImageExpand,
   activeThreadEnvironmentId,
+  canForkAssistantMessage,
   markdownCwd,
   resolvedTheme,
   timestampFormat,
@@ -464,6 +476,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      canForkAssistantMessage,
       onRevertUserMessage,
       onForkAssistantMessage: onForkAssistantMessage ?? (() => {}),
       userMessageEditing,
@@ -481,6 +494,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       workspaceRoot,
       skills,
       activeThreadEnvironmentId,
+      canForkAssistantMessage,
       onRevertUserMessage,
       onForkAssistantMessage,
       userMessageEditing,
@@ -1139,28 +1153,47 @@ function AssistantCopyButton({ row }: { row: Extract<TimelineRow, { kind: "messa
 
 function AssistantForkButton({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  const activity = use(TimelineRowActivityCtx);
   const turnId = row.message.turnId;
-  if (!turnId) {
+  if (!turnId || !ctx.canForkAssistantMessage) {
     return null;
   }
 
+  const disabled = activity.activeTurnInProgress || activity.isWorking;
+  if (disabled) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button type="button" size="xs" variant="ghost" disabled aria-label="Fork from here" />
+          }
+        >
+          <GitForkIcon className="size-3" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Fork is available when the thread is idle</TooltipPopup>
+      </Tooltip>
+    );
+  }
+
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            type="button"
-            size="xs"
-            variant="ghost"
-            onClick={() => ctx.onForkAssistantMessage(row.message.id, turnId)}
-            aria-label="Fork from here"
-          />
-        }
+    <Menu>
+      <MenuTrigger
+        render={<Button type="button" size="xs" variant="ghost" aria-label="Fork from here" />}
       >
         <GitForkIcon className="size-3" />
-      </TooltipTrigger>
-      <TooltipPopup side="top">Fork from here</TooltipPopup>
-    </Tooltip>
+      </MenuTrigger>
+      <MenuPopup align="end">
+        <MenuItem onClick={() => ctx.onForkAssistantMessage(row.message.id, turnId)}>
+          Fork here
+        </MenuItem>
+        <MenuItem
+          onClick={() => ctx.onForkAssistantMessage(row.message.id, turnId, { workspace: "new" })}
+        >
+          Fork into new workspace
+        </MenuItem>
+        <MenuItem disabled>Fork to host...</MenuItem>
+      </MenuPopup>
+    </Menu>
   );
 }
 

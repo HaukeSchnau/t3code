@@ -9,6 +9,7 @@ import {
   PositiveInt,
   ProjectId,
   ThreadId,
+  ThreadWorkspaceId,
   TurnId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
@@ -222,6 +223,12 @@ export const CodexThreadForkInput = Schema.Struct({
   threadId: ThreadId,
   lastTurnId: Schema.optional(Schema.NullOr(TurnId)),
   sourceMessageId: Schema.optional(Schema.NullOr(MessageId)),
+  workspace: Schema.optional(
+    Schema.Struct({
+      mode: Schema.Literal("new"),
+      kind: Schema.optional(Schema.Literal("directory-copy")),
+    }),
+  ),
 });
 export type CodexThreadForkInput = typeof CodexThreadForkInput.Type;
 
@@ -231,6 +238,7 @@ export const CodexThreadForkResult = Schema.Struct({
   sourceThreadId: ThreadId,
   providerThreadId: TrimmedNonEmptyString,
   importedMessageCount: NonNegativeInt,
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
 });
 export type CodexThreadForkResult = typeof CodexThreadForkResult.Type;
 

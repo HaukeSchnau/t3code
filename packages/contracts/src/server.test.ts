@@ -1,9 +1,11 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { ServerProvider } from "./server.ts";
+import { CodexThreadForkInput, CodexThreadForkResult, ServerProvider } from "./server.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
+const decodeCodexThreadForkInput = Schema.decodeUnknownSync(CodexThreadForkInput);
+const decodeCodexThreadForkResult = Schema.decodeUnknownSync(CodexThreadForkResult);
 
 describe("ServerProvider", () => {
   it("defaults capability arrays when decoding provider snapshots", () => {
@@ -70,5 +72,40 @@ describe("ServerProvider", () => {
     });
 
     expect(parsed.continuation?.groupKey).toBe("codex:home:/Users/julius/.codex");
+  });
+});
+
+describe("CodexThreadFork", () => {
+  it("decodes new workspace fork requests", () => {
+    const parsed = decodeCodexThreadForkInput({
+      threadId: "thread-source",
+      lastTurnId: "turn-1",
+      sourceMessageId: "message-1",
+      workspace: { mode: "new", kind: "directory-copy" },
+    });
+
+    expect(parsed.workspace).toEqual({ mode: "new", kind: "directory-copy" });
+  });
+
+  it("rejects non-copy workspace kinds for Codex fork requests", () => {
+    expect(() =>
+      decodeCodexThreadForkInput({
+        threadId: "thread-source",
+        workspace: { mode: "new", kind: "git-detached" },
+      }),
+    ).toThrow();
+  });
+
+  it("decodes fork results with destination workspace metadata", () => {
+    const parsed = decodeCodexThreadForkResult({
+      threadId: "thread-destination",
+      projectId: "project-1",
+      sourceThreadId: "thread-source",
+      providerThreadId: "codex-thread-destination",
+      importedMessageCount: 4,
+      workspaceId: "workspace:thread-destination",
+    });
+
+    expect(parsed.workspaceId).toBe("workspace:thread-destination");
   });
 });

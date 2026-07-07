@@ -693,6 +693,7 @@ function MonitorThreadBody({
         isRevertingCheckpoint={false}
         onImageExpand={() => undefined}
         activeThreadEnvironmentId={threadRef.environmentId}
+        canForkAssistantMessage={false}
         markdownCwd={thread.worktreePath ?? projectCwd}
         resolvedTheme={resolvedTheme}
         timestampFormat={timestampFormat}

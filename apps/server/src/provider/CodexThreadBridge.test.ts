@@ -201,17 +201,19 @@ it("falls back for invalid Codex timestamps", () => {
   expect(codexThreadTimestamp(Number.NaN, "fallback")).toBe("fallback");
 });
 
-it("passes optional fork turn bounds to Codex app-server", () => {
+it("passes optional fork turn bounds and destination context to Codex app-server", () => {
   expect(
     codexThreadForkParams({
       providerThreadId: "codex-thread-1",
       cwd: "/repo",
       lastTurnId: "turn-2",
+      developerInstructions: "Use the destination workspace as authoritative.",
     }),
   ).toEqual({
     threadId: "codex-thread-1",
     cwd: "/repo",
     lastTurnId: "turn-2",
+    developerInstructions: "Use the destination workspace as authoritative.",
   });
 
   expect(
