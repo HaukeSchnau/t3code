@@ -206,6 +206,23 @@ function statusForThread(thread: ThreadSummarySource): string {
   return "idle";
 }
 
+function forkSourceBusyReason(thread: OrchestrationThread): string | null {
+  if (thread.deletedAt !== null) return "deleted";
+  if (thread.archivedAt !== null) return "archived";
+  const queuedMessageCount = thread.queuedMessages?.length ?? 0;
+  if (queuedMessageCount > 0) return `${queuedMessageCount} queued message(s)`;
+  if (thread.session?.status === "starting" || thread.session?.status === "running") {
+    return `session is ${thread.session.status}`;
+  }
+  if (thread.session?.activeTurnId !== null && thread.session?.activeTurnId !== undefined) {
+    return "session has an active turn";
+  }
+  if (thread.latestTurn?.state === "running" || thread.latestTurn?.state === "interrupted") {
+    return `latest turn is ${thread.latestTurn.state}`;
+  }
+  return null;
+}
+
 function summaryForThread(
   thread: ThreadSummarySource,
   project: ProjectSummarySource,
@@ -1044,6 +1061,16 @@ const make = Effect.gen(function* () {
       if (!sourceThread) {
         return yield* notFoundError("fork_thread", "thread", sourceThreadId, {
           threadId: sourceThreadId,
+        });
+      }
+      const busyReason = forkSourceBusyReason(sourceThread);
+      if (busyReason !== null) {
+        return yield* new ThreadOrchestrationError({
+          operation: "fork_thread",
+          code: "source_busy",
+          message: `Thread '${sourceThreadId}' cannot be forked right now because ${busyReason}. Wait until it is idle, then try again.`,
+          threadId: sourceThreadId,
+          projectId: sourceThread.projectId,
         });
       }
       const project = findProject(model.projects, sourceThread.projectId);
