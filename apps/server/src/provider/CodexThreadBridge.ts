@@ -39,6 +39,7 @@ export interface CodexProviderThreadRequest {
 export interface CodexProviderThreadForkRequest extends CodexProviderThreadRequest {
   readonly cwd?: string;
   readonly lastTurnId?: string | null;
+  readonly developerInstructions?: string;
 }
 
 export function codexThreadTitle(input: {
@@ -170,11 +171,13 @@ export function codexThreadForkParams(input: {
   readonly providerThreadId: string;
   readonly cwd?: string;
   readonly lastTurnId?: string | null;
+  readonly developerInstructions?: string;
 }) {
   return {
     threadId: input.providerThreadId,
     ...(input.lastTurnId ? { lastTurnId: input.lastTurnId } : {}),
     ...(input.cwd ? { cwd: input.cwd } : {}),
+    ...(input.developerInstructions ? { developerInstructions: input.developerInstructions } : {}),
   };
 }
 

@@ -5121,7 +5121,7 @@ function ChatViewContent(props: ChatViewProps) {
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
   const onForkAssistantMessage = useCallback(
-    async (messageId: MessageId, turnId: TurnId) => {
+    async (messageId: MessageId, turnId: TurnId, options: { workspace?: "new" } = {}) => {
       if (!activeThreadRef) {
         return;
       }
@@ -5142,6 +5142,9 @@ function ChatViewContent(props: ChatViewProps) {
           threadId: activeThreadRef.threadId,
           lastTurnId: turnId,
           sourceMessageId: messageId,
+          ...(options.workspace === "new"
+            ? { workspace: { mode: "new" as const, kind: "directory-copy" as const } }
+            : {}),
         }),
       );
       if (result._tag === "Failure") {
@@ -5178,8 +5181,11 @@ function ChatViewContent(props: ChatViewProps) {
       toastManager.add(
         stackedThreadToast({
           type: "success",
-          title: "Forked from message",
-          description: "Opened the fork with history up to that response.",
+          title: options.workspace === "new" ? "Forked into new workspace" : "Forked from message",
+          description:
+            options.workspace === "new"
+              ? "Opened the fork with a copied workspace at the selected response."
+              : "Opened the fork with history up to that response.",
         }),
       );
     },
@@ -5440,6 +5446,9 @@ function ChatViewContent(props: ChatViewProps) {
                 }
                 onImageExpand={onExpandTimelineImage}
                 markdownCwd={gitCwd ?? undefined}
+                canForkAssistantMessage={
+                  activeProviderStatus?.driver === ProviderDriverKind.make("codex")
+                }
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
                 workspaceRoot={activeWorkspaceRoot}

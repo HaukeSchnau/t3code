@@ -36,6 +36,8 @@ import {
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
   type OrchestrationShellStreamEvent,
+  type OrchestrationThread,
+  type OrchestrationThreadActivity,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
@@ -314,6 +316,131 @@ const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 const isCodexThreadResumeError = Schema.is(CodexThreadResumeError);
 const isCodexThreadForkError = Schema.is(CodexThreadForkError);
 
+function codexForkSourceBusyReason(thread: OrchestrationThread): string | null {
+  if (thread.archivedAt !== null) {
+    return "Cannot fork an archived thread.";
+  }
+  if (thread.latestTurn?.state === "running") {
+    return "Cannot fork a thread while its latest turn is still running.";
+  }
+  if (thread.session?.activeTurnId !== null && thread.session?.activeTurnId !== undefined) {
+    return "Cannot fork a thread while a provider turn is active.";
+  }
+  if (
+    thread.session &&
+    !["idle", "ready", "stopped", "interrupted", "error"].includes(thread.session.status)
+  ) {
+    return `Cannot fork a thread while its session is ${thread.session.status}.`;
+  }
+  if (thread.messages.some((message) => message.streaming)) {
+    return "Cannot fork a thread while a message is still streaming.";
+  }
+  const queuedMessages = thread.queuedMessages ?? [];
+  if (queuedMessages.length > 0) {
+    return "Cannot fork a thread while it has queued messages.";
+  }
+  const pendingApprovalCount = deriveThreadPendingRequestCount(thread.activities, "approval");
+  if (pendingApprovalCount > 0) {
+    return "Cannot fork a thread while it is waiting on approval.";
+  }
+  const pendingUserInputCount = deriveThreadPendingRequestCount(thread.activities, "user-input");
+  if (pendingUserInputCount > 0) {
+    return "Cannot fork a thread while it is waiting on user input.";
+  }
+  return null;
+}
+
+function deriveThreadPendingRequestCount(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  kind: "approval" | "user-input",
+): number {
+  const openRequestIds = new Set<string>();
+  for (const activity of [...activities].toSorted(
+    (left, right) =>
+      left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
+  )) {
+    const requestId = threadActivityRequestId(activity);
+    if (requestId === null) {
+      continue;
+    }
+
+    if (kind === "approval") {
+      if (activity.kind === "approval.requested") {
+        openRequestIds.add(requestId);
+      } else if (activity.kind === "approval.resolved") {
+        openRequestIds.delete(requestId);
+      } else if (
+        activity.kind === "provider.approval.respond.failed" &&
+        pendingRequestFailureDetailIsStale(activity)
+      ) {
+        openRequestIds.delete(requestId);
+      }
+      continue;
+    }
+
+    if (activity.kind === "user-input.requested") {
+      openRequestIds.add(requestId);
+      continue;
+    }
+    if (activity.kind === "user-input.resolved") {
+      openRequestIds.delete(requestId);
+      continue;
+    }
+
+    if (
+      activity.kind === "provider.user-input.respond.failed" &&
+      pendingRequestFailureDetailIsStale(activity)
+    ) {
+      openRequestIds.delete(requestId);
+    }
+  }
+  return openRequestIds.size;
+}
+
+function pendingRequestFailureDetailIsStale(activity: OrchestrationThreadActivity): boolean {
+  const payload =
+    typeof activity.payload === "object" && activity.payload !== null
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  const detail = typeof payload?.detail === "string" ? payload.detail.toLowerCase() : "";
+  return (
+    detail.includes("stale pending request") ||
+    detail.includes("stale pending approval request") ||
+    detail.includes("stale pending user-input request") ||
+    detail.includes("unknown pending request") ||
+    detail.includes("unknown pending approval request") ||
+    detail.includes("unknown pending user-input request") ||
+    detail.includes("unknown pending user input request") ||
+    detail.includes("unknown pending codex approval request") ||
+    detail.includes("unknown pending codex user input request")
+  );
+}
+
+function threadActivityRequestId(activity: OrchestrationThreadActivity): string | null {
+  if (typeof activity.payload !== "object" || activity.payload === null) {
+    return null;
+  }
+  const requestId = (activity.payload as Record<string, unknown>).requestId;
+  return typeof requestId === "string" && requestId.trim().length > 0 ? requestId : null;
+}
+
+function codexForkDeveloperInstructions(input: {
+  readonly sourceCwd: string;
+  readonly targetCwd: string;
+  readonly workspaceMode: "same" | "new";
+}): string {
+  return [
+    "This thread was forked by the user from an earlier T3 Code thread.",
+    "The conversation history was imported, but execution continues from this destination thread.",
+    `Source working directory: ${input.sourceCwd}`,
+    `Current working directory: ${input.targetCwd}`,
+    input.workspaceMode === "new"
+      ? "T3 Code copied the source workspace into a new workspace before creating this fork."
+      : "This fork uses the same workspace as the source thread.",
+    "Use the current working directory as authoritative. Do not assume terminals, approvals, or host-local state from the source thread are still active.",
+  ].join("\n");
+}
+
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
@@ -589,6 +716,37 @@ const makeWsRpcLayer = (
               activity: {
                 id: activityId,
                 tone: input.tone,
+                kind: input.kind,
+                summary: input.summary,
+                payload: input.payload,
+                turnId: null,
+                createdAt: input.createdAt,
+              },
+              createdAt: input.createdAt,
+            }),
+          ),
+        );
+
+      const appendThreadActivity = (input: {
+        readonly threadId: ThreadId;
+        readonly kind: string;
+        readonly summary: string;
+        readonly createdAt: string;
+        readonly payload: Record<string, unknown>;
+        readonly tone?: "info" | "tool" | "approval" | "error";
+      }) =>
+        Effect.all({
+          commandId: serverCommandId("thread-activity"),
+          activityId: serverEventId,
+        }).pipe(
+          Effect.flatMap(({ commandId, activityId }) =>
+            orchestrationEngine.dispatch({
+              type: "thread.activity.append",
+              commandId,
+              threadId: input.threadId,
+              activity: {
+                id: activityId,
+                tone: input.tone ?? "info",
                 kind: input.kind,
                 summary: input.summary,
                 payload: input.payload,
@@ -1169,6 +1327,12 @@ const makeWsRpcLayer = (
         readonly threadId: ThreadId;
         readonly lastTurnId?: TurnId | null | undefined;
         readonly sourceMessageId?: MessageId | null | undefined;
+        readonly workspace?:
+          | {
+              readonly mode: "new";
+              readonly kind?: "directory-copy" | undefined;
+            }
+          | undefined;
       }) =>
         Effect.gen(function* () {
           const sourceThreadId = input.threadId;
@@ -1208,6 +1372,12 @@ const makeWsRpcLayer = (
             });
           }
           const sourceThread = sourceThreadOption.value;
+          const sourceThreadBusyReason = codexForkSourceBusyReason(sourceThread);
+          if (sourceThreadBusyReason) {
+            return yield* new CodexThreadForkError({
+              message: sourceThreadBusyReason,
+            });
+          }
           let forkLastTurnId = requestedLastTurnId;
 
           if (requestedSourceMessageId) {
@@ -1252,6 +1422,34 @@ const makeWsRpcLayer = (
 
           const createdAt = yield* nowIso;
           const threadId = ThreadId.make(yield* randomUUID);
+          const sourceCwd = sourceThread.worktreePath ?? project.workspaceRoot;
+          const preparedWorkspace =
+            input.workspace?.mode === "new"
+              ? yield* threadWorkspaceService
+                  .prepareWorkspace({
+                    threadId,
+                    kind: input.workspace.kind ?? "directory-copy",
+                    roots: [
+                      {
+                        projectId: project.id,
+                        sourcePath: sourceCwd,
+                        role: "primary",
+                      },
+                    ],
+                    displayNameSeed: `Fork of ${sourceThread.title}`,
+                    retentionPolicy: "explicit-delete",
+                  })
+                  .pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new CodexThreadForkError({
+                          message: cause.message,
+                          cause,
+                        }),
+                    ),
+                  )
+              : undefined;
+          const targetCwd = preparedWorkspace?.primaryCwd ?? sourceCwd;
           const result = yield* codexThreadForkImporter
             .fork({
               threadId,
@@ -1259,18 +1457,87 @@ const makeWsRpcLayer = (
               project,
               title: `Fork of ${sourceThread.title}`,
               createdAt,
+              ...(preparedWorkspace ? { preparedWorkspace } : {}),
               lastTurnId: forkLastTurnId,
+              developerInstructions: codexForkDeveloperInstructions({
+                sourceCwd,
+                targetCwd,
+                workspaceMode: preparedWorkspace === undefined ? "same" : "new",
+              }),
             })
             .pipe(
-              Effect.mapError(
-                (cause) =>
-                  new CodexThreadForkError({
+              Effect.catch((cause: unknown) =>
+                Effect.gen(function* () {
+                  if (preparedWorkspace) {
+                    yield* threadWorkspaceService
+                      .deleteWorkspace({
+                        workspaceId: preparedWorkspace.workspace.id,
+                        force: true,
+                      })
+                      .pipe(Effect.ignoreCause({ log: true }));
+                  }
+                  return yield* new CodexThreadForkError({
                     message:
                       cause instanceof Error ? cause.message : "Failed to fork Codex thread.",
                     cause,
-                  }),
+                  });
+                }),
               ),
             );
+
+          const relationshipPayload = {
+            provider: CODEX_DRIVER,
+            sourceThreadId,
+            destinationThreadId: result.thread.threadId,
+            sourceProjectId: sourceThread.projectId,
+            destinationProjectId: result.thread.projectId,
+            sourceProviderThreadId,
+            destinationProviderThreadId: result.providerThreadId,
+            sourceCwd,
+            destinationCwd: targetCwd,
+            workspace:
+              preparedWorkspace === undefined
+                ? { mode: "source" }
+                : {
+                    mode: "new",
+                    workspaceId: preparedWorkspace.workspace.id,
+                    kind: preparedWorkspace.workspace.kind,
+                    primaryCwd: preparedWorkspace.primaryCwd,
+                  },
+          };
+          yield* Effect.all(
+            [
+              appendThreadActivity({
+                threadId: sourceThreadId,
+                kind: "thread.forked-to",
+                summary:
+                  preparedWorkspace === undefined
+                    ? `Forked to ${result.thread.title}`
+                    : `Forked to ${result.thread.title} in a new workspace`,
+                payload: relationshipPayload,
+                createdAt,
+              }),
+              appendThreadActivity({
+                threadId: result.thread.threadId,
+                kind: "thread.forked-from",
+                summary:
+                  preparedWorkspace === undefined
+                    ? `Forked from ${sourceThread.title}`
+                    : `Forked from ${sourceThread.title} into a new workspace`,
+                payload: relationshipPayload,
+                createdAt,
+              }),
+            ],
+            { concurrency: 1 },
+          ).pipe(
+            Effect.catch((cause: unknown) =>
+              Effect.logWarning("Codex fork created but relationship activity recording failed", {
+                sourceThreadId,
+                destinationThreadId: result.thread.threadId,
+                cause,
+              }),
+            ),
+          );
 
           return {
             threadId: result.thread.threadId,
@@ -1278,6 +1545,7 @@ const makeWsRpcLayer = (
             sourceThreadId,
             providerThreadId: result.providerThreadId,
             importedMessageCount: result.importedMessageCount,
+            workspaceId: preparedWorkspace?.workspace.id ?? null,
           };
         }).pipe(
           Effect.mapError((cause) =>
@@ -1371,7 +1639,6 @@ const makeWsRpcLayer = (
                     ),
                   );
                 }
-
                 yield* terminalManager.close({ threadId: normalizedCommand.threadId }).pipe(
                   Effect.catch((error) =>
                     Effect.logWarning("failed to close thread terminals after archive", {

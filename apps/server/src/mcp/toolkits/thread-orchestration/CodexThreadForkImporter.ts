@@ -48,6 +48,7 @@ export interface CodexThreadForkImportInput {
   readonly createdAt: string;
   readonly preparedWorkspace?: PreparedThreadWorkspace;
   readonly lastTurnId?: TurnId | null;
+  readonly developerInstructions?: string;
 }
 
 export interface CodexThreadForkImportResult {
@@ -77,8 +78,20 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
 
-  const fork = (input: CodexThreadForkImportInput) =>
-    Effect.gen(function* () {
+  const fork = (input: CodexThreadForkImportInput) => {
+    let createdThread = false;
+    const cleanupCreatedThread = () =>
+      createdThread
+        ? engine
+            .dispatch({
+              type: "thread.delete",
+              commandId: CommandId.make(`codex-fork-thread-rollback:${input.threadId}`),
+              threadId: input.threadId,
+            })
+            .pipe(Effect.ignoreCause({ log: true }))
+        : Effect.void;
+
+    return Effect.gen(function* () {
       const bindingOption = yield* providerSessionDirectory
         .getBinding(input.sourceThread.id)
         .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_binding_read")));
@@ -178,6 +191,9 @@ const make = Effect.gen(function* () {
         ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
         environment: processEnv,
         ...(input.lastTurnId !== undefined ? { lastTurnId: input.lastTurnId } : {}),
+        ...(input.developerInstructions
+          ? { developerInstructions: input.developerInstructions }
+          : {}),
       }).pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_fork")));
 
       yield* engine
@@ -197,6 +213,7 @@ const make = Effect.gen(function* () {
           createdAt: input.createdAt,
         })
         .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_create")));
+      createdThread = true;
 
       const messages = codexThreadMessages({
         thread: forkResponse.thread,
@@ -272,7 +289,12 @@ const make = Effect.gen(function* () {
         providerThreadId: forkResponse.thread.id,
         importedMessageCount: messages.length,
       };
-    });
+    }).pipe(
+      Effect.catch((cause: ThreadOrchestrationError) =>
+        cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(cause))),
+      ),
+    );
+  };
 
   return { fork };
 });

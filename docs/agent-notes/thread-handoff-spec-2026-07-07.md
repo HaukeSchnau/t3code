@@ -185,8 +185,8 @@ Avoid moving environment IDs into core thread identity unless a larger cross-env
 
 ## Suggested Phases
 
-1. Replace the single fork button action with a fork destination menu, keeping the existing same-thread/same-checkout fork path intact.
-2. Same-host, new-workspace fork for idle Codex-backed threads, with relationship activities and destination context instruction.
+1. Done: replace the assistant-message fork button action with a fork destination menu, keeping the existing same-thread/same-checkout fork path intact.
+2. Done: same-host, new-workspace fork for idle Codex-backed threads, with relationship activities and destination context instruction. First implementation uses managed `directory-copy` workspaces for matching dirty/untracked file state, and the user-facing RPC only accepts that workspace kind.
 3. Cross-host Codex fork where T3 creates a destination workspace and synchronizes matching repo/file state before creating the thread.
 4. Source disposition options such as archive/read-only/close source, if the duplicate-thread UX becomes noisy.
 5. Non-Codex provider support and active-turn policies, if user pressure proves the complexity is worth it.
@@ -201,6 +201,15 @@ Avoid moving environment IDs into core thread identity unless a larger cross-env
   - move local thread to new workspace,
   - move local thread to registered SSH/Tailscale environment,
   - failure while preparing workspace leaves source usable and destination absent/marked failed.
+
+## 2026-07-07 Implementation Notes
+
+- Implemented the first slice as a destination-aware assistant-message fork menu.
+- The UI exposes fork actions only for Codex-backed active threads; monitor tiles remain read-only.
+- The server rejects non-idle sources and mirrors stale approval/user-input failure handling so stale requests do not block forks forever.
+- `CodexThreadForkImporter` rolls back a partially-created destination thread if later import/binding/session setup fails. The caller then deletes any prepared workspace, avoiding dangling threads that point at removed checkouts.
+- Browser validation confirmed the menu renders with `Fork here`, `Fork into new workspace`, and disabled `Fork to host...`.
+- Browser validation also hit the expected directory-copy guard for threads whose source cwd is `/Users/haukeschnau`: managed workspaces under `~/.t3/workspaces` would be inside that source root, so the fork fails before creating a destination workspace. This is a guardrail, not the normal project-root path.
 
 ## Open Assumptions
 
