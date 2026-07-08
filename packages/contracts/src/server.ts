@@ -226,7 +226,7 @@ export const CodexThreadForkInput = Schema.Struct({
   workspace: Schema.optional(
     Schema.Struct({
       mode: Schema.Literal("new"),
-      kind: Schema.optional(Schema.Literal("directory-copy")),
+      kind: Schema.optional(Schema.Literals(["auto", "directory-copy"])),
     }),
   ),
 });

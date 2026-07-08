@@ -1330,7 +1330,7 @@ const makeWsRpcLayer = (
         readonly workspace?:
           | {
               readonly mode: "new";
-              readonly kind?: "directory-copy" | undefined;
+              readonly kind?: "auto" | "directory-copy" | undefined;
             }
           | undefined;
       }) =>
@@ -1428,7 +1428,7 @@ const makeWsRpcLayer = (
               ? yield* threadWorkspaceService
                   .prepareWorkspace({
                     threadId,
-                    kind: input.workspace.kind ?? "directory-copy",
+                    kind: input.workspace.kind ?? "auto",
                     roots: [
                       {
                         projectId: project.id,
