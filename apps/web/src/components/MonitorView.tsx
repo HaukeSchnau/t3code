@@ -1136,6 +1136,7 @@ function MonitorThreadActions({
             <QueuedMessagesStrip
               queuedMessages={thread.queuedMessages ?? []}
               isRunning={isRunning}
+              density="compact"
               onDispatch={(message) => void dispatchQueuedMessage(message)}
               onDelete={(message) => void deleteQueuedMessage(message)}
             />
