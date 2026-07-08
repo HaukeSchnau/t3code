@@ -263,6 +263,102 @@ export const DesktopUpdateCheckResultSchema = Schema.Struct({
   state: DesktopUpdateStateSchema,
 });
 
+export interface DesktopEnergyProcessSample {
+  readonly sampledAtIso: string;
+  readonly pid: number;
+  readonly type: string;
+  readonly name: string | null;
+  readonly serviceName: string | null;
+  readonly cpuPercent: number | null;
+  readonly idleWakeupsPerSecond: number | null;
+  readonly workingSetBytes: number | null;
+  readonly peakWorkingSetBytes: number | null;
+  readonly privateBytes: number | null;
+  readonly sharedBytes: number | null;
+  readonly sandboxed: boolean | null;
+  readonly integrityLevel: string | null;
+  readonly webContentsId: number | null;
+  readonly webContentsType: string | null;
+  readonly webContentsUrl: string | null;
+  readonly webContentsTitle: string | null;
+}
+
+export const DesktopEnergyProcessSampleSchema = Schema.Struct({
+  sampledAtIso: Schema.String,
+  pid: Schema.Number,
+  type: Schema.String,
+  name: Schema.NullOr(Schema.String),
+  serviceName: Schema.NullOr(Schema.String),
+  cpuPercent: Schema.NullOr(Schema.Number),
+  idleWakeupsPerSecond: Schema.NullOr(Schema.Number),
+  workingSetBytes: Schema.NullOr(Schema.Number),
+  peakWorkingSetBytes: Schema.NullOr(Schema.Number),
+  privateBytes: Schema.NullOr(Schema.Number),
+  sharedBytes: Schema.NullOr(Schema.Number),
+  sandboxed: Schema.NullOr(Schema.Boolean),
+  integrityLevel: Schema.NullOr(Schema.String),
+  webContentsId: Schema.NullOr(Schema.Number),
+  webContentsType: Schema.NullOr(Schema.String),
+  webContentsUrl: Schema.NullOr(Schema.String),
+  webContentsTitle: Schema.NullOr(Schema.String),
+});
+
+export interface DesktopEnergyProcessSnapshot {
+  readonly sampledAtIso: string;
+  readonly processes: readonly DesktopEnergyProcessSample[];
+}
+
+export const DesktopEnergyProcessSnapshotSchema = Schema.Struct({
+  sampledAtIso: Schema.String,
+  processes: Schema.Array(DesktopEnergyProcessSampleSchema),
+});
+
+export interface DesktopIpcMessagePressureCounter {
+  readonly channel: string;
+  readonly operation: "invoke" | "sendSync";
+  readonly count: number;
+  readonly totalDurationMs: number;
+  readonly maxDurationMs: number;
+  readonly estimatedPayloadBytes: number;
+  readonly failureCount: number;
+}
+
+export const DesktopIpcMessagePressureCounterSchema = Schema.Struct({
+  channel: Schema.String,
+  operation: Schema.Literals(["invoke", "sendSync"]),
+  count: Schema.Number,
+  totalDurationMs: Schema.Number,
+  maxDurationMs: Schema.Number,
+  estimatedPayloadBytes: Schema.Number,
+  failureCount: Schema.Number,
+});
+
+export interface DesktopIpcMessagePressureSnapshot {
+  readonly readAtIso: string;
+  readonly counters: readonly DesktopIpcMessagePressureCounter[];
+}
+
+export const DesktopIpcMessagePressureSnapshotSchema = Schema.Struct({
+  readAtIso: Schema.String,
+  counters: Schema.Array(DesktopIpcMessagePressureCounterSchema),
+});
+
+export interface DesktopEnergyDiagnosticsCaptureWriteInput {
+  readonly artifactJson: string;
+}
+
+export const DesktopEnergyDiagnosticsCaptureWriteInputSchema = Schema.Struct({
+  artifactJson: Schema.String,
+});
+
+export interface DesktopEnergyDiagnosticsCaptureWriteResult {
+  readonly path: string;
+}
+
+export const DesktopEnergyDiagnosticsCaptureWriteResultSchema = Schema.Struct({
+  path: Schema.String,
+});
+
 // Stable id for the Windows-native primary backend. Desktop side wraps
 // this with a brand inside DesktopBackendManager; web side keeps it as
 // a plain string so the env-runtime can compare against it without
@@ -1018,11 +1114,21 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  energyDiagnostics?: DesktopEnergyDiagnosticsBridge;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the
    * Electron desktop build; web builds have `preview === undefined`.
    */
   preview?: DesktopPreviewBridge;
+}
+
+export interface DesktopEnergyDiagnosticsBridge {
+  captureProcessSnapshot: () => Promise<DesktopEnergyProcessSnapshot>;
+  readIpcMessagePressureSnapshot: () => DesktopIpcMessagePressureSnapshot;
+  writeCaptureArtifact: (
+    input: DesktopEnergyDiagnosticsCaptureWriteInput,
+  ) => Promise<DesktopEnergyDiagnosticsCaptureWriteResult>;
+  revealCaptureArtifact: (path: string) => Promise<void>;
 }
 
 export interface DesktopPreviewBridge {
