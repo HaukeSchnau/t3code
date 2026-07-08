@@ -11,6 +11,7 @@ import { assert, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
@@ -772,6 +773,250 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           assert.equal(firstThreadId.value, ThreadId.make("thread-first"));
         }
       }),
+  );
+
+  it.effect("reads compact thread result context without hydrating full thread bodies", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`DELETE FROM projection_thread_queued_messages`;
+      yield* sql`DELETE FROM projection_thread_messages`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id,
+          title,
+          workspace_root,
+          default_model_selection_json,
+          scripts_json,
+          created_at,
+          updated_at,
+          deleted_at
+        )
+        VALUES (
+          'project-result',
+          'Result Project',
+          '/tmp/result-project',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          '[]',
+          '2026-07-08T00:00:00.000Z',
+          '2026-07-08T00:00:01.000Z',
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id,
+          project_id,
+          title,
+          model_selection_json,
+          runtime_mode,
+          interaction_mode,
+          branch,
+          worktree_path,
+          latest_turn_id,
+          latest_user_message_at,
+          pending_approval_count,
+          pending_user_input_count,
+          has_actionable_proposed_plan,
+          created_at,
+          updated_at,
+          archived_at,
+          deleted_at
+        )
+        VALUES (
+          'thread-result',
+          'project-result',
+          'Result Thread',
+          '{"provider":"codex","model":"gpt-5-codex"}',
+          'full-access',
+          'default',
+          NULL,
+          NULL,
+          NULL,
+          '2026-07-08T00:00:06.000Z',
+          0,
+          0,
+          0,
+          '2026-07-08T00:00:02.000Z',
+          '2026-07-08T00:00:03.000Z',
+          NULL,
+          NULL
+        )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_messages (
+          message_id,
+          thread_id,
+          turn_id,
+          role,
+          text,
+          attachments_json,
+          is_streaming,
+          created_at,
+          updated_at
+        )
+        VALUES
+          (
+            'message-user-old',
+            'thread-result',
+            NULL,
+            'user',
+            'older user message',
+            NULL,
+            0,
+            '2026-07-08T00:00:04.000Z',
+            '2026-07-08T00:00:04.000Z'
+          ),
+          (
+            'message-assistant-old',
+            'thread-result',
+            NULL,
+            'assistant',
+            'older assistant message',
+            NULL,
+            0,
+            '2026-07-08T00:00:05.000Z',
+            '2026-07-08T00:00:05.000Z'
+          ),
+          (
+            'message-assistant-new',
+            'thread-result',
+            NULL,
+            'assistant',
+            'newer assistant message',
+            NULL,
+            0,
+            '2026-07-08T00:00:06.000Z',
+            '2026-07-08T00:00:06.000Z'
+          ),
+          (
+            'message-user-new',
+            'thread-result',
+            NULL,
+            'user',
+            'newest user message',
+            NULL,
+            0,
+            '2026-07-08T00:00:07.000Z',
+            '2026-07-08T00:00:07.000Z'
+          )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_queued_messages (
+          message_id,
+          thread_id,
+          text,
+          attachments_json,
+          model_selection_json,
+          title_seed,
+          runtime_mode,
+          interaction_mode,
+          source_proposed_plan_thread_id,
+          source_proposed_plan_id,
+          created_at,
+          updated_at
+        )
+        VALUES
+          (
+            'queued-1',
+            'thread-result',
+            'first queued message',
+            '[]',
+            NULL,
+            NULL,
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            '2026-07-08T00:00:08.000Z',
+            '2026-07-08T00:00:08.000Z'
+          ),
+          (
+            'queued-2',
+            'thread-result',
+            'second queued message',
+            '[]',
+            NULL,
+            NULL,
+            'full-access',
+            'default',
+            NULL,
+            NULL,
+            '2026-07-08T00:00:09.000Z',
+            '2026-07-08T00:00:09.000Z'
+          )
+      `;
+
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id,
+          thread_id,
+          turn_id,
+          tone,
+          kind,
+          summary,
+          payload_json,
+          created_at
+        )
+        VALUES
+          (
+            'activity-result-1',
+            'thread-result',
+            NULL,
+            'info',
+            'runtime.note',
+            'first activity',
+            '{}',
+            '2026-07-08T00:00:10.000Z'
+          ),
+          (
+            'activity-result-2',
+            'thread-result',
+            NULL,
+            'info',
+            'runtime.note',
+            'second activity',
+            '{}',
+            '2026-07-08T00:00:11.000Z'
+          ),
+          (
+            'activity-result-3',
+            'thread-result',
+            NULL,
+            'info',
+            'runtime.note',
+            'third activity',
+            '{}',
+            '2026-07-08T00:00:12.000Z'
+          )
+      `;
+
+      const contextOption = yield* snapshotQuery.getThreadResultContextById(
+        ThreadId.make("thread-result"),
+      );
+      assert.equal(Option.isSome(contextOption), true);
+      if (Option.isNone(contextOption)) return;
+
+      const context = contextOption.value;
+      assert.equal(context.thread.id, ThreadId.make("thread-result"));
+      assert.equal(context.project.id, ProjectId.make("project-result"));
+      assert.equal(context.latestMessage?.id, MessageId.make("message-user-new"));
+      assert.equal(context.latestMessage?.text, "newest user message");
+      assert.equal(context.latestAssistantMessage?.id, MessageId.make("message-assistant-new"));
+      assert.equal(context.latestAssistantMessage?.text, "newer assistant message");
+      assert.equal(context.queuedMessageCount, 2);
+      assert.equal(context.activityCount, 3);
+    }),
   );
 
   it.effect("reads single-thread checkpoint context without hydrating unrelated threads", () =>

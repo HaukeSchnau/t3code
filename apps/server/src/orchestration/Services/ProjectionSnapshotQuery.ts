@@ -12,6 +12,7 @@ import type {
   OrchestrationProject,
   OrchestrationProjectShell,
   OrchestrationReadModel,
+  OrchestrationMessage,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadShell,
@@ -51,6 +52,15 @@ export interface ProjectionFullThreadDiffContext {
   readonly workspaceId: ThreadWorkspaceId | null;
   readonly latestCheckpointTurnCount: number;
   readonly toCheckpointRef: CheckpointRef | null;
+}
+
+export interface ProjectionThreadResultContext {
+  readonly thread: OrchestrationThreadShell;
+  readonly project: OrchestrationProjectShell;
+  readonly latestMessage: OrchestrationMessage | null;
+  readonly latestAssistantMessage: OrchestrationMessage | null;
+  readonly queuedMessageCount: number;
+  readonly activityCount: number;
 }
 
 /**
@@ -153,6 +163,13 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadShellById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<OrchestrationThreadShell>, ProjectionRepositoryError>;
+
+  /**
+   * Read the bounded data needed for compact thread orchestration results.
+   */
+  readonly getThreadResultContextById: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadResultContext>, ProjectionRepositoryError>;
 
   /**
    * Read a single active thread detail snapshot by id.
