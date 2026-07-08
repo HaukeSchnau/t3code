@@ -8,6 +8,11 @@ import {
   setConnectionCatalog,
 } from "./methods/connectionCatalog.ts";
 import {
+  captureEnergyProcessSnapshot,
+  revealEnergyCaptureArtifact,
+  writeEnergyCaptureArtifact,
+} from "./methods/energyDiagnostics.ts";
+import {
   getAdvertisedEndpoints,
   getServerExposureState,
   setServerExposureMode,
@@ -88,6 +93,9 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(downloadUpdate);
   yield* ipc.handle(installUpdate);
   yield* ipc.handle(checkForUpdate);
+  yield* ipc.handle(captureEnergyProcessSnapshot);
+  yield* ipc.handle(writeEnergyCaptureArtifact);
+  yield* ipc.handle(revealEnergyCaptureArtifact);
   for (const previewMethod of PreviewIpc.methods) {
     yield* ipc.handle(previewMethod);
   }
