@@ -67,6 +67,9 @@ import {
   type TerminalError,
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
+  type ThreadWorkspaceKind,
+  type ThreadWorkspaceRetentionPolicy,
+  type ThreadWorkspaceRootRole,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -607,6 +610,39 @@ const makeWsRpcLayer = (
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
       const processResourceMonitor = yield* ProcessResourceMonitor.ProcessResourceMonitor;
       const relayClient = yield* RelayClient.RelayClient;
+      type ThreadWorkspacePrepareRequest = {
+        readonly kind?: "auto" | Exclude<ThreadWorkspaceKind, "local"> | undefined;
+        readonly roots: ReadonlyArray<{
+          readonly projectId: ProjectId;
+          readonly sourcePath: string;
+          readonly role: ThreadWorkspaceRootRole;
+          readonly baseRevision?: string | null | undefined;
+          readonly startFromOrigin?: boolean | undefined;
+        }>;
+        readonly displayNameSeed?: string | undefined;
+        readonly retentionPolicy?: ThreadWorkspaceRetentionPolicy | undefined;
+      };
+      const prepareThreadWorkspace = (input: {
+        readonly threadId: ThreadId;
+        readonly request: ThreadWorkspacePrepareRequest;
+      }) =>
+        threadWorkspaceService.prepareWorkspace({
+          threadId: input.threadId,
+          kind: input.request.kind ?? "auto",
+          roots: input.request.roots.map((root) => ({
+            projectId: root.projectId,
+            sourcePath: root.sourcePath,
+            role: root.role,
+            ...(root.baseRevision !== undefined ? { baseRevision: root.baseRevision } : {}),
+            ...(root.startFromOrigin !== undefined
+              ? { startFromOrigin: root.startFromOrigin }
+              : {}),
+          })),
+          ...(input.request.displayNameSeed !== undefined
+            ? { displayNameSeed: input.request.displayNameSeed }
+            : {}),
+          retentionPolicy: input.request.retentionPolicy ?? "explicit-delete",
+        });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1073,22 +1109,14 @@ const makeWsRpcLayer = (
                 : undefined);
 
             if (prepareWorkspace) {
-              const preparedWorkspace = yield* threadWorkspaceService.prepareWorkspace({
+              const preparedWorkspace = yield* prepareThreadWorkspace({
                 threadId: command.threadId,
-                kind: prepareWorkspace.kind ?? "auto",
-                roots: prepareWorkspace.roots.map((root) => ({
-                  projectId: root.projectId,
-                  sourcePath: root.sourcePath,
-                  role: root.role,
-                  ...(root.baseRevision !== undefined ? { baseRevision: root.baseRevision } : {}),
-                  ...(root.startFromOrigin !== undefined
-                    ? { startFromOrigin: root.startFromOrigin }
+                request: {
+                  ...prepareWorkspace,
+                  ...(bootstrap?.createThread?.title
+                    ? { displayNameSeed: bootstrap.createThread.title }
                     : {}),
-                })),
-                ...(bootstrap?.createThread?.title
-                  ? { displayNameSeed: bootstrap.createThread.title }
-                  : {}),
-                retentionPolicy: prepareWorkspace.retentionPolicy ?? "explicit-delete",
+                },
               });
               targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;
               yield* orchestrationEngine.dispatch({
@@ -1425,10 +1453,10 @@ const makeWsRpcLayer = (
           const sourceCwd = sourceThread.worktreePath ?? project.workspaceRoot;
           const preparedWorkspace =
             input.workspace?.mode === "new"
-              ? yield* threadWorkspaceService
-                  .prepareWorkspace({
-                    threadId,
-                    kind: input.workspace.kind ?? "auto",
+              ? yield* prepareThreadWorkspace({
+                  threadId,
+                  request: {
+                    ...(input.workspace.kind !== undefined ? { kind: input.workspace.kind } : {}),
                     roots: [
                       {
                         projectId: project.id,
@@ -1437,17 +1465,16 @@ const makeWsRpcLayer = (
                       },
                     ],
                     displayNameSeed: `Fork of ${sourceThread.title}`,
-                    retentionPolicy: "explicit-delete",
-                  })
-                  .pipe(
-                    Effect.mapError(
-                      (cause) =>
-                        new CodexThreadForkError({
-                          message: cause.message,
-                          cause,
-                        }),
-                    ),
-                  )
+                  },
+                }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new CodexThreadForkError({
+                        message: cause.message,
+                        cause,
+                      }),
+                  ),
+                )
               : undefined;
           const targetCwd = preparedWorkspace?.primaryCwd ?? sourceCwd;
           const result = yield* codexThreadForkImporter

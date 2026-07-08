@@ -79,6 +79,9 @@ history. The agent-facing thread orchestration `fork_thread` path also rejects b
 preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
 "source must be idle" rule. The public RPC accepts `auto` and `directory-copy`, defaulting to
 `auto` so repository-backed projects avoid copying dependency directories and other ignored payloads.
+The "Fork into new workspace" path and the regular "start new thread in workspace" bootstrap path
+share the same server-side workspace preparation helper so workspace kind defaults, root normalization,
+display names, and retention policy cannot drift between those user-visible workflows again.
 If a prepared-workspace fork fails after creating a destination thread, T3 rolls the destination
 thread back before deleting the prepared workspace.
 
