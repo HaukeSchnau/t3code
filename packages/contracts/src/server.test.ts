@@ -81,13 +81,13 @@ describe("CodexThreadFork", () => {
       threadId: "thread-source",
       lastTurnId: "turn-1",
       sourceMessageId: "message-1",
-      workspace: { mode: "new", kind: "directory-copy" },
+      workspace: { mode: "new", kind: "auto" },
     });
 
-    expect(parsed.workspace).toEqual({ mode: "new", kind: "directory-copy" });
+    expect(parsed.workspace).toEqual({ mode: "new", kind: "auto" });
   });
 
-  it("rejects non-copy workspace kinds for Codex fork requests", () => {
+  it("rejects unsupported workspace kinds for Codex fork requests", () => {
     expect(() =>
       decodeCodexThreadForkInput({
         threadId: "thread-source",

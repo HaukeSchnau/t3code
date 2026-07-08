@@ -5143,7 +5143,7 @@ function ChatViewContent(props: ChatViewProps) {
           lastTurnId: turnId,
           sourceMessageId: messageId,
           ...(options.workspace === "new"
-            ? { workspace: { mode: "new" as const, kind: "directory-copy" as const } }
+            ? { workspace: { mode: "new" as const, kind: "auto" as const } }
             : {}),
         }),
       );

@@ -65,8 +65,10 @@ The message-level fork action is destination-aware. The fork button opens a menu
 
 - `Fork here`, preserving the existing same-workspace behavior.
 - `Fork into new workspace`, which asks `ThreadWorkspaceService` to create a managed
-  `directory-copy` workspace from the source thread's current cwd before calling Codex
-  App Server `thread/fork` with that copied cwd.
+  `auto` workspace from the source thread's current cwd before calling Codex App Server
+  `thread/fork` with the prepared cwd. On JJ repositories this resolves to a cheap
+  `jj-workspace`; `directory-copy` is reserved for explicit preservation of ignored or
+  untracked runtime state.
 - A disabled `Fork to host...` placeholder. Cross-host Codex continuation remains blocked
   until provider-thread transfer/export semantics are proven.
 
@@ -75,10 +77,10 @@ archived sources, running latest turns, active provider turns, streaming message
 pending approvals, and pending user-input requests before preparing any workspace or forking provider
 history. The agent-facing thread orchestration `fork_thread` path also rejects busy sources before
 preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
-"source must be idle" rule. The public RPC only accepts `directory-copy` for this first workspace
-fork slice, because the feature promise is to preserve dirty and untracked file state rather than
-create a clean VCS worktree. If a prepared-workspace fork fails after creating a destination thread,
-T3 rolls the destination thread back before deleting the prepared workspace.
+"source must be idle" rule. The public RPC accepts `auto` and `directory-copy`, defaulting to
+`auto` so repository-backed projects avoid copying dependency directories and other ignored payloads.
+If a prepared-workspace fork fails after creating a destination thread, T3 rolls the destination
+thread back before deleting the prepared workspace.
 
 On successful workspace forks, the destination T3 thread stores the prepared `workspaceId` and
 `worktreePath`, while Codex receives developer instructions that mark the destination cwd as
