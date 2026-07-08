@@ -131,6 +131,28 @@ const shellSnapshot: OrchestrationShellSnapshot = {
   updatedAt: readModel.updatedAt,
 };
 
+const getThreadResultContextById =
+  (model: OrchestrationReadModel = readModel) =>
+  (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const thread = model.threads.find((candidate) => candidate.id === threadId);
+      if (!thread || thread.deletedAt !== null) return Option.none();
+      const project = model.projects.find(
+        (candidate) => candidate.id === thread.projectId && candidate.deletedAt === null,
+      );
+      if (!project) return Option.none();
+      const { deletedAt: _deletedAt, ...projectShell } = project;
+      return Option.some({
+        thread: makeThreadShell(thread),
+        project: projectShell,
+        latestMessage: thread.messages.at(-1) ?? null,
+        latestAssistantMessage:
+          thread.messages.findLast((message) => message.role === "assistant") ?? null,
+        queuedMessageCount: thread.queuedMessages?.length ?? 0,
+        activityCount: thread.activities.length,
+      });
+    });
+
 const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
   fork: (input) =>
     Effect.fail(
@@ -308,6 +330,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -386,6 +409,7 @@ it.effect("lists environments and projects without provider model metadata", () 
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -495,6 +519,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -576,6 +601,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(model),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -663,6 +689,7 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -783,6 +810,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -843,6 +871,7 @@ it.effect("creates threads before starting their initial turn", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -966,6 +995,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1047,6 +1077,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1176,6 +1207,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1239,6 +1271,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1346,6 +1379,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1429,6 +1463,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1541,6 +1576,7 @@ it.effect("reads compact thread results without recording read relationships", (
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(model),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1594,6 +1630,7 @@ it.effect("awaits idle threads without polling side effects", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),
@@ -1692,6 +1729,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
       }),
     ),

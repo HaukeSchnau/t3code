@@ -7,7 +7,6 @@ import {
   type ModelSelection,
   ThreadId,
   ThreadOrchestrationError,
-  type OrchestrationMessage,
   type OrchestrationProject,
   type OrchestrationProjectShell,
   type OrchestrationThread,
@@ -50,11 +49,15 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionSnapshotQuery,
+  type ProjectionThreadResultContext,
+} from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
@@ -275,22 +278,6 @@ function trimMessagesForTurns(
   return thread.messages.slice(startIndex);
 }
 
-function latestMessage(messages: ReadonlyArray<OrchestrationMessage>): OrchestrationMessage | null {
-  return messages[messages.length - 1] ?? null;
-}
-
-function latestAssistantMessage(
-  messages: ReadonlyArray<OrchestrationMessage>,
-): OrchestrationMessage | null {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant") {
-      return message;
-    }
-  }
-  return null;
-}
-
 function isHiddenThreadModel(model: string): boolean {
   const slug = model.split("/").at(-1) ?? model;
   if (HIDDEN_THREAD_MODEL_SLUGS.has(model) || HIDDEN_THREAD_MODEL_SLUGS.has(slug)) return true;
@@ -405,18 +392,20 @@ function relationshipFromActivity(
   };
 }
 
-function awaitSatisfied(
-  thread: OrchestrationThread,
+function awaitSatisfiedResult(
+  context: ProjectionThreadResultContext,
   until: "idle" | "completed" | "queueDrained",
 ): boolean {
-  const queuedMessageCount = thread.queuedMessages?.length ?? 0;
   switch (until) {
     case "idle":
-      return !["running", "starting"].includes(statusForThread(thread));
+      return !["running", "starting"].includes(statusForThread(context.thread));
     case "completed":
-      return thread.latestTurn?.state === "completed";
+      return context.thread.latestTurn?.state === "completed";
     case "queueDrained":
-      return queuedMessageCount === 0 && !["running", "starting"].includes(statusForThread(thread));
+      return (
+        context.queuedMessageCount === 0 &&
+        !["running", "starting"].includes(statusForThread(context.thread))
+      );
   }
 }
 
@@ -547,40 +536,37 @@ const make = Effect.gen(function* () {
       return summaryForThread(thread, project, yield* localEnvironmentId);
     });
 
-  const threadResultFromModel = (
-    model: {
-      readonly threads: ReadonlyArray<OrchestrationThread>;
-      readonly projects: ReadonlyArray<OrchestrationProject>;
-    },
-    targetThreadId: ThreadId,
-    operation: string,
+  const threadResultFromContext = (
+    context: ProjectionThreadResultContext,
   ): Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError> =>
     Effect.gen(function* () {
-      const thread = findThread(model.threads, targetThreadId);
-      if (!thread) {
+      return {
+        thread: summaryForThread(context.thread, context.project, yield* localEnvironmentId),
+        latestMessage: context.latestMessage,
+        latestAssistantMessage: context.latestAssistantMessage,
+        queuedMessageCount: context.queuedMessageCount,
+        activityCount: context.activityCount,
+      };
+    });
+
+  const readThreadResultContext = (
+    targetThreadId: ThreadId,
+    operation: string,
+  ): Effect.Effect<ProjectionThreadResultContext, ThreadOrchestrationError> =>
+    Effect.gen(function* () {
+      const context = yield* snapshotQuery.getThreadResultContextById(targetThreadId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError(`${operation}.result_context`, {
+            threadId: targetThreadId,
+          }),
+        ),
+      );
+      if (Option.isNone(context)) {
         return yield* notFoundError(operation, "thread", targetThreadId, {
           threadId: targetThreadId,
         });
       }
-      const project = findProject(model.projects, thread.projectId);
-      if (!project) {
-        return yield* new ThreadOrchestrationError({
-          operation,
-          code: "not_found",
-          message: `Project '${thread.projectId}' for thread '${targetThreadId}' was not found.`,
-          threadId: targetThreadId,
-          projectId: thread.projectId,
-          resourceType: "project",
-          resourceId: thread.projectId,
-        });
-      }
-      return {
-        thread: summaryForThread(thread, project, yield* localEnvironmentId),
-        latestMessage: latestMessage(thread.messages),
-        latestAssistantMessage: latestAssistantMessage(thread.messages),
-        queuedMessageCount: thread.queuedMessages?.length ?? 0,
-        activityCount: thread.activities.length,
-      };
+      return context.value;
     });
 
   const readThreadResult = (
@@ -591,8 +577,8 @@ const make = Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
         return yield* remoteClient.readThreadResult(scopeForRemote(scope), input);
       }
-      const model = yield* snapshot;
-      return yield* threadResultFromModel(model, input.threadId, "read_thread_result");
+      const context = yield* readThreadResultContext(input.threadId, "read_thread_result");
+      return yield* threadResultFromContext(context);
     });
 
   const listLocalProjects = () =>
@@ -779,15 +765,9 @@ const make = Effect.gen(function* () {
 
       const poll: Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError> =
         Effect.gen(function* () {
-          const model = yield* snapshot;
-          const thread = findThread(model.threads, input.threadId);
-          if (!thread) {
-            return yield* notFoundError("await_thread", "thread", input.threadId, {
-              threadId: input.threadId,
-            });
-          }
-          const result = yield* threadResultFromModel(model, input.threadId, "await_thread");
-          const satisfied = awaitSatisfied(thread, until);
+          const context = yield* readThreadResultContext(input.threadId, "await_thread");
+          const result = yield* threadResultFromContext(context);
+          const satisfied = awaitSatisfiedResult(context, until);
           if (satisfied) {
             return { result, satisfied, timedOut: false };
           }
