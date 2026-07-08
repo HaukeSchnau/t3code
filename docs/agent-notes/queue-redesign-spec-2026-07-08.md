@@ -131,10 +131,45 @@ Verification plan:
 
 ## Open Questions
 
-- Should queued messages be visually labeled as `Queued`/`Next`/`Waiting`, or is the spatial tray enough?
-- Should `Steer` remain the action label, or should the new design make it `Send now` for clarity?
-- Should the queue surface join directly to the composer border, or sit with a 4-8px gap?
 - Should this redesign also touch the blue `Queue` primary button styling, or only the queued-message strip?
+
+## Implemented On 2026-07-08
+
+- `QueuedMessagesStrip` now renders as a composer-attached tray instead of an overlapping floating card.
+- Removed the negative bottom margin, hidden-under-composer padding, translucent `bg-card/90` treatment, and older broad shadow.
+- Added a solid `bg-popover` surface using the newer border, `not-dark:bg-clip-padding`, `shadow-xs/5`, and subtle `before` shadow language.
+- Added a small bottom gap:
+  - `mb-2` for the main composer,
+  - `mb-1.5` for compact monitor density.
+- Added `density?: "default" | "compact"` so monitor tiles can use tighter spacing and icon-only send actions without duplicating the component.
+- Updated the dispatch action label from visible `Steer` to `Send now` in the main composer. Compact monitor keeps the same accessible label but hides the text visually.
+- Added a small `Queued` header only when there are multiple queued messages.
+- Capped action ARIA labels at 96 characters so long queued prompts do not produce unwieldy button names.
+
+## Verification Results
+
+Commands:
+
+- `vp check` passed. It still reports seven unrelated mobile schema-hoisting warnings in `apps/mobile/src/connection/*`.
+- `vp run typecheck` passed.
+
+Screenshots were captured from the running Vite app through Playwright by importing and rendering the real `QueuedMessagesStrip` module via Vite, with the app's actual CSS:
+
+- `/tmp/t3code-queue-redesign/desktop-light-one.png`
+- `/tmp/t3code-queue-redesign/desktop-light-multiple.png`
+- `/tmp/t3code-queue-redesign/mobile-dark-multiple.png`
+- `/tmp/t3code-queue-redesign/monitor-light-compact.png`
+
+Measured visual checks:
+
+- Main desktop queue/composer gap: `9px`.
+- Main mobile queue/composer gap: `9px`.
+- Monitor compact queue/composer gap: `6px`.
+- Main tray width aligns to composer within `2px`.
+- Monitor compact tray fits inside a `420px` tile at `402px` width.
+- No horizontal document overflow in desktop, mobile, or monitor captures.
+- Long queued message text truncates.
+- Queue backgrounds resolve as solid colors, not transparent overlays.
 
 ## Repo State Notes
 
