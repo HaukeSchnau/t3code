@@ -1,4 +1,8 @@
-import { AuthOrchestrationReadScope, EnvironmentHttpApi } from "@t3tools/contracts";
+import {
+  AuthDiagnosticsCaptureScope,
+  AuthOrchestrationReadScope,
+  EnvironmentHttpApi,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
@@ -7,22 +11,32 @@ import {
   failEnvironmentInternal,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import { EnergyCaptureRequests } from "../diagnostics/EnergyCaptureRequests.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
 export const serverStatusHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "server",
   Effect.fnUntraced(function* (handlers) {
-    yield* Effect.void;
-    return handlers.handle(
-      "idleStatus",
-      Effect.fn("environment.server.idleStatus")(function* (args) {
-        yield* annotateEnvironmentRequest(args.endpoint.name);
-        yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-        return yield* getServerIdleStatus().pipe(
-          Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
-        );
-      }),
-    );
+    const energyCaptureRequests = yield* EnergyCaptureRequests;
+    return handlers
+      .handle(
+        "idleStatus",
+        Effect.fn("environment.server.idleStatus")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* getServerIdleStatus().pipe(
+            Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)),
+          );
+        }),
+      )
+      .handle(
+        "requestEnergyCapture",
+        Effect.fn("environment.server.requestEnergyCapture")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthDiagnosticsCaptureScope);
+          return yield* energyCaptureRequests.requestCapture(args.payload);
+        }),
+      );
   }),
 );

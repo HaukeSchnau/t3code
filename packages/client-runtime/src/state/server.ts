@@ -290,12 +290,24 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
+    readTraceDiagnostics: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:read-trace-diagnostics",
+      tag: WS_METHODS.serverGetTraceDiagnostics,
+    }),
     processDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
     }),
+    readProcessDiagnostics: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:read-process-diagnostics",
+      tag: WS_METHODS.serverGetProcessDiagnostics,
+    }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
+      tag: WS_METHODS.serverGetProcessResourceHistory,
+    }),
+    readProcessResourceHistory: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:read-process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
     configProjection,
@@ -306,6 +318,10 @@ export function createServerEnvironmentAtoms<R, E>(
         stream.pipe(
           Stream.mapAccum(Option.none<ServerLifecycleWelcomePayload>, projectServerWelcome),
         ),
+    }),
+    energyDiagnosticsCaptureRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:energy-diagnostics-capture-requests",
+      tag: WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
@@ -342,6 +358,22 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
+    }),
+    claimEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:claim-energy-diagnostics-capture",
+      tag: WS_METHODS.serverClaimEnergyDiagnosticsCapture,
+    }),
+    releaseEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:release-energy-diagnostics-capture",
+      tag: WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
+    }),
+    completeEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:complete-energy-diagnostics-capture",
+      tag: WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
+    }),
+    failEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:fail-energy-diagnostics-capture",
+      tag: WS_METHODS.serverFailEnergyDiagnosticsCapture,
     }),
   };
 }

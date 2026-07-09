@@ -1,4 +1,6 @@
 import {
+  AuthAdministrativeScopes,
+  AuthDiagnosticsCaptureScope,
   EnvironmentAuthInvalidError,
   type AuthBrowserSessionResult,
   type AuthCreatePairingCredentialInput,
@@ -41,9 +43,13 @@ const unauthenticatedSession = (auth: AuthSessionState["auth"]): AuthSessionStat
   auth,
 });
 
-const authenticatedSession = (auth: AuthSessionState["auth"]): AuthSessionState => ({
+const authenticatedSession = (
+  auth: AuthSessionState["auth"],
+  scopes?: AuthSessionState["scopes"],
+): AuthSessionState => ({
   authenticated: true,
   auth,
+  ...(scopes === undefined ? {} : { scopes }),
   sessionMethod: "browser-session-cookie",
   expiresAt: SESSION_EXPIRES_AT,
 });
@@ -139,7 +145,7 @@ describe("resolveInitialServerAuthGateState", () => {
   it("reuses an in-flight silent bootstrap attempt", async () => {
     const nextSession = sequence(
       unauthenticatedSession(DESKTOP_AUTH),
-      authenticatedSession(DESKTOP_AUTH),
+      authenticatedSession(DESKTOP_AUTH, AuthAdministrativeScopes),
     );
     const testApi = await installAuthApi({
       session: nextSession,
@@ -383,11 +389,11 @@ describe("resolveInitialServerAuthGateState", () => {
     const nextSession = sequence(
       unauthenticatedSession(DESKTOP_AUTH),
       unauthenticatedSession(DESKTOP_AUTH),
-      authenticatedSession(DESKTOP_AUTH),
+      authenticatedSession(DESKTOP_AUTH, AuthAdministrativeScopes),
     );
     const testApi = await installAuthApi({
       session: nextSession,
-      browserSession: () => Effect.succeed(browserSession(["orchestration:read", "access:write"])),
+      browserSession: () => Effect.succeed(browserSession(AuthAdministrativeScopes)),
     });
 
     const testWindow = installTestBrowser("http://localhost/");
@@ -410,6 +416,28 @@ describe("resolveInitialServerAuthGateState", () => {
 
     await expect(gateStatePromise).resolves.toEqual({ status: "authenticated" });
     expect(testApi.calls.session).toBe(3);
+  });
+
+  it("refreshes an older desktop session that lacks newly required administrative scopes", async () => {
+    const previousAdministrativeScopes = AuthAdministrativeScopes.filter(
+      (scope) => scope !== AuthDiagnosticsCaptureScope,
+    );
+    const testApi = await installAuthApi({
+      session: sequence(
+        authenticatedSession(DESKTOP_AUTH, previousAdministrativeScopes),
+        authenticatedSession(DESKTOP_AUTH, AuthAdministrativeScopes),
+      ),
+      browserSession: () => Effect.succeed(browserSession(AuthAdministrativeScopes)),
+    });
+    installDesktopBootstrap();
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+    });
+    expect(testApi.calls.browserSession).toEqual([{ credential: "desktop-bootstrap-token" }]);
+    expect(testApi.calls.session).toBe(2);
   });
 
   it("preserves the timeout message when a bootstrapped session never becomes observable", async () => {

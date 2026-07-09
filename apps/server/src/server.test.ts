@@ -2011,6 +2011,54 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("requires diagnostics capture scope for energy capture requests", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+        body: yield* HttpBody.json({}),
+      });
+      const credential = (yield* credentialResponse.json) as { readonly credential: string };
+      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(credential.credential);
+      const captureUrl = yield* getHttpServerUrl("/api/diagnostics/energy-capture");
+      const captureBody = jsonRequestBody({ durationMs: 1_000, waitTimeoutMs: 1_000 });
+
+      const pairedResponse = yield* fetchEffect(captureUrl, {
+        method: "POST",
+        headers: {
+          cookie: pairedCookie,
+          "content-type": "application/json",
+        },
+        body: captureBody,
+      });
+      const pairedBody = yield* responseJsonEffect<{
+        readonly _tag?: string;
+        readonly requiredScope?: string;
+      }>(pairedResponse);
+      assert.equal(pairedResponse.status, 403);
+      assert.equal(pairedBody._tag, "EnvironmentScopeRequiredError");
+      assert.equal(pairedBody.requiredScope, "diagnostics:capture");
+
+      const ownerResponse = yield* fetchEffect(captureUrl, {
+        method: "POST",
+        headers: {
+          cookie: ownerCookie,
+          "content-type": "application/json",
+        },
+        body: captureBody,
+      });
+      const ownerBody = yield* responseJsonEffect<{
+        readonly status?: string;
+        readonly message?: string;
+      }>(ownerResponse);
+      assert.equal(ownerResponse.status, 200);
+      assert.equal(ownerBody.status, "rejected");
+      assert.include(ownerBody.message, "capture duration plus");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "reports relay client status and streams installation progress over environment RPC",
     () =>

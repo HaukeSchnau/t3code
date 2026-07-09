@@ -26,5 +26,6 @@ export * from "./assets.ts";
 export * from "./review.ts";
 export * from "./preview.ts";
 export * from "./previewAutomation.ts";
+export * from "./diagnostics.ts";
 export * from "./threadOrchestration.ts";
 export * from "./rpc.ts";

@@ -198,59 +198,68 @@ async function sampleDesktopBridge(input: {
 export async function recordEnergyDiagnosticsCapture(input: {
   readonly durationMs: number;
   readonly bridge: DesktopBridge | undefined;
-  readonly readServerSnapshot: () => EnergyDiagnosticsServerSnapshot;
-  readonly refreshServerDiagnostics: () => void;
+  readonly readServerSnapshot: () =>
+    | EnergyDiagnosticsServerSnapshot
+    | Promise<EnergyDiagnosticsServerSnapshot>;
+  readonly refreshServerDiagnostics: () => void | Promise<void>;
 }): Promise<EnergyDiagnosticsCaptureResult> {
+  if (activeRendererCapture !== null) {
+    throw new Error("An energy diagnostics capture is already running in this renderer.");
+  }
+
   const durationMs = Math.max(1_000, input.durationMs);
   const capturedAtIso = nowIso();
   const rendererCapture = startRendererCapture();
   const processSnapshots: DesktopEnergyProcessSnapshot[] = [];
   const ipcPressureSnapshots: DesktopIpcMessagePressureSnapshot[] = [];
   const recurringWork: EnergyRecurringWorkSample[] = [];
-  const serverBefore = input.readServerSnapshot();
+  try {
+    const serverBefore = await input.readServerSnapshot();
 
-  input.refreshServerDiagnostics();
-  await sampleDesktopBridge({
-    bridge: input.bridge,
-    durationMs,
-    processSnapshots,
-    ipcSnapshots: ipcPressureSnapshots,
-    recurringWork,
-  });
-  input.refreshServerDiagnostics();
-  await sleep(250);
-  const serverAfter = input.readServerSnapshot();
-  stopRendererCapture(rendererCapture);
-
-  const artifact: EnergyDiagnosticsCaptureArtifact = {
-    schemaVersion: 1,
-    capturedAtIso,
-    durationMs,
-    route: buildRouteMetadata(),
-    server: {
-      before: serverBefore,
-      after: serverAfter,
-    },
-    desktop: {
-      available: Boolean(input.bridge?.energyDiagnostics),
+    await input.refreshServerDiagnostics();
+    await sampleDesktopBridge({
+      bridge: input.bridge,
+      durationMs,
       processSnapshots,
-      ipcPressureSnapshots,
-    },
-    renderer: {
-      longTasks: rendererCapture.longTasks,
-      commits: rendererCapture.commits,
-    },
-    recurringWork,
-  };
+      ipcSnapshots: ipcPressureSnapshots,
+      recurringWork,
+    });
+    await input.refreshServerDiagnostics();
+    await sleep(250);
+    const serverAfter = await input.readServerSnapshot();
 
-  const writer = input.bridge?.energyDiagnostics?.writeCaptureArtifact;
-  if (!writer) {
-    return { artifact, artifactPath: null };
+    const artifact: EnergyDiagnosticsCaptureArtifact = {
+      schemaVersion: 1,
+      capturedAtIso,
+      durationMs,
+      route: buildRouteMetadata(),
+      server: {
+        before: serverBefore,
+        after: serverAfter,
+      },
+      desktop: {
+        available: Boolean(input.bridge?.energyDiagnostics),
+        processSnapshots,
+        ipcPressureSnapshots,
+      },
+      renderer: {
+        longTasks: rendererCapture.longTasks,
+        commits: rendererCapture.commits,
+      },
+      recurringWork,
+    };
+
+    const writer = input.bridge?.energyDiagnostics?.writeCaptureArtifact;
+    if (!writer) {
+      return { artifact, artifactPath: null };
+    }
+
+    const result = await writer({ artifactJson: safeJsonStringify(artifact) });
+    return {
+      artifact,
+      artifactPath: result.path,
+    };
+  } finally {
+    stopRendererCapture(rendererCapture);
   }
-
-  const result = await writer({ artifactJson: safeJsonStringify(artifact) });
-  return {
-    artifact,
-    artifactPath: result.path,
-  };
 }
