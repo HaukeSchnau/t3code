@@ -114,6 +114,16 @@ import {
   PreviewAutomationStreamEvent,
 } from "./previewAutomation.ts";
 import {
+  EnergyDiagnosticsCaptureClaimInput,
+  EnergyDiagnosticsCaptureClaimResult,
+  EnergyDiagnosticsCaptureCompletionInput,
+  EnergyDiagnosticsCaptureFailureInput,
+  EnergyDiagnosticsCaptureReleaseInput,
+  EnergyDiagnosticsCaptureReleaseResult,
+  EnergyDiagnosticsCaptureRequest,
+  EnergyDiagnosticsCaptureResult,
+} from "./diagnostics.ts";
+import {
   ServerConfigStreamEvent,
   ServerConfig,
   CodexThreadForkError,
@@ -221,6 +231,10 @@ export const WS_METHODS = {
   serverGetProcessDiagnostics: "server.getProcessDiagnostics",
   serverGetProcessResourceHistory: "server.getProcessResourceHistory",
   serverSignalProcess: "server.signalProcess",
+  serverClaimEnergyDiagnosticsCapture: "server.claimEnergyDiagnosticsCapture",
+  serverReleaseEnergyDiagnosticsCapture: "server.releaseEnergyDiagnosticsCapture",
+  serverCompleteEnergyDiagnosticsCapture: "server.completeEnergyDiagnosticsCapture",
+  serverFailEnergyDiagnosticsCapture: "server.failEnergyDiagnosticsCapture",
 
   // Cloud environment methods
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
@@ -238,6 +252,7 @@ export const WS_METHODS = {
   subscribePreviewEvents: "subscribePreviewEvents",
   subscribeDiscoveredLocalServers: "subscribeDiscoveredLocalServers",
   subscribeServerConfig: "subscribeServerConfig",
+  subscribeEnergyDiagnosticsCaptureRequests: "subscribeEnergyDiagnosticsCaptureRequests",
   subscribeServerLifecycle: "subscribeServerLifecycle",
   subscribeAuthAccess: "subscribeAuthAccess",
 } as const;
@@ -336,6 +351,42 @@ export const WsServerSignalProcessRpc = Rpc.make(WS_METHODS.serverSignalProcess,
   success: ServerSignalProcessResult,
   error: EnvironmentAuthorizationError,
 });
+
+export const WsServerClaimEnergyDiagnosticsCaptureRpc = Rpc.make(
+  WS_METHODS.serverClaimEnergyDiagnosticsCapture,
+  {
+    payload: EnergyDiagnosticsCaptureClaimInput,
+    success: EnergyDiagnosticsCaptureClaimResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsServerReleaseEnergyDiagnosticsCaptureRpc = Rpc.make(
+  WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
+  {
+    payload: EnergyDiagnosticsCaptureReleaseInput,
+    success: EnergyDiagnosticsCaptureReleaseResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsServerCompleteEnergyDiagnosticsCaptureRpc = Rpc.make(
+  WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
+  {
+    payload: EnergyDiagnosticsCaptureCompletionInput,
+    success: EnergyDiagnosticsCaptureResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
+export const WsServerFailEnergyDiagnosticsCaptureRpc = Rpc.make(
+  WS_METHODS.serverFailEnergyDiagnosticsCapture,
+  {
+    payload: EnergyDiagnosticsCaptureFailureInput,
+    success: EnergyDiagnosticsCaptureResult,
+    error: EnvironmentAuthorizationError,
+  },
+);
 
 export const WsCloudGetRelayClientStatusRpc = Rpc.make(WS_METHODS.cloudGetRelayClientStatus, {
   payload: Schema.Struct({}),
@@ -687,6 +738,16 @@ export const WsSubscribeServerConfigRpc = Rpc.make(WS_METHODS.subscribeServerCon
   stream: true,
 });
 
+export const WsSubscribeEnergyDiagnosticsCaptureRequestsRpc = Rpc.make(
+  WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
+  {
+    payload: Schema.Struct({}),
+    success: EnergyDiagnosticsCaptureRequest,
+    error: EnvironmentAuthorizationError,
+    stream: true,
+  },
+);
+
 export const WsSubscribeServerLifecycleRpc = Rpc.make(WS_METHODS.subscribeServerLifecycle, {
   payload: Schema.Struct({}),
   success: ServerLifecycleStreamEvent,
@@ -716,6 +777,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetProcessDiagnosticsRpc,
   WsServerGetProcessResourceHistoryRpc,
   WsServerSignalProcessRpc,
+  WsServerClaimEnergyDiagnosticsCaptureRpc,
+  WsServerReleaseEnergyDiagnosticsCaptureRpc,
+  WsServerCompleteEnergyDiagnosticsCaptureRpc,
+  WsServerFailEnergyDiagnosticsCaptureRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsSourceControlLookupRepositoryRpc,
@@ -763,6 +828,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribePreviewEventsRpc,
   WsSubscribeDiscoveredLocalServersRpc,
   WsSubscribeServerConfigRpc,
+  WsSubscribeEnergyDiagnosticsCaptureRequestsRpc,
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,

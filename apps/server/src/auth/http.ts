@@ -1,6 +1,7 @@
 import {
   AuthAccessReadScope,
   AuthAccessWriteScope,
+  AuthDiagnosticsCaptureScope,
   AuthStandardClientScopes,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
@@ -265,6 +266,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
                     allowedScopes: new Set<AuthEnvironmentScope>([
                       AuthOrchestrationReadScope,
                       AuthOrchestrationOperateScope,
+                      AuthDiagnosticsCaptureScope,
                       AuthTerminalOperateScope,
                       AuthReviewWriteScope,
                       AuthAccessReadScope,

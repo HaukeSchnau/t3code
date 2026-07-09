@@ -14,6 +14,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  AuthDiagnosticsCaptureScope,
   AuthOrchestrationOperateScope,
   AuthOrchestrationReadScope,
   AuthReviewWriteScope,
@@ -131,6 +132,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as EnergyCaptureRequests from "./diagnostics/EnergyCaptureRequests.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
@@ -468,6 +470,10 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.serverGetProcessDiagnostics, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetProcessResourceHistory, AuthOrchestrationReadScope],
   [WS_METHODS.serverSignalProcess, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverClaimEnergyDiagnosticsCapture, AuthDiagnosticsCaptureScope],
+  [WS_METHODS.serverReleaseEnergyDiagnosticsCapture, AuthDiagnosticsCaptureScope],
+  [WS_METHODS.serverCompleteEnergyDiagnosticsCapture, AuthDiagnosticsCaptureScope],
+  [WS_METHODS.serverFailEnergyDiagnosticsCapture, AuthDiagnosticsCaptureScope],
   [WS_METHODS.cloudGetRelayClientStatus, AuthRelayWriteScope],
   [WS_METHODS.cloudInstallRelayClient, AuthRelayWriteScope],
   [WS_METHODS.sourceControlLookupRepository, AuthOrchestrationReadScope],
@@ -515,6 +521,7 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [WS_METHODS.subscribePreviewEvents, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeDiscoveredLocalServers, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeServerConfig, AuthOrchestrationReadScope],
+  [WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests, AuthDiagnosticsCaptureScope],
   [WS_METHODS.subscribeServerLifecycle, AuthOrchestrationReadScope],
   [WS_METHODS.subscribeAuthAccess, AuthAccessReadScope],
 ]);
@@ -562,6 +569,7 @@ function toAuthAccessStreamEvent(
 const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -2020,6 +2028,38 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
+        [WS_METHODS.serverClaimEnergyDiagnosticsCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverClaimEnergyDiagnosticsCapture,
+            energyCaptureRequests.claimCapture(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverReleaseEnergyDiagnosticsCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
+            energyCaptureRequests.releaseCapture(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverCompleteEnergyDiagnosticsCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
+            energyCaptureRequests.completeCapture(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
+        [WS_METHODS.serverFailEnergyDiagnosticsCapture]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.serverFailEnergyDiagnosticsCapture,
+            energyCaptureRequests.failCapture(input),
+            {
+              "rpc.aggregate": "server",
+            },
+          ),
         [WS_METHODS.cloudGetRelayClientStatus]: (_input) =>
           observeRpcEffect(WS_METHODS.cloudGetRelayClientStatus, relayClient.resolve, {
             "rpc.aggregate": "cloud",
@@ -2496,6 +2536,12 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
+        [WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests]: (_input) =>
+          observeRpcStream(
+            WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
+            energyCaptureRequests.requests,
+            { "rpc.aggregate": "server" },
+          ),
         [WS_METHODS.subscribeServerLifecycle]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerLifecycle,
@@ -2550,6 +2596,7 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
+    const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2569,7 +2616,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, energyCaptureRequests).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),
               Layer.provide(ProviderMaintenanceRunner.layer),

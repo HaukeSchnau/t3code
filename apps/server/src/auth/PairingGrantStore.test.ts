@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { AuthAdministrativeScopes } from "@t3tools/contracts";
 import { expect, it } from "@effect/vitest";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -145,16 +146,7 @@ it.layer(NodeServices.layer)("PairingGrantStore.layer", (it) => {
       const third = yield* bootstrapCredentials.consume("desktop-bootstrap-token");
 
       expect(first.method).toBe("desktop-bootstrap");
-      expect(first.scopes).toEqual([
-        "orchestration:read",
-        "orchestration:operate",
-        "terminal:operate",
-        "review:write",
-        "relay:read",
-        "access:read",
-        "access:write",
-        "relay:write",
-      ]);
+      expect(first.scopes).toEqual(AuthAdministrativeScopes);
       expect(first.subject).toBe("desktop-bootstrap");
       expect(second.method).toBe("desktop-bootstrap");
       expect(third.method).toBe("desktop-bootstrap");

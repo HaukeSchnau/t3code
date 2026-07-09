@@ -7,7 +7,11 @@ import type {
   AuthSessionId,
   AuthSessionState,
 } from "@t3tools/contracts";
-import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
+import {
+  AuthDiagnosticsCaptureScope,
+  EnvironmentHttpCommonError,
+  PRIMARY_LOCAL_ENVIRONMENT_ID,
+} from "@t3tools/contracts";
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -255,12 +259,17 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
   });
 }
 
-async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionState> {
+async function waitForAuthenticatedSessionAfterBootstrap(input?: {
+  readonly requiredScopes?: ReadonlyArray<AuthEnvironmentScope>;
+}): Promise<AuthSessionState> {
   const startedAt = Date.now();
 
   while (true) {
     const session = await fetchSessionState();
-    if (session.authenticated) {
+    if (
+      session.authenticated &&
+      (input?.requiredScopes?.every((scope) => session.scopes?.includes(scope) === true) ?? true)
+    ) {
       return session;
     }
 
@@ -320,7 +329,11 @@ function isTransientBootstrapError(error: unknown): boolean {
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const bootstrapCredential = getDesktopBootstrapCredential();
   const currentSession = await fetchSessionState();
-  if (currentSession.authenticated) {
+  const requiresDesktopSessionUpgrade =
+    currentSession.authenticated &&
+    bootstrapCredential !== null &&
+    currentSession.scopes?.includes(AuthDiagnosticsCaptureScope) !== true;
+  if (currentSession.authenticated && !requiresDesktopSessionUpgrade) {
     return { status: "authenticated" };
   }
 
@@ -333,7 +346,9 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
 
   try {
     await exchangeBootstrapCredential(bootstrapCredential);
-    await waitForAuthenticatedSessionAfterBootstrap();
+    await waitForAuthenticatedSessionAfterBootstrap({
+      requiredScopes: [AuthDiagnosticsCaptureScope],
+    });
     return { status: "authenticated" };
   } catch (error) {
     return {

@@ -27,6 +27,10 @@ import {
 import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
+  EnergyDiagnosticsCaptureRequestInput,
+  EnergyDiagnosticsCaptureResult,
+} from "./diagnostics.ts";
+import {
   ClientOrchestrationCommand,
   DispatchResult,
   OrchestrationReadModel,
@@ -526,13 +530,22 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 
-export class EnvironmentServerHttpApi extends HttpApiGroup.make("server").add(
-  HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
-    headers: OptionalBearerHeaders,
-    success: ServerIdleStatus,
-    error: EnvironmentServerIdleStatusErrors,
-  }).middleware(EnvironmentAuthenticatedAuth),
-) {}
+export class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
+  .add(
+    HttpApiEndpoint.get("idleStatus", "/api/server/idle", {
+      headers: OptionalBearerHeaders,
+      success: ServerIdleStatus,
+      error: EnvironmentServerIdleStatusErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("requestEnergyCapture", "/api/diagnostics/energy-capture", {
+      headers: OptionalBearerHeaders,
+      payload: EnergyDiagnosticsCaptureRequestInput,
+      success: EnergyDiagnosticsCaptureResult,
+      error: EnvironmentScopedOperationErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  ) {}
 
 export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("threadOrchestration")
   .add(
