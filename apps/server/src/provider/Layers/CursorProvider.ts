@@ -250,8 +250,21 @@ function getBooleanCurrentValue(
   return undefined;
 }
 
+function isCursorComposer25Model(input: {
+  readonly modelName?: string | null;
+  readonly modelSlug?: string | null;
+}): boolean {
+  const slug = input.modelSlug?.trim().toLowerCase();
+  const name = input.modelName?.trim().toLowerCase();
+  return slug === "composer-2.5" || name === "composer 2.5" || name === "cursor composer 2.5";
+}
+
 export function buildCursorCapabilitiesFromConfigOptions(
   configOptions: ReadonlyArray<EffectAcpSchema.SessionConfigOption> | null | undefined,
+  model?: {
+    readonly modelName?: string | null;
+    readonly modelSlug?: string | null;
+  },
 ): ModelCapabilities {
   if (!configOptions || configOptions.length === 0) {
     return EMPTY_CAPABILITIES;
@@ -303,7 +316,9 @@ export function buildCursorCapabilitiesFromConfigOptions(
   const thinkingOption = configOptions.find(
     (option) => option.category === "model_config" && isCursorThinkingConfigOption(option),
   );
-  const fastCurrentValue = getBooleanCurrentValue(fastOption);
+  const fastCurrentValue = isCursorComposer25Model(model ?? {})
+    ? false
+    : getBooleanCurrentValue(fastOption);
   const thinkingCurrentValue = getBooleanCurrentValue(thinkingOption);
   const optionDescriptors = [
     ...(reasoningEffortLevels.length > 0
@@ -394,7 +409,10 @@ function buildCursorDiscoveredModelsFromAvailableModelsResponse(
         {
           slug,
           name,
-          capabilities: buildCursorCapabilitiesFromConfigOptions(model.configOptions),
+          capabilities: buildCursorCapabilitiesFromConfigOptions(model.configOptions, {
+            modelName: name,
+            modelSlug: slug,
+          }),
         },
       ];
     }),

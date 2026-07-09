@@ -424,6 +424,28 @@ describe("buildCursorCapabilitiesFromConfigOptions", () => {
       }),
     );
   });
+
+  it("defaults Cursor Composer 2.5 to normal mode", () => {
+    expect(
+      buildCursorCapabilitiesFromConfigOptions(parameterizedClaudeModelOptionConfigOptions, {
+        modelName: "Composer 2.5",
+        modelSlug: "composer-2.5",
+      }),
+    ).toEqual(
+      createModelCapabilities({
+        optionDescriptors: [
+          selectDescriptor("reasoning", "Effort", [
+            { id: "low", label: "Low" },
+            { id: "medium", label: "Medium" },
+            { id: "high", label: "High" },
+            { id: "max", label: "Max", isDefault: true },
+          ]),
+          booleanDescriptor("fastMode", "Fast", false),
+          booleanDescriptor("thinking", "Thinking", true),
+        ],
+      }),
+    );
+  });
 });
 
 describe("checkCursorProviderStatus", () => {
