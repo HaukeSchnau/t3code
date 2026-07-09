@@ -5,6 +5,7 @@ import { LayoutAnimation, Pressable, ScrollView, useColorScheme, View } from "re
 import { AppText as Text } from "../../components/AppText";
 import { cn } from "../../lib/cn";
 import type { ThreadFeedActivity } from "../../lib/threadActivity";
+import Animated, { FadeIn } from "react-native-reanimated";
 
 const WORK_LOG_LAYOUT_ANIMATION = {
   duration: 180,
@@ -68,6 +69,14 @@ function workRowSymbolName(icon: ThreadFeedActivity["icon"]): SFSymbol {
   }
 }
 
+// Entering fades only for rows created moments ago: rows remount whenever the
+// list scrolls them back into view, and old rows must not replay an entrance.
+const FRESH_ROW_WINDOW_MS = 3_000;
+function isFreshRow(createdAt: string): boolean {
+  const timestamp = Date.parse(createdAt);
+  return Number.isFinite(timestamp) && Date.now() - timestamp < FRESH_ROW_WINDOW_MS;
+}
+
 export function ThreadWorkLog(props: {
   readonly activities: ReadonlyArray<ThreadFeedActivity>;
   readonly copiedRowId: string | null;
@@ -104,7 +113,10 @@ export function ThreadWorkLog(props: {
           const iconIsDestructive = row.icon === "alert" || row.icon === "warning";
 
           return (
-            <View key={row.id}>
+            <Animated.View
+              key={row.id}
+              {...(isFreshRow(row.createdAt) ? { entering: FadeIn.duration(200) } : {})}
+            >
               <Pressable
                 accessibilityRole={canExpand ? "button" : undefined}
                 accessibilityLabel={displayText}
@@ -138,10 +150,7 @@ export function ThreadWorkLog(props: {
                     />
                   </View>
 
-                  <Text
-                    className="min-w-0 flex-1 text-xs leading-4 text-foreground"
-                    numberOfLines={1}
-                  >
+                  <Text className="min-w-0 flex-1 text-xs text-foreground" numberOfLines={1}>
                     <Text
                       className={cn(
                         "font-t3-medium text-foreground",
@@ -197,20 +206,19 @@ export function ThreadWorkLog(props: {
                     nestedScrollEnabled
                     directionalLockEnabled
                     showsVerticalScrollIndicator
-                    style={{ maxHeight: 240 }}
+                    className="max-h-60"
                     contentContainerStyle={{ paddingRight: 8 }}
                   >
                     <Text
                       selectable
-                      className="text-2xs leading-[17px] text-foreground-muted"
-                      style={{ fontFamily: "ui-monospace" }}
+                      className="font-mono text-2xs leading-normal text-foreground-muted"
                     >
                       {row.fullDetail}
                     </Text>
                   </ScrollView>
                 </View>
               ) : null}
-            </View>
+            </Animated.View>
           );
         })}
       </View>
