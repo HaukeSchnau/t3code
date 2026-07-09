@@ -102,3 +102,41 @@ it("uses standard routing when the catalog has no default service tier", () => {
     },
   ]);
 });
+
+it("uses high reasoning as the Codex GPT-5.5 default", () => {
+  const capabilities = mapCodexModelCapabilities({
+    additionalSpeedTiers: [],
+    defaultReasoningEffort: "medium",
+    defaultServiceTier: null,
+    description: "Test model",
+    displayName: "GPT-5.5",
+    hidden: false,
+    id: "gpt-5.5",
+    isDefault: true,
+    model: "gpt-5.5",
+    serviceTiers: [],
+    supportedReasoningEfforts: [
+      {
+        description: "Medium reasoning",
+        reasoningEffort: "medium",
+      },
+      {
+        description: "High reasoning",
+        reasoningEffort: "high",
+      },
+    ],
+  });
+
+  assert.deepStrictEqual(capabilities.optionDescriptors, [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      options: [
+        { id: "medium", label: "Medium" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+      currentValue: "high",
+    },
+  ]);
+});

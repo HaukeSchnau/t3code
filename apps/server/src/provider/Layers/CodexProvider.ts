@@ -59,9 +59,25 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 };
 
 const DEFAULT_SERVICE_TIER_ID = "default";
+const CODEX_REASONING_DEFAULT_OVERRIDES: Readonly<Record<string, string>> = {
+  "gpt-5.5": "high",
+};
 
 function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
+}
+
+function resolveCodexDefaultReasoningEffort(
+  model: CodexSchema.V2ModelListResponse__Model,
+): string | null {
+  const override = CODEX_REASONING_DEFAULT_OVERRIDES[model.model];
+  if (
+    override &&
+    model.supportedReasoningEfforts.some(({ reasoningEffort }) => reasoningEffort === override)
+  ) {
+    return override;
+  }
+  return model.defaultReasoningEffort;
 }
 
 function codexAccountAuthLabel(account: CodexSchema.V2GetAccountResponse["account"]) {
@@ -107,8 +123,9 @@ function codexAccountEmail(account: CodexSchema.V2GetAccountResponse["account"])
 export function mapCodexModelCapabilities(
   model: CodexSchema.V2ModelListResponse__Model,
 ): ModelCapabilities {
+  const defaultReasoningEffort = resolveCodexDefaultReasoningEffort(model);
   const reasoningOptions = model.supportedReasoningEfforts.map(({ reasoningEffort }) =>
-    reasoningEffort === model.defaultReasoningEffort
+    reasoningEffort === defaultReasoningEffort
       ? {
           id: reasoningEffort,
           label: reasoningEffortLabel(reasoningEffort),
