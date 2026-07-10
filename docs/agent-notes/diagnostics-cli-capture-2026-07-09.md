@@ -48,3 +48,53 @@ Allow agents and developers to trigger energy diagnostics from the shell against
 - Focused React Doctor scan passed at 100/100.
 - Complete `vp test` suite passed: 595 files and 4,753 tests passed; 2 files and 7 tests were skipped.
 - No mobile/native files are changed, so `vp run lint:mobile` is not required.
+
+## Production Diagnosis
+
+2026-07-10, packaged macOS build `0.0.28` using the real `~/.t3/userdata` state:
+
+- The packaged CLI is functional through Electron's Node mode, but no `t3` executable is installed on
+  `PATH`. The working invocation is the app executable plus
+  `Contents/Resources/app.asar/apps/server/dist/bin.mjs diagnostics energy ...`.
+- A 30-second capture during a runaway command-output stream recorded 121 renderer long tasks totaling
+  9.77 seconds. The renderer reached roughly 1.8-2.3 GB and was frequently near or above one CPU core.
+- The trigger was an `rg -a` command that treated application binaries as text and emitted 9,187 Codex
+  `item/commandExecution/outputDelta` notifications, about 22.4 MB, in the capture window.
+- `ProviderRuntimeIngestion.updateSubagentActivity` publishes a full `subagent.thread` activity for every
+  subagent runtime event, even when command-output events change neither transcript, status, nor last
+  activity. This turns provider chunk rate directly into orchestration write rate.
+- Every activity/message event refreshes thread-shell summary state by loading complete per-thread message,
+  plan, activity, and approval collections. The hot thread's refreshes measured roughly 40-100 ms each.
+- The shell stream converts every thread aggregate event into `thread-upserted`. The client replaces the
+  shell snapshot, rebuilds thread indexes/groupings, and invalidates sidebar derivations for inactive-thread
+  updates.
+- The sidebar additionally opens live full-detail subscriptions for its first ten visible threads. The hot
+  thread was second-most-recent and therefore prewarmed. Each activity update filters and sorts its complete
+  activity history, and a 500 ms debounce JSON-encodes the complete thread snapshot into IndexedDB.
+- Native and canonical provider streams are both logged by default. Provider logs occupied about 1.8 GB;
+  rotated server traces occupied about 107 MB and amplified serialization and disk IO during the flood.
+- `state.sqlite` was about 5.8 GB with 1.91 million orchestration events. The dominant payloads were 472,539
+  `thread.activity-appended` rows totaling about 2.0 GB and 1,427,905 `thread.message-sent` rows totaling
+  about 601 MB.
+- An old packaged server process remained orphaned under PID 1 after restart. It had no listener and low
+  current CPU, but retained memory and had accumulated about 30 minutes of CPU time.
+- A final 15-second settling capture with no child reviewer running recorded three long tasks totaling
+  284 ms. This establishes that event ingestion is the dominant multiplier rather than a permanent tight
+  renderer loop, although idle renderer/GPU work and periodic VCS/provider polling remain follow-up targets.
+
+Artifacts retained under `~/.t3/userdata/logs/energy-diagnostics/`:
+
+- `energy-capture-2026-07-10T15-10-34-385Z.json`: runaway output stream.
+- `energy-capture-2026-07-10T15-15-45-111Z.json`: assistant streaming after the command completed.
+- `energy-capture-2026-07-10T15-31-27-033Z.json`: settling baseline.
+
+Recommended fix order:
+
+1. Do not publish unchanged subagent activities; coalesce meaningful transcript/status updates at a bounded
+   cadence and avoid storing repeated cumulative transcript snapshots.
+2. Remove live sidebar detail prewarming or replace it with one-shot bounded snapshot prefetching.
+3. Emit shell updates only when shell-visible fields change.
+4. Make thread reducers incremental and bound/defer full-thread IndexedDB persistence.
+5. Disable, sample, or explicitly enable native/canonical provider payload logs and high-frequency traces.
+6. Add retention/compaction for orchestration events and provider logs, then repair orphan server cleanup.
+7. Add source-attributed renderer CPU/heap profiling and subscription-owner counters to the diagnostics CLI.
