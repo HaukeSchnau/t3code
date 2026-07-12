@@ -5,6 +5,8 @@ apple_team_id := env_var_or_default("T3CODE_APPLE_TEAM_ID", "2243J9RD68")
 desktop_output_dir := env_var_or_default("T3CODE_DESKTOP_INSTALL_OUTPUT_DIR", "release/local-desktop-install")
 agent_device_session := env_var_or_default("T3CODE_AGENT_DEVICE_SESSION", "t3dev-physical")
 agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID", "dev.schnau.agentdevice.runner")
+mobile_tailnet_service := env_var_or_default("T3CODE_MOBILE_TAILNET_SERVICE", "t3code-mobile-dev")
+mobile_tailnet_port := env_var_or_default("T3CODE_MOBILE_TAILNET_PORT", "19081")
 
 default:
     @just --list
@@ -34,6 +36,35 @@ mobile-dev-server pairing_url="":
     else
       bun run dev:client
     fi
+
+# Restart Metro as a persistent service advertised at this host's stable Tailnet MagicDNS name.
+mobile-dev-tailnet:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    repo_root="$(pwd)"
+    tailnet_host="$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\.$//')"
+    if [[ -z "$tailnet_host" ]]; then
+      echo "Could not resolve this host's Tailnet MagicDNS name. Is Tailscale connected?" >&2
+      exit 1
+    fi
+
+    agent-service run "{{ mobile_tailnet_service }}" \
+      --port "{{ mobile_tailnet_port }}" \
+      --cwd "$repo_root/apps/mobile" \
+      --wait-http /status \
+      --wait-timeout 120 \
+      -- \
+      bash -lc 'export REACT_NATIVE_PACKAGER_HOSTNAME="$1"; exec nix develop "$2" -c node node_modules/expo/bin/cli start --dev-client --scheme t3code-dev --clear --lan --port "$PORT"' \
+        _ "$tailnet_host" "$repo_root"
+
+    metro_url="http://$tailnet_host:{{ mobile_tailnet_port }}"
+    encoded_metro_url="$(jq -rn --arg value "$metro_url" '$value | @uri')"
+    dev_client_url="t3code-dev://expo-development-client/?url=$encoded_metro_url"
+    echo "Metro:      $metro_url"
+    echo "Dev client: $dev_client_url"
+    echo "Logs:       agent-service logs {{ mobile_tailnet_service }}"
+    echo "Stop:       agent-service stop {{ mobile_tailnet_service }}"
 
 # Open the iOS dev client on the configured physical device through agent-device.
 mobile-dev-open metro_url="":
