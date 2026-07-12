@@ -33,6 +33,7 @@ From the repo root, the `Justfile` has wrappers for the physical iOS dev loop:
 ```bash
 just mobile-dev
 just mobile-dev-server
+just mobile-dev-tailnet
 just mobile-dev-open
 just mobile-dev-reload
 just mobile-dev-snapshot
@@ -53,6 +54,17 @@ T3CODE_MOBILE_METRO_HOST="192.168.1.10"
 ```bash
 just mobile-dev-open http://192.168.1.10:8081
 ```
+
+On a persistent Tailnet-connected development host, start or replace the named Metro service with:
+
+```bash
+just mobile-dev-tailnet
+```
+
+The recipe advertises Metro at the host's stable Tailscale MagicDNS name and port `19081`, prints the
+`t3code-dev://` link for the Expo Dev Client, and keeps running through `agent-service` after the shell exits.
+Running it again stops and replaces the existing service so it always serves the current checkout. Override
+the stable service name or port with `T3CODE_MOBILE_TAILNET_SERVICE` and `T3CODE_MOBILE_TAILNET_PORT`.
 
 For remote-pairing debugging, start Metro with a fresh one-time pairing URL and the dev client will fill and submit the Add Environment screen automatically:
 
