@@ -50,6 +50,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type CodexAdapterShape } from "../Services/CodexAdapter.ts";
+import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import {
@@ -82,6 +83,7 @@ export interface CodexAdapterLiveOptions {
   >;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }
 
 interface CodexAdapterSessionContext {
@@ -468,7 +470,10 @@ function mapItemLifecycle(
     return undefined;
   }
 
-  const detail = itemDetail(item);
+  const detail =
+    itemType === "assistant_message" && "text" in item && typeof item.text === "string"
+      ? item.text
+      : itemDetail(item);
   const status =
     lifecycle === "item.started"
       ? "inProgress"
@@ -483,7 +488,7 @@ function mapItemLifecycle(
       itemType,
       ...(status ? { status } : {}),
       ...(itemTitle(itemType, item) ? { title: itemTitle(itemType, item) } : {}),
-      ...(detail ? { detail } : {}),
+      ...(detail !== undefined && detail.length > 0 ? { detail } : {}),
       ...(event.payload !== undefined ? { data: event.payload } : {}),
     },
   };
@@ -1371,6 +1376,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
   codexConfig: CodexSettings,
   options?: CodexAdapterLiveOptions,
 ) {
+  const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("codex");
   const fileSystem = yield* FileSystem.FileSystem;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1473,7 +1479,16 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
               });
               return;
             }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+            yield* Effect.forEach(
+              runtimeEvents,
+              (runtimeEvent) =>
+                acceptRuntimeEvent(runtimeEvent).pipe(
+                  Effect.flatMap((accepted) =>
+                    accepted ? Queue.offer(runtimeEventQueue, runtimeEvent) : Effect.void,
+                  ),
+                ),
+              { concurrency: 1, discard: true },
+            );
           }),
         ).pipe(Effect.forkChild);
 
@@ -1716,6 +1731,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
+      assistantTranscriptRecovery: "none",
     },
     startSession,
     sendTurn,

@@ -14,6 +14,7 @@ export const WORKLOAD_COUNTER_NAMES = [
   "ingestion.activity.coalesced",
   "ingestion.activity.published",
   "ingestion.activity.flushes",
+  "ingestion.activity.persistence_retries",
   "orchestration.events.durable",
   "projection.candidates",
   "projection.applied",
