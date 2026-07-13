@@ -99,6 +99,7 @@ import {
 import { cn } from "~/lib/utils";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import { formatChatTimestampTooltip, formatShortTimestamp } from "../../timestampFormat";
+import { useAssetUrls } from "../../assets/assetUrls";
 
 import {
   buildInlineTerminalContextText,
@@ -113,7 +114,6 @@ import {
   parseReviewCommentMessageSegments,
   type ReviewCommentContext,
 } from "../../reviewCommentContext";
-import { resolveEnvironmentHttpUrl } from "~/environments/runtime";
 
 // ---------------------------------------------------------------------------
 // Context — shared state consumed by every row component via Context.
@@ -156,25 +156,6 @@ const TimelineRowCtx = createContext<TimelineRowSharedState>(null!);
 const TimelineRowActivityCtx = createContext<TimelineRowActivityState>(null!);
 const TIMELINE_LIST_HEADER = <div className="h-3 sm:h-4" />;
 const TIMELINE_LIST_FOOTER = <div className="h-3 sm:h-4" />;
-const OBSERVED_MEDIA_ROUTE_PREFIX = "/observed-media";
-
-function observedMediaPreviewRoutePath(storageId: string): string {
-  return `${OBSERVED_MEDIA_ROUTE_PREFIX}/${encodeURIComponent(storageId)}`;
-}
-
-function resolveObservedMediaPreviewUrl(
-  environmentId: EnvironmentId,
-  storageId: string,
-): string | undefined {
-  try {
-    return resolveEnvironmentHttpUrl({
-      environmentId,
-      pathname: observedMediaPreviewRoutePath(storageId),
-    });
-  } catch {
-    return undefined;
-  }
-}
 const EMPTY_TIMELINE_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
 const EMPTY_EDITABLE_USER_MESSAGE_IDS: ReadonlySet<MessageId> = new Set();
 
@@ -2047,13 +2028,19 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
   const subagent = workEntry.subagent;
   const activity = use(TimelineRowActivityCtx);
   const [expanded, setExpanded] = useState(false);
+  const observedMediaResources = useMemo(
+    () =>
+      (workEntry.media ?? []).map((media) => ({
+        _tag: "observed-media" as const,
+        storageId: media.storageId,
+      })),
+    [workEntry.media],
+  );
+  const observedMediaUrls = useAssetUrls(ctx.activeThreadEnvironmentId, observedMediaResources);
   const observedMediaPreviews = useMemo(
     () =>
-      (workEntry.media ?? []).flatMap((media) => {
-        const previewUrl = resolveObservedMediaPreviewUrl(
-          ctx.activeThreadEnvironmentId,
-          media.storageId,
-        );
+      (workEntry.media ?? []).flatMap((media, index) => {
+        const previewUrl = observedMediaUrls[index];
         return previewUrl
           ? [
               {
@@ -2064,7 +2051,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
             ]
           : [];
       }),
-    [ctx.activeThreadEnvironmentId, workEntry.media],
+    [observedMediaUrls, workEntry.media],
   );
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
