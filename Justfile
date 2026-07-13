@@ -37,28 +37,24 @@ mobile-dev-server pairing_url="":
       bun run dev:client
     fi
 
-# Restart Metro as a persistent service advertised at this host's stable Tailnet MagicDNS name.
+# Restart Metro as a persistent service behind a stable Tailnet-only HTTPS URL.
 mobile-dev-tailnet:
     #!/usr/bin/env bash
     set -euo pipefail
 
     repo_root="$(pwd)"
-    tailnet_host="$(tailscale status --json | jq -r '.Self.DNSName // empty' | sed 's/\.$//')"
-    if [[ -z "$tailnet_host" ]]; then
-      echo "Could not resolve this host's Tailnet MagicDNS name. Is Tailscale connected?" >&2
-      exit 1
-    fi
-
     agent-service run "{{ mobile_tailnet_service }}" \
       --port "{{ mobile_tailnet_port }}" \
       --cwd "$repo_root/apps/mobile" \
+      --publish \
+      --tailnet \
       --wait-http /status \
       --wait-timeout 120 \
       -- \
-      bash -lc 'export REACT_NATIVE_PACKAGER_HOSTNAME="$1"; exec nix develop "$2" -c node node_modules/expo/bin/cli start --dev-client --scheme t3code-dev --clear --lan --port "$PORT"' \
-        _ "$tailnet_host" "$repo_root"
+      bash -lc 'export EXPO_PACKAGER_PROXY_URL="$AGENT_SERVICE_URL"; exec nix develop "$1" -c node node_modules/expo/bin/cli start --dev-client --scheme t3code-dev --clear --lan --port "$PORT"' \
+        _ "$repo_root"
 
-    metro_url="http://$tailnet_host:{{ mobile_tailnet_port }}"
+    metro_url="$(agent-service url "{{ mobile_tailnet_service }}")"
     encoded_metro_url="$(jq -rn --arg value "$metro_url" '$value | @uri')"
     dev_client_url="t3code-dev://expo-development-client/?url=$encoded_metro_url"
     echo "Metro:      $metro_url"

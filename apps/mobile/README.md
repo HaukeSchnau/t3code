@@ -61,10 +61,11 @@ On a persistent Tailnet-connected development host, start or replace the named M
 just mobile-dev-tailnet
 ```
 
-The recipe advertises Metro at the host's stable Tailscale MagicDNS name and port `19081`, prints the
-`t3code-dev://` link for the Expo Dev Client, and keeps running through `agent-service` after the shell exits.
-Running it again stops and replaces the existing service so it always serves the current checkout. Override
-the stable service name or port with `T3CODE_MOBILE_TAILNET_SERVICE` and `T3CODE_MOBILE_TAILNET_PORT`.
+The recipe publishes Metro at the stable, Tailnet-only URL
+`https://t3code-mobile-dev.schnau.dev`, prints the `t3code-dev://` link for the Expo Dev Client, and keeps
+running through `agent-service` after the shell exits. Running it again stops and replaces the existing
+service so it always serves the current checkout. Override the stable service name or internal port with
+`T3CODE_MOBILE_TAILNET_SERVICE` and `T3CODE_MOBILE_TAILNET_PORT`; the default URL follows the service name.
 
 For remote-pairing debugging, start Metro with a fresh one-time pairing URL and the dev client will fill and submit the Add Environment screen automatically:
 
