@@ -29,6 +29,7 @@ import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import {
   ORCHESTRATION_PROJECTOR_NAMES,
   OrchestrationProjectionPipelineLive,
+  relevantOrchestrationProjectors,
 } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -53,6 +54,81 @@ const exists = (filePath: string) =>
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
 
 it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
+  it.effect("routes non-shell activity progress only to the activity projector", () =>
+    Effect.sync(() => {
+      const now = "2026-01-01T00:00:00.000Z";
+      const event = {
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-routing-progress"),
+        sequence: 1,
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-routing-progress"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-routing-progress"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-routing-progress"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-routing-progress"),
+          activity: {
+            id: EventId.make("activity-routing-progress"),
+            tone: "info",
+            kind: "command_output",
+            summary: "chunk",
+            payload: { text: "chunk" },
+            turnId: null,
+            createdAt: now,
+          },
+        },
+      } as const;
+
+      assert.deepEqual(relevantOrchestrationProjectors(event), [
+        ORCHESTRATION_PROJECTOR_NAMES.threadActivities,
+      ]);
+    }),
+  );
+
+  it.effect("keeps streaming assistant deltas out of the shell-carried turn projector", () =>
+    Effect.sync(() => {
+      const now = "2026-01-01T00:00:00.000Z";
+      const streamingEvent = {
+        type: "thread.message-sent",
+        eventId: EventId.make("evt-routing-streaming-message"),
+        sequence: 1,
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-routing-streaming-message"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-routing-streaming-message"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-routing-streaming-message"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-routing-streaming-message"),
+          messageId: MessageId.make("message-routing-streaming-message"),
+          role: "assistant",
+          text: "delta",
+          turnId: TurnId.make("turn-routing-streaming-message"),
+          streaming: true,
+          createdAt: now,
+          updatedAt: now,
+        },
+      } as const;
+      const completedEvent = {
+        ...streamingEvent,
+        eventId: EventId.make("evt-routing-completed-message"),
+        payload: { ...streamingEvent.payload, text: "", streaming: false },
+      } as const;
+
+      assert.deepEqual(relevantOrchestrationProjectors(streamingEvent), [
+        ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+      ]);
+      assert.deepEqual(relevantOrchestrationProjectors(completedEvent), [
+        ORCHESTRATION_PROJECTOR_NAMES.threadMessages,
+        ORCHESTRATION_PROJECTOR_NAMES.threadTurns,
+      ]);
+    }),
+  );
+
   it.effect("bootstraps all projection states and writes projection rows", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;
@@ -171,6 +247,92 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
       for (const row of stateRows) {
         assert.equal(row.lastAppliedSequence, 3);
       }
+    }),
+  );
+
+  it.effect("does not touch the shell projection for non-shell activity progress", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+        eventStore
+          .append(event)
+          .pipe(Effect.flatMap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+      yield* appendAndProject({
+        type: "thread.created",
+        eventId: EventId.make("evt-no-shell-progress-created"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-no-shell-progress"),
+        occurredAt: createdAt,
+        commandId: CommandId.make("cmd-no-shell-progress-created"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-no-shell-progress-created"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-no-shell-progress"),
+          projectId: ProjectId.make("project-no-shell-progress"),
+          title: "No shell progress",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("codex"),
+            model: "gpt-5-codex",
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+          createdAt,
+          updatedAt: createdAt,
+        },
+      });
+
+      yield* sql`
+        CREATE TRIGGER reject_non_shell_thread_update
+        BEFORE UPDATE ON projection_threads
+        WHEN OLD.thread_id = 'thread-no-shell-progress'
+        BEGIN
+          SELECT RAISE(ABORT, 'non-shell activity updated projection_threads');
+        END
+      `;
+
+      yield* appendAndProject({
+        type: "thread.activity-appended",
+        eventId: EventId.make("evt-no-shell-progress-activity"),
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-no-shell-progress"),
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-no-shell-progress-activity"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-no-shell-progress-activity"),
+        metadata: {},
+        payload: {
+          threadId: ThreadId.make("thread-no-shell-progress"),
+          activity: {
+            id: EventId.make("activity-no-shell-progress"),
+            tone: "info",
+            kind: "subagent.thread",
+            summary: "Subagent still working",
+            payload: { status: "running", transcript: "partial" },
+            turnId: null,
+            createdAt: "2026-01-01T00:00:01.000Z",
+          },
+        },
+      });
+
+      const threadRows = yield* sql<{ readonly updatedAt: string }>`
+        SELECT updated_at AS "updatedAt"
+        FROM projection_threads
+        WHERE thread_id = 'thread-no-shell-progress'
+      `;
+      const activityRows = yield* sql<{ readonly activityId: string }>`
+        SELECT activity_id AS "activityId"
+        FROM projection_thread_activities
+        WHERE thread_id = 'thread-no-shell-progress'
+      `;
+      assert.deepEqual(threadRows, [{ updatedAt: createdAt }]);
+      assert.deepEqual(activityRows, [{ activityId: "activity-no-shell-progress" }]);
     }),
   );
 });
