@@ -36,9 +36,9 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
   `T3CODE_MOBILE_METRO_HOST`.
 - Keep pairing URLs out of committed state and logs. Treat them as credentials.
-- Keep the Tailnet Metro server under a stable `agent-service` name and fixed port. Re-running its
-  recipe must replace the current service, advertise the host's Tailscale MagicDNS name to Expo Dev
-  Clients, wait for Metro readiness, and leave the service running persistently.
+- Keep the Tailnet Metro server under a stable `agent-service` name and fixed internal port. Re-running
+  its recipe must replace the current service, publish a Tailnet-only HTTPS route, advertise that route
+  to Expo Dev Clients, wait for Metro readiness, and leave the service running persistently.
 - In dev builds, allow the Add Environment screen to prefill and optionally auto-connect from
   `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`.
 - Also support route params for pairing URL and auto-connect so external automation can deep-link
