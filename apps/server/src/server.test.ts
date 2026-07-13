@@ -118,6 +118,7 @@ import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import { incrementWorkloadCounter } from "./diagnostics/WorkloadDiagnostics.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -2056,6 +2057,39 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(ownerResponse.status, 200);
       assert.equal(ownerBody.status, "rejected");
       assert.include(ownerBody.message, "capture duration plus");
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("serves metadata-only workload diagnostics to standard read clients", () =>
+    Effect.gen(function* () {
+      yield* buildAppUnderTest();
+      incrementWorkloadCounter("provider.events.received", 2);
+
+      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
+      const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
+        headers: { cookie: ownerCookie },
+        body: yield* HttpBody.json({}),
+      });
+      const credential = (yield* credentialResponse.json) as { readonly credential: string };
+      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(credential.credential);
+      const diagnosticsUrl = yield* getHttpServerUrl("/api/diagnostics/workload");
+      const response = yield* fetchEffect(diagnosticsUrl, {
+        headers: { cookie: pairedCookie },
+      });
+      const body = yield* responseJsonEffect<{
+        readonly schemaVersion?: number;
+        readonly startedAtIso?: string;
+        readonly readAtIso?: string;
+        readonly counters?: Readonly<Record<string, number>>;
+        readonly gauges?: Readonly<Record<string, number>>;
+      }>(response);
+
+      assert.equal(response.status, 200);
+      assert.equal(body.schemaVersion, 1);
+      assert.equal(typeof body.startedAtIso, "string");
+      assert.equal(typeof body.readAtIso, "string");
+      assert.isAtLeast(body.counters?.["provider.events.received"] ?? 0, 2);
+      assert.equal(typeof body.gauges?.["subscriptions.detail.active"], "number");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

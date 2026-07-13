@@ -30,6 +30,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
 
 import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
@@ -70,13 +71,15 @@ export const NoOpProviderEventLoggers: ProviderEventLoggersShape = {
 export const ProviderEventLoggersLive = Layer.effect(
   ProviderEventLoggers,
   Effect.gen(function* () {
-    const { providerEventLogPath } = yield* ServerConfig;
-    const native = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "native",
-    });
-    const canonical = yield* makeEventNdjsonLogger(providerEventLogPath, {
-      stream: "canonical",
-    });
+    const { providerLogsDir } = yield* ServerConfig;
+    const path = yield* Path.Path;
+    const makeScopedLogger = (fileName: string, stream: "native" | "canonical") =>
+      Effect.acquireRelease(
+        makeEventNdjsonLogger(path.join(providerLogsDir, fileName), { stream }),
+        (logger) => (logger ? logger.close() : Effect.void),
+      );
+    const native = yield* makeScopedLogger("native.log", "native");
+    const canonical = yield* makeScopedLogger("canonical.log", "canonical");
     return {
       native,
       canonical,
