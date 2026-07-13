@@ -25,6 +25,8 @@ The CLI path is brokered through the running server:
 - The primary local environment's authenticated web app subscribes at the root route, claims the request, runs the existing renderer/desktop recorder, and reports completion or failure back over WebSocket RPC.
 - The CLI exits nonzero for rejected, failed, or timed-out captures and supports clean `--json` output for agent-readable automation.
 
+For headless amplification analysis, `t3 diagnostics workload --json` reads cumulative process-local counters and active-work gauges from the authenticated server. It complements the bounded renderer capture: workload counters explain how provider input fans out into durable events, projection work, shell/detail publications, and provider log bytes without requiring macOS or Electron.
+
 Capture RPCs require the administrative `diagnostics:capture` scope. Requests use a one-item replay buffer so a renderer that subscribes just after publication still sees the pending work. A per-request claim token ensures only one of multiple windows can record or settle a capture. Explicit wait timeouts must include the capture duration plus a 15-second completion allowance.
 
 Renderer settlement commands are retried to tolerate brief WebSocket reconnects. If completion or failure still cannot reach the server, the renderer releases its claim and the broker republishes the request so another connected window can recover it. Interrupted HTTP requests also clear their pending broker entry. Existing desktop sessions created before the `diagnostics:capture` scope was introduced are automatically refreshed from the desktop bootstrap credential.
@@ -38,6 +40,7 @@ Renderer settlement commands are retried to tolerate brief WebSocket reconnects.
 - Claim release is restricted to the current claim token and returns the request to the unclaimed state before republishing it.
 - IPC pressure is accumulated in the preload process because that is the shared bridge choke point for renderer-to-main calls.
 - The UI is scoped to diagnostics/dev use; it is not intended to be an end-user performance report yet.
+- Workload counters reset at server startup and are intentionally diagnostic state rather than persisted telemetry. Their implementation and benchmark contract are documented in `patches/high-cardinality-session-energy.md`.
 
 ## Verification
 
