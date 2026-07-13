@@ -48,6 +48,10 @@ import { ServerSettingsService } from "../../serverSettings.ts";
 import { ServerConfig } from "../../config.ts";
 import { inferImageExtension } from "../../imageMime.ts";
 import { createObservedMediaId, resolveObservedMediaPath } from "../../observedMediaStore.ts";
+import {
+  adjustWorkloadGauge,
+  incrementWorkloadCounter,
+} from "../../diagnostics/WorkloadDiagnostics.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -58,10 +62,24 @@ interface AssistantSegmentState {
 }
 
 interface SubagentProjectionState {
+  activityId: EventId;
+  threadId: ThreadId;
+  provider: ProviderRuntimeEvent["provider"];
+  providerInstanceId: string;
+  providerThreadId: string;
+  parentTurnId: TurnId | null;
+  turnId: TurnId | null;
   transcript: string;
+  transcriptSegmentsByItemId: Map<string, Array<string>>;
+  transcriptItemOrder: ReadonlyArray<string>;
+  lastTranscriptItemId: string | null;
   status: "running" | "waiting" | "completed" | "failed";
   lastActivity: string | null;
   updatedAt: string;
+  latestEventType: ProviderRuntimeEvent["type"];
+  lastEventId: EventId;
+  lastPublishedAtMs: number | null;
+  dirty: boolean;
 }
 
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
@@ -70,10 +88,8 @@ const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_TTL = Duration.minutes(120);
 const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
-const SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_CACHE_CAPACITY = 1_000;
-const SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_TTL = Duration.minutes(120);
+const SUBAGENT_PUBLICATION_INTERVAL_MS = 500;
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
-const MAX_SUBAGENT_TRANSCRIPT_CHARS = 48_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
 type TurnStartRequestedDomainEvent = Extract<
@@ -189,6 +205,15 @@ function truncateDetail(value: string, limit = 180): string {
 const MAX_ACTIVITY_DATA_STRING_CHARS = 12_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 200;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 100;
+const SUBAGENT_STANDALONE_ACTIVITY_KINDS = new Set([
+  "approval.requested",
+  "approval.resolved",
+  "user-input.requested",
+  "user-input.resolved",
+  "runtime.error",
+  "runtime.warning",
+  "tool.denied",
+]);
 
 function compactActivityData(value: unknown, depth = 0): unknown {
   if (typeof value === "string") {
@@ -229,8 +254,63 @@ function compactActivityData(value: unknown, depth = 0): unknown {
   return compacted;
 }
 
-function subagentActivityId(providerThreadId: string): EventId {
-  return EventId.make(`subagent:${providerThreadId.replace(/[^a-zA-Z0-9_.:-]/g, "_")}`);
+export function subagentActivityIdForRuntime(
+  threadId: ThreadId,
+  event: ProviderRuntimeEvent,
+  providerThreadId: string,
+): EventId {
+  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
+  return EventId.make(
+    `subagent:${encodeURIComponent(threadId)}:${encodeURIComponent(event.provider)}:${encodeURIComponent(
+      providerInstanceId,
+    )}:${encodeURIComponent(providerThreadId)}`,
+  );
+}
+
+function subagentProjectionKey(
+  threadId: ThreadId,
+  event: ProviderRuntimeEvent & {
+    readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
+  },
+): string {
+  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
+  return `${threadId}\0${event.provider}\0${providerInstanceId}\0${event.agentContext.providerThreadId}`;
+}
+
+function runtimeSessionKey(event: ProviderRuntimeEvent): string {
+  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
+  return `${event.provider}\0${providerInstanceId}\0${event.threadId}`;
+}
+
+function runtimeEventScopeKey(event: ProviderRuntimeEvent): string {
+  const turnScope = `turn:${event.turnId ?? "session"}`;
+  if (event.itemId !== undefined) {
+    return `${turnScope}\0item:${event.itemId}`;
+  }
+  if (
+    event.type === "content.delta" ||
+    event.type === "item.started" ||
+    event.type === "item.updated" ||
+    event.type === "item.completed"
+  ) {
+    return `${turnScope}\0item:anonymous`;
+  }
+  return `${turnScope}\0lifecycle:${event.type}`;
+}
+
+function runtimeTurnScopePrefix(turnId: TurnId | string): string {
+  return `turn:${turnId}\0`;
+}
+
+interface RuntimeSessionDedupeState {
+  readonly activeEventIdsByScope: Map<string, Set<string>>;
+  readonly completedItemScopes: Set<string>;
+  readonly completedTurnIds: Set<string>;
+}
+
+function eventTimeMillis(createdAt: string): number {
+  const parsed = Date.parse(createdAt);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isSubagentRuntimeEvent(event: ProviderRuntimeEvent): event is ProviderRuntimeEvent & {
@@ -252,7 +332,7 @@ function subagentStatusFromRuntimeEvent(
     return "running";
   }
   if (event.type === "turn.completed") {
-    return event.payload.state === "failed" ? "failed" : "completed";
+    return event.payload.state === "completed" ? "completed" : "failed";
   }
   if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
     return "completed";
@@ -291,17 +371,6 @@ function subagentLastActivityFromRuntimeEvent(event: ProviderRuntimeEvent): stri
   }
 }
 
-function appendSubagentTranscript(existingTranscript: string, delta: string): string {
-  if (delta.length === 0) {
-    return existingTranscript;
-  }
-  const nextTranscript = `${existingTranscript}${delta}`;
-  if (nextTranscript.length <= MAX_SUBAGENT_TRANSCRIPT_CHARS) {
-    return nextTranscript;
-  }
-  return nextTranscript.slice(nextTranscript.length - MAX_SUBAGENT_TRANSCRIPT_CHARS);
-}
-
 function subagentTranscriptDeltaFromRuntimeEvent(event: ProviderRuntimeEvent): string {
   if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
     return event.payload.delta;
@@ -314,6 +383,80 @@ function subagentTranscriptDeltaFromRuntimeEvent(event: ProviderRuntimeEvent): s
     return event.payload.detail;
   }
   return "";
+}
+
+function materializeSubagentTranscript(
+  state: Pick<SubagentProjectionState, "transcriptSegmentsByItemId" | "transcriptItemOrder">,
+): string {
+  return state.transcriptItemOrder
+    .flatMap((key) => state.transcriptSegmentsByItemId.get(key) ?? [])
+    .join("");
+}
+
+function updateSubagentTranscript(
+  state: Pick<
+    SubagentProjectionState,
+    "transcriptSegmentsByItemId" | "transcriptItemOrder" | "lastTranscriptItemId"
+  >,
+  event: ProviderRuntimeEvent,
+): {
+  readonly changed: boolean;
+  readonly transcriptItemOrder: ReadonlyArray<string>;
+  readonly lastTranscriptItemId: string | null;
+} {
+  const itemId = String(
+    event.itemId ??
+      (event.type === "item.completed" ? state.lastTranscriptItemId : undefined) ??
+      event.turnId ??
+      event.eventId,
+  );
+  const previousSegments = state.transcriptSegmentsByItemId.get(itemId);
+  const transcriptItemOrder =
+    previousSegments === undefined
+      ? [...state.transcriptItemOrder, itemId]
+      : state.transcriptItemOrder;
+
+  if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+    if (event.payload.delta.length === 0) {
+      return {
+        changed: false,
+        transcriptItemOrder: state.transcriptItemOrder,
+        lastTranscriptItemId: state.lastTranscriptItemId,
+      };
+    }
+    if (previousSegments === undefined) {
+      state.transcriptSegmentsByItemId.set(itemId, [event.payload.delta]);
+    } else {
+      previousSegments.push(event.payload.delta);
+    }
+  } else if (
+    event.type === "item.completed" &&
+    event.payload.itemType === "assistant_message" &&
+    (event.payload.detail?.length ?? 0) > 0
+  ) {
+    const authoritativeText = event.payload.detail ?? "";
+    if (previousSegments?.join("") === authoritativeText) {
+      return {
+        changed: false,
+        transcriptItemOrder: state.transcriptItemOrder,
+        lastTranscriptItemId: itemId,
+      };
+    }
+    // Authoritative completion replaces this item's streamed segments in O(1).
+    // Full transcript materialization is reserved for durable publication.
+    state.transcriptSegmentsByItemId.set(itemId, [authoritativeText]);
+  } else {
+    return {
+      changed: false,
+      transcriptItemOrder: state.transcriptItemOrder,
+      lastTranscriptItemId: state.lastTranscriptItemId,
+    };
+  }
+  return {
+    transcriptItemOrder,
+    lastTranscriptItemId: itemId,
+    changed: true,
+  };
 }
 
 function runtimeAgentContextPayload(event: ProviderRuntimeEvent):
@@ -1081,9 +1224,76 @@ const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
-    crypto.randomUUIDv4.pipe(
-      Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
+    Effect.succeed(
+      CommandId.make(
+        `provider:${event.provider}:${
+          event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)
+        }:${encodeURIComponent(event.threadId)}:${event.eventId}:${tag}`,
+      ),
     );
+  const processedRuntimeEventsBySession = new Map<string, RuntimeSessionDedupeState>();
+
+  const hasProcessedRuntimeEvent = (event: ProviderRuntimeEvent): boolean => {
+    const state = processedRuntimeEventsBySession.get(runtimeSessionKey(event));
+    if (state === undefined) return false;
+    if (event.turnId !== undefined && state.completedTurnIds.has(String(event.turnId))) return true;
+    const scopeKey = runtimeEventScopeKey(event);
+    return (
+      state.completedItemScopes.has(scopeKey) ||
+      (state.activeEventIdsByScope.get(scopeKey)?.has(String(event.eventId)) ?? false)
+    );
+  };
+
+  const rememberProcessedRuntimeEvent = (event: ProviderRuntimeEvent) =>
+    Effect.sync(() => {
+      const sessionKey = runtimeSessionKey(event);
+      if (event.type === "session.exited") {
+        const existing = processedRuntimeEventsBySession.get(sessionKey);
+        if (existing !== undefined) {
+          const retainedEventCount = Array.from(existing.activeEventIdsByScope.values()).reduce(
+            (total, eventIds) => total + eventIds.size,
+            0,
+          );
+          adjustWorkloadGauge("ingestion.dedupe.events.active", -retainedEventCount);
+        }
+        processedRuntimeEventsBySession.delete(sessionKey);
+        return;
+      }
+      const state = processedRuntimeEventsBySession.get(sessionKey) ?? {
+        activeEventIdsByScope: new Map<string, Set<string>>(),
+        completedItemScopes: new Set<string>(),
+        completedTurnIds: new Set<string>(),
+      };
+      const scopeKey = runtimeEventScopeKey(event);
+      const eventIds = state.activeEventIdsByScope.get(scopeKey) ?? new Set<string>();
+      if (!eventIds.has(String(event.eventId))) {
+        eventIds.add(String(event.eventId));
+        adjustWorkloadGauge("ingestion.dedupe.events.active", 1);
+      }
+      state.activeEventIdsByScope.set(scopeKey, eventIds);
+
+      if (event.type === "item.completed" && event.itemId !== undefined) {
+        state.activeEventIdsByScope.delete(scopeKey);
+        adjustWorkloadGauge("ingestion.dedupe.events.active", -eventIds.size);
+        state.completedItemScopes.add(scopeKey);
+      }
+      if (event.type === "turn.completed" || event.type === "turn.aborted") {
+        const turnId = event.turnId;
+        if (turnId !== undefined) {
+          const prefix = runtimeTurnScopePrefix(turnId);
+          for (const [candidateScope, candidateEventIds] of state.activeEventIdsByScope) {
+            if (!candidateScope.startsWith(prefix)) continue;
+            state.activeEventIdsByScope.delete(candidateScope);
+            adjustWorkloadGauge("ingestion.dedupe.events.active", -candidateEventIds.size);
+          }
+          for (const candidateScope of state.completedItemScopes) {
+            if (candidateScope.startsWith(prefix)) state.completedItemScopes.delete(candidateScope);
+          }
+          state.completedTurnIds.add(String(turnId));
+        }
+      }
+      processedRuntimeEventsBySession.set(sessionKey, state);
+    });
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -1112,17 +1322,10 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed({ text: "", createdAt: "" }),
   });
 
-  const subagentStateByProviderThreadId = yield* Cache.make<string, SubagentProjectionState>({
-    capacity: SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_CACHE_CAPACITY,
-    timeToLive: SUBAGENT_STATE_BY_PROVIDER_THREAD_ID_TTL,
-    lookup: () =>
-      Effect.succeed({
-        transcript: "",
-        status: "running",
-        lastActivity: null,
-        updatedAt: "",
-      }),
-  });
+  // This state is lossless until an explicit lifecycle flush. A TTL/capacity
+  // cache can evict a dirty coalescer without an effectful finalizer, losing
+  // transcript bytes and leaking its active gauge.
+  const subagentStates = new Map<string, SubagentProjectionState>();
 
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -1383,7 +1586,7 @@ const make = Effect.gen(function* () {
     Effect.forEach(activities, (activity) =>
       enrichObservedImageActivity({ activity, threadId }).pipe(
         Effect.flatMap((enrichedActivity) =>
-          providerCommandId(event, "thread-activity-append").pipe(
+          providerCommandId(event, `thread-activity-append:${enrichedActivity.id}`).pipe(
             Effect.flatMap((commandId) =>
               orchestrationEngine.dispatch({
                 type: "thread.activity.append",
@@ -1398,62 +1601,209 @@ const make = Effect.gen(function* () {
       ),
     ).pipe(Effect.asVoid);
 
+  const publishSubagentActivity = (
+    key: string,
+    state: SubagentProjectionState,
+    commandTag: string,
+  ) =>
+    Effect.gen(function* () {
+      const transcript = materializeSubagentTranscript(state);
+      yield* orchestrationEngine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make(
+          `provider:${state.provider}:${state.providerInstanceId}:${state.lastEventId}:${commandTag}:${state.activityId}`,
+        ),
+        threadId: state.threadId,
+        activity: {
+          id: state.activityId,
+          createdAt: state.updatedAt,
+          tone: state.status === "failed" ? "error" : "info",
+          kind: "subagent.thread",
+          summary: `Subagent ${state.status}`,
+          payload: {
+            providerThreadId: state.providerThreadId,
+            parentTurnId: state.parentTurnId,
+            status: state.status,
+            transcript,
+            lastActivity: state.lastActivity,
+            updatedAt: state.updatedAt,
+            latestEventType: state.latestEventType,
+          },
+          turnId: state.parentTurnId ?? state.turnId,
+        },
+        createdAt: state.updatedAt,
+      });
+      subagentStates.set(key, {
+        ...state,
+        transcript,
+        lastPublishedAtMs: eventTimeMillis(state.updatedAt),
+        dirty: false,
+      });
+      incrementWorkloadCounter("ingestion.activity.published");
+      if (commandTag === "subagent-thread-activity-flush") {
+        incrementWorkloadCounter("ingestion.activity.flushes");
+      }
+    });
+
   const updateSubagentActivity = (input: { event: ProviderRuntimeEvent; threadId: ThreadId }) =>
     Effect.gen(function* () {
       if (!isSubagentRuntimeEvent(input.event)) {
         return;
       }
 
-      const providerThreadId = input.event.agentContext.providerThreadId;
-      const existingState = yield* Cache.getOption(
-        subagentStateByProviderThreadId,
+      const agentContext = input.event.agentContext;
+      const providerThreadId = agentContext.providerThreadId;
+      const key = subagentProjectionKey(input.threadId, input.event);
+      incrementWorkloadCounter("ingestion.activity.candidates");
+      const rawTranscriptDelta = subagentTranscriptDeltaFromRuntimeEvent(input.event);
+      const statusUpdate = subagentStatusFromRuntimeEvent(input.event);
+      const lastActivityUpdate = subagentLastActivityFromRuntimeEvent(input.event);
+      if (
+        rawTranscriptDelta.length === 0 &&
+        statusUpdate === undefined &&
+        lastActivityUpdate === null
+      ) {
+        incrementWorkloadCounter("ingestion.activity.unchanged_suppressed");
+        return;
+      }
+
+      const existingState = subagentStates.get(key);
+      const existing = existingState ?? {
+        activityId: subagentActivityIdForRuntime(input.threadId, input.event, providerThreadId),
+        threadId: input.threadId,
+        provider: input.event.provider,
+        providerInstanceId:
+          input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
         providerThreadId,
-      );
-      const existing = Option.getOrElse(existingState, () => ({
+        parentTurnId: agentContext.parentTurnId ?? null,
+        turnId: toTurnId(input.event.turnId) ?? null,
         transcript: "",
+        transcriptSegmentsByItemId: new Map<string, Array<string>>(),
+        transcriptItemOrder: [],
+        lastTranscriptItemId: null,
         status: "running" as const,
         lastActivity: null,
         updatedAt: "",
-      }));
-      const rawTranscriptDelta = subagentTranscriptDeltaFromRuntimeEvent(input.event);
-      const transcriptDelta =
-        input.event.type === "item.completed" && existing.transcript.length > 0
-          ? ""
-          : rawTranscriptDelta;
-      const status = subagentStatusFromRuntimeEvent(input.event) ?? existing.status;
-      const lastActivity =
-        subagentLastActivityFromRuntimeEvent(input.event) ?? existing.lastActivity;
+        latestEventType: input.event.type,
+        lastEventId: input.event.eventId,
+        lastPublishedAtMs: null,
+        dirty: false,
+      };
+      const status = statusUpdate ?? existing.status;
+      const lastActivity = lastActivityUpdate ?? existing.lastActivity;
+      const transcriptUpdate = updateSubagentTranscript(existing, input.event);
+      const parentTurnId = agentContext.parentTurnId ?? existing.parentTurnId;
+      const turnId = toTurnId(input.event.turnId) ?? existing.turnId;
+      const semanticallyChanged =
+        transcriptUpdate.changed ||
+        status !== existing.status ||
+        lastActivity !== existing.lastActivity ||
+        parentTurnId !== existing.parentTurnId ||
+        turnId !== existing.turnId;
+      if (!semanticallyChanged) {
+        incrementWorkloadCounter("ingestion.activity.unchanged_suppressed");
+        return;
+      }
+      if (existingState === undefined) {
+        adjustWorkloadGauge("ingestion.subagent_coalescers.active", 1);
+      }
+
       const nextState: SubagentProjectionState = {
-        transcript: appendSubagentTranscript(existing.transcript, transcriptDelta),
+        ...existing,
+        transcriptItemOrder: transcriptUpdate.transcriptItemOrder,
+        lastTranscriptItemId: transcriptUpdate.lastTranscriptItemId,
         status,
         lastActivity,
+        parentTurnId,
+        turnId,
         updatedAt: input.event.createdAt,
+        latestEventType: input.event.type,
+        lastEventId: input.event.eventId,
+        dirty: true,
       };
+      const elapsedSincePublication =
+        existing.lastPublishedAtMs === null
+          ? Number.POSITIVE_INFINITY
+          : eventTimeMillis(input.event.createdAt) - existing.lastPublishedAtMs;
+      const shouldPublish =
+        existing.lastPublishedAtMs === null ||
+        status !== existing.status ||
+        elapsedSincePublication >= SUBAGENT_PUBLICATION_INTERVAL_MS;
 
-      yield* Cache.set(subagentStateByProviderThreadId, providerThreadId, nextState);
-      yield* orchestrationEngine.dispatch({
-        type: "thread.activity.append",
-        commandId: yield* providerCommandId(input.event, "subagent-thread-activity-upsert"),
-        threadId: input.threadId,
-        activity: {
-          id: subagentActivityId(providerThreadId),
-          createdAt: input.event.createdAt,
-          tone: status === "failed" ? "error" : "info",
-          kind: "subagent.thread",
-          summary: `Subagent ${status}`,
-          payload: {
-            providerThreadId,
-            parentTurnId: input.event.agentContext.parentTurnId ?? null,
-            status,
-            transcript: nextState.transcript,
-            lastActivity,
-            updatedAt: nextState.updatedAt,
-            latestEventType: input.event.type,
-          },
-          turnId: input.event.agentContext.parentTurnId ?? toTurnId(input.event.turnId) ?? null,
-        },
-        createdAt: input.event.createdAt,
-      });
+      if (!shouldPublish) {
+        subagentStates.set(key, nextState);
+        incrementWorkloadCounter("ingestion.activity.coalesced");
+        return;
+      }
+
+      subagentStates.set(key, nextState);
+      yield* publishSubagentActivity(key, nextState, "subagent-thread-activity-upsert").pipe(
+        Effect.tapError(() =>
+          Effect.sync(() => {
+            // Retain the dirty state for a later terminal/drain retry. Rolling
+            // back would discard transcript segments already accepted in O(1).
+            subagentStates.set(key, nextState);
+          }),
+        ),
+      );
+    });
+
+  const flushSubagentActivities = (input?: {
+    readonly threadId?: ThreadId;
+    readonly turnId?: TurnId;
+    readonly terminalStatus?: SubagentProjectionState["status"];
+    readonly event?: ProviderRuntimeEvent;
+    readonly clear?: boolean;
+  }) =>
+    Effect.gen(function* () {
+      const keys = Array.from(subagentStates.keys());
+      yield* Effect.forEach(
+        keys,
+        (key) =>
+          Effect.gen(function* () {
+            const state = subagentStates.get(key);
+            if (state === undefined) {
+              return;
+            }
+            if (input?.threadId !== undefined && state.threadId !== input.threadId) {
+              return;
+            }
+            if (
+              input?.turnId !== undefined &&
+              state.parentTurnId !== input.turnId &&
+              state.turnId !== input.turnId
+            ) {
+              return;
+            }
+            const terminalStatus = input?.terminalStatus ?? state.status;
+            const event = input?.event;
+            const nextState: SubagentProjectionState = {
+              ...state,
+              status: terminalStatus,
+              ...(event
+                ? {
+                    updatedAt: event.createdAt,
+                    latestEventType: event.type,
+                    lastEventId: event.eventId,
+                  }
+                : {}),
+              dirty: state.dirty || terminalStatus !== state.status,
+            };
+            if (!nextState.dirty) {
+              if (input?.clear === true) {
+                subagentStates.delete(key);
+                adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
+              }
+              return;
+            }
+            yield* publishSubagentActivity(key, nextState, "subagent-thread-activity-flush");
+            if (input?.clear === true) {
+              subagentStates.delete(key);
+              adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
+            }
+          }),
+        { concurrency: 1 },
+      ).pipe(Effect.asVoid);
     });
 
   const clearAssistantMessageState = (messageId: MessageId) =>
@@ -1475,7 +1825,7 @@ const make = Effect.gen(function* () {
 
       yield* orchestrationEngine.dispatch({
         type: "thread.message.assistant.delta",
-        commandId: yield* providerCommandId(input.event, input.commandTag),
+        commandId: yield* providerCommandId(input.event, `${input.commandTag}:${input.messageId}`),
         threadId: input.threadId,
         messageId: input.messageId,
         delta: bufferedText,
@@ -1531,18 +1881,19 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
-      const text =
-        bufferedText.length > 0
-          ? bufferedText
-          : (input.fallbackText?.trim().length ?? 0) > 0
-            ? input.fallbackText!
-            : "";
+      let text = bufferedText;
+      if (text.length === 0 && (input.fallbackText?.trim().length ?? 0) > 0) {
+        text = input.fallbackText ?? "";
+      }
       const hasRenderableText = hasRenderableAssistantText(text);
 
       if (hasRenderableText) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.delta",
-          commandId: yield* providerCommandId(input.event, input.finalDeltaCommandTag),
+          commandId: yield* providerCommandId(
+            input.event,
+            `${input.finalDeltaCommandTag}:${input.messageId}`,
+          ),
           threadId: input.threadId,
           messageId: input.messageId,
           delta: text,
@@ -1554,7 +1905,10 @@ const make = Effect.gen(function* () {
       if (input.hasProjectedMessage || hasRenderableText) {
         yield* orchestrationEngine.dispatch({
           type: "thread.message.assistant.complete",
-          commandId: yield* providerCommandId(input.event, input.commandTag),
+          commandId: yield* providerCommandId(
+            input.event,
+            `${input.commandTag}:${input.messageId}`,
+          ),
           threadId: input.threadId,
           messageId: input.messageId,
           ...(input.turnId ? { turnId: input.turnId } : {}),
@@ -1806,22 +2160,7 @@ const make = Effect.gen(function* () {
 
   const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      const thread = yield* resolveThreadShell(event.threadId);
-      if (!thread) return;
-
-      let loadedThreadDetail: OrchestrationThread | null | undefined;
-      const getLoadedThreadDetail = () =>
-        Effect.gen(function* () {
-          if (loadedThreadDetail !== undefined) {
-            return loadedThreadDetail;
-          }
-          loadedThreadDetail = (yield* resolveThreadDetail(thread.id)) ?? null;
-          return loadedThreadDetail;
-        });
-
       const now = event.createdAt;
-      const eventTurnId = toTurnId(event.turnId);
-      const activeTurnId = thread.session?.activeTurnId ?? null;
 
       if (event.type === "account.rate-limits.updated") {
         const usageLimits = buildUsageLimitsSnapshot(event);
@@ -1839,9 +2178,58 @@ const make = Effect.gen(function* () {
       }
 
       if (isSubagentRuntimeEvent(event)) {
-        yield* updateSubagentActivity({ event, threadId: thread.id });
-        yield* appendActivities(event, thread.id, runtimeEventToActivities(event));
+        const threadId = ThreadId.make(event.threadId);
+        yield* updateSubagentActivity({ event, threadId });
+        yield* appendActivities(
+          event,
+          threadId,
+          runtimeEventToActivities(event).filter((activity) =>
+            SUBAGENT_STANDALONE_ACTIVITY_KINDS.has(activity.kind),
+          ),
+        );
         return;
+      }
+
+      const thread = yield* resolveThreadShell(event.threadId);
+      if (!thread) return;
+
+      let loadedThreadDetail: OrchestrationThread | null | undefined;
+      const getLoadedThreadDetail = () =>
+        Effect.gen(function* () {
+          if (loadedThreadDetail !== undefined) {
+            return loadedThreadDetail;
+          }
+          loadedThreadDetail = (yield* resolveThreadDetail(thread.id)) ?? null;
+          return loadedThreadDetail;
+        });
+
+      const eventTurnId = toTurnId(event.turnId);
+      const activeTurnId = thread.session?.activeTurnId ?? null;
+
+      if (event.type === "turn.completed") {
+        yield* flushSubagentActivities({
+          threadId: thread.id,
+          ...(eventTurnId ? { turnId: eventTurnId } : {}),
+          terminalStatus:
+            normalizeRuntimeTurnState(event.payload.state) === "completed" ? "completed" : "failed",
+          event,
+          clear: true,
+        });
+      } else if (event.type === "turn.aborted" || event.type === "runtime.error") {
+        yield* flushSubagentActivities({
+          threadId: thread.id,
+          ...(eventTurnId ? { turnId: eventTurnId } : {}),
+          terminalStatus: "failed",
+          event,
+          clear: true,
+        });
+      } else if (event.type === "session.exited") {
+        yield* flushSubagentActivities({
+          threadId: thread.id,
+          terminalStatus: "failed",
+          event,
+          clear: true,
+        });
       }
 
       const conflictsWithActiveTurn =
@@ -1920,11 +2308,17 @@ const make = Effect.gen(function* () {
             case "session.exited":
               return "stopped";
             case "turn.completed":
-              return normalizeRuntimeTurnState(event.payload.state) === "failed"
-                ? "error"
-                : "ready";
+              switch (normalizeRuntimeTurnState(event.payload.state)) {
+                case "failed":
+                  return "error";
+                case "interrupted":
+                case "cancelled":
+                  return "interrupted";
+                case "completed":
+                  return "ready";
+              }
             case "turn.aborted":
-              return "ready";
+              return "interrupted";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
@@ -2311,8 +2705,38 @@ const make = Effect.gen(function* () {
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
 
-  const processInput = (input: RuntimeIngestionInput) =>
-    input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
+  const processInput = (input: RuntimeIngestionInput) => {
+    if (input.source === "domain") {
+      return processDomainEvent(input.event);
+    }
+    incrementWorkloadCounter("provider.events.received");
+    if (input.event.type === "content.delta") {
+      incrementWorkloadCounter("provider.delta.chunks");
+      incrementWorkloadCounter(
+        "provider.delta.characters",
+        typeof input.event.payload.delta === "string" ? input.event.payload.delta.length : 0,
+      );
+    }
+    if (hasProcessedRuntimeEvent(input.event)) {
+      incrementWorkloadCounter("provider.events.duplicates_suppressed");
+      return Effect.void;
+    }
+    if (
+      isSubagentRuntimeEvent(input.event) &&
+      input.event.type === "content.delta" &&
+      input.event.payload.streamKind === "command_output"
+    ) {
+      incrementWorkloadCounter("ingestion.activity.candidates");
+      incrementWorkloadCounter("ingestion.activity.unchanged_suppressed");
+      // Command-output chunks carry no semantic state. Replaying one is the
+      // same no-op, so retaining thousands of identities would only amplify
+      // memory with provider chunk cardinality.
+      return Effect.void;
+    }
+    return processRuntimeEvent(input.event).pipe(
+      Effect.andThen(rememberProcessedRuntimeEvent(input.event)),
+    );
+  };
 
   const processInputSafely = (input: RuntimeIngestionInput) =>
     processInput(input).pipe(
@@ -2330,9 +2754,46 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processInputSafely);
+  const drain = worker.drain.pipe(
+    Effect.andThen(
+      flushSubagentActivities().pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider runtime ingestion failed to flush subagent activities", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+    ),
+  );
+  const finalize = worker.drain.pipe(
+    Effect.andThen(
+      flushSubagentActivities({ clear: true }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("provider runtime ingestion failed to finalize subagent activities", {
+            cause: Cause.pretty(cause),
+          }),
+        ),
+      ),
+    ),
+    Effect.ensuring(
+      Effect.sync(() => {
+        adjustWorkloadGauge("ingestion.subagent_coalescers.active", -subagentStates.size);
+        subagentStates.clear();
+        let retainedEventCount = 0;
+        for (const state of processedRuntimeEventsBySession.values()) {
+          for (const eventIds of state.activeEventIdsByScope.values()) {
+            retainedEventCount += eventIds.size;
+          }
+        }
+        adjustWorkloadGauge("ingestion.dedupe.events.active", -retainedEventCount);
+        processedRuntimeEventsBySession.clear();
+      }),
+    ),
+  );
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => finalize.pipe(Effect.ignore));
       yield* Effect.forkScoped(
         Stream.runForEach(providerService.streamEvents, (event) =>
           worker.enqueue({ source: "runtime", event }),
@@ -2350,7 +2811,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
-    drain: worker.drain,
+    drain,
   } satisfies ProviderRuntimeIngestionShape;
 });
 
