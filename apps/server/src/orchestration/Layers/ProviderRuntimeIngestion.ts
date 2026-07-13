@@ -31,12 +31,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
+import { ProviderTranscriptJournalLive } from "../../persistence/Layers/ProviderTranscriptJournal.ts";
 import { isGitRepository } from "../../git/Utils.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -52,6 +56,9 @@ import {
   adjustWorkloadGauge,
   incrementWorkloadCounter,
 } from "../../diagnostics/WorkloadDiagnostics.ts";
+import { isPersistenceError } from "../../persistence/Errors.ts";
+import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
+import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -72,6 +79,7 @@ interface SubagentProjectionState {
   transcript: string;
   transcriptSegmentsByItemId: Map<string, Array<string>>;
   transcriptItemOrder: ReadonlyArray<string>;
+  completedTranscriptItemIds: Set<string>;
   lastTranscriptItemId: string | null;
   status: "running" | "waiting" | "completed" | "failed";
   lastActivity: string | null;
@@ -79,7 +87,14 @@ interface SubagentProjectionState {
   latestEventType: ProviderRuntimeEvent["type"];
   lastEventId: EventId;
   lastPublishedAtMs: number | null;
+  authoritativeTranscriptRecovery: boolean;
   dirty: boolean;
+}
+
+interface SubagentTranscriptItemMetadata {
+  readonly itemId: string;
+  readonly length: number;
+  readonly completed: boolean;
 }
 
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
@@ -298,6 +313,11 @@ function runtimeEventScopeKey(event: ProviderRuntimeEvent): string {
   return `${turnScope}\0lifecycle:${event.type}`;
 }
 
+function transcriptItemScopeKey(event: ProviderRuntimeEvent): string | null {
+  if (event.itemId === undefined) return null;
+  return `${event.provider}\0${event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)}\0${event.threadId}\0${event.turnId ?? ""}\0${event.itemId}`;
+}
+
 function runtimeTurnScopePrefix(turnId: TurnId | string): string {
   return `turn:${turnId}\0`;
 }
@@ -393,10 +413,41 @@ function materializeSubagentTranscript(
     .join("");
 }
 
+function subagentTranscriptItemMetadata(
+  state: Pick<
+    SubagentProjectionState,
+    "transcriptSegmentsByItemId" | "transcriptItemOrder" | "completedTranscriptItemIds"
+  >,
+): ReadonlyArray<SubagentTranscriptItemMetadata> {
+  return state.transcriptItemOrder.map((itemId) => ({
+    itemId,
+    length: (state.transcriptSegmentsByItemId.get(itemId) ?? []).reduce(
+      (total, segment) => total + segment.length,
+      0,
+    ),
+    completed: state.completedTranscriptItemIds.has(itemId),
+  }));
+}
+
+function subagentActivityCommandId(
+  state: Pick<
+    SubagentProjectionState,
+    "provider" | "providerInstanceId" | "lastEventId" | "activityId"
+  >,
+  commandTag: string,
+): CommandId {
+  return CommandId.make(
+    `provider:${state.provider}:${state.providerInstanceId}:${state.lastEventId}:${commandTag}:${state.activityId}`,
+  );
+}
+
 function updateSubagentTranscript(
   state: Pick<
     SubagentProjectionState,
-    "transcriptSegmentsByItemId" | "transcriptItemOrder" | "lastTranscriptItemId"
+    | "transcriptSegmentsByItemId"
+    | "transcriptItemOrder"
+    | "lastTranscriptItemId"
+    | "completedTranscriptItemIds"
   >,
   event: ProviderRuntimeEvent,
 ): {
@@ -411,13 +462,14 @@ function updateSubagentTranscript(
       event.eventId,
   );
   const previousSegments = state.transcriptSegmentsByItemId.get(itemId);
+  const itemWasCompleted = state.completedTranscriptItemIds.has(itemId);
   const transcriptItemOrder =
     previousSegments === undefined
       ? [...state.transcriptItemOrder, itemId]
       : state.transcriptItemOrder;
 
   if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
-    if (event.payload.delta.length === 0) {
+    if (event.payload.delta.length === 0 || itemWasCompleted) {
       return {
         changed: false,
         transcriptItemOrder: state.transcriptItemOrder,
@@ -429,16 +481,20 @@ function updateSubagentTranscript(
     } else {
       previousSegments.push(event.payload.delta);
     }
-  } else if (
-    event.type === "item.completed" &&
-    event.payload.itemType === "assistant_message" &&
-    (event.payload.detail?.length ?? 0) > 0
-  ) {
-    const authoritativeText = event.payload.detail ?? "";
-    if (previousSegments?.join("") === authoritativeText) {
+  } else if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
+    if (itemWasCompleted) {
       return {
         changed: false,
         transcriptItemOrder: state.transcriptItemOrder,
+        lastTranscriptItemId: itemId,
+      };
+    }
+    state.completedTranscriptItemIds.add(itemId);
+    const authoritativeText = event.payload.detail ?? "";
+    if (authoritativeText.length === 0 || previousSegments?.join("") === authoritativeText) {
+      return {
+        changed: true,
+        transcriptItemOrder,
         lastTranscriptItemId: itemId,
       };
     }
@@ -1218,6 +1274,8 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
+  const transcriptJournal = yield* ProviderTranscriptJournal;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const serverConfig = yield* ServerConfig;
@@ -1232,6 +1290,8 @@ const make = Effect.gen(function* () {
       ),
     );
   const processedRuntimeEventsBySession = new Map<string, RuntimeSessionDedupeState>();
+  const recoveringTranscriptJournalCountByScope = new Map<string, number>();
+  const durableParentDeltaPromotions = new Map<string, Array<ProviderRuntimeEvent>>();
 
   const hasProcessedRuntimeEvent = (event: ProviderRuntimeEvent): boolean => {
     const state = processedRuntimeEventsBySession.get(runtimeSessionKey(event));
@@ -1326,6 +1386,10 @@ const make = Effect.gen(function* () {
   // cache can evict a dirty coalescer without an effectful finalizer, losing
   // transcript bytes and leaking its active gauge.
   const subagentStates = new Map<string, SubagentProjectionState>();
+  const bufferedAssistantJournalEventsByMessageId = new Map<
+    MessageId,
+    Array<ProviderRuntimeEvent>
+  >();
 
   const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
@@ -1337,6 +1401,118 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadShellById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const readAuthoritativeTranscriptRecoveryCapability = Effect.fn(
+    "readAuthoritativeTranscriptRecoveryCapability",
+  )(function* (event: ProviderRuntimeEvent) {
+    const instanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
+    return yield* providerService.getCapabilities(instanceId).pipe(
+      Effect.map((capabilities) => capabilities.assistantTranscriptRecovery === "authoritative"),
+      // Capability lookup failure must choose the lossless path. Volatile
+      // coalescing is an optimization that requires positive proof.
+      Effect.orElseSucceed(() => false),
+    );
+  });
+
+  const hydrateSubagentState = Effect.fn("hydrateSubagentState")(function* (input: {
+    readonly event: ProviderRuntimeEvent & {
+      readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
+    };
+    readonly threadId: ThreadId;
+    readonly activityId: EventId;
+    readonly authoritativeTranscriptRecovery: boolean;
+  }) {
+    const thread = yield* resolveThreadDetail(input.threadId);
+    const activity = thread?.activities.find((candidate) => candidate.id === input.activityId);
+    const payload = activity ? asRecord(activity.payload) : null;
+    const transcript = typeof payload?.transcript === "string" ? payload.transcript : null;
+    if (!activity || !payload || transcript === null) {
+      return undefined;
+    }
+
+    const transcriptSegmentsByItemId = new Map<string, Array<string>>();
+    const transcriptItemOrder: string[] = [];
+    const completedTranscriptItemIds = new Set<string>();
+    const rawItems = payload.transcriptItems;
+    let offset = 0;
+    let metadataIsValid = Array.isArray(rawItems);
+    if (Array.isArray(rawItems)) {
+      for (const rawItem of rawItems) {
+        const item = asRecord(rawItem);
+        const itemId = typeof item?.itemId === "string" ? item.itemId : null;
+        const length =
+          typeof item?.length === "number" && Number.isSafeInteger(item.length) && item.length >= 0
+            ? item.length
+            : null;
+        if (itemId === null || length === null || offset + length > transcript.length) {
+          metadataIsValid = false;
+          break;
+        }
+        transcriptItemOrder.push(itemId);
+        transcriptSegmentsByItemId.set(itemId, [transcript.slice(offset, offset + length)]);
+        if (item?.completed === true) completedTranscriptItemIds.add(itemId);
+        offset += length;
+      }
+    }
+    if (!metadataIsValid || offset !== transcript.length) {
+      transcriptSegmentsByItemId.clear();
+      transcriptItemOrder.length = 0;
+      completedTranscriptItemIds.clear();
+      if (transcript.length > 0) {
+        // Never bind a legacy cumulative transcript to the incoming item. A
+        // later authoritative completion for that item must not replace and
+        // erase pre-metadata bytes recovered during an upgrade.
+        const fallbackItemId = `legacy:${input.activityId}`;
+        transcriptItemOrder.push(fallbackItemId);
+        transcriptSegmentsByItemId.set(fallbackItemId, [transcript]);
+        completedTranscriptItemIds.add(fallbackItemId);
+      }
+    }
+
+    const status: SubagentProjectionState["status"] =
+      payload.status === "running" ||
+      payload.status === "waiting" ||
+      payload.status === "completed" ||
+      payload.status === "failed"
+        ? payload.status
+        : "running";
+    const updatedAt =
+      typeof payload.updatedAt === "string" ? payload.updatedAt : activity.createdAt;
+    const latestEventType =
+      typeof payload.latestEventType === "string"
+        ? (payload.latestEventType as ProviderRuntimeEvent["type"])
+        : input.event.type;
+    const lastEventId =
+      typeof payload.latestEventId === "string"
+        ? EventId.make(payload.latestEventId)
+        : input.event.eventId;
+
+    return {
+      activityId: input.activityId,
+      threadId: input.threadId,
+      provider: input.event.provider,
+      providerInstanceId:
+        input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
+      providerThreadId: input.event.agentContext.providerThreadId,
+      parentTurnId:
+        input.event.agentContext.parentTurnId ??
+        (typeof payload.parentTurnId === "string" ? TurnId.make(payload.parentTurnId) : null),
+      turnId: toTurnId(input.event.turnId) ?? activity.turnId,
+      transcript,
+      transcriptSegmentsByItemId,
+      transcriptItemOrder,
+      completedTranscriptItemIds,
+      lastTranscriptItemId: transcriptItemOrder.at(-1) ?? null,
+      status,
+      lastActivity: typeof payload.lastActivity === "string" ? payload.lastActivity : null,
+      updatedAt,
+      latestEventType,
+      lastEventId,
+      lastPublishedAtMs: eventTimeMillis(updatedAt),
+      authoritativeTranscriptRecovery: input.authoritativeTranscriptRecovery,
+      dirty: false,
+    };
   });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
@@ -1608,31 +1784,42 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const transcript = materializeSubagentTranscript(state);
-      yield* orchestrationEngine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(
-          `provider:${state.provider}:${state.providerInstanceId}:${state.lastEventId}:${commandTag}:${state.activityId}`,
-        ),
-        threadId: state.threadId,
-        activity: {
-          id: state.activityId,
-          createdAt: state.updatedAt,
-          tone: state.status === "failed" ? "error" : "info",
-          kind: "subagent.thread",
-          summary: `Subagent ${state.status}`,
-          payload: {
-            providerThreadId: state.providerThreadId,
-            parentTurnId: state.parentTurnId,
-            status: state.status,
-            transcript,
-            lastActivity: state.lastActivity,
-            updatedAt: state.updatedAt,
-            latestEventType: state.latestEventType,
+      yield* orchestrationEngine
+        .dispatch({
+          type: "thread.activity.append",
+          commandId: subagentActivityCommandId(state, commandTag),
+          threadId: state.threadId,
+          activity: {
+            id: state.activityId,
+            createdAt: state.updatedAt,
+            tone: state.status === "failed" ? "error" : "info",
+            kind: "subagent.thread",
+            summary: `Subagent ${state.status}`,
+            payload: {
+              providerThreadId: state.providerThreadId,
+              parentTurnId: state.parentTurnId,
+              status: state.status,
+              transcript,
+              transcriptItems: subagentTranscriptItemMetadata(state),
+              lastActivity: state.lastActivity,
+              updatedAt: state.updatedAt,
+              latestEventType: state.latestEventType,
+              latestEventId: state.lastEventId,
+            },
+            turnId: state.parentTurnId ?? state.turnId,
           },
-          turnId: state.parentTurnId ?? state.turnId,
-        },
-        createdAt: state.updatedAt,
-      });
+          createdAt: state.updatedAt,
+        })
+        .pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("50 millis"),
+            while: (error) => {
+              if (!isPersistenceError(error)) return false;
+              incrementWorkloadCounter("ingestion.activity.persistence_retries");
+              return true;
+            },
+          }),
+        );
       subagentStates.set(key, {
         ...state,
         transcript,
@@ -1667,9 +1854,52 @@ const make = Effect.gen(function* () {
         return;
       }
 
+      const activityId = subagentActivityIdForRuntime(
+        input.threadId,
+        input.event,
+        providerThreadId,
+      );
+      const publicationCommandId = subagentActivityCommandId(
+        {
+          provider: input.event.provider,
+          providerInstanceId:
+            input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
+          lastEventId: input.event.eventId,
+          activityId,
+        },
+        "subagent-thread-activity-upsert",
+      );
+      const existingReceipt = yield* commandReceiptRepository
+        .getByCommandId({ commandId: publicationCommandId })
+        .pipe(
+          Effect.retry({
+            schedule: Schedule.spaced("50 millis"),
+            while: (error) => {
+              if (!isPersistenceError(error)) return false;
+              incrementWorkloadCounter("ingestion.activity.persistence_retries");
+              return true;
+            },
+          }),
+        );
+      if (Option.isSome(existingReceipt) && existingReceipt.value.status === "accepted") {
+        incrementWorkloadCounter("provider.events.duplicates_suppressed");
+        return;
+      }
+
       const existingState = subagentStates.get(key);
-      const existing = existingState ?? {
-        activityId: subagentActivityIdForRuntime(input.threadId, input.event, providerThreadId),
+      const authoritativeTranscriptRecovery =
+        existingState?.authoritativeTranscriptRecovery ??
+        (yield* readAuthoritativeTranscriptRecoveryCapability(input.event));
+      const hydratedState =
+        existingState ??
+        (yield* hydrateSubagentState({
+          event: input.event,
+          threadId: input.threadId,
+          activityId,
+          authoritativeTranscriptRecovery,
+        }));
+      const existing = hydratedState ?? {
+        activityId,
         threadId: input.threadId,
         provider: input.event.provider,
         providerInstanceId:
@@ -1680,6 +1910,7 @@ const make = Effect.gen(function* () {
         transcript: "",
         transcriptSegmentsByItemId: new Map<string, Array<string>>(),
         transcriptItemOrder: [],
+        completedTranscriptItemIds: new Set<string>(),
         lastTranscriptItemId: null,
         status: "running" as const,
         lastActivity: null,
@@ -1687,6 +1918,7 @@ const make = Effect.gen(function* () {
         latestEventType: input.event.type,
         lastEventId: input.event.eventId,
         lastPublishedAtMs: null,
+        authoritativeTranscriptRecovery,
         dirty: false,
       };
       const status = statusUpdate ?? existing.status;
@@ -1728,6 +1960,7 @@ const make = Effect.gen(function* () {
       const shouldPublish =
         existing.lastPublishedAtMs === null ||
         status !== existing.status ||
+        (transcriptUpdate.changed && !existing.authoritativeTranscriptRecovery) ||
         elapsedSincePublication >= SUBAGENT_PUBLICATION_INTERVAL_MS;
 
       if (!shouldPublish) {
@@ -1787,7 +2020,11 @@ const make = Effect.gen(function* () {
                     lastEventId: event.eventId,
                   }
                 : {}),
-              dirty: state.dirty || terminalStatus !== state.status,
+              dirty:
+                state.dirty ||
+                terminalStatus !== state.status ||
+                (event !== undefined &&
+                  (event.type !== state.latestEventType || event.eventId !== state.lastEventId)),
             };
             if (!nextState.dirty) {
               if (input?.clear === true) {
@@ -1806,8 +2043,44 @@ const make = Effect.gen(function* () {
       ).pipe(Effect.asVoid);
     });
 
+  const rememberBufferedAssistantJournalEvent = (
+    messageId: MessageId,
+    event: ProviderRuntimeEvent,
+  ) => {
+    const events = bufferedAssistantJournalEventsByMessageId.get(messageId);
+    if (events === undefined) {
+      bufferedAssistantJournalEventsByMessageId.set(messageId, [event]);
+    } else {
+      events.push(event);
+    }
+  };
+
+  const takeBufferedAssistantJournalEvents = (messageId: MessageId) => {
+    const events = bufferedAssistantJournalEventsByMessageId.get(messageId) ?? [];
+    bufferedAssistantJournalEventsByMessageId.delete(messageId);
+    return events;
+  };
+
+  const markParentJournalEventsDurable = (
+    boundaryEvent: ProviderRuntimeEvent,
+    events: ReadonlyArray<ProviderRuntimeEvent>,
+  ) => {
+    if (events.length === 0) return;
+    const key = String(boundaryEvent.eventId);
+    const existing = durableParentDeltaPromotions.get(key);
+    if (existing === undefined) {
+      durableParentDeltaPromotions.set(key, [...events]);
+    } else {
+      existing.push(...events);
+    }
+  };
+
   const clearAssistantMessageState = (messageId: MessageId) =>
-    clearBufferedAssistantText(messageId);
+    clearBufferedAssistantText(messageId).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => bufferedAssistantJournalEventsByMessageId.delete(messageId)),
+      ),
+    );
 
   const flushBufferedAssistantMessage = (input: {
     event: ProviderRuntimeEvent;
@@ -1819,7 +2092,9 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
+      const journalEvents = takeBufferedAssistantJournalEvents(input.messageId);
       if (!hasRenderableAssistantText(bufferedText)) {
+        markParentJournalEventsDurable(input.event, journalEvents);
         return false;
       }
 
@@ -1832,6 +2107,7 @@ const make = Effect.gen(function* () {
         ...(input.turnId ? { turnId: input.turnId } : {}),
         createdAt: input.createdAt,
       });
+      markParentJournalEventsDurable(input.event, journalEvents);
       return true;
     });
 
@@ -1881,6 +2157,7 @@ const make = Effect.gen(function* () {
   }) =>
     Effect.gen(function* () {
       const bufferedText = yield* takeBufferedAssistantText(input.messageId);
+      const journalEvents = takeBufferedAssistantJournalEvents(input.messageId);
       let text = bufferedText;
       if (text.length === 0 && (input.fallbackText?.trim().length ?? 0) > 0) {
         text = input.fallbackText ?? "";
@@ -1915,6 +2192,7 @@ const make = Effect.gen(function* () {
           createdAt: input.createdAt,
         });
       }
+      markParentJournalEventsDurable(input.event, journalEvents);
       yield* clearAssistantMessageState(input.messageId);
     });
 
@@ -2236,6 +2514,8 @@ const make = Effect.gen(function* () {
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
+      const terminatesAssistantTurn =
+        isTerminalTurnEvent || event.type === "runtime.error" || event.type === "session.exited";
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -2396,6 +2676,38 @@ const make = Effect.gen(function* () {
 
       if (assistantDelta && assistantDelta.length > 0) {
         const turnId = toTurnId(event.turnId);
+        const replayMessageId = assistantSegmentMessageId(
+          assistantSegmentBaseKeyFromEvent(event),
+          0,
+        );
+        const detailedMessages = (yield* getLoadedThreadDetail())?.messages ?? [];
+        const recoveryScopeKey = transcriptItemScopeKey(event);
+        const isRecoveringTranscriptItem =
+          recoveryScopeKey !== null &&
+          recoveringTranscriptJournalCountByScope.has(recoveryScopeKey);
+        const segmentPrefix = `${replayMessageId}:segment:`;
+        const projectedSegments = detailedMessages.filter(
+          (message) =>
+            message.id === replayMessageId || String(message.id).startsWith(segmentPrefix),
+        );
+        if (isRecoveringTranscriptItem && projectedSegments.length > 0 && turnId !== undefined) {
+          const existingSegmentState = yield* getAssistantSegmentStateForTurn(thread.id, turnId);
+          if (Option.isNone(existingSegmentState)) {
+            const streamingSegment = projectedSegments.find((message) => message.streaming);
+            const nextSegmentIndex = projectedSegments.length;
+            yield* setAssistantSegmentStateForTurn(thread.id, turnId, {
+              baseKey: assistantSegmentBaseKeyFromEvent(event),
+              nextSegmentIndex:
+                streamingSegment === undefined ? nextSegmentIndex + 1 : nextSegmentIndex,
+              activeMessageId:
+                streamingSegment?.id ??
+                assistantSegmentMessageId(
+                  assistantSegmentBaseKeyFromEvent(event),
+                  nextSegmentIndex,
+                ),
+            });
+          }
+        }
         const assistantMessageId = yield* getOrCreateAssistantMessageId({
           threadId: thread.id,
           event,
@@ -2405,11 +2717,15 @@ const make = Effect.gen(function* () {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
 
-        const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
-          serverSettingsService.getSettings,
-          (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
-        );
+        const authoritativeTranscriptRecovery =
+          yield* readAuthoritativeTranscriptRecoveryCapability(event);
+        const assistantDeliveryMode: AssistantDeliveryMode = authoritativeTranscriptRecovery
+          ? yield* Effect.map(serverSettingsService.getSettings, (settings) =>
+              settings.enableAssistantStreaming ? "streaming" : "buffered",
+            )
+          : "streaming";
         if (assistantDeliveryMode === "buffered") {
+          rememberBufferedAssistantJournalEvent(assistantMessageId, event);
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
@@ -2421,6 +2737,10 @@ const make = Effect.gen(function* () {
               ...(turnId ? { turnId } : {}),
               createdAt: now,
             });
+            markParentJournalEventsDurable(
+              event,
+              takeBufferedAssistantJournalEvents(assistantMessageId),
+            );
           }
         } else {
           yield* orchestrationEngine.dispatch({
@@ -2432,6 +2752,7 @@ const make = Effect.gen(function* () {
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
+          markParentJournalEventsDurable(event, [event]);
         }
       }
 
@@ -2568,11 +2889,11 @@ const make = Effect.gen(function* () {
         });
       }
 
-      if (isTerminalTurnEvent) {
+      if (terminatesAssistantTurn) {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
         const proposedPlans = detailedThread?.proposedPlans ?? [];
-        const turnId = toTurnId(event.turnId);
+        const turnId = eventTurnId ?? activeTurnId ?? undefined;
         if (turnId) {
           const assistantMessageIds = yield* getAssistantMessageIdsForTurn(thread.id, turnId);
           yield* Effect.forEach(
@@ -2738,8 +3059,102 @@ const make = Effect.gen(function* () {
     );
   };
 
+  const retryPersistence = <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+    effect.pipe(
+      Effect.retry({
+        schedule: Schedule.spaced("50 millis"),
+        while: (error) => {
+          if (!isPersistenceError(error)) return false;
+          incrementWorkloadCounter("ingestion.activity.persistence_retries");
+          return true;
+        },
+      }),
+    );
+
+  const removePromotedJournalEvent = (event: ProviderRuntimeEvent) => {
+    if (!isTranscriptDurabilityEvent(event)) return Effect.void;
+    if (isSubagentRuntimeEvent(event)) {
+      if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
+        return retryPersistence(transcriptJournal.markItemCompleted(event)).pipe(
+          Effect.andThen(retryPersistence(transcriptJournal.removeItem(event))),
+        );
+      }
+      return retryPersistence(transcriptJournal.remove(event));
+    }
+    const promotedEvents = durableParentDeltaPromotions.get(String(event.eventId)) ?? [];
+    durableParentDeltaPromotions.delete(String(event.eventId));
+    const removePromotedEvents = Effect.forEach(
+      promotedEvents,
+      (promotedEvent) => retryPersistence(transcriptJournal.remove(promotedEvent)),
+      { concurrency: 1, discard: true },
+    );
+    if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
+      return removePromotedEvents.pipe(
+        Effect.andThen(retryPersistence(transcriptJournal.markItemCompleted(event))),
+        Effect.andThen(retryPersistence(transcriptJournal.removeItem(event))),
+        Effect.tap(() =>
+          Effect.sync(() => {
+            const scopeKey = transcriptItemScopeKey(event);
+            if (scopeKey !== null) recoveringTranscriptJournalCountByScope.delete(scopeKey);
+          }),
+        ),
+      );
+    }
+    if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+      return removePromotedEvents;
+    }
+    // Lifecycle rows are removed only by their own identity. Never sweep a
+    // turn/thread by acceptance sequence: an earlier journaled event may not
+    // have reached its volatile delivery queue yet.
+    return removePromotedEvents.pipe(
+      Effect.andThen(retryPersistence(transcriptJournal.remove(event))),
+    );
+  };
+
+  const processJournaledRuntimeEvent = (event: ProviderRuntimeEvent) =>
+    Effect.gen(function* () {
+      if (
+        event.itemId !== undefined &&
+        (event.type === "content.delta" ||
+          (event.type === "item.completed" && event.payload.itemType === "assistant_message")) &&
+        (yield* retryPersistence(transcriptJournal.isItemCompleted(event)))
+      ) {
+        incrementWorkloadCounter("provider.events.duplicates_suppressed");
+        yield* retryPersistence(transcriptJournal.remove(event));
+        return;
+      }
+      yield* retryPersistence(processInput({ source: "runtime", event }));
+      yield* retryPersistence(transcriptJournal.markDelivered(event));
+      yield* removePromotedJournalEvent(event);
+    });
+
+  const drainPendingTranscriptJournal = (fallbackEvent?: ProviderRuntimeEvent) =>
+    Effect.gen(function* () {
+      const pending = yield* retryPersistence(transcriptJournal.listUndelivered);
+      let fallbackWasJournaled = false;
+      for (const { event } of pending) {
+        if (
+          fallbackEvent !== undefined &&
+          event.eventId === fallbackEvent.eventId &&
+          (event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)) ===
+            (fallbackEvent.providerInstanceId ?? defaultInstanceIdForDriver(fallbackEvent.provider))
+        ) {
+          fallbackWasJournaled = true;
+        }
+        yield* processJournaledRuntimeEvent(event);
+      }
+      // Unit/mocked provider services may bypass the adapter acceptance seam.
+      // Production semantic events are always found in the journal.
+      if (fallbackEvent !== undefined && !fallbackWasJournaled) {
+        yield* processJournaledRuntimeEvent(fallbackEvent);
+      }
+    });
+
   const processInputSafely = (input: RuntimeIngestionInput) =>
-    processInput(input).pipe(
+    (input.source === "runtime" && isTranscriptDurabilityEvent(input.event)
+      ? drainPendingTranscriptJournal(input.event)
+      : processInput(input)
+    ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.failCause(cause);
@@ -2787,6 +3202,9 @@ const make = Effect.gen(function* () {
         }
         adjustWorkloadGauge("ingestion.dedupe.events.active", -retainedEventCount);
         processedRuntimeEventsBySession.clear();
+        recoveringTranscriptJournalCountByScope.clear();
+        durableParentDeltaPromotions.clear();
+        bufferedAssistantJournalEventsByMessageId.clear();
       }),
     ),
   );
@@ -2794,9 +3212,56 @@ const make = Effect.gen(function* () {
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
       yield* Effect.addFinalizer(() => finalize.pipe(Effect.ignore));
+      const liveSubscription =
+        providerService.subscribeEvents === undefined
+          ? null
+          : yield* providerService.subscribeEvents;
+      const pendingTranscriptEvents = yield* retryPersistence(transcriptJournal.list).pipe(
+        Effect.orDie,
+      );
+      for (const { event } of pendingTranscriptEvents) {
+        const scopeKey = transcriptItemScopeKey(event);
+        if (scopeKey === null) continue;
+        if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+          recoveringTranscriptJournalCountByScope.set(
+            scopeKey,
+            (recoveringTranscriptJournalCountByScope.get(scopeKey) ?? 0) + 1,
+          );
+        }
+      }
+      yield* Effect.forEach(
+        pendingTranscriptEvents,
+        ({ event }) =>
+          processJournaledRuntimeEvent(event).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                const scopeKey = transcriptItemScopeKey(event);
+                if (scopeKey === null) return;
+                const remaining = recoveringTranscriptJournalCountByScope.get(scopeKey);
+                if (remaining === undefined) return;
+                if (remaining > 1) {
+                  recoveringTranscriptJournalCountByScope.set(scopeKey, remaining - 1);
+                  return;
+                }
+                recoveringTranscriptJournalCountByScope.delete(scopeKey);
+              }),
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logError("failed to recover durable provider transcript event", {
+                eventId: event.eventId,
+                eventType: event.type,
+                cause: Cause.pretty(cause),
+              }),
+            ),
+          ),
+        { concurrency: 1, discard: true },
+      );
       yield* Effect.forkScoped(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue({ source: "runtime", event }),
+        Stream.runForEach(
+          liveSubscription === null
+            ? providerService.streamEvents
+            : Stream.fromSubscription(liveSubscription),
+          (event) => worker.enqueue({ source: "runtime", event }),
         ),
       );
       yield* Effect.forkScoped(
@@ -2818,4 +3283,12 @@ const make = Effect.gen(function* () {
 export const ProviderRuntimeIngestionLive = Layer.effect(
   ProviderRuntimeIngestionService,
   make,
-).pipe(Layer.provide(ProjectionTurnRepositoryLive));
+).pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      ProjectionTurnRepositoryLive,
+      OrchestrationCommandReceiptRepositoryLive,
+      ProviderTranscriptJournalLive,
+    ),
+  ),
+);

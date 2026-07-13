@@ -412,7 +412,9 @@ export const ItemLifecyclePayload = Schema.Struct({
   itemType: CanonicalItemType,
   status: Schema.optional(RuntimeItemStatus),
   title: Schema.optional(TrimmedNonEmptyStringSchema),
-  detail: Schema.optional(TrimmedNonEmptyStringSchema),
+  // Assistant completions may use detail as a transcript fallback. Never
+  // normalize boundary whitespace on a transcript-bearing contract field.
+  detail: Schema.optional(Schema.String),
   data: Schema.optional(Schema.Unknown),
 });
 export type ItemLifecyclePayload = typeof ItemLifecyclePayload.Type;

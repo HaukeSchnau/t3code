@@ -36,6 +36,7 @@ import {
   ProviderAdapterValidationError,
 } from "../Errors.ts";
 import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
+import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
   OpenCodeRuntime,
@@ -103,6 +104,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly environment?: NodeJS.ProcessEnv;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -445,6 +447,7 @@ export function makeOpenCodeAdapter(
     const managedNativeEventLogger =
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
     const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
     const sessions = new Map<ThreadId, OpenCodeSessionContext>();
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
       Effect.mapError(
@@ -510,7 +513,11 @@ export function makeOpenCodeAdapter(
     );
 
     const emit = (event: ProviderRuntimeEvent) =>
-      Queue.offer(runtimeEvents, event).pipe(Effect.asVoid);
+      acceptRuntimeEvent(event).pipe(
+        Effect.flatMap((accepted) =>
+          accepted ? Queue.offer(runtimeEvents, event).pipe(Effect.asVoid) : Effect.void,
+        ),
+      );
     const writeNativeEvent = (
       threadId: ThreadId,
       event: {
@@ -1453,6 +1460,7 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
+        assistantTranscriptRecovery: "none",
       },
       startSession,
       sendTurn,

@@ -61,6 +61,15 @@ import {
   type ProviderInstanceRegistryMutatorShape,
 } from "../Services/ProviderInstanceRegistryMutator.ts";
 import type { AnyProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
+import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
+
+export const bindProviderInstanceRuntimeEventAcceptance =
+  (
+    instanceId: ProviderInstanceId,
+    acceptRuntimeEvent: ProviderRuntimeEventAcceptance,
+  ): ProviderRuntimeEventAcceptance =>
+  (event) =>
+    acceptRuntimeEvent({ ...event, providerInstanceId: instanceId });
 
 /**
  * Live registry entry: the materialized `ProviderInstance` + the fresh
@@ -112,6 +121,7 @@ const buildEntry = <R>(input: {
   readonly instanceId: ProviderInstanceId;
   readonly rawInstanceId: string;
   readonly entry: ProviderInstanceConfig;
+  readonly acceptRuntimeEvent: ProviderRuntimeEventAcceptance;
 }): Effect.Effect<
   | { readonly kind: "live"; readonly live: LiveEntry }
   | { readonly kind: "unavailable"; readonly snapshot: ServerProvider },
@@ -119,7 +129,8 @@ const buildEntry = <R>(input: {
   R
 > =>
   Effect.gen(function* () {
-    const { driversById, parentScope, instanceId, rawInstanceId, entry } = input;
+    const { driversById, parentScope, instanceId, rawInstanceId, entry, acceptRuntimeEvent } =
+      input;
     const driver = driversById.get(entry.driver);
     if (!driver) {
       return {
@@ -173,6 +184,10 @@ const buildEntry = <R>(input: {
         environment: entry.environment ?? [],
         enabled: entry.enabled ?? decodedConfigEnabled(typedConfig) ?? true,
         config: typedConfig,
+        acceptRuntimeEvent: bindProviderInstanceRuntimeEventAcceptance(
+          instanceId,
+          acceptRuntimeEvent,
+        ),
       })
       .pipe(Effect.provideService(Scope.Scope, childScope), Effect.result);
     if (createResult._tag === "Failure") {
@@ -212,8 +227,9 @@ const makeReconcile = <R>(input: {
   readonly state: RegistryState;
   readonly driversById: ReadonlyMap<ProviderDriverKind, AnyProviderDriver<R>>;
   readonly parentScope: Scope.Scope;
+  readonly acceptRuntimeEvent: ProviderRuntimeEventAcceptance;
 }): ((configMap: ProviderInstanceConfigMap) => Effect.Effect<void, never, R>) => {
-  const { state, driversById, parentScope } = input;
+  const { state, driversById, parentScope, acceptRuntimeEvent } = input;
   return (configMap: ProviderInstanceConfigMap) =>
     Effect.gen(function* () {
       const previousEntries = yield* Ref.get(state.entries);
@@ -270,6 +286,7 @@ const makeReconcile = <R>(input: {
           instanceId,
           rawInstanceId,
           entry,
+          acceptRuntimeEvent,
         });
         if (result.kind === "live") {
           builtEntries.set(instanceId, result.live);
@@ -330,6 +347,7 @@ const makeReconcile = <R>(input: {
 export const makeProviderInstanceRegistry = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }): Effect.Effect<
   {
     readonly registry: ProviderInstanceRegistryShape;
@@ -361,7 +379,12 @@ export const makeProviderInstanceRegistry = <R>(input: {
     yield* Effect.addFinalizer(() => PubSub.shutdown(changes));
 
     const state: RegistryState = { entries, unavailable, changes };
-    const reconcileWithR = makeReconcile({ state, driversById, parentScope });
+    const reconcileWithR = makeReconcile({
+      state,
+      driversById,
+      parentScope,
+      acceptRuntimeEvent: input.acceptRuntimeEvent ?? (() => Effect.succeed(true)),
+    });
     const reconcile: ProviderInstanceRegistryMutatorShape["reconcile"] = (configMap) =>
       reconcileWithR(configMap).pipe(Effect.provideContext(driverContext));
 
@@ -414,6 +437,7 @@ export const makeProviderInstanceRegistry = <R>(input: {
 export const ProviderInstanceRegistryLayer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }): Layer.Layer<ProviderInstanceRegistry, never, R> =>
   Layer.effect(
     ProviderInstanceRegistry,
@@ -429,6 +453,7 @@ export const ProviderInstanceRegistryLayer = <R>(input: {
 export const ProviderInstanceRegistryMutableLayer = <R>(input: {
   readonly drivers: ReadonlyArray<AnyProviderDriver<R>>;
   readonly configMap: ProviderInstanceConfigMap;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }): Layer.Layer<ProviderInstanceRegistry | ProviderInstanceRegistryMutator, never, R> =>
   Layer.effectContext(
     makeProviderInstanceRegistry(input).pipe(

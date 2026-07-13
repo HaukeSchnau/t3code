@@ -19,6 +19,7 @@ import { fixPath } from "./os-jank.ts";
 import { websocketRpcRouteLayer } from "./ws.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "./persistence/Layers/Sqlite.ts";
+import { ProviderTranscriptJournalLive } from "./persistence/Layers/ProviderTranscriptJournal.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionDirectory.ts";
@@ -216,11 +217,15 @@ const TextGenerationLayerLive = TextGeneration.layer.pipe(
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
+const ProviderTranscriptJournalLayerLive = ProviderTranscriptJournalLive.pipe(
+  Layer.provide(PersistenceLayerLive),
+);
 
 const RepositoryIdentityResolverLayerLive = RepositoryIdentityResolver.layer;
 
 const OrchestrationRuntimeLayerLive = OrchestrationLayerLive.pipe(
   Layer.provideMerge(PersistenceLayerLive),
+  Layer.provideMerge(ProviderTranscriptJournalLayerLive),
   Layer.provideMerge(RepositoryIdentityResolverLayerLive),
 );
 

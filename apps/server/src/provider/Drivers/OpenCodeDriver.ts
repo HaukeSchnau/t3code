@@ -112,7 +112,15 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
   },
   configSchema: OpenCodeSettings,
   defaultConfig: (): OpenCodeSettings => decodeOpenCodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    acceptRuntimeEvent,
+  }) =>
     Effect.gen(function* () {
       const openCodeRuntime = yield* OpenCodeRuntime;
       const serverConfig = yield* ServerConfig;
@@ -139,6 +147,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
       const adapter = yield* makeOpenCodeAdapter(effectiveConfig, {
         instanceId,
         environment: processEnv,
+        acceptRuntimeEvent,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
       const textGeneration = yield* makeOpenCodeTextGeneration(effectiveConfig, processEnv);

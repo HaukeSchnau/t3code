@@ -75,6 +75,7 @@ import {
   extractTodosAsPlan,
 } from "../acp/CursorAcpExtension.ts";
 import { type CursorAdapterShape } from "../Services/CursorAdapter.ts";
+import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import { resolveCursorAcpBaseModelId } from "./CursorProvider.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.UnknownFromJsonString);
@@ -111,6 +112,7 @@ export interface CursorAdapterLiveOptions {
    * the latest snapshot so the closure isn't stale.
    */
   readonly resolveSettings?: Effect.Effect<CursorSettings>;
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
 }
 
 interface PendingApproval {
@@ -335,6 +337,7 @@ export function makeCursorAdapter(
     const sessions = new Map<ThreadId, CursorSessionContext>();
     const threadLocksRef = yield* SynchronizedRef.make(new Map<string, Semaphore.Semaphore>());
     const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
+    const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
 
     const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -362,7 +365,11 @@ export function makeCursorAdapter(
       );
 
     const offerRuntimeEvent = (event: ProviderRuntimeEvent) =>
-      PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid);
+      acceptRuntimeEvent(event).pipe(
+        Effect.flatMap((accepted) =>
+          accepted ? PubSub.publish(runtimeEventPubSub, event).pipe(Effect.asVoid) : Effect.void,
+        ),
+      );
 
     const getThreadSemaphore = (threadId: string) =>
       SynchronizedRef.modifyEffect(threadLocksRef, (current) => {
@@ -1163,7 +1170,10 @@ export function makeCursorAdapter(
 
     return {
       provider: PROVIDER,
-      capabilities: { sessionModelSwitch: "in-session" },
+      capabilities: {
+        sessionModelSwitch: "in-session",
+        assistantTranscriptRecovery: "none",
+      },
       startSession,
       sendTurn,
       interruptTurn,

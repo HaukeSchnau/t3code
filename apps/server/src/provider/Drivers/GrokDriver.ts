@@ -82,7 +82,15 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
   },
   configSchema: GrokSettings,
   defaultConfig: (): GrokSettings => decodeGrokSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    acceptRuntimeEvent,
+  }) =>
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
@@ -109,6 +117,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         instanceId,
+        acceptRuntimeEvent,
       });
       const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv);
 

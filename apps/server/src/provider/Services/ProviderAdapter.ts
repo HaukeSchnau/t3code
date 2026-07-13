@@ -24,12 +24,22 @@ import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
+export type ProviderAssistantTranscriptRecoveryMode = "none" | "authoritative";
+export type ProviderRuntimeEventAcceptance = (
+  event: ProviderRuntimeEvent,
+) => Effect.Effect<boolean>;
 
 export interface ProviderAdapterCapabilities {
   /**
    * Declares whether changing the model on an existing session is supported.
    */
   readonly sessionModelSwitch: ProviderSessionModelSwitchMode;
+  /**
+   * Whether restart recovery supplies byte-exact authoritative assistant
+   * transcripts, including parent and subagent messages, before live runtime events resume. Only adapters with an
+   * integration-tested replay cursor or recovered snapshot may opt in.
+   */
+  readonly assistantTranscriptRecovery: ProviderAssistantTranscriptRecoveryMode;
 }
 
 export interface ProviderThreadTurnSnapshot {

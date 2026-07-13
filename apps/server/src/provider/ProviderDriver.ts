@@ -33,6 +33,7 @@ import type * as Scope from "effect/Scope";
 import type * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import type { ProviderAdapterError, ProviderDriverError } from "./Errors.ts";
 import type { ProviderAdapterShape } from "./Services/ProviderAdapter.ts";
+import type { ProviderRuntimeEventAcceptance } from "./Services/ProviderAdapter.ts";
 import type { ServerProviderShape } from "./Services/ServerProvider.ts";
 
 /**
@@ -101,6 +102,8 @@ export interface ProviderDriverCreateInput<Config> {
   readonly environment: ProviderInstanceEnvironment;
   readonly enabled: boolean;
   readonly config: Config;
+  /** Persist semantic transcript events before an adapter's first volatile offer. */
+  readonly acceptRuntimeEvent: ProviderRuntimeEventAcceptance;
 }
 
 /**
