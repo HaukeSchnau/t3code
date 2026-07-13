@@ -225,6 +225,7 @@ export interface OrchestrationIntegrationHarness {
 interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderDriverKind;
   readonly realCodex?: boolean;
+  readonly rootDir?: string;
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -247,16 +248,21 @@ export const makeOrchestrationIntegrationHarness = (
           makeAdapterRegistryMock({ [adapterHarness.provider]: adapterHarness.adapter }),
         )
       : null;
-    const rootDir = yield* fileSystem.makeTempDirectoryScoped({
-      prefix: "t3-orchestration-integration-",
-    });
+    const isReconnect = options?.rootDir !== undefined;
+    const rootDir =
+      options?.rootDir ??
+      (yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-orchestration-integration-",
+      }));
     const workspaceDir = path.join(rootDir, "workspace");
     const { stateDir, dbPath } = yield* deriveServerPaths(rootDir, undefined).pipe(
       Effect.provideService(Path.Path, path),
     );
-    yield* fileSystem.makeDirectory(workspaceDir, { recursive: true });
-    yield* fileSystem.makeDirectory(stateDir, { recursive: true });
-    yield* initializeGitWorkspace(workspaceDir);
+    if (!isReconnect) {
+      yield* fileSystem.makeDirectory(workspaceDir, { recursive: true });
+      yield* fileSystem.makeDirectory(stateDir, { recursive: true });
+      yield* initializeGitWorkspace(workspaceDir);
+    }
 
     const persistenceLayer = makeSqlitePersistenceLive(dbPath);
     const orchestrationLayer = OrchestrationEngineLive.pipe(
