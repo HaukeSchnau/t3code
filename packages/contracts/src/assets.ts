@@ -12,6 +12,9 @@ export const AssetResource = Schema.Union([
   Schema.TaggedStruct("attachment", {
     attachmentId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
   }),
+  Schema.TaggedStruct("observed-media", {
+    storageId: TrimmedNonEmptyString.check(Schema.isMaxLength(256)),
+  }),
   Schema.TaggedStruct("project-favicon", {
     cwd: TrimmedNonEmptyString.check(Schema.isMaxLength(ASSET_PATH_MAX_LENGTH)),
   }),
@@ -133,6 +136,17 @@ export class AssetAttachmentNotFoundError extends Schema.TaggedErrorClass<AssetA
   }
 }
 
+export class AssetObservedMediaNotFoundError extends Schema.TaggedErrorClass<AssetObservedMediaNotFoundError>()(
+  "AssetObservedMediaNotFoundError",
+  {
+    resource: AssetResource,
+  },
+) {
+  override get message(): string {
+    return "Observed media was not found.";
+  }
+}
+
 export class AssetProjectFaviconResolutionError extends Schema.TaggedErrorClass<AssetProjectFaviconResolutionError>()(
   "AssetProjectFaviconResolutionError",
   {
@@ -190,6 +204,7 @@ export const AssetAccessError = Schema.Union([
   AssetWorkspaceAssetNotFoundError,
   AssetWorkspaceResolutionError,
   AssetAttachmentNotFoundError,
+  AssetObservedMediaNotFoundError,
   AssetProjectFaviconResolutionError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,

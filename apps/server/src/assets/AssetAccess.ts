@@ -1,6 +1,7 @@
 import type { AssetResource } from "@t3tools/contracts";
 import {
   AssetAttachmentNotFoundError,
+  AssetObservedMediaNotFoundError,
   AssetPreviewTypeValidationError,
   AssetProjectFaviconInspectionError,
   AssetProjectFaviconNotFoundError,
@@ -36,6 +37,7 @@ import {
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import { resolveAttachmentPathById } from "../attachmentStore.ts";
 import * as ServerConfig from "../config.ts";
+import { resolveObservedMediaPathById } from "../observedMediaStore.ts";
 import * as ProjectFaviconResolver from "../project/ProjectFaviconResolver.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
@@ -75,6 +77,12 @@ const AssetClaimsSchema = Schema.Union([
     version: Schema.Literal(1),
     kind: Schema.Literal("attachment"),
     attachmentId: Schema.String,
+    expiresAt: Schema.Number,
+  }),
+  Schema.Struct({
+    version: Schema.Literal(1),
+    kind: Schema.Literal("observed-media"),
+    storageId: Schema.String,
     expiresAt: Schema.Number,
   }),
   Schema.Struct({
@@ -274,6 +282,26 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       fileName = path.basename(attachmentPath);
       break;
     }
+    case "observed-media": {
+      const config = yield* ServerConfig.ServerConfig;
+      const observedMediaPath = resolveObservedMediaPathById({
+        observedMediaDir: config.observedMediaDir,
+        mediaId: input.resource.storageId,
+      });
+      if (!observedMediaPath) {
+        return yield* new AssetObservedMediaNotFoundError({
+          resource: input.resource,
+        });
+      }
+      claims = {
+        version: 1,
+        kind: "observed-media",
+        storageId: input.resource.storageId,
+        expiresAt,
+      };
+      fileName = path.basename(observedMediaPath);
+      break;
+    }
     case "project-favicon": {
       const workspaceRoot = yield* workspacePaths.normalizeWorkspaceRoot(input.resource.cwd).pipe(
         Effect.mapError(
@@ -387,6 +415,29 @@ export const resolveAsset = Effect.fn("AssetAccess.resolveAsset")(function* (
     );
     return Option.isSome(info) && info.value.type === "File"
       ? ({ kind: "file", path: attachmentPath } satisfies ResolvedAsset)
+      : null;
+  }
+
+  if (claims.kind === "observed-media") {
+    const config = yield* ServerConfig.ServerConfig;
+    const observedMediaPath = resolveObservedMediaPathById({
+      observedMediaDir: config.observedMediaDir,
+      mediaId: claims.storageId,
+    });
+    if (!observedMediaPath) return null;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const info = yield* optionOnNotFound(fileSystem.stat(observedMediaPath)).pipe(
+      Effect.tapError((cause) =>
+        Effect.logError("Failed to inspect observed media asset.", {
+          storageId: claims.storageId,
+          path: observedMediaPath,
+          cause,
+        }),
+      ),
+      Effect.orElseSucceed(() => Option.none()),
+    );
+    return Option.isSome(info) && info.value.type === "File"
+      ? ({ kind: "file", path: observedMediaPath } satisfies ResolvedAsset)
       : null;
   }
 
