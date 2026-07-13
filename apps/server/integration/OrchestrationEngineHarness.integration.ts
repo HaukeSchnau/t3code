@@ -5,6 +5,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ApprovalRequestId,
   CodexSettings,
+  defaultInstanceIdForDriver,
   ProviderDriverKind,
   type OrchestrationEvent,
   type OrchestrationThread,
@@ -31,6 +32,8 @@ import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Laye
 import { ProjectionTurnRepositoryLive } from "../src/persistence/Layers/ProjectionTurns.ts";
 import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
+import { ProviderTranscriptJournalLive } from "../src/persistence/Layers/ProviderTranscriptJournal.ts";
+import { ProviderTranscriptJournal } from "../src/persistence/Services/ProviderTranscriptJournal.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
 import { makeAdapterRegistryMock } from "../src/provider/testUtils/providerAdapterRegistryMock.ts";
@@ -39,12 +42,14 @@ import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerReg
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
+import { bindProviderInstanceRuntimeEventAcceptance } from "../src/provider/Layers/ProviderInstanceRegistryLive.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
 import {
   NoOpProviderEventLoggers,
   ProviderEventLoggers,
 } from "../src/provider/Layers/ProviderEventLoggers.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
+import { makeDurableRuntimeEventAcceptance } from "../src/provider/ProviderRuntimeEventDurability.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
@@ -313,6 +318,7 @@ export const makeOrchestrationIntegrationHarness = (
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusTest,
+      ProviderTranscriptJournalLive,
     );
     const serverSettingsLayer = ServerSettingsService.layerTest();
     const runtimeIngestionLayer = ProviderRuntimeIngestionLive.pipe(
@@ -427,6 +433,18 @@ export const makeOrchestrationIntegrationHarness = (
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
       runtime.runPromise(Effect.service(RuntimeReceiptBus)),
     ).pipe(Effect.orDie);
+    if (adapterHarness !== null) {
+      const transcriptJournal = yield* tryRuntimePromise(
+        "load ProviderTranscriptJournal service",
+        () => runtime.runPromise(Effect.service(ProviderTranscriptJournal)),
+      ).pipe(Effect.orDie);
+      adapterHarness.setRuntimeEventAcceptance(
+        bindProviderInstanceRuntimeEventAcceptance(
+          defaultInstanceIdForDriver(adapterHarness.provider),
+          makeDurableRuntimeEventAcceptance(transcriptJournal),
+        ),
+      );
+    }
 
     const scope = yield* Scope.make("sequential");
     yield* tryRuntimePromise("start OrchestrationReactor", () =>

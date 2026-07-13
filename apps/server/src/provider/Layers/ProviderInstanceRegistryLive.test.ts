@@ -30,12 +30,16 @@ import {
   type CursorSettings,
   type GrokSettings,
   type OpenCodeSettings,
+  EventId,
   ProviderDriverKind,
   type ProviderInstanceConfigMap,
   ProviderInstanceId,
+  RuntimeItemId,
+  ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
 import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../../config.ts";
@@ -47,7 +51,10 @@ import { GrokDriver } from "../Drivers/GrokDriver.ts";
 import { OpenCodeDriver } from "../Drivers/OpenCodeDriver.ts";
 import { OpenCodeRuntimeLive } from "../opencodeRuntime.ts";
 import { NoOpProviderEventLoggers, ProviderEventLoggers } from "./ProviderEventLoggers.ts";
-import { makeProviderInstanceRegistry } from "./ProviderInstanceRegistryLive.ts";
+import {
+  bindProviderInstanceRuntimeEventAcceptance,
+  makeProviderInstanceRegistry,
+} from "./ProviderInstanceRegistryLive.ts";
 
 const TestHttpClientLive = Layer.succeed(
   HttpClient.HttpClient,
@@ -97,6 +104,29 @@ const makeOpenCodeConfig = (overrides: Partial<OpenCodeSettings>): OpenCodeSetti
   customModels: [],
   ...overrides,
 });
+
+it.effect("stamps configured instance identity before durable acceptance", () =>
+  Effect.gen(function* () {
+    const configuredInstanceId = ProviderInstanceId.make("codex_work");
+    const acceptedInstanceId = yield* Ref.make<ProviderInstanceId | undefined>(undefined);
+    const accept = bindProviderInstanceRuntimeEventAcceptance(configuredInstanceId, (event) =>
+      Ref.set(acceptedInstanceId, event.providerInstanceId).pipe(Effect.as(true)),
+    );
+
+    yield* accept({
+      type: "content.delta",
+      eventId: EventId.make("registry-acceptance-event"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("incorrect-native-id"),
+      threadId: ThreadId.make("registry-acceptance-thread"),
+      itemId: RuntimeItemId.make("registry-acceptance-item"),
+      createdAt: "2026-07-14T00:00:00.000Z",
+      payload: { streamKind: "assistant_text", delta: "durable" },
+    });
+
+    expect(yield* Ref.get(acceptedInstanceId)).toBe(configuredInstanceId);
+  }),
+);
 
 describe("ProviderInstanceRegistryLive — multi-instance codex slice", () => {
   // `ServerConfig.layerTest` needs `FileSystem` to materialize its scratch

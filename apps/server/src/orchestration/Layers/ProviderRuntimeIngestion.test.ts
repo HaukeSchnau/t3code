@@ -10,6 +10,7 @@ import {
   ProviderRuntimeEvent,
   ProviderSession,
   ProviderInstanceId,
+  RuntimeItemId,
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
@@ -96,7 +97,9 @@ function isLegacyTurnCompletedEvent(
   );
 }
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(options?: {
+  readonly assistantTranscriptRecovery?: "none" | "authoritative";
+}) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
 
@@ -109,7 +112,11 @@ function createProviderServiceHarness() {
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: () =>
+      Effect.succeed({
+        sessionModelSwitch: "in-session",
+        assistantTranscriptRecovery: options?.assistantTranscriptRecovery ?? "none",
+      }),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
       return Effect.succeed({
@@ -237,10 +244,17 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    assistantTranscriptRecovery?: "none" | "authoritative";
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const provider = createProviderServiceHarness(
+      options?.assistantTranscriptRecovery
+        ? { assistantTranscriptRecovery: options.assistantTranscriptRecovery }
+        : undefined,
+    );
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -1143,8 +1157,8 @@ describe("ProviderRuntimeIngestion", () => {
     ).toHaveLength(1_001);
   }, 120_000);
 
-  it("coalesces meaningful subagent transcript deltas by event time", async () => {
-    const harness = await createHarness();
+  it("coalesces subagent transcript deltas only with authoritative recovery", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const turnId = asTurnId("turn-subagent-coalesced");
     const agentContext = {
       providerThreadId: "provider-child-coalesced",
@@ -1276,6 +1290,79 @@ describe("ProviderRuntimeIngestion", () => {
     }
     expect((subagent.payload as Record<string, unknown>).transcript).toBe(
       `${firstFinal}${secondFinal}`,
+    );
+  });
+
+  it("preserves legacy cumulative transcript bytes when a new item completes", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-legacy-transcript");
+    const agentContext = {
+      providerThreadId: "provider-child-legacy-transcript",
+      parentTurnId: turnId,
+    } as const;
+    const event = {
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-legacy-new-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: RuntimeItemId.make("item-subagent-legacy-new"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: "new partial" },
+    } as const satisfies ProviderRuntimeEvent;
+    const activityId = subagentActivityIdForRuntime(
+      asThreadId("thread-1"),
+      event,
+      agentContext.providerThreadId,
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-subagent-legacy-activity"),
+        threadId: asThreadId("thread-1"),
+        activity: {
+          id: activityId,
+          kind: "subagent.thread",
+          tone: "info",
+          summary: "Subagent running",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          turnId,
+          payload: {
+            providerThreadId: agentContext.providerThreadId,
+            status: "running",
+            transcript: "legacy bytes ",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    harness.emit(event);
+    harness.emit({
+      ...event,
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-legacy-new-completed"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "new final",
+      },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (candidate) =>
+          candidate.id === activityId &&
+          (candidate.payload as Record<string, unknown>).transcript === "legacy bytes new final",
+      ),
+    );
+    const activity = thread.activities.find((candidate) => candidate.id === activityId);
+    expect((activity?.payload as Record<string, unknown> | undefined)?.transcript).toBe(
+      "legacy bytes new final",
     );
   });
 
@@ -2405,8 +2492,8 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas by default until completion", async () => {
-    const harness = await createHarness();
+  it("buffers assistant deltas only with authoritative recovery until completion", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
@@ -2474,7 +2561,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("flushes and completes buffered assistant text when an approval request opens", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
@@ -2534,7 +2621,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("flushes and completes buffered assistant text when user input is requested", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
@@ -2601,7 +2688,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("does not create assistant segments for whitespace-only buffered text at approval boundaries", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const startedAt = "2026-03-28T06:28:00.000Z";
     const pausedAt = "2026-03-28T06:28:01.000Z";
 
@@ -2661,7 +2748,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("starts a new buffered assistant message segment after approval and completes without duplication", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const startedAt = "2026-03-28T06:07:00.000Z";
     const pausedAt = "2026-03-28T06:07:01.000Z";
     const resumedAt = "2026-03-28T06:07:02.000Z";
@@ -2992,7 +3079,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("spills oversized buffered deltas and still finalizes full assistant text", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const now = "2026-01-01T00:00:00.000Z";
     const oversizedText = "x".repeat(40_000);
 
@@ -3229,6 +3316,56 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime exploded");
+  });
+
+  it("finalizes buffered parent text when a provider session exits", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const turnId = asTurnId("turn-buffered-session-exit");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-buffered-session-exit-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    await waitForThread(harness.readModel, (thread) => thread.session?.activeTurnId === turnId);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-session-exit-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-buffered-session-exit"),
+      payload: { streamKind: "assistant_text", delta: "survives session exit" },
+    });
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-buffered-session-exit-terminal"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      payload: { reason: "provider crashed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "stopped" &&
+        entry.messages.some(
+          (message) =>
+            message.id === "assistant:item-buffered-session-exit" &&
+            !message.streaming &&
+            message.text === "survives session exit",
+        ),
+    );
+    expect(
+      thread.messages.find((message) => message.id === "assistant:item-buffered-session-exit")
+        ?.text,
+    ).toBe("survives session exit");
   });
 
   it("records runtime.error activities from the typed payload message", async () => {

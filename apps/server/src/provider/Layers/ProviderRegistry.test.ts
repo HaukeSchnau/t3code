@@ -49,6 +49,7 @@ import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "../providerMaintenance.ts";
+import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
 const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
@@ -71,6 +72,18 @@ const TestHttpClientLive = Layer.succeed(
     Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
   ),
 );
+
+const TestProviderTranscriptJournalLive = Layer.succeed(ProviderTranscriptJournal, {
+  append: () => Effect.succeed(true),
+  list: Effect.succeed([]),
+  listUndelivered: Effect.succeed([]),
+  markDelivered: () => Effect.void,
+  remove: () => Effect.void,
+  removeItem: () => Effect.void,
+  isItemCompleted: () => Effect.succeed(false),
+  markItemCompleted: () => Effect.void,
+});
+const TestLayers = Layer.merge(TestHttpClientLive, TestProviderTranscriptJournalLive);
 
 function selectDescriptor(
   id: string,
@@ -298,7 +311,7 @@ function makeMutableServerSettingsService(
   });
 }
 
-it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), TestHttpClientLive))(
+it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), TestLayers))(
   "ProviderRegistry",
   (it) => {
     describe("checkCodexProviderStatus", () => {

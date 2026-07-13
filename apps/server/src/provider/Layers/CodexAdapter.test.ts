@@ -469,7 +469,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           item: {
             type: "agentMessage",
             id: "msg_1",
-            text: "done",
+            text: "done with boundary whitespace\n",
           },
         },
       };
@@ -488,6 +488,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       NodeAssert.equal(firstEvent.value.itemId, "msg_1");
       NodeAssert.equal(firstEvent.value.turnId, "turn-1");
       NodeAssert.equal(firstEvent.value.payload.itemType, "assistant_message");
+      NodeAssert.equal(firstEvent.value.payload.detail, "done with boundary whitespace\n");
     }),
   );
 
