@@ -15,6 +15,8 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProposedPlan,
   OrchestrationSession,
+  OrchestrationShellStreamItem,
+  OrchestrationSubscribeShellInput,
   ProjectCreateCommand,
   ThreadMetaUpdatedPayload,
   ThreadMessageQueueCommand,
@@ -51,6 +53,39 @@ const decodeThreadCreatedPayload = Schema.decodeUnknownEffect(ThreadCreatedPaylo
 const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationCommand);
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
+const decodeShellStreamItem = Schema.decodeUnknownEffect(OrchestrationShellStreamItem);
+const decodeSubscribeShellInput = Schema.decodeUnknownEffect(OrchestrationSubscribeShellInput);
+const decodeLegacySubscribeShellInput = Schema.decodeUnknownEffect(
+  Schema.Struct({ afterSequence: Schema.optionalKey(Schema.Number) }),
+);
+
+it.effect("decodes capability-gated shell cursor items", () =>
+  Effect.gen(function* () {
+    const cursor = yield* decodeShellStreamItem({ kind: "cursor", sequence: 42 });
+    assert.strictEqual(cursor.kind, "cursor");
+    if (cursor.kind === "cursor") {
+      assert.strictEqual(cursor.sequence, 42);
+    }
+
+    const legacyInput = yield* decodeSubscribeShellInput({ afterSequence: 7 });
+    assert.strictEqual(legacyInput.afterSequence, 7);
+    assert.strictEqual(legacyInput.includeCursorItems, undefined);
+
+    const capableInput = yield* decodeSubscribeShellInput({
+      afterSequence: 7,
+      includeCursorItems: true,
+    });
+    assert.strictEqual(capableInput.includeCursorItems, true);
+
+    // Effect Struct decoders strip the new optional capability for an older
+    // server schema, keeping a new-client/old-server connection compatible.
+    const decodedByLegacyServer = yield* decodeLegacySubscribeShellInput({
+      afterSequence: 7,
+      includeCursorItems: true,
+    });
+    assert.deepStrictEqual(decodedByLegacyServer, { afterSequence: 7 });
+  }),
+);
 
 it.effect("parses turn diff input when fromTurnCount <= toTurnCount", () =>
   Effect.gen(function* () {

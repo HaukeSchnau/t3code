@@ -1,5 +1,21 @@
-import * as Arr from "effect/Array";
 import type { OrchestrationShellSnapshot, OrchestrationShellStreamEvent } from "@t3tools/contracts";
+
+function upsertBy<T>(
+  values: ReadonlyArray<T>,
+  value: T,
+  matches: (candidate: T) => boolean,
+): ReadonlyArray<T> {
+  const index = values.findIndex(matches);
+  if (index < 0) {
+    return [...values, value];
+  }
+  if (values[index] === value) {
+    return values;
+  }
+  const next = [...values];
+  next[index] = value;
+  return next;
+}
 
 /**
  * Reduce a single shell stream event into an existing snapshot, returning a new
@@ -17,39 +33,39 @@ export function applyShellStreamEvent(
 
   switch (event.kind) {
     case "project-upserted": {
-      const projects = snapshot.projects.some((p) => p.id === event.project.id)
-        ? Arr.map(snapshot.projects, (p) => (p.id === event.project.id ? event.project : p))
-        : Arr.append(snapshot.projects, event.project);
+      const projects = upsertBy(
+        snapshot.projects,
+        event.project,
+        (project) => project.id === event.project.id,
+      );
       return { ...snapshot, projects, snapshotSequence: event.sequence };
     }
     case "project-removed":
       return {
         ...snapshot,
-        projects: Arr.filter(snapshot.projects, (p) => p.id !== event.projectId),
+        projects: snapshot.projects.filter((project) => project.id !== event.projectId),
         snapshotSequence: event.sequence,
       };
     case "thread-upserted": {
-      const threads = snapshot.threads.some((t) => t.id === event.thread.id)
-        ? Arr.map(snapshot.threads, (t) => (t.id === event.thread.id ? event.thread : t))
-        : Arr.append(snapshot.threads, event.thread);
+      const threads = upsertBy(
+        snapshot.threads,
+        event.thread,
+        (thread) => thread.id === event.thread.id,
+      );
       return { ...snapshot, threads, snapshotSequence: event.sequence };
     }
     case "thread-removed":
       return {
         ...snapshot,
-        threads: Arr.filter(snapshot.threads, (t) => t.id !== event.threadId),
+        threads: snapshot.threads.filter((thread) => thread.id !== event.threadId),
         snapshotSequence: event.sequence,
       };
     case "usage-limits-updated": {
-      const usageLimits = snapshot.usageLimits.some(
+      const usageLimits = upsertBy(
+        snapshot.usageLimits,
+        event.usageLimits,
         (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
-      )
-        ? Arr.map(snapshot.usageLimits, (entry) =>
-            entry.providerInstanceId === event.usageLimits.providerInstanceId
-              ? event.usageLimits
-              : entry,
-          )
-        : Arr.append(snapshot.usageLimits, event.usageLimits);
+      );
       return { ...snapshot, usageLimits, snapshotSequence: event.sequence };
     }
     default:

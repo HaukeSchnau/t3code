@@ -8,8 +8,10 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
   AVAILABLE_CONNECTION_STATE,
@@ -113,10 +115,10 @@ describe("environment shell synchronization", () => {
         kind: "snapshot",
         snapshot: LIVE_SHELL_SNAPSHOT,
       });
-      yield* SubscriptionRef.changes(shellState).pipe(
-        Stream.filter((state) => state.status === "live"),
-        Stream.runHead,
-      );
+      for (let index = 0; index < 100; index += 1) {
+        yield* Effect.yieldNow;
+      }
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("live");
 
       yield* SubscriptionRef.set(supervisorState, {
         desired: true,
@@ -148,12 +150,16 @@ describe("environment shell synchronization", () => {
         updatedAt: "2026-06-06T00:00:00.000Z",
       };
       const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
-      const capturedAfterSequence = yield* SubscriptionRef.make<number | undefined>(undefined);
+      const capturedSubscription = yield* SubscriptionRef.make<{
+        readonly afterSequence?: number;
+        readonly includeCursorItems?: boolean;
+      }>({});
       const loaderCalls = yield* SubscriptionRef.make(0);
+      const savedShells = yield* Ref.make<ReadonlyArray<OrchestrationShellSnapshot>>([]);
       const client = {
         [ORCHESTRATION_WS_METHODS.subscribeShell]: (input: { readonly afterSequence?: number }) =>
           Stream.unwrap(
-            SubscriptionRef.set(capturedAfterSequence, input.afterSequence).pipe(
+            SubscriptionRef.set(capturedSubscription, input).pipe(
               Effect.as(Stream.fromQueue(events)),
             ),
           ),
@@ -173,7 +179,8 @@ describe("environment shell synchronization", () => {
       } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
       const cache = Persistence.EnvironmentCacheStore.of({
         loadShell: () => Effect.succeed(Option.some(cachedSnapshot)),
-        saveShell: () => Effect.void,
+        saveShell: (_environmentId, snapshot) =>
+          Ref.update(savedShells, (saved) => [...saved, snapshot]),
         loadThread: () => Effect.succeed(Option.none()),
         saveThread: () => Effect.void,
         removeThread: () => Effect.void,
@@ -187,20 +194,35 @@ describe("environment shell synchronization", () => {
         load: () =>
           SubscriptionRef.update(loaderCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
       });
-      yield* makeEnvironmentShellState().pipe(
+      const shellState = yield* makeEnvironmentShellState().pipe(
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
         Effect.provideService(Persistence.EnvironmentCacheStore, cache),
         Effect.provideService(ShellSnapshotLoader, snapshotLoader),
       );
 
       // Wait until the subscription is established from the warm cache.
-      yield* SubscriptionRef.changes(capturedAfterSequence).pipe(
-        Stream.filter((value) => value !== undefined),
+      yield* SubscriptionRef.changes(capturedSubscription).pipe(
+        Stream.filter((value) => value.afterSequence !== undefined),
         Stream.runHead,
       );
 
-      expect(yield* SubscriptionRef.get(capturedAfterSequence)).toBe(5);
+      expect(yield* SubscriptionRef.get(capturedSubscription)).toEqual({
+        afterSequence: 5,
+        includeCursorItems: true,
+      });
       expect(yield* SubscriptionRef.get(loaderCalls)).toBe(0);
+
+      const beforeCursor = yield* SubscriptionRef.get(shellState);
+      yield* Queue.offer(events, { kind: "cursor", sequence: 6 });
+      for (let index = 0; index < 10; index += 1) {
+        yield* Effect.yieldNow;
+      }
+      const afterCursor = yield* SubscriptionRef.get(shellState);
+      expect(afterCursor).toBe(beforeCursor);
+      expect(Option.getOrThrow(afterCursor.snapshot).snapshotSequence).toBe(5);
+      yield* TestClock.adjust("500 millis");
+      yield* Effect.yieldNow;
+      expect((yield* Ref.get(savedShells)).at(-1)?.snapshotSequence).toBe(6);
     }),
   );
 });
