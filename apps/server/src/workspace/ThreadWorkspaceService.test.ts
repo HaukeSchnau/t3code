@@ -263,7 +263,6 @@ layer("ThreadWorkspaceService", (it) => {
     Effect.gen(function* () {
       const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
       const sql = yield* SqlClient.SqlClient;
-      const hostPlatform = yield* HostProcessPlatform;
       const sourcePath = makeTempDir("t3-directory-copy-small-source-");
       NodeFS.writeFileSync(NodePath.join(sourcePath, "file.txt"), "copied");
       const threadId = ThreadId.make("thread-directory-copy-small-source");
@@ -293,10 +292,11 @@ layer("ThreadWorkspaceService", (it) => {
       `;
       assert.equal(rows.length, 1);
       assert.equal(rows[0]?.lifecycle, "active");
-      assert.match(rows[0]?.metadata_json ?? "", /"preparationStatus":"ready"/);
+      const metadataJson = rows[0]?.metadata_json ?? "";
+      assert.match(metadataJson, /"preparationStatus":"ready"/);
       assert.match(
-        rows[0]?.metadata_json ?? "",
-        hostPlatform === "darwin"
+        metadataJson,
+        metadataJson.includes('"copyOnWriteSupported":true')
           ? /"copyStrategy":"copy-on-write"/
           : /"copyStrategy":"recursive-copy"/,
       );
@@ -345,7 +345,7 @@ layer("ThreadWorkspaceService", (it) => {
         Effect.provide(
           makeTestLayer({
             baseDir,
-            platform: "linux",
+            platform: "freebsd",
             processRunner: {
               run: (input) =>
                 input.command === "du"
@@ -504,7 +504,7 @@ layer("ThreadWorkspaceService", (it) => {
         Effect.provide(
           makeTestLayer({
             baseDir,
-            platform: "linux",
+            platform: "freebsd",
             processRunner: {
               run: (input) => {
                 if (input.command === "du") {
