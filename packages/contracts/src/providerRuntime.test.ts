@@ -69,6 +69,29 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
+  it("preserves assistant completion boundary whitespace", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "item.completed",
+      eventId: "event-assistant-completed-whitespace",
+      provider: "codex",
+      createdAt: "2026-02-28T00:00:00.000Z",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      itemId: "assistant-item-1",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "answer\n",
+      },
+    });
+
+    expect(parsed.type).toBe("item.completed");
+    if (parsed.type !== "item.completed") {
+      throw new Error("expected item.completed");
+    }
+    expect(parsed.payload.detail).toBe("answer\n");
+  });
+
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",

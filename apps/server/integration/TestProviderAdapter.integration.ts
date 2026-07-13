@@ -22,6 +22,7 @@ import {
 } from "../src/provider/Errors.ts";
 import type {
   ProviderAdapterShape,
+  ProviderRuntimeEventAcceptance,
   ProviderThreadSnapshot,
   ProviderThreadTurnSnapshot,
 } from "../src/provider/Services/ProviderAdapter.ts";
@@ -187,6 +188,11 @@ export interface TestProviderAdapterHarness {
   readonly queueTurnResponseForNextSession: (
     response: TestTurnResponse,
   ) => Effect.Effect<void, never>;
+  readonly emitRuntimeEvent: (event: ProviderRuntimeEvent) => Effect.Effect<void, never>;
+  readonly acceptRuntimeEventWithoutDelivery: (
+    event: ProviderRuntimeEvent,
+  ) => Effect.Effect<boolean, never>;
+  readonly setRuntimeEventAcceptance: (accept: ProviderRuntimeEventAcceptance) => void;
   readonly getStartCount: () => number;
   readonly getRollbackCalls: (threadId: ThreadId) => ReadonlyArray<number>;
   readonly getInterruptCalls: (threadId: ThreadId) => ReadonlyArray<TurnId | undefined>;
@@ -228,6 +234,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
     const provider = options?.provider ?? ProviderDriverKind.make("codex");
     const crypto = yield* Crypto.Crypto;
     const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    let acceptRuntimeEvent: ProviderRuntimeEventAcceptance = () => Effect.succeed(true);
     let sessionCount = 0;
     const sessions = new Map<ThreadId, SessionState>();
     const queuedResponsesForNextSession: TestTurnResponse[] = [];
@@ -241,7 +248,12 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       }>
     >();
 
-    const emit = (event: ProviderRuntimeEvent) => Queue.offer(runtimeEvents, event);
+    const emit = (event: ProviderRuntimeEvent) =>
+      acceptRuntimeEvent(event).pipe(
+        Effect.flatMap((accepted) =>
+          accepted ? Queue.offer(runtimeEvents, event).pipe(Effect.asVoid) : Effect.void,
+        ),
+      );
     const randomUUIDv4 = (threadId: ThreadId) =>
       crypto.randomUUIDv4.pipe(
         Effect.mapError(
@@ -494,6 +506,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       provider,
       capabilities: {
         sessionModelSwitch: "in-session",
+        assistantTranscriptRecovery: "none",
       },
       startSession,
       sendTurn,
@@ -570,6 +583,11 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
       provider,
       queueTurnResponse,
       queueTurnResponseForNextSession,
+      emitRuntimeEvent: emit,
+      acceptRuntimeEventWithoutDelivery: (event) => acceptRuntimeEvent(event),
+      setRuntimeEventAcceptance: (accept) => {
+        acceptRuntimeEvent = accept;
+      },
       getStartCount,
       getRollbackCalls,
       getInterruptCalls,
