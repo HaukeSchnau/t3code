@@ -1191,4 +1191,35 @@ describe("OrchestrationEngine", () => {
 
     await system.dispose();
   });
+
+  it("rejects a command receipt id reused for another aggregate", async () => {
+    const system = await createOrchestrationSystem();
+    const commandId = CommandId.make("cmd-cross-aggregate-collision");
+    await system.run(
+      system.engine.dispatch({
+        type: "project.create",
+        commandId,
+        projectId: asProjectId("project-command-collision-a"),
+        title: "First project",
+        workspaceRoot: "/tmp/project-command-collision-a",
+        defaultModelSelection: null,
+        createdAt: now(),
+      }),
+    );
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          type: "project.create",
+          commandId,
+          projectId: asProjectId("project-command-collision-b"),
+          title: "Second project",
+          workspaceRoot: "/tmp/project-command-collision-b",
+          defaultModelSelection: null,
+          createdAt: now(),
+        }),
+      ),
+    ).rejects.toThrow("already bound to project 'project-command-collision-a'");
+    await system.dispose();
+  });
 });

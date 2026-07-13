@@ -42,6 +42,7 @@ import { decideOrchestrationCommand } from "../decider.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
+import { incrementWorkloadCounter } from "../../diagnostics/WorkloadDiagnostics.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
@@ -146,6 +147,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         });
         if (Option.isSome(existingReceipt)) {
           if (existingReceipt.value.status === "accepted") {
+            if (
+              existingReceipt.value.aggregateKind !== aggregateRef.aggregateKind ||
+              existingReceipt.value.aggregateId !== aggregateRef.aggregateId
+            ) {
+              return yield* new OrchestrationCommandInvariantError({
+                commandType: envelope.command.type,
+                detail: `Command id '${envelope.command.commandId}' is already bound to ${existingReceipt.value.aggregateKind} '${existingReceipt.value.aggregateId}'.`,
+              });
+            }
             return {
               sequence: existingReceipt.value.resultSequence,
             };
@@ -219,6 +229,10 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           );
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        incrementWorkloadCounter(
+          "orchestration.events.durable",
+          committedCommand.committedEvents.length,
+        );
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
           if (index === 0) {

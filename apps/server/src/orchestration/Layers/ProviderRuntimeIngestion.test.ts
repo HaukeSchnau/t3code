@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+/* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- These legacy ingestion tests share a ManagedRuntime harness so async test bodies can drive the real event worker and projection pipeline. */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -43,7 +44,10 @@ import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityRes
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
-import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
+import {
+  ProviderRuntimeIngestionLive,
+  subagentActivityIdForRuntime,
+} from "./ProviderRuntimeIngestion.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
@@ -493,7 +497,7 @@ describe("ProviderRuntimeIngestion", () => {
     const thread = await waitForThread(
       harness.readModel,
       (entry) =>
-        entry.session?.status === "ready" &&
+        entry.session?.status === "interrupted" &&
         entry.session.activeTurnId === null &&
         entry.session.lastError === "Interrupted by user." &&
         (entry.queuedMessages ?? []).length === 1,
@@ -502,6 +506,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.messages.some((message) => message.id === "message-queued-before-abort")).toBe(
       false,
     );
+    expect(thread.latestTurn?.state).toBe("interrupted");
   });
 
   it("applies provider session.state.changed transitions directly", async () => {
@@ -956,10 +961,567 @@ describe("ProviderRuntimeIngestion", () => {
         : null;
 
     expect(thread.messages).toHaveLength(0);
-    expect(subagentActivity?.id).toBe("subagent:provider-child-thread");
+    expect(subagentActivity?.id).toBe("subagent:thread-1:codex:codex:provider-child-thread");
     expect(subagentActivity?.turnId).toBe("turn-parent");
     expect(payload?.transcript).toBe("child agent findings");
     expect(payload?.parentTurnId).toBe("turn-parent");
+  });
+
+  it("suppresses unchanged subagent command-output updates and exact duplicates", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-output-flood");
+    const agentContext = {
+      providerThreadId: "provider-child-output-flood",
+      parentTurnId: turnId,
+    } as const;
+    const beforeEvents = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).length;
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-subagent-output-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-output"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message",
+        title: "Assistant message",
+      },
+    });
+    for (let index = 0; index < 100; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-command-output-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:00.${String(index + 10).padStart(3, "0")}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-command"),
+        agentContext,
+        payload: {
+          streamKind: "command_output",
+          delta: `chunk ${index}\n`,
+        },
+      });
+    }
+    const completedEvent = {
+      type: "item.completed" as const,
+      eventId: asEventId("evt-subagent-output-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-output"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message" as const,
+        status: "completed" as const,
+        detail: "byte-exact child result",
+      },
+    };
+    harness.emit(completedEvent);
+    harness.emit(completedEvent);
+    await harness.drain();
+
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).slice(beforeEvents);
+    const subagentEvents = events.filter(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "subagent.thread",
+    );
+    expect(subagentEvents).toHaveLength(2);
+    const finalEvent = subagentEvents.at(-1);
+    if (finalEvent?.type !== "thread.activity-appended") {
+      throw new Error("Expected a final subagent activity event.");
+    }
+    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
+    expect(finalPayload.transcript).toBe("byte-exact child result");
+    expect(finalPayload.status).toBe("completed");
+  });
+
+  it("retains duplicate identities beyond the former 50k FIFO boundary", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-long-dedupe");
+    const agentContext = {
+      providerThreadId: "provider-child-long-dedupe",
+      parentTurnId: turnId,
+    } as const;
+    const firstDelta = {
+      type: "content.delta" as const,
+      eventId: asEventId("evt-subagent-long-dedupe-first"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-long-dedupe"),
+      agentContext,
+      payload: { streamKind: "assistant_text" as const, delta: "exact once" },
+    };
+    harness.emit(firstDelta);
+    for (let index = 0; index < 50_001; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-long-output-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.100Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-long-output"),
+        agentContext,
+        payload: { streamKind: "command_output", delta: "x" },
+      });
+    }
+    harness.emit(firstDelta);
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        return (activity.payload as Record<string, unknown>).transcript === "exact once";
+      }),
+    );
+    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected the long-session subagent activity.");
+    }
+    expect((subagent.payload as Record<string, unknown>).transcript).toBe("exact once");
+  }, 60_000);
+
+  it("retains dirty transcript state for more than one thousand concurrent subagents", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-many-children");
+    for (let index = 0; index < 1_001; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-many-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId(`item-subagent-many-${index}`),
+        agentContext: {
+          providerThreadId: `provider-child-many-${index}`,
+          parentTurnId: turnId,
+        },
+        payload: { streamKind: "assistant_text", delta: `head-${index}` },
+      });
+    }
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-many-first-tail"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-many-0"),
+      agentContext: {
+        providerThreadId: "provider-child-many-0",
+        parentTurnId: turnId,
+      },
+      payload: { streamKind: "assistant_text", delta: "-tail" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return (
+          payload.providerThreadId === "provider-child-many-0" &&
+          payload.transcript === "head-0-tail"
+        );
+      }),
+    );
+    expect(
+      thread.activities.filter((activity) => activity.kind === "subagent.thread"),
+    ).toHaveLength(1_001);
+  }, 120_000);
+
+  it("coalesces meaningful subagent transcript deltas by event time", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-coalesced");
+    const agentContext = {
+      providerThreadId: "provider-child-coalesced",
+      parentTurnId: turnId,
+    } as const;
+    const chunks = Array.from({ length: 120 }, (_, index) => `${index}:`);
+    const beforeEvents = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).length;
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-text-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:0${Math.floor((index * 10) / 1_000)}.${String(
+          (index * 10) % 1_000,
+        ).padStart(3, "0")}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-text"),
+        agentContext,
+        payload: {
+          streamKind: "assistant_text",
+          delta: chunks[index]!,
+        },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-text-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-text"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    await harness.drain();
+
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).slice(beforeEvents);
+    const subagentEvents = events.filter(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "subagent.thread",
+    );
+    expect(subagentEvents.length).toBeLessThanOrEqual(4);
+    const finalEvent = subagentEvents.at(-1);
+    if (finalEvent?.type !== "thread.activity-appended") {
+      throw new Error("Expected a final subagent activity event.");
+    }
+    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
+    expect(finalPayload.transcript).toBe(chunks.join(""));
+    expect(finalPayload.status).toBe("completed");
+  });
+
+  it("preserves large multi-item subagent text and authoritative completion suffixes", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-large-transcript");
+    const agentContext = {
+      providerThreadId: "provider-child-large-transcript",
+      parentTurnId: turnId,
+    } as const;
+    const firstFinal = `${"a".repeat(60_000)} corrected suffix`;
+    const secondFinal = "\nsecond item final text";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-large-first-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-first"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: `${"a".repeat(60_000)} partial` },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-large-first-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-first"),
+      agentContext,
+      payload: { itemType: "assistant_message", status: "completed", detail: firstFinal },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-large-second-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-second"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: "\nsecond item partial" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-large-second-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.300Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-second"),
+      agentContext,
+      payload: { itemType: "assistant_message", status: "completed", detail: secondFinal },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((candidate) => {
+        if (candidate.kind !== "subagent.thread") return false;
+        const payload = candidate.payload as Record<string, unknown>;
+        return payload.transcript === `${firstFinal}${secondFinal}`;
+      }),
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a large subagent transcript activity.");
+    }
+    expect((subagent.payload as Record<string, unknown>).transcript).toBe(
+      `${firstFinal}${secondFinal}`,
+    );
+  });
+
+  it("keeps turnless item dedupe isolated from later items and session exit", async () => {
+    const harness = await createHarness();
+    const agentContext = { providerThreadId: "provider-child-turnless" } as const;
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      agentContext,
+    } as const;
+
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-a-delta"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { streamKind: "assistant_text", delta: "A" },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("evt-turnless-item-a-completed"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { itemType: "assistant_message", status: "completed", detail: "A" },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-a-replayed-with-new-id"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { streamKind: "assistant_text", delta: "CORRUPT" },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-b-delta"),
+      createdAt: "2026-01-01T00:00:00.300Z",
+      itemId: asItemId("item-turnless-b"),
+      payload: { streamKind: "assistant_text", delta: "B" },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("evt-turnless-item-b-completed"),
+      createdAt: "2026-01-01T00:00:00.400Z",
+      itemId: asItemId("item-turnless-b"),
+      payload: { itemType: "assistant_message", status: "completed", detail: "B" },
+    });
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-turnless-session-exited"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.500Z",
+      payload: { reason: "done" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "stopped",
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    expect((subagent?.payload as Record<string, unknown> | undefined)?.transcript).toBe("AB");
+  });
+
+  it("keeps anonymous item completion distinct from parent turn completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-anonymous-item-completion");
+    const agentContext = {
+      providerThreadId: "provider-child-anonymous-item",
+      parentTurnId: turnId,
+    } as const;
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-anonymous-item-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-known-before-anonymous-completion"),
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: { streamKind: "assistant_text", delta: "partial" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-anonymous-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.100Z",
+      payload: { itemType: "assistant_message", status: "completed", detail: "final" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-after-anonymous-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-after-anonymous-completion"),
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.150Z",
+      payload: { streamKind: "assistant_text", delta: "!" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-parent-after-anonymous-item"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      createdAt: "2026-01-01T00:00:00.200Z",
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((candidate) => {
+        if (candidate.kind !== "subagent.thread") return false;
+        const payload = candidate.payload as Record<string, unknown>;
+        return payload.status === "completed" && payload.transcript === "final!";
+      }),
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    expect((subagent?.payload as Record<string, unknown> | undefined)?.latestEventType).toBe(
+      "turn.completed",
+    );
+  });
+
+  it("derives globally distinct subagent activity ids without lossy punctuation", () => {
+    const baseEvent = {
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-identity"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("provider-thread"),
+      payload: { streamKind: "assistant_text", delta: "text" },
+    } as ProviderRuntimeEvent;
+
+    const first = subagentActivityIdForRuntime(asThreadId("parent/a"), baseEvent, "child/a");
+    const second = subagentActivityIdForRuntime(asThreadId("parent?a"), baseEvent, "child?a");
+    expect(first).not.toBe(second);
+    expect(first).toContain("parent%2Fa");
+    expect(second).toContain("child%3Fa");
+  });
+
+  it("flushes pending subagent text when a parent-only interruption arrives", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-interrupted");
+    const agentContext = {
+      providerThreadId: "provider-child-interrupted",
+      parentTurnId: turnId,
+    } as const;
+
+    for (const [index, delta] of ["first", " second"].entries()) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-interrupted-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:00.${index === 0 ? "000" : "100"}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-interrupted"),
+        agentContext,
+        payload: {
+          streamKind: "assistant_text",
+          delta,
+        },
+      });
+    }
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-parent-turn-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "Interrupted by user." },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return payload.status === "failed" && payload.transcript === "first second";
+      }),
+    );
+    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a terminal subagent activity.");
+    }
+    expect((subagent.payload as Record<string, unknown>).latestEventType).toBe("turn.aborted");
+  });
+
+  it("settles a clean running subagent as failed when its provider session exits", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-session-exit");
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-before-session-exit"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-session-exit"),
+      agentContext: {
+        providerThreadId: "provider-child-session-exit",
+        parentTurnId: turnId,
+      },
+      payload: { streamKind: "assistant_text", delta: "preserved before exit" },
+    });
+    await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "subagent.thread"),
+    );
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-provider-session-exited"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      payload: { reason: "provider exited", recoverable: false },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return (
+          payload.status === "failed" &&
+          payload.transcript === "preserved before exit" &&
+          payload.latestEventType === "session.exited"
+        );
+      }),
+    );
+    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a terminal subagent activity after session exit.");
+    }
+    expect((subagent.payload as Record<string, unknown>).status).toBe("failed");
   });
 
   it("preserves completed tool metadata on projected tool activities", async () => {
