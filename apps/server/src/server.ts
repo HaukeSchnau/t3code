@@ -89,6 +89,7 @@ import * as EnergyCaptureRequests from "./diagnostics/EnergyCaptureRequests.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as WorkloadDiagnostics from "./diagnostics/WorkloadDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import {
   clearPersistedServerRuntimeState,
@@ -429,6 +430,7 @@ export const makeRoutesLayer = Layer.mergeAll(
 ).pipe(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(EnergyCaptureRequests.layer),
+  Layer.provide(WorkloadDiagnostics.layer),
   Layer.provide(browserApiCorsLayer),
 );
 

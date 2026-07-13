@@ -1264,10 +1264,11 @@ it.effect("flushes managed native logs when the adapter layer shuts down", () =>
       yield* Scope.close(scope, Exit.void);
       scopeClosed = true;
 
-      const threadLogPath = NodePath.join(tempDir, "thread-logger.log");
-      NodeAssert.equal(NodeFS.existsSync(threadLogPath), true);
-      const contents = NodeFS.readFileSync(threadLogPath, "utf8");
-      NodeAssert.match(contents, /NTIVE: .*"message":"native flush test"/);
+      NodeAssert.equal(NodeFS.existsSync(basePath), true);
+      const contents = NodeFS.readFileSync(basePath, "utf8");
+      NodeAssert.match(contents, /NTIVE: .*"name":"process\/stderr"/);
+      NodeAssert.match(contents, /"threadId":"thread-logger"/);
+      NodeAssert.doesNotMatch(contents, /native flush test/);
     } finally {
       if (!scopeClosed) {
         yield* Scope.close(scope, Exit.void);

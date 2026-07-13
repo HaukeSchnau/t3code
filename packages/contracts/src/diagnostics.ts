@@ -110,3 +110,12 @@ export const EnergyDiagnosticsCaptureResult = Schema.Struct({
   rendererLongTaskCount: NonNegativeInt,
 });
 export type EnergyDiagnosticsCaptureResult = typeof EnergyDiagnosticsCaptureResult.Type;
+
+export const WorkloadDiagnosticsSnapshot = Schema.Struct({
+  schemaVersion: Schema.Literal(1),
+  startedAtIso: IsoDateTime,
+  readAtIso: IsoDateTime,
+  counters: Schema.Record(TrimmedNonEmptyString, NonNegativeInt),
+  gauges: Schema.Record(TrimmedNonEmptyString, NonNegativeInt),
+});
+export type WorkloadDiagnosticsSnapshot = typeof WorkloadDiagnosticsSnapshot.Type;

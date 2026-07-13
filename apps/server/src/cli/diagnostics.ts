@@ -3,6 +3,7 @@ import {
   AuthAdministrativeScopes,
   EnvironmentHttpApi,
   type EnergyDiagnosticsCaptureResult,
+  type WorkloadDiagnosticsSnapshot,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Data from "effect/Data";
@@ -150,6 +151,25 @@ function formatEnergyCaptureResult(
   return lines.join("\n");
 }
 
+export function formatWorkloadDiagnosticsResult(
+  result: WorkloadDiagnosticsSnapshot,
+  options: { readonly json: boolean },
+): string {
+  if (options.json) return encodeJsonString(result);
+
+  const nonZeroCounters = Object.entries(result.counters)
+    .filter(([, value]) => value > 0)
+    .sort(([left], [right]) => left.localeCompare(right));
+  const nonZeroGauges = Object.entries(result.gauges)
+    .filter(([, value]) => value > 0)
+    .sort(([left], [right]) => left.localeCompare(right));
+  return [
+    `Workload diagnostics since ${result.startedAtIso}.`,
+    ...nonZeroCounters.map(([name, value]) => `${name}: ${value}`),
+    ...nonZeroGauges.map(([name, value]) => `${name}: ${value}`),
+  ].join("\n");
+}
+
 const requestLiveEnergyCapture = (
   flags: {
     readonly duration: Duration.Duration;
@@ -238,7 +258,58 @@ const energyDiagnosticsCommand = Command.make("energy", {
   ),
 );
 
+const readLiveWorkloadDiagnostics = (flags: CliAuthLocationFlags) =>
+  Effect.gen(function* () {
+    const logLevel = yield* GlobalFlag.LogLevel;
+    const config = yield* resolveCliAuthConfig(flags, logLevel);
+    const runtimeState = yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath);
+    if (Option.isNone(runtimeState)) {
+      return yield* new DiagnosticsLiveServerUnavailableError({
+        reason: "no persisted running-server state",
+      });
+    }
+
+    return yield* Effect.gen(function* () {
+      const environmentAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      return yield* withDiagnosticsCliSessionToken(environmentAuth, (token) =>
+        Effect.gen(function* () {
+          const client = yield* makeLiveServerClient(runtimeState.value.origin);
+          return yield* client.server.workloadDiagnostics({
+            headers: { authorization: `Bearer ${token}` },
+          });
+        }),
+      );
+    }).pipe(
+      Effect.provide(
+        EnvironmentAuth.runtimeLayer.pipe(
+          Layer.provideMerge(FetchHttpClient.layer),
+          Layer.provide(ServerConfig.layer(config)),
+          Layer.provide(Layer.succeed(References.MinimumLogLevel, "None")),
+        ),
+      ),
+    );
+  });
+
+const workloadDiagnosticsCommand = Command.make("workload", {
+  ...authLocationFlags,
+  json: jsonFlag,
+}).pipe(
+  Command.withDescription("Read cumulative server workload amplification counters."),
+  Command.withHandler((flags) =>
+    Effect.gen(function* () {
+      const attempted = yield* Effect.result(readLiveWorkloadDiagnostics(flags));
+      if (attempted._tag === "Failure") {
+        yield* setExitCode(2);
+        const message = failureMessage(attempted.failure);
+        yield* Console.error(flags.json ? encodeJsonString({ status: "error", message }) : message);
+        return;
+      }
+      yield* Console.log(formatWorkloadDiagnosticsResult(attempted.success, { json: flags.json }));
+    }),
+  ),
+);
+
 export const diagnosticsCommand = Command.make("diagnostics").pipe(
   Command.withDescription("Record and inspect local T3 Code diagnostics."),
-  Command.withSubcommands([energyDiagnosticsCommand]),
+  Command.withSubcommands([energyDiagnosticsCommand, workloadDiagnosticsCommand]),
 );

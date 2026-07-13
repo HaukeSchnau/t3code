@@ -29,6 +29,7 @@ import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   EnergyDiagnosticsCaptureRequestInput,
   EnergyDiagnosticsCaptureResult,
+  WorkloadDiagnosticsSnapshot,
 } from "./diagnostics.ts";
 import {
   ClientOrchestrationCommand,
@@ -536,6 +537,13 @@ export class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
       headers: OptionalBearerHeaders,
       success: ServerIdleStatus,
       error: EnvironmentServerIdleStatusErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("workloadDiagnostics", "/api/diagnostics/workload", {
+      headers: OptionalBearerHeaders,
+      success: WorkloadDiagnosticsSnapshot,
+      error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
