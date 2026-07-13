@@ -67,6 +67,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     status: shellStatusForSnapshot(cachedSnapshot),
     error: Option.none(),
   });
+  const lastSequence = yield* SubscriptionRef.make(
+    Option.match(cachedSnapshot, {
+      onNone: () => 0,
+      onSome: (snapshot) => snapshot.snapshotSequence,
+    }),
+  );
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
 
   const persist = Effect.fn("EnvironmentShellState.persist")(function* (
@@ -126,17 +132,46 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const applyItem = Effect.fn("EnvironmentShellState.applyItem")(function* (
     item: OrchestrationShellStreamItem,
   ) {
+    if (item.kind === "snapshot") {
+      yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
+      yield* SubscriptionRef.set(state, {
+        snapshot: Option.some(item.snapshot),
+        status: "live",
+        error: Option.none(),
+      });
+      yield* Queue.offer(persistence, item.snapshot);
+      return;
+    }
+
+    const sequence = yield* SubscriptionRef.get(lastSequence);
+    if (item.sequence <= sequence) {
+      return;
+    }
+    yield* SubscriptionRef.set(lastSequence, item.sequence);
+
+    // Cursor items prove replay progress but carry no shell-visible change.
+    // Keeping the cursor separate avoids invalidating every shell consumer or
+    // serializing the complete snapshot for every provider-detail event. The
+    // server bounds cursor frames, and this queue debounces a cursor-only run
+    // to one cache write so a recreated subscription can resume from its tail.
+    if (item.kind === "cursor") {
+      const current = yield* SubscriptionRef.get(state);
+      yield* Option.match(current.snapshot, {
+        onNone: () => Effect.void,
+        onSome: (snapshot) =>
+          Queue.offer(persistence, {
+            ...snapshot,
+            snapshotSequence: item.sequence,
+          }),
+      });
+      return;
+    }
+
     const current = yield* SubscriptionRef.get(state);
-    const nextSnapshot =
-      item.kind === "snapshot"
-        ? item.snapshot
-        : Option.match(current.snapshot, {
-            onNone: () => null,
-            onSome: (snapshot) =>
-              item.sequence > snapshot.snapshotSequence
-                ? applyShellStreamEvent(snapshot, item)
-                : snapshot,
-          });
+    const nextSnapshot = Option.match(current.snapshot, {
+      onNone: () => null,
+      onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
+    });
     if (nextSnapshot === null) {
       return;
     }
@@ -179,8 +214,11 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       }
 
       const subscribeInput = Option.match(base, {
-        onNone: () => ({}),
-        onSome: (snapshot) => ({ afterSequence: snapshot.snapshotSequence }),
+        onNone: () => ({ includeCursorItems: true }),
+        onSome: (snapshot) => ({
+          afterSequence: snapshot.snapshotSequence,
+          includeCursorItems: true,
+        }),
       });
 
       yield* subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {

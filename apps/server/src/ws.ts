@@ -36,7 +36,7 @@ import {
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
-  type OrchestrationShellStreamEvent,
+  type OrchestrationShellCursorItem,
   type OrchestrationShellStreamItem,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -88,6 +88,11 @@ import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { isShellVisibleThreadEvent } from "./orchestration/shellVisibility.ts";
+import {
+  adjustWorkloadGauge,
+  incrementWorkloadCounter,
+} from "./diagnostics/WorkloadDiagnostics.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -314,6 +319,58 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
     event.type === "thread.history-pruned" ||
     event.type === "thread.session-set"
   );
+}
+
+const SHELL_CURSOR_COMPACTION_INTERVAL = 128;
+const REPLAY_PAGE_SIZE = 256;
+const LIVE_REPLAY_BUFFER_SIZE = 1_024;
+
+export function shouldIncludeShellStreamItem(
+  item: OrchestrationShellStreamItem,
+  includeCursorItems: boolean | undefined,
+): boolean {
+  return item.kind !== "cursor" || includeCursorItems === true;
+}
+
+/**
+ * Bound sequence-only traffic without delaying shell-visible changes. A finite
+ * catch-up stream flushes its final cursor so the client resumes from its true
+ * tail; a live stream emits progress at a fixed event-count cadence.
+ */
+export function compactShellCursorItems<E, R>(
+  stream: Stream.Stream<OrchestrationShellStreamItem, E, R>,
+  interval = SHELL_CURSOR_COMPACTION_INTERVAL,
+): Stream.Stream<OrchestrationShellStreamItem, E, R> {
+  const boundedInterval = Math.max(1, Math.floor(interval));
+  interface CursorCompactionState {
+    readonly count: number;
+    readonly pending: OrchestrationShellCursorItem | null;
+  }
+  const initial = (): CursorCompactionState => ({ count: 0, pending: null });
+  const compact = (
+    state: CursorCompactionState,
+    item: OrchestrationShellStreamItem,
+  ): readonly [CursorCompactionState, ReadonlyArray<OrchestrationShellStreamItem>] => {
+    if (item.kind !== "cursor") {
+      incrementWorkloadCounter("shell.suppressed", state.count);
+      return [initial(), [item]];
+    }
+    const count = state.count + 1;
+    if (count >= boundedInterval) {
+      incrementWorkloadCounter("shell.suppressed", state.count);
+      return [initial(), [item]];
+    }
+    return [{ count, pending: item }, []];
+  };
+  return Stream.mapAccum<
+    OrchestrationShellStreamItem,
+    E,
+    R,
+    CursorCompactionState,
+    OrchestrationShellStreamItem
+  >(stream, initial, compact, {
+    onHalt: (state) => (state.pending === null ? [] : [state.pending]),
+  });
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -862,77 +919,104 @@ const makeWsRpcLayer = (
       const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
         Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
+      const readEventsPaginated = (afterSequence: number) =>
+        Stream.paginate(afterSequence, (cursor) =>
+          Stream.runCollect(orchestrationEngine.readEvents(cursor, REPLAY_PAGE_SIZE)).pipe(
+            Effect.map((chunk) => {
+              const events = Array.from(chunk);
+              const lastEvent = events.at(-1);
+              return [
+                events,
+                events.length === REPLAY_PAGE_SIZE && lastEvent !== undefined
+                  ? Option.some(lastEvent.sequence)
+                  : Option.none<number>(),
+              ] as const;
+            }),
+          ),
+        );
+
+      type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
+      const shellCursor = (event: OrchestrationEvent): OrchestrationShellCursorItem => ({
+        kind: "cursor",
+        sequence: event.sequence,
+      });
       const toShellStreamEvent = (
         event: OrchestrationEvent,
-      ): Effect.Effect<Option.Option<OrchestrationShellStreamEvent>, never, never> => {
+      ): Effect.Effect<ShellDeltaItem, never, never> => {
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
             return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
-              Effect.map((project) =>
-                Option.map(project, (nextProject) => ({
-                  kind: "project-upserted" as const,
-                  sequence: event.sequence,
-                  project: nextProject,
-                })),
+              Effect.map(
+                (project): ShellDeltaItem =>
+                  Option.match(project, {
+                    onNone: () => shellCursor(event),
+                    onSome: (nextProject) => ({
+                      kind: "project-upserted",
+                      sequence: event.sequence,
+                      project: nextProject,
+                    }),
+                  }),
               ),
-              Effect.orElseSucceed(() => Option.none()),
+              Effect.orElseSucceed(() => shellCursor(event)),
             );
           case "project.deleted":
-            return Effect.succeed(
-              Option.some({
-                kind: "project-removed" as const,
-                sequence: event.sequence,
-                projectId: event.payload.projectId,
-              }),
-            );
+            return Effect.succeed({
+              kind: "project-removed" as const,
+              sequence: event.sequence,
+              projectId: event.payload.projectId,
+            });
           case "thread.deleted":
           case "thread.archived":
-            return Effect.succeed(
-              Option.some({
-                kind: "thread-removed" as const,
-                sequence: event.sequence,
-                threadId: event.payload.threadId,
-              }),
-            );
+            return Effect.succeed({
+              kind: "thread-removed" as const,
+              sequence: event.sequence,
+              threadId: event.payload.threadId,
+            });
           case "thread.unarchived":
             return projectionSnapshotQuery.getThreadShellById(event.payload.threadId).pipe(
-              Effect.map((thread) =>
-                Option.map(thread, (nextThread) => ({
-                  kind: "thread-upserted" as const,
-                  sequence: event.sequence,
-                  thread: nextThread,
-                })),
+              Effect.map(
+                (thread): ShellDeltaItem =>
+                  Option.match(thread, {
+                    onNone: () => shellCursor(event),
+                    onSome: (nextThread) => ({
+                      kind: "thread-upserted",
+                      sequence: event.sequence,
+                      thread: nextThread,
+                    }),
+                  }),
               ),
-              Effect.orElseSucceed(() => Option.none()),
+              Effect.orElseSucceed(() => shellCursor(event)),
             );
           case "provider.usage-limits-updated":
-            return Effect.succeed(
-              Option.some({
-                kind: "usage-limits-updated" as const,
-                sequence: event.sequence,
-                usageLimits: {
-                  provider: event.payload.provider,
-                  providerInstanceId: event.payload.providerInstanceId,
-                  usageLimits: event.payload.usageLimits,
-                },
-              }),
-            );
+            return Effect.succeed({
+              kind: "usage-limits-updated" as const,
+              sequence: event.sequence,
+              usageLimits: {
+                provider: event.payload.provider,
+                providerInstanceId: event.payload.providerInstanceId,
+                usageLimits: event.payload.usageLimits,
+              },
+            });
           default:
-            if (event.aggregateKind !== "thread") {
-              return Effect.succeed(Option.none());
+            if (event.aggregateKind !== "thread" || !isShellVisibleThreadEvent(event)) {
+              return Effect.succeed(shellCursor(event));
             }
             return projectionSnapshotQuery
               .getThreadShellById(ThreadId.make(event.aggregateId))
               .pipe(
-                Effect.map((thread) =>
-                  Option.map(thread, (nextThread) => ({
-                    kind: "thread-upserted" as const,
-                    sequence: event.sequence,
-                    thread: nextThread,
-                  })),
+                Effect.map(
+                  (thread): ShellDeltaItem =>
+                    Option.match(thread, {
+                      onNone: () => shellCursor(event),
+                      onSome: (nextThread) => ({
+                        kind: "thread-upserted",
+                        sequence: event.sequence,
+                        thread: nextThread,
+                      }),
+                    }),
                 ),
-                Effect.orElseSucceed(() => Option.none()),
+                Effect.orElseSucceed(() => shellCursor(event)),
               );
         }
       };
@@ -1753,12 +1837,32 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.mapEffect(toShellStreamEvent),
-                Stream.flatMap((event) =>
-                  Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
-                ),
+              yield* Effect.acquireRelease(
+                Effect.sync(() => adjustWorkloadGauge("subscriptions.shell.active", 1)),
+                () => Effect.sync(() => adjustWorkloadGauge("subscriptions.shell.active", -1)),
               );
+              const includeCursorItems = input.includeCursorItems === true;
+              const toShellStream = <E, R>(events: Stream.Stream<OrchestrationEvent, E, R>) =>
+                events.pipe(
+                  Stream.tap(() => Effect.sync(() => incrementWorkloadCounter("shell.candidates"))),
+                  Stream.mapEffect(toShellStreamEvent),
+                  Stream.tap((item) =>
+                    Effect.sync(() =>
+                      incrementWorkloadCounter(
+                        item.kind === "cursor" ? "shell.cursor_only" : "shell.upserts",
+                      ),
+                    ),
+                  ),
+                  Stream.filter((item) => {
+                    const include = shouldIncludeShellStreamItem(item, includeCursorItems);
+                    if (!include) {
+                      incrementWorkloadCounter("shell.suppressed");
+                    }
+                    return include;
+                  }),
+                  compactShellCursorItems,
+                );
+              const liveStream = toShellStream(orchestrationEngine.streamDomainEvents);
 
               // When the client already holds a shell snapshot (cached, or loaded
               // over HTTP) it passes that snapshot's sequence, and we resume by
@@ -1773,25 +1877,21 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
                   Effect.gen(function* () {
-                    const liveBuffer = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+                    const liveBuffer =
+                      yield* Queue.bounded<OrchestrationShellStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
-                    const catchUpStream = orchestrationEngine
-                      .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                      .pipe(
-                        Stream.mapEffect(toShellStreamEvent),
-                        Stream.flatMap((event) =>
-                          Option.isSome(event) ? Stream.succeed(event.value) : Stream.empty,
-                        ),
-                        Stream.mapError(
-                          (cause) =>
-                            new OrchestrationGetSnapshotError({
-                              message: "Failed to replay orchestration shell events",
-                              cause,
-                            }),
-                        ),
-                      );
+                    const catchUpStream = readEventsPaginated(afterSequence).pipe(
+                      toShellStream,
+                      Stream.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: "Failed to replay orchestration shell events",
+                            cause,
+                          }),
+                      ),
+                    );
                     return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
                   }),
                 );
@@ -1841,6 +1941,10 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeThread,
             Effect.gen(function* () {
+              yield* Effect.acquireRelease(
+                Effect.sync(() => adjustWorkloadGauge("subscriptions.detail.active", 1)),
+                () => Effect.sync(() => adjustWorkloadGauge("subscriptions.detail.active", -1)),
+              );
               const isThisThreadDetailEvent = (event: OrchestrationEvent) =>
                 event.aggregateKind === "thread" &&
                 event.aggregateId === input.threadId &&
@@ -1848,6 +1952,9 @@ const makeWsRpcLayer = (
 
               const liveStream = orchestrationEngine.streamDomainEvents.pipe(
                 Stream.filter(isThisThreadDetailEvent),
+                Stream.tap(() =>
+                  Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
+                ),
                 Stream.map((event) => ({
                   kind: "event" as const,
                   event,
@@ -1875,23 +1982,27 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
                   Effect.gen(function* () {
-                    const liveBuffer = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
+                    const liveBuffer =
+                      yield* Queue.bounded<OrchestrationThreadStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
                     yield* Effect.forkScoped(
                       liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
                     );
-                    const catchUpStream = orchestrationEngine
-                      .readEvents(afterSequence, Number.MAX_SAFE_INTEGER)
-                      .pipe(
-                        Stream.filter(isThisThreadDetailEvent),
-                        Stream.map((event) => ({ kind: "event" as const, event })),
-                        Stream.mapError(
-                          (cause) =>
-                            new OrchestrationGetSnapshotError({
-                              message: `Failed to replay thread ${input.threadId} events`,
-                              cause,
-                            }),
+                    const catchUpStream = readEventsPaginated(afterSequence).pipe(
+                      Stream.filter(isThisThreadDetailEvent),
+                      Stream.tap(() =>
+                        Effect.sync(() =>
+                          incrementWorkloadCounter("thread_detail.events_published"),
                         ),
-                      );
+                      ),
+                      Stream.map((event) => ({ kind: "event" as const, event })),
+                      Stream.mapError(
+                        (cause) =>
+                          new OrchestrationGetSnapshotError({
+                            message: `Failed to replay thread ${input.threadId} events`,
+                            cause,
+                          }),
+                      ),
+                    );
                     return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
                   }),
                 );

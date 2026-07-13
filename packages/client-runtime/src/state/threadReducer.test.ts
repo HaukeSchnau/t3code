@@ -724,6 +724,48 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.activities[0]?.id).toBe("activity-0");
       }
     });
+
+    it("repositions a stable activity id only when its ordering key changes", () => {
+      const existingActivities = [1, 2, 3].map((sequence) => ({
+        id: EventId.make(sequence === 2 ? "activity-stable" : `activity-${sequence}`),
+        tone: "tool" as const,
+        kind: "command",
+        summary: `Activity ${sequence}`,
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        sequence,
+        createdAt: `2026-04-01T11:00:0${sequence}.000Z`,
+      }));
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: existingActivities },
+        {
+          ...baseEventFields,
+          sequence: 14,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              ...existingActivities[1]!,
+              sequence: 4,
+              summary: "Updated stable activity",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((entry) => entry.id)).toEqual([
+          "activity-1",
+          "activity-3",
+          "activity-stable",
+        ]);
+        expect(result.thread.activities.at(-1)?.summary).toBe("Updated stable activity");
+      }
+    });
   });
 
   describe("thread.turn-diff-completed", () => {

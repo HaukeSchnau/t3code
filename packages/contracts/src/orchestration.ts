@@ -522,11 +522,18 @@ export const OrchestrationShellStreamEvent = Schema.Union([
 ]);
 export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;
 
+export const OrchestrationShellCursorItem = Schema.Struct({
+  kind: Schema.Literal("cursor"),
+  sequence: NonNegativeInt,
+});
+export type OrchestrationShellCursorItem = typeof OrchestrationShellCursorItem.Type;
+
 export const OrchestrationShellStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("snapshot"),
     snapshot: OrchestrationShellSnapshot,
   }),
+  OrchestrationShellCursorItem,
   OrchestrationShellStreamEvent,
 ]);
 export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
@@ -541,6 +548,11 @@ export const OrchestrationSubscribeShellInput = Schema.Struct({
    * client).
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /**
+   * Capability flag for sequence-only frames. Older clients omit this field,
+   * so servers must not send them a stream item their schema cannot decode.
+   */
+  includeCursorItems: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
 

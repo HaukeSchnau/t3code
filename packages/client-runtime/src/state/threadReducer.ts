@@ -29,16 +29,74 @@ const checkpointOrder = O.mapInput(
     cp.checkpointTurnCount ?? Number.MAX_SAFE_INTEGER,
 );
 
-const activityOrder = O.combineAll<OrchestrationThreadActivity>([
-  O.mapInput(O.Number, (a) => a.sequence ?? Number.MAX_SAFE_INTEGER),
-  O.mapInput(O.String, (a) => a.createdAt),
-  O.mapInput(O.String, (a) => a.id),
-]);
-
 const queuedMessageOrder = O.combine<NonNullable<OrchestrationThread["queuedMessages"]>[number]>(
   O.mapInput(O.String, (message) => message.createdAt),
   O.mapInput(O.String, (message) => message.messageId),
 );
+
+function compareActivities(
+  left: OrchestrationThreadActivity,
+  right: OrchestrationThreadActivity,
+): number {
+  const sequence =
+    (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER);
+  if (sequence !== 0) return sequence;
+  const createdAt = left.createdAt.localeCompare(right.createdAt);
+  return createdAt !== 0 ? createdAt : left.id.localeCompare(right.id);
+}
+
+function insertOrderedActivity(
+  activities: OrchestrationThreadActivity[],
+  activity: OrchestrationThreadActivity,
+): void {
+  let low = 0;
+  let high = activities.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (compareActivities(activities[middle]!, activity) <= 0) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  activities.splice(low, 0, activity);
+}
+
+function upsertOrderedActivity(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  activity: OrchestrationThreadActivity,
+): OrchestrationThreadActivity[] {
+  const lastIndex = activities.length - 1;
+  const existingIndex =
+    lastIndex >= 0 && activities[lastIndex]?.id === activity.id
+      ? lastIndex
+      : activities.findIndex((entry) => entry.id === activity.id);
+
+  if (existingIndex >= 0) {
+    const previous = activities[existingIndex - 1];
+    const next = activities[existingIndex + 1];
+    if (
+      (previous === undefined || compareActivities(previous, activity) <= 0) &&
+      (next === undefined || compareActivities(activity, next) <= 0)
+    ) {
+      const updated = [...activities];
+      updated[existingIndex] = activity;
+      return updated;
+    }
+    const reordered = [...activities];
+    reordered.splice(existingIndex, 1);
+    insertOrderedActivity(reordered, activity);
+    return reordered;
+  }
+
+  const last = activities[lastIndex];
+  if (last === undefined || compareActivities(last, activity) <= 0) {
+    return [...activities, activity];
+  }
+  const inserted = [...activities];
+  insertOrderedActivity(inserted, activity);
+  return inserted;
+}
 
 /**
  * Apply a single orchestration event to an `OrchestrationThread`, returning
@@ -233,27 +291,31 @@ export function applyThreadDetailEvent(
         updatedAt: event.payload.updatedAt,
       };
 
-      const existingMessage = thread.messages.find((entry) => entry.id === message.id);
-      const messages = existingMessage
-        ? Arr.map(thread.messages, (entry) =>
-            entry.id !== message.id
-              ? entry
-              : {
-                  ...entry,
-                  text: message.streaming
-                    ? `${entry.text}${message.text}`
-                    : message.text.length > 0
-                      ? message.text
-                      : entry.text,
-                  streaming: message.streaming,
-                  ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
-                  ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
-                  ...(message.attachments !== undefined
-                    ? { attachments: message.attachments }
-                    : {}),
-                },
-          )
-        : Arr.append(thread.messages, message);
+      const lastMessageIndex = thread.messages.length - 1;
+      const existingMessageIndex =
+        lastMessageIndex >= 0 && thread.messages[lastMessageIndex]?.id === message.id
+          ? lastMessageIndex
+          : thread.messages.findIndex((entry) => entry.id === message.id);
+      const messages =
+        existingMessageIndex < 0
+          ? [...thread.messages, message]
+          : (() => {
+              const entry = thread.messages[existingMessageIndex]!;
+              const updated = [...thread.messages];
+              updated[existingMessageIndex] = {
+                ...entry,
+                text: message.streaming
+                  ? `${entry.text}${message.text}`
+                  : message.text.length > 0
+                    ? message.text
+                    : entry.text,
+                streaming: message.streaming,
+                ...(message.turnId !== undefined ? { turnId: message.turnId } : {}),
+                ...(message.streaming ? {} : { updatedAt: message.updatedAt }),
+                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+              };
+              return updated;
+            })();
       // Update latestTurn for assistant messages bound to a turn. A completed
       // assistant message only settles the turn once the session is no longer
       // running it — providers may emit several assistant messages per turn
@@ -546,12 +608,7 @@ export function applyThreadDetailEvent(
 
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
-      const activities = pipe(
-        thread.activities,
-        Arr.filter((activity) => activity.id !== event.payload.activity.id),
-        Arr.append(event.payload.activity),
-        Arr.sort(activityOrder),
-      );
+      const activities = upsertOrderedActivity(thread.activities, event.payload.activity);
 
       return {
         kind: "updated",
