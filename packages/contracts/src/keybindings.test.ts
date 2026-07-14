@@ -77,6 +77,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedModelPickerToggle.command, "modelPicker.toggle");
 
+    const parsedReasoningEffortCycle = yield* decode(KeybindingRule, {
+      key: "mod+shift+.",
+      command: "reasoningEffort.cycle",
+    });
+    assert.strictEqual(parsedReasoningEffortCycle.command, "reasoningEffort.cycle");
+
     const parsedModelPickerJump = yield* decode(KeybindingRule, {
       key: "mod+1",
       command: "modelPicker.jump.1",

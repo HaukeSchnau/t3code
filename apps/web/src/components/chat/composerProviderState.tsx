@@ -36,6 +36,37 @@ export type ComposerProviderState = {
   modelPickerIconClassName?: string;
 };
 
+export function cycleComposerReasoningEffort(
+  input: ComposerProviderStateInput,
+): ReadonlyArray<ProviderOptionSelection> | null {
+  const caps = getProviderModelCapabilities(input.models, input.model, input.provider);
+  const descriptors = getProviderOptionDescriptors({ caps, selections: input.modelOptions });
+  const effortDescriptor = descriptors.find(
+    (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
+      descriptor.type === "select",
+  );
+  if (!effortDescriptor || effortDescriptor.options.length === 0) {
+    return null;
+  }
+
+  const currentValue = getProviderOptionCurrentValue(effortDescriptor);
+  const currentIndex = effortDescriptor.options.findIndex((option) => option.id === currentValue);
+  const nextOption = effortDescriptor.options[(currentIndex + 1) % effortDescriptor.options.length];
+  if (!nextOption) {
+    return null;
+  }
+
+  return (
+    buildProviderOptionSelectionsFromDescriptors(
+      descriptors.map((descriptor) =>
+        descriptor.id === effortDescriptor.id
+          ? { ...effortDescriptor, currentValue: nextOption.id }
+          : descriptor,
+      ),
+    ) ?? null
+  );
+}
+
 type TraitsRenderInput = {
   provider: ProviderDriverKind;
   instanceId?: ProviderInstanceId;

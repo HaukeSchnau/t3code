@@ -82,6 +82,7 @@ import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
 import {
+  cycleComposerReasoningEffort,
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -436,6 +437,7 @@ export interface ChatComposerHandle {
   insertTextAtEnd: (text: string) => boolean;
   openModelPicker: () => void;
   toggleModelPicker: () => void;
+  cycleReasoningEffort: () => void;
   isModelPickerOpen: () => boolean;
   readSnapshot: () => {
     value: string;
@@ -680,6 +682,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const effectiveInteractionMode = composerDraft.interactionMode ?? interactionMode;
 
   const setComposerDraftPrompt = useComposerDraftStore((store) => store.setPrompt);
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
   const addComposerDraftImage = useComposerDraftStore((store) => store.addImage);
   const addComposerDraftImages = useComposerDraftStore((store) => store.addImages);
   const removeComposerDraftImage = useComposerDraftStore((store) => store.removeImage);
@@ -2155,6 +2158,20 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       toggleModelPicker: () => {
         setIsComposerModelPickerOpen((open) => !open);
       },
+      cycleReasoningEffort: () => {
+        const nextOptions = cycleComposerReasoningEffort({
+          provider: selectedProvider,
+          model: selectedModel,
+          models: selectedProviderModels,
+          modelOptions: composerModelOptions?.[selectedInstanceId],
+        });
+        if (!nextOptions) return;
+        setProviderModelOptions(composerDraftTarget, selectedProvider, nextOptions, {
+          instanceId: selectedInstanceId,
+          model: selectedModel,
+          persistSticky: true,
+        });
+      },
       isModelPickerOpen: () => isComposerModelPickerOpen,
       readSnapshot: () => {
         return readComposerSnapshot();
@@ -2253,6 +2270,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,
+      composerModelOptions,
+      selectedInstanceId,
+      setProviderModelOptions,
     ],
   );
 
