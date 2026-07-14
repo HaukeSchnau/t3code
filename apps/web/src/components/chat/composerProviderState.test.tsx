@@ -6,6 +6,7 @@ import {
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
+  cycleComposerReasoningEffort,
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
@@ -60,6 +61,50 @@ const ULTRATHINK_FRAME_CLASSES = {
   composerSurfaceClassName: "shadow-[0_0_0_1px_rgba(255,255,255,0.07)_inset]",
   modelPickerIconClassName: "ultrathink-chroma",
 } as const;
+
+describe("cycleComposerReasoningEffort", () => {
+  const models = modelWith([
+    selectDescriptor("reasoningEffort", [
+      { id: "low", label: "Low" },
+      { id: "medium", label: "Medium", isDefault: true },
+      { id: "high", label: "High" },
+    ]),
+    booleanDescriptor("fastMode"),
+  ]);
+
+  it("advances through advertised efforts while preserving other options", () => {
+    expect(
+      cycleComposerReasoningEffort({
+        provider: PROVIDER,
+        model: MODEL,
+        models,
+        modelOptions: selections(["reasoningEffort", "medium"], ["fastMode", true]),
+      }),
+    ).toEqual(selections(["reasoningEffort", "high"], ["fastMode", true]));
+  });
+
+  it("wraps from the last effort to the first", () => {
+    expect(
+      cycleComposerReasoningEffort({
+        provider: PROVIDER,
+        model: MODEL,
+        models,
+        modelOptions: selections(["reasoningEffort", "high"]),
+      }),
+    ).toEqual(selections(["reasoningEffort", "low"]));
+  });
+
+  it("returns null when the model has no selectable effort", () => {
+    expect(
+      cycleComposerReasoningEffort({
+        provider: PROVIDER,
+        model: MODEL,
+        models: modelWith([booleanDescriptor("thinking")]),
+        modelOptions: undefined,
+      }),
+    ).toBeNull();
+  });
+});
 
 describe("getComposerProviderState", () => {
   it("derives a stable prompt injection state for ordinary prompt edits", () => {

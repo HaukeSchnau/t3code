@@ -132,6 +132,11 @@ const DEFAULT_BINDINGS = compile([
     command: "modelPicker.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  {
+    shortcut: modShortcut(".", { shiftKey: true }),
+    command: "reasoningEffort.cycle",
+    whenAst: whenNot(whenIdentifier("terminalFocus")),
+  },
   { shortcut: modShortcut("o", { shiftKey: true }), command: "chat.new" },
   { shortcut: modShortcut("n", { shiftKey: true }), command: "chat.newLocal" },
   { shortcut: modShortcut("o"), command: "editor.openFavorite" },
@@ -345,6 +350,10 @@ describe("shortcutLabelForCommand", () => {
       "Ctrl+Shift+M",
     );
     assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_BINDINGS, "reasoningEffort.cycle", "MacIntel"),
+      "⇧⌘.",
+    );
+    assert.strictEqual(
       shortcutLabelForCommand(DEFAULT_BINDINGS, "editor.openFavorite", "Linux"),
       "Ctrl+O",
     );
@@ -404,6 +413,19 @@ describe("shortcutLabelForCommand", () => {
         context: { terminalFocus: true },
       }),
       "Ctrl+D",
+    );
+  });
+});
+
+describe("reasoning effort shortcut", () => {
+  it("matches the shifted period key by physical key code", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: ">", code: "Period", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "MacIntel", context: { terminalFocus: false } },
+      ),
+      "reasoningEffort.cycle",
     );
   });
 });
