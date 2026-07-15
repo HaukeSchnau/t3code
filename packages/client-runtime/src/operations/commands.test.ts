@@ -1,6 +1,9 @@
 import {
   CommandId,
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
   EnvironmentId,
+  MessageId,
   ORCHESTRATION_WS_METHODS,
   ProjectId,
   ThreadId,
@@ -21,7 +24,12 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import { archiveThread, createProject, stopThreadSession } from "./commands.ts";
+import {
+  archiveThread,
+  createProject,
+  prepareQueueThreadMessage,
+  stopThreadSession,
+} from "./commands.ts";
 
 const TEST_CRYPTO_LAYER = Layer.succeed(
   Crypto.Crypto,
@@ -132,6 +140,39 @@ describe("environment commands", () => {
           threadId: "thread-1",
         },
       ]);
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
+  it.effect("prepares a stable-identity command without requiring a connection", () =>
+    Effect.gen(function* () {
+      const command = yield* prepareQueueThreadMessage({
+        commandId: CommandId.make("queued-command"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: MessageId.make("message-1"),
+          role: "user",
+          text: "Queued while offline",
+          attachments: [],
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-06-06T00:02:00.000Z",
+      });
+
+      expect(command).toEqual({
+        type: "thread.message.queue",
+        commandId: "queued-command",
+        threadId: "thread-1",
+        message: {
+          messageId: "message-1",
+          role: "user",
+          text: "Queued while offline",
+          attachments: [],
+        },
+        runtimeMode: DEFAULT_RUNTIME_MODE,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-06-06T00:02:00.000Z",
+      });
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 });
