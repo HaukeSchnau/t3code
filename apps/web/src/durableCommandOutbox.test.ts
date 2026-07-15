@@ -124,6 +124,18 @@ describe("web durable command outbox", () => {
     expect(shouldClearComposerAfterDurableEnqueue("send me", "send me and keep typing")).toBe(
       false,
     );
+    expect(
+      shouldClearComposerAfterDurableEnqueue(
+        { prompt: "send", imageIds: [], terminalContexts: [] },
+        { prompt: "send", imageIds: ["new-image"], terminalContexts: [] },
+      ),
+    ).toBe(false);
+    expect(
+      shouldClearComposerAfterDurableEnqueue(
+        { prompt: "send", previewAnnotations: [], reviewComments: [] },
+        { prompt: "send", previewAnnotations: [{ id: "new-preview" }], reviewComments: [] },
+      ),
+    ).toBe(false);
   });
 
   it("does not publish or accept intent when its enqueue save fails", async () => {
@@ -181,6 +193,68 @@ describe("web durable command outbox", () => {
       "command-1",
       "command-2",
     ]);
+    first.dispose();
+    second.dispose();
+  });
+
+  it("lets another controller enqueue while the elected drainer is awaiting an RPC", async () => {
+    const memory = memoryStorage();
+    let mutationTail = Promise.resolve();
+    const withMutationLock = <A>(task: () => Promise<A>): Promise<A> => {
+      const result = mutationTail.then(task);
+      mutationTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    };
+    let leaderHeld = false;
+    const withDrainLeadership = async (task: () => Promise<void>) => {
+      if (leaderHeld) return false;
+      leaderHeld = true;
+      try {
+        await task();
+        return true;
+      } finally {
+        leaderHeld = false;
+      }
+    };
+    let releaseDispatch: (() => void) | undefined;
+    let markDispatchStarted: (() => void) | undefined;
+    const dispatchStarted = new Promise<void>((resolve) => void (markDispatchStarted = resolve));
+    const dispatches: string[] = [];
+    const first = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withMutationLock,
+      withDrainLeadership,
+      dispatch: async (_environmentId, value) => {
+        dispatches.push(value.commandId);
+        if (value.commandId === "command-1") {
+          markDispatchStarted?.();
+          await new Promise<void>((resolve) => void (releaseDispatch = resolve));
+        }
+      },
+    });
+    const second = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withMutationLock,
+      withDrainLeadership,
+      dispatch: async (_environmentId, value) => void dispatches.push(value.commandId),
+    });
+
+    await first.enqueue(environmentId, command("command-1", "message-1"));
+    await dispatchStarted;
+    await second.enqueue(environmentId, command("command-2", "message-2"));
+    expect(memory.read().entries.map((entry) => entry.plan.command.commandId)).toEqual([
+      "command-1",
+      "command-2",
+    ]);
+    expect(dispatches).toEqual(["command-1"]);
+
+    releaseDispatch?.();
+    await first.flush();
     first.dispose();
     second.dispose();
   });
@@ -366,6 +440,101 @@ describe("web durable command outbox", () => {
 
     await controller.discardRejected(CommandId.make("command-1"));
     expect(memory.read().entries).toEqual([]);
+    controller.dispose();
+  });
+
+  it("turns a same-id previously-rejected retry permanent and unblocks FIFO after discard", async () => {
+    const memory = memoryStorage();
+    let clock = T0;
+    let attempts = 0;
+    const delivered: string[] = [];
+    const controller = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => clock,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async (_environmentId, value) => {
+        delivered.push(value.commandId);
+        if (value.commandId === "command-1") {
+          attempts += 1;
+          if (attempts === 1) throw new Error("Socket closed after server rejection");
+          throw {
+            _tag: "OrchestrationCommandPreviouslyRejectedError",
+            message: "The original command was durably rejected",
+          };
+        }
+      },
+    });
+    await controller.enqueue(environmentId, command("command-1", "message-1"));
+    await controller.enqueue(environmentId, command("command-2", "message-2"));
+    await controller.flush();
+    clock = T1;
+    controller.wake();
+    await controller.flush();
+
+    expect(memory.read().entries[0]?.state._tag).toBe("Rejected");
+    expect(delivered).toEqual(["command-1", "command-1"]);
+    await controller.discardRejected(CommandId.make("command-1"));
+    await controller.flush();
+    expect(delivered).toEqual(["command-1", "command-1", "command-2"]);
+    controller.dispose();
+  });
+
+  it("uses independent bounded recovery wakes after consecutive load failures", async () => {
+    let remainingLoadFailures = 2;
+    const timers: Array<() => void> = [];
+    const storage = CommandOutboxStorage.of({
+      load: Effect.suspend(() =>
+        remainingLoadFailures-- > 0
+          ? Effect.fail(
+              new CommandOutboxStorageError({ operation: "load", message: "temporary read error" }),
+            )
+          : Effect.succeed(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT),
+      ),
+      save: () => Effect.void,
+    });
+    const controller = createDurableCommandOutboxController({
+      storage,
+      now: () => T0,
+      setTimer: (callback) => {
+        timers.push(callback);
+        return callback;
+      },
+      clearTimer: () => undefined,
+      dispatch: async () => undefined,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(timers).toHaveLength(1);
+    timers.shift()?.();
+    await controller.flush();
+    expect(timers).toHaveLength(1);
+    timers.shift()?.();
+    await controller.flush();
+    expect(controller.snapshot()).toEqual([]);
+    controller.dispose();
+  });
+
+  it("deduplicates persisted queue intent already visible in the server queue", async () => {
+    const memory = memoryStorage();
+    const controller = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async () => {
+        throw new Error("offline");
+      },
+    });
+    await controller.enqueue(environmentId, command());
+    await controller.flush();
+    expect(
+      selectDurableOutboxMessages(
+        controller.snapshot(),
+        environmentId,
+        threadId,
+        new Set(["message-1"]),
+      ),
+    ).toEqual([]);
     controller.dispose();
   });
 });

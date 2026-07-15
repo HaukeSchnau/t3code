@@ -4193,6 +4193,14 @@ function ChatViewContent(props: ChatViewProps) {
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
+    const composerRevisionForSend = {
+      prompt: promptForSend,
+      imageIds: composerImagesSnapshot.map((image) => image.id),
+      terminalContexts: composerTerminalContextsSnapshot,
+      elementContexts: composerElementContextsSnapshot,
+      previewAnnotations: composerPreviewAnnotationsSnapshot,
+      reviewComments: composerReviewCommentsSnapshot,
+    };
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(promptForSend, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
@@ -4449,7 +4457,18 @@ function ChatViewContent(props: ChatViewProps) {
           },
         ]);
       }
-      if (shouldClearComposerAfterDurableEnqueue(promptForSend, promptRef.current)) {
+      const currentDraft = useComposerDraftStore.getState().getComposerDraft(composerDraftTarget);
+      const currentComposerRevision = {
+        prompt: promptRef.current,
+        imageIds: composerImagesRef.current.map((image) => image.id),
+        terminalContexts: composerTerminalContextsRef.current,
+        elementContexts: composerElementContextsRef.current,
+        previewAnnotations: currentDraft?.previewAnnotations ?? [],
+        reviewComments: currentDraft?.reviewComments ?? [],
+      };
+      if (
+        shouldClearComposerAfterDurableEnqueue(composerRevisionForSend, currentComposerRevision)
+      ) {
         promptRef.current = "";
         clearComposerDraftContent(composerDraftTarget);
         readComposerHandle(composerRef)?.resetCursorState();

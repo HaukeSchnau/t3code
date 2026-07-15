@@ -35,7 +35,10 @@ export interface DurableCommandOutboxControllerOptions {
   readonly now?: () => string;
   readonly setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   readonly clearTimer?: (handle: TimerHandle) => void;
+  /** @deprecated Use withMutationLock. */
   readonly withLock?: <A>(task: () => Promise<A>) => Promise<A>;
+  readonly withMutationLock?: <A>(task: () => Promise<A>) => Promise<A>;
+  readonly withDrainLeadership?: (task: () => Promise<void>) => Promise<boolean>;
 }
 
 export interface DurableCommandOutboxController {
@@ -145,7 +148,9 @@ function classifyWebCommandFailure(cause: unknown) {
       tag.includes("Validation") ||
       tag.includes("NotFound") ||
       tag.includes("Unauthorized") ||
-      tag.includes("Forbidden")
+      tag.includes("Forbidden") ||
+      tag === "OrchestrationCommandPreviouslyRejectedError" ||
+      tag === "OrchestrationCommandReceiptMismatchError"
     ) {
       return classifyCommandDeliveryFailure(cause, "permanent");
     }
@@ -160,14 +165,22 @@ export function createDurableCommandOutboxController(
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer =
     options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
-  const withLock = options.withLock ?? (async (task) => task());
+  const withMutationLock = options.withMutationLock ?? options.withLock ?? (async (task) => task());
+  const withDrainLeadership =
+    options.withDrainLeadership ??
+    (async (task) => {
+      await task();
+      return true;
+    });
   const listeners = new Set<() => void>();
   let current: ReadonlyArray<DurableCommandOutboxEntry> = [];
   let disposed = false;
   let timer: TimerHandle | null = null;
   let activeFlush: Promise<void> | null = null;
   let flushRequested = false;
-  const loadService = () => Effect.runPromise(makeCommandOutbox(options.storage, now()));
+  let recoveryAttempt = 0;
+  const loadService = (recoverInterruptedDeliveries = false) =>
+    Effect.runPromise(makeCommandOutbox(options.storage, now(), recoverInterruptedDeliveries));
 
   const publish = async (service: CommandOutboxService) => {
     current = await Effect.runPromise(service.entries);
@@ -186,58 +199,66 @@ export function createDurableCommandOutboxController(
     }, delay);
   };
 
+  const scheduleRecovery = () => {
+    if (disposed || timer !== null) return;
+    recoveryAttempt += 1;
+    const delay = Math.min(1_000 * 2 ** (recoveryAttempt - 1), 16_000);
+    timer = setTimer(() => {
+      timer = null;
+      void flush();
+    }, delay);
+  };
+
   const runFlush = async () => {
-    while (true) {
-      if (disposed) break;
-      let didDeliver = false;
-      try {
-        didDeliver = await withLock(async () => {
-          const service = await loadService();
-          const entry = (await Effect.runPromise(service.ready(now())))[0];
-          if (entry === undefined) {
-            await publish(service);
-            await schedule(service);
-            return false;
-          }
-          const commandId = entry.plan.command.commandId;
-          await Effect.runPromise(service.begin(commandId, now()));
-          await publish(service);
-          try {
-            await options.dispatch(entry.plan.environmentId, entry.plan.command);
-          } catch (cause) {
-            await Effect.runPromise(
-              service.fail(commandId, classifyWebCommandFailure(cause), now()),
-            );
-            await publish(service);
-            return true;
-          }
-          try {
-            await Effect.runPromise(service.complete(commandId));
-          } catch {
-            // Re-open from durable storage. A persisted Delivering state is
-            // recovered as an ambiguous retry, while a failed completion write
-            // can never make an unpersisted acknowledgement authoritative.
-            const recovered = await loadService();
-            await publish(recovered);
-            await schedule(recovered);
-            return false;
-          }
-          await publish(service);
-          return true;
+    try {
+      await withDrainLeadership(async () => {
+        await withMutationLock(async () => {
+          const recovered = await loadService(true);
+          await publish(recovered);
         });
-      } catch (cause) {
-        console.error("Durable command delivery state could not be saved", cause);
-        try {
-          await withLock(async () => {
-            const recovered = await loadService();
-            await publish(recovered);
-            await schedule(recovered);
+        recoveryAttempt = 0;
+        while (true) {
+          if (disposed) break;
+          const delivery = await withMutationLock(async () => {
+            const service = await loadService(false);
+            const entry = (await Effect.runPromise(service.ready(now())))[0];
+            if (entry === undefined) {
+              await publish(service);
+              await schedule(service);
+              return null;
+            }
+            const commandId = entry.plan.command.commandId;
+            await Effect.runPromise(service.begin(commandId, now()));
+            await publish(service);
+            return entry;
           });
-        } catch (recoveryCause) {
-          console.error("Durable command outbox recovery failed", recoveryCause);
+          if (delivery === null) break;
+          let dispatchFailure: unknown | null = null;
+          try {
+            await options.dispatch(delivery.plan.environmentId, delivery.plan.command);
+          } catch (cause) {
+            dispatchFailure = cause;
+          }
+          await withMutationLock(async () => {
+            const service = await loadService(false);
+            if (dispatchFailure === null) {
+              await Effect.runPromise(service.complete(delivery.plan.command.commandId));
+            } else {
+              await Effect.runPromise(
+                service.fail(
+                  delivery.plan.command.commandId,
+                  classifyWebCommandFailure(dispatchFailure),
+                  now(),
+                ),
+              );
+            }
+            await publish(service);
+          });
         }
-      }
-      if (!didDeliver) break;
+      });
+    } catch (cause) {
+      console.error("Durable command outbox recovery failed", cause);
+      scheduleRecovery();
     }
   };
 
@@ -257,14 +278,17 @@ export function createDurableCommandOutboxController(
     return activeFlush;
   };
 
-  void withLock(async () => publish(await loadService()))
+  void withMutationLock(async () => publish(await loadService(false)))
     .then(() => flush())
-    .catch((cause) => console.error("Could not initialize durable command outbox", cause));
+    .catch((cause) => {
+      console.error("Could not initialize durable command outbox", cause);
+      scheduleRecovery();
+    });
 
   return {
     enqueue: async (environmentId, command) => {
-      const entry = await withLock(async () => {
-        const service = await loadService();
+      const entry = await withMutationLock(async () => {
+        const service = await loadService(false);
         const persisted = await Effect.runPromise(
           service.enqueue(
             makeDurableCommandDeliveryPlan({ environmentId, enqueuedAt: now(), command }),
@@ -290,8 +314,8 @@ export function createDurableCommandOutboxController(
       return () => listeners.delete(listener);
     },
     discardRejected: (commandId) =>
-      withLock(async () => {
-        const service = await loadService();
+      withMutationLock(async () => {
+        const service = await loadService(false);
         await Effect.runPromise(service.removeRejected(commandId));
         await publish(service);
         void flush();
@@ -308,18 +332,30 @@ export function createDurableCommandOutboxController(
 let liveController: DurableCommandOutboxController | null = null;
 let liveListenerCleanup: (() => void) | null = null;
 
-function withBrowserOutboxLock<A>(task: () => Promise<A>): Promise<A> {
+function withBrowserMutationLock<A>(task: () => Promise<A>): Promise<A> {
   if (typeof navigator === "undefined" || navigator.locks === undefined) return task();
-  return navigator.locks.request("t3code:durable-command-outbox", task);
+  return navigator.locks.request("t3code:durable-command-outbox:mutation", task);
+}
+
+function withBrowserDrainLeadership(task: () => Promise<void>): Promise<boolean> {
+  if (typeof navigator === "undefined" || navigator.locks === undefined) {
+    return task().then(() => true);
+  }
+  return navigator.locks.request(
+    "t3code:durable-command-outbox:drain-leader",
+    { ifAvailable: true },
+    async (lock) => {
+      if (lock === null) return false;
+      await task();
+      return true;
+    },
+  );
 }
 
 export function attachDurableOutboxWakeListeners(
   controller: Pick<DurableCommandOutboxController, "wake">,
   windowTarget: Pick<Window, "addEventListener" | "removeEventListener">,
-  documentTarget: Pick<
-    Document,
-    "addEventListener" | "removeEventListener" | "visibilityState"
-  >,
+  documentTarget: Pick<Document, "addEventListener" | "removeEventListener" | "visibilityState">,
 ): () => void {
   const visibilityListener = () => {
     if (documentTarget.visibilityState === "visible") controller.wake();
@@ -341,7 +377,8 @@ export function durableCommandOutbox(): DurableCommandOutboxController {
       if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);
       await api.orchestration.dispatchCommand(command);
     },
-    withLock: withBrowserOutboxLock,
+    withMutationLock: withBrowserMutationLock,
+    withDrainLeadership: withBrowserDrainLeadership,
   });
   if (typeof window !== "undefined") {
     liveListenerCleanup = attachDurableOutboxWakeListeners(liveController, window, document);
@@ -382,10 +419,10 @@ export function selectDurableOutboxMessages(
 }
 
 export function shouldClearComposerAfterDurableEnqueue(
-  submittedPrompt: string,
-  currentPrompt: string,
+  submittedDraftRevision: unknown,
+  currentDraftRevision: unknown,
 ): boolean {
-  return submittedPrompt === currentPrompt;
+  return JSON.stringify(submittedDraftRevision) === JSON.stringify(currentDraftRevision);
 }
 
 export function __resetDurableCommandOutboxForTests(): void {
