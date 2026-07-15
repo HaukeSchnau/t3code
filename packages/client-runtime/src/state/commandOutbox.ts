@@ -12,7 +12,8 @@ import {
   decodeDurableCommandOutboxDocument,
   type CommandDeliveryFailure,
   type CommandDeliveryFailureClassification,
-  type DurableCommandDeliveryPlan,
+  DurableCommandDeliveryPlan,
+  type DurableCommandDeliveryPlan as DurableCommandDeliveryPlanType,
   type DurableCommandOutboxDocument,
   type DurableCommandOutboxEntry,
 } from "../operations/commandOutbox.ts";
@@ -25,6 +26,7 @@ export class CommandOutboxStateError extends Schema.TaggedErrorClass<CommandOutb
   {
     reason: Schema.Literals([
       "duplicate-command",
+      "invalid-replacement",
       "missing-command",
       "invalid-transition",
       "not-ready",
@@ -87,7 +89,10 @@ function commandIdOf(entry: DurableCommandOutboxEntry): CommandIdType {
   return entry.plan.command.commandId;
 }
 
-function sameThread(left: DurableCommandDeliveryPlan, right: DurableCommandDeliveryPlan): boolean {
+function sameThread(
+  left: DurableCommandDeliveryPlanType,
+  right: DurableCommandDeliveryPlanType,
+): boolean {
   return (
     left.environmentId === right.environmentId && left.command.threadId === right.command.threadId
   );
@@ -129,7 +134,7 @@ const isCommandOutboxStateError: (value: unknown) => value is CommandOutboxState
 export interface CommandOutboxService {
   readonly entries: Effect.Effect<ReadonlyArray<DurableCommandOutboxEntry>>;
   readonly enqueue: (
-    plan: DurableCommandDeliveryPlan,
+    plan: DurableCommandDeliveryPlanType,
   ) => Effect.Effect<
     DurableCommandOutboxEntry,
     CommandOutboxStorageError | CommandOutboxStateError
@@ -158,7 +163,17 @@ export interface CommandOutboxService {
   ) => Effect.Effect<void, CommandOutboxStorageError | CommandOutboxStateError>;
   readonly replaceRejected: (
     commandId: CommandIdType,
-    replacement: DurableCommandDeliveryPlan,
+    replacement: DurableCommandDeliveryPlanType,
+  ) => Effect.Effect<
+    DurableCommandOutboxEntry,
+    CommandOutboxStorageError | CommandOutboxStateError
+  >;
+  readonly cancelPending: (
+    commandId: CommandIdType,
+  ) => Effect.Effect<void, CommandOutboxStorageError | CommandOutboxStateError>;
+  readonly replacePending: (
+    commandId: CommandIdType,
+    replacement: DurableCommandDeliveryPlanType,
   ) => Effect.Effect<
     DurableCommandOutboxEntry,
     CommandOutboxStorageError | CommandOutboxStateError
@@ -234,7 +249,9 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
       }),
     );
 
-  const enqueue = Effect.fn("CommandOutbox.enqueue")(function* (plan: DurableCommandDeliveryPlan) {
+  const enqueue = Effect.fn("CommandOutbox.enqueue")(function* (
+    plan: DurableCommandDeliveryPlanType,
+  ) {
     return yield* persist((current) => {
       const commandId = plan.command.commandId;
       if (current.entries.some((entry) => commandIdOf(entry) === commandId)) {
@@ -362,9 +379,87 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
     });
   });
 
+  const cancelPending = Effect.fn("CommandOutbox.cancelPending")(function* (
+    commandId: CommandIdType,
+  ) {
+    return yield* persist((current) => {
+      const index = current.entries.findIndex((entry) => commandIdOf(entry) === commandId);
+      if (index < 0) {
+        return stateError("missing-command", commandId, `Command ${commandId} is not queued`);
+      }
+      const entry = current.entries[index]!;
+      if (entry.state._tag !== "Pending") {
+        return stateError(
+          "invalid-transition",
+          commandId,
+          `Command ${commandId} may only be cancelled before delivery begins`,
+        );
+      }
+      return [
+        undefined,
+        {
+          ...current,
+          entries: current.entries.filter((_, entryIndex) => entryIndex !== index),
+        },
+      ] as const;
+    });
+  });
+
+  const replacePending = Effect.fn("CommandOutbox.replacePending")(function* (
+    commandId: CommandIdType,
+    replacement: DurableCommandDeliveryPlanType,
+  ) {
+    return yield* persist((current) => {
+      const index = current.entries.findIndex((entry) => commandIdOf(entry) === commandId);
+      if (index < 0) {
+        return stateError("missing-command", commandId, `Command ${commandId} is not queued`);
+      }
+      const previous = current.entries[index]!;
+      if (previous.state._tag !== "Pending") {
+        return stateError(
+          "invalid-transition",
+          commandId,
+          `Command ${commandId} may only be replaced before delivery begins`,
+        );
+      }
+      if (!Schema.is(DurableCommandDeliveryPlan)(replacement)) {
+        return stateError(
+          "invalid-replacement",
+          commandId,
+          "A pending command replacement must be a valid durable delivery plan",
+        );
+      }
+      if (!sameThread(previous.plan, replacement)) {
+        return stateError(
+          "replacement-thread-changed",
+          replacement.command.commandId,
+          "A pending command replacement must remain in the same environment and thread",
+        );
+      }
+      const replacementCommandId = replacement.command.commandId;
+      if (
+        replacementCommandId !== commandId &&
+        current.entries.some((entry) => commandIdOf(entry) === replacementCommandId)
+      ) {
+        return stateError(
+          "duplicate-command",
+          replacementCommandId,
+          `Command ${replacementCommandId} is already present in the outbox`,
+        );
+      }
+      const nextEntry: DurableCommandOutboxEntry = {
+        plan: replacement,
+        state: { _tag: "Pending" },
+      };
+      const entries = [...current.entries];
+      entries[index] = nextEntry;
+      return [nextEntry, { ...current, entries }] as const;
+    });
+  });
+
   const replaceRejected = Effect.fn("CommandOutbox.replaceRejected")(function* (
     commandId: CommandIdType,
-    replacement: DurableCommandDeliveryPlan,
+    replacement: DurableCommandDeliveryPlanType,
   ) {
     return yield* persist((current) => {
       const index = current.entries.findIndex((entry) => commandIdOf(entry) === commandId);
@@ -417,6 +512,8 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
     begin,
     complete,
     fail,
+    cancelPending,
+    replacePending,
     removeRejected,
     replaceRejected,
   });

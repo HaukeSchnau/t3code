@@ -25,7 +25,8 @@ storage and decide when to drain ready thread heads.
 - `@t3tools/client-runtime/state/command-outbox` exports the serialized state machine and Effect layer. Every
   mutation saves the next document before publishing it in memory. Durable save and in-memory publication are
   one uninterruptible commit section, while mutation serialization and unrelated work remain interruptible. A
-  failed save leaves observable state unchanged.
+  failed save leaves observable state unchanged. If interruption arrives after that commit section starts, it
+  is observed only after storage and memory agree; interruption before the section leaves both unchanged.
 
 ## Delivery requirements
 
@@ -33,6 +34,14 @@ storage and decide when to drain ready thread heads.
   `prepareQueueThreadMessage` create complete commands without requiring a live environment connection.
 - Retry transient and ambiguous failures with the exact frozen command and command id. An interrupted
   `Delivering` record becomes an immediate ambiguous retry during startup recovery.
+- `cancelPending` is the only pre-delivery cancellation transition. It removes only a `Pending` entry, persists
+  that removal before publication, and rejects `Delivering`, `Retrying`, and `Rejected` entries because each may
+  represent intent that reached or attempted the network boundary.
+- `replacePending` atomically edits only a `Pending` entry in its existing array position. The replacement must
+  pass the durable-plan schema and remain in the same environment and thread. Because no I/O has occurred, a
+  same-command-id edit is explicitly allowed; a new command id is also allowed when it is unique across the
+  document. Once `begin` succeeds, pending replacement and cancellation are permanently unavailable and the
+  deeply frozen plan identity and payload are reused unchanged by delivery and retry transitions.
 - A permanent rejection remains at the thread head. Only `removeRejected` may discard an entry, and it rejects
   pending, delivering, transient-retry, and ambiguous-retry states. Removing a rejected head unblocks the next
   item; edit-and-retry uses the atomic `replaceRejected` transition and must provide a new command id in the
@@ -66,5 +75,7 @@ command schema, replace the local refinement rather than duplicating command pay
 - Focused operation, schema, persistence-order, lifecycle, retry, FIFO, rejection, and crash-recovery tests in
   `packages/client-runtime/src/operations/commands.test.ts`,
   `packages/client-runtime/src/operations/commandOutbox.test.ts`, and
-  `packages/client-runtime/src/state/commandOutbox.test.ts`.
+  `packages/client-runtime/src/state/commandOutbox.test.ts`. The state tests cover every lifecycle for pending
+  edit/cancel, same- and new-ID edits, duplicate IDs, durable-plan validation, FIFO/thread-head behavior,
+  storage failure, and interruption during asynchronous saves.
 - Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.
