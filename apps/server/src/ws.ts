@@ -109,6 +109,7 @@ import {
   replayEventBatch,
   type ReplayObserver,
 } from "./observability/ReplayObservability.ts";
+import * as ReplayLogPublisher from "./observability/ReplayLogPublisher.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -642,6 +643,7 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
+  replayLogPublisher: ReplayLogPublisher.ReplayLogPublisher["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1958,7 +1960,12 @@ const makeWsRpcLayer = (
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 return replayCatchUpWithLive({
-                  observer: makeReplayObserver("shell", afterSequence),
+                  observer: makeReplayObserver("shell", afterSequence).pipe(
+                    Effect.provideService(
+                      ReplayLogPublisher.ReplayLogPublisher,
+                      replayLogPublisher,
+                    ),
+                  ),
                   live: liveStream,
                   sequence: (item) =>
                     item.kind === "synchronized" ? afterSequence : item.sequence,
@@ -2065,7 +2072,12 @@ const makeWsRpcLayer = (
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 return replayCatchUpWithLive({
-                  observer: makeReplayObserver("thread", afterSequence),
+                  observer: makeReplayObserver("thread", afterSequence).pipe(
+                    Effect.provideService(
+                      ReplayLogPublisher.ReplayLogPublisher,
+                      replayLogPublisher,
+                    ),
+                  ),
                   live: liveStream,
                   sequence: (item) => (item.kind === "event" ? item.event.sequence : afterSequence),
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
@@ -2795,6 +2807,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
+    // RPC handlers return streams that execute after this route layer has built.
+    // Capture the publisher in the handler closure so replay diagnostics do not
+    // leak a runtime service requirement into a WebSocket subscription.
+    const replayLogPublisher = yield* ReplayLogPublisher.ReplayLogPublisher;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2814,7 +2830,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker, energyCaptureRequests).pipe(
+            makeWsRpcLayer(
+              session,
+              previewAutomationBroker,
+              energyCaptureRequests,
+              replayLogPublisher,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
