@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
@@ -16,7 +18,18 @@ import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
 const isProjectSetupScriptOperationError = Schema.is(
   ProjectSetupScriptRunner.ProjectSetupScriptOperationError,
 );
-const decodeJsonString = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
+const decodePosixShellArgument = (literal: string): string => {
+  if (!literal.startsWith("'") || !literal.endsWith("'")) {
+    throw new Error(`Invalid POSIX shell argument: ${literal}`);
+  }
+  return literal.slice(1, -1).replaceAll(`'\\''`, "'");
+};
+
+const wrapperPathFromWrite = (data: string): string => {
+  const boundary = data.trim().indexOf("' '");
+  if (boundary < 0) throw new Error(`Missing wrapper path in terminal write: ${data}`);
+  return decodePosixShellArgument(data.trim().slice(boundary + 2));
+};
 
 const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationProject => ({
   id: ProjectId.make("project-1"),
@@ -88,9 +101,7 @@ const claimWrapperExecution = (data: string) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const wrapperLiteral = data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
-    if (!wrapperLiteral) throw new Error(`Missing wrapper path in terminal write: ${data}`);
-    const wrapperPath = decodeJsonString(wrapperLiteral);
+    const wrapperPath = wrapperPathFromWrite(data);
     const executionDirectory = path.dirname(wrapperPath);
     yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
     yield* fileSystem.writeFileString(
@@ -184,8 +195,9 @@ describe("ProjectSetupScriptRunner", () => {
     },
   );
 
-  it.effect("fails closed for a claimed incomplete execution and reuses its completion", () => {
+  it.effect("reconciles an interrupted claimed execution before exact retry completes", () => {
     let wrapperPath = "";
+    let claimed!: Deferred.Deferred<void>;
     const open = vi.fn(() =>
       Effect.succeed({
         threadId: "thread-1",
@@ -206,10 +218,9 @@ describe("ProjectSetupScriptRunner", () => {
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const wrapperLiteral = input.data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
-          if (!wrapperLiteral) throw new Error("missing wrapper path");
-          wrapperPath = decodeJsonString(wrapperLiteral);
+          wrapperPath = wrapperPathFromWrite(input.data);
           yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
+          yield* Deferred.succeed(claimed, undefined);
         }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
     );
     const project = makeProject([
@@ -226,36 +237,52 @@ describe("ProjectSetupScriptRunner", () => {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
       const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      claimed = yield* Deferred.make<void>();
       const input = {
         threadId: "thread-1",
         projectId: "project-1",
         worktreePath: "/repo/worktrees/a",
         preferredTerminalId: "setup-setup",
       };
-      yield* runner.runForThread(input);
-
-      const incomplete = yield* runner
-        .runForThread({ ...input, reconcileClaimedLaunch: true })
-        .pipe(Effect.flip);
-      expect(isProjectSetupScriptOperationError(incomplete)).toBe(true);
-      if (isProjectSetupScriptOperationError(incomplete)) {
-        expect(incomplete.operation).toBe("reconcileExecution");
-      }
+      const interrupted = yield* runner.runForThread(input).pipe(Effect.forkChild);
+      yield* Deferred.await(claimed);
+      yield* Fiber.interrupt(interrupted);
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
 
+      const retry = yield* runner
+        .runForThread({ ...input, reconcileClaimedLaunch: true })
+        .pipe(Effect.forkChild);
+      yield* Effect.yieldNow;
+      expect(open).toHaveBeenCalledOnce();
+      expect(write).toHaveBeenCalledOnce();
       yield* fileSystem.writeFileString(
         path.join(path.dirname(wrapperPath), "completed.json"),
         '{"exitCode":0}\n',
       );
-      const completed = yield* runner.runForThread({
-        ...input,
-        reconcileClaimedLaunch: true,
-      });
+      const completed = yield* Fiber.join(retry);
       expect(completed.status).toBe("started");
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
     }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
+  it("quotes executable and wrapper paths as inert POSIX shell arguments", () => {
+    const values = [
+      "/tmp/with spaces/node",
+      "/tmp/$(touch injected)/node",
+      "/tmp/`touch injected`/node",
+      "/tmp/$HOME/node",
+      "/tmp/Hauke's node",
+      "/tmp/all $(bad) `bad` $PATH and Hauke's node",
+    ];
+
+    for (const value of values) {
+      const quoted = ProjectSetupScriptRunner.quotePosixShellArgument(value);
+      expect(decodePosixShellArgument(quoted)).toBe(value);
+      expect(quoted.startsWith("'")).toBe(true);
+      expect(quoted.endsWith("'")).toBe(true);
+    }
   });
 
   it.effect("safely resubmits when terminal open completed without an execution claim", () => {

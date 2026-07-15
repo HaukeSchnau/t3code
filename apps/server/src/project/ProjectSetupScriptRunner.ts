@@ -14,6 +14,12 @@ import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSn
 import * as TerminalManager from "../terminal/Manager.ts";
 
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const SETUP_RECONCILIATION_ATTEMPTS = 200;
+const SETUP_RECONCILIATION_INTERVAL = "10 millis";
+
+/** Quote one argument for a POSIX shell without permitting expansion or substitution. */
+export const quotePosixShellArgument = (value: string): string =>
+  `'${value.replaceAll("'", `'\\''`)}'`;
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -183,14 +189,38 @@ export const make = Effect.gen(function* () {
       } as const;
     }
 
+    const awaitCompletion = (
+      remaining: number | null,
+    ): Effect.Effect<void, ProjectSetupScriptOperationError> =>
+      executionExists(completedPath).pipe(
+        Effect.flatMap((exists) => {
+          if (exists) return Effect.void;
+          if (remaining === 0) {
+            return Effect.fail(
+              new ProjectSetupScriptOperationError({
+                ...errorContext,
+                operation: "reconcileExecution",
+                cause: new Error(
+                  `Setup execution '${terminalId}' remains claimed without a durable completion marker.`,
+                ),
+              }),
+            );
+          }
+          return Effect.sleep(SETUP_RECONCILIATION_INTERVAL).pipe(
+            Effect.andThen(awaitCompletion(remaining === null ? null : remaining - 1)),
+          );
+        }),
+      );
+
     if (claimed && input.reconcileClaimedLaunch) {
-      return yield* new ProjectSetupScriptOperationError({
-        ...errorContext,
-        operation: "reconcileExecution",
-        cause: new Error(
-          `Setup execution '${terminalId}' was launched but has no durable completion marker.`,
-        ),
-      });
+      yield* awaitCompletion(SETUP_RECONCILIATION_ATTEMPTS);
+      return {
+        status: "started",
+        scriptId: script.id,
+        scriptName: script.name,
+        terminalId,
+        cwd,
+      } as const;
     }
 
     const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(claimDir)};\nconst completedPath = ${encodeJson(completedPath)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
@@ -233,7 +263,7 @@ export const make = Effect.gen(function* () {
       .write({
         threadId: input.threadId,
         terminalId,
-        data: `${encodeJson(process.execPath)} ${encodeJson(wrapperPath)}\r`,
+        data: `${quotePosixShellArgument(process.execPath)} ${quotePosixShellArgument(wrapperPath)}\r`,
       })
       .pipe(
         Effect.mapError(
@@ -266,6 +296,11 @@ export const make = Effect.gen(function* () {
         cause: new Error(`Setup execution '${terminalId}' was not durably claimed after write.`),
       });
     }
+
+    // The caller may only persist `setup-completed` after this durable wrapper
+    // completion exists. Waiting is interruptible, so shutdown leaves the durable
+    // claim for a bounded exact-retry reconciliation.
+    yield* awaitCompletion(null);
 
     return {
       status: "started",
