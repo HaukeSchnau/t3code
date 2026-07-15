@@ -59,6 +59,7 @@ import { useSelectedThreadWorktree } from "../../state/use-selected-thread-workt
 import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
+import { useEnvironmentConnectionFreshness } from "../../state/use-environment-connection-freshness";
 import {
   useAdaptiveWorkspaceLayout,
   useAdaptiveWorkspacePaneRole,
@@ -199,6 +200,7 @@ function ThreadRouteContent(
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
   const environmentId = environmentIdRaw ? EnvironmentId.make(environmentIdRaw) : null;
+  const connectionFreshness = useEnvironmentConnectionFreshness(environmentId);
   const threadId = firstRouteParam(params.threadId);
   const routeThreadIdentity =
     environmentIdRaw !== null && threadId !== null ? `${environmentIdRaw}:${threadId}` : null;
@@ -772,6 +774,7 @@ function ThreadRouteContent(
           draftMessage={composer.draftMessage}
           draftAttachments={composer.draftAttachments}
           connectionStateLabel={routeConnectionState}
+          connectionFreshness={connectionFreshness}
           threadSyncStatus={selectedThreadDetailState.status}
           activeThreadBusy={composer.activeThreadBusy}
           environmentId={selectedThread.environmentId}
@@ -780,7 +783,14 @@ function ThreadRouteContent(
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
           selectedThreadQueueStatus={composer.selectedThreadQueueStatus}
           selectedThreadRejectedCount={composer.selectedThreadRejectedCount}
+          selectedThreadQueuedIntents={composer.selectedThreadQueuedIntents}
+          editingQueuedMessageId={composer.editingQueuedMessageId}
+          remoteQueueCount={selectedThread.queuedMessages?.length ?? 0}
           onDiscardRejectedMessages={composer.discardRejectedMessages}
+          onEditPendingMessage={composer.editPendingMessage}
+          onCancelPendingMessage={composer.cancelPendingMessage}
+          onDiscardRejectedMessage={composer.discardRejectedMessage}
+          onCancelQueuedMessageEdit={composer.cancelQueuedMessageEdit}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onNavigateBack={handleNavigateBack}

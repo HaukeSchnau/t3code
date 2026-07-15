@@ -17,6 +17,7 @@ import { cn } from "../../lib/cn";
 import { relativeTime } from "../../lib/time";
 import { useThemeColor } from "../../lib/useThemeColor";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import { presentLocalIntent } from "./trainNetworkPresentation";
 import { useThreadPr, type ThreadPr } from "../../state/use-thread-pr";
 import type { HomeGroupDisplayAction } from "../home/homeListItems";
 import { ThreadSwipeable } from "../home/thread-swipe-actions";
@@ -277,7 +278,9 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
 
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
-  const rejected = pendingTask.deliveryState?._tag === "Rejected";
+  const localIntent = presentLocalIntent(pendingTask.deliveryState);
+  const canEdit = localIntent.canEdit;
+  const canDelete = localIntent.canCancel || localIntent.canDiscard;
   const timestamp = relativeTime(pendingTask.message.createdAt);
   const subtitleParts = [props.environmentLabel, pendingTask.creation.branch].filter(
     (part): part is string => Boolean(part),
@@ -293,19 +296,19 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
   const statusPill = (
     <View
       className={
-        rejected
+        localIntent.tone === "danger"
           ? "rounded-full bg-red-500/12 px-1.5 py-0.5 dark:bg-red-500/16"
           : "rounded-full bg-zinc-500/12 px-1.5 py-0.5 dark:bg-zinc-500/16"
       }
     >
       <Text
         className={
-          rejected
+          localIntent.tone === "danger"
             ? "text-3xs font-t3-bold text-red-700 dark:text-red-300"
             : "text-3xs font-t3-bold text-zinc-600 dark:text-zinc-300"
         }
       >
-        {rejected ? "Rejected" : "Pending"}
+        {localIntent.label}
       </Text>
     </View>
   );
@@ -334,10 +337,11 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
 
   const rowContent = compact ? (
     <Pressable
-      accessibilityHint="Opens the queued task for editing"
-      accessibilityLabel={pendingTask.title}
+      accessibilityHint={canEdit ? "Opens the saved task for editing" : localIntent.detail}
+      accessibilityLabel={`${pendingTask.title}. ${localIntent.label}`}
       accessibilityRole="button"
       className="bg-screen"
+      disabled={!canEdit}
       onPress={() => onSelectPendingTask(pendingTask)}
       style={({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })}
     >
@@ -377,9 +381,10 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
     </Pressable>
   ) : (
     <Pressable
-      accessibilityHint="Opens the queued task for editing"
-      accessibilityLabel={pendingTask.title}
+      accessibilityHint={canEdit ? "Opens the saved task for editing" : localIntent.detail}
+      accessibilityLabel={`${pendingTask.title}. ${localIntent.label}`}
       accessibilityRole="button"
+      disabled={!canEdit}
       onPress={() => onSelectPendingTask(pendingTask)}
       style={({ pressed }) => ({
         backgroundColor: pressed ? pressedBackgroundColor : "transparent",
@@ -407,6 +412,8 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
       </View>
     </Pressable>
   );
+
+  if (!canDelete) return rowContent;
 
   return (
     <ControlPillMenu
