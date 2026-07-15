@@ -40,6 +40,7 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
@@ -1449,7 +1450,9 @@ const makeWsRpcLayer = (
             thread: providerThread,
             importedAt,
             ...(existingThread
-              ? { importThroughTurnId: existingThread.latestTurn?.turnId ?? null }
+              ? {
+                  importThroughTurnId: existingThread.latestTurn?.turnId ?? null,
+                }
               : {}),
           });
           const existingMessageIds = new Set(existingThread?.messages.map((message) => message.id));
@@ -1957,8 +1960,12 @@ const makeWsRpcLayer = (
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("shell", afterSequence),
                   live: liveStream,
-                  sequence: (item) => item.sequence,
+                  sequence: (item) =>
+                    item.kind === "synchronized" ? afterSequence : item.sequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
+                  ...(input.includeSynchronizationItems
+                    ? { synchronized: () => ({ kind: "synchronized" as const }) }
+                    : {}),
                   catchUp: (observer) =>
                     readEventsPaginated(afterSequence, observer).pipe(
                       toShellStream,
@@ -2026,16 +2033,17 @@ const makeWsRpcLayer = (
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
 
-              const liveStream = orchestrationEngine.streamDomainEvents.pipe(
-                Stream.filter(isThisThreadDetailEvent),
-                Stream.tap(() =>
-                  Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
-                ),
-                Stream.map((event) => ({
-                  kind: "event" as const,
-                  event,
-                })),
-              );
+              const liveStream: Stream.Stream<OrchestrationThreadStreamItem> =
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.filter(isThisThreadDetailEvent),
+                  Stream.tap(() =>
+                    Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
+                  ),
+                  Stream.map((event) => ({
+                    kind: "event" as const,
+                    event,
+                  })),
+                );
 
               // When the client already loaded the snapshot over HTTP it passes
               // that snapshot's sequence, and we resume the live subscription by
@@ -2059,8 +2067,11 @@ const makeWsRpcLayer = (
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("thread", afterSequence),
                   live: liveStream,
-                  sequence: (item) => item.event.sequence,
+                  sequence: (item) => (item.kind === "event" ? item.event.sequence : afterSequence),
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
+                  ...(input.includeSynchronizationItems
+                    ? { synchronized: () => ({ kind: "synchronized" as const }) }
+                    : {}),
                   catchUp: (observer) =>
                     readEventsPaginated(afterSequence, observer).pipe(
                       Stream.filter(isThisThreadDetailEvent),
@@ -2069,7 +2080,10 @@ const makeWsRpcLayer = (
                           incrementWorkloadCounter("thread_detail.events_published"),
                         ),
                       ),
-                      Stream.map((event) => ({ kind: "event" as const, event })),
+                      Stream.map((event) => ({
+                        kind: "event" as const,
+                        event,
+                      })),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({

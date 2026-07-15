@@ -535,6 +535,9 @@ export const OrchestrationShellStreamItem = Schema.Union([
   }),
   OrchestrationShellCursorItem,
   OrchestrationShellStreamEvent,
+  Schema.Struct({
+    kind: Schema.Literal("synchronized"),
+  }),
 ]);
 export type OrchestrationShellStreamItem = typeof OrchestrationShellStreamItem.Type;
 
@@ -553,6 +556,8 @@ export const OrchestrationSubscribeShellInput = Schema.Struct({
    * so servers must not send them a stream item their schema cannot decode.
    */
   includeCursorItems: Schema.optionalKey(Schema.Boolean),
+  /** Request a lightweight frame after catch-up and before live delivery. */
+  includeSynchronizationItems: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
 
@@ -566,6 +571,8 @@ export const OrchestrationSubscribeThreadInput = Schema.Struct({
    * sequence on the client).
    */
   afterSequence: Schema.optionalKey(NonNegativeInt),
+  /** Request a lightweight frame after catch-up and before live delivery. */
+  includeSynchronizationItems: Schema.optionalKey(Schema.Boolean),
 });
 export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThreadInput.Type;
 
@@ -1429,6 +1436,9 @@ export const OrchestrationThreadStreamItem = Schema.Union([
   Schema.Struct({
     kind: Schema.Literal("event"),
     event: OrchestrationEvent,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("synchronized"),
   }),
 ]);
 export type OrchestrationThreadStreamItem = typeof OrchestrationThreadStreamItem.Type;

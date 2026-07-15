@@ -85,6 +85,12 @@ export function buildThreadTurnInterruptInput(thread: Pick<Thread, "id" | "sessi
   };
 }
 
+export function collectAuthoritativeProjectedMessageIds(
+  thread: Pick<Thread, "messages">,
+): ReadonlySet<string> {
+  return new Set(thread.messages.map((message) => String(message.id)));
+}
+
 export function reconcileMountedTerminalThreadIds(input: {
   currentThreadIds: ReadonlyArray<string>;
   openThreadIds: ReadonlyArray<string>;

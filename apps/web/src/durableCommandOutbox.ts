@@ -23,14 +23,16 @@ import { useSyncExternalStore } from "react";
 import { readEnvironmentApi } from "./environmentApi";
 
 const DATABASE_NAME = "t3code:durable-command-outbox";
-const DATABASE_VERSION = 1;
+const DATABASE_VERSION = 2;
 const STORE_NAME = "outbox";
+const ACCEPTED_STORE_NAME = "accepted-awaiting-projection";
 const DOCUMENT_KEY = "document";
 
 type TimerHandle = unknown;
 
 export interface DurableCommandOutboxControllerOptions {
   readonly storage: CommandOutboxStorage["Service"];
+  readonly acceptedProjectionStorage?: CommandOutboxStorage["Service"];
   readonly dispatch: (environmentId: EnvironmentId, command: DurableClientCommand) => Promise<void>;
   readonly now?: () => string;
   readonly setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
@@ -49,6 +51,7 @@ export interface DurableCommandOutboxController {
   readonly flush: () => Promise<void>;
   readonly wake: () => void;
   readonly snapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
+  readonly acceptedProjectionSnapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
   readonly subscribe: (listener: () => void) => () => void;
   readonly cancelPending: (commandId: CommandId) => Promise<void>;
   readonly replacePending: (
@@ -60,6 +63,7 @@ export interface DurableCommandOutboxController {
     replacement: DurableClientCommand,
   ) => Promise<DurableCommandOutboxEntry>;
   readonly discardRejected: (commandId: CommandId) => Promise<void>;
+  readonly confirmProjected: (messageIds: ReadonlySet<string>) => Promise<void>;
   readonly dispose: () => void;
 }
 
@@ -81,19 +85,22 @@ function openDatabase(): Promise<IDBDatabase> {
       if (!request.result.objectStoreNames.contains(STORE_NAME)) {
         request.result.createObjectStore(STORE_NAME);
       }
+      if (!request.result.objectStoreNames.contains(ACCEPTED_STORE_NAME)) {
+        request.result.createObjectStore(ACCEPTED_STORE_NAME);
+      }
     });
     request.addEventListener("error", () => reject(request.error ?? new Error("Open failed")));
     request.addEventListener("success", () => resolve(request.result));
   });
 }
 
-async function loadBrowserDocument(): Promise<DurableCommandOutboxDocument> {
+async function loadBrowserDocument(storeName = STORE_NAME): Promise<DurableCommandOutboxDocument> {
   const database = await openDatabase();
   try {
     const raw = await new Promise<unknown>((resolve, reject) => {
       const request = database
-        .transaction(STORE_NAME, "readonly")
-        .objectStore(STORE_NAME)
+        .transaction(storeName, "readonly")
+        .objectStore(storeName)
         .get(DOCUMENT_KEY);
       request.addEventListener("error", () => reject(request.error ?? new Error("Read failed")));
       request.addEventListener("success", () => resolve(request.result));
@@ -105,17 +112,20 @@ async function loadBrowserDocument(): Promise<DurableCommandOutboxDocument> {
   }
 }
 
-async function saveBrowserDocument(document: DurableCommandOutboxDocument): Promise<void> {
+async function saveBrowserDocument(
+  document: DurableCommandOutboxDocument,
+  storeName = STORE_NAME,
+): Promise<void> {
   const database = await openDatabase();
   try {
     await new Promise<void>((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, "readwrite");
+      const transaction = database.transaction(storeName, "readwrite");
       transaction.addEventListener("error", () =>
         reject(transaction.error ?? new Error("Write failed")),
       );
       transaction.addEventListener("complete", () => resolve());
       transaction
-        .objectStore(STORE_NAME)
+        .objectStore(storeName)
         .put(encodeDurableCommandOutboxDocument(document), DOCUMENT_KEY);
     });
   } finally {
@@ -125,12 +135,24 @@ async function saveBrowserDocument(document: DurableCommandOutboxDocument): Prom
 
 export const browserCommandOutboxStorage = CommandOutboxStorage.of({
   load: Effect.tryPromise({
-    try: loadBrowserDocument,
+    try: () => loadBrowserDocument(),
     catch: (cause) => storageError("load", cause),
   }),
   save: (document) =>
     Effect.tryPromise({
       try: () => saveBrowserDocument(document),
+      catch: (cause) => storageError("save", cause),
+    }),
+});
+
+export const browserAcceptedProjectionStorage = CommandOutboxStorage.of({
+  load: Effect.tryPromise({
+    try: () => loadBrowserDocument(ACCEPTED_STORE_NAME),
+    catch: (cause) => storageError("load", cause),
+  }),
+  save: (document) =>
+    Effect.tryPromise({
+      try: () => saveBrowserDocument(document, ACCEPTED_STORE_NAME),
       catch: (cause) => storageError("save", cause),
     }),
 });
@@ -170,6 +192,13 @@ function classifyWebCommandFailure(cause: unknown) {
 export function createDurableCommandOutboxController(
   options: DurableCommandOutboxControllerOptions,
 ): DurableCommandOutboxController {
+  let memoryAcceptedDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+  const acceptedProjectionStorage =
+    options.acceptedProjectionStorage ??
+    CommandOutboxStorage.of({
+      load: Effect.sync(() => memoryAcceptedDocument),
+      save: (document) => Effect.sync(() => void (memoryAcceptedDocument = document)),
+    });
   const now = options.now ?? (() => new Date().toISOString());
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer =
@@ -183,6 +212,7 @@ export function createDurableCommandOutboxController(
     });
   const listeners = new Set<() => void>();
   let current: ReadonlyArray<DurableCommandOutboxEntry> = [];
+  let acceptedProjection: ReadonlyArray<DurableCommandOutboxEntry> = [];
   let disposed = false;
   let timer: TimerHandle | null = null;
   let activeFlush: Promise<void> | null = null;
@@ -190,10 +220,21 @@ export function createDurableCommandOutboxController(
   let recoveryAttempt = 0;
   const loadService = (recoverInterruptedDeliveries = false) =>
     Effect.runPromise(makeCommandOutbox(options.storage, now(), recoverInterruptedDeliveries));
+  const loadAcceptedProjectionService = () =>
+    Effect.runPromise(makeCommandOutbox(acceptedProjectionStorage, now(), false));
+
+  const notify = () => {
+    for (const listener of listeners) listener();
+  };
 
   const publish = async (service: CommandOutboxService) => {
     current = await Effect.runPromise(service.entries);
-    for (const listener of listeners) listener();
+    notify();
+  };
+
+  const publishAcceptedProjection = async (service: CommandOutboxService) => {
+    acceptedProjection = await Effect.runPromise(service.entries);
+    notify();
   };
 
   const schedule = async (service: CommandOutboxService) => {
@@ -230,7 +271,21 @@ export function createDurableCommandOutboxController(
           if (disposed) break;
           const delivery = await withMutationLock(async () => {
             const service = await loadService(false);
-            const entry = (await Effect.runPromise(service.ready(now())))[0];
+            const accepted = await loadAcceptedProjectionService();
+            const acceptedCommandIds = new Set(
+              (await Effect.runPromise(accepted.entries)).map(
+                (entry) => entry.plan.command.commandId,
+              ),
+            );
+            let entry = (await Effect.runPromise(service.ready(now())))[0];
+            while (entry !== undefined && acceptedCommandIds.has(entry.plan.command.commandId)) {
+              // A prior attempt persisted acceptance but crashed before removing
+              // retry ownership. Finish that local cleanup without dispatching
+              // the already accepted command again.
+              await Effect.runPromise(service.begin(entry.plan.command.commandId, now()));
+              await Effect.runPromise(service.complete(entry.plan.command.commandId));
+              entry = (await Effect.runPromise(service.ready(now())))[0];
+            }
             if (entry === undefined) {
               await publish(service);
               await schedule(service);
@@ -251,6 +306,20 @@ export function createDurableCommandOutboxController(
           await withMutationLock(async () => {
             const service = await loadService(false);
             if (dispatchFailure === null) {
+              // Persist the accepted intent before removing it from the retry
+              // queue. This bridges the acknowledgement-to-projection window,
+              // including reloads, without sending an already accepted command
+              // merely to keep its optimistic message visible.
+              const accepted = await loadAcceptedProjectionService();
+              const acceptedEntries = await Effect.runPromise(accepted.entries);
+              if (
+                !acceptedEntries.some(
+                  (entry) => entry.plan.command.commandId === delivery.plan.command.commandId,
+                )
+              ) {
+                await Effect.runPromise(accepted.enqueue(delivery.plan));
+              }
+              await publishAcceptedProjection(accepted);
               await Effect.runPromise(service.complete(delivery.plan.command.commandId));
             } else {
               await Effect.runPromise(
@@ -290,7 +359,10 @@ export function createDurableCommandOutboxController(
     return activeFlush;
   };
 
-  void withMutationLock(async () => publish(await loadService(false)))
+  void withMutationLock(async () => {
+    await publishAcceptedProjection(await loadAcceptedProjectionService());
+    await publish(await loadService(false));
+  })
     .then(() => flush())
     .catch((cause) => {
       console.error("Could not initialize durable command outbox", cause);
@@ -303,7 +375,11 @@ export function createDurableCommandOutboxController(
         const service = await loadService(false);
         const persisted = await Effect.runPromise(
           service.enqueue(
-            makeDurableCommandDeliveryPlan({ environmentId, enqueuedAt: now(), command }),
+            makeDurableCommandDeliveryPlan({
+              environmentId,
+              enqueuedAt: now(),
+              command,
+            }),
           ),
         );
         await publish(service);
@@ -321,6 +397,7 @@ export function createDurableCommandOutboxController(
       void flush();
     },
     snapshot: () => current,
+    acceptedProjectionSnapshot: () => acceptedProjection,
     subscribe: (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -381,6 +458,17 @@ export function createDurableCommandOutboxController(
         await publish(service);
         void flush();
       }),
+    confirmProjected: (messageIds) =>
+      withMutationLock(async () => {
+        if (messageIds.size === 0) return;
+        const accepted = await loadAcceptedProjectionService();
+        for (const entry of await Effect.runPromise(accepted.entries)) {
+          if (messageIds.has(entry.plan.command.message.messageId)) {
+            await Effect.runPromise(accepted.cancelPending(entry.plan.command.commandId));
+          }
+        }
+        await publishAcceptedProjection(accepted);
+      }),
     dispose: () => {
       disposed = true;
       if (timer !== null) clearTimer(timer);
@@ -433,6 +521,7 @@ export function durableCommandOutbox(): DurableCommandOutboxController {
   if (liveController !== null) return liveController;
   liveController = createDurableCommandOutboxController({
     storage: browserCommandOutboxStorage,
+    acceptedProjectionStorage: browserAcceptedProjectionStorage,
     dispatch: async (environmentId, command) => {
       const api = readEnvironmentApi(environmentId);
       if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);
@@ -454,6 +543,15 @@ export function useDurableCommandOutboxEntries(): ReadonlyArray<DurableCommandOu
   return useSyncExternalStore(
     controller?.subscribe ?? (() => () => undefined),
     controller?.snapshot ?? (() => EMPTY_ENTRIES),
+    () => EMPTY_ENTRIES,
+  );
+}
+
+export function useAcceptedCommandProjectionEntries(): ReadonlyArray<DurableCommandOutboxEntry> {
+  const controller = typeof window === "undefined" ? null : durableCommandOutbox();
+  return useSyncExternalStore(
+    controller?.subscribe ?? (() => () => undefined),
+    controller?.acceptedProjectionSnapshot ?? (() => EMPTY_ENTRIES),
     () => EMPTY_ENTRIES,
   );
 }

@@ -39,7 +39,10 @@ function command(id = "command-1", messageId = "message-1") {
       text: "Saved on the train",
       attachments: [],
     },
-    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5" },
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5",
+    },
     titleSeed: "Saved on the train",
     runtimeMode: "full-access" as const,
     interactionMode: "default" as const,
@@ -133,9 +136,42 @@ describe("web durable command outbox", () => {
     expect(
       shouldClearComposerAfterDurableEnqueue(
         { prompt: "send", previewAnnotations: [], reviewComments: [] },
-        { prompt: "send", previewAnnotations: [{ id: "new-preview" }], reviewComments: [] },
+        {
+          prompt: "send",
+          previewAnnotations: [{ id: "new-preview" }],
+          reviewComments: [],
+        },
       ),
     ).toBe(false);
+  });
+
+  it("keeps an accepted message visible until the authoritative projection owns it", async () => {
+    const outbox = memoryStorage();
+    const accepted = memoryStorage();
+    const controller = createDurableCommandOutboxController({
+      storage: outbox.storage,
+      acceptedProjectionStorage: accepted.storage,
+      now: () => T0,
+      dispatch: async () => undefined,
+    });
+
+    await controller.enqueue(environmentId, command());
+    await controller.flush();
+
+    expect(controller.snapshot()).toEqual([]);
+    expect(
+      selectDurableOutboxMessages(
+        controller.acceptedProjectionSnapshot(),
+        environmentId,
+        threadId,
+      ).map((message) => message.messageId),
+    ).toEqual(["message-1"]);
+
+    await controller.confirmProjected(new Set(["some-other-message"]));
+    expect(controller.acceptedProjectionSnapshot()).toHaveLength(1);
+    await controller.confirmProjected(new Set(["message-1"]));
+    expect(controller.acceptedProjectionSnapshot()).toEqual([]);
+    controller.dispose();
   });
 
   it("edits and cancels only pending browser intents through durable lifecycle transitions", async () => {
@@ -155,7 +191,10 @@ describe("web durable command outbox", () => {
     const editor = createDurableCommandOutboxController(options);
     await editor.replacePending(CommandId.make("original"), {
       ...command("replacement"),
-      message: { ...command("replacement").message, text: "Edited on the train" },
+      message: {
+        ...command("replacement").message,
+        text: "Edited on the train",
+      },
     });
     editor.dispose();
 
@@ -484,10 +523,15 @@ describe("web durable command outbox", () => {
     controller.dispose();
   });
 
-  it("recovers a persisted delivery when acknowledgement cleanup cannot be saved", async () => {
+  it("does not redispatch after acceptance survives acknowledgement cleanup failure and reload", async () => {
     let persisted = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     let rejectCompletionOnce = true;
     let dispatchCount = 0;
+    let markCompletionRejected: (() => void) | undefined;
+    const completionRejected = new Promise<void>((resolve) => {
+      markCompletionRejected = resolve;
+    });
+    const accepted = memoryStorage();
     const storage = CommandOutboxStorage.of({
       load: Effect.sync(() => persisted),
       save: (document) =>
@@ -498,6 +542,7 @@ describe("web durable command outbox", () => {
             document.entries.length === 0
           ) {
             rejectCompletionOnce = false;
+            markCompletionRejected?.();
             return yield* new CommandOutboxStorageError({
               operation: "save",
               message: "disk temporarily unavailable",
@@ -506,20 +551,34 @@ describe("web durable command outbox", () => {
           persisted = document;
         }),
     });
-    const controller = createDurableCommandOutboxController({
+    const first = createDurableCommandOutboxController({
       storage,
+      acceptedProjectionStorage: accepted.storage,
       now: () => T0,
       setTimer: () => 1,
       clearTimer: () => undefined,
       dispatch: async () => void (dispatchCount += 1),
     });
 
-    await controller.enqueue(environmentId, command());
-    await controller.flush();
+    await first.enqueue(environmentId, command());
+    await completionRejected;
+    first.dispose();
 
-    expect(persisted.entries[0]?.state._tag).not.toBe("Delivering");
-    expect(dispatchCount).toBeGreaterThanOrEqual(2);
-    controller.dispose();
+    expect(persisted.entries[0]?.state._tag).toBe("Delivering");
+    expect(accepted.read().entries).toHaveLength(1);
+    expect(dispatchCount).toBe(1);
+
+    const second = createDurableCommandOutboxController({
+      storage,
+      acceptedProjectionStorage: accepted.storage,
+      now: () => T1,
+      dispatch: async () => void (dispatchCount += 1),
+    });
+    await second.flush();
+
+    expect(persisted.entries).toEqual([]);
+    expect(dispatchCount).toBe(1);
+    second.dispose();
   });
 
   it("surfaces deterministic rejection and allows explicit discard", async () => {
@@ -640,7 +699,10 @@ describe("web durable command outbox", () => {
       load: Effect.suspend(() =>
         remainingLoadFailures-- > 0
           ? Effect.fail(
-              new CommandOutboxStorageError({ operation: "load", message: "temporary read error" }),
+              new CommandOutboxStorageError({
+                operation: "load",
+                message: "temporary read error",
+              }),
             )
           : Effect.succeed(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT),
       ),

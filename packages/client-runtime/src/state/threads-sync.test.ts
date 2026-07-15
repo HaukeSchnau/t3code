@@ -121,15 +121,17 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         input instanceof Error ? Effect.fail(input) : Effect.succeed(input),
       ),
     );
-  const client = {
-    [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly afterSequence?: number }) =>
-      Stream.unwrap(
-        Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
-          Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
-          Effect.as(streamFrom(inputs)),
+  const clientFor = (queue: Queue.Queue<TestThreadInput>) =>
+    ({
+      [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly afterSequence?: number }) =>
+        Stream.unwrap(
+          Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
+            Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
+            Effect.as(streamFrom(queue)),
+          ),
         ),
-      ),
-  } as unknown as WsRpcProtocolClient;
+    }) as unknown as WsRpcProtocolClient;
+  const client = clientFor(inputs);
   const supervisorSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
     Option.some(testSession(client)),
   );
@@ -202,7 +204,162 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     savedThreads,
     removedThreads,
     replaceSession: SubscriptionRef.set(supervisorSession, Option.some(testSession(client))),
+    replaceSessionUsing: (queue: Queue.Queue<TestThreadInput>) =>
+      SubscriptionRef.set(supervisorSession, Option.some(testSession(clientFor(queue)))),
   };
+});
+
+describe("thread reconnect freshness", () => {
+  it.effect("returns a cached thread to live when catch-up has no new thread events", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+      });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 2,
+        generation: 2,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* SubscriptionRef.set(harness.supervisorSession, Option.none());
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      yield* harness.replaceSession;
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
+      yield* Queue.offer(harness.inputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("live");
+      const replacementInputs = yield* Queue.unbounded<TestThreadInput>();
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* harness.replaceSessionUsing(replacementInputs);
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
+      yield* Queue.offer(harness.inputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      yield* Queue.offer(replacementInputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* Queue.offer(replacementInputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("live");
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("live");
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 2,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      const recovered = yield* Ref.get(harness.latest);
+      expect(recovered.status).toBe("live");
+      expect(Option.getOrThrow(recovered.data)).toEqual(BASE_THREAD);
+
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("synchronizing");
+    }),
+  );
+
+  it.effect("does not make a missing thread live from a synchronization marker", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness();
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      yield* Queue.offer(harness.inputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      const state = yield* Ref.get(harness.latest);
+      expect(state.status).not.toBe("live");
+      expect(Option.isNone(state.data)).toBe(true);
+    }),
+  );
+
+  it.effect("does not resurrect a deleted thread from a synchronization marker", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* Queue.offer(harness.inputs, deleted());
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      expect((yield* Ref.get(harness.latest)).status).toBe("deleted");
+      yield* Queue.offer(harness.inputs, { kind: "synchronized" });
+      for (let index = 0; index < 50; index += 1) yield* Effect.yieldNow;
+      const state = yield* Ref.get(harness.latest);
+      expect(state.status).toBe("deleted");
+      expect(Option.isNone(state.data)).toBe(true);
+    }),
+  );
 });
 
 const snapshot = (thread: OrchestrationThread): OrchestrationThreadStreamItem => ({
@@ -340,9 +497,15 @@ describe("EnvironmentThreads", () => {
 
   it.effect("seeds the thread from the HTTP snapshot and resumes live events", () =>
     Effect.gen(function* () {
-      const httpThread: OrchestrationThread = { ...BASE_THREAD, title: "HTTP title" };
+      const httpThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        title: "HTTP title",
+      };
       const harness = yield* makeHarness({
-        httpSnapshot: Option.some({ snapshotSequence: 1, thread: httpThread }),
+        httpSnapshot: Option.some({
+          snapshotSequence: 1,
+          thread: httpThread,
+        }),
       });
       // No socket snapshot is pushed; only a live event arrives over the socket.
       // It can only be applied if the HTTP snapshot already seeded the thread.
