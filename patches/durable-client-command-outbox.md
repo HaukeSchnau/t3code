@@ -73,6 +73,13 @@ storage and decide when to drain ready thread heads.
 - The adapter owns one drain loop. It retries ready thread heads on the shared bounded backoff and wakes the
   loop when the browser reports that it is online or foregrounded. RPC success is the durable acknowledgement;
   ambiguous response loss keeps the frozen command in the outbox and retries the same command id.
+- Cross-tab coordination uses separate Web Locks: a nonblocking drain-leadership lock spans delivery, while a
+  short mutation lock protects reload-plus-transition transactions. RPC waits never hold the mutation lock, so
+  another tab can durably enqueue without becoming a second drainer. Ordinary locked reloads preserve an
+  active `Delivering` state; only new drain leadership recovers a delivery abandoned by a prior leader.
+- A turn-start command atomically emits any selected model, runtime-mode, and interaction-mode projection
+  changes before its message and turn request. These settings therefore share the command receipt/replay
+  boundary instead of depending on unaudited preflight RPCs.
 - Chat rendering projects persisted outbox messages alongside the existing in-memory optimistic messages and
   server snapshot, deduplicated by message id. This makes reload recovery visible without rendering two copies
   while the server projection catches up.
