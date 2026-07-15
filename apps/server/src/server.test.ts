@@ -6104,14 +6104,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[ORCHESTRATION_WS_METHODS.subscribeShell]({
             afterSequence: 0,
             includeCursorItems: true,
-          }).pipe(Stream.take(1), Stream.runCollect),
+            includeSynchronizationItems: true,
+          }).pipe(
+            Stream.takeUntil((item) => item.kind === "synchronized"),
+            Stream.runCollect,
+          ),
         ),
       );
-      assert.equal(Array.from(shellItems).at(0)?.kind, "cursor");
+      assert.deepEqual(
+        Array.from(shellItems).map((item) => item.kind),
+        ["cursor", "synchronized"],
+      );
       yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
       assert.deepInclude(readReplayObservationReportsForTesting().shell, {
         flow: "shell",
-        outcome: "interrupt",
+        outcome: "success",
         pages: 1,
         scannedEvents: 2,
         emittedEvents: 1,
@@ -6124,14 +6131,21 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[ORCHESTRATION_WS_METHODS.subscribeThread]({
             threadId: selectedThreadId,
             afterSequence: 0,
-          }).pipe(Stream.take(1), Stream.runCollect),
+            includeSynchronizationItems: true,
+          }).pipe(
+            Stream.takeUntil((item) => item.kind === "synchronized"),
+            Stream.runCollect,
+          ),
         ),
       );
-      assert.equal(Array.from(threadItems).at(0)?.kind, "event");
+      assert.deepEqual(
+        Array.from(threadItems).map((item) => item.kind),
+        ["event", "synchronized"],
+      );
       yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
       assert.deepInclude(readReplayObservationReportsForTesting().thread, {
         flow: "thread",
-        outcome: "interrupt",
+        outcome: "success",
         pages: 1,
         scannedEvents: 2,
         emittedEvents: 1,
