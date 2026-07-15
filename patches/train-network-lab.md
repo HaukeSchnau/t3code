@@ -4,11 +4,8 @@
 
 This fork needs repeatable evidence for connection recovery over intermittent mobile links. The
 foundation under `scripts/network-lab/` defines the stable scenario, profile, execution-plan, result,
-and adapter boundaries that later Linux impairment, server fixture, managed-relay, and real-browser
-packets will implement.
-
-No network, browser, provider, or server implementation is included in this patch. The module is a
-test and diagnostics foundation only.
+and adapter boundaries used by later Linux impairment, managed-relay, and real-browser packets. NL1
+adds the first direct server/provider recovery adapter without changing those production contracts.
 
 ## Contract
 
@@ -74,15 +71,52 @@ test and diagnostics foundation only.
 - A future comparator may add a separately versioned aggregate artifact. It must match results by
   scenario/profile/seed identity before comparing timing or traffic metrics.
 
+## NL1 direct Effect RPC recovery gate
+
+NL1 owns `apps/server/integration/NetworkRecoveryHarness.integration.ts` and
+`apps/server/integration/networkRecovery.integration.test.ts`, with read-only observation seams in
+the existing orchestration and deterministic-provider harnesses. It launches a real Node WebSocket
+server with the Effect RPC dispatch schema, calls the real orchestration engine and receipt store,
+and lets the deterministic provider adapter complete a turn. The version-1 profile still declares
+the origin path `unshaped`; no control is installed on the server or provider side.
+
+The loss gate decorates only the client socket. It records the outgoing Effect RPC request, then
+examines origin-to-client frames. A successful terminal `Exit` is eligible for suppression only when
+its request id correlates to the captured command and an independent receipt read proves an accepted
+`thread.turn.start` with a nonempty envelope fingerprint and the same positive result sequence. The
+gate does not suppress `Ack`, errors, uncorrelated exits, or any frame when receipt proof is
+unavailable. On a proved match it suppresses exactly that complete `Exit` and closes only the client
+link. Retry creates a new RPC protocol/session and sends the same frozen client envelope and command
+id.
+
+Passing evidence requires one terminal receipt, the single expected command-event set, one provider
+send, one provider turn, and one projected user/assistant turn. It also requires identical canonical
+envelope hashes across retry, replay of the committed receipt sequence, and semantic projection/hash
+equality with a no-fault oracle. The false-green case deliberately makes receipt proof unavailable:
+the real adapter forwards the terminal exit and correctness remains intact, but fault evidence must
+fail. Repeating the recovery plan with the same seed must reproduce the normalized control
+transcript. Cleanup is runner-bounded per resource and a second cleanup pass proves every release is
+idempotent.
+
+NL1 is deliberately attachment- and bootstrap-free. RC2 owns client-command preprocessing,
+deterministic attachment persistence/identity, and first-send worktree bootstrap replay. Repeating
+those cases here would obscure whether failure came from preprocessing or acknowledgement loss.
+NL2 will reuse the NL1 scenario/profile/provenance and correctness oracle while replacing the direct
+client action with Chromium production UI behavior and DOM-visible reconnect checkpoints; the
+server/provider recovery fixture remains the unshaped downstream oracle rather than becoming a
+browser-specific fault surface.
+
 ## Verification
 
 Focused coverage validates control schema boundaries, locale-independent golden planning,
 checkpoint-driven execution, strict evidence matching, aborting hung collectors, and partial cleanup
-failure behavior:
+failure behavior. NL1 adds the direct real-RPC recovery and false-green cases:
 
 ```bash
 nix develop --command ./node_modules/.bin/vp test run scripts/network-lab
 nix develop --command ./node_modules/.bin/vp run --filter @t3tools/scripts typecheck
+./node_modules/.bin/vp test run apps/server/integration/networkRecovery.integration.test.ts
+./node_modules/.bin/vp run --filter t3 typecheck
 ```
 
 Repository gates remain `vp check` and `vp run typecheck` from the Nix development shell.

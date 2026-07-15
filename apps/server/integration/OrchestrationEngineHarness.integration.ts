@@ -4,6 +4,7 @@ import * as NodeChildProcess from "node:child_process";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   ApprovalRequestId,
+  type CommandId,
   CodexSettings,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
@@ -34,6 +35,10 @@ import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/
 import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProviderTranscriptJournalLive } from "../src/persistence/Layers/ProviderTranscriptJournal.ts";
 import { ProviderTranscriptJournal } from "../src/persistence/Services/ProviderTranscriptJournal.ts";
+import {
+  OrchestrationCommandReceiptRepository,
+  type OrchestrationCommandReceipt,
+} from "../src/persistence/Services/OrchestrationCommandReceipts.ts";
 import { ProjectionCheckpointRepository } from "../src/persistence/Services/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepository } from "../src/persistence/Services/ProjectionPendingApprovals.ts";
 import { makeAdapterRegistryMock } from "../src/provider/testUtils/providerAdapterRegistryMock.ts";
@@ -189,6 +194,9 @@ export interface OrchestrationIntegrationHarness {
   readonly checkpointStore: CheckpointStore.CheckpointStore["Service"];
   readonly checkpointRepository: ProjectionCheckpointRepository["Service"];
   readonly pendingApprovalRepository: ProjectionPendingApprovalRepository["Service"];
+  readonly getCommandReceipt: (
+    commandId: CommandId,
+  ) => Effect.Effect<Option.Option<OrchestrationCommandReceipt>, never>;
   readonly waitForThread: (
     threadId: string,
     predicate: (thread: OrchestrationThread) => boolean,
@@ -315,6 +323,7 @@ export const makeOrchestrationIntegrationHarness = (
       orchestrationLayer.pipe(Layer.provide(projectionSnapshotQueryLayer)),
       ProjectionCheckpointRepositoryLive,
       ProjectionPendingApprovalRepositoryLive,
+      OrchestrationCommandReceiptRepositoryLive,
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusTest,
@@ -430,6 +439,14 @@ export const makeOrchestrationIntegrationHarness = (
       "load ProjectionPendingApprovalRepository service",
       () => runtime.runPromise(Effect.service(ProjectionPendingApprovalRepository)),
     ).pipe(Effect.orDie);
+    const getCommandReceipt = (commandId: CommandId) =>
+      tryRuntimePromise("read OrchestrationCommandReceipt", () =>
+        runtime.runPromise(
+          Effect.flatMap(OrchestrationCommandReceiptRepository, (repository) =>
+            repository.getByCommandId({ commandId }),
+          ),
+        ),
+      ).pipe(Effect.orDie);
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
       runtime.runPromise(Effect.service(RuntimeReceiptBus)),
     ).pipe(Effect.orDie);
@@ -585,6 +602,7 @@ export const makeOrchestrationIntegrationHarness = (
       checkpointStore,
       checkpointRepository,
       pendingApprovalRepository,
+      getCommandReceipt,
       waitForThread,
       waitForDomainEvent,
       waitForPendingApproval,
