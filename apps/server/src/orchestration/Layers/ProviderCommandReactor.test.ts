@@ -151,6 +151,7 @@ describe("ProviderCommandReactor", () => {
     readonly threadModelSelection?: ModelSelection;
     readonly sessionModelSwitch?: "unsupported" | "in-session";
     readonly requiresNewThreadForModelChange?: boolean;
+    readonly beforeStartSession?: (threadId: ThreadId) => Effect.Effect<void>;
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -161,6 +162,7 @@ describe("ProviderCommandReactor", () => {
     const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
     let nextSessionIndex = 1;
     const runtimeSessions: Array<ProviderSession> = [];
+    const beforeStartSession = input?.beforeStartSession;
     const modelSelection = input?.threadModelSelection ?? {
       instanceId: ProviderInstanceId.make("codex"),
       model: "gpt-5-codex",
@@ -218,8 +220,13 @@ describe("ProviderCommandReactor", () => {
         createdAt: now,
         updatedAt: now,
       };
-      runtimeSessions.push(session);
-      return Effect.succeed(session);
+      return Effect.gen(function* () {
+        if (beforeStartSession !== undefined) {
+          yield* beforeStartSession(threadId);
+        }
+        runtimeSessions.push(session);
+        return session;
+      });
     });
     const sendTurn = vi.fn((_: unknown) =>
       Effect.succeed({
@@ -494,6 +501,104 @@ describe("ProviderCommandReactor", () => {
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("starts an independent thread while another thread session start is blocked", async () => {
+    let releaseBlockedSession!: () => void;
+    const blockedSession = new Promise<void>((resolve) => {
+      releaseBlockedSession = resolve;
+    });
+    let reportBlockedSessionStarted!: () => void;
+    const blockedSessionStarted = new Promise<void>((resolve) => {
+      reportBlockedSessionStarted = resolve;
+    });
+    const harness = await createHarness({
+      beforeStartSession: (threadId) =>
+        threadId === ThreadId.make("thread-1")
+          ? Effect.promise(async () => {
+              reportBlockedSessionStarted();
+              await blockedSession;
+            })
+          : Effect.void,
+    });
+    const now = "2026-01-01T00:00:00.000Z";
+    const independentThreadId = ThreadId.make("thread-2");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-thread-create-2"),
+        threadId: independentThreadId,
+        projectId: asProjectId("project-1"),
+        title: "Independent thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-blocked"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-blocked"),
+          role: "user",
+          text: "block this session start",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await blockedSessionStarted;
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-independent"),
+        threadId: independentThreadId,
+        message: {
+          messageId: asMessageId("user-message-independent"),
+          role: "user",
+          text: "continue independently",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() =>
+      harness.sendTurn.mock.calls.some(
+        ([request]) =>
+          typeof request === "object" &&
+          request !== null &&
+          "threadId" in request &&
+          request.threadId === independentThreadId,
+      ),
+    );
+    expect(
+      harness.sendTurn.mock.calls.some(
+        ([request]) =>
+          typeof request === "object" &&
+          request !== null &&
+          "threadId" in request &&
+          request.threadId === ThreadId.make("thread-1"),
+      ),
+    ).toBe(false);
+
+    releaseBlockedSession();
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
   });
 
   it("rolls back an interrupted provider turn when pruning its user message", async () => {
