@@ -22,7 +22,9 @@ describe("mobile train network presentation", () => {
   });
 
   it("offers no mutation once delivery has started and discard only after rejection", () => {
-    expect(presentLocalIntent({ _tag: "Delivering", attempt: 1, startedAt: "2026-07-15T10:00:00.000Z" })).toMatchObject({
+    expect(
+      presentLocalIntent({ _tag: "Delivering", attempt: 1, startedAt: "2026-07-15T10:00:00.000Z" }),
+    ).toMatchObject({
       canEdit: false,
       canCancel: false,
       canDiscard: false,

@@ -93,14 +93,15 @@ export async function finalizeChromiumIsolation(input: {
   readonly removeProfile: () => Promise<void>;
   readonly browserIsConnected: () => boolean;
   readonly profileExists: () => boolean;
-}): Promise<{ readonly browserDisconnected: boolean; readonly temporaryDirectoryRemoved: boolean }> {
+}): Promise<{
+  readonly browserDisconnected: boolean;
+  readonly temporaryDirectoryRemoved: boolean;
+}> {
   const [contextClose] = await Promise.allSettled([input.closeContext()]);
   const [profileRemoval] = await Promise.allSettled([input.removeProfile()]);
   return {
-    browserDisconnected:
-      contextClose?.status === "fulfilled" && !input.browserIsConnected(),
-    temporaryDirectoryRemoved:
-      profileRemoval?.status === "fulfilled" && !input.profileExists(),
+    browserDisconnected: contextClose?.status === "fulfilled" && !input.browserIsConnected(),
+    temporaryDirectoryRemoved: profileRemoval?.status === "fulfilled" && !input.profileExists(),
   };
 }
 
@@ -280,8 +281,12 @@ export async function launchChromiumNetworkLabHarness(
     const cleanupFailed = cleanup.some(({ status }) => status === "rejected");
     if (cleanupFailed || NodeFS.existsSync(userDataDir)) {
       throw new AggregateError(
-        [error, ...cleanup.flatMap((result) => result.status === "rejected" ? [result.reason] : [])],
+        [
+          error,
+          ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        ],
         "Chromium launch failed and its isolated profile could not be fully cleaned up.",
+        { cause: error },
       );
     }
     throw error;
@@ -333,7 +338,9 @@ export function makeChromiumProductionT3Driver(
       await newIntent.waitFor({ state: "visible" });
       const commandId = await newIntent.getAttribute("data-outbox-command-id");
       if (!commandId || existingIds.includes(commandId)) {
-        throw new Error("The durable outbox did not expose a new command identity for this message.");
+        throw new Error(
+          "The durable outbox did not expose a new command identity for this message.",
+        );
       }
       return {
         localAcceptanceMs: now() - startedAt,

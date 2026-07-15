@@ -26,13 +26,7 @@ export function useTrainNetworkPresentation(input: {
             hasThreadContent: input.hasThreadContent,
           })
         : input.fallbackStatus,
-    [
-      input.environmentLabel,
-      input.fallbackStatus,
-      input.hasThreadContent,
-      input.projection,
-      nowMs,
-    ],
+    [input.environmentLabel, input.fallbackStatus, input.hasThreadContent, input.projection, nowMs],
   );
   const [visibleStatus, setVisibleStatus] = useState<TrainConnectionStatus | null>(null);
   const retryDeadline =

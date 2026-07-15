@@ -217,7 +217,11 @@ function composerConnectionStatus(input: {
         accessibilityLabel: `Reconnecting to ${environmentLabel}.`,
       };
     case "offline":
-      return { kind: "unavailable", label: "You are offline", accessibilityLabel: "You are offline." };
+      return {
+        kind: "unavailable",
+        label: "You are offline",
+        accessibilityLabel: "You are offline.",
+      };
     case "error":
       return {
         kind: "unavailable",
@@ -227,7 +231,11 @@ function composerConnectionStatus(input: {
         accessibilityLabel: `Failed to connect to ${environmentLabel}.`,
       };
     case "available":
-      return { kind: "unavailable", label: `${environmentLabel} is not connected`, accessibilityLabel: `${environmentLabel} is not connected.` };
+      return {
+        kind: "unavailable",
+        label: `${environmentLabel} is not connected`,
+        accessibilityLabel: `${environmentLabel} is not connected.`,
+      };
     case "connected":
       break;
   }
@@ -237,9 +245,17 @@ function composerConnectionStatus(input: {
   // cached messages are already visible.
   switch (input.threadSyncPhase) {
     case "loading":
-      return { kind: "syncing", label: "Loading messages...", accessibilityLabel: "Loading messages." };
+      return {
+        kind: "syncing",
+        label: "Loading messages...",
+        accessibilityLabel: "Loading messages.",
+      };
     case "syncing":
-      return { kind: "syncing", label: "Syncing messages...", accessibilityLabel: "Syncing messages." };
+      return {
+        kind: "syncing",
+        label: "Syncing messages...",
+        accessibilityLabel: "Syncing messages.",
+      };
     default:
       return null;
   }
@@ -291,28 +307,54 @@ const LocalIntentRow = memo(function LocalIntentRow(props: {
   const toneClass = props.presentation.tone === "danger" ? "text-danger" : "text-foreground";
   return (
     <View className="mt-2 rounded-xl border border-neutral-200/80 bg-white/90 px-3 py-2 dark:border-white/[0.08] dark:bg-neutral-900/90">
-      <Text accessibilityLiveRegion="polite" className={`text-xs font-t3-bold ${toneClass}`}>{props.presentation.label}</Text>
+      <Text accessibilityLiveRegion="polite" className={`text-xs font-t3-bold ${toneClass}`}>
+        {props.presentation.label}
+      </Text>
       <Text numberOfLines={1} className="pt-0.5 text-xs text-foreground-muted">
         {props.text.trim() || "Message with attachments"}
       </Text>
       <Text className="pt-0.5 text-2xs text-foreground-muted">{props.presentation.detail}</Text>
       <View className="flex-row gap-4 pt-1.5">
         {props.editing ? (
-          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Cancel editing saved message" onPress={props.onCancelEdit}>
+          <Pressable
+            hitSlop={10}
+            className="min-h-11 justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Cancel editing saved message"
+            onPress={props.onCancelEdit}
+          >
             <Text className="text-xs font-t3-bold text-accent">Cancel edit</Text>
           </Pressable>
         ) : props.presentation.canEdit ? (
-          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Edit saved message" onPress={() => props.onEdit(props.messageId)}>
+          <Pressable
+            hitSlop={10}
+            className="min-h-11 justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Edit saved message"
+            onPress={() => props.onEdit(props.messageId)}
+          >
             <Text className="text-xs font-t3-bold text-accent">Edit</Text>
           </Pressable>
         ) : null}
         {props.presentation.canCancel && !props.editing ? (
-          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Cancel saved message" onPress={() => void props.onCancel(props.messageId)}>
+          <Pressable
+            hitSlop={10}
+            className="min-h-11 justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Cancel saved message"
+            onPress={() => void props.onCancel(props.messageId)}
+          >
             <Text className="text-xs font-t3-bold text-danger">Cancel</Text>
           </Pressable>
         ) : null}
         {props.presentation.canDiscard ? (
-          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Discard failed saved message" onPress={() => void props.onDiscard(props.messageId)}>
+          <Pressable
+            hitSlop={10}
+            className="min-h-11 justify-center"
+            accessibilityRole="button"
+            accessibilityLabel="Discard failed saved message"
+            onPress={() => void props.onDiscard(props.messageId)}
+          >
             <Text className="text-xs font-t3-bold text-danger">Discard</Text>
           </Pressable>
         ) : null}
@@ -380,12 +422,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         environmentLabel: props.environmentLabel,
         threadSyncPhase: props.threadSyncPhase,
       }),
-    [
-      props.connectionError,
-      props.connectionState,
-      props.environmentLabel,
-      props.threadSyncPhase,
-    ],
+    [props.connectionError, props.connectionState, props.environmentLabel, props.threadSyncPhase],
   );
   const { connectionStatus: visibleConnectionStatus, remoteQueueStatus } =
     useTrainNetworkPresentation({
@@ -982,7 +1019,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         {/* Queue count */}
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
-            <Text accessibilityLiveRegion="polite" className="pt-2 text-xs font-t3-bold text-foreground-muted">
+            <Text
+              accessibilityLiveRegion="polite"
+              className="pt-2 text-xs font-t3-bold text-foreground-muted"
+            >
               {props.queueStatus}
             </Text>
             {props.queuedIntents.map(({ message, presentation }) => (

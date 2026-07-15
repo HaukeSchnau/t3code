@@ -85,7 +85,9 @@ function verifyFaultEvidence(
       planned.step.kind === "control",
   );
   if (evidence.length !== expected.length) {
-    throw new Error(`Fault evidence count mismatch: expected ${expected.length}, observed ${evidence.length}.`);
+    throw new Error(
+      `Fault evidence count mismatch: expected ${expected.length}, observed ${evidence.length}.`,
+    );
   }
   return expected.map((planned, index) => {
     const observed = evidence[index];
@@ -98,7 +100,9 @@ function verifyFaultEvidence(
           ? "external-protocol-suppression-adapter"
           : "chromium-cdp")
     ) {
-      throw new Error(`Fault evidence did not match planned control at sequence ${planned.sequence}.`);
+      throw new Error(
+        `Fault evidence did not match planned control at sequence ${planned.sequence}.`,
+      );
     }
     return `${observed.decisionToken}:${observed.effectiveControl.kind}:${observed.mechanism}`;
   });
@@ -113,13 +117,14 @@ export async function runProductionT3BrowserScenario(
   try {
     prepared = await fixture.prepare(plan, variant);
   } catch (cause) {
-    const cleanup = await fixture.cleanupPreparationFailure(plan, variant, cause).catch(
-      (cleanupCause) => ({ complete: false, details: String(cleanupCause) }),
-    );
+    const cleanup = await fixture
+      .cleanupPreparationFailure(plan, variant, cause)
+      .catch((cleanupCause) => ({ complete: false, details: String(cleanupCause) }));
     if (!cleanup.complete) {
       throw new AggregateError(
         [cause, new Error(`Preparation rollback was incomplete: ${cleanup.details}`)],
         "Browser fixture preparation failed and rollback was incomplete.",
+        { cause: cause },
       );
     }
     throw cause;
@@ -206,7 +211,9 @@ export async function runProductionT3BrowserScenario(
           text,
         });
         if (submission.text !== text || submission.commandId.length === 0) {
-          throw new Error("Durable acceptance evidence was not correlated to the submitted message.");
+          throw new Error(
+            "Durable acceptance evidence was not correlated to the submitted message.",
+          );
         }
         localAcceptanceMs.push(submission.localAcceptanceMs);
       } else if (step.action === "browser.reload") {
@@ -246,16 +253,16 @@ export async function runProductionT3BrowserScenario(
     browserCleanupComplete = browserCleanup.status === "fulfilled" && browserCleanup.value.complete;
     fixtureCleanupComplete = fixtureCleanup.status === "fulfilled" && fixtureCleanup.value.complete;
     if (browserCleanup.status === "rejected") cleanupFailures.push(browserCleanup.reason);
-    else if (!browserCleanup.value.complete) cleanupFailures.push(new Error(browserCleanup.value.details));
+    else if (!browserCleanup.value.complete)
+      cleanupFailures.push(new Error(browserCleanup.value.details));
     if (fixtureCleanup.status === "rejected") cleanupFailures.push(fixtureCleanup.reason);
-    else if (!fixtureCleanup.value.complete) cleanupFailures.push(new Error(fixtureCleanup.value.details));
+    else if (!fixtureCleanup.value.complete)
+      cleanupFailures.push(new Error(fixtureCleanup.value.details));
   }
 
   if (!browserCleanupComplete || !fixtureCleanupComplete) {
     throw new AggregateError(
-      executionError === undefined
-        ? cleanupFailures
-        : [executionError, ...cleanupFailures],
+      executionError === undefined ? cleanupFailures : [executionError, ...cleanupFailures],
       "Browser scenario cleanup evidence was incomplete.",
     );
   }

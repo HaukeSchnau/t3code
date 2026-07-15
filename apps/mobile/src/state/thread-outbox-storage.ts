@@ -31,9 +31,7 @@ export function nextCommandOutboxGenerationSequence(
   fileNames: ReadonlyArray<string>,
   manifestSequence = 0,
 ): number {
-  return (
-    Math.max(manifestSequence, ...fileNames.map((name) => generationSequence(name) ?? 0)) + 1
-  );
+  return Math.max(manifestSequence, ...fileNames.map((name) => generationSequence(name) ?? 0)) + 1;
 }
 
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
@@ -84,212 +82,206 @@ function messageFileName(messageId: MessageId): string {
   return `${encodeURIComponent(messageId)}.json`;
 }
 
-export function createThreadOutboxStorage(
-  fileSystem: ThreadOutboxFileSystem,
-): ThreadOutboxStorage {
+export function createThreadOutboxStorage(fileSystem: ThreadOutboxFileSystem): ThreadOutboxStorage {
   let commandOutboxSaveQueue: Promise<void> = Promise.resolve();
   return {
-  loadCommandOutbox: async () => {
-    try {
-      const directory = await fileSystem.directory();
-      const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
-      if (manifest.exists) {
-        try {
-          const value = JSON.parse(await manifest.text()) as {
-            version?: unknown;
-            sequence?: unknown;
-            fileName?: unknown;
-          };
-          if (
-            value.version !== 1 ||
-            typeof value.sequence !== "number" ||
-            typeof value.fileName !== "string" ||
-            value.fileName !== generationFileName(value.sequence)
-          ) {
-            throw new Error("Invalid command outbox manifest");
+    loadCommandOutbox: async () => {
+      try {
+        const directory = await fileSystem.directory();
+        const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+        if (manifest.exists) {
+          try {
+            const value = JSON.parse(await manifest.text()) as {
+              version?: unknown;
+              sequence?: unknown;
+              fileName?: unknown;
+            };
+            if (
+              value.version !== 1 ||
+              typeof value.sequence !== "number" ||
+              typeof value.fileName !== "string" ||
+              value.fileName !== generationFileName(value.sequence)
+            ) {
+              throw new Error("Invalid command outbox manifest");
+            }
+            const authoritative = await fileSystem.file(directory, value.fileName);
+            return decodeDurableCommandOutboxDocument(
+              JSON.parse(await authoritative.text()) as unknown,
+            );
+          } catch (cause) {
+            // The manifest sequence is the high-water mark. Falling back to an
+            // older lifecycle after its authoritative removal generation is
+            // corrupt could resurrect acknowledged or discarded commands.
+            console.warn("[thread-outbox] rebuilding corrupt authoritative command outbox", cause);
+            return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
           }
-          const authoritative = await fileSystem.file(directory, value.fileName);
-          return decodeDurableCommandOutboxDocument(
-            JSON.parse(await authoritative.text()) as unknown,
-          );
-        } catch (cause) {
-          // The manifest sequence is the high-water mark. Falling back to an
-          // older lifecycle after its authoritative removal generation is
-          // corrupt could resurrect acknowledged or discarded commands.
-          console.warn("[thread-outbox] rebuilding corrupt authoritative command outbox", cause);
-          return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
         }
-      }
-      const candidates = (await fileSystem.list(directory))
-        .filter(
-          (entry) =>
-            entry.name === COMMAND_OUTBOX_FILE || generationSequence(entry.name) !== null,
-        )
-        .sort((left, right) => {
-          if (left.name === COMMAND_OUTBOX_FILE) return 1;
-          if (right.name === COMMAND_OUTBOX_FILE) return -1;
-          return right.name.localeCompare(left.name);
+        const candidates = (await fileSystem.list(directory))
+          .filter(
+            (entry) =>
+              entry.name === COMMAND_OUTBOX_FILE || generationSequence(entry.name) !== null,
+          )
+          .sort((left, right) => {
+            if (left.name === COMMAND_OUTBOX_FILE) return 1;
+            if (right.name === COMMAND_OUTBOX_FILE) return -1;
+            return right.name.localeCompare(left.name);
+          });
+        for (const file of candidates) {
+          try {
+            return decodeDurableCommandOutboxDocument(JSON.parse(await file.text()) as unknown);
+          } catch (cause) {
+            console.warn("[thread-outbox] ignored corrupt command outbox generation", {
+              fileName: file.name,
+              cause,
+            });
+          }
+        }
+        return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+      } catch (cause) {
+        throw new ThreadOutboxStorageError({
+          operation: "load",
+          environmentId: null,
+          threadId: null,
+          messageId: null,
+          fileName: COMMAND_OUTBOX_FILE,
+          cause,
         });
-      for (const file of candidates) {
+      }
+    },
+    saveCommandOutbox: (document) => {
+      const save = commandOutboxSaveQueue.then(async () => {
         try {
-          return decodeDurableCommandOutboxDocument(JSON.parse(await file.text()) as unknown);
+          const directory = await fileSystem.directory();
+          const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+          let previousSequence = 0;
+          if (manifest.exists) {
+            try {
+              const value = JSON.parse(await manifest.text()) as { sequence?: unknown };
+              if (typeof value.sequence === "number") previousSequence = value.sequence;
+            } catch {
+              // Recover the high-water value from immutable generation names.
+            }
+          }
+          const sequence = nextCommandOutboxGenerationSequence(
+            (await fileSystem.list(directory)).map((entry) => entry.name),
+            previousSequence,
+          );
+          const generation = generationFileName(sequence);
+          const destination = await fileSystem.file(directory, generation);
+          const temporary = await fileSystem.file(directory, `${generation}.tmp`);
+          temporary.create({ intermediates: true, overwrite: true });
+          temporary.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
+          await fileSystem.move(temporary, destination, { overwrite: false });
+
+          const manifestTemporary = await fileSystem.file(
+            directory,
+            `${COMMAND_OUTBOX_MANIFEST_FILE}.tmp`,
+          );
+          manifestTemporary.create({ intermediates: true, overwrite: true });
+          manifestTemporary.write(JSON.stringify({ version: 1, sequence, fileName: generation }));
+          await fileSystem.move(manifestTemporary, manifest, { overwrite: true });
+
+          // Keep multiple immutable generations so a corrupt newest record can
+          // fall back to the prior complete lifecycle snapshot.
+          const older = (await fileSystem.list(directory))
+            .filter((entry) => generationSequence(entry.name) !== null && entry.name !== generation)
+            .sort((left, right) => right.name.localeCompare(left.name))
+            .slice(2);
+          for (const file of older) file.delete();
         } catch (cause) {
-          console.warn("[thread-outbox] ignored corrupt command outbox generation", {
-            fileName: file.name,
+          throw new ThreadOutboxStorageError({
+            operation: "write",
+            environmentId: null,
+            threadId: null,
+            messageId: null,
+            fileName: COMMAND_OUTBOX_FILE,
             cause,
           });
         }
-      }
-      return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "load",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        fileName: COMMAND_OUTBOX_FILE,
-        cause,
       });
-    }
-  },
-  saveCommandOutbox: (document) => {
-    const save = commandOutboxSaveQueue.then(async () => {
+      commandOutboxSaveQueue = save.catch(() => undefined);
+      return save;
+    },
+    load: async () => {
+      const messages: QueuedThreadMessage[] = [];
       try {
-      const directory = await fileSystem.directory();
-      const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
-      let previousSequence = 0;
-      if (manifest.exists) {
-        try {
-          const value = JSON.parse(await manifest.text()) as { sequence?: unknown };
-          if (typeof value.sequence === "number") previousSequence = value.sequence;
-        } catch {
-          // Recover the high-water value from immutable generation names.
+        const directory = await fileSystem.directory();
+
+        for (const entry of await fileSystem.list(directory)) {
+          if (
+            !entry.name.endsWith(".json") ||
+            entry.name === COMMAND_OUTBOX_FILE ||
+            entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX)
+          ) {
+            continue;
+          }
+          try {
+            messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
+          } catch (cause) {
+            console.warn(
+              "[thread-outbox] ignored invalid persisted message",
+              new ThreadOutboxStorageError({
+                operation: "read-message",
+                environmentId: null,
+                threadId: null,
+                messageId: null,
+                fileName: entry.name,
+                cause,
+              }),
+            );
+          }
         }
-      }
-      const sequence = nextCommandOutboxGenerationSequence(
-        (await fileSystem.list(directory)).map((entry) => entry.name),
-        previousSequence,
-      );
-      const generation = generationFileName(sequence);
-      const destination = await fileSystem.file(directory, generation);
-      const temporary = await fileSystem.file(directory, `${generation}.tmp`);
-      temporary.create({ intermediates: true, overwrite: true });
-      temporary.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
-      await fileSystem.move(temporary, destination, { overwrite: false });
-
-      const manifestTemporary = await fileSystem.file(
-        directory,
-        `${COMMAND_OUTBOX_MANIFEST_FILE}.tmp`,
-      );
-      manifestTemporary.create({ intermediates: true, overwrite: true });
-      manifestTemporary.write(JSON.stringify({ version: 1, sequence, fileName: generation }));
-      await fileSystem.move(manifestTemporary, manifest, { overwrite: true });
-
-      // Keep multiple immutable generations so a corrupt newest record can
-      // fall back to the prior complete lifecycle snapshot.
-      const older = (await fileSystem.list(directory))
-        .filter(
-          (entry) =>
-            generationSequence(entry.name) !== null &&
-            entry.name !== generation,
-        )
-        .sort((left, right) => right.name.localeCompare(left.name))
-        .slice(2);
-      for (const file of older) file.delete();
       } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "write",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        fileName: COMMAND_OUTBOX_FILE,
-        cause,
-      });
+        throw new ThreadOutboxStorageError({
+          operation: "load",
+          environmentId: null,
+          threadId: null,
+          messageId: null,
+          fileName: null,
+          cause,
+        });
       }
-    });
-    commandOutboxSaveQueue = save.catch(() => undefined);
-    return save;
-  },
-  load: async () => {
-    const messages: QueuedThreadMessage[] = [];
-    try {
-      const directory = await fileSystem.directory();
-
-      for (const entry of await fileSystem.list(directory)) {
-        if (
-          !entry.name.endsWith(".json") ||
-          entry.name === COMMAND_OUTBOX_FILE ||
-          entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX)
-        ) {
-          continue;
+      return messages;
+    },
+    write: async (message) => {
+      const fileName = messageFileName(message.messageId);
+      try {
+        const directory = await fileSystem.directory();
+        const file = await fileSystem.file(directory, fileName);
+        const temporary = await fileSystem.file(directory, `${file.name}.${Date.now()}.tmp`);
+        temporary.create({ intermediates: true, overwrite: true });
+        temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
+        await fileSystem.move(temporary, file, { overwrite: true });
+      } catch (cause) {
+        throw new ThreadOutboxStorageError({
+          operation: "write",
+          environmentId: message.environmentId,
+          threadId: message.threadId,
+          messageId: message.messageId,
+          fileName,
+          cause,
+        });
+      }
+    },
+    remove: async (message) => {
+      const fileName = messageFileName(message.messageId);
+      try {
+        const directory = await fileSystem.directory();
+        const file = await fileSystem.file(directory, fileName);
+        if (file.exists) {
+          file.delete();
         }
-        try {
-          messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
-        } catch (cause) {
-          console.warn(
-            "[thread-outbox] ignored invalid persisted message",
-            new ThreadOutboxStorageError({
-              operation: "read-message",
-              environmentId: null,
-              threadId: null,
-              messageId: null,
-              fileName: entry.name,
-              cause,
-            }),
-          );
-        }
+      } catch (cause) {
+        throw new ThreadOutboxStorageError({
+          operation: "remove",
+          environmentId: message.environmentId,
+          threadId: message.threadId,
+          messageId: message.messageId,
+          fileName,
+          cause,
+        });
       }
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "load",
-        environmentId: null,
-        threadId: null,
-        messageId: null,
-        fileName: null,
-        cause,
-      });
-    }
-    return messages;
-  },
-  write: async (message) => {
-    const fileName = messageFileName(message.messageId);
-    try {
-      const directory = await fileSystem.directory();
-      const file = await fileSystem.file(directory, fileName);
-      const temporary = await fileSystem.file(directory, `${file.name}.${Date.now()}.tmp`);
-      temporary.create({ intermediates: true, overwrite: true });
-      temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
-      await fileSystem.move(temporary, file, { overwrite: true });
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "write",
-        environmentId: message.environmentId,
-        threadId: message.threadId,
-        messageId: message.messageId,
-        fileName,
-        cause,
-      });
-    }
-  },
-  remove: async (message) => {
-    const fileName = messageFileName(message.messageId);
-    try {
-      const directory = await fileSystem.directory();
-      const file = await fileSystem.file(directory, fileName);
-      if (file.exists) {
-        file.delete();
-      }
-    } catch (cause) {
-      throw new ThreadOutboxStorageError({
-        operation: "remove",
-        environmentId: message.environmentId,
-        threadId: message.threadId,
-        messageId: message.messageId,
-        fileName,
-        cause,
-      });
-    }
-  },
+    },
   };
 }
 

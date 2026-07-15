@@ -136,8 +136,8 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
-    draft.workspaceSelection === undefined
-    && draft.editingQueuedMessageId === undefined
+    draft.workspaceSelection === undefined &&
+    draft.editingQueuedMessageId === undefined
   );
 }
 

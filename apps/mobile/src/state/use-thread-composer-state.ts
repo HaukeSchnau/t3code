@@ -242,16 +242,25 @@ export function useThreadComposerState() {
       );
       return null;
     }
-  }, [editingQueuedMessageId, selectedThreadDetail, selectedThreadQueuedMessages, selectedThreadShell]);
+  }, [
+    editingQueuedMessageId,
+    selectedThreadDetail,
+    selectedThreadQueuedMessages,
+    selectedThreadShell,
+  ]);
 
   const editPendingMessage = useCallback(
     (messageId: MessageId) => {
       if (!selectedThreadKey) return;
-      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      const message = selectedThreadQueuedMessages.find(
+        (candidate) => candidate.messageId === messageId,
+      );
       if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Pending") return;
       const draft = getComposerDraftSnapshot(selectedThreadKey);
       if (draft.text.trim().length > 0 || draft.attachments.length > 0) {
-        setPendingConnectionError("Send or clear the current draft before editing a saved message.");
+        setPendingConnectionError(
+          "Send or clear the current draft before editing a saved message.",
+        );
         return;
       }
       holdEditingQueuedMessage(message.messageId);
@@ -269,7 +278,9 @@ export function useThreadComposerState() {
 
   const cancelPendingMessage = useCallback(
     async (messageId: MessageId) => {
-      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      const message = selectedThreadQueuedMessages.find(
+        (candidate) => candidate.messageId === messageId,
+      );
       if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Pending") return;
       await threadOutboxManager.remove(message);
       if (editingQueuedMessageId === messageId && selectedThreadKey) {
@@ -282,7 +293,9 @@ export function useThreadComposerState() {
 
   const discardRejectedMessage = useCallback(
     async (messageId: MessageId) => {
-      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      const message = selectedThreadQueuedMessages.find(
+        (candidate) => candidate.messageId === messageId,
+      );
       if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Rejected") return;
       await threadOutboxManager.discardRejected(message);
     },
