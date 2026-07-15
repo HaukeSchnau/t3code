@@ -72,7 +72,18 @@ export interface ProjectSetupScriptRunnerInput {
   readonly preferredTerminalId?: string;
   /** Reconcile a launch durably claimed by preprocessing before this process started. */
   readonly reconcileClaimedLaunch?: boolean;
+  /** Durable preprocessing identity that the live project setup script must still match. */
+  readonly expectedExecution?: SetupExecutionIdentity;
 }
+
+export interface SetupExecutionIdentity {
+  readonly executionKey: string;
+  readonly scriptDigest: string;
+}
+
+export type ProjectSetupScriptResolution =
+  | { readonly status: "no-script" }
+  | { readonly status: "resolved"; readonly execution: SetupExecutionIdentity };
 
 export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
@@ -124,10 +135,26 @@ export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedE
   }
 }
 
+export class ProjectSetupScriptIdentityMismatchError extends Schema.TaggedErrorClass<ProjectSetupScriptIdentityMismatchError>()(
+  "ProjectSetupScriptIdentityMismatchError",
+  {
+    threadId: Schema.String,
+    expectedExecutionKey: Schema.String,
+    expectedScriptDigest: Schema.String,
+    actualExecutionKey: Schema.NullOr(Schema.String),
+    actualScriptDigest: Schema.NullOr(Schema.String),
+  },
+) {
+  override get message(): string {
+    return `The live setup script no longer matches the durable execution claimed for thread '${this.threadId}'.`;
+  }
+}
+
 export const ProjectSetupScriptRunnerError = Schema.Union([
   ProjectSetupScriptOperationError,
   ProjectSetupScriptProjectNotFoundError,
   ProjectSetupScriptReconciliationTimeoutError,
+  ProjectSetupScriptIdentityMismatchError,
 ]);
 export type ProjectSetupScriptRunnerError = typeof ProjectSetupScriptRunnerError.Type;
 
@@ -137,6 +164,9 @@ export class ProjectSetupScriptRunner extends Context.Service<
     readonly runForThread: (
       input: ProjectSetupScriptRunnerInput,
     ) => Effect.Effect<ProjectSetupScriptRunnerResult, ProjectSetupScriptRunnerError>;
+    readonly resolveForThread: (
+      input: ProjectSetupScriptRunnerInput,
+    ) => Effect.Effect<ProjectSetupScriptResolution, ProjectSetupScriptRunnerError>;
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
@@ -147,26 +177,15 @@ export const make = Effect.gen(function* () {
   const path = yield* Path.Path;
   const { terminalLogsDir } = yield* ServerConfig.ServerConfig;
 
-  const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
-    "ProjectSetupScriptRunner.runForThread",
-  )(function* (input) {
+  const resolveSetup = Effect.fn("ProjectSetupScriptRunner.resolveSetup")(function* (
+    input: ProjectSetupScriptRunnerInput,
+  ) {
     const errorContext = {
       threadId: input.threadId,
       worktreePath: input.worktreePath,
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
     };
-    const executionExists = (filePath: string) =>
-      fileSystem.exists(filePath).pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectSetupScriptOperationError({
-              ...errorContext,
-              operation: "reconcileExecution",
-              cause,
-            }),
-        ),
-      );
     const projectById = input.projectId
       ? yield* projectionSnapshotQuery.getProjectShellById(ProjectId.make(input.projectId)).pipe(
           Effect.map(Option.getOrUndefined),
@@ -195,29 +214,87 @@ export const make = Effect.gen(function* () {
             ),
           )
         : null);
-
     if (!project) {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
-
     const script = setupProjectScript(project.scripts);
+    if (!script) return { errorContext, project, script: null } as const;
+    const terminalId = input.preferredTerminalId ?? `setup-${script.id}`;
+    return {
+      errorContext,
+      project,
+      script,
+      terminalId,
+      execution: setupExecutionIdentity(input.threadId, terminalId, script.command),
+    } as const;
+  });
+
+  const resolveForThread: ProjectSetupScriptRunner["Service"]["resolveForThread"] = Effect.fn(
+    "ProjectSetupScriptRunner.resolveForThread",
+  )(function* (input) {
+    const resolved = yield* resolveSetup(input);
+    return resolved.script
+      ? { status: "resolved", execution: resolved.execution }
+      : { status: "no-script" };
+  });
+
+  const runForThread: ProjectSetupScriptRunner["Service"]["runForThread"] = Effect.fn(
+    "ProjectSetupScriptRunner.runForThread",
+  )(function* (input) {
+    const errorContext = {
+      threadId: input.threadId,
+      worktreePath: input.worktreePath,
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
+      ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
+    };
+    const executionExists = (filePath: string) =>
+      fileSystem.exists(filePath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "reconcileExecution",
+              cause,
+            }),
+        ),
+      );
+    const resolved = yield* resolveSetup(input);
+    const { project, script } = resolved;
     if (!script) {
+      if (input.expectedExecution) {
+        return yield* new ProjectSetupScriptIdentityMismatchError({
+          threadId: input.threadId,
+          expectedExecutionKey: input.expectedExecution.executionKey,
+          expectedScriptDigest: input.expectedExecution.scriptDigest,
+          actualExecutionKey: null,
+          actualScriptDigest: null,
+        });
+      }
       return {
         status: "no-script",
       } as const;
     }
 
-    const terminalId = input.preferredTerminalId ?? `setup-${script.id}`;
+    const { terminalId } = resolved;
     const cwd = input.worktreePath;
     const env = projectScriptRuntimeEnv({
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
     });
-    const { executionKey, scriptDigest } = setupExecutionIdentity(
-      input.threadId,
-      terminalId,
-      script.command,
-    );
+    const { executionKey, scriptDigest } = resolved.execution;
+    if (
+      input.expectedExecution &&
+      (input.expectedExecution.executionKey !== executionKey ||
+        input.expectedExecution.scriptDigest !== scriptDigest)
+    ) {
+      return yield* new ProjectSetupScriptIdentityMismatchError({
+        threadId: input.threadId,
+        expectedExecutionKey: input.expectedExecution.executionKey,
+        expectedScriptDigest: input.expectedExecution.scriptDigest,
+        actualExecutionKey: executionKey,
+        actualScriptDigest: scriptDigest,
+      });
+    }
     const executionDir = path.join(terminalLogsDir, "setup-executions", executionKey);
     const claimDir = path.join(executionDir, "claimed");
     const completedPath = path.join(executionDir, "completed.json");
@@ -381,7 +458,7 @@ export const make = Effect.gen(function* () {
     } as const;
   });
 
-  return ProjectSetupScriptRunner.of({ runForThread });
+  return ProjectSetupScriptRunner.of({ runForThread, resolveForThread });
 });
 
 export const layer = Layer.effect(ProjectSetupScriptRunner, make);

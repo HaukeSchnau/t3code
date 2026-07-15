@@ -103,7 +103,7 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
     const filename = yield* makePersistentFilename;
     const cases: ReadonlyArray<{
       readonly name: string;
-      readonly completed: ReadonlyArray<CommandPreprocessingStep>;
+      readonly completed: ReadonlyArray<CommandPreprocessingStep | "claim-setup">;
       readonly expected: readonly [boolean, boolean, boolean, boolean, boolean];
     }> = [
       {
@@ -127,7 +127,7 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
           "deferred-preprocessing-completed",
           "thread-created",
           "workspace-prepared",
-          "setup-claimed",
+          "claim-setup",
         ],
         expected: [true, true, true, true, false],
       },
@@ -137,7 +137,7 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
           "deferred-preprocessing-completed",
           "thread-created",
           "workspace-prepared",
-          "setup-claimed",
+          "claim-setup",
           "setup-completed",
         ],
         expected: [true, true, true, true, true],
@@ -155,7 +155,12 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
           const coordinator = yield* CommandPreprocessingCoordinator;
           yield* coordinator.claim(checkpointCommand);
           for (const step of checkpoint.completed) {
-            yield* coordinator.markCompleted(checkpointCommand, step);
+            yield* step === "claim-setup"
+              ? coordinator.claimSetup(checkpointCommand, {
+                  executionKey: "setup-execution-a",
+                  scriptDigest: "setup-digest-a",
+                })
+              : coordinator.markCompleted(checkpointCommand, step);
           }
         }),
       );
@@ -171,12 +176,43 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
           resumed.deferredPreprocessingCompleted,
           resumed.threadCreated,
           resumed.workspacePrepared,
-          resumed.setupClaimed,
-          resumed.setupCompleted,
+          resumed.setup.status === "claimed" || resumed.setup.status === "completed",
+          resumed.setup.status === "completed",
         ],
         checkpoint.expected,
         checkpoint.name,
       );
+    }
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
+
+it.effect("fails closed when a restarted setup claim is resolved to a different identity", () =>
+  Effect.gen(function* () {
+    const filename = yield* makePersistentFilename;
+    yield* withFreshCoordinator(
+      filename,
+      Effect.flatMap(CommandPreprocessingCoordinator, (coordinator) =>
+        coordinator.claimSetup(command, {
+          executionKey: "setup-execution-a",
+          scriptDigest: "setup-digest-a",
+        }),
+      ),
+    );
+
+    const result = yield* withFreshCoordinator(
+      filename,
+      Effect.flatMap(CommandPreprocessingCoordinator, (coordinator) =>
+        coordinator.claimSetup(command, {
+          executionKey: "setup-execution-b",
+          scriptDigest: "setup-digest-b",
+        }),
+      ),
+    ).pipe(Effect.result);
+    assert.isTrue(result._tag === "Failure");
+    if (result._tag === "Failure") {
+      if (!isReceiptMismatchError(result.failure)) return yield* Effect.die(result.failure);
+      assert.equal(result.failure.reason, "payload-mismatch");
+      assert.include(result.failure.detail, "setup execution identity");
     }
   }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );

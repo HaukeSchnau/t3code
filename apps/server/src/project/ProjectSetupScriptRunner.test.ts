@@ -155,6 +155,45 @@ describe("ProjectSetupScriptRunner", () => {
     }).pipe(Effect.provide(testLayer(project, { open, write })));
   });
 
+  it.effect("rejects a changed live setup identity before terminal I/O", () => {
+    const open = vi.fn(() => Effect.die("unexpected open"));
+    const write = vi.fn(() => Effect.die("unexpected write"));
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install --changed",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const result = yield* runner
+        .runForThread({
+          threadId: "thread-1",
+          projectId: "project-1",
+          worktreePath: "/repo/worktrees/a",
+          preferredTerminalId: "setup-setup",
+          reconcileClaimedLaunch: true,
+          expectedExecution: ProjectSetupScriptRunner.setupExecutionIdentity(
+            "thread-1",
+            "setup-setup",
+            "bun install --original",
+          ),
+        })
+        .pipe(Effect.result);
+
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure._tag).toBe("ProjectSetupScriptIdentityMismatchError");
+      }
+      expect(open).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
   it.effect(
     "opens the deterministic setup terminal with worktree env and writes the command",
     () => {
