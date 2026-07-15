@@ -15,30 +15,50 @@ test and diagnostics foundation only.
 - Scenario and profile documents use schema version 1. Their identities are separate versioned
   values, and every execution identity records the scenario, profile, unsigned 32-bit seed, stable
   definition hash, and human-readable execution ID.
-- Scenario steps are either adapter actions or observed checkpoints with explicit timeouts. There is
-  intentionally no sleep step: progress must be driven by observable system state.
+- Scenario steps separate application/browser actions, network fault controls, and observed
+  checkpoints with explicit timeouts. There is intentionally no sleep step: progress must be driven
+  by observable system state.
+- Fault controls are a schema-versioned discriminated union. Version 1 models administrative link
+  offline/apply and online/remove, directional data-plane blackhole apply/remove, active-connection
+  reset, directional impairment, and protocol-aware acknowledgement/response suppression. Every
+  control states its surface, direction, lifecycle, and semantics. Impairment semantics define
+  latency as constant one-way delay, jitter as a uniform plus-or-minus delay, loss as independent
+  per-packet probability, and bandwidth as maximum throughput in kilobits per second.
 - A deterministic xorshift32 stream assigns a decision token to each planned step. The same scenario,
-  profile, and seed produce the same identity, order, and tokens; later fault adapters can consume
-  those tokens without inventing their own nondeterministic selection.
+  profile, seed, lab provenance, and adapter provenance produce the same identity, order, and tokens;
+  later fault adapters can consume those tokens without inventing their own nondeterministic
+  selection. Definition hashing canonicalizes object keys by JavaScript code-unit order rather than
+  locale collation and includes the complete version-1 control semantics and provenance.
 - Profiles describe only the client-facing path. The origin path is the literal `unshaped`, making it
   impossible to represent server/provider shaping in a valid version-1 profile.
-- The runner accepts a compiled plan and a narrow adapter. The adapter can prepare resources, execute
-  a namespaced action, observe a named checkpoint, collect correctness and fault proof, and clean up.
-  It does not expose or prescribe server, provider, browser, proxy, relay, namespace, or `tc` types.
+- The runner accepts a compiled plan and a narrow adapter. Preparation returns a nonempty resource
+  lease whose manifest is then owned by the runner. The adapter can execute an application action or
+  typed fault control, observe a named checkpoint, collect correctness and fault proof, and release
+  one registered resource at a time. It does not expose or prescribe server, provider, browser,
+  proxy, relay, namespace, or `tc` types.
+- Every adapter operation receives an `AbortSignal` and is bounded by a runner deadline. Cleanup runs
+  in guaranteed finalization, receives its own deadline even when execution was aborted, attempts
+  every registered resource, and retains per-resource success, failure details, and structured
+  runner errors.
 - Result schema version 1 always contains correctness, fault, and cleanup sections. Preparation,
   execution, evidence collection, and cleanup errors are converted to structured evidence; a failed
   run resolves to a machine-readable result instead of rejecting.
-- Passing requires successful execution, passing correctness and fault evidence, explicit proof that
-  the origin path remained unshaped, and passing cleanup evidence.
+- Passing requires successful execution; a nonempty set of uniquely named, passing correctness
+  assertions; and exact fault evidence for every planned control in plan order. Each fault operation
+  must match its step ID, sequence, decision token, kind, surface/direction, lifecycle, and effective
+  parameters. Passing also requires explicit proof that the origin path remained unshaped and
+  nonempty cleanup proof for every uniquely registered resource. Empty, duplicate, reordered,
+  wrong-kind, mismatched, or partially failing evidence cannot produce a passing result.
 
 ## Maintenance and extension seams
 
-- The Linux packet should implement the adapter behind a client-facing ingress and translate plan
-  decision tokens into deterministic `tc netem` or proxy settings. It must populate fault events and
-  attest that the upstream/origin-facing path has no qdisc.
+- A later Linux packet may implement the adapter behind a client-facing ingress and translate plan
+  controls and decision tokens into deterministic impairment settings. It must populate typed fault
+  operations and attest that the upstream/origin-facing path is unshaped. No Linux, `tc`/netem,
+  proxy, browser, or server adapter is part of this foundation.
 - The server/provider fixture should surface observed checkpoint names and correctness assertions;
   it must not become a shaping surface.
-- The browser packet should drive production web behavior through namespaced actions and DOM-visible
+- The browser packet should drive production web behavior through application actions and DOM-visible
   checkpoints. Browser timing belongs in evidence details, not in scenario control flow.
 - Protocol-aware acknowledgement loss should remain a dedicated adapter component because ordinary
   TCP packet loss is retransmitted and cannot prove lost-response recovery.
@@ -47,8 +67,9 @@ test and diagnostics foundation only.
 
 ## Verification
 
-Focused coverage validates schema boundaries, deterministic planning, checkpoint-driven execution,
-failure evidence, and cleanup behavior:
+Focused coverage validates control schema boundaries, locale-independent golden planning,
+checkpoint-driven execution, strict evidence matching, aborting hung collectors, and partial cleanup
+failure behavior:
 
 ```bash
 nix develop --command ./node_modules/.bin/vp test run scripts/network-lab

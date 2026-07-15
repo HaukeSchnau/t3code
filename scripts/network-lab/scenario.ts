@@ -2,6 +2,7 @@ import type * as Schema from "effect/Schema";
 
 import {
   type NetworkLabScenario,
+  type NetworkLabProvenance,
   type NetworkProfile,
   type PlannedScenarioStep,
   type RunIdentity,
@@ -26,7 +27,7 @@ function canonicalize(value: Schema.Json): Schema.Json {
   if (value !== null && typeof value === "object") {
     return Object.fromEntries(
       Object.entries(value)
-        .toSorted(([left], [right]) => left.localeCompare(right))
+        .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
         .map(([key, entry]) => [key, canonicalize(entry)]),
     );
   }
@@ -88,11 +89,12 @@ export function makeScenarioExecutionPlan(
   scenario: NetworkLabScenario,
   profile: NetworkProfile,
   seed: number,
+  provenance: NetworkLabProvenance,
 ): ScenarioExecutionPlan {
   assertSeed(seed);
   assertUniqueStepIds(scenario);
 
-  const definitionHash = fnv1a64(canonicalJson({ profile, scenario }));
+  const definitionHash = fnv1a64(canonicalJson({ profile, provenance, scenario }));
   const executionId = [
     `${scenario.identity.id}@${String(scenario.identity.version)}`,
     `${profile.identity.id}@${String(profile.identity.version)}`,
@@ -102,6 +104,7 @@ export function makeScenarioExecutionPlan(
   const identity = {
     scenario: scenario.identity,
     profile: profile.identity,
+    provenance,
     seed,
     executionId,
     definitionHash,
@@ -116,5 +119,5 @@ export function makeScenarioExecutionPlan(
       }) satisfies PlannedScenarioStep,
   );
 
-  return { identity, scenario, profile, steps };
+  return { identity, scenario, profile, provenance, steps };
 }
