@@ -49,7 +49,22 @@ export function deriveTrainNetworkExperience(
     };
   }
 
-  if (connection.phase === "available" || connection.phase === "offline") {
+  if (connection.phase === "available") {
+    const detail = savedContentDetail(
+      projection,
+      "Connect this environment to load the conversation.",
+    );
+    return {
+      kind: "degraded",
+      title: "Not connected",
+      detail,
+      attempt: null,
+      retryRemainingMs: null,
+      announcement: `Not connected. ${detail}`,
+    };
+  }
+
+  if (connection.phase === "offline") {
     const detail = savedContentDetail(
       projection,
       "Waiting for a connection before loading this conversation.",
@@ -65,9 +80,10 @@ export function deriveTrainNetworkExperience(
   }
 
   if (connection.phase === "error") {
+    const failure = connection.failure?.message ?? "Reconnect this environment to continue.";
+    const failureSentence = /[.!?]$/.test(failure) ? failure : `${failure}.`;
     const detail =
-      connection.failure?.message ??
-      savedContentDetail(projection, "Connect this environment to load the conversation.");
+      snapshot.snapshot === null ? failure : `${failureSentence} Showing saved content.`;
     return {
       kind: "degraded",
       title: "Connection failed",

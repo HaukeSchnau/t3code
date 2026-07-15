@@ -237,6 +237,28 @@ function buildAssistantTimelineEntry(text: string) {
 }
 
 describe("MessagesTimeline", () => {
+  it("wires the initial loader only when the mounted timeline has no visible content", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const emptyMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[]}
+        isLoadingInitialThreadDetail={true}
+      />,
+    );
+    const cachedMarkup = renderToStaticMarkup(
+      <MessagesTimeline
+        {...buildProps()}
+        timelineEntries={[buildUserTimelineEntry("Cached conversation")]}
+        isLoadingInitialThreadDetail={true}
+      />,
+    );
+
+    expect(emptyMarkup).toContain("Syncing conversation...");
+    expect(cachedMarkup).toContain("Cached conversation");
+    expect(cachedMarkup).not.toContain("Syncing conversation...");
+  }, 60_000);
+
   it("uses LegendList isNearEnd when deciding whether the live edge is visible", async () => {
     const {
       resolveTimelineIsAtEnd,
