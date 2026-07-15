@@ -16,7 +16,7 @@ import {
   makeCommandOutbox,
   type CommandOutboxService,
 } from "@t3tools/client-runtime/state/command-outbox";
-import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useSyncExternalStore } from "react";
 
@@ -35,6 +35,7 @@ export interface DurableCommandOutboxControllerOptions {
   readonly now?: () => string;
   readonly setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   readonly clearTimer?: (handle: TimerHandle) => void;
+  readonly withLock?: <A>(task: () => Promise<A>) => Promise<A>;
 }
 
 export interface DurableCommandOutboxController {
@@ -46,6 +47,7 @@ export interface DurableCommandOutboxController {
   readonly wake: () => void;
   readonly snapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly discardRejected: (commandId: CommandId) => Promise<void>;
   readonly dispose: () => void;
 }
 
@@ -135,6 +137,22 @@ function earliestRetryDelay(
   return earliest;
 }
 
+function classifyWebCommandFailure(cause: unknown) {
+  if (typeof cause === "object" && cause !== null && "_tag" in cause) {
+    const tag = String(cause._tag);
+    if (
+      tag.includes("Invariant") ||
+      tag.includes("Validation") ||
+      tag.includes("NotFound") ||
+      tag.includes("Unauthorized") ||
+      tag.includes("Forbidden")
+    ) {
+      return classifyCommandDeliveryFailure(cause, "permanent");
+    }
+  }
+  return classifyCommandDeliveryFailure(cause);
+}
+
 export function createDurableCommandOutboxController(
   options: DurableCommandOutboxControllerOptions,
 ): DurableCommandOutboxController {
@@ -142,15 +160,14 @@ export function createDurableCommandOutboxController(
   const setTimer = options.setTimer ?? ((callback, delayMs) => setTimeout(callback, delayMs));
   const clearTimer =
     options.clearTimer ?? ((handle) => clearTimeout(handle as ReturnType<typeof setTimeout>));
+  const withLock = options.withLock ?? (async (task) => task());
   const listeners = new Set<() => void>();
   let current: ReadonlyArray<DurableCommandOutboxEntry> = [];
   let disposed = false;
   let timer: TimerHandle | null = null;
   let activeFlush: Promise<void> | null = null;
   let flushRequested = false;
-  const servicePromise: Promise<CommandOutboxService> = Effect.runPromise(
-    makeCommandOutbox(options.storage, now()),
-  );
+  const loadService = () => Effect.runPromise(makeCommandOutbox(options.storage, now()));
 
   const publish = async (service: CommandOutboxService) => {
     current = await Effect.runPromise(service.entries);
@@ -170,26 +187,58 @@ export function createDurableCommandOutboxController(
   };
 
   const runFlush = async () => {
-    const service = await servicePromise;
     while (true) {
       if (disposed) break;
-      const ready = await Effect.runPromise(service.ready(now()));
-      const entry = ready[0];
-      if (entry === undefined) break;
-      const commandId = entry.plan.command.commandId;
-      await Effect.runPromise(service.begin(commandId, now()));
-      await publish(service);
+      let didDeliver = false;
       try {
-        await options.dispatch(entry.plan.environmentId, entry.plan.command);
-        await Effect.runPromise(service.complete(commandId));
+        didDeliver = await withLock(async () => {
+          const service = await loadService();
+          const entry = (await Effect.runPromise(service.ready(now())))[0];
+          if (entry === undefined) {
+            await publish(service);
+            await schedule(service);
+            return false;
+          }
+          const commandId = entry.plan.command.commandId;
+          await Effect.runPromise(service.begin(commandId, now()));
+          await publish(service);
+          try {
+            await options.dispatch(entry.plan.environmentId, entry.plan.command);
+          } catch (cause) {
+            await Effect.runPromise(
+              service.fail(commandId, classifyWebCommandFailure(cause), now()),
+            );
+            await publish(service);
+            return true;
+          }
+          try {
+            await Effect.runPromise(service.complete(commandId));
+          } catch {
+            // Re-open from durable storage. A persisted Delivering state is
+            // recovered as an ambiguous retry, while a failed completion write
+            // can never make an unpersisted acknowledgement authoritative.
+            const recovered = await loadService();
+            await publish(recovered);
+            await schedule(recovered);
+            return false;
+          }
+          await publish(service);
+          return true;
+        });
       } catch (cause) {
-        await Effect.runPromise(
-          service.fail(commandId, classifyCommandDeliveryFailure(cause), now()),
-        );
+        console.error("Durable command delivery state could not be saved", cause);
+        try {
+          await withLock(async () => {
+            const recovered = await loadService();
+            await publish(recovered);
+            await schedule(recovered);
+          });
+        } catch (recoveryCause) {
+          console.error("Durable command outbox recovery failed", recoveryCause);
+        }
       }
-      await publish(service);
+      if (!didDeliver) break;
     }
-    await schedule(service);
   };
 
   const flush = (): Promise<void> => {
@@ -208,17 +257,22 @@ export function createDurableCommandOutboxController(
     return activeFlush;
   };
 
-  void servicePromise.then((service) => publish(service).then(() => flush()));
+  void withLock(async () => publish(await loadService()))
+    .then(() => flush())
+    .catch((cause) => console.error("Could not initialize durable command outbox", cause));
 
   return {
     enqueue: async (environmentId, command) => {
-      const service = await servicePromise;
-      const entry = await Effect.runPromise(
-        service.enqueue(
-          makeDurableCommandDeliveryPlan({ environmentId, enqueuedAt: now(), command }),
-        ),
-      );
-      await publish(service);
+      const entry = await withLock(async () => {
+        const service = await loadService();
+        const persisted = await Effect.runPromise(
+          service.enqueue(
+            makeDurableCommandDeliveryPlan({ environmentId, enqueuedAt: now(), command }),
+          ),
+        );
+        await publish(service);
+        return persisted;
+      });
       void flush();
       return entry;
     },
@@ -235,6 +289,13 @@ export function createDurableCommandOutboxController(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    discardRejected: (commandId) =>
+      withLock(async () => {
+        const service = await loadService();
+        await Effect.runPromise(service.removeRejected(commandId));
+        await publish(service);
+        void flush();
+      }),
     dispose: () => {
       disposed = true;
       if (timer !== null) clearTimer(timer);
@@ -245,6 +306,31 @@ export function createDurableCommandOutboxController(
 }
 
 let liveController: DurableCommandOutboxController | null = null;
+let liveListenerCleanup: (() => void) | null = null;
+
+function withBrowserOutboxLock<A>(task: () => Promise<A>): Promise<A> {
+  if (typeof navigator === "undefined" || navigator.locks === undefined) return task();
+  return navigator.locks.request("t3code:durable-command-outbox", task);
+}
+
+export function attachDurableOutboxWakeListeners(
+  controller: Pick<DurableCommandOutboxController, "wake">,
+  windowTarget: Pick<Window, "addEventListener" | "removeEventListener">,
+  documentTarget: Pick<
+    Document,
+    "addEventListener" | "removeEventListener" | "visibilityState"
+  >,
+): () => void {
+  const visibilityListener = () => {
+    if (documentTarget.visibilityState === "visible") controller.wake();
+  };
+  windowTarget.addEventListener("online", controller.wake);
+  documentTarget.addEventListener("visibilitychange", visibilityListener);
+  return () => {
+    windowTarget.removeEventListener("online", controller.wake);
+    documentTarget.removeEventListener("visibilitychange", visibilityListener);
+  };
+}
 
 export function durableCommandOutbox(): DurableCommandOutboxController {
   if (liveController !== null) return liveController;
@@ -255,12 +341,10 @@ export function durableCommandOutbox(): DurableCommandOutboxController {
       if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);
       await api.orchestration.dispatchCommand(command);
     },
+    withLock: withBrowserOutboxLock,
   });
   if (typeof window !== "undefined") {
-    window.addEventListener("online", liveController.wake);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") liveController?.wake();
-    });
+    liveListenerCleanup = attachDurableOutboxWakeListeners(liveController, window, document);
   }
   return liveController;
 }
@@ -280,12 +364,14 @@ export function selectDurableOutboxMessages(
   entries: ReadonlyArray<DurableCommandOutboxEntry>,
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  alreadyVisibleMessageIds: ReadonlySet<string> = new Set(),
 ) {
   const seen = new Set<string>();
   return entries.flatMap((entry) => {
     if (
       entry.plan.environmentId !== environmentId ||
       entry.plan.command.threadId !== threadId ||
+      alreadyVisibleMessageIds.has(entry.plan.command.message.messageId) ||
       seen.has(entry.plan.command.message.messageId)
     ) {
       return [];
@@ -295,7 +381,16 @@ export function selectDurableOutboxMessages(
   });
 }
 
+export function shouldClearComposerAfterDurableEnqueue(
+  submittedPrompt: string,
+  currentPrompt: string,
+): boolean {
+  return submittedPrompt === currentPrompt;
+}
+
 export function __resetDurableCommandOutboxForTests(): void {
+  liveListenerCleanup?.();
+  liveListenerCleanup = null;
   liveController?.dispose();
   liveController = null;
 }
