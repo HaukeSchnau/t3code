@@ -63,10 +63,15 @@ setup was launched. The deterministic terminal writes a generated wrapper whose 
 atomically claims the execution identity before invoking the user command and whose completion record
 is atomically published after exit. An exact retry with no execution claim safely resubmits the same
 wrapper; competing writes still execute the user command once. A completed execution is reused. A
-claimed execution without a completion record fails closed because the prior process may have run
-part of an arbitrary command. Only `setup-completed` permits preprocessing to skip reconciliation and
-dispatch the original turn. Terminal launch/reconciliation errors are recorded as setup activity and
-then returned; they no longer fall through to final turn dispatch.
+normal launch waits interruptibly for the wrapper's atomic completion journal. An exact retry of a
+claimed execution waits for that same completion for a bounded interval and then returns a typed
+reconciliation error rather than falling through. Only durable wrapper completion permits
+`setup-completed` to be persisted and the original turn to dispatch. Terminal
+launch/reconciliation errors are recorded as setup activity and returned.
+
+The generic HTTP orchestration endpoint rejects bootstrap-bearing turn starts. Bootstrap remains on
+the WebSocket path that owns thread, workspace, setup, and completion reconciliation, preventing the
+HTTP endpoint from bypassing the durable bootstrap pipeline.
 
 ## Claim and transaction boundary
 

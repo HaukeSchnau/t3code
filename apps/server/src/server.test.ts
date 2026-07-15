@@ -6616,6 +6616,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("serializes the same command across HTTP and WebSocket dispatch", () =>
     Effect.gen(function* () {
       const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
+      const bothInitialLookups = yield* Deferred.make<void>();
+      let initialLookupCount = 0;
       const dispatch = vi.fn((command: OrchestrationCommand) =>
         Effect.sync(() => {
           const receipt = { envelope: encodeTestJson(command), sequence: 41 };
@@ -6627,11 +6629,19 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           orchestrationEngine: {
             resolveReceipt: (command) =>
-              Effect.sync(() => {
+              Effect.gen(function* () {
                 const receipt = receipts.get(command.commandId);
-                return receipt && receipt.envelope === encodeTestJson(command)
-                  ? Option.some({ sequence: receipt.sequence })
-                  : Option.none();
+                if (receipt && receipt.envelope === encodeTestJson(command)) {
+                  return Option.some({ sequence: receipt.sequence });
+                }
+                initialLookupCount += 1;
+                if (initialLookupCount === 2) {
+                  yield* Deferred.succeed(bothInitialLookups, undefined);
+                }
+                if (initialLookupCount <= 2) {
+                  yield* Deferred.await(bothInitialLookups);
+                }
+                return Option.none();
               }),
             dispatch,
             readEvents: () => Stream.empty,
@@ -6689,9 +6699,70 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(httpResponse.status, 200);
       assert.deepEqual(httpReceipt, wsReceipt);
+      assert.isAtLeast(initialLookupCount, 2);
       assert.equal(dispatch.mock.calls.length, 1);
       assert.equal(attachmentFiles.filter((name) => !name.includes(".pending-")).length, 1);
       assert.equal(attachmentFiles.some((name) => name.includes(".pending-")), false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects bootstrap commands at the generic HTTP dispatch boundary", () =>
+    Effect.gen(function* () {
+      const dispatch = vi.fn(() => Effect.succeed({ sequence: 1 }));
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            resolveReceipt: () => Effect.succeed(Option.none()),
+            dispatch,
+          },
+        },
+      });
+      const accessToken = yield* getAuthenticatedBearerSessionToken();
+      const httpUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const response = yield* fetchEffect(httpUrl, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          "content-type": "application/json",
+        },
+        body: jsonRequestBody({
+          type: "thread.turn.start",
+          commandId: "cmd-http-bootstrap-rejected",
+          threadId: "thread-http-bootstrap-rejected",
+          message: {
+            messageId: "msg-http-bootstrap-rejected",
+            role: "user",
+            text: "bootstrap must use the complete pipeline",
+            attachments: [],
+          },
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          bootstrap: {
+            createThread: {
+              projectId: defaultProjectId,
+              title: "Rejected HTTP bootstrap",
+              modelSelection: defaultModelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              branch: null,
+              worktreePath: null,
+              createdAt,
+            },
+            runSetupScript: false,
+          },
+          createdAt,
+        }),
+      });
+      const body = yield* responseJsonEffect<{
+        readonly code?: string;
+        readonly reason?: string;
+      }>(response);
+
+      assert.equal(response.status, 400);
+      assert.equal(body.code, "invalid_request");
+      assert.equal(body.reason, "invalid_command");
+      assert.equal(dispatch.mock.calls.length, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

@@ -83,6 +83,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
           const normalizedCommand = preparedCommand.command;
+          if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+            return yield* failEnvironmentInvalidRequest("invalid_command");
+          }
           return yield* orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
             Effect.flatMap(
               Option.match({
