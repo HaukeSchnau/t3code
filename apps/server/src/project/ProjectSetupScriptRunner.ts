@@ -267,16 +267,6 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    const awaitCompletion: Effect.Effect<void, ProjectSetupScriptOperationError> =
-      executionExists(completedPath).pipe(
-        Effect.flatMap((exists) =>
-          exists
-            ? Effect.void
-            : Effect.sleep("50 millis").pipe(Effect.andThen(Effect.suspend(() => awaitCompletion))),
-        ),
-      );
-    yield* awaitCompletion;
-
     return {
       status: "started",
       scriptId: script.id,
