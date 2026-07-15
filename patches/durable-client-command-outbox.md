@@ -38,10 +38,11 @@ storage and decide when to drain ready thread heads.
   that removal before publication, and rejects `Delivering`, `Retrying`, and `Rejected` entries because each may
   represent intent that reached or attempted the network boundary.
 - `replacePending` atomically edits only a `Pending` entry in its existing array position. The replacement must
-  pass the durable-plan schema and remain in the same environment and thread. Because no I/O has occurred, a
-  same-command-id edit is explicitly allowed; a new command id is also allowed when it is unique across the
-  document. Once `begin` succeeds, pending replacement and cancellation are permanently unavailable and the
-  deeply frozen plan identity and payload are reused unchanged by delivery and retry transitions.
+  pass the durable-plan schema, remain in the same environment and thread, and use a new command id that is
+  unique across the document. Same-id edits are forbidden even before I/O: replacing ready entry A with new-id
+  entry B guarantees a drainer holding a stale snapshot of A cannot begin or dispatch obsolete intent. Once
+  `begin` succeeds, pending replacement and cancellation are permanently unavailable and the deeply frozen
+  plan identity and payload are reused unchanged by delivery and retry transitions.
 - A permanent rejection remains at the thread head. Only `removeRejected` may discard an entry, and it rejects
   pending, delivering, transient-retry, and ambiguous-retry states. Removing a rejected head unblocks the next
   item; edit-and-retry uses the atomic `replaceRejected` transition and must provide a new command id in the
@@ -55,8 +56,9 @@ storage and decide when to drain ready thread heads.
 ## Integration notes
 
 - Web and mobile adapters must decode/migrate their platform records into document version 1 and implement an
-  atomic replacement write. They should call `begin` immediately before dispatch, then `complete` only after a
-  positive receipt or `fail` with an explicit classification.
+  atomic replacement write. They should call `begin` immediately before dispatch and dispatch only the frozen
+  plan returned by that successful `begin`, never a prior `ready` snapshot. They should then call `complete`
+  only after a positive receipt or `fail` with an explicit classification.
 - The core does not own reconnects, timers, connection policy, server receipts, or UI. `EnvironmentSupervisor`
   remains the transport reconnect owner; adapters re-evaluate `ready(at)` on connectivity and retry-timer
   changes.
@@ -76,6 +78,7 @@ command schema, replace the local refinement rather than duplicating command pay
   `packages/client-runtime/src/operations/commands.test.ts`,
   `packages/client-runtime/src/operations/commandOutbox.test.ts`, and
   `packages/client-runtime/src/state/commandOutbox.test.ts`. The state tests cover every lifecycle for pending
-  edit/cancel, same- and new-ID edits, duplicate IDs, durable-plan validation, FIFO/thread-head behavior,
+  edit/cancel, stale-ready invalidation, mandatory new IDs, duplicate IDs, durable-plan validation,
+  FIFO/thread-head behavior,
   storage failure, and interruption during asynchronous saves.
 - Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.

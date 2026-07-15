@@ -479,18 +479,28 @@ describe("pending command edits and cancellation", () => {
     }),
   );
 
-  it.effect("allows same-ID edits, rejects duplicate new IDs, and validates replacements", () =>
+  it.effect("rejects same and duplicate replacement IDs without publishing changes", () =>
     Effect.gen(function* () {
       const harness = makeStorage();
       const outbox = yield* makeCommandOutbox(harness.storage, T0);
       yield* outbox.enqueue(plan({ commandId: "editable", text: "before" }));
       yield* outbox.enqueue(plan({ commandId: "occupied", threadId: "thread-2" }));
+      const beforeSameId = harness.persisted();
+      const savesBeforeSameId = harness.saves.length;
 
-      yield* outbox.replacePending(
-        CommandId.make("editable"),
-        plan({ commandId: "editable", text: "after" }),
+      const sameId = yield* Effect.flip(
+        outbox.replacePending(
+          CommandId.make("editable"),
+          plan({ commandId: "editable", text: "after" }),
+        ),
       );
-      expect((yield* outbox.entries)[0]?.plan.command.message.text).toBe("after");
+      expect(sameId).toMatchObject({
+        reason: "replacement-identity-reused",
+        commandId: "editable",
+      });
+      expect(harness.persisted()).toBe(beforeSameId);
+      expect(harness.saves).toHaveLength(savesBeforeSameId);
+      expect((yield* outbox.entries)[0]?.plan.command.message.text).toBe("before");
 
       const duplicate = yield* Effect.flip(
         outbox.replacePending(
@@ -518,6 +528,32 @@ describe("pending command edits and cancellation", () => {
       expect(invalidError).toMatchObject({ reason: "invalid-replacement" });
       expect(commandIds(harness.persisted())).toEqual(["editable", "occupied"]);
       expect(entryIds(yield* outbox.entries)).toEqual(["editable", "occupied"]);
+    }),
+  );
+
+  it.effect("invalidates stale ready entries and dispatches the canonical begin result", () =>
+    Effect.gen(function* () {
+      const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
+      yield* outbox.enqueue(plan({ commandId: "old-id", text: "obsolete intent" }));
+      const staleReadyEntry = (yield* outbox.ready(T0))[0]!;
+      const replacementPlan = plan({ commandId: "new-id", text: "canonical replacement" });
+
+      yield* outbox.replacePending(CommandId.make("old-id"), replacementPlan);
+
+      const staleBegin = yield* Effect.flip(
+        outbox.begin(staleReadyEntry.plan.command.commandId, T1),
+      );
+      expect(staleBegin).toMatchObject({ reason: "missing-command", commandId: "old-id" });
+
+      const begun = yield* outbox.begin(CommandId.make("new-id"), T1);
+      const dispatchedCommand = begun.plan.command;
+      expect(begun.state).toMatchObject({ _tag: "Delivering", attempt: 1 });
+      expect(dispatchedCommand).toEqual(replacementPlan.command);
+      expect(dispatchedCommand).not.toBe(staleReadyEntry.plan.command);
+      expect(dispatchedCommand).toMatchObject({
+        commandId: "new-id",
+        message: { text: "canonical replacement" },
+      });
     }),
   );
 
