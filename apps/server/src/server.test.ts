@@ -5982,6 +5982,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect("enriches replayed project events with repository identity metadata", () =>
     Effect.gen(function* () {
+      resetReplayObservationReportsForTesting();
       const repositoryIdentity = {
         canonicalKey: "github.com/t3tools/t3code",
         locator: {
@@ -6044,6 +6045,15 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           : null,
         repositoryIdentity,
       );
+      assert.deepInclude(readReplayObservationReportsForTesting().rpc, {
+        flow: "rpc",
+        outcome: "success",
+        pages: 1,
+        scannedEvents: 1,
+        emittedEvents: 1,
+        dedupedOverlapEvents: 0,
+        liveBufferHighWaterMark: 0,
+      });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
