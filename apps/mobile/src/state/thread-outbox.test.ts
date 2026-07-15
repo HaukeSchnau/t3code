@@ -323,18 +323,174 @@ describe("thread outbox", () => {
     });
     const editedPayload = { ...edited, text: "edited" };
     await expect(manager.update(message, editedPayload)).resolves.toBe(true);
+    const durableEditedPayload = {
+      ...editedPayload,
+      replacesCommandId: message.commandId,
+    };
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
-      "environment-1:thread-1": [editedPayload],
+      "environment-1:thread-1": [durableEditedPayload],
     });
-    expect(stored.get(edited.messageId)).toEqual(editedPayload);
+    expect(stored.get(edited.messageId)).toEqual(durableEditedPayload);
 
-    await manager.remove(editedPayload);
+    await manager.remove(durableEditedPayload);
     await expect(
       manager.update(message, { ...editedPayload, text: "stale flush" }),
     ).resolves.toBe(false);
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     expect(stored.size).toBe(0);
     registry.dispose();
+  });
+
+  it("replaces edited content with fresh identities while preserving its thread", async () => {
+    const registry = AtomRegistry.make();
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    const storage: ThreadOutboxStorage = {
+      load: async () => [...stored.values()],
+      write: async (message) => void stored.set(message.messageId, message),
+      remove: async (message) => void stored.delete(message.messageId),
+      loadCommandOutbox: async () => commandDocument,
+      saveCommandOutbox: async (document) => void (commandDocument = document),
+    };
+    const manager = createThreadOutboxManager({ registry, storage });
+    const original = queuedMessage({
+      messageId: "original-message",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const replacement = {
+      ...queuedMessage({
+        messageId: "replacement-message",
+        createdAt: "2026-07-15T10:00:01.000Z",
+      }),
+      text: "edited",
+    };
+    await manager.enqueue(original);
+    await manager.update(original, replacement);
+
+    const [entry] = commandDocument.entries;
+    expect(entry?.plan.command.commandId).toBe(replacement.commandId);
+    expect(entry?.plan.command.message.messageId).toBe(replacement.messageId);
+    expect(entry?.plan.command.threadId).toBe(original.threadId);
+    expect(entry?.plan.command.commandId).not.toBe(original.commandId);
+    expect(entry?.plan.command.message.messageId).not.toBe(original.messageId);
+    registry.dispose();
+  });
+
+  it("reconciles a committed replacement when obsolete presentation cleanup crashes", async () => {
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    let failOldRemoval = true;
+    const original = queuedMessage({
+      messageId: "old-message",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const storage: ThreadOutboxStorage = {
+      load: async () => [...stored.values()],
+      write: async (message) => void stored.set(message.messageId, message),
+      remove: async (message) => {
+        if (message.messageId === original.messageId && failOldRemoval) {
+          failOldRemoval = false;
+          throw new Error("crash before obsolete cleanup");
+        }
+        stored.delete(message.messageId);
+      },
+      loadCommandOutbox: async () => commandDocument,
+      saveCommandOutbox: async (document) => void (commandDocument = document),
+    };
+    const firstRegistry = AtomRegistry.make();
+    const first = createThreadOutboxManager({ registry: firstRegistry, storage, warn: () => undefined });
+    const replacement = queuedMessage({
+      messageId: "new-message",
+      createdAt: "2026-07-15T10:00:01.000Z",
+    });
+    await first.enqueue(original);
+    await first.update(original, replacement);
+    expect(stored.size).toBe(2);
+    firstRegistry.dispose();
+
+    const restartedRegistry = AtomRegistry.make();
+    const restarted = createThreadOutboxManager({ registry: restartedRegistry, storage });
+    await restarted.load();
+    expect([...stored.keys()]).toEqual([replacement.messageId]);
+    expect(Object.values(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).flat())
+      .toHaveLength(1);
+    restartedRegistry.dispose();
+  });
+
+  it("rolls back an uncommitted replacement when lifecycle persistence fails", async () => {
+    const registry = AtomRegistry.make();
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    let failNextLifecycleSave = false;
+    const storage: ThreadOutboxStorage = {
+      load: async () => [...stored.values()],
+      write: async (message) => void stored.set(message.messageId, message),
+      remove: async (message) => void stored.delete(message.messageId),
+      loadCommandOutbox: async () => commandDocument,
+      saveCommandOutbox: async (document) => {
+        if (failNextLifecycleSave) {
+          failNextLifecycleSave = false;
+          throw new Error("crash before lifecycle replacement commit");
+        }
+        commandDocument = document;
+      },
+    };
+    const manager = createThreadOutboxManager({ registry, storage });
+    const original = queuedMessage({
+      messageId: "old-message",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const replacement = queuedMessage({
+      messageId: "new-message",
+      createdAt: "2026-07-15T10:00:01.000Z",
+    });
+    await manager.enqueue(original);
+    failNextLifecycleSave = true;
+    await expect(manager.update(original, replacement)).rejects.toThrow(
+      "Failed to save the mobile command outbox",
+    );
+    expect([...stored.keys()]).toEqual([original.messageId]);
+    expect(commandDocument.entries[0]?.plan.command.commandId).toBe(original.commandId);
+    registry.dispose();
+  });
+
+  it("finishes acknowledged cleanup after presentation deletion fails", async () => {
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    let failAcknowledgedRemoval = true;
+    const storage: ThreadOutboxStorage = {
+      load: async () => [...stored.values()],
+      write: async (message) => void stored.set(message.messageId, message),
+      remove: async (message) => {
+        if (message.acknowledgedAt && failAcknowledgedRemoval) {
+          failAcknowledgedRemoval = false;
+          throw new Error("crash before acknowledged cleanup");
+        }
+        stored.delete(message.messageId);
+      },
+      loadCommandOutbox: async () => commandDocument,
+      saveCommandOutbox: async (document) => void (commandDocument = document),
+    };
+    const message = queuedMessage({
+      messageId: "acknowledged-message",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const firstRegistry = AtomRegistry.make();
+    const first = createThreadOutboxManager({ registry: firstRegistry, storage, warn: () => undefined });
+    await first.enqueue(message);
+    await first.begin(message, "2026-07-15T10:00:00.000Z");
+    await first.complete(message);
+    expect(commandDocument.entries).toEqual([]);
+    expect(stored.get(message.messageId)?.acknowledgedAt).toBeDefined();
+    firstRegistry.dispose();
+
+    const restartedRegistry = AtomRegistry.make();
+    const restarted = createThreadOutboxManager({ registry: restartedRegistry, storage });
+    await restarted.load();
+    expect(stored.size).toBe(0);
+    expect(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).toEqual({});
+    expect(commandDocument.entries).toEqual([]);
+    restartedRegistry.dispose();
   });
 
   it("hydrates retry state and replays the frozen identity after acknowledgement loss", async () => {

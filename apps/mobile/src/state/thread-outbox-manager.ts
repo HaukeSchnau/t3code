@@ -130,12 +130,69 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     }
     loadPromise = serialize(async () => {
       const persistedMessages = await options.storage.load();
-      const messages = flattenQueuedThreadMessages(
+      let messages = flattenQueuedThreadMessages(
         groupQueuedThreadMessages([...persistedMessages, ...currentMessages()]),
       );
       const service = await outbox();
-      const entries = await Effect.runPromise(service.entries);
-      const queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
+      let entries = await Effect.runPromise(service.entries);
+      let queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
+
+      for (const discarded of messages.filter((message) => message.discardedAt)) {
+        const entry = entries.find(
+          (candidate) => candidate.plan.command.commandId === discarded.commandId,
+        );
+        if (entry?.state._tag === "Rejected") {
+          await Effect.runPromise(service.removeRejected(discarded.commandId));
+        }
+        await options.storage.remove(discarded).catch((cause) =>
+          warn("[thread-outbox] deferred discarded record cleanup", cause),
+        );
+      }
+      messages = messages.filter((message) => !message.discardedAt);
+      entries = await Effect.runPromise(service.entries);
+      queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
+
+      // Finish acknowledgement cleanup after a crash at either side of the
+      // lifecycle/presentation boundary. The marker itself is written before
+      // shared completion, so this path never resends an acknowledged effect.
+      for (const acknowledged of messages.filter((message) => message.acknowledgedAt)) {
+        const entry = entries.find(
+          (candidate) => candidate.plan.command.commandId === acknowledged.commandId,
+        );
+        if (entry) {
+          if (entry.state._tag !== "Delivering") {
+            const readyAt =
+              entry.state._tag === "Retrying"
+                ? entry.state.retryNotBefore
+                : acknowledged.acknowledgedAt!;
+            await Effect.runPromise(service.begin(acknowledged.commandId, readyAt));
+          }
+          await Effect.runPromise(service.complete(acknowledged.commandId));
+        }
+        await options.storage.remove(acknowledged).catch((cause) =>
+          warn("[thread-outbox] deferred acknowledged record cleanup", cause),
+        );
+      }
+      messages = messages.filter((message) => !message.acknowledgedAt);
+      entries = await Effect.runPromise(service.entries);
+      queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
+
+      // Replacement uses a small durable intent marker. If the shared swap
+      // committed, the replacement wins and stale presentation is removed;
+      // otherwise the old intent wins and the uncommitted replacement is
+      // discarded. Both crash boundaries converge idempotently on load.
+      for (const replacement of messages.filter((message) => message.replacesCommandId)) {
+        const replacementCommitted = queuedIds.has(replacement.commandId);
+        const obsolete = replacementCommitted
+          ? messages.find((message) => message.commandId === replacement.replacesCommandId)
+          : replacement;
+        if (obsolete) {
+          await options.storage.remove(obsolete).catch((cause) =>
+            warn("[thread-outbox] deferred replacement record cleanup", cause),
+          );
+          messages = messages.filter((message) => message.messageId !== obsolete.messageId);
+        }
+      }
       // Old mobile outbox files are upgraded before becoming visible. This is
       // also the crash reconciliation for a message file written immediately
       // before its shared lifecycle record.
@@ -196,16 +253,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         return false;
       }
       const service = await outbox();
-      await Effect.runPromise(
-        service.replacePending(
-          previous.commandId,
-          makeQueuedThreadDeliveryPlan(message),
-        ),
-      );
-      await refreshDeliveryStates(service);
+      const replacement: QueuedThreadMessage = {
+        ...message,
+        replacesCommandId: previous.commandId,
+      };
       try {
-        await options.storage.write(message);
-        await options.storage.remove(previous);
+        await options.storage.write(replacement);
       } catch (cause) {
         throw new ThreadOutboxManagerError({
           operation: "update",
@@ -215,9 +268,24 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
+      try {
+        await Effect.runPromise(
+          service.replacePending(
+            previous.commandId,
+            makeQueuedThreadDeliveryPlan(replacement),
+          ),
+        );
+      } catch (cause) {
+        await options.storage.remove(replacement).catch(() => undefined);
+        throw cause;
+      }
+      await refreshDeliveryStates(service);
+      await options.storage.remove(previous).catch((cause) =>
+        warn("[thread-outbox] deferred obsolete replacement cleanup", cause),
+      );
       setMessages([
         ...currentMessages().filter((candidate) => candidate.messageId !== previous.messageId),
-        message,
+        replacement,
       ]);
       return true;
     });
@@ -311,10 +379,15 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
 
   const complete = (message: QueuedThreadMessage): Promise<void> =>
     serialize(async () => {
-      await Effect.runPromise((await outbox()).complete(message.commandId));
-      await options.storage.remove(message);
+      const service = await outbox();
+      const acknowledged = { ...message, acknowledgedAt: new Date().toISOString() };
+      await options.storage.write(acknowledged);
+      await Effect.runPromise(service.complete(message.commandId));
+      await options.storage.remove(acknowledged).catch((cause) =>
+        warn("[thread-outbox] deferred acknowledged record cleanup", cause),
+      );
       setMessages(currentMessages().filter((candidate) => candidate.messageId !== message.messageId));
-      await refreshDeliveryStates(await outbox());
+      await refreshDeliveryStates(service);
     });
 
   const fail = (
@@ -336,6 +409,19 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return entry;
     });
 
+  const discardRejected = (message: QueuedThreadMessage): Promise<void> =>
+    serialize(async () => {
+      const service = await outbox();
+      const discarded = { ...message, discardedAt: new Date().toISOString() };
+      await options.storage.write(discarded);
+      await Effect.runPromise(service.removeRejected(message.commandId));
+      await options.storage.remove(discarded).catch((cause) =>
+        warn("[thread-outbox] deferred discarded record cleanup", cause),
+      );
+      setMessages(currentMessages().filter((candidate) => candidate.messageId !== message.messageId));
+      await refreshDeliveryStates(service);
+    });
+
   return {
     queuedMessagesByThreadKeyAtom,
     deliveryStatesAtom,
@@ -349,5 +435,6 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     begin,
     complete,
     fail,
+    discardRejected,
   };
 }

@@ -778,6 +778,9 @@ function ThreadRouteContent(
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
           selectedThreadQueueCount={composer.selectedThreadQueueCount}
+          selectedThreadQueueStatus={composer.selectedThreadQueueStatus}
+          selectedThreadRejectedCount={composer.selectedThreadRejectedCount}
+          onDiscardRejectedMessages={composer.discardRejectedMessages}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           onNavigateBack={handleNavigateBack}

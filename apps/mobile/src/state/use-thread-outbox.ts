@@ -53,6 +53,10 @@ export function useThreadOutboxMessages() {
   return useAtomValue(threadOutboxManager.queuedMessagesByThreadKeyAtom);
 }
 
+export function useThreadOutboxDeliveryStates() {
+  return useAtomValue(threadOutboxManager.deliveryStatesAtom);
+}
+
 export function useThreadOutboxShellStatuses() {
   return useAtomValue(threadOutboxShellStatusesAtom);
 }

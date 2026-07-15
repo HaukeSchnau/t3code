@@ -38,8 +38,11 @@ import {
 import { setPendingConnectionError } from "../state/use-remote-environment-registry";
 import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
-import { enqueueThreadOutboxMessage } from "./thread-outbox";
-import { useThreadOutboxMessages } from "./use-thread-outbox";
+import { enqueueThreadOutboxMessage, threadOutboxManager } from "./thread-outbox";
+import {
+  useThreadOutboxDeliveryStates,
+  useThreadOutboxMessages,
+} from "./use-thread-outbox";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -77,6 +80,7 @@ export function useThreadComposerState() {
   const selectedThreadDetail = useSelectedThreadDetail();
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
+  const outboxDeliveryStates = useThreadOutboxDeliveryStates();
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -98,6 +102,34 @@ export function useThreadComposerState() {
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
+  const selectedThreadRejectedMessages = selectedThreadQueuedMessages.filter(
+    (message) => outboxDeliveryStates[message.commandId]?._tag === "Rejected",
+  );
+  const selectedThreadQueueStatus = (() => {
+    if (selectedThreadRejectedMessages.length > 0) {
+      return `${selectedThreadRejectedMessages.length} message${selectedThreadRejectedMessages.length === 1 ? "" : "s"} failed permanently`;
+    }
+    if (
+      selectedThreadQueuedMessages.some(
+        (message) => outboxDeliveryStates[message.commandId]?._tag === "Delivering",
+      )
+    ) {
+      return "Sending saved message…";
+    }
+    if (
+      selectedThreadQueuedMessages.some(
+        (message) => outboxDeliveryStates[message.commandId]?._tag === "Retrying",
+      )
+    ) {
+      return "Saved message waiting to retry";
+    }
+    return `${selectedThreadQueueCount} saved message${selectedThreadQueueCount === 1 ? "" : "s"} waiting to send`;
+  })();
+  const discardRejectedMessages = useCallback(async () => {
+    for (const message of selectedThreadRejectedMessages) {
+      await threadOutboxManager.discardRejected(message);
+    }
+  }, [selectedThreadRejectedMessages]);
   const selectedThread = selectedThreadDetail ?? selectedThreadShell;
   const modelSelection = selectedDraft?.modelSelection ?? selectedThread?.modelSelection ?? null;
   const runtimeMode = selectedDraft?.runtimeMode ?? selectedThread?.runtimeMode ?? null;
@@ -292,6 +324,9 @@ export function useThreadComposerState() {
   return {
     selectedThreadFeed,
     selectedThreadQueueCount,
+    selectedThreadQueueStatus,
+    selectedThreadRejectedCount: selectedThreadRejectedMessages.length,
+    discardRejectedMessages,
     activeWorkStartedAt,
     draftMessage,
     draftAttachments,

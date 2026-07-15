@@ -499,92 +499,35 @@ export function NewTaskDraftScreen(props: {
 
     const editingPendingTask = flow.editingPendingTask;
 
-    if (!environmentConnected) {
-      // Offline: park the task in the outbox; the drain sends it when the
-      // environment reconnects. An edit is a replacement with fresh command
-      // and message identities, never an in-place mutation of replay intent.
-      const metadata = makeTurnCommandMetadata();
-      const message = flow.buildPendingTaskMessage(metadata);
-      if (!message) {
-        return;
-      }
-      flow.setSubmitting(true);
-      try {
-        if (editingPendingTask) {
-          await updateThreadOutboxMessage(editingPendingTask, message);
-        } else {
-          await enqueueThreadOutboxMessage(message);
-        }
-      } catch (error) {
-        Alert.alert(
-          "Could not queue task",
-          error instanceof Error ? error.message : "The task could not be saved to the outbox.",
-        );
-        return;
-      } finally {
-        flow.setSubmitting(false);
-      }
+    // Connected and disconnected creation share one invariant: durable local
+    // acceptance happens before any network attempt. The mounted drain owns
+    // immediate delivery when connected and background retry otherwise.
+    const freshIdentity = makeTurnCommandMetadata();
+    const metadata = editingPendingTask
+      ? { ...freshIdentity, threadId: editingPendingTask.threadId }
+      : freshIdentity;
+    const queued = flow.buildPendingTaskMessage(metadata);
+    if (!queued) return;
+    flow.setSubmitting(true);
+    try {
       if (editingPendingTask) {
+        await updateThreadOutboxMessage(editingPendingTask, queued);
         flow.finishEditingPendingTask();
       } else {
+        await enqueueThreadOutboxMessage(queued);
         flow.setPrompt("");
         flow.clearAttachments();
       }
-      navigation.getParent()?.goBack();
+    } catch (error) {
+      Alert.alert(
+        "Could not save task",
+        error instanceof Error ? error.message : "The task could not be saved for delivery.",
+      );
       return;
+    } finally {
+      flow.setSubmitting(false);
     }
-
-    flow.setSubmitting(true);
-    // Arm the lock-screen card before the async thread creation: backgrounding
-    // the app right after tapping submit would otherwise reject the foreground
-    // -only Activity start. If creation fails, the token registration's replay
-    // finds no work and ends the card within seconds.
-    armAgentAwarenessLiveActivityForLocalWork({
-      threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
-      projectTitle: selectedProject.title,
-    });
-    const result = await createProjectThread({
-      project: selectedProject,
-      modelSelection,
-      envMode: workspaceMode,
-      branch: selectedBranchName,
-      worktreePath: workspaceMode === "worktree" ? null : selectedWorktreePath,
-      startFromOrigin,
-      runtimeMode,
-      interactionMode,
-      initialMessageText,
-      initialAttachments: draft.attachments,
-    });
-    flow.setSubmitting(false);
-
-    if (result._tag === "Failure") {
-      if (!isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        Alert.alert(
-          "Could not start task",
-          error instanceof Error ? error.message : "The task could not be started.",
-        );
-      }
-      return;
-    }
-
-    if (editingPendingTask) {
-      try {
-        await removeThreadOutboxMessage(editingPendingTask);
-      } catch (error) {
-        console.warn("[new-task] failed to remove delivered pending task", error);
-      }
-      flow.finishEditingPendingTask();
-    } else {
-      flow.setPrompt("");
-      flow.clearAttachments();
-    }
-    navigation.dispatch(
-      StackActions.replace("Thread", {
-        environmentId: String(result.value.environmentId),
-        threadId: String(result.value.threadId),
-      }),
-    );
+    navigation.getParent()?.goBack();
   }
 
   if (!selectedProject) {

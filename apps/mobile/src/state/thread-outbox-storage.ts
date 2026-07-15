@@ -15,6 +15,7 @@ import {
 
 const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
 const COMMAND_OUTBOX_FILE = "command-outbox.json";
+const COMMAND_OUTBOX_GENERATION_PREFIX = "command-outbox.";
 
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
@@ -60,11 +61,32 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   loadCommandOutbox: async () => {
     try {
       const { File } = await import("expo-file-system");
-      const file = new File(await getOutboxDirectory(), COMMAND_OUTBOX_FILE);
-      if (!file.exists) {
-        return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+      const directory = await getOutboxDirectory();
+      const candidates = directory
+        .list()
+        .filter(
+          (entry): entry is InstanceType<typeof File> =>
+            entry instanceof File &&
+            (entry.name === COMMAND_OUTBOX_FILE ||
+              (entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX) &&
+                entry.name.endsWith(".json"))),
+        )
+        .sort((left, right) => {
+          if (left.name === COMMAND_OUTBOX_FILE) return 1;
+          if (right.name === COMMAND_OUTBOX_FILE) return -1;
+          return right.name.localeCompare(left.name);
+        });
+      for (const file of candidates) {
+        try {
+          return decodeDurableCommandOutboxDocument(JSON.parse(await file.text()) as unknown);
+        } catch (cause) {
+          console.warn("[thread-outbox] ignored corrupt command outbox generation", {
+            fileName: file.name,
+            cause,
+          });
+        }
       }
-      return decodeDurableCommandOutboxDocument(JSON.parse(await file.text()) as unknown);
+      return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "load",
@@ -79,11 +101,28 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   saveCommandOutbox: async (document) => {
     try {
       const { File } = await import("expo-file-system");
-      const file = new File(await getOutboxDirectory(), COMMAND_OUTBOX_FILE);
-      if (!file.exists) {
-        file.create({ intermediates: true, overwrite: true });
-      }
-      file.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
+      const directory = await getOutboxDirectory();
+      const generation = `${COMMAND_OUTBOX_GENERATION_PREFIX}${Date.now().toString().padStart(16, "0")}.${Math.random().toString(16).slice(2)}.json`;
+      const destination = new File(directory, generation);
+      const temporary = new File(directory, `${generation}.tmp`);
+      temporary.create({ intermediates: true, overwrite: true });
+      temporary.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
+      await temporary.move(destination, { overwrite: false });
+
+      // Keep multiple immutable generations so a corrupt newest record can
+      // fall back to the prior complete lifecycle snapshot.
+      const older = directory
+        .list()
+        .filter(
+          (entry): entry is InstanceType<typeof File> =>
+            entry instanceof File &&
+            entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX) &&
+            entry.name.endsWith(".json") &&
+            entry.name !== generation,
+        )
+        .sort((left, right) => right.name.localeCompare(left.name))
+        .slice(2);
+      for (const file of older) file.delete();
     } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "write",
@@ -105,7 +144,8 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         if (
           !(entry instanceof File) ||
           !entry.name.endsWith(".json") ||
-          entry.name === COMMAND_OUTBOX_FILE
+          entry.name === COMMAND_OUTBOX_FILE ||
+          entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX)
         ) {
           continue;
         }
@@ -141,10 +181,11 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
     const fileName = messageFileName(message.messageId);
     try {
       const file = await getMessageFile(message.messageId);
-      if (!file.exists) {
-        file.create({ intermediates: true, overwrite: true });
-      }
-      file.write(JSON.stringify(encodeQueuedThreadMessage(message)));
+      const { File } = await import("expo-file-system");
+      const temporary = new File(file.parentDirectory, `${file.name}.${Date.now()}.tmp`);
+      temporary.create({ intermediates: true, overwrite: true });
+      temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
+      await temporary.move(file, { overwrite: true });
     } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "write",

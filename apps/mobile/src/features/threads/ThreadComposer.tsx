@@ -94,6 +94,9 @@ export interface ThreadComposerProps {
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
+  readonly queueStatus: string;
+  readonly rejectedCount: number;
+  readonly onDiscardRejected: () => Promise<void>;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
@@ -899,9 +902,17 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
             <Text className="pt-2 text-xs text-foreground-muted">
-              {props.queueCount} queued message{props.queueCount === 1 ? "" : "s"} will send
-              automatically.
+              {props.queueStatus}
             </Text>
+            {props.rejectedCount > 0 ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Discard permanently failed messages"
+                onPress={() => void props.onDiscardRejected()}
+              >
+                <Text className="pt-1 text-xs font-medium text-danger">Discard failed</Text>
+              </Pressable>
+            ) : null}
           </Animated.View>
         ) : null}
       </Animated.View>

@@ -58,6 +58,9 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   // Frozen when queued so ambiguous retries replay byte-for-byte equivalent
   // bootstrap intent rather than generating a new worktree branch.
   deliveryWorktreeBranchName: Schema.optional(Schema.String),
+  replacesCommandId: Schema.optional(CommandId),
+  acknowledgedAt: Schema.optional(IsoDateTime),
+  discardedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
 });
 
@@ -86,6 +89,9 @@ export interface QueuedThreadMessage {
   readonly interactionMode?: ProviderInteractionModeType;
   readonly creation?: QueuedThreadCreation;
   readonly deliveryWorktreeBranchName?: string;
+  readonly replacesCommandId?: CommandId;
+  readonly acknowledgedAt?: string;
+  readonly discardedAt?: string;
   readonly createdAt: string;
 }
 
