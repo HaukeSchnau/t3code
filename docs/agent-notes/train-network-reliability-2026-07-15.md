@@ -107,17 +107,25 @@ again. Implementers do not approve their own packets.
   migration, concurrency, rollback, and restart; liveness tests exercise the installed Effect pinger
   through the real supervisor boundary; and the network lab fails closed on unverifiable fault and
   cleanup evidence.
-- Independent re-review approved the outbox, liveness, and network-lab corrections. The receipt
-  reviewer approved the production correction and requested two additional integration tests; those
-  now traverse the real repository decoder and dispose/reopen SQLite after finalization rollback. A
-  replacement bounded verdict is pending because the original final review turn stalled after
-  inspecting the requested lines.
+- Independent re-review approved the outbox, liveness, network-lab, and receipt corrections. The
+  replacement receipt reviewer confirmed that the added tests traverse the real repository decoder
+  and dispose/reopen SQLite after finalization rollback.
 - Final integrated Wave 1 verification passed: 9 focused files / 94 tests and `vp check` with the 10
   baseline React warnings. Full workspace typecheck exposed one raw timer in the network-lab runner;
   it was replaced by an abortable `Effect.sleep` deadline, its 16 focused tests passed, and the full
   15-workspace typecheck then passed with only baseline Effect suggestions.
-- Current step: obtain the bounded receipt test verdict and start Wave 2 platform-integration packets
-  from the reviewed foundation.
+- Wave 2 preflight found two server-side replay blockers before platform integration: upload
+  normalization generates random attachment IDs before receipt fingerprinting, and bootstrap-bearing
+  turn starts execute newly identified bootstrap subcommands before the original receipt is observed.
+  Packet `RC2` now owns replay-safe preprocessing and must close both before image/bootstrap commands
+  enter web or mobile durable storage.
+- Mobile preflight also found that lossless legacy edit/delete behavior needs reviewed Pending-only
+  replace/cancel transitions in the shared core; platform code must not mutate storage behind the
+  lifecycle service. Web preflight will initially prefer `thread.message.queue` for ordinary existing
+  threads and keeps destructive, bootstrap, approval, interrupt, VCS, terminal, and preview workflows
+  outside generic replay.
+- Current step: implement `UX1` and `RC2` independently, review them, then green-light the mobile/web
+  adapters against the corrected replay boundary.
 
 ## Explorer Threads
 
@@ -140,6 +148,14 @@ again. Implementers do not approve their own packets.
 - Network-lab final re-review: `mcp:thread:22e9fada-5636-4512-bc7c-bfd2d3a69143`
 - Receipt correction review: `mcp:thread:a11288d3-1354-407a-9a94-2ccd804521ab`
 - Receipt correction implementation: `mcp:thread:53bfceeb-9b8b-4758-8158-229146f0c017`
+- Receipt replacement review: `mcp:thread:2939be74-3428-40eb-8a24-eeaa445b4f49`
+
+## Wave 2 Threads
+
+- Mobile outbox preflight/implementation: `mcp:thread:31c73ee7-47f4-488c-bfee-c8477be4b59e`
+- Web outbox preflight/implementation: `mcp:thread:4c4de5be-6e36-481b-87c4-45c6190b4934`
+- Shared connection/freshness projection: `mcp:thread:eecca459-bc8b-425f-ac42-2a4afc0da591`
+- Replay-safe server preprocessing: `mcp:thread:289fd42e-9530-4170-973d-692646648ff5`
 
 ## Verification Notes
 
