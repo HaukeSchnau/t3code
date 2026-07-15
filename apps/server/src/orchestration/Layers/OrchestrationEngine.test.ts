@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Persistent restart and shared-file tests exercise the real Node SQLite boundary.
+/* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- This pre-existing integration-style engine suite owns explicit runtime lifecycle and restart coverage. */
 import {
   CheckpointRef,
   CommandId,
@@ -11,6 +13,9 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFSP from "node:fs/promises";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
@@ -18,12 +23,20 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import type * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
-import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import {
+  makeSqlitePersistenceLive,
+  SqlitePersistenceMemory,
+} from "../../persistence/Layers/Sqlite.ts";
+import {
+  OrchestrationCommandReceiptRepository,
+  type OrchestrationCommandReceiptRepositoryShape,
+} from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   OrchestrationEventStore,
   type OrchestrationEventStoreShape,
@@ -60,6 +73,43 @@ async function createOrchestrationSystem() {
     Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     Layer.provide(RepositoryIdentityResolver.layer),
     Layer.provide(SqlitePersistenceMemory),
+    Layer.provideMerge(ServerConfigLayer),
+    Layer.provideMerge(NodeServices.layer),
+  );
+  const runtime = ManagedRuntime.make(orchestrationLayer);
+  const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
+  const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+  return {
+    engine,
+    readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
+    run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
+    dispose: () => runtime.dispose(),
+  };
+}
+
+async function createPersistentOrchestrationSystem(
+  dbPath: string,
+  receiptRepositoryLayer: Layer.Layer<
+    OrchestrationCommandReceiptRepository,
+    never,
+    SqlClient.SqlClient
+  > = OrchestrationCommandReceiptRepositoryLive,
+) {
+  const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
+    prefix: "t3-orchestration-engine-persistent-test-",
+  });
+  const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+  const orchestrationLayer = Layer.mergeAll(
+    OrchestrationEngineLive.pipe(
+      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+      Layer.provide(OrchestrationProjectionPipelineLive),
+    ),
+    OrchestrationProjectionSnapshotQueryLive,
+  ).pipe(
+    Layer.provide(OrchestrationEventStoreLive),
+    Layer.provide(receiptRepositoryLayer),
+    Layer.provide(RepositoryIdentityResolver.layer),
+    Layer.provide(persistenceLayer),
     Layer.provideMerge(ServerConfigLayer),
     Layer.provideMerge(NodeServices.layer),
   );
@@ -1344,7 +1394,18 @@ describe("OrchestrationEngine", () => {
         messageId: asMessageId(`msg-receipt-${scenario.slug}-collision`),
       });
       await expect(system.run(system.engine.dispatch(collidingCommand))).rejects.toThrow(
-        `already bound to thread '${threadId}'`,
+        "aggregate-mismatch",
+      );
+
+      const changedPayloadCommand = {
+        ...command,
+        message: {
+          ...command.message,
+          text: `${command.message.text} changed`,
+        },
+      };
+      await expect(system.run(system.engine.dispatch(changedPayloadCommand))).rejects.toThrow(
+        "payload-mismatch",
       );
 
       const replayAfterCollision = await system.run(system.engine.dispatch(command));
@@ -1387,6 +1448,17 @@ describe("OrchestrationEngine", () => {
     );
     await expect(
       system.run(
+        system.engine.dispatch({
+          ...rejectedCommand,
+          message: {
+            ...rejectedCommand.message,
+            text: "Changed rejected payload",
+          },
+        }),
+      ),
+    ).rejects.toThrow("payload-mismatch");
+    await expect(
+      system.run(
         system.engine.dispatch(
           makeAmbiguousAckCommand({
             type: "thread.turn.start",
@@ -1396,7 +1468,7 @@ describe("OrchestrationEngine", () => {
           }),
         ),
       ),
-    ).rejects.toThrow("Command previously rejected");
+    ).rejects.toThrow("aggregate-mismatch");
 
     const rejectedCommandEvents = await system.run(
       Stream.runCollect(system.engine.readEvents(0)).pipe(
@@ -1435,7 +1507,282 @@ describe("OrchestrationEngine", () => {
           createdAt: now(),
         }),
       ),
-    ).rejects.toThrow("already bound to project 'project-command-collision-a'");
+    ).rejects.toThrow("aggregate-mismatch");
     await system.dispose();
+  });
+
+  it("rejects cross-variant command id reuse without changing the accepted receipt", async () => {
+    const system = await createOrchestrationSystem();
+    const threadId = ThreadId.make("thread-receipt-cross-variant");
+    await createReceiptTestThreads(system, "cross-variant", [threadId]);
+    const commandId = CommandId.make("cmd-receipt-cross-variant");
+    const accepted = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId,
+      threadId,
+      messageId: asMessageId("msg-receipt-cross-variant"),
+    });
+    const acceptedResult = await system.run(system.engine.dispatch(accepted));
+
+    await expect(
+      system.run(
+        system.engine.dispatch({
+          ...accepted,
+          type: "thread.message.queue",
+        }),
+      ),
+    ).rejects.toThrow("variant-mismatch");
+    await expect(system.run(system.engine.dispatch(accepted))).resolves.toEqual(acceptedResult);
+
+    const commandEvents = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(
+        Effect.map((events) => Array.from(events).filter((event) => event.commandId === commandId)),
+      ),
+    );
+    expect(commandEvents.map((event) => event.type)).toEqual([
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+    await system.dispose();
+  });
+
+  it("fingerprints semantically identical command objects independent of key order", async () => {
+    const system = await createOrchestrationSystem();
+    const threadId = ThreadId.make("thread-receipt-canonical-order");
+    await createReceiptTestThreads(system, "canonical-order", [threadId]);
+    const command: AmbiguousAckCommand = {
+      ...makeAmbiguousAckCommand({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-receipt-canonical-order"),
+        threadId,
+        messageId: asMessageId("msg-receipt-canonical-order"),
+      }),
+      modelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+        options: [{ id: "reasoning", value: "high" }],
+      },
+    };
+    const accepted = await system.run(system.engine.dispatch(command));
+    const reordered: AmbiguousAckCommand = {
+      createdAt: command.createdAt,
+      interactionMode: command.interactionMode,
+      message: {
+        attachments: command.message.attachments,
+        text: command.message.text,
+        role: command.message.role,
+        messageId: command.message.messageId,
+      },
+      modelSelection: {
+        options: [{ value: "high", id: "reasoning" }],
+        model: "gpt-5-codex",
+        instanceId: ProviderInstanceId.make("codex"),
+      },
+      runtimeMode: command.runtimeMode,
+      threadId: command.threadId,
+      commandId: command.commandId,
+      type: command.type,
+    };
+
+    await expect(system.run(system.engine.dispatch(reordered))).resolves.toEqual(accepted);
+    const commandEvents = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(
+        Effect.map((events) =>
+          Array.from(events).filter((event) => event.commandId === command.commandId),
+        ),
+      ),
+    );
+    expect(commandEvents).toHaveLength(2);
+    await system.dispose();
+  });
+
+  it("fails a legacy receipt closed instead of replaying or executing it", async () => {
+    const command = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-receipt-legacy-unverifiable"),
+      threadId: ThreadId.make("thread-receipt-legacy-unverifiable"),
+      messageId: asMessageId("msg-receipt-legacy-unverifiable"),
+    });
+    const legacyReceiptLayer = Layer.succeed(OrchestrationCommandReceiptRepository, {
+      claimAccepted: () => Effect.succeed(false),
+      finalizeAccepted: () => Effect.succeed(false),
+      insertRejected: () => Effect.succeed(false),
+      getByCommandId: () =>
+        Effect.succeed(
+          Option.some({
+            commandId: command.commandId,
+            aggregateKind: "thread",
+            aggregateId: command.threadId,
+            commandVariant: null,
+            envelopeFingerprint: null,
+            acceptedAt: command.createdAt,
+            resultSequence: 42,
+            status: "accepted",
+            error: null,
+          }),
+        ),
+    } satisfies OrchestrationCommandReceiptRepositoryShape);
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "t3-receipt-legacy-unverifiable-"),
+    );
+    const system = await createPersistentOrchestrationSystem(
+      NodePath.join(tempDir, "state.sqlite"),
+      legacyReceiptLayer,
+    );
+
+    await expect(system.run(system.engine.dispatch(command))).rejects.toThrow(
+      "legacy-unverifiable",
+    );
+    const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));
+    expect(Array.from(events)).toEqual([]);
+    await system.dispose();
+    await NodeFSP.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("surfaces rejection receipt persistence failure and does not make the rejection sticky", async () => {
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "t3-receipt-rejection-restart-"),
+    );
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    let failRejectedInsert = true;
+    const flakyReceiptLayer = Layer.effect(
+      OrchestrationCommandReceiptRepository,
+      Effect.gen(function* () {
+        const repository = yield* OrchestrationCommandReceiptRepository;
+        return {
+          ...repository,
+          insertRejected: (input) => {
+            if (failRejectedInsert) {
+              failRejectedInsert = false;
+              return Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test.insertRejected",
+                  detail: "injected rejected receipt failure",
+                }),
+              );
+            }
+            return repository.insertRejected(input);
+          },
+        } satisfies OrchestrationCommandReceiptRepositoryShape;
+      }),
+    ).pipe(Layer.provide(OrchestrationCommandReceiptRepositoryLive));
+    const command = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-receipt-rejection-restart"),
+      threadId: ThreadId.make("thread-receipt-rejection-restart"),
+      messageId: asMessageId("msg-receipt-rejection-restart"),
+    });
+
+    const firstSystem = await createPersistentOrchestrationSystem(dbPath, flakyReceiptLayer);
+    await expect(firstSystem.run(firstSystem.engine.dispatch(command))).rejects.toThrow(
+      "injected rejected receipt failure",
+    );
+    await firstSystem.dispose();
+
+    const restartedSystem = await createPersistentOrchestrationSystem(dbPath);
+    await createReceiptTestThreads(restartedSystem, "rejection-restart", [command.threadId]);
+    await expect(restartedSystem.run(restartedSystem.engine.dispatch(command))).resolves.toEqual({
+      sequence: 4,
+    });
+    await restartedSystem.dispose();
+    await NodeFSP.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("rolls back accepted effects when receipt finalization fails", async () => {
+    let failFinalize = false;
+    const flakyReceiptLayer = Layer.effect(
+      OrchestrationCommandReceiptRepository,
+      Effect.gen(function* () {
+        const repository = yield* OrchestrationCommandReceiptRepository;
+        return {
+          ...repository,
+          finalizeAccepted: (input) => {
+            if (failFinalize) {
+              failFinalize = false;
+              return Effect.fail(
+                new PersistenceSqlError({
+                  operation: "test.finalizeAccepted",
+                  detail: "injected accepted receipt failure",
+                }),
+              );
+            }
+            return repository.finalizeAccepted(input);
+          },
+        } satisfies OrchestrationCommandReceiptRepositoryShape;
+      }),
+    ).pipe(Layer.provide(OrchestrationCommandReceiptRepositoryLive));
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "t3-receipt-accepted-atomic-"),
+    );
+    const system = await createPersistentOrchestrationSystem(
+      NodePath.join(tempDir, "state.sqlite"),
+      flakyReceiptLayer,
+    );
+    const threadId = ThreadId.make("thread-receipt-accepted-atomic");
+    await createReceiptTestThreads(system, "accepted-atomic", [threadId]);
+    const command = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-receipt-accepted-atomic"),
+      threadId,
+      messageId: asMessageId("msg-receipt-accepted-atomic"),
+    });
+    failFinalize = true;
+
+    await expect(system.run(system.engine.dispatch(command))).rejects.toThrow(
+      "injected accepted receipt failure",
+    );
+    const afterFailure = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(
+        Effect.map((events) =>
+          Array.from(events).filter((event) => event.commandId === command.commandId),
+        ),
+      ),
+    );
+    expect(afterFailure).toEqual([]);
+    await expect(system.run(system.engine.dispatch(command))).resolves.toEqual({ sequence: 4 });
+    await system.dispose();
+    await NodeFSP.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("prevents duplicate effects across engines sharing one SQLite file", async () => {
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "t3-receipt-shared-storage-"),
+    );
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    const setupSystem = await createPersistentOrchestrationSystem(dbPath);
+    const threadId = ThreadId.make("thread-receipt-shared-storage");
+    await createReceiptTestThreads(setupSystem, "shared-storage", [threadId]);
+    await setupSystem.dispose();
+
+    const firstSystem = await createPersistentOrchestrationSystem(dbPath);
+    const secondSystem = await createPersistentOrchestrationSystem(dbPath);
+    const command = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-receipt-shared-storage"),
+      threadId,
+      messageId: asMessageId("msg-receipt-shared-storage"),
+    });
+    const attempts = await Promise.allSettled([
+      firstSystem.run(firstSystem.engine.dispatch(command)),
+      secondSystem.run(secondSystem.engine.dispatch(command)),
+    ]);
+    expect(attempts.some((attempt) => attempt.status === "fulfilled")).toBe(true);
+
+    const replayed = await secondSystem.run(secondSystem.engine.dispatch(command));
+    const commandEvents = await firstSystem.run(
+      Stream.runCollect(firstSystem.engine.readEvents(0)).pipe(
+        Effect.map((events) =>
+          Array.from(events).filter((event) => event.commandId === command.commandId),
+        ),
+      ),
+    );
+    expect(commandEvents.map((event) => event.type)).toEqual([
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+    expect(replayed.sequence).toBe(commandEvents.at(-1)?.sequence);
+    await firstSystem.dispose();
+    await secondSystem.dispose();
+    await NodeFSP.rm(tempDir, { recursive: true, force: true });
   });
 });
