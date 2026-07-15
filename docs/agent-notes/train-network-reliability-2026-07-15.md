@@ -125,8 +125,16 @@ again. Implementers do not approve their own packets.
   retains the authoritative queued message. Narrow 320 px rendering remains usable without horizontal overflow.
 - Mobile has strong renderer, persistence, drain, accessibility-label, and typecheck coverage, but no simulator
   or physical device was available for final screenshot evidence. Do not claim device-level visual validation.
-- Remaining completion work: update patch notes/history, run full repository gates, clean empty JJ changes, stop
-  temporary services/browser sessions, and push `main`.
+- Final regression hardening found two stale assertions plus two real atomic-settings defects: a first-turn
+  title seed could replace a custom title, and a stopped session could lose its durable provider binding after
+  incompatible settings were projected. Shared title policy, durable provider identity, and retry-time
+  compatibility checks are independently approved; the affected server suites pass 65/65.
+- Final validation passes: the bounded full suite reports 629 files / 5,031 tests passed with 10 skipped;
+  `vp check`, the 15-workspace typecheck, and `lint:mobile` all exit zero; the final real-Chromium network-lab
+  run passes 6 files / 36 tests. Native Swift/Kotlin linters remain unavailable in this Linux environment and
+  were skipped by the repository's mobile static-check command as designed.
+- Completion state: patch notes/history are current and the implementation is ready for final JJ cleanup,
+  temporary-service shutdown, and direct push to `main`.
 
 - 2026-07-15: fetched origin/upstream, merged `main@upstream` at `ecb35f758399` without conflicts.
 - Baseline `vp check` passed with 10 existing React warnings.
