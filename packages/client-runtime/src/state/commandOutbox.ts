@@ -429,6 +429,13 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
           "A pending command replacement must be a valid durable delivery plan",
         );
       }
+      if (replacement.command.commandId === commandId) {
+        return stateError(
+          "replacement-identity-reused",
+          commandId,
+          "Editing a pending command requires a new identity so stale ready entries cannot begin",
+        );
+      }
       if (!sameThread(previous.plan, replacement)) {
         return stateError(
           "replacement-thread-changed",
@@ -437,10 +444,7 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
         );
       }
       const replacementCommandId = replacement.command.commandId;
-      if (
-        replacementCommandId !== commandId &&
-        current.entries.some((entry) => commandIdOf(entry) === replacementCommandId)
-      ) {
+      if (current.entries.some((entry) => commandIdOf(entry) === replacementCommandId)) {
         return stateError(
           "duplicate-command",
           replacementCommandId,
