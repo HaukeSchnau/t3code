@@ -16,6 +16,7 @@ import {
   type FaultEvidence,
   type NetworkLabResult,
   type ObservationEvidence,
+  type PassedCleanupResourceEvidence,
   type RunnerErrorEvidence,
   type RunnerPhase,
   type StepResult,
@@ -202,7 +203,8 @@ function validateFault(context: ScenarioExecutionPlan, evidence: FaultEvidence):
     evidence.status === "passed" &&
     evidence.originPathUnshaped &&
     matches &&
-    (planned.length === 0 || evidence.operations.length > 0);
+    planned.length > 0 &&
+    evidence.operations.length > 0;
   return evidence.status === "passed" && !valid ? { ...evidence, status: "failed" } : evidence;
 }
 
@@ -294,13 +296,14 @@ async function cleanup(
     }
   }
 
-  return {
-    status: resources.every(({ released, error }) => released && error === null)
-      ? "passed"
-      : "failed",
-    leaseId: lease.id,
-    resources,
-  };
+  const releasedResources = resources.filter(
+    (resource): resource is PassedCleanupResourceEvidence =>
+      resource.released && resource.error === null,
+  );
+  if (releasedResources.length === resources.length) {
+    return { status: "passed", leaseId: lease.id, resources: releasedResources };
+  }
+  return { status: "failed", leaseId: lease.id, resources };
 }
 
 async function runStep(
@@ -435,11 +438,27 @@ export async function runNetworkLabScenario(
     fault.status === "passed" &&
     cleanupEvidence.status === "passed";
 
-  return {
+  const resultBase = {
     schemaVersion: NETWORK_LAB_RESULT_SCHEMA_VERSION,
     identity: context.identity,
-    status: passed ? "passed" : "failed",
     steps,
+  };
+  if (
+    passed &&
+    correctness.status === "passed" &&
+    fault.status === "passed" &&
+    cleanupEvidence.status === "passed"
+  ) {
+    return {
+      ...resultBase,
+      status: "passed",
+      evidence: { correctness, fault, cleanup: cleanupEvidence },
+      errors: [],
+    };
+  }
+  return {
+    ...resultBase,
+    status: "failed",
     evidence: { correctness, fault, cleanup: cleanupEvidence },
     errors,
   };

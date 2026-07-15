@@ -12,11 +12,23 @@ import {
 
 export class NetworkLabScenarioError extends Error {
   override readonly name = "NetworkLabScenarioError";
-  readonly reason: "duplicate-step-id" | "invalid-seed";
+  readonly reason: "duplicate-step-id" | "invalid-seed" | "missing-control-step";
 
-  constructor(reason: "duplicate-step-id" | "invalid-seed", message: string) {
+  constructor(
+    reason: "duplicate-step-id" | "invalid-seed" | "missing-control-step",
+    message: string,
+  ) {
     super(message);
     this.reason = reason;
+  }
+}
+
+function assertHasControlStep(scenario: NetworkLabScenario): void {
+  if (!scenario.steps.some((step) => step.kind === "control")) {
+    throw new NetworkLabScenarioError(
+      "missing-control-step",
+      "A network-lab scenario must plan at least one network fault control.",
+    );
   }
 }
 
@@ -93,6 +105,7 @@ export function makeScenarioExecutionPlan(
 ): ScenarioExecutionPlan {
   assertSeed(seed);
   assertUniqueStepIds(scenario);
+  assertHasControlStep(scenario);
 
   const definitionHash = fnv1a64(canonicalJson({ profile, provenance, scenario }));
   const executionId = [

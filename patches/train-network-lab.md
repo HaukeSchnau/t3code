@@ -17,13 +17,17 @@ test and diagnostics foundation only.
   definition hash, and human-readable execution ID.
 - Scenario steps separate application/browser actions, network fault controls, and observed
   checkpoints with explicit timeouts. There is intentionally no sleep step: progress must be driven
-  by observable system state.
+  by observable system state. Compilation rejects scenarios without at least one fault control, and
+  the runner cannot pass a forged zero-control plan.
 - Fault controls are a schema-versioned discriminated union. Version 1 models administrative link
   offline/apply and online/remove, directional data-plane blackhole apply/remove, active-connection
   reset, directional impairment, and protocol-aware acknowledgement/response suppression. Every
   control states its surface, direction, lifecycle, and semantics. Impairment semantics define
-  latency as constant one-way delay, jitter as a uniform plus-or-minus delay, loss as independent
-  per-packet probability, and bandwidth as maximum throughput in kilobits per second.
+  latency as constant one-way delay and jitter as a uniform plus-or-minus delay whose resulting
+  sample is clamped at zero. Loss is independent per-packet probability. A numeric bandwidth is the
+  maximum throughput in kilobits per second; `null` means unlimited throughput with no rate limit.
+  The same semantic object is mandatory on profiles and directional controls, so adapters cannot
+  interpret baseline and step-applied impairment differently.
 - A deterministic xorshift32 stream assigns a decision token to each planned step. The same scenario,
   profile, seed, lab provenance, and adapter provenance produce the same identity, order, and tokens;
   later fault adapters can consume those tokens without inventing their own nondeterministic
@@ -43,6 +47,11 @@ test and diagnostics foundation only.
 - Result schema version 1 always contains correctness, fault, and cleanup sections. Preparation,
   execution, evidence collection, and cleanup errors are converted to structured evidence; a failed
   run resolves to a machine-readable result instead of rejecting.
+- Public result decoding is fail closed through status-discriminated schemas. Passed correctness
+  requires at least one passing assertion, passed fault evidence requires at least one typed
+  operation and an unshaped origin path, and passed cleanup requires a lease plus at least one
+  released resource without an error. A passed top-level result requires all three passed evidence
+  variants and an empty runner-error tuple; forged contradictory results fail schema decoding.
 - Passing requires successful execution; a nonempty set of uniquely named, passing correctness
   assertions; and exact fault evidence for every planned control in plan order. Each fault operation
   must match its step ID, sequence, decision token, kind, surface/direction, lifecycle, and effective
