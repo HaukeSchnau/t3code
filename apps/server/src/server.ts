@@ -92,6 +92,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as WorkloadDiagnostics from "./diagnostics/WorkloadDiagnostics.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
+import * as CommandPreprocessingCoordinator from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -394,6 +395,7 @@ const RuntimeDependenciesLive = RuntimeCoreDependenciesLive.pipe(
   Layer.provideMerge(AnalyticsService.layer),
   Layer.provideMerge(ExternalLauncher.layer),
   Layer.provideMerge(ServerLifecycleEvents.layer),
+  Layer.provideMerge(CommandPreprocessingCoordinator.layer),
   Layer.provide(NetService.layer),
 );
 

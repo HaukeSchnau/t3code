@@ -30,22 +30,39 @@ committed:
 
 - Upload attachment ids are derived from the command id, attachment position, declared metadata,
   and payload content. Normalization produces the durable command envelope without writing files.
-  The WebSocket path first validates that envelope against any existing receipt and materializes
-  attachment bytes only for a command id with no receipt. Existing identical bytes are accepted,
-  while an identity collision fails closed.
+  HTTP and WebSocket paths first validate that envelope against any existing receipt and materialize
+  attachment bytes only for a command id with no receipt. Materialization uses a deterministic
+  pending file and an atomic hard-link publish, so interruption cannot expose a partial final file.
+  Existing identical bytes are accepted and stale pending files are removed, while an identity
+  collision fails closed.
+- Project workspace-root canonicalization is pure. Filesystem validation, `createIfMissing`, and all
+  later preprocessing run only after an initial receipt miss, inside the shared command lock, and
+  after a second receipt lookup. A committed command therefore performs no path stat, directory
+  creation, workspace preparation, or upload write when its acknowledgement is replayed.
 - Receipt lookup uses the same aggregate, variant, canonical fingerprint, rejection, and legacy
   validation as engine dispatch. It is read-only and cannot mutate or replace a receipt.
-- Preprocessing is serialized per command id, so concurrent WebSocket retries cannot both cross the
-  no-receipt boundary. Different command ids remain independent.
+- Preprocessing is serialized per command id by a persistence-scoped coordinator shared by HTTP and
+  every WebSocket route layer. Concurrent retries cannot both cross the no-receipt boundary.
+  Different command ids remain independent.
 - Bootstrap metadata remains part of the `thread.turn.start` envelope passed to the engine. The
   decider deliberately omits bootstrap instructions from domain events, but the receipt fingerprint
   includes them. WebSocket bootstrap checks the full receipt before thread, workspace/worktree, setup
   script, or attachment side effects, so commit-then-lost-ack replay returns the original sequence.
+- Migration 39 adds immutable, envelope-keyed preprocessing progress. Attachment materialization,
+  thread creation, workspace preparation, and setup execution advance monotonic checkpoints. Thread
+  creation, workspace metadata, setup activities, and setup terminals use deterministic identities
+  derived from the frozen original envelope. After process restart, an exact retry resumes at the
+  first incomplete checkpoint; changed-envelope reuse fails before further effects.
+- Workspace provisioning persists a deterministic `preparing` record before invoking git, jj, or
+  directory-copy work. Retry reuses an active workspace or reconciles the incomplete deterministic
+  checkout before provisioning it again, preventing orphan workspaces.
 
-This boundary does not make a never-committed bootstrap transaction atomic with filesystem or setup
-script effects. A process crash after bootstrap begins but before the final turn receipt commits can
-still require existing workspace/setup recovery behavior. RC2 specifically closes exact concurrent
-replay and replay after a committed command whose acknowledgement was lost.
+Setup scripts are arbitrary user shell programs and cannot be transactionally coupled to SQLite.
+The coordinator therefore durably claims setup before launching its deterministic terminal and never
+launches that setup identity twice. A process crash in the narrow interval after the claim but before
+the terminal write leaves setup outcome indeterminate; retry safely completes the original turn
+without relaunching the script. Scripts that require recovery from that interval must remain
+restart-safe themselves.
 
 ## Claim and transaction boundary
 
@@ -86,8 +103,18 @@ mismatch, and legacy rules as dispatch.
 `apps/server/src/server.test.ts` covers the WebSocket preprocessing seam for attachment-free and
 image-bearing turn start/message queue commands, concurrent replay, changed image payload reuse,
 commit-then-lost-ack replay, and local, worktree, and explicit-workspace bootstrap replay without
-repeated thread/workspace/setup resources.
+repeated thread/workspace/setup resources. Its concurrent clients instantiate independent WebSocket
+route layers and prove that their shared coordinator serializes preprocessing.
+
+`apps/server/src/orchestration/Services/CommandPreprocessingCoordinator.test.ts` reopens the same
+SQLite file with fresh coordinator instances at crash checkpoints after attachment materialization,
+thread creation/during workspace preparation, workspace completion, and setup completion. It also
+checks changed-envelope fail-closed behavior after restart and shared-service lock serialization.
 
 `apps/server/src/persistence/Migrations/038_OrchestrationCommandReceiptEnvelopes.test.ts` verifies that
 the migration preserves existing terminal receipt data while marking its missing envelope identity as
 legacy and unverifiable.
+
+Migration 39 is additive and does not modify receipt rows. Missing preprocessing progress for an
+already committed legacy receipt is never synthesized because receipt validation runs first; legacy
+receipt replay therefore remains fail-closed.

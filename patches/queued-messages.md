@@ -19,7 +19,8 @@ The patch intentionally reuses the existing `thread.turn-start-requested` provid
 When syncing upstream, verify:
 
 - `packages/contracts/src/orchestration.ts` still exposes queue command/event schemas.
-- `apps/server/src/orchestration/Normalizer.ts` still materializes upload attachments for `thread.message.queue`.
+- `apps/server/src/orchestration/Normalizer.ts` still derives deterministic upload identities for
+  `thread.message.queue`, with materialization deferred behind durable receipt/progress validation.
 - `apps/server/src/ws.ts` still treats queued-message lifecycle events as thread detail events.
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` still dispatches queued messages only after completed turns.
 - `apps/web/src/components/chat/QueuedMessagesStrip.tsx` and the composer running actions still expose send-now and remove controls.

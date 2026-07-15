@@ -81,6 +81,7 @@ import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as CommandPreprocessingCoordinator from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import {
   OrchestrationCommandReceiptMismatchError,
   OrchestrationListenerCallbackError,
@@ -347,6 +348,7 @@ const buildAppUnderTest = (options?: {
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
+    commandPreprocessingCoordinator?: CommandPreprocessingCoordinator.CommandPreprocessingCoordinator["Service"];
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
@@ -534,6 +536,13 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
+    const commandPreprocessingCoordinatorLayer = options?.layers
+      ?.commandPreprocessingCoordinator
+      ? Layer.succeed(
+          CommandPreprocessingCoordinator.CommandPreprocessingCoordinator,
+          options.layers.commandPreprocessingCoordinator,
+        )
+      : CommandPreprocessingCoordinator.layer.pipe(Layer.provide(SqlitePersistenceMemory));
 
     const servedRoutesCoreLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -815,6 +824,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(commandPreprocessingCoordinatorLayer),
       Layer.provide(
         Layer.mock(BrowserTraceCollector.BrowserTraceCollector)({
           record: () => Effect.void,
@@ -4986,6 +4996,46 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("does not touch a project workspace root before an exact receipt replay", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const parentDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-ws-project-receipt-",
+      });
+      const missingWorkspaceRoot = path.join(parentDir, "must-remain-missing");
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            resolveReceipt: () => Effect.succeed(Option.some({ sequence: 73 })),
+            dispatch: () => Effect.die("dispatch must not run for an exact receipt replay"),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const response = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            type: "project.create",
+            commandId: CommandId.make("cmd-project-create-receipt-replay"),
+            projectId: ProjectId.make("project-create-receipt-replay"),
+            title: "Already accepted",
+            workspaceRoot: missingWorkspaceRoot,
+            createWorkspaceRootIfMissing: true,
+            defaultModelSelection,
+            createdAt: "2026-01-01T00:00:00.000Z",
+          }),
+        ),
+      );
+      const workspaceStat = yield* fs.stat(missingWorkspaceRoot).pipe(Effect.option);
+
+      assert.equal(response.sequence, 73);
+      assert.isTrue(Option.isNone(workspaceStat));
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("routes websocket rpc projects.writeFile errors", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
@@ -6374,7 +6424,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("deduplicates concurrent and commit-then-lost-ack websocket preprocessing", () =>
+  it.effect(
+    "shares preprocessing serialization across websocket route layers and lost acknowledgements",
+    () =>
     Effect.gen(function* () {
       const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
       const dispatchCounts = new Map<string, number>();
@@ -6775,6 +6827,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           projectId: defaultProjectId,
           projectCwd: "/tmp/project",
           worktreePath: "/tmp/bootstrap-worktree",
+          preferredTerminalId:
+            "setup-preprocess:cmd-bootstrap-turn-start:10988b73a3ad0991:setup-run",
         });
         assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
         assert.equal(prepareWorkspace.mock.calls.length, 1);
@@ -7182,7 +7236,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("cleans up created bootstrap threads when workspace preparation defects", () =>
+  it.effect("retains a durably identified bootstrap thread when workspace preparation defects", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const prepareWorkspace = vi.fn<ThreadWorkspaceService["Service"]["prepareWorkspace"]>(() =>
@@ -7248,7 +7302,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(result.failure.message, "workspace exploded");
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.delete"],
+        ["thread.create"],
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

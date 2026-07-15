@@ -7,7 +7,8 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { normalizeDispatchCommand } from "./Normalizer.ts";
+import { prepareDispatchCommand } from "./Normalizer.ts";
+import { CommandPreprocessingCoordinator } from "./Services/CommandPreprocessingCoordinator.ts";
 import {
   annotateEnvironmentRequest,
   failEnvironmentInternal,
@@ -24,6 +25,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
+    const commandPreprocessing = yield* CommandPreprocessingCoordinator;
 
     return handlers
       .handle(
@@ -77,11 +79,42 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.dispatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          const normalizedCommand = yield* normalizeDispatchCommand(args.payload).pipe(
+          const preparedCommand = yield* prepareDispatchCommand(args.payload).pipe(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
+          const normalizedCommand = preparedCommand.command;
           return yield* orchestrationEngine
-            .dispatch(normalizedCommand)
+            .resolveReceipt(normalizedCommand)
+            .pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () =>
+                    commandPreprocessing.withCommandLock(
+                      normalizedCommand.commandId,
+                      orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+                        Effect.flatMap(
+                          Option.match({
+                            onSome: Effect.succeed,
+                            onNone: () =>
+                              Effect.gen(function* () {
+                                let progress = yield* commandPreprocessing.claim(normalizedCommand);
+                                if (!progress.deferredPreprocessingCompleted) {
+                                  yield* preparedCommand.performDeferredPreprocessing;
+                                  progress = yield* commandPreprocessing.markCompleted(
+                                    normalizedCommand,
+                                    "deferred-preprocessing-completed",
+                                  );
+                                }
+                                return yield* orchestrationEngine.dispatch(normalizedCommand);
+                              }),
+                          }),
+                        ),
+                      ),
+                    ),
+                }),
+              ),
+            )
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_dispatch_failed", cause),

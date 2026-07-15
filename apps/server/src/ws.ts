@@ -8,7 +8,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -88,6 +87,11 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand, prepareDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import {
+  CommandPreprocessingCoordinator,
+  type CommandPreprocessingProgress,
+  preprocessingCommandId,
+} from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { isShellVisibleThreadEvent } from "./orchestration/shellVisibility.ts";
 import {
@@ -628,7 +632,6 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
-  preprocessingLocks: Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -655,30 +658,7 @@ const makeWsRpcLayer = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
-      const withPreprocessingLock = <A, E, R>(
-        commandId: string,
-        effect: Effect.Effect<A, E, R>,
-      ): Effect.Effect<A, E, R> =>
-        Effect.acquireUseRelease(
-          Effect.sync(() => {
-            const existing = preprocessingLocks.get(commandId);
-            if (existing) {
-              existing.users += 1;
-              return existing;
-            }
-            const created = { semaphore: Semaphore.makeUnsafe(1), users: 1 };
-            preprocessingLocks.set(commandId, created);
-            return created;
-          }),
-          ({ semaphore }) => semaphore.withPermits(1)(effect),
-          (entry) =>
-            Effect.sync(() => {
-              entry.users -= 1;
-              if (entry.users === 0) {
-                preprocessingLocks.delete(commandId);
-              }
-            }),
-        );
+      const commandPreprocessing = yield* CommandPreprocessingCoordinator;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const threadWorkspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
@@ -826,16 +806,26 @@ const makeWsRpcLayer = (
         );
 
       const appendSetupScriptActivity = (input: {
+        readonly parentCommand?: Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
+        readonly phase?: string;
         readonly threadId: ThreadId;
         readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
         readonly summary: string;
         readonly createdAt: string;
         readonly payload: Record<string, unknown>;
         readonly tone: "info" | "error";
-      }) =>
-        Effect.all({
-          commandId: serverCommandId("setup-script-activity"),
-          activityId: serverEventId,
+      }) => {
+        const stableCommandId =
+          input.parentCommand && input.phase
+            ? preprocessingCommandId(input.parentCommand, `setup-activity-${input.phase}`)
+            : null;
+        return Effect.all({
+          commandId: stableCommandId
+            ? Effect.succeed(stableCommandId)
+            : serverCommandId("setup-script-activity"),
+          activityId: stableCommandId
+            ? Effect.succeed(EventId.make(`activity:${stableCommandId}`))
+            : serverEventId,
         }).pipe(
           Effect.flatMap(({ commandId, activityId }) =>
             orchestrationEngine.dispatch({
@@ -855,6 +845,7 @@ const makeWsRpcLayer = (
             }),
           ),
         );
+      };
 
       const appendThreadActivity = (input: {
         readonly threadId: ThreadId;
@@ -1049,29 +1040,16 @@ const makeWsRpcLayer = (
 
       const dispatchBootstrapTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+        initialProgress: CommandPreprocessingProgress,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
-          let createdThread = false;
+          let progress = initialProgress;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd =
             bootstrap?.prepareWorkspace?.roots.find((root) => root.role === "primary")
               ?.sourcePath ?? bootstrap?.prepareWorktree?.projectCwd;
           let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
-
-          const cleanupCreatedThread = () =>
-            createdThread
-              ? serverCommandId("bootstrap-thread-delete").pipe(
-                  Effect.flatMap((commandId) =>
-                    orchestrationEngine.dispatch({
-                      type: "thread.delete",
-                      commandId,
-                      threadId: command.threadId,
-                    }),
-                  ),
-                  Effect.ignoreCause({ log: true }),
-                )
-              : Effect.void;
 
           const recordSetupScriptLaunchFailure = (input: {
             readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -1080,6 +1058,8 @@ const makeWsRpcLayer = (
           }) => {
             const detail = projectSetupScriptCompatibilityDetail(input.error);
             return appendSetupScriptActivity({
+              parentCommand: command,
+              phase: "failed",
               threadId: command.threadId,
               kind: "setup-script.failed",
               summary: "Setup script failed to start",
@@ -1118,6 +1098,8 @@ const makeWsRpcLayer = (
               };
               yield* Effect.all([
                 appendSetupScriptActivity({
+                  parentCommand: command,
+                  phase: "requested",
                   threadId: command.threadId,
                   kind: "setup-script.requested",
                   summary: "Starting setup script",
@@ -1126,6 +1108,8 @@ const makeWsRpcLayer = (
                   tone: "info",
                 }),
                 appendSetupScriptActivity({
+                  parentCommand: command,
+                  phase: "started",
                   threadId: command.threadId,
                   kind: "setup-script.started",
                   summary: "Setup script started",
@@ -1155,6 +1139,10 @@ const makeWsRpcLayer = (
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
                 return;
               }
+              if (progress.setupClaimed) {
+                return;
+              }
+              progress = yield* commandPreprocessing.markCompleted(command, "setup-claimed");
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
               yield* projectSetupScriptRunner
@@ -1163,6 +1151,7 @@ const makeWsRpcLayer = (
                   ...(targetProjectId ? { projectId: targetProjectId } : {}),
                   ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
                   worktreePath,
+                  preferredTerminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
                 })
                 .pipe(
                   Effect.matchEffect({
@@ -1186,13 +1175,14 @@ const makeWsRpcLayer = (
                     },
                   }),
                 );
+              progress = yield* commandPreprocessing.markCompleted(command, "setup-completed");
             });
 
           const bootstrapProgram = Effect.gen(function* () {
-            if (bootstrap?.createThread) {
+            if (bootstrap?.createThread && !progress.threadCreated) {
               yield* orchestrationEngine.dispatch({
                 type: "thread.create",
-                commandId: yield* serverCommandId("bootstrap-thread-create"),
+                commandId: preprocessingCommandId(command, "thread-create"),
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
                 title: bootstrap.createThread.title,
@@ -1204,7 +1194,7 @@ const makeWsRpcLayer = (
                 workspaceId: bootstrap.createThread.workspaceId ?? null,
                 createdAt: bootstrap.createThread.createdAt,
               });
-              createdThread = true;
+              progress = yield* commandPreprocessing.markCompleted(command, "thread-created");
             }
 
             const prepareWorkspace =
@@ -1238,16 +1228,22 @@ const makeWsRpcLayer = (
                 },
               });
               targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;
-              yield* orchestrationEngine.dispatch({
-                type: "thread.meta.update",
-                commandId: yield* serverCommandId("bootstrap-thread-meta-update"),
-                threadId: command.threadId,
-                branch: preparedWorkspace.compatibilityBranch,
-                worktreePath: targetWorktreePath,
-                workspaceId: preparedWorkspace.workspace.id,
-              });
-              if (targetWorktreePath) {
-                yield* refreshGitStatus(targetWorktreePath);
+              if (!progress.workspacePrepared) {
+                yield* orchestrationEngine.dispatch({
+                  type: "thread.meta.update",
+                  commandId: preprocessingCommandId(command, "thread-workspace-meta"),
+                  threadId: command.threadId,
+                  branch: preparedWorkspace.compatibilityBranch,
+                  worktreePath: targetWorktreePath,
+                  workspaceId: preparedWorkspace.workspace.id,
+                });
+                if (targetWorktreePath) {
+                  yield* refreshGitStatus(targetWorktreePath);
+                }
+                progress = yield* commandPreprocessing.markCompleted(
+                  command,
+                  "workspace-prepared",
+                );
               }
             }
 
@@ -1261,47 +1257,56 @@ const makeWsRpcLayer = (
           return yield* bootstrapProgram.pipe(
             Effect.catchCause((cause) => {
               const dispatchError = toBootstrapDispatchCommandCauseError(cause);
-              if (Cause.hasInterruptsOnly(cause)) {
-                return Effect.fail(dispatchError);
-              }
-              return cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(dispatchError)));
+              return Effect.fail(dispatchError);
             }),
           );
         });
 
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
-        materializeAttachments: Effect.Effect<
+        performDeferredPreprocessing: Effect.Effect<
           void,
           OrchestrationDispatchCommandError
         > = Effect.void,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect = orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                Effect.gen(function* () {
-                  yield* materializeAttachments;
-                  if (
-                    normalizedCommand.type === "thread.turn.start" &&
-                    normalizedCommand.bootstrap
-                  ) {
-                    return yield* dispatchBootstrapTurnStart(normalizedCommand);
-                  }
-                  return yield* orchestrationEngine.dispatch(normalizedCommand);
+        const dispatchAfterInitialMiss = commandPreprocessing.withCommandLock(
+          normalizedCommand.commandId,
+          startup.enqueueCommand(
+            orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () =>
+                    Effect.gen(function* () {
+                      let progress = yield* commandPreprocessing.claim(normalizedCommand);
+                      if (!progress.deferredPreprocessingCompleted) {
+                        yield* performDeferredPreprocessing;
+                        progress = yield* commandPreprocessing.markCompleted(
+                          normalizedCommand,
+                          "deferred-preprocessing-completed",
+                        );
+                      }
+                      if (
+                        normalizedCommand.type === "thread.turn.start" &&
+                        normalizedCommand.bootstrap
+                      ) {
+                        return yield* dispatchBootstrapTurnStart(normalizedCommand, progress);
+                      }
+                      return yield* orchestrationEngine.dispatch(normalizedCommand);
+                    }),
                 }),
-              onSome: Effect.succeed,
-            }),
-          ),
-          Effect.mapError((cause) =>
-            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+              ),
+            ),
           ),
         );
 
-        return withPreprocessingLock(
-          normalizedCommand.commandId,
-          startup.enqueueCommand(dispatchEffect),
-        ).pipe(
+        return orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+          Effect.flatMap(
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () => dispatchAfterInitialMiss,
+            }),
+          ),
           Effect.mapError((cause) =>
             toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
           ),
@@ -1783,7 +1788,7 @@ const makeWsRpcLayer = (
                   : false;
               const result = yield* dispatchNormalizedCommand(
                 normalizedCommand,
-                preparedCommand.materializeAttachments,
+                preparedCommand.performDeferredPreprocessing,
               );
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
@@ -2755,10 +2760,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
-    const preprocessingLocks = new Map<
-      string,
-      { readonly semaphore: Semaphore.Semaphore; users: number }
-    >();
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2778,12 +2779,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(
-              session,
-              previewAutomationBroker,
-              energyCaptureRequests,
-              preprocessingLocks,
-            ).pipe(
+            makeWsRpcLayer(session, previewAutomationBroker, energyCaptureRequests).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),
               Layer.provide(ProviderMaintenanceRunner.layer),

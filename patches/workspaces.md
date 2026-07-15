@@ -27,6 +27,11 @@ support non-Git backends.
   `worktreePath` fields.
 - Managed workspace records live in `projection_thread_workspaces` and
   `projection_thread_workspace_roots`.
+- All managed provisioners persist the deterministic workspace/root identities in `preparing` state
+  before their external filesystem/VCS operation. Bootstrap retry reuses an active record; an
+  incomplete record is reconciled by removing its deterministic checkout/worktree registration and
+  then reprovisioning, so process interruption does not create a second logical workspace or orphan
+  the first checkout.
 - Directory-copy workspace preparation persists a `preparing` workspace row before
   starting the filesystem copy, then marks it `active` on success or `failed`
   with `failureDetail` if provisioning fails. This keeps long-running or stuck
