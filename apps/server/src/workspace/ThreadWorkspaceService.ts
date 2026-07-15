@@ -24,6 +24,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -859,6 +860,84 @@ export const make = Effect.gen(function* () {
     }
   });
 
+  const toPreparedWorkspace = (workspace: ThreadWorkspace): PreparedThreadWorkspace => {
+    const primary = workspace.roots.find((root) => root.id === workspace.primaryRootId);
+    if (!primary) {
+      throw new ThreadWorkspaceError({
+        operation: "ThreadWorkspaceService.toPreparedWorkspace",
+        detail: `Workspace '${workspace.id}' has no primary root.`,
+      });
+    }
+    return {
+      workspace,
+      primaryCwd: primary.checkoutPath,
+      compatibilityWorktreePath: workspace.kind === "local" ? null : primary.checkoutPath,
+      compatibilityBranch: null,
+    };
+  };
+
+  const getPreparedWorkspace = Effect.fn("ThreadWorkspaceService.getPreparedWorkspace")(
+    function* ({ threadId }: { readonly threadId: ThreadId }) {
+      const workspaceId = makeWorkspaceId(threadId);
+      const rows = yield* sql<{ readonly id: string }>`
+        SELECT id
+        FROM projection_thread_workspaces
+        WHERE id = ${workspaceId}
+          AND lifecycle = 'active'
+          AND deleted_at IS NULL
+        LIMIT 1
+      `.pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.getPreparedWorkspace")));
+      if (!rows[0]) {
+        return Option.none();
+      }
+      const workspace = yield* readWorkspace(workspaceId).pipe(
+        Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.getPreparedWorkspace")),
+      );
+      return Option.some(toPreparedWorkspace(workspace));
+    },
+  );
+
+  const clearIncompleteWorkspace = Effect.fn(
+    "ThreadWorkspaceService.clearIncompleteWorkspace",
+  )(function* (threadId: ThreadId) {
+    const workspaceId = makeWorkspaceId(threadId);
+    const rows = yield* sql<{ readonly id: string }>`
+      SELECT id
+      FROM projection_thread_workspaces
+      WHERE id = ${workspaceId}
+        AND lifecycle <> 'active'
+      LIMIT 1
+    `;
+    if (!rows[0]) {
+      return;
+    }
+    const workspace = yield* readWorkspace(workspaceId);
+    const primary = workspace.roots.find((root) => root.id === workspace.primaryRootId);
+    if (primary) {
+      if (workspace.kind === "git-detached") {
+        yield* gitWorkflow
+          .removeWorktree({ cwd: primary.sourcePath, path: primary.checkoutPath, force: true })
+          .pipe(Effect.ignore);
+      } else if (workspace.kind === "jj-workspace") {
+        const workspaceName = String(primary.metadata.jjWorkspaceName ?? "");
+        if (workspaceName) {
+          yield* Effect.try({
+            try: () =>
+              runCommand({
+                command: "jj",
+                args: ["workspace", "forget", workspaceName],
+                cwd: primary.sourcePath,
+              }),
+            catch: () => undefined,
+          }).pipe(Effect.ignore);
+        }
+      }
+      yield* Effect.sync(() => removeWorkspaceDirectory(primary.checkoutPath)).pipe(Effect.ignore);
+    }
+    yield* sql`DELETE FROM projection_thread_workspace_roots WHERE workspace_id = ${workspaceId}`;
+    yield* sql`DELETE FROM projection_thread_workspaces WHERE id = ${workspaceId}`;
+  });
+
   const makeWorkspace = (input: {
     readonly request: PrepareThreadWorkspaceInput;
     readonly kind: Exclude<ThreadWorkspaceKind, "local">;
@@ -1119,6 +1198,18 @@ export const make = Effect.gen(function* () {
     const repoName = slug(NodePath.basename(root.sourcePath));
     const workspaceName = shortId(input.threadId);
     const checkoutPath = NodePath.join(workspacesDir, repoName, workspaceName);
+    yield* persistWorkspace(
+      makeWorkspace({
+        request: input,
+        kind: "git-detached",
+        checkoutPath,
+        vcsKind: "git",
+        lifecycle: "preparing",
+        headRevision: baseRevision,
+        metadata: { provisioner: "git-detached", preparationStatus: "preparing" },
+        rootMetadata: { gitDetached: true },
+      }),
+    );
     NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
     const worktree = yield* gitWorkflow.createWorktree({
       cwd: root.sourcePath,
@@ -1152,6 +1243,18 @@ export const make = Effect.gen(function* () {
     const workspaceName = `t3code-${shortId(input.threadId)}`;
     const checkoutPath = NodePath.join(workspacesDir, repoName, workspaceName);
     const resolvedBaseRevision = resolveJjRevision(root.sourcePath, root.baseRevision);
+    yield* persistWorkspace(
+      makeWorkspace({
+        request: input,
+        kind: "jj-workspace",
+        checkoutPath,
+        vcsKind: "jj",
+        lifecycle: "preparing",
+        baseRevision: resolvedBaseRevision,
+        metadata: { provisioner: "jj-workspace", preparationStatus: "preparing" },
+        rootMetadata: { jjWorkspaceName: workspaceName },
+      }),
+    );
     NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
     yield* Effect.try({
       try: () => {
@@ -1452,6 +1555,13 @@ export const make = Effect.gen(function* () {
   const prepareWorkspace: ThreadWorkspaceService["Service"]["prepareWorkspace"] = Effect.fn(
     "ThreadWorkspaceService.prepareWorkspace",
   )(function* (input) {
+    const existing = yield* getPreparedWorkspace({ threadId: input.threadId });
+    if (Option.isSome(existing)) {
+      return existing.value;
+    }
+    yield* clearIncompleteWorkspace(input.threadId).pipe(
+      Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace.cleanup")),
+    );
     const mapPrepareError = Effect.mapError(
       mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace"),
     );

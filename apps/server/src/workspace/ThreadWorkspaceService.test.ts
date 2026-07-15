@@ -36,6 +36,7 @@ const makeTestLayer = (
     readonly baseDir?: string;
     readonly platform?: NodeJS.Platform;
     readonly processRunner?: Partial<ProcessRunner.ProcessRunner["Service"]>;
+    readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   } = {},
 ) => {
   const layer = ThreadWorkspaceService.layer.pipe(
@@ -48,7 +49,11 @@ const makeTestLayer = (
         },
       ),
     ),
-    Layer.provide(Layer.mock(GitWorkflowService.GitWorkflowService)({})),
+    Layer.provide(
+      Layer.mock(GitWorkflowService.GitWorkflowService)({
+        ...options.gitWorkflow,
+      }),
+    ),
     Layer.provide(
       options.processRunner
         ? Layer.mock(ProcessRunner.ProcessRunner)({
@@ -85,6 +90,76 @@ function makeProcessOutput(
 }
 
 layer("ThreadWorkspaceService", (it) => {
+  it.effect("reconciles an interrupted deterministic git workspace before retry", () =>
+    Effect.gen(function* () {
+      const baseDir = makeTempDir("t3-workspace-restart-base-");
+      const sourcePath = makeTempDir("t3-workspace-restart-source-");
+      const threadId = ThreadId.make("thread-git-workspace-restart");
+      let createCount = 0;
+      let removeCount = 0;
+
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+        const sql = yield* SqlClient.SqlClient;
+        const input = {
+          threadId,
+          kind: "git-detached" as const,
+          roots: [
+            {
+              projectId: ProjectId.make("project-git-workspace-restart"),
+              sourcePath,
+              role: "primary" as const,
+              baseRevision: "main",
+            },
+          ],
+          retentionPolicy: "explicit-delete" as const,
+        };
+
+        const interrupted = yield* service.prepareWorkspace(input).pipe(Effect.exit);
+        assert.isTrue(Exit.isFailure(interrupted));
+
+        const resumed = yield* service.prepareWorkspace(input);
+        const replayed = yield* service.prepareWorkspace(input);
+        const rows = yield* sql<{
+          readonly id: string;
+          readonly lifecycle: string;
+        }>`SELECT id, lifecycle FROM projection_thread_workspaces WHERE created_for_thread_id = ${threadId}`;
+
+        assert.equal(createCount, 2);
+        assert.equal(removeCount, 1);
+        assert.equal(rows.length, 1);
+        assert.deepEqual(rows[0], {
+          id: `workspace:${threadId}`,
+          lifecycle: "active",
+        });
+        assert.equal(resumed.workspace.id, `workspace:${threadId}`);
+        assert.equal(replayed.workspace.id, resumed.workspace.id);
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            baseDir,
+            gitWorkflow: {
+              createWorktree: ({ path }) =>
+                Effect.sync(() => {
+                  assert.isNotNull(path);
+                  createCount += 1;
+                  NodeFS.mkdirSync(path, { recursive: true });
+                  if (createCount === 1) {
+                    throw new Error("simulated crash after git worktree creation");
+                  }
+                  return { worktree: { refName: "main", path } };
+                }),
+              removeWorktree: () =>
+                Effect.sync(() => {
+                  removeCount += 1;
+                }),
+            },
+          }),
+        ),
+      );
+    }),
+  );
+
   it("recognizes Linux BTRFS reflink directory-copy capabilities", () => {
     const destinationFileSystemType = ThreadWorkspaceService.__testing.fileSystemTypeFromStatfsType(
       ThreadWorkspaceService.__testing.BTRFS_STATFS_TYPE,

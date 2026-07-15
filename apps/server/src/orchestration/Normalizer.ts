@@ -18,7 +18,10 @@ import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
 export interface PreparedDispatchCommand {
   readonly command: OrchestrationCommand;
-  readonly materializeAttachments: Effect.Effect<void, OrchestrationDispatchCommandError>;
+  readonly performDeferredPreprocessing: Effect.Effect<
+    void,
+    OrchestrationDispatchCommandError
+  >;
 }
 
 export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
@@ -56,33 +59,37 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
         );
 
     if (command.type === "project.create") {
+      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(command.workspaceRoot);
       return {
         command: {
           ...command,
-          workspaceRoot: yield* normalizeProjectWorkspaceRootForCreate(
-            command.workspaceRoot,
-            command.createWorkspaceRootIfMissing,
-          ),
+          workspaceRoot,
           createWorkspaceRootIfMissing: command.createWorkspaceRootIfMissing === true,
         },
-        materializeAttachments: Effect.void,
+        performDeferredPreprocessing: normalizeProjectWorkspaceRootForCreate(
+          workspaceRoot,
+          command.createWorkspaceRootIfMissing,
+        ).pipe(Effect.asVoid),
       } satisfies PreparedDispatchCommand;
     }
 
     if (command.type === "project.meta.update" && command.workspaceRoot !== undefined) {
+      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(command.workspaceRoot);
       return {
         command: {
           ...command,
-          workspaceRoot: yield* normalizeProjectWorkspaceRoot(command.workspaceRoot),
+          workspaceRoot,
         },
-        materializeAttachments: Effect.void,
+        performDeferredPreprocessing: normalizeProjectWorkspaceRoot(workspaceRoot).pipe(
+          Effect.asVoid,
+        ),
       } satisfies PreparedDispatchCommand;
     }
 
     if (command.type !== "thread.turn.start" && command.type !== "thread.message.queue") {
       return {
         command: command as OrchestrationCommand,
-        materializeAttachments: Effect.void,
+        performDeferredPreprocessing: Effect.void,
       } satisfies PreparedDispatchCommand;
     }
 
@@ -140,6 +147,7 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
               message: `Failed to resolve persisted path for '${attachment.name}'.`,
             });
           }
+          const pendingPath = `${attachmentPath}.${contentDigest}.pending`;
 
           const materialize = Effect.gen(function* () {
             const existing = yield* fileSystem.readFile(attachmentPath).pipe(
@@ -147,6 +155,7 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
               Effect.orElseSucceed(() => null),
             );
             if (existing?.equals(bytes)) {
+              yield* fileSystem.remove(pendingPath, { force: true }).pipe(Effect.ignore);
               return;
             }
             if (existing !== null) {
@@ -162,13 +171,32 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
                   }),
               ),
             );
-            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-              Effect.mapError(
-                () =>
-                  new OrchestrationDispatchCommandError({
-                    message: `Failed to persist attachment '${attachment.name}'.`,
-                  }),
+            yield* Effect.gen(function* () {
+              yield* fileSystem.writeFile(pendingPath, bytes);
+              yield* fileSystem.link(pendingPath, attachmentPath).pipe(
+                Effect.catch(() =>
+                  fileSystem.readFile(attachmentPath).pipe(
+                    Effect.flatMap((value) =>
+                      Buffer.from(value).equals(bytes)
+                        ? Effect.void
+                        : Effect.fail(
+                            new OrchestrationDispatchCommandError({
+                              message: `Persisted attachment identity collision for '${attachment.name}'.`,
+                            }),
+                          ),
+                    ),
+                  ),
+                ),
+              );
+            }).pipe(
+              Effect.mapError((cause) =>
+                cause instanceof OrchestrationDispatchCommandError
+                  ? cause
+                  : new OrchestrationDispatchCommandError({
+                      message: `Failed to persist attachment '${attachment.name}'.`,
+                    }),
               ),
+              Effect.ensuring(fileSystem.remove(pendingPath, { force: true }).pipe(Effect.ignore)),
             );
           });
 
@@ -185,7 +213,7 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
           attachments: preparedAttachments.map(({ attachment }) => attachment),
         },
       },
-      materializeAttachments: Effect.forEach(
+      performDeferredPreprocessing: Effect.forEach(
         preparedAttachments,
         ({ materialize }) => materialize,
         { concurrency: 1, discard: true },
@@ -195,6 +223,6 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
 
 export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
   prepareDispatchCommand(command).pipe(
-    Effect.tap(({ materializeAttachments }) => materializeAttachments),
+    Effect.tap(({ performDeferredPreprocessing }) => performDeferredPreprocessing),
     Effect.map(({ command: normalizedCommand }) => normalizedCommand),
   );

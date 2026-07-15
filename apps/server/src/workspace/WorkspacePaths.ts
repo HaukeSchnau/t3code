@@ -91,6 +91,8 @@ export type WorkspacePathsError = typeof WorkspacePathsError.Type;
 export class WorkspacePaths extends Context.Service<
   WorkspacePaths,
   {
+    /** Canonicalize a workspace root without touching the filesystem. */
+    readonly canonicalizeWorkspaceRoot: (workspaceRoot: string) => string;
     /** Normalize a user-provided workspace root and verify it exists as a directory. */
     readonly normalizeWorkspaceRoot: (
       workspaceRoot: string,
@@ -161,7 +163,7 @@ export const make = Effect.gen(function* () {
   const normalizeWorkspaceRoot: WorkspacePaths["Service"]["normalizeWorkspaceRoot"] = Effect.fn(
     "WorkspacePaths.normalizeWorkspaceRoot",
   )(function* (workspaceRoot, options) {
-    const normalizedWorkspaceRoot = path.resolve(expandHomePath(workspaceRoot.trim(), path));
+    const normalizedWorkspaceRoot = canonicalizeWorkspaceRoot(workspaceRoot);
     let workspaceStat = yield* statWorkspaceRoot(
       workspaceRoot,
       normalizedWorkspaceRoot,
@@ -199,6 +201,10 @@ export const make = Effect.gen(function* () {
     return normalizedWorkspaceRoot;
   });
 
+  const canonicalizeWorkspaceRoot: WorkspacePaths["Service"]["canonicalizeWorkspaceRoot"] = (
+    workspaceRoot,
+  ) => path.resolve(expandHomePath(workspaceRoot.trim(), path));
+
   const resolveRelativePathWithinRoot: WorkspacePaths["Service"]["resolveRelativePathWithinRoot"] =
     Effect.fn("WorkspacePaths.resolveRelativePathWithinRoot")(function* (input) {
       const normalizedInputPath = input.relativePath.trim();
@@ -230,7 +236,11 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  return WorkspacePaths.of({ normalizeWorkspaceRoot, resolveRelativePathWithinRoot });
+  return WorkspacePaths.of({
+    canonicalizeWorkspaceRoot,
+    normalizeWorkspaceRoot,
+    resolveRelativePathWithinRoot,
+  });
 });
 
 export const layer = Layer.effect(WorkspacePaths, make);
