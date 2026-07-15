@@ -10,6 +10,8 @@ import {
   shouldIncludeShellStreamItem,
 } from "./ws.ts";
 
+type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
+
 const eventWithType = (type: OrchestrationEvent["type"]): OrchestrationEvent =>
   ({ type }) as OrchestrationEvent;
 
@@ -41,7 +43,7 @@ describe("compactShellCursorItems", () => {
     Effect.gen(function* () {
       const cursors = Array.from(
         { length: 9_200 },
-        (_, index): OrchestrationShellStreamItem => ({ kind: "cursor", sequence: index + 1 }),
+        (_, index): ShellDeltaItem => ({ kind: "cursor", sequence: index + 1 }),
       );
       const output = yield* compactShellCursorItems(Stream.fromIterable(cursors)).pipe(
         Stream.runCollect,
@@ -60,7 +62,7 @@ describe("compactShellCursorItems", () => {
         projectId: "project-1" as never,
       };
       const output = yield* compactShellCursorItems(
-        Stream.fromIterable<OrchestrationShellStreamItem>([
+        Stream.fromIterable<ShellDeltaItem>([
           { kind: "cursor", sequence: 1 },
           { kind: "cursor", sequence: 2 },
           visible,

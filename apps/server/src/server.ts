@@ -91,6 +91,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as WorkloadDiagnostics from "./diagnostics/WorkloadDiagnostics.ts";
+import * as ReplayLogPublisher from "./observability/ReplayLogPublisher.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as CommandPreprocessingCoordinator from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import {
@@ -438,6 +439,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(EnergyCaptureRequests.layer),
   Layer.provide(WorkloadDiagnostics.layer),
+  Layer.provide(ReplayLogPublisher.layer),
   Layer.provide(browserApiCorsLayer),
 );
 

@@ -19,6 +19,7 @@ import {
   replayOverlapEventsTotal,
   replayPagesTotal,
 } from "./Metrics.ts";
+import { ReplayLogPublisher } from "./ReplayLogPublisher.ts";
 
 export type ReplayFlow = "rpc" | "shell" | "thread";
 
@@ -34,6 +35,18 @@ export interface ReplayObservationReport {
   readonly liveBufferHighWaterMark: number;
 }
 
+const latestReplayReports: Partial<Record<ReplayFlow, ReplayObservationReport>> = {};
+
+export function readReplayObservationReportsForTesting(): Readonly<
+  Partial<Record<ReplayFlow, ReplayObservationReport>>
+> {
+  return { ...latestReplayReports };
+}
+
+export function resetReplayObservationReportsForTesting(): void {
+  for (const flow of ["rpc", "shell", "thread"] as const) delete latestReplayReports[flow];
+}
+
 export interface ReplayObserver {
   readonly recordPage: () => void;
   readonly recordScanned: (sequence: number) => void;
@@ -46,49 +59,50 @@ export interface ReplayObserver {
 
 export type ReplayReportRecorder = (report: ReplayObservationReport) => Effect.Effect<void>;
 
-const recordReplayReport: ReplayReportRecorder = (report) =>
-  Effect.gen(function* () {
-    const attributes = metricAttributes({ flow: report.flow, outcome: report.outcome });
-    const flowAttributes = metricAttributes({ flow: report.flow });
+const recordReplayReport =
+  (replayLogPublisher: ReplayLogPublisher["Service"]): ReplayReportRecorder =>
+  (report) =>
+    Effect.gen(function* () {
+      const attributes = metricAttributes({ flow: report.flow, outcome: report.outcome });
+      const flowAttributes = metricAttributes({ flow: report.flow });
 
-    yield* Metric.update(Metric.withAttributes(replayOperationsTotal, attributes), 1);
-    yield* Metric.update(
-      Metric.withAttributes(replayDuration, attributes),
-      Duration.millis(report.durationMs),
-    );
-    yield* Metric.update(Metric.withAttributes(replayPagesTotal, flowAttributes), report.pages);
-    yield* Metric.update(
-      Metric.withAttributes(replayEventsScannedTotal, flowAttributes),
-      report.scannedEvents,
-    );
-    yield* Metric.update(
-      Metric.withAttributes(replayEventsEmittedTotal, flowAttributes),
-      report.emittedEvents,
-    );
-    yield* Metric.update(
-      Metric.withAttributes(replayOverlapEventsTotal, flowAttributes),
-      report.dedupedOverlapEvents,
-    );
-    yield* Metric.update(
-      Metric.withAttributes(replayLiveBufferHighWater, flowAttributes),
-      report.liveBufferHighWaterMark,
-    );
+      yield* Metric.update(Metric.withAttributes(replayOperationsTotal, attributes), 1);
+      yield* Metric.update(
+        Metric.withAttributes(replayDuration, attributes),
+        Duration.millis(report.durationMs),
+      );
+      yield* Metric.update(Metric.withAttributes(replayPagesTotal, flowAttributes), report.pages);
+      yield* Metric.update(
+        Metric.withAttributes(replayEventsScannedTotal, flowAttributes),
+        report.scannedEvents,
+      );
+      yield* Metric.update(
+        Metric.withAttributes(replayEventsEmittedTotal, flowAttributes),
+        report.emittedEvents,
+      );
+      yield* Metric.update(
+        Metric.withAttributes(replayOverlapEventsTotal, flowAttributes),
+        report.dedupedOverlapEvents,
+      );
+      yield* Metric.update(
+        Metric.withAttributes(replayLiveBufferHighWater, flowAttributes),
+        report.liveBufferHighWaterMark,
+      );
 
-    incrementWorkloadCounter("replay.operations");
-    incrementWorkloadCounter("replay.pages", report.pages);
-    incrementWorkloadCounter("replay.events_scanned", report.scannedEvents);
-    incrementWorkloadCounter("replay.events_emitted", report.emittedEvents);
-    incrementWorkloadCounter("replay.overlap_deduped", report.dedupedOverlapEvents);
+      incrementWorkloadCounter("replay.operations");
+      incrementWorkloadCounter("replay.pages", report.pages);
+      incrementWorkloadCounter("replay.events_scanned", report.scannedEvents);
+      incrementWorkloadCounter("replay.events_emitted", report.emittedEvents);
+      incrementWorkloadCounter("replay.overlap_deduped", report.dedupedOverlapEvents);
+      latestReplayReports[report.flow] = report;
 
-    yield* Effect.logInfo("orchestration replay completed", report).pipe(
-      Effect.forkDetach({ startImmediately: true }),
-    );
-  });
+      yield* replayLogPublisher.publish(report);
+    });
 
-export const makeReplayObserver = Effect.fn("ReplayObservability.makeReplayObserver")(function* (
+const makeReplayObserverWith = Effect.fn("ReplayObservability.makeReplayObserverWith")(function* (
   flow: ReplayFlow,
   initialSequence: number,
-  recorder: ReplayReportRecorder = recordReplayReport,
+  recorder: ReplayReportRecorder,
 ) {
   const startedAt = yield* Clock.currentTimeNanos;
   let persistedTailSequence = initialSequence;
@@ -159,16 +173,31 @@ export const makeReplayObserver = Effect.fn("ReplayObservability.makeReplayObser
   } satisfies ReplayObserver;
 });
 
+export const makeReplayObserverWithRecorder = (
+  flow: ReplayFlow,
+  initialSequence: number,
+  recorder: ReplayReportRecorder,
+) => makeReplayObserverWith(flow, initialSequence, recorder);
+
+export const makeReplayObserver = Effect.fn("ReplayObservability.makeReplayObserver")(function* (
+  flow: ReplayFlow,
+  initialSequence: number,
+) {
+  const replayLogPublisher = yield* ReplayLogPublisher;
+  return yield* makeReplayObserverWith(
+    flow,
+    initialSequence,
+    recordReplayReport(replayLogPublisher),
+  );
+});
+
 export const observeReplayEffect = <A, E, R>(
   flow: ReplayFlow,
   initialSequence: number,
   use: (observer: ReplayObserver) => Effect.Effect<A, E, R>,
-  recorder?: ReplayReportRecorder,
-): Effect.Effect<A, E, R> =>
+): Effect.Effect<A, E, R | ReplayLogPublisher> =>
   Effect.gen(function* () {
-    const observer = yield* recorder === undefined
-      ? makeReplayObserver(flow, initialSequence)
-      : makeReplayObserver(flow, initialSequence, recorder);
+    const observer = yield* makeReplayObserver(flow, initialSequence);
     return yield* use(observer).pipe(Effect.onExit(observer.finish));
   });
 
@@ -185,34 +214,35 @@ export const replayEventBatch = <
   readonly transform: (
     events: ReadonlyArray<Event>,
   ) => Effect.Effect<ReadonlyArray<Output>, TransformError, TransformContext>;
-  readonly recorder?: ReplayReportRecorder;
 }): Effect.Effect<
   ReadonlyArray<Output>,
   ReadError | TransformError,
-  ReadContext | TransformContext
+  ReadContext | TransformContext | ReplayLogPublisher
 > =>
-  observeReplayEffect(
-    "rpc",
-    options.initialSequence,
-    (observer) => {
-      observer.recordPage();
-      return options.events.pipe(
-        Stream.tap((event) => Effect.sync(() => observer.recordScanned(event.sequence))),
-        Stream.runCollect,
-        Effect.map((events) => Array.from(events)),
-        Effect.flatMap(options.transform),
-        Effect.tap((events) =>
-          Effect.sync(() => {
-            for (const event of events) observer.recordEmitted(event.sequence);
-          }),
-        ),
-      );
-    },
-    options.recorder,
-  );
+  observeReplayEffect("rpc", options.initialSequence, (observer) => {
+    observer.recordPage();
+    return options.events.pipe(
+      Stream.tap((event) => Effect.sync(() => observer.recordScanned(event.sequence))),
+      Stream.runCollect,
+      Effect.map((events) => Array.from(events)),
+      Effect.flatMap(options.transform),
+      Effect.tap((events) =>
+        Effect.sync(() => {
+          for (const event of events) observer.recordEmitted(event.sequence);
+        }),
+      ),
+    );
+  });
 
-export interface ReplayCatchUpOptions<A, CatchUpError, CatchUpContext, LiveError, LiveContext> {
-  readonly observer: Effect.Effect<ReplayObserver>;
+export interface ReplayCatchUpOptions<
+  A,
+  CatchUpError,
+  CatchUpContext,
+  LiveError,
+  LiveContext,
+  ObserverContext,
+> {
+  readonly observer: Effect.Effect<ReplayObserver, never, ObserverContext>;
   readonly catchUp: (observer: ReplayObserver) => Stream.Stream<A, CatchUpError, CatchUpContext>;
   readonly live: Stream.Stream<A, LiveError, LiveContext>;
   readonly sequence: (item: A) => number;
@@ -224,9 +254,23 @@ export interface ReplayCatchUpOptions<A, CatchUpError, CatchUpContext, LiveError
  * any external diagnostics sink. The bounded queue and catch-up-first concat
  * intentionally preserve the existing replay ordering and backpressure.
  */
-export const replayCatchUpWithLive = <A, CatchUpError, CatchUpContext, LiveError, LiveContext>(
-  options: ReplayCatchUpOptions<A, CatchUpError, CatchUpContext, LiveError, LiveContext>,
-): Stream.Stream<A, CatchUpError, CatchUpContext | LiveContext | Scope.Scope> =>
+export const replayCatchUpWithLive = <
+  A,
+  CatchUpError,
+  CatchUpContext,
+  LiveError,
+  LiveContext,
+  ObserverContext,
+>(
+  options: ReplayCatchUpOptions<
+    A,
+    CatchUpError,
+    CatchUpContext,
+    LiveError,
+    LiveContext,
+    ObserverContext
+  >,
+): Stream.Stream<A, CatchUpError, CatchUpContext | LiveContext | ObserverContext | Scope.Scope> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const observer = yield* options.observer;

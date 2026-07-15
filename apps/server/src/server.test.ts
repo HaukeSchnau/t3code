@@ -131,6 +131,11 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import { incrementWorkloadCounter } from "./diagnostics/WorkloadDiagnostics.ts";
+import {
+  readReplayObservationReportsForTesting,
+  resetReplayObservationReportsForTesting,
+} from "./observability/ReplayObservability.ts";
+import * as ReplayLogPublisher from "./observability/ReplayLogPublisher.ts";
 import * as Data from "effect/Data";
 
 const defaultProjectId = ProjectId.make("project-default");
@@ -858,6 +863,7 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(ReplayLogPublisher.layer),
       Layer.provide(commandPreprocessingCoordinatorLayer),
       Layer.provide(
         Layer.mock(BrowserTraceCollector.BrowserTraceCollector)({
@@ -6041,6 +6047,90 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("observes actual shell and thread websocket catch-up handlers", () =>
+    Effect.gen(function* () {
+      resetReplayObservationReportsForTesting();
+      const selectedThreadId = ThreadId.make("thread-replay-observed");
+      const otherThreadId = ThreadId.make("thread-replay-other");
+      const makeMessageEvent = (sequence: number, threadId: ThreadId): OrchestrationEvent => ({
+        sequence,
+        eventId: EventId.make(`event-replay-${sequence}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-04-05T00:00:00.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId: MessageId.make(`message-replay-${sequence}`),
+          role: "user",
+          text: `message ${sequence}`,
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-04-05T00:00:00.000Z",
+          updatedAt: "2026-04-05T00:00:00.000Z",
+        },
+      });
+      const persistedEvents = [
+        makeMessageEvent(1, selectedThreadId),
+        makeMessageEvent(2, otherThreadId),
+      ];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            readEvents: () => Stream.fromIterable(persistedEvents),
+            streamDomainEvents: Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+
+      const shellItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 0,
+            includeCursorItems: true,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      assert.equal(Array.from(shellItems).at(0)?.kind, "cursor");
+      yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
+      assert.deepInclude(readReplayObservationReportsForTesting().shell, {
+        flow: "shell",
+        outcome: "interrupt",
+        pages: 1,
+        scannedEvents: 2,
+        emittedEvents: 1,
+        dedupedOverlapEvents: 0,
+        liveBufferHighWaterMark: 0,
+      });
+
+      const threadItems = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId: selectedThreadId,
+            afterSequence: 0,
+          }).pipe(Stream.take(1), Stream.runCollect),
+        ),
+      );
+      assert.equal(Array.from(threadItems).at(0)?.kind, "event");
+      yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
+      assert.deepInclude(readReplayObservationReportsForTesting().thread, {
+        flow: "thread",
+        outcome: "interrupt",
+        pages: 1,
+        scannedEvents: 2,
+        emittedEvents: 1,
+        dedupedOverlapEvents: 0,
+        liveBufferHighWaterMark: 0,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("stops the provider session and closes thread terminals after archive", () =>
     Effect.gen(function* () {
       const threadId = ThreadId.make("thread-archive");
@@ -7467,12 +7557,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertInclude(String(changedScriptDigest.failure), "reconcileExecution");
       assert.deepEqual(
         dispatchedCommands.map((entry) => entry.type),
-        [
-          "thread.create",
-          "thread.meta.update",
-          "thread.activity.append",
-          "thread.activity.append",
-        ],
+        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.activity.append"],
       );
       assert.equal(terminalOpenCount, 1);
       assert.equal(terminalWriteCount, 1);
