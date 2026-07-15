@@ -1538,7 +1538,7 @@ describe("ProviderCommandReactor", () => {
           attachments: [],
         },
         interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "full-access",
+        runtimeMode: "approval-required",
         createdAt: now,
       }),
     );
@@ -1810,6 +1810,36 @@ describe("ProviderCommandReactor", () => {
         detail: expect.stringContaining("cannot switch to 'claudeAgent'"),
       },
     });
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-start-stopped-provider-switch-retry"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-stopped-provider-switch-retry"),
+          role: "user",
+          text: "retry with persisted settings",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(async () => {
+      const retryModel = await harness.readModel();
+      const retryThread = retryModel.threads.find(
+        (entry) => entry.id === ThreadId.make("thread-1"),
+      );
+      return (
+        retryThread?.activities.filter((activity) => activity.kind === "provider.turn.start.failed")
+          .length === 2
+      );
+    });
+    expect(harness.startSession.mock.calls.length).toBe(0);
+    expect(harness.sendTurn.mock.calls.length).toBe(0);
   });
 
   it("reacts to thread.turn.interrupt-requested by calling provider interrupt", async () => {

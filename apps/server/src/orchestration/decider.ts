@@ -20,6 +20,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
+import { canReplaceThreadTitle } from "./threadTitle.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
@@ -425,7 +426,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       const settingsEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      const title = targetThread.messages.length === 0 ? command.titleSeed : undefined;
+      const title =
+        targetThread.messages.length === 0 &&
+        canReplaceThreadTitle(targetThread.title, command.titleSeed)
+          ? command.titleSeed
+          : undefined;
       if (command.modelSelection !== undefined || title !== undefined) {
         settingsEvents.push({
           ...(yield* withEventBase({
