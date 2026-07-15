@@ -130,6 +130,7 @@ function stateError(
 
 const isCommandOutboxStateError: (value: unknown) => value is CommandOutboxStateError =
   Schema.is(CommandOutboxStateError);
+const isDurableCommandDeliveryPlan = Schema.is(DurableCommandDeliveryPlan);
 
 export interface CommandOutboxService {
   readonly entries: Effect.Effect<ReadonlyArray<DurableCommandOutboxEntry>>;
@@ -194,11 +195,15 @@ function retryAt(failedAt: string, attempt: number): string {
 export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
   storage: CommandOutboxStorage["Service"],
   recoveredAt?: string,
+  recoverInterruptedDeliveries = true,
 ): Effect.fn.Return<CommandOutboxService, CommandOutboxStorageError> {
   const loaded = yield* storage.load;
   const recoveryTimestamp =
     recoveredAt ?? (yield* DateTime.now.pipe(Effect.map(DateTime.formatIso)));
   const recoveredEntries = loaded.entries.map((entry): DurableCommandOutboxEntry => {
+    if (!recoverInterruptedDeliveries) {
+      return entry;
+    }
     if (entry.state._tag !== "Delivering") {
       return entry;
     }
@@ -422,7 +427,7 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
           `Command ${commandId} may only be replaced before delivery begins`,
         );
       }
-      if (!Schema.is(DurableCommandDeliveryPlan)(replacement)) {
+      if (!isDurableCommandDeliveryPlan(replacement)) {
         return stateError(
           "invalid-replacement",
           commandId,
