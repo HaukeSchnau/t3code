@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
+import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
+import * as ServerConfig from "../config.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
@@ -12,6 +16,7 @@ import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
 const isProjectSetupScriptOperationError = Schema.is(
   ProjectSetupScriptRunner.ProjectSetupScriptOperationError,
 );
+const decodeJsonString = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.String));
 
 const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationProject => ({
   id: ProjectId.make("project-1"),
@@ -68,7 +73,26 @@ const testLayer = (
   ProjectSetupScriptRunner.layer.pipe(
     Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
     Layer.provideMerge(makeTerminalManagerLayer(terminal)),
+    Layer.provideMerge(
+      ServerConfig.layerTest(process.cwd(), { prefix: "t3-setup-runner-test-" }).pipe(
+        Layer.provide(NodeServices.layer),
+      ),
+    ),
+    Layer.provide(NodeServices.layer),
   );
+
+const claimWrapperExecution = (data: string) =>
+  Effect.sync(() => {
+    const wrapperLiteral = data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
+    if (!wrapperLiteral) throw new Error(`Missing wrapper path in terminal write: ${data}`);
+    const wrapperPath = decodeJsonString(wrapperLiteral);
+    const executionDirectory = NodePath.dirname(wrapperPath);
+    NodeFS.mkdirSync(NodePath.join(executionDirectory, "claimed"));
+    NodeFS.writeFileSync(
+      NodePath.join(executionDirectory, "completed.json"),
+      '{"exitCode":0}\n',
+    );
+  });
 
 describe("ProjectSetupScriptRunner", () => {
   it.effect("returns no-script when no setup script exists", () => {
@@ -108,7 +132,10 @@ describe("ProjectSetupScriptRunner", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
         }),
       );
-      const write = vi.fn(() => Effect.void);
+      const write = vi.fn(
+        (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+          claimWrapperExecution(input.data),
+      );
       const project = makeProject([
         {
           id: "setup",
@@ -144,14 +171,147 @@ describe("ProjectSetupScriptRunner", () => {
             T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
           },
         });
-        expect(write).toHaveBeenCalledWith({
-          threadId: "thread-1",
-          terminalId: "setup-setup",
-          data: "bun install\r",
-        });
+        expect(write).toHaveBeenCalledOnce();
+        expect(write.mock.calls[0]?.[0].threadId).toBe("thread-1");
+        expect(write.mock.calls[0]?.[0].terminalId).toBe("setup-setup");
+        expect(write.mock.calls[0]?.[0].data).toContain("run.cjs");
       }).pipe(Effect.provide(testLayer(project, { open, write })));
     },
   );
+
+  it.effect("fails closed for a claimed incomplete execution and reuses its completion", () => {
+    let wrapperPath = "";
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const write = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+        Effect.sync(() => {
+          const wrapperLiteral = input.data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
+          if (!wrapperLiteral) throw new Error("missing wrapper path");
+          wrapperPath = decodeJsonString(wrapperLiteral);
+          NodeFS.mkdirSync(NodePath.join(NodePath.dirname(wrapperPath), "claimed"));
+        }),
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const input = {
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+        preferredTerminalId: "setup-setup",
+      };
+      yield* runner.runForThread(input);
+
+      const incomplete = yield* runner
+        .runForThread({ ...input, reconcileClaimedLaunch: true })
+        .pipe(Effect.flip);
+      expect(isProjectSetupScriptOperationError(incomplete)).toBe(true);
+      if (isProjectSetupScriptOperationError(incomplete)) {
+        expect(incomplete.operation).toBe("reconcileExecution");
+      }
+      expect(open).toHaveBeenCalledOnce();
+      expect(write).toHaveBeenCalledOnce();
+
+      NodeFS.writeFileSync(
+        NodePath.join(NodePath.dirname(wrapperPath), "completed.json"),
+        '{"exitCode":0}\n',
+      );
+      const completed = yield* runner.runForThread({
+        ...input,
+        reconcileClaimedLaunch: true,
+      });
+      expect(completed.status).toBe("started");
+      expect(open).toHaveBeenCalledOnce();
+      expect(write).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
+  it.effect("safely resubmits when terminal open completed without an execution claim", () => {
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    let writeAttempt = 0;
+    const write = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) => {
+        writeAttempt += 1;
+        return writeAttempt === 1
+          ? Effect.fail(
+              new TerminalManager.TerminalNotRunningError({
+                threadId: input.threadId,
+                terminalId: input.terminalId,
+              }),
+            )
+          : claimWrapperExecution(input.data);
+      },
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const input = {
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+        preferredTerminalId: "setup-setup",
+      };
+      const interrupted = yield* runner.runForThread(input).pipe(Effect.flip);
+      expect(isProjectSetupScriptOperationError(interrupted)).toBe(true);
+      if (isProjectSetupScriptOperationError(interrupted)) {
+        expect(interrupted.operation).toBe("writeCommand");
+      }
+
+      const resumed = yield* runner.runForThread({
+        ...input,
+        reconcileClaimedLaunch: true,
+      });
+      expect(resumed.status).toBe("started");
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(write).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
 
   it.effect("keeps terminal failures as the exact cause of a structured operation error", () => {
     const rootCause = new Error("stat failed");

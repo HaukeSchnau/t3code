@@ -83,43 +83,39 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
           );
           const normalizedCommand = preparedCommand.command;
-          return yield* orchestrationEngine
-            .resolveReceipt(normalizedCommand)
-            .pipe(
-              Effect.flatMap(
-                Option.match({
-                  onSome: Effect.succeed,
-                  onNone: () =>
-                    commandPreprocessing.withCommandLock(
-                      normalizedCommand.commandId,
-                      orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-                        Effect.flatMap(
-                          Option.match({
-                            onSome: Effect.succeed,
-                            onNone: () =>
-                              Effect.gen(function* () {
-                                let progress = yield* commandPreprocessing.claim(normalizedCommand);
-                                if (!progress.deferredPreprocessingCompleted) {
-                                  yield* preparedCommand.performDeferredPreprocessing;
-                                  progress = yield* commandPreprocessing.markCompleted(
-                                    normalizedCommand,
-                                    "deferred-preprocessing-completed",
-                                  );
-                                }
-                                return yield* orchestrationEngine.dispatch(normalizedCommand);
-                              }),
-                          }),
-                        ),
+          return yield* orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+            Effect.flatMap(
+              Option.match({
+                onSome: Effect.succeed,
+                onNone: () =>
+                  commandPreprocessing.withCommandLock(
+                    normalizedCommand.commandId,
+                    orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+                      Effect.flatMap(
+                        Option.match({
+                          onSome: Effect.succeed,
+                          onNone: () =>
+                            Effect.gen(function* () {
+                              let progress = yield* commandPreprocessing.claim(normalizedCommand);
+                              if (!progress.deferredPreprocessingCompleted) {
+                                yield* preparedCommand.performDeferredPreprocessing;
+                                progress = yield* commandPreprocessing.markCompleted(
+                                  normalizedCommand,
+                                  "deferred-preprocessing-completed",
+                                );
+                              }
+                              return yield* orchestrationEngine.dispatch(normalizedCommand);
+                            }),
+                        }),
                       ),
                     ),
-                }),
-              ),
-            )
-            .pipe(
-              Effect.catch((cause) =>
-                failEnvironmentInternal("orchestration_dispatch_failed", cause),
-              ),
-            );
+                  ),
+              }),
+            ),
+            Effect.catch((cause) =>
+              failEnvironmentInternal("orchestration_dispatch_failed", cause),
+            ),
+          );
         }),
       );
   }),

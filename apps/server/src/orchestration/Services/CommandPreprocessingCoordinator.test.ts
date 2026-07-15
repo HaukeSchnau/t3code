@@ -1,7 +1,4 @@
-import * as NodeFS from "node:fs";
-import * as NodeOS from "node:os";
-import * as NodePath from "node:path";
-
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import {
   CommandId,
@@ -14,7 +11,10 @@ import {
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 
 import { OrchestrationCommandReceiptMismatchError } from "../Errors.ts";
 import { runMigrations } from "../../persistence/Migrations.ts";
@@ -24,6 +24,17 @@ import {
   type CommandPreprocessingStep,
   layer as CommandPreprocessingCoordinatorLive,
 } from "./CommandPreprocessingCoordinator.ts";
+
+const isReceiptMismatchError = Schema.is(OrchestrationCommandReceiptMismatchError);
+
+const makePersistentFilename = Effect.gen(function* () {
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const directory = yield* fileSystem.makeTempDirectoryScoped({
+    prefix: "t3-preprocessing-",
+  });
+  return path.join(directory, "state.sqlite");
+});
 
 const command = {
   type: "thread.turn.start",
@@ -89,8 +100,7 @@ const withFreshCoordinator = <A, E>(
 
 it.effect("resumes durable preprocessing checkpoints after coordinator restart", () =>
   Effect.gen(function* () {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-preprocessing-"));
-    const filename = NodePath.join(directory, "state.sqlite");
+    const filename = yield* makePersistentFilename;
     const cases: ReadonlyArray<{
       readonly name: string;
       readonly completed: ReadonlyArray<CommandPreprocessingStep>;
@@ -108,12 +118,18 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
       },
       {
         name: "after workspace preparation",
+        completed: ["deferred-preprocessing-completed", "thread-created", "workspace-prepared"],
+        expected: [true, true, true, false, false],
+      },
+      {
+        name: "after setup claim before terminal reconciliation",
         completed: [
           "deferred-preprocessing-completed",
           "thread-created",
           "workspace-prepared",
+          "setup-claimed",
         ],
-        expected: [true, true, true, false, false],
+        expected: [true, true, true, true, false],
       },
       {
         name: "after setup",
@@ -162,13 +178,12 @@ it.effect("resumes durable preprocessing checkpoints after coordinator restart",
         checkpoint.name,
       );
     }
-  }),
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
 
 it.effect("fails closed after restart when a command id is reused with a changed envelope", () =>
   Effect.gen(function* () {
-    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-preprocessing-"));
-    const filename = NodePath.join(directory, "state.sqlite");
+    const filename = yield* makePersistentFilename;
     yield* withFreshCoordinator(
       filename,
       Effect.flatMap(CommandPreprocessingCoordinator, (coordinator) =>
@@ -187,12 +202,12 @@ it.effect("fails closed after restart when a command id is reused with a changed
     ).pipe(Effect.result);
     assert.isTrue(result._tag === "Failure");
     if (result._tag === "Failure") {
-      if (!(result.failure instanceof OrchestrationCommandReceiptMismatchError)) {
+      if (!isReceiptMismatchError(result.failure)) {
         return yield* Effect.die(result.failure);
       }
       assert.equal(result.failure.reason, "payload-mismatch");
     }
-  }),
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
 );
 
 it.effect("serializes consumers that share one persistence-scoped coordinator", () =>

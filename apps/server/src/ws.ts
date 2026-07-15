@@ -1139,10 +1139,13 @@ const makeWsRpcLayer = (
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
                 return;
               }
-              if (progress.setupClaimed) {
+              if (progress.setupCompleted) {
                 return;
               }
-              progress = yield* commandPreprocessing.markCompleted(command, "setup-claimed");
+              const reconcileClaimedLaunch = progress.setupClaimed;
+              if (!reconcileClaimedLaunch) {
+                progress = yield* commandPreprocessing.markCompleted(command, "setup-claimed");
+              }
               const worktreePath = targetWorktreePath;
               const requestedAt = yield* nowIso;
               yield* projectSetupScriptRunner
@@ -1152,6 +1155,7 @@ const makeWsRpcLayer = (
                   ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
                   worktreePath,
                   preferredTerminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
+                  reconcileClaimedLaunch,
                 })
                 .pipe(
                   Effect.matchEffect({
@@ -1160,7 +1164,7 @@ const makeWsRpcLayer = (
                         error,
                         requestedAt,
                         worktreePath,
-                      }),
+                      }).pipe(Effect.andThen(Effect.fail(error))),
                     onSuccess: (setupResult) => {
                       if (setupResult.status !== "started") {
                         return Effect.void;
@@ -1240,10 +1244,7 @@ const makeWsRpcLayer = (
                 if (targetWorktreePath) {
                   yield* refreshGitStatus(targetWorktreePath);
                 }
-                progress = yield* commandPreprocessing.markCompleted(
-                  command,
-                  "workspace-prepared",
-                );
+                progress = yield* commandPreprocessing.markCompleted(command, "workspace-prepared");
               }
             }
 
