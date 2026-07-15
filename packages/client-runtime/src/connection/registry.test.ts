@@ -784,6 +784,43 @@ describe("EnvironmentRegistry", () => {
     }),
   );
 
+  it.effect(
+    "reconciles a changed primary identity without retaining the old runtime or cache",
+    () =>
+      Effect.gen(function* () {
+        const harness = yield* makeHarness([]);
+
+        yield* Effect.gen(function* () {
+          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
+          yield* registry.reconcilePlatform([
+            new PrimaryConnectionRegistration({ target: TARGET }),
+          ]);
+          yield* awaitConnectionState(
+            registry,
+            TARGET.environmentId,
+            (state) => state.phase === "connected",
+          );
+
+          yield* registry.reconcilePlatform([
+            new PrimaryConnectionRegistration({ target: SECOND_TARGET }),
+          ]);
+          yield* awaitConnectionState(
+            registry,
+            SECOND_TARGET.environmentId,
+            (state) => state.phase === "connected",
+          );
+
+          const entries = yield* SubscriptionRef.get(registry.entries);
+          expect(entries.has(TARGET.environmentId)).toBe(false);
+          expect(entries.get(SECOND_TARGET.environmentId)?.target).toEqual(SECOND_TARGET);
+          expect((yield* Ref.get(harness.shellCache)).has(TARGET.environmentId)).toBe(false);
+          expect(yield* Ref.get(harness.cacheClears)).toContain(TARGET.environmentId);
+          expect(yield* Ref.get(harness.ownedDataClears)).toContain(TARGET.environmentId);
+          expect(yield* Ref.get(harness.releasedSessions)).toBeGreaterThanOrEqual(1);
+        }).pipe(Effect.provide(harness.layer), Effect.scoped);
+      }),
+  );
+
   it.effect("gives a primary platform registration precedence over persisted registrations", () =>
     Effect.gen(function* () {
       const shadowedTarget = new RelayConnectionTarget({

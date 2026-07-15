@@ -25,6 +25,10 @@ import {
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
+import {
+  primaryEnvironmentTargetSignature,
+  readPrimaryEnvironmentTarget,
+} from "./target";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",
@@ -144,8 +148,9 @@ export interface ServerClientSessionRecord {
   readonly current: boolean;
 }
 
-type ServerAuthGateState =
+export type ServerAuthGateState =
   | { status: "authenticated" }
+  | { status: "offline-authenticated" }
   | {
       status: "requires-auth";
       auth: AuthSessionState["auth"];
@@ -154,6 +159,8 @@ type ServerAuthGateState =
 
 let bootstrapPromise: Promise<ServerAuthGateState> | null = null;
 let resolvedAuthenticatedGateState: ServerAuthGateState | null = null;
+let authoritativeRequiresAuthGateState: ServerAuthGateState | null = null;
+const AUTHENTICATED_PROOF_STORAGE_KEY = "t3code:primary-authenticated:v1";
 const AUTH_SESSION_ESTABLISH_TIMEOUT_MS = 2_000;
 const AUTH_SESSION_ESTABLISH_STEP_MS = 100;
 
@@ -190,21 +197,91 @@ function getDesktopBootstrapCredential(): string | null {
     : null;
 }
 
+const PersistedAuthenticatedProof = Schema.Struct({
+  version: Schema.Literal(1),
+  browserOrigin: Schema.String,
+  primaryTargetSignature: Schema.String,
+  expiresAt: Schema.String,
+});
+type PersistedAuthenticatedProof = typeof PersistedAuthenticatedProof.Type;
+const decodePersistedAuthenticatedProof = Schema.decodeUnknownSync(PersistedAuthenticatedProof);
+
+function currentAuthProofBinding() {
+  const target = readPrimaryEnvironmentTarget();
+  return {
+    browserOrigin: window.location.origin,
+    primaryTargetSignature: primaryEnvironmentTargetSignature(target),
+  };
+}
+
+export function clearOfflineAuthProof(): void {
+  try {
+    window.localStorage.removeItem(AUTHENTICATED_PROOF_STORAGE_KEY);
+  } catch {
+    // Storage can be disabled. The online auth flow remains authoritative.
+  }
+}
+
+function persistAuthenticatedProof(session: AuthSessionState) {
+  if (!session.authenticated || session.expiresAt === undefined) return;
+  try {
+    window.localStorage.setItem(
+      AUTHENTICATED_PROOF_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        ...currentAuthProofBinding(),
+        expiresAt: DateTime.formatIso(session.expiresAt),
+      } satisfies PersistedAuthenticatedProof),
+    );
+  } catch {
+    // Cache-only startup is an optional resilience path; auth must not depend on storage access.
+  }
+}
+
+function readValidAuthenticatedProof(): PersistedAuthenticatedProof | null {
+  try {
+    const raw = window.localStorage.getItem(AUTHENTICATED_PROOF_STORAGE_KEY);
+    if (raw === null) return null;
+    const value = decodePersistedAuthenticatedProof(JSON.parse(raw));
+    const binding = currentAuthProofBinding();
+    const expiresAtEpochMs = Date.parse(value.expiresAt);
+    return value.browserOrigin === binding.browserOrigin &&
+      value.primaryTargetSignature === binding.primaryTargetSignature &&
+      Number.isFinite(expiresAtEpochMs) &&
+      expiresAtEpochMs > Date.now()
+      ? value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+export function hasValidOfflineAuthProof(): boolean {
+  return readValidAuthenticatedProof() !== null;
+}
+
+export function offlineAuthProofExpiresAtEpochMs(): number | null {
+  const proof = readValidAuthenticatedProof();
+  return proof === null ? null : Date.parse(proof.expiresAt);
+}
+
 export async function fetchSessionState(): Promise<AuthSessionState> {
-  return retryTransientBootstrap(async () => {
-    try {
-      return await runPrimaryHttp(
-        PrimaryEnvironmentHttpClient.pipe(
-          Effect.flatMap((client) => client.auth.session({ headers: {} })),
-        ),
-      );
-    } catch (error) {
-      throw PrimaryEnvironmentRequestError.fromCause({
-        operation: "fetch-session-state",
-        cause: error,
-      });
-    }
-  });
+  return retryTransientBootstrap(fetchSessionStateOnce);
+}
+
+async function fetchSessionStateOnce(): Promise<AuthSessionState> {
+  try {
+    return await runPrimaryHttp(
+      PrimaryEnvironmentHttpClient.pipe(
+        Effect.flatMap((client) => client.auth.session({ headers: {} })),
+      ),
+    );
+  } catch (error) {
+    throw PrimaryEnvironmentRequestError.fromCause({
+      operation: "fetch-session-state",
+      cause: error,
+    });
+  }
 }
 
 function readHttpApiStatus(error: unknown): number | null {
@@ -316,7 +393,9 @@ function waitForBootstrapRetry(delayMs: number): Promise<void> {
 
 function isTransientBootstrapError(error: unknown): boolean {
   if (isPrimaryEnvironmentRequestError(error)) {
-    return TRANSIENT_BOOTSTRAP_STATUS_CODES.has(error.status);
+    return (
+      TRANSIENT_BOOTSTRAP_STATUS_CODES.has(error.status) || isTransientBootstrapError(error.cause)
+    );
   }
 
   if (error instanceof TypeError) {
@@ -328,12 +407,30 @@ function isTransientBootstrapError(error: unknown): boolean {
 
 async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
   const bootstrapCredential = getDesktopBootstrapCredential();
-  const currentSession = await fetchSessionState();
+  const cachedAuthenticationEligible = readValidAuthenticatedProof() !== null;
+  let currentSession: AuthSessionState;
+  try {
+    currentSession = cachedAuthenticationEligible
+      ? await fetchSessionStateOnce()
+      : await fetchSessionState();
+  } catch (error) {
+    if (isPrimaryEnvironmentRequestError(error) && (error.status === 401 || error.status === 403)) {
+      clearOfflineAuthProof();
+    }
+    if (isTransientBootstrapError(error) && cachedAuthenticationEligible) {
+      return { status: "offline-authenticated" };
+    }
+    throw error;
+  }
+  if (!currentSession.authenticated) {
+    clearOfflineAuthProof();
+  }
   const requiresDesktopSessionUpgrade =
     currentSession.authenticated &&
     bootstrapCredential !== null &&
     currentSession.scopes?.includes(AuthDiagnosticsCaptureScope) !== true;
   if (currentSession.authenticated && !requiresDesktopSessionUpgrade) {
+    persistAuthenticatedProof(currentSession);
     return { status: "authenticated" };
   }
 
@@ -346,9 +443,10 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
 
   try {
     await exchangeBootstrapCredential(bootstrapCredential);
-    await waitForAuthenticatedSessionAfterBootstrap({
+    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap({
       requiredScopes: [AuthDiagnosticsCaptureScope],
     });
+    persistAuthenticatedProof(authenticatedSession);
     return { status: "authenticated" };
   } catch (error) {
     return {
@@ -368,6 +466,7 @@ export async function submitServerAuthCredential(credential: string): Promise<vo
   }
 
   resolvedAuthenticatedGateState = null;
+  authoritativeRequiresAuthGateState = null;
   await exchangeBootstrapCredential(trimmedCredential);
   bootstrapPromise = null;
   stripPairingTokenFromUrl();
@@ -526,6 +625,9 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
   if (resolvedAuthenticatedGateState?.status === "authenticated") {
     return resolvedAuthenticatedGateState;
   }
+  if (authoritativeRequiresAuthGateState !== null) {
+    return authoritativeRequiresAuthGateState;
+  }
 
   if (bootstrapPromise) {
     return bootstrapPromise;
@@ -553,11 +655,37 @@ export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGat
 // hit 401 and start a reauth loop in the renderer.
 export async function reauthenticatePrimaryEnvironment(): Promise<ServerAuthGateState> {
   resolvedAuthenticatedGateState = null;
+  authoritativeRequiresAuthGateState = null;
   bootstrapPromise = null;
   return resolveInitialServerAuthGateState();
+}
+
+/** Re-checks a cache-only bootstrap without allowing the cached proof to satisfy the check. */
+export async function revalidateOfflineServerAuthGateState(): Promise<ServerAuthGateState> {
+  resolvedAuthenticatedGateState = null;
+  authoritativeRequiresAuthGateState = null;
+  bootstrapPromise = null;
+  let currentSession: AuthSessionState;
+  try {
+    currentSession = await fetchSessionStateOnce();
+  } catch (error) {
+    if (isPrimaryEnvironmentRequestError(error) && (error.status === 401 || error.status === 403)) {
+      clearOfflineAuthProof();
+    }
+    throw error;
+  }
+  if (currentSession.authenticated) {
+    persistAuthenticatedProof(currentSession);
+    resolvedAuthenticatedGateState = { status: "authenticated" };
+    return resolvedAuthenticatedGateState;
+  }
+  clearOfflineAuthProof();
+  authoritativeRequiresAuthGateState = { status: "requires-auth", auth: currentSession.auth };
+  return authoritativeRequiresAuthGateState;
 }
 
 export function __resetServerAuthBootstrapForTests() {
   bootstrapPromise = null;
   resolvedAuthenticatedGateState = null;
+  authoritativeRequiresAuthGateState = null;
 }
