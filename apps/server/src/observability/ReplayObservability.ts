@@ -3,6 +3,9 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Metric from "effect/Metric";
+import * as Queue from "effect/Queue";
+import * as Scope from "effect/Scope";
+import * as Stream from "effect/Stream";
 
 import { incrementWorkloadCounter } from "../diagnostics/WorkloadDiagnostics.ts";
 import { outcomeFromExit, type ObservabilityOutcome } from "./Attributes.ts";
@@ -38,10 +41,10 @@ export interface ReplayObserver {
   readonly recordEmitted: (sequence: number) => void;
   readonly recordLiveBuffered: (sequence: number) => void;
   readonly recordLiveDequeued: () => void;
-  readonly finish: (exit: Exit.Exit<unknown, unknown>) => Effect.Effect<void>;
+  readonly finish: <A, E>(exit: Exit.Exit<A, E>) => Effect.Effect<void>;
 }
 
-type ReplayReportRecorder = (report: ReplayObservationReport) => Effect.Effect<void>;
+export type ReplayReportRecorder = (report: ReplayObservationReport) => Effect.Effect<void>;
 
 const recordReplayReport: ReplayReportRecorder = (report) =>
   Effect.gen(function* () {
@@ -77,7 +80,9 @@ const recordReplayReport: ReplayReportRecorder = (report) =>
     incrementWorkloadCounter("replay.events_emitted", report.emittedEvents);
     incrementWorkloadCounter("replay.overlap_deduped", report.dedupedOverlapEvents);
 
-    yield* Effect.logInfo("orchestration replay completed", report);
+    yield* Effect.logInfo("orchestration replay completed", report).pipe(
+      Effect.forkDetach({ startImmediately: true }),
+    );
   });
 
 export const makeReplayObserver = Effect.fn("ReplayObservability.makeReplayObserver")(function* (
@@ -158,8 +163,93 @@ export const observeReplayEffect = <A, E, R>(
   flow: ReplayFlow,
   initialSequence: number,
   use: (observer: ReplayObserver) => Effect.Effect<A, E, R>,
+  recorder?: ReplayReportRecorder,
 ): Effect.Effect<A, E, R> =>
   Effect.gen(function* () {
-    const observer = yield* makeReplayObserver(flow, initialSequence);
+    const observer = yield* recorder === undefined
+      ? makeReplayObserver(flow, initialSequence)
+      : makeReplayObserver(flow, initialSequence, recorder);
     return yield* use(observer).pipe(Effect.onExit(observer.finish));
   });
+
+export const replayEventBatch = <
+  Event extends { readonly sequence: number },
+  Output extends { readonly sequence: number },
+  ReadError,
+  ReadContext,
+  TransformError,
+  TransformContext,
+>(options: {
+  readonly initialSequence: number;
+  readonly events: Stream.Stream<Event, ReadError, ReadContext>;
+  readonly transform: (
+    events: ReadonlyArray<Event>,
+  ) => Effect.Effect<ReadonlyArray<Output>, TransformError, TransformContext>;
+  readonly recorder?: ReplayReportRecorder;
+}): Effect.Effect<
+  ReadonlyArray<Output>,
+  ReadError | TransformError,
+  ReadContext | TransformContext
+> =>
+  observeReplayEffect(
+    "rpc",
+    options.initialSequence,
+    (observer) => {
+      observer.recordPage();
+      return options.events.pipe(
+        Stream.tap((event) => Effect.sync(() => observer.recordScanned(event.sequence))),
+        Stream.runCollect,
+        Effect.map((events) => Array.from(events)),
+        Effect.flatMap(options.transform),
+        Effect.tap((events) =>
+          Effect.sync(() => {
+            for (const event of events) observer.recordEmitted(event.sequence);
+          }),
+        ),
+      );
+    },
+    options.recorder,
+  );
+
+export interface ReplayCatchUpOptions<A, CatchUpError, CatchUpContext, LiveError, LiveContext> {
+  readonly observer: Effect.Effect<ReplayObserver>;
+  readonly catchUp: (observer: ReplayObserver) => Stream.Stream<A, CatchUpError, CatchUpContext>;
+  readonly live: Stream.Stream<A, LiveError, LiveContext>;
+  readonly sequence: (item: A) => number;
+  readonly bufferCapacity: number;
+}
+
+/**
+ * Captures live events before reading history, then hands off without awaiting
+ * any external diagnostics sink. The bounded queue and catch-up-first concat
+ * intentionally preserve the existing replay ordering and backpressure.
+ */
+export const replayCatchUpWithLive = <A, CatchUpError, CatchUpContext, LiveError, LiveContext>(
+  options: ReplayCatchUpOptions<A, CatchUpError, CatchUpContext, LiveError, LiveContext>,
+): Stream.Stream<A, CatchUpError, CatchUpContext | LiveContext | Scope.Scope> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const observer = yield* options.observer;
+      yield* Effect.addFinalizer(observer.finish);
+      const liveBuffer = yield* Queue.bounded<A>(options.bufferCapacity);
+      yield* Effect.forkScoped(
+        options.live.pipe(
+          Stream.runForEach((item) =>
+            Queue.offer(liveBuffer, item).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => observer.recordLiveBuffered(options.sequence(item))),
+              ),
+            ),
+          ),
+        ),
+      );
+      const catchUpStream = options.catchUp(observer).pipe(
+        Stream.tap((item) => Effect.sync(() => observer.recordEmitted(options.sequence(item)))),
+        Stream.onExit(observer.finish),
+      );
+      const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
+        Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
+      );
+      return Stream.concat(catchUpStream, bufferedLiveStream);
+    }),
+  );
