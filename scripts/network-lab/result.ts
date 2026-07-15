@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 
 import {
   NETWORK_LAB_RESULT_SCHEMA_VERSION,
+  NetworkFaultControl,
   NonEmptyString,
   NonNegativeInt,
   RunIdentity,
@@ -31,10 +32,19 @@ export const CorrectnessEvidence = Schema.Struct({
 });
 export type CorrectnessEvidence = typeof CorrectnessEvidence.Type;
 
+export const FaultOperationEvidence = Schema.Struct({
+  stepId: NonEmptyString,
+  sequence: NonNegativeInt,
+  decisionToken: NonEmptyString,
+  effectiveControl: NetworkFaultControl,
+  details: Schema.Record(Schema.String, Schema.Json),
+});
+export type FaultOperationEvidence = typeof FaultOperationEvidence.Type;
+
 export const FaultEvidence = Schema.Struct({
   status: EvidenceStatus,
   originPathUnshaped: Schema.Boolean,
-  events: Schema.Array(ObservationEvidence),
+  operations: Schema.Array(FaultOperationEvidence),
 });
 export type FaultEvidence = typeof FaultEvidence.Type;
 
@@ -43,11 +53,13 @@ export const CleanupResourceEvidence = Schema.Struct({
   id: NonEmptyString,
   released: Schema.Boolean,
   details: Schema.Record(Schema.String, Schema.Json),
+  error: Schema.Union([NonEmptyString, Schema.Null]),
 });
 export type CleanupResourceEvidence = typeof CleanupResourceEvidence.Type;
 
 export const CleanupEvidence = Schema.Struct({
   status: EvidenceStatus,
+  leaseId: Schema.Union([NonEmptyString, Schema.Null]),
   resources: Schema.Array(CleanupResourceEvidence),
 });
 export type CleanupEvidence = typeof CleanupEvidence.Type;
@@ -64,6 +76,7 @@ export type RunnerPhase = typeof RunnerPhase.Type;
 export const RunnerErrorEvidence = Schema.Struct({
   phase: RunnerPhase,
   stepId: Schema.Union([NonEmptyString, Schema.Null]),
+  resourceId: Schema.Union([NonEmptyString, Schema.Null]),
   name: NonEmptyString,
   message: NonEmptyString,
 });
@@ -73,7 +86,7 @@ export const StepResult = Schema.Struct({
   id: NonEmptyString,
   sequence: NonNegativeInt,
   decisionToken: NonEmptyString,
-  kind: Schema.Literals(["action", "checkpoint"]),
+  kind: Schema.Literals(["action", "control", "checkpoint"]),
   status: Schema.Literals(["passed", "failed"]),
   observation: Schema.Union([ObservationEvidence, Schema.Null]),
 });
