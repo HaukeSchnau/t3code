@@ -4,6 +4,8 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
   type EnvironmentId,
+  MessageId,
+  type MessageId as MessageIdType,
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -42,6 +44,8 @@ export interface ComposerDraft {
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
+  /** Durable outbox intent currently copied into this draft for editing. */
+  readonly editingQueuedMessageId?: MessageIdType;
 }
 
 export interface ComposerDraftWorkspaceSelection {
@@ -70,6 +74,7 @@ const ComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  editingQueuedMessageId: Schema.optional(MessageId),
 });
 
 const PersistedComposerDraftsSchema = Schema.Struct({
@@ -90,6 +95,17 @@ export const composerDraftsAtom = Atom.make<Record<string, ComposerDraft>>({}).p
   Atom.keepAlive,
   Atom.withLabel("mobile:composer-drafts"),
 );
+export const composerDraftsReadyAtom = Atom.make(false).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:composer-drafts:ready"),
+);
+export const persistedQueuedEditIdsAtom = Atom.make((get) => {
+  const editing: Record<MessageIdType, true> = {};
+  for (const draft of Object.values(get(composerDraftsAtom))) {
+    if (draft.editingQueuedMessageId !== undefined) editing[draft.editingQueuedMessageId] = true;
+  }
+  return editing as Readonly<Record<MessageIdType, true>>;
+}).pipe(Atom.withLabel("mobile:composer-drafts:queued-edit-ids"));
 
 let loadPromise: Promise<void> | null = null;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
@@ -121,6 +137,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
     draft.workspaceSelection === undefined
+    && draft.editingQueuedMessageId === undefined
   );
 }
 
@@ -236,7 +253,23 @@ export function ensureComposerDraftsLoaded(): void {
         }),
       );
       // Draft loading is best-effort; in-memory drafts still keep working.
-    });
+    })
+    .finally(() => appAtomRegistry.set(composerDraftsReadyAtom, true));
+}
+
+export function setComposerDraftQueuedEdit(
+  draftKey: string,
+  messageId: MessageIdType | undefined,
+): void {
+  updateComposerDrafts((current) => {
+    const draft = { ...normalizeDraft(current[draftKey]), editingQueuedMessageId: messageId };
+    if (isEmptyDraft(draft)) {
+      const next = { ...current };
+      delete next[draftKey];
+      return next;
+    }
+    return { ...current, [draftKey]: draft };
+  });
 }
 
 function updateComposerDrafts(

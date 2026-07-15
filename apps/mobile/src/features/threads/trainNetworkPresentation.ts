@@ -97,10 +97,15 @@ export function presentTrainConnectionStatus(input: {
     case "reconnecting": {
       const seconds = retrySeconds(connection, input.nowMs);
       const retry = seconds === null ? "Reconnecting" : `Retrying in ${seconds}s`;
+      const attempt = `attempt ${connection.attempt}`;
       return {
         kind: "reconnecting",
-        label: input.hasThreadContent ? `${retry} · showing saved conversation` : retry,
-        accessibilityLabel: `${retry} to ${environment}. ${input.hasThreadContent ? "Showing saved conversation while reconnecting." : ""}`,
+        label: input.hasThreadContent
+          ? `${retry} · ${attempt} · showing saved conversation`
+          : `${retry} · ${attempt}`,
+        // Deliberately excludes the per-second countdown. The live region
+        // changes only when phase or supervisor-owned attempt changes.
+        accessibilityLabel: `Reconnecting to ${environment}, ${attempt}. ${input.hasThreadContent ? "Showing saved conversation while reconnecting." : ""}`,
       };
     }
     case "error":
@@ -148,6 +153,12 @@ export function presentRemoteQueue(count: number): string | null {
   return `Remote queue · ${count} message${count === 1 ? "" : "s"} waiting behind current work`;
 }
 
+const FIXTURE_FAILURE = {
+  classification: "transient",
+  message: "connection dropped",
+  failedAt: "2026-07-15T10:00:00.000Z",
+} as const;
+
 /** Stable, clock-free inputs for the iOS/Android screenshot matrix. */
 export const TRAIN_NETWORK_SCREENSHOT_FIXTURES = {
   offlineCachedPending: {
@@ -157,13 +168,13 @@ export const TRAIN_NETWORK_SCREENSHOT_FIXTURES = {
     remoteQueueCount: 0,
   },
   retryCountdownCached: {
-    connectionLabel: "Retrying in 4s · showing saved conversation",
+    connectionLabel: "Retrying in 4s · attempt 2 · showing saved conversation",
     freshness: "cached",
     localIntent: presentLocalIntent({
       _tag: "Retrying",
       attempt: 2,
-      nextAttemptAt: "2026-07-15T10:00:04.000Z",
-      lastFailure: { classification: "transport", message: "connection dropped" },
+      retryNotBefore: "2026-07-15T10:00:04.000Z",
+      failure: FIXTURE_FAILURE,
     }),
     remoteQueueCount: 0,
   },
@@ -178,6 +189,7 @@ export const TRAIN_NETWORK_SCREENSHOT_FIXTURES = {
     freshness: "live",
     localIntent: presentLocalIntent({
       _tag: "Delivering",
+      attempt: 1,
       startedAt: "2026-07-15T10:00:00.000Z",
     }),
     remoteQueueCount: 0,
@@ -188,7 +200,11 @@ export const TRAIN_NETWORK_SCREENSHOT_FIXTURES = {
     localIntent: presentLocalIntent({
       _tag: "Rejected",
       attempt: 1,
-      failure: { classification: "permanent", message: "command rejected" },
+      failure: {
+        classification: "permanent",
+        message: "command rejected",
+        failedAt: "2026-07-15T10:00:00.000Z",
+      },
     }),
     remoteQueueCount: 0,
   },

@@ -785,7 +785,7 @@ function ThreadRouteContent(
           selectedThreadRejectedCount={composer.selectedThreadRejectedCount}
           selectedThreadQueuedIntents={composer.selectedThreadQueuedIntents}
           editingQueuedMessageId={composer.editingQueuedMessageId}
-          remoteQueueCount={selectedThread.queuedMessages?.length ?? 0}
+          remoteQueueCount={selectedThreadDetail?.queuedMessages?.length ?? 0}
           onDiscardRejectedMessages={composer.discardRejectedMessages}
           onEditPendingMessage={composer.editPendingMessage}
           onCancelPendingMessage={composer.cancelPendingMessage}

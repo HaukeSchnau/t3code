@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo } from "react";
 
 import {
   CommandId,
@@ -27,12 +27,14 @@ import {
   appendComposerDraftAttachments,
   appendComposerDraftText,
   clearComposerDraftContent,
+  clearComposerDraft,
   composerDraftsAtom,
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
   removeComposerDraftAttachment,
   replaceComposerDraftAttachments,
   setComposerDraftText,
+  setComposerDraftQueuedEdit,
   updateComposerDraftSettings,
   useComposerDraft,
 } from "./use-composer-drafts";
@@ -85,15 +87,6 @@ export function useThreadComposerState() {
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const outboxDeliveryStates = useThreadOutboxDeliveryStates();
-  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<MessageId | null>(null);
-
-  useEffect(
-    () => () => {
-      if (editingQueuedMessageId !== null) releaseEditingQueuedMessage(editingQueuedMessageId);
-    },
-    [editingQueuedMessageId],
-  );
-
   useEffect(() => {
     ensureComposerDraftsLoaded();
   }, []);
@@ -105,21 +98,13 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
-  useEffect(() => {
-    if (
-      editingQueuedMessageId !== null &&
-      !selectedThreadQueuedMessages.some((message) => message.messageId === editingQueuedMessageId)
-    ) {
-      releaseEditingQueuedMessage(editingQueuedMessageId);
-      setEditingQueuedMessageId(null);
-    }
-  }, [editingQueuedMessageId, selectedThreadQueuedMessages]);
   const selectedThreadFeed = useMemo(
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
     [selectedThreadDetail],
   );
 
   const selectedDraft = selectedThreadKey ? composerDrafts[selectedThreadKey] : null;
+  const editingQueuedMessageId = selectedDraft?.editingQueuedMessageId ?? null;
   const draftMessage = selectedDraft?.text ?? "";
   const draftAttachments = selectedDraft?.attachments ?? [];
   const selectedThreadQueueCount = selectedThreadQueuedMessages.length;
@@ -213,6 +198,12 @@ export function useThreadComposerState() {
       const editingMessage = selectedThreadQueuedMessages.find(
         (message) => message.messageId === editingQueuedMessageId,
       );
+      if (editingQueuedMessageId !== null && !editingMessage) {
+        setPendingConnectionError(
+          "The original saved message is no longer available. Cancel this edit before sending.",
+        );
+        return null;
+      }
       if (editingMessage) {
         const updated = await threadOutboxManager.update(editingMessage, {
           ...editingMessage,
@@ -226,8 +217,8 @@ export function useThreadComposerState() {
           createdAt: metadata.createdAt,
         });
         if (!updated) return null;
+        setComposerDraftQueuedEdit(threadKey, undefined);
         releaseEditingQueuedMessage(editingMessage.messageId);
-        setEditingQueuedMessageId(null);
         clearComposerDraftContent(threadKey);
         return messageId;
       }
@@ -264,7 +255,7 @@ export function useThreadComposerState() {
         return;
       }
       holdEditingQueuedMessage(message.messageId);
-      setEditingQueuedMessageId(message.messageId);
+      setComposerDraftQueuedEdit(selectedThreadKey, message.messageId);
       setComposerDraftText(selectedThreadKey, message.text);
       replaceComposerDraftAttachments(selectedThreadKey, message.attachments);
       updateComposerDraftSettings(selectedThreadKey, {
@@ -282,9 +273,8 @@ export function useThreadComposerState() {
       if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Pending") return;
       await threadOutboxManager.remove(message);
       if (editingQueuedMessageId === messageId && selectedThreadKey) {
+        clearComposerDraft(selectedThreadKey);
         releaseEditingQueuedMessage(messageId);
-        setEditingQueuedMessageId(null);
-        clearComposerDraftContent(selectedThreadKey);
       }
     },
     [editingQueuedMessageId, outboxDeliveryStates, selectedThreadKey, selectedThreadQueuedMessages],
@@ -301,9 +291,8 @@ export function useThreadComposerState() {
 
   const cancelQueuedMessageEdit = useCallback(() => {
     if (editingQueuedMessageId === null || selectedThreadKey === null) return;
+    clearComposerDraft(selectedThreadKey);
     releaseEditingQueuedMessage(editingQueuedMessageId);
-    setEditingQueuedMessageId(null);
-    clearComposerDraftContent(selectedThreadKey);
   }, [editingQueuedMessageId, selectedThreadKey]);
 
   const onChangeDraftMessage = useCallback(

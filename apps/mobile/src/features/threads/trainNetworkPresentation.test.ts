@@ -22,7 +22,7 @@ describe("mobile train network presentation", () => {
   });
 
   it("offers no mutation once delivery has started and discard only after rejection", () => {
-    expect(presentLocalIntent({ _tag: "Delivering", startedAt: "2026-07-15T10:00:00.000Z" })).toMatchObject({
+    expect(presentLocalIntent({ _tag: "Delivering", attempt: 1, startedAt: "2026-07-15T10:00:00.000Z" })).toMatchObject({
       canEdit: false,
       canCancel: false,
       canDiscard: false,
@@ -31,15 +31,23 @@ describe("mobile train network presentation", () => {
       presentLocalIntent({
         _tag: "Retrying",
         attempt: 2,
-        nextAttemptAt: "2026-07-15T10:00:02.000Z",
-        lastFailure: { classification: "transport", message: "dropped" },
+        retryNotBefore: "2026-07-15T10:00:02.000Z",
+        failure: {
+          classification: "transient",
+          message: "dropped",
+          failedAt: "2026-07-15T10:00:00.000Z",
+        },
       }),
     ).toMatchObject({ canEdit: false, canCancel: false, canDiscard: false });
     expect(
       presentLocalIntent({
         _tag: "Rejected",
         attempt: 1,
-        failure: { classification: "permanent", message: "invalid" },
+        failure: {
+          classification: "permanent",
+          message: "invalid",
+          failedAt: "2026-07-15T10:00:00.000Z",
+        },
       }),
     ).toMatchObject({ canEdit: false, canCancel: false, canDiscard: true });
   });
@@ -81,7 +89,10 @@ describe("mobile train network presentation", () => {
       nowMs: Date.parse("2026-07-15T10:00:00.000Z"),
       hasThreadContent: true,
     });
-    expect(status?.label).toBe("Retrying in 4s · showing saved conversation");
+    expect(status?.label).toBe("Retrying in 4s · attempt 3 · showing saved conversation");
+    expect(status?.accessibilityLabel).toBe(
+      "Reconnecting to Workstation, attempt 3. Showing saved conversation while reconnecting.",
+    );
   });
 
   it("calls the first fetch loading and cached recovery checking for updates", () => {
