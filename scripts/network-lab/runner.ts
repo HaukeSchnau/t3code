@@ -1,3 +1,5 @@
+import * as Effect from "effect/Effect";
+
 import {
   NETWORK_LAB_RESULT_SCHEMA_VERSION,
   type CleanupResource,
@@ -128,15 +130,15 @@ async function runBounded<T>(
     parentSignal?.addEventListener("abort", abortFromParent, { once: true });
   }
 
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      const error = new AdapterOperationTimeoutError(
-        `${label} exceeded its ${String(timeoutMs)} ms deadline.`,
-      );
-      controller.abort(error);
-      reject(error);
-    }, timeoutMs);
+  const deadlineController = new AbortController();
+  const deadline = Effect.runPromise(Effect.sleep(timeoutMs), {
+    signal: deadlineController.signal,
+  }).then(() => {
+    const error = new AdapterOperationTimeoutError(
+      `${label} exceeded its ${String(timeoutMs)} ms deadline.`,
+    );
+    controller.abort(error);
+    throw error;
   });
 
   try {
@@ -147,7 +149,7 @@ async function runBounded<T>(
     }
     return await Promise.race([work(controller.signal), deadline]);
   } finally {
-    if (timer !== undefined) clearTimeout(timer);
+    deadlineController.abort();
     parentSignal?.removeEventListener("abort", abortFromParent);
   }
 }
