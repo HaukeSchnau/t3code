@@ -124,8 +124,22 @@ again. Implementers do not approve their own packets.
   lifecycle service. Web preflight will initially prefer `thread.message.queue` for ordinary existing
   threads and keeps destructive, bootstrap, approval, interrupt, VCS, terminal, and preview workflows
   outside generic replay.
-- Current step: implement `UX1` and `RC2` independently, review them, then green-light the mobile/web
-  adapters against the corrected replay boundary.
+- `UX1` is integrated and independently approved after correction: disconnected transport now
+  downgrades nominally live content, content snapshot sequence is not mislabeled as a replay cursor,
+  and the projection rejects contradictory source combinations.
+- Pending-only outbox edit/cancel transitions are integrated and independently approved. Every edit
+  rotates the command identity, so a drainer holding stale ready entry A cannot begin it after
+  replacement B is published; adapters must dispatch only the canonical frozen plan returned by
+  `begin`. Central verification passed 25 focused tests.
+- Initial `RC2` preprocessing review approved deterministic attachment identity and post-commit
+  materialization ordering but rejected three remaining gaps: project filesystem effects before
+  receipt/lock, bootstrap's pre-receipt crash window, and route-local rather than process-scoped
+  command serialization. The owning implementer is correcting all three with restart fault injection.
+- `NL1` is implementing the real RPC acknowledgement-loss fixture independently while `RC2` is
+  corrected. Mobile and web adapters remain intentionally gated until the corrected replay boundary
+  receives independent approval.
+- Current step: finish and independently review `RC2` and `NL1`, then green-light mobile/web adapters
+  against the approved replay boundary.
 
 ## Explorer Threads
 
@@ -156,6 +170,11 @@ again. Implementers do not approve their own packets.
 - Web outbox preflight/implementation: `mcp:thread:4c4de5be-6e36-481b-87c4-45c6190b4934`
 - Shared connection/freshness projection: `mcp:thread:eecca459-bc8b-425f-ac42-2a4afc0da591`
 - Replay-safe server preprocessing: `mcp:thread:289fd42e-9530-4170-973d-692646648ff5`
+- Connection/freshness review: `mcp:thread:24838132-85b4-4336-a595-26fc94f981ef`
+- Pending outbox lifecycle implementation: `mcp:thread:1e89825d-06bd-4aa1-9b61-be05d4a7e8b2`
+- Pending outbox lifecycle review: `mcp:thread:2edb4303-57a1-44df-8ec3-8dce17c3bec3`
+- Replay-safe preprocessing review: `mcp:thread:4ec7b446-3100-4b0d-a472-1953ed3e7a67`
+- Real acknowledgement-loss fixture: `mcp:thread:a7b0976c-9169-423e-9034-ebb68af72c2b`
 
 ## Verification Notes
 
