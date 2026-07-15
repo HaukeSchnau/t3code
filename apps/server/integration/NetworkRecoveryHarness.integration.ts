@@ -692,6 +692,7 @@ export function makeNetworkRecoveryAdapter(
         (candidate) =>
           candidate.latestTurn?.state === "completed" &&
           candidate.session?.status === "ready" &&
+          candidate.activities.some((activity) => activity.kind === "checkpoint.captured") &&
           candidate.messages.some(
             (message) => message.role === "assistant" && message.streaming === false,
           ),
