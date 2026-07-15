@@ -153,7 +153,7 @@ describe("connection freshness projection", () => {
 
   it("keeps snapshot sequence and update time coupled across freshness states", () => {
     const identity = {
-      sequence: SNAPSHOT.snapshotSequence,
+      contentSequence: SNAPSHOT.snapshotSequence,
       updatedAt: SNAPSHOT.updatedAt,
     };
 
@@ -191,9 +191,79 @@ describe("connection freshness projection", () => {
     expect(projected.connection.phase).toBe("connected");
     expect(projected.snapshot).toEqual({
       status: "cached",
-      snapshot: { sequence: 42, updatedAt: "2026-07-15T12:00:00.000Z" },
+      snapshot: { contentSequence: 42, updatedAt: "2026-07-15T12:00:00.000Z" },
       error: "Could not synchronize environment data.",
     });
+  });
+
+  it("downgrades an asynchronously retained live shell when the connection is not ready", () => {
+    const transient = new ConnectionTransientError({
+      reason: "transport",
+      detail: "Socket closed.",
+    });
+    const blocked = new ConnectionBlockedError({
+      reason: "authentication",
+      detail: "Sign in again.",
+    });
+    const disconnectedStates: ReadonlyArray<SupervisorConnectionState> = [
+      connectionState(),
+      connectionState({
+        desired: false,
+        phase: "available",
+        stage: null,
+        attempt: 0,
+      }),
+      connectionState({
+        network: "offline",
+        phase: "offline",
+        stage: null,
+      }),
+      connectionState({
+        phase: "backoff",
+        stage: null,
+        lastFailure: transient,
+        retryAt: 10_000,
+      }),
+      connectionState({ phase: "blocked", stage: null, lastFailure: blocked }),
+    ];
+
+    for (const state of disconnectedStates) {
+      const projected = projectEnvironmentConnectionFreshness(
+        state,
+        shellState("live", Option.some(SNAPSHOT)),
+      );
+      expect(projected.snapshot).toEqual({
+        status: "cached",
+        snapshot: {
+          contentSequence: 42,
+          updatedAt: "2026-07-15T12:00:00.000Z",
+        },
+        error: null,
+      });
+    }
+
+    expect(() =>
+      projectEnvironmentConnectionFreshness(
+        connectionState({
+          desired: false,
+          phase: "available",
+          stage: null,
+          attempt: 0,
+        }),
+        shellState("live", Option.none()),
+      ),
+    ).toThrow("live shell lacks a snapshot");
+  });
+
+  it("describes the embedded content sequence without claiming the private replay cursor", () => {
+    // A cursor-only shell frame can advance makeEnvironmentShellState's private
+    // lastSequence to 43 while leaving its published content snapshot at 42.
+    const projected = projectEnvironmentSnapshotFreshness(
+      shellState("live", Option.some(SNAPSHOT)),
+    );
+
+    expect(projected.snapshot).toMatchObject({ contentSequence: 42 });
+    expect(projected.snapshot).not.toHaveProperty("sequence");
   });
 
   it("rejects impossible nullable source combinations instead of publishing invalid unions", () => {
@@ -215,5 +285,77 @@ describe("connection freshness projection", () => {
         shellState("live", Option.some(SNAPSHOT), Option.some("stale error")),
       ),
     ).toThrow("live shell lacks a snapshot or carries a stale error");
+  });
+
+  it("rejects invalid failure tags, desired/network relationships, and attempts", () => {
+    const transient = new ConnectionTransientError({
+      reason: "transport",
+      detail: "Socket closed.",
+    });
+    const blocked = new ConnectionBlockedError({
+      reason: "authentication",
+      detail: "Sign in again.",
+    });
+
+    expect(() =>
+      projectEnvironmentConnectionProgress(
+        connectionState({
+          phase: "backoff",
+          stage: null,
+          lastFailure: blocked,
+          retryAt: 10_000,
+        }),
+      ),
+    ).toThrow("backoff connection carries a blocked failure");
+    expect(() =>
+      projectEnvironmentConnectionProgress(
+        connectionState({ phase: "blocked", stage: null, lastFailure: transient }),
+      ),
+    ).toThrow("blocked connection carries a transient failure");
+
+    const invalidRelationships: ReadonlyArray<SupervisorConnectionState> = [
+      connectionState({ desired: true, phase: "available", stage: null, attempt: 0 }),
+      connectionState({ network: "online", phase: "offline", stage: null }),
+      connectionState({ desired: false }),
+      connectionState({ network: "offline" }),
+    ];
+    for (const state of invalidRelationships) {
+      expect(() => projectEnvironmentConnectionProgress(state)).toThrow(
+        "Invalid connection freshness projection source",
+      );
+    }
+
+    for (const phase of ["connecting", "backoff", "connected", "blocked"] as const) {
+      const state = connectionState({
+        phase,
+        stage: phase === "connecting" ? "preparing" : null,
+        attempt: 0,
+        lastFailure: phase === "backoff" ? transient : phase === "blocked" ? blocked : null,
+        retryAt: phase === "backoff" ? 10_000 : null,
+      });
+      expect(() => projectEnvironmentConnectionProgress(state)).toThrow(
+        `${phase} connection has a non-positive attempt`,
+      );
+    }
+
+    const activeStates: ReadonlyArray<SupervisorConnectionState> = [
+      connectionState(),
+      connectionState({
+        phase: "backoff",
+        stage: null,
+        lastFailure: transient,
+        retryAt: 10_000,
+      }),
+      connectionState({ phase: "connected", stage: null }),
+      connectionState({ phase: "blocked", stage: null, lastFailure: blocked }),
+    ];
+    for (const state of activeStates) {
+      expect(() => projectEnvironmentConnectionProgress({ ...state, desired: false })).toThrow(
+        `${state.phase} connection is not desired`,
+      );
+      expect(() => projectEnvironmentConnectionProgress({ ...state, network: "offline" })).toThrow(
+        `${state.phase} connection claims an offline network`,
+      );
+    }
   });
 });
