@@ -134,10 +134,21 @@ again. Implementers do not approve their own packets.
 - Initial `RC2` preprocessing review approved deterministic attachment identity and post-commit
   materialization ordering but rejected three remaining gaps: project filesystem effects before
   receipt/lock, bootstrap's pre-receipt crash window, and route-local rather than process-scoped
-  command serialization. The owning implementer is correcting all three with restart fault injection.
+  command serialization. Correction `wsowspmkxryy` is integrated: a process-scoped preprocessing
+  coordinator persists deterministic bootstrap progress, defers filesystem work behind receipt
+  resolution/serialization, reconciles interrupted workspace creation, and publishes attachments
+  atomically. Central verification passed 5 focused server files / 147 tests and scoped server
+  typecheck; independent correction review is still required before platform rollout.
 - `NL1` is implementing the real RPC acknowledgement-loss fixture independently while `RC2` is
-  corrected. Mobile and web adapters remain intentionally gated until the corrected replay boundary
-  receives independent approval.
+  corrected. Its first real-protocol run found a non-terminating path; diagnosis has narrowed this to
+  an open WebSocket whose Effect RPC handler does not observe the request. The fixture is not accepted
+  until it both recovers correctly and fails/cleans up within deterministic deadlines.
+- The Wave 3 UX experiment completed. Its implementation target exposes four independent facts:
+  transport state, data freshness, locally durable intent state, and remote queue state. It specifies
+  exact wording and actions for 15 clean/degraded states, Pending-only edit/cancel, accessible live
+  regions, reduced motion, 250/500 ms anti-flicker holds, and screenshot review across desktop,
+  narrow web, iOS, and Android. UX2/UX3 must consume the shared OB2/OB3 lifecycle rather than decorate
+  the existing web in-memory optimism or mobile legacy retry loop.
 - Current step: finish and independently review `RC2` and `NL1`, then green-light mobile/web adapters
   against the approved replay boundary.
 
@@ -175,6 +186,8 @@ again. Implementers do not approve their own packets.
 - Pending outbox lifecycle review: `mcp:thread:2edb4303-57a1-44df-8ec3-8dce17c3bec3`
 - Replay-safe preprocessing review: `mcp:thread:4ec7b446-3100-4b0d-a472-1953ed3e7a67`
 - Real acknowledgement-loss fixture: `mcp:thread:a7b0976c-9169-423e-9034-ebb68af72c2b`
+- Crash-resumable preprocessing correction review: `mcp:thread:edbd43d3-f8b8-4032-b63b-8bdf2aee9bc0`
+- Train-state UX experiment: `mcp:thread:d2e4b0ca-9ee3-4ac0-a469-021e2b4f695d`
 
 ## Verification Notes
 
