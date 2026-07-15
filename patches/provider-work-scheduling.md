@@ -12,12 +12,16 @@ can each take seconds or minutes; globally serial execution makes an unrelated a
 - `drain` completes only when all queued and active items across every thread have settled.
 - Transcript-journal delivery remains ordered within its thread and does not let concurrent threads process
   each other's undelivered entries.
+- Thread detail replay uses the indexed aggregate stream; it must not scan and decode unrelated global events
+  before filtering to the selected thread.
 
 ## Files
 
 - `packages/shared/src/KeyedDrainableWorker.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/persistence/Layers/OrchestrationEventStore.ts`
+- `apps/server/src/ws.ts`
 
 ## Verification
 

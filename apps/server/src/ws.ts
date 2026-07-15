@@ -965,6 +965,36 @@ const makeWsRpcLayer = (
           ),
         );
 
+      const readThreadEventsPaginated = (
+        threadId: ThreadId,
+        afterSequence: number,
+        observer: ReplayObserver,
+      ) =>
+        Stream.paginate(afterSequence, (cursor) =>
+          Stream.runCollect(
+            orchestrationEngine.readAggregateEvents === undefined
+              ? orchestrationEngine.readEvents(cursor, REPLAY_PAGE_SIZE)
+              : orchestrationEngine.readAggregateEvents(
+                  "thread",
+                  threadId,
+                  cursor,
+                  REPLAY_PAGE_SIZE,
+                ),
+          ).pipe(
+            Effect.map((chunk) => {
+              const events = Array.from(chunk);
+              observer.recordBatch(events);
+              const lastEvent = events.at(-1);
+              return [
+                events,
+                events.length === REPLAY_PAGE_SIZE && lastEvent !== undefined
+                  ? Option.some(lastEvent.sequence)
+                  : Option.none<number>(),
+              ] as const;
+            }),
+          ),
+        );
+
       const shellCursor = (event: OrchestrationEvent): OrchestrationShellCursorItem => ({
         kind: "cursor",
         sequence: event.sequence,
@@ -2065,10 +2095,9 @@ const makeWsRpcLayer = (
               // catch-up followed by the buffered/ongoing live events. Overlapping
               // events are deduped by sequence on the client.
               //
-              // Read the full range after the cursor (not the store's default
-              // page-bounded limit): the range is normally tiny (a fresh HTTP
-              // snapshot sequence) and the per-thread filter runs after reading,
-              // so a global cap could otherwise omit this thread's events.
+              // Replay directly from the indexed thread aggregate. This keeps a
+              // stale client cursor proportional to changes in this thread rather
+              // than the size and payload volume of the global event range.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
                 return replayCatchUpWithLive({
@@ -2085,7 +2114,7 @@ const makeWsRpcLayer = (
                     ? { synchronized: () => ({ kind: "synchronized" as const }) }
                     : {}),
                   catchUp: (observer) =>
-                    readEventsPaginated(afterSequence, observer).pipe(
+                    readThreadEventsPaginated(input.threadId, afterSequence, observer).pipe(
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.tap(() =>
                         Effect.sync(() =>

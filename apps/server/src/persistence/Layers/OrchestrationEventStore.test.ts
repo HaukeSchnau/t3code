@@ -66,6 +66,35 @@ layer("OrchestrationEventStore", (it) => {
       assert.equal(replayed.length, 1);
       assert.equal(replayed[0]?.type, "project.created");
       assert.equal(replayed[0]?.metadata.adapterKey, "codex");
+
+      yield* eventStore.append({
+        type: "project.created",
+        eventId: EventId.make("evt-store-other-project"),
+        aggregateKind: "project",
+        aggregateId: ProjectId.make("project-other"),
+        occurredAt: now,
+        commandId: CommandId.make("cmd-store-other-project"),
+        causationEventId: null,
+        correlationId: CommandId.make("cmd-store-other-project"),
+        metadata: {},
+        payload: {
+          projectId: ProjectId.make("project-other"),
+          title: "Other Project",
+          workspaceRoot: "/tmp/project-other",
+          defaultModelSelection: null,
+          scripts: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      assert.ok(eventStore.readAggregateFromSequence !== undefined);
+      const aggregateReplay = yield* Stream.runCollect(
+        eventStore.readAggregateFromSequence("project", ProjectId.make("project-roundtrip"), 0, 10),
+      ).pipe(Effect.map((chunk) => Array.from(chunk)));
+      assert.deepEqual(
+        aggregateReplay.map((event) => event.eventId),
+        [EventId.make("evt-store-roundtrip")],
+      );
     }),
   );
 

@@ -10,7 +10,14 @@
  *
  * @module OrchestrationEngineService
  */
-import type { OrchestrationCommand, OrchestrationEvent } from "@t3tools/contracts";
+import type {
+  OrchestrationAggregateKind,
+  OrchestrationCommand,
+  OrchestrationEvent,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
@@ -29,11 +36,18 @@ export interface OrchestrationEngineShape {
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to read. Defaults to the event
    *   store's page-bounded default; pass a higher value when the caller must
-   *   read every event after the cursor (e.g. per-thread catch-up that filters
-   *   a small subset out of a potentially larger global range).
+   *   read every global event after the cursor.
    * @returns Stream containing ordered events.
    */
   readonly readEvents: (
+    fromSequenceExclusive: number,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /** Replay one aggregate without scanning unrelated global events. */
+  readonly readAggregateEvents?: (
+    aggregateKind: OrchestrationAggregateKind,
+    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
     fromSequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
