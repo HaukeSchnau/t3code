@@ -1,5 +1,9 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
+  type DurableCommandOutboxDocument,
+} from "@t3tools/client-runtime/operations/command-outbox";
+import {
   CommandId,
   EnvironmentId,
   MessageId,
@@ -313,18 +317,73 @@ describe("thread outbox", () => {
     });
 
     await manager.enqueue(message);
-    const edited = { ...message, text: "edited" };
-    await expect(manager.update(edited)).resolves.toBe(true);
-    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
-      "environment-1:thread-1": [edited],
+    const edited = queuedMessage({
+      messageId: "message-2",
+      createdAt: "2026-06-08T10:00:02.000Z",
     });
-    expect(stored.get(message.messageId)).toEqual(edited);
+    const editedPayload = { ...edited, text: "edited" };
+    await expect(manager.update(message, editedPayload)).resolves.toBe(true);
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [editedPayload],
+    });
+    expect(stored.get(edited.messageId)).toEqual(editedPayload);
 
-    await manager.remove(edited);
-    await expect(manager.update({ ...message, text: "stale flush" })).resolves.toBe(false);
+    await manager.remove(editedPayload);
+    await expect(
+      manager.update(message, { ...editedPayload, text: "stale flush" }),
+    ).resolves.toBe(false);
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     expect(stored.size).toBe(0);
     registry.dispose();
+  });
+
+  it("hydrates retry state and replays the frozen identity after acknowledgement loss", async () => {
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    let commandDocument: DurableCommandOutboxDocument =
+      EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    const storage: ThreadOutboxStorage = {
+      load: async () => [...stored.values()],
+      write: async (message) => void stored.set(message.messageId, message),
+      remove: async (message) => void stored.delete(message.messageId),
+      loadCommandOutbox: async () => commandDocument,
+      saveCommandOutbox: async (document) => {
+        commandDocument = document;
+      },
+    };
+    const message = queuedMessage({
+      messageId: "offline-intent",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const firstRegistry = AtomRegistry.make();
+    const firstRuntime = createThreadOutboxManager({ registry: firstRegistry, storage });
+
+    await firstRuntime.enqueue(message);
+    expect(stored.get(message.messageId)).toEqual(message);
+    expect(commandDocument.entries[0]?.state._tag).toBe("Pending");
+    const firstAttempt = await firstRuntime.begin(message, "2026-07-15T10:00:00.000Z");
+    await firstRuntime.fail(
+      message,
+      new Error("Socket closed after the server received the command"),
+      "2026-07-15T10:00:00.000Z",
+    );
+    firstRegistry.dispose();
+
+    const restartedRegistry = AtomRegistry.make();
+    const restarted = createThreadOutboxManager({ registry: restartedRegistry, storage });
+    await restarted.load();
+    await restarted.load();
+    expect(
+      Object.values(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).flat(),
+    ).toEqual([message]);
+    expect(await restarted.ready("2026-07-15T10:00:00.999Z")).toEqual([]);
+    expect(await restarted.ready("2026-07-15T10:00:01.000Z")).toEqual([message]);
+
+    const replay = await restarted.begin(message, "2026-07-15T10:00:01.000Z");
+    expect(replay.plan.command).toEqual(firstAttempt.plan.command);
+    await restarted.complete(message);
+    expect(stored.size).toBe(0);
+    expect(commandDocument.entries).toEqual([]);
+    restartedRegistry.dispose();
   });
 
   it("only removes a missing-thread message after shell synchronization is live", () => {

@@ -1,4 +1,7 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
+
+import { randomHex } from "../lib/uuid";
 
 import { appAtomRegistry } from "./atom-registry";
 import { createThreadOutboxManager } from "./thread-outbox-manager";
@@ -17,12 +20,25 @@ export function ensureThreadOutboxLoaded(): void {
 }
 
 export function enqueueThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
-  return threadOutboxManager.enqueue(message);
+  return threadOutboxManager.enqueue(freezeDeliveryIdentity(message));
 }
 
-/** Rewrite a queued message; no-op (false) if it was removed in the meantime. */
-export function updateThreadOutboxMessage(message: QueuedThreadMessage): Promise<boolean> {
-  return threadOutboxManager.update(message);
+function freezeDeliveryIdentity(message: QueuedThreadMessage): QueuedThreadMessage {
+  if (message.creation?.workspaceMode !== "worktree" || message.deliveryWorktreeBranchName) {
+    return message;
+  }
+  return {
+    ...message,
+    deliveryWorktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
+  };
+}
+
+/** Replace pending intent under mandatory fresh command and message identities. */
+export function updateThreadOutboxMessage(
+  previous: QueuedThreadMessage,
+  replacement: QueuedThreadMessage,
+): Promise<boolean> {
+  return threadOutboxManager.update(previous, freezeDeliveryIdentity(replacement));
 }
 
 export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
