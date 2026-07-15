@@ -23,7 +23,7 @@ import * as Metric from "effect/Metric";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import type * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { describe, expect, it } from "vite-plus/test";
 
 import { PersistenceSqlError } from "../../persistence/Errors.ts";
@@ -33,6 +33,8 @@ import {
   makeSqlitePersistenceLive,
   SqlitePersistenceMemory,
 } from "../../persistence/Layers/Sqlite.ts";
+import { runMigrations } from "../../persistence/Migrations.ts";
+import * as NodeSqliteClient from "../../persistence/NodeSqliteClient.ts";
 import {
   OrchestrationCommandReceiptRepository,
   type OrchestrationCommandReceiptRepositoryShape,
@@ -99,29 +101,74 @@ async function createPersistentOrchestrationSystem(
     prefix: "t3-orchestration-engine-persistent-test-",
   });
   const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+  const providedPersistenceLayer = persistenceLayer.pipe(Layer.provide(NodeServices.layer));
+  const providedReceiptRepositoryLayer = receiptRepositoryLayer.pipe(
+    Layer.provide(providedPersistenceLayer),
+  );
   const orchestrationLayer = Layer.mergeAll(
-    OrchestrationEngineLive.pipe(
-      Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-      Layer.provide(OrchestrationProjectionPipelineLive),
+    Layer.mergeAll(
+      OrchestrationEngineLive.pipe(
+        Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+        Layer.provide(OrchestrationProjectionPipelineLive),
+      ),
+      OrchestrationProjectionSnapshotQueryLive,
+    ).pipe(
+      Layer.provide(OrchestrationEventStoreLive),
+      Layer.provide(providedReceiptRepositoryLayer),
+      Layer.provide(RepositoryIdentityResolver.layer),
+      Layer.provide(providedPersistenceLayer),
+      Layer.provideMerge(ServerConfigLayer),
+      Layer.provideMerge(NodeServices.layer),
     ),
-    OrchestrationProjectionSnapshotQueryLive,
-  ).pipe(
-    Layer.provide(OrchestrationEventStoreLive),
-    Layer.provide(receiptRepositoryLayer),
-    Layer.provide(RepositoryIdentityResolver.layer),
-    Layer.provide(persistenceLayer),
-    Layer.provideMerge(ServerConfigLayer),
-    Layer.provideMerge(NodeServices.layer),
+    providedReceiptRepositoryLayer,
   );
   const runtime = ManagedRuntime.make(orchestrationLayer);
   const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
   const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
+  const receiptRepository = await runtime.runPromise(
+    Effect.service(OrchestrationCommandReceiptRepository),
+  );
   return {
     engine,
+    receiptRepository,
     readModel: () => runtime.runPromise(snapshotQuery.getSnapshot()),
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
+}
+
+async function prepareLegacyReceiptDatabase(
+  dbPath: string,
+  command: AmbiguousAckCommand,
+): Promise<void> {
+  const runtime = ManagedRuntime.make(NodeSqliteClient.layer({ filename: dbPath }));
+  await runtime.runPromise(
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* runMigrations({ toMigrationInclusive: 37 });
+      yield* sql`
+        INSERT INTO orchestration_command_receipts (
+          command_id,
+          aggregate_kind,
+          aggregate_id,
+          accepted_at,
+          result_sequence,
+          status,
+          error
+        )
+        VALUES (
+          ${command.commandId},
+          'thread',
+          ${command.threadId},
+          ${command.createdAt},
+          42,
+          'accepted',
+          NULL
+        )
+      `;
+    }),
+  );
+  await runtime.dispose();
 }
 
 type OrchestrationSystem = Awaited<ReturnType<typeof createOrchestrationSystem>>;
@@ -1603,32 +1650,25 @@ describe("OrchestrationEngine", () => {
       threadId: ThreadId.make("thread-receipt-legacy-unverifiable"),
       messageId: asMessageId("msg-receipt-legacy-unverifiable"),
     });
-    const legacyReceiptLayer = Layer.succeed(OrchestrationCommandReceiptRepository, {
-      claimAccepted: () => Effect.succeed(false),
-      finalizeAccepted: () => Effect.succeed(false),
-      insertRejected: () => Effect.succeed(false),
-      getByCommandId: () =>
-        Effect.succeed(
-          Option.some({
-            commandId: command.commandId,
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            commandVariant: null,
-            envelopeFingerprint: null,
-            acceptedAt: command.createdAt,
-            resultSequence: 42,
-            status: "accepted",
-            error: null,
-          }),
-        ),
-    } satisfies OrchestrationCommandReceiptRepositoryShape);
     const tempDir = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "t3-receipt-legacy-unverifiable-"),
     );
-    const system = await createPersistentOrchestrationSystem(
-      NodePath.join(tempDir, "state.sqlite"),
-      legacyReceiptLayer,
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    await prepareLegacyReceiptDatabase(dbPath, command);
+    const system = await createPersistentOrchestrationSystem(dbPath);
+
+    const migratedReceipt = await system.run(
+      system.receiptRepository.getByCommandId({ commandId: command.commandId }),
     );
+    expect(Option.getOrThrow(migratedReceipt)).toMatchObject({
+      commandId: command.commandId,
+      aggregateKind: "thread",
+      aggregateId: command.threadId,
+      commandVariant: null,
+      envelopeFingerprint: null,
+      resultSequence: 42,
+      status: "accepted",
+    });
 
     await expect(system.run(system.engine.dispatch(command))).rejects.toThrow(
       "legacy-unverifiable",
@@ -1714,10 +1754,8 @@ describe("OrchestrationEngine", () => {
     const tempDir = await NodeFSP.mkdtemp(
       NodePath.join(NodeOS.tmpdir(), "t3-receipt-accepted-atomic-"),
     );
-    const system = await createPersistentOrchestrationSystem(
-      NodePath.join(tempDir, "state.sqlite"),
-      flakyReceiptLayer,
-    );
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    const system = await createPersistentOrchestrationSystem(dbPath, flakyReceiptLayer);
     const threadId = ThreadId.make("thread-receipt-accepted-atomic");
     await createReceiptTestThreads(system, "accepted-atomic", [threadId]);
     const command = makeAmbiguousAckCommand({
@@ -1739,8 +1777,35 @@ describe("OrchestrationEngine", () => {
       ),
     );
     expect(afterFailure).toEqual([]);
-    await expect(system.run(system.engine.dispatch(command))).resolves.toEqual({ sequence: 4 });
     await system.dispose();
+
+    const restartedSystem = await createPersistentOrchestrationSystem(dbPath);
+    const persistedAfterRestart = await restartedSystem.run(
+      Stream.runCollect(restartedSystem.engine.readEvents(0)).pipe(
+        Effect.map((events) =>
+          Array.from(events).filter((event) => event.commandId === command.commandId),
+        ),
+      ),
+    );
+    expect(persistedAfterRestart).toEqual([]);
+
+    const accepted = await restartedSystem.run(restartedSystem.engine.dispatch(command));
+    expect(accepted).toEqual({ sequence: 4 });
+    await expect(restartedSystem.run(restartedSystem.engine.dispatch(command))).resolves.toEqual(
+      accepted,
+    );
+    const committedOnce = await restartedSystem.run(
+      Stream.runCollect(restartedSystem.engine.readEvents(0)).pipe(
+        Effect.map((events) =>
+          Array.from(events).filter((event) => event.commandId === command.commandId),
+        ),
+      ),
+    );
+    expect(committedOnce.map((event) => event.type)).toEqual([
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
+    await restartedSystem.dispose();
     await NodeFSP.rm(tempDir, { recursive: true, force: true });
   });
 
