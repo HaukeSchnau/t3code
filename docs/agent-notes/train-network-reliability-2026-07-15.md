@@ -139,18 +139,31 @@ again. Implementers do not approve their own packets.
   resolution/serialization, reconciles interrupted workspace creation, and publishes attachments
   atomically. Central verification passed 5 focused server files / 147 tests and scoped server
   typecheck; independent correction review is still required before platform rollout.
-- `NL1` is implementing the real RPC acknowledgement-loss fixture independently while `RC2` is
-  corrected. Its first real-protocol run found a non-terminating path; diagnosis has narrowed this to
-  an open WebSocket whose Effect RPC handler does not observe the request. The fixture is not accepted
-  until it both recovers correctly and fails/cleans up within deterministic deadlines.
+- `NL1` is integrated and independently approved. Its real Effect RPC fixture suppresses only the
+  response after receipt proof, reconnects with a fresh session, verifies exactly one durable effect
+  and projection, compares the final oracle hash, and bounds cleanup. Central focused verification
+  passed 18 tests.
 - The Wave 3 UX experiment completed. Its implementation target exposes four independent facts:
   transport state, data freshness, locally durable intent state, and remote queue state. It specifies
   exact wording and actions for 15 clean/degraded states, Pending-only edit/cancel, accessible live
   regions, reduced motion, 250/500 ms anti-flicker holds, and screenshot review across desktop,
   narrow web, iOS, and Android. UX2/UX3 must consume the shared OB2/OB3 lifecycle rather than decorate
   the existing web in-memory optimism or mobile legacy retry loop.
-- Current step: finish and independently review `RC2` and `NL1`, then green-light mobile/web adapters
-  against the approved replay boundary.
+- `RC2` is now independently approved after several adversarial correction rounds. Bootstrap
+  preprocessing is process-scoped and crash-resumable; attachment/workspace effects are deterministic;
+  setup completion is journal-backed; HTTP cannot bypass bootstrap preprocessing; and the fresh-server
+  WebSocket gate rebuilds listeners and service graphs over the same SQLite database. The final review
+  found and closed a high-severity script-identity hole: preprocessing now atomically freezes the setup
+  execution key/digest, so changing project script A to B after A claims fails before filesystem or
+  terminal I/O. Restoring A reconciles its original journal and dispatches the turn exactly once.
+- `OB2` mobile and `OB3` web implementations are integrated as separate changes and are under separate
+  independent reviews. Mobile focused verification passed 16 tests, TypeScript, and the mobile static
+  check; web focused verification passed 34 tests, typecheck, and scoped formatting/lint. Both still
+  require reviewer approval and real degraded-network interaction validation.
+- The product-native durable-thread API began returning `Auth required`, so later implementation and
+  review packets use visible lightweight subagents until T3 thread orchestration is available again.
+- Current step: complete independent `OB2`/`OB3` review, implement `UX2`/`UX3`, then run the real-browser
+  comparator, mobile/browser screenshot review, integrated regression suite, and final repository gates.
 
 ## Explorer Threads
 
