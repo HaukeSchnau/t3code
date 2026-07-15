@@ -138,6 +138,31 @@ describe("web durable command outbox", () => {
     ).toBe(false);
   });
 
+  it("edits and cancels only pending browser intents through durable lifecycle transitions", async () => {
+    const memory = memoryStorage();
+    const controller = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withDrainLeadership: async () => false,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async () => undefined,
+    });
+
+    await controller.enqueue(environmentId, command("original"));
+    await controller.replacePending(CommandId.make("original"), {
+      ...command("replacement"),
+      message: { ...command("replacement").message, text: "Edited on the train" },
+    });
+
+    expect(memory.read().entries).toHaveLength(1);
+    expect(memory.read().entries[0]?.plan.command.commandId).toBe("replacement");
+    expect(memory.read().entries[0]?.plan.command.message.text).toBe("Edited on the train");
+    await controller.cancelPending(CommandId.make("replacement"));
+    expect(memory.read().entries).toEqual([]);
+    controller.dispose();
+  });
+
   it("does not publish or accept intent when its enqueue save fails", async () => {
     const storage = CommandOutboxStorage.of({
       load: Effect.succeed(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT),
@@ -550,6 +575,39 @@ describe("web durable command outbox", () => {
     await controller.discardRejected(CommandId.make("command-1"));
     await controller.flush();
     expect(delivered).toEqual(["command-1", "command-1", "command-2"]);
+    controller.dispose();
+  });
+
+  it("retries a rejected browser intent with a fresh durable identity", async () => {
+    const memory = memoryStorage();
+    let canLead = true;
+    const controller = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withDrainLeadership: async (task) => {
+        if (!canLead) return false;
+        await task();
+        return true;
+      },
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async () => {
+        throw {
+          _tag: "OrchestrationCommandPreviouslyRejectedError",
+          message: "The command was rejected",
+        };
+      },
+    });
+
+    await controller.enqueue(environmentId, command("rejected"));
+    await controller.flush();
+    expect(memory.read().entries[0]?.state._tag).toBe("Rejected");
+
+    canLead = false;
+    await controller.replaceRejected(CommandId.make("rejected"), command("replacement"));
+    expect(memory.read().entries).toHaveLength(1);
+    expect(memory.read().entries[0]?.plan.command.commandId).toBe("replacement");
+    expect(memory.read().entries[0]?.state._tag).toBe("Pending");
     controller.dispose();
   });
 

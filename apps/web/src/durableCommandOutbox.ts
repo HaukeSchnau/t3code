@@ -50,6 +50,15 @@ export interface DurableCommandOutboxController {
   readonly wake: () => void;
   readonly snapshot: () => ReadonlyArray<DurableCommandOutboxEntry>;
   readonly subscribe: (listener: () => void) => () => void;
+  readonly cancelPending: (commandId: CommandId) => Promise<void>;
+  readonly replacePending: (
+    commandId: CommandId,
+    replacement: DurableClientCommand,
+  ) => Promise<DurableCommandOutboxEntry>;
+  readonly replaceRejected: (
+    commandId: CommandId,
+    replacement: DurableClientCommand,
+  ) => Promise<DurableCommandOutboxEntry>;
   readonly discardRejected: (commandId: CommandId) => Promise<void>;
   readonly dispose: () => void;
 }
@@ -316,6 +325,55 @@ export function createDurableCommandOutboxController(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    cancelPending: (commandId) =>
+      withMutationLock(async () => {
+        const service = await loadService(false);
+        await Effect.runPromise(service.cancelPending(commandId));
+        await publish(service);
+        void flush();
+      }),
+    replacePending: (commandId, replacement) =>
+      withMutationLock(async () => {
+        const service = await loadService(false);
+        const original = (await Effect.runPromise(service.entries)).find(
+          (entry) => entry.plan.command.commandId === commandId,
+        );
+        if (!original) throw new Error(`Command ${commandId} is not queued`);
+        const replaced = await Effect.runPromise(
+          service.replacePending(
+            commandId,
+            makeDurableCommandDeliveryPlan({
+              environmentId: original.plan.environmentId,
+              enqueuedAt: now(),
+              command: replacement,
+            }),
+          ),
+        );
+        await publish(service);
+        void flush();
+        return replaced;
+      }),
+    replaceRejected: (commandId, replacement) =>
+      withMutationLock(async () => {
+        const service = await loadService(false);
+        const original = (await Effect.runPromise(service.entries)).find(
+          (entry) => entry.plan.command.commandId === commandId,
+        );
+        if (!original) throw new Error(`Command ${commandId} is not queued`);
+        const replaced = await Effect.runPromise(
+          service.replaceRejected(
+            commandId,
+            makeDurableCommandDeliveryPlan({
+              environmentId: original.plan.environmentId,
+              enqueuedAt: now(),
+              command: replacement,
+            }),
+          ),
+        );
+        await publish(service);
+        void flush();
+        return replaced;
+      }),
     discardRejected: (commandId) =>
       withMutationLock(async () => {
         const service = await loadService(false);

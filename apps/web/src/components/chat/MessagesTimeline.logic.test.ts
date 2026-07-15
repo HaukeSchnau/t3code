@@ -5,7 +5,20 @@ import {
   deriveMessagesTimelineRows,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
+  shouldShowInitialConversationLoader,
 } from "./MessagesTimeline.logic";
+
+describe("initial conversation loading", () => {
+  it("never replaces cached or locally saved rows with the initial loader", () => {
+    expect(shouldShowInitialConversationLoader(1, true)).toBe(false);
+    expect(shouldShowInitialConversationLoader(8, true)).toBe(false);
+  });
+
+  it("shows the loader only while synchronizing with no visible content", () => {
+    expect(shouldShowInitialConversationLoader(0, true)).toBe(true);
+    expect(shouldShowInitialConversationLoader(0, false)).toBe(false);
+  });
+});
 
 describe("computeMessageDurationStart", () => {
   it("returns message createdAt when there is no preceding user message", () => {
