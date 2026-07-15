@@ -74,6 +74,35 @@ export const terminalRestartsTotal = Metric.counter("t3_terminal_restarts_total"
   description: "Total terminal restart requests handled.",
 });
 
+export const replayOperationsTotal = Metric.counter("t3_replay_operations_total", {
+  description: "Total persisted event replay and subscription catch-up operations.",
+});
+
+export const replayDuration = Metric.timer("t3_replay_duration", {
+  description: "Duration of persisted event replay and subscription catch-up operations.",
+});
+
+export const replayPagesTotal = Metric.counter("t3_replay_pages_total", {
+  description: "Total persisted event pages or batches read by replay operations.",
+});
+
+export const replayEventsScannedTotal = Metric.counter("t3_replay_events_scanned_total", {
+  description: "Total persisted events scanned by replay operations before stream filtering.",
+});
+
+export const replayEventsEmittedTotal = Metric.counter("t3_replay_events_emitted_total", {
+  description: "Total persisted events or stream items emitted by replay operations.",
+});
+
+export const replayOverlapEventsTotal = Metric.counter("t3_replay_overlap_events_total", {
+  description: "Total live-buffer events overlapping the persisted tail and deduped by clients.",
+});
+
+export const replayLiveBufferHighWater = Metric.histogram("t3_replay_live_buffer_high_water", {
+  description: "Highest number of live events buffered while persisted catch-up was in progress.",
+  boundaries: Metric.exponentialBoundaries({ start: 1, factor: 2, count: 11 }),
+});
+
 export const metricAttributes = (
   attributes: Readonly<Record<string, unknown>>,
 ): ReadonlyArray<[string, string]> => Object.entries(compactMetricAttributes(attributes));

@@ -11,6 +11,8 @@ describe("WorkloadDiagnostics", () => {
     const registry = makeWorkloadDiagnosticsRegistry("2026-07-13T00:00:00.000Z");
     registry.increment("provider.events.received", 3);
     registry.increment("provider.delta.characters", 22_000_000);
+    registry.increment("replay.events_scanned", 513);
+    registry.increment("replay.overlap_deduped", 2);
     registry.adjustGauge("subscriptions.detail.active", 2);
     registry.adjustGauge("subscriptions.detail.active", -1);
     registry.adjustGauge("subscriptions.shell.active", -10);
@@ -18,6 +20,8 @@ describe("WorkloadDiagnostics", () => {
     const snapshot = registry.snapshot();
     assert.equal(snapshot.counters["provider.events.received"], 3);
     assert.equal(snapshot.counters["provider.delta.characters"], 22_000_000);
+    assert.equal(snapshot.counters["replay.events_scanned"], 513);
+    assert.equal(snapshot.counters["replay.overlap_deduped"], 2);
     assert.equal(snapshot.gauges["subscriptions.detail.active"], 1);
     assert.equal(snapshot.gauges["subscriptions.shell.active"], 0);
     assert.equal(isWorkloadDiagnosticsSnapshot(snapshot), true);

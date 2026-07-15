@@ -103,6 +103,11 @@ import {
   observeRpcStream as instrumentRpcStream,
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
+import {
+  makeReplayObserver,
+  observeReplayEffect,
+  type ReplayObserver,
+} from "./observability/ReplayObservability.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -940,11 +945,12 @@ const makeWsRpcLayer = (
       const enrichOrchestrationEvents = (events: ReadonlyArray<OrchestrationEvent>) =>
         Effect.forEach(events, enrichProjectEvent, { concurrency: 4 });
 
-      const readEventsPaginated = (afterSequence: number) =>
+      const readEventsPaginated = (afterSequence: number, observer: ReplayObserver) =>
         Stream.paginate(afterSequence, (cursor) =>
           Stream.runCollect(orchestrationEngine.readEvents(cursor, REPLAY_PAGE_SIZE)).pipe(
             Effect.map((chunk) => {
               const events = Array.from(chunk);
+              observer.recordBatch(events);
               const lastEvent = events.at(-1);
               return [
                 events,
@@ -1882,16 +1888,41 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
-            Stream.runCollect(
-              orchestrationEngine.readEvents(
-                clamp(input.fromSequenceExclusive, {
-                  maximum: Number.MAX_SAFE_INTEGER,
-                  minimum: 0,
-                }),
-              ),
+            observeReplayEffect(
+              "rpc",
+              clamp(input.fromSequenceExclusive, {
+                maximum: Number.MAX_SAFE_INTEGER,
+                minimum: 0,
+              }),
+              (observer) => {
+                observer.recordPage();
+                return Stream.runCollect(
+                  orchestrationEngine
+                    .readEvents(
+                      clamp(input.fromSequenceExclusive, {
+                        maximum: Number.MAX_SAFE_INTEGER,
+                        minimum: 0,
+                      }),
+                    )
+                    .pipe(
+                      Stream.tap((event) =>
+                        Effect.sync(() => observer.recordScanned(event.sequence)),
+                      ),
+                    ),
+                ).pipe(
+                  Effect.map((events) => {
+                    const collected = Array.from(events);
+                    return collected;
+                  }),
+                  Effect.flatMap(enrichOrchestrationEvents),
+                  Effect.tap((events) =>
+                    Effect.sync(() => {
+                      for (const event of events) observer.recordEmitted(event.sequence);
+                    }),
+                  ),
+                );
+              },
             ).pipe(
-              Effect.map((events) => Array.from(events)),
-              Effect.flatMap(enrichOrchestrationEvents),
               Effect.mapError(
                 (cause) =>
                   new OrchestrationReplayEventsError({
@@ -1946,13 +1977,26 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
                   Effect.gen(function* () {
+                    const observer = yield* makeReplayObserver("shell", afterSequence);
+                    yield* Effect.addFinalizer(observer.finish);
                     const liveBuffer =
                       yield* Queue.bounded<OrchestrationShellStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
                     yield* Effect.forkScoped(
-                      liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+                      liveStream.pipe(
+                        Stream.runForEach((item) =>
+                          Queue.offer(liveBuffer, item).pipe(
+                            Effect.tap(() =>
+                              Effect.sync(() => observer.recordLiveBuffered(item.sequence)),
+                            ),
+                          ),
+                        ),
+                      ),
                     );
-                    const catchUpStream = readEventsPaginated(afterSequence).pipe(
+                    const catchUpStream = readEventsPaginated(afterSequence, observer).pipe(
                       toShellStream,
+                      Stream.tap((item) =>
+                        Effect.sync(() => observer.recordEmitted(item.sequence)),
+                      ),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({
@@ -1960,8 +2004,12 @@ const makeWsRpcLayer = (
                             cause,
                           }),
                       ),
+                      Stream.onExit(observer.finish),
                     );
-                    return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
+                    const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
+                      Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
+                    );
+                    return Stream.concat(catchUpStream, bufferedLiveStream);
                   }),
                 );
               }
@@ -2051,12 +2099,26 @@ const makeWsRpcLayer = (
                 const afterSequence = input.afterSequence;
                 return Stream.unwrap(
                   Effect.gen(function* () {
+                    const observer = yield* makeReplayObserver("thread", afterSequence);
+                    yield* Effect.addFinalizer(observer.finish);
                     const liveBuffer =
                       yield* Queue.bounded<OrchestrationThreadStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
                     yield* Effect.forkScoped(
-                      liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+                      liveStream.pipe(
+                        Stream.runForEach((item) =>
+                          Queue.offer(liveBuffer, item).pipe(
+                            Effect.tap(() =>
+                              Effect.sync(() =>
+                                observer.recordLiveBuffered(
+                                  item.kind === "event" ? item.event.sequence : afterSequence,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     );
-                    const catchUpStream = readEventsPaginated(afterSequence).pipe(
+                    const catchUpStream = readEventsPaginated(afterSequence, observer).pipe(
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.tap(() =>
                         Effect.sync(() =>
@@ -2064,6 +2126,9 @@ const makeWsRpcLayer = (
                         ),
                       ),
                       Stream.map((event) => ({ kind: "event" as const, event })),
+                      Stream.tap((item) =>
+                        Effect.sync(() => observer.recordEmitted(item.event.sequence)),
+                      ),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({
@@ -2071,8 +2136,12 @@ const makeWsRpcLayer = (
                             cause,
                           }),
                       ),
+                      Stream.onExit(observer.finish),
                     );
-                    return Stream.concat(catchUpStream, Stream.fromQueue(liveBuffer));
+                    const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
+                      Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
+                    );
+                    return Stream.concat(catchUpStream, bufferedLiveStream);
                   }),
                 );
               }
