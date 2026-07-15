@@ -61,7 +61,9 @@ function commandIds(document: DurableCommandOutboxDocument) {
   return document.entries.map((entry) => entry.plan.command.commandId);
 }
 
-function entryIds(entries: ReadonlyArray<{ readonly plan: { readonly command: { readonly commandId: string } } }>) {
+function entryIds(
+  entries: ReadonlyArray<{ readonly plan: { readonly command: { readonly commandId: string } } }>,
+) {
   return entries.map((entry) => entry.plan.command.commandId);
 }
 
@@ -413,70 +415,72 @@ describe("pending command edits and cancellation", () => {
     }),
   );
 
-  it.effect("replaces only pending entries and freezes identity and payload when delivery begins", () =>
-    Effect.gen(function* () {
-      const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
-      for (const [commandId, threadId] of [
-        ["pending", "thread-pending"],
-        ["delivering", "thread-delivering"],
-        ["retrying", "thread-retrying"],
-        ["rejected", "thread-rejected"],
-      ] as const) {
-        yield* outbox.enqueue(plan({ commandId, threadId }));
-      }
-      yield* outbox.begin(CommandId.make("delivering"), T0);
-      yield* outbox.begin(CommandId.make("retrying"), T0);
-      yield* outbox.fail(
-        CommandId.make("retrying"),
-        { classification: "transient", message: "offline" },
-        T0,
-      );
-      yield* outbox.begin(CommandId.make("rejected"), T0);
-      yield* outbox.fail(
-        CommandId.make("rejected"),
-        { classification: "permanent", message: "invalid" },
-        T0,
-      );
+  it.effect(
+    "replaces only pending entries and freezes identity and payload when delivery begins",
+    () =>
+      Effect.gen(function* () {
+        const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
+        for (const [commandId, threadId] of [
+          ["pending", "thread-pending"],
+          ["delivering", "thread-delivering"],
+          ["retrying", "thread-retrying"],
+          ["rejected", "thread-rejected"],
+        ] as const) {
+          yield* outbox.enqueue(plan({ commandId, threadId }));
+        }
+        yield* outbox.begin(CommandId.make("delivering"), T0);
+        yield* outbox.begin(CommandId.make("retrying"), T0);
+        yield* outbox.fail(
+          CommandId.make("retrying"),
+          { classification: "transient", message: "offline" },
+          T0,
+        );
+        yield* outbox.begin(CommandId.make("rejected"), T0);
+        yield* outbox.fail(
+          CommandId.make("rejected"),
+          { classification: "permanent", message: "invalid" },
+          T0,
+        );
 
-      for (const commandId of ["delivering", "retrying", "rejected"]) {
-        const error = yield* Effect.flip(
+        for (const commandId of ["delivering", "retrying", "rejected"]) {
+          const error = yield* Effect.flip(
+            outbox.replacePending(
+              CommandId.make(commandId),
+              plan({ commandId: `${commandId}-replacement`, threadId: `thread-${commandId}` }),
+            ),
+          );
+          expect(error).toMatchObject({
+            _tag: "CommandOutboxStateError",
+            reason: "invalid-transition",
+          });
+        }
+
+        const replacement = yield* outbox.replacePending(
+          CommandId.make("pending"),
+          plan({ commandId: "replacement", threadId: "thread-pending", text: "edited" }),
+        );
+        expect(replacement).toMatchObject({
+          plan: { command: { commandId: "replacement", message: { text: "edited" } } },
+          state: { _tag: "Pending" },
+        });
+
+        const delivering = yield* outbox.begin(CommandId.make("replacement"), T0);
+        expect(Object.isFrozen(delivering.plan)).toBe(true);
+        expect(Object.isFrozen(delivering.plan.command)).toBe(true);
+        expect(Object.isFrozen(delivering.plan.command.message)).toBe(true);
+        expect(Reflect.set(delivering.plan.command.message, "text", "mutated after begin")).toBe(
+          false,
+        );
+        expect(delivering.plan.command.message.text).toBe("edited");
+
+        const afterBegin = yield* Effect.flip(
           outbox.replacePending(
-            CommandId.make(commandId),
-            plan({ commandId: `${commandId}-replacement`, threadId: `thread-${commandId}` }),
+            CommandId.make("replacement"),
+            plan({ commandId: "too-late", threadId: "thread-pending" }),
           ),
         );
-        expect(error).toMatchObject({
-          _tag: "CommandOutboxStateError",
-          reason: "invalid-transition",
-        });
-      }
-
-      const replacement = yield* outbox.replacePending(
-        CommandId.make("pending"),
-        plan({ commandId: "replacement", threadId: "thread-pending", text: "edited" }),
-      );
-      expect(replacement).toMatchObject({
-        plan: { command: { commandId: "replacement", message: { text: "edited" } } },
-        state: { _tag: "Pending" },
-      });
-
-      const delivering = yield* outbox.begin(CommandId.make("replacement"), T0);
-      expect(Object.isFrozen(delivering.plan)).toBe(true);
-      expect(Object.isFrozen(delivering.plan.command)).toBe(true);
-      expect(Object.isFrozen(delivering.plan.command.message)).toBe(true);
-      expect(
-        Reflect.set(delivering.plan.command.message, "text", "mutated after begin"),
-      ).toBe(false);
-      expect(delivering.plan.command.message.text).toBe("edited");
-
-      const afterBegin = yield* Effect.flip(
-        outbox.replacePending(
-          CommandId.make("replacement"),
-          plan({ commandId: "too-late", threadId: "thread-pending" }),
-        ),
-      );
-      expect(afterBegin).toMatchObject({ reason: "invalid-transition" });
-    }),
+        expect(afterBegin).toMatchObject({ reason: "invalid-transition" });
+      }),
   );
 
   it.effect("rejects same and duplicate replacement IDs without publishing changes", () =>
@@ -503,10 +507,7 @@ describe("pending command edits and cancellation", () => {
       expect((yield* outbox.entries)[0]?.plan.command.message.text).toBe("before");
 
       const duplicate = yield* Effect.flip(
-        outbox.replacePending(
-          CommandId.make("editable"),
-          plan({ commandId: "occupied" }),
-        ),
+        outbox.replacePending(CommandId.make("editable"), plan({ commandId: "occupied" })),
       );
       expect(duplicate).toMatchObject({ reason: "duplicate-command", commandId: "occupied" });
 
@@ -590,9 +591,7 @@ describe("pending command edits and cancellation", () => {
         outbox.replacePending(CommandId.make("editable"), plan({ commandId: "replacement" })),
       );
       expect(replaceError._tag).toBe("CommandOutboxStorageError");
-      const cancelError = yield* Effect.flip(
-        outbox.cancelPending(CommandId.make("cancellable")),
-      );
+      const cancelError = yield* Effect.flip(outbox.cancelPending(CommandId.make("cancellable")));
       expect(cancelError._tag).toBe("CommandOutboxStorageError");
 
       expect(harness.persisted()).toBe(before);
@@ -601,47 +600,50 @@ describe("pending command edits and cancellation", () => {
   );
 
   for (const transition of ["replace", "cancel"] as const) {
-    it.effect(`publishes an async ${transition} atomically when interruption arrives during save`, () =>
-      Effect.gen(function* () {
-        const initial = decodeDurableCommandOutboxDocument({
-          schemaVersion: 1,
-          entries: [{ plan: plan({ commandId: "pending" }), state: { _tag: "Pending" } }],
-        });
-        let persisted = initial;
-        let completeSave: (() => void) | undefined;
-        const saveCommitted = yield* Deferred.make<void>();
-        const storage = CommandOutboxStorage.of({
-          load: Effect.succeed(initial),
-          save: (document) =>
-            Effect.callback<void>((resume) => {
-              persisted = document;
-              Deferred.doneUnsafe(saveCommitted, Effect.void);
-              completeSave = () => resume(Effect.void);
-            }),
-        });
-        const outbox = yield* makeCommandOutbox(storage, T0);
-        const mutation = yield* (transition === "replace"
-          ? outbox.replacePending(CommandId.make("pending"), plan({ commandId: "replacement" }))
-          : outbox.cancelPending(CommandId.make("pending"))
-        ).pipe(Effect.forkChild({ startImmediately: true }));
+    it.effect(
+      `publishes an async ${transition} atomically when interruption arrives during save`,
+      () =>
+        Effect.gen(function* () {
+          const initial = decodeDurableCommandOutboxDocument({
+            schemaVersion: 1,
+            entries: [{ plan: plan({ commandId: "pending" }), state: { _tag: "Pending" } }],
+          });
+          let persisted = initial;
+          let completeSave: (() => void) | undefined;
+          const saveCommitted = yield* Deferred.make<void>();
+          const storage = CommandOutboxStorage.of({
+            load: Effect.succeed(initial),
+            save: (document) =>
+              Effect.callback<void>((resume) => {
+                persisted = document;
+                Deferred.doneUnsafe(saveCommitted, Effect.void);
+                completeSave = () => resume(Effect.void);
+              }),
+          });
+          const outbox = yield* makeCommandOutbox(storage, T0);
+          const mutation = yield* (
+            transition === "replace"
+              ? outbox.replacePending(CommandId.make("pending"), plan({ commandId: "replacement" }))
+              : outbox.cancelPending(CommandId.make("pending"))
+          ).pipe(Effect.forkChild({ startImmediately: true }));
 
-        yield* Deferred.await(saveCommitted);
-        const expected = transition === "replace" ? ["replacement"] : [];
-        expect(commandIds(persisted)).toEqual(expected);
-        expect(entryIds(yield* outbox.entries)).toEqual(["pending"]);
+          yield* Deferred.await(saveCommitted);
+          const expected = transition === "replace" ? ["replacement"] : [];
+          expect(commandIds(persisted)).toEqual(expected);
+          expect(entryIds(yield* outbox.entries)).toEqual(["pending"]);
 
-        const interrupted = yield* Effect.sync(() => {
-          if (completeSave === undefined) {
-            throw new Error("Expected the controlled async save to be waiting for completion");
-          }
-          mutation.interruptUnsafe();
-          completeSave();
-        }).pipe(Effect.andThen(Fiber.await(mutation)));
+          const interrupted = yield* Effect.sync(() => {
+            if (completeSave === undefined) {
+              throw new Error("Expected the controlled async save to be waiting for completion");
+            }
+            mutation.interruptUnsafe();
+            completeSave();
+          }).pipe(Effect.andThen(Fiber.await(mutation)));
 
-        expect(Exit.hasInterrupts(interrupted)).toBe(true);
-        expect(commandIds(persisted)).toEqual(expected);
-        expect(entryIds(yield* outbox.entries)).toEqual(expected);
-      }),
+          expect(Exit.hasInterrupts(interrupted)).toBe(true);
+          expect(commandIds(persisted)).toEqual(expected);
+          expect(entryIds(yield* outbox.entries)).toEqual(expected);
+        }),
     );
   }
 });

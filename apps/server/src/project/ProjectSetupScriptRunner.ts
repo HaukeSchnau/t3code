@@ -245,10 +245,7 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-      if (
-        completion.executionKey !== executionKey ||
-        completion.scriptDigest !== scriptDigest
-      ) {
+      if (completion.executionKey !== executionKey || completion.scriptDigest !== scriptDigest) {
         return yield* new ProjectSetupScriptOperationError({
           ...errorContext,
           operation: "reconcileExecution",
@@ -368,10 +365,7 @@ export const make = Effect.gen(function* () {
     // A successful PTY write is not a durable launch acknowledgement. Wait until the
     // wrapper atomically claims the deterministic execution identity. A retry may
     // safely resubmit while this marker is absent; competing wrappers race on mkdir.
-    yield* awaitJournal(
-      executionExists(claimDir),
-      reconciliationTimeout,
-    );
+    yield* awaitJournal(executionExists(claimDir), reconciliationTimeout);
 
     // The caller may only persist `setup-completed` after this durable wrapper
     // completion exists. Waiting is interruptible, so shutdown leaves the durable

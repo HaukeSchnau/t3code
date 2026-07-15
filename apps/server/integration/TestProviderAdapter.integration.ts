@@ -317,9 +317,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         const sendTurnCalls = sendTurnCallsBySession.get(input.threadId) ?? [];
         sendTurnCalls.push({
           ...input,
-          ...(input.attachments !== undefined
-            ? { attachments: [...input.attachments] }
-            : {}),
+          ...(input.attachments !== undefined ? { attachments: [...input.attachments] } : {}),
         });
         sendTurnCallsBySession.set(input.threadId, sendTurnCalls);
 
@@ -568,9 +566,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
     const getSendTurnCalls = (threadId: ThreadId): ReadonlyArray<ProviderSendTurnInput> =>
       (sendTurnCallsBySession.get(threadId) ?? []).map((input) => ({
         ...input,
-        ...(input.attachments !== undefined
-          ? { attachments: [...input.attachments] }
-          : {}),
+        ...(input.attachments !== undefined ? { attachments: [...input.attachments] } : {}),
       }));
 
     const getInterruptCalls = (threadId: ThreadId): ReadonlyArray<TurnId | undefined> => {
