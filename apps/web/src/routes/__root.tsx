@@ -7,6 +7,7 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
+  useRouter,
 } from "@tanstack/react-router";
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 
@@ -38,7 +39,13 @@ import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import { EnergyDiagnosticsCaptureRequestConsumer } from "../diagnostics/EnergyDiagnosticsCaptureRequestConsumer";
 import { EnergyDiagnosticsProfiler } from "../diagnostics/EnergyDiagnosticsProfiler";
-import { resolveInitialServerAuthGateState } from "../environments/primary";
+import {
+  clearOfflineAuthProof,
+  offlineAuthProofExpiresAtEpochMs,
+  resolveInitialServerAuthGateState,
+  revalidateOfflineServerAuthGateState,
+} from "../environments/primary";
+import { createOfflineAuthRevalidationController } from "../offlineAuthRevalidation";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
@@ -94,6 +101,7 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
+  const cachedAuthentication = authGateState.status === "offline-authenticated";
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -113,7 +121,11 @@ function RootRouteView() {
     );
   }
 
-  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
+  if (
+    authGateState.status !== "authenticated" &&
+    authGateState.status !== "offline-authenticated" &&
+    authGateState.status !== "hosted-static"
+  ) {
     return (
       <>
         <DocumentTitleSync />
@@ -142,6 +154,7 @@ function RootRouteView() {
         <SshPasswordPromptDialog />
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
+        {cachedAuthentication ? <OfflineAuthenticationRevalidator /> : null}
         {primaryEnvironmentAuthenticated ? <EnergyDiagnosticsCaptureRequestConsumer /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
@@ -149,6 +162,34 @@ function RootRouteView() {
       </AnchoredToastProvider>
     </ToastProvider>
   );
+}
+
+function OfflineAuthenticationRevalidator() {
+  const router = useRouter();
+
+  useEffect(() => {
+    const controller = createOfflineAuthRevalidationController({
+      revalidate: revalidateOfflineServerAuthGateState,
+      invalidate: () => router.invalidate(),
+      clearProof: clearOfflineAuthProof,
+      proofExpiresAtEpochMs: offlineAuthProofExpiresAtEpochMs,
+    });
+    const wake = () => {
+      if (document.visibilityState === "hidden") return;
+      controller.wake();
+    };
+
+    controller.start();
+    window.addEventListener("online", wake);
+    document.addEventListener("visibilitychange", wake);
+    return () => {
+      controller.stop();
+      window.removeEventListener("online", wake);
+      document.removeEventListener("visibilitychange", wake);
+    };
+  }, [router]);
+
+  return null;
 }
 
 function DocumentTitleSync() {

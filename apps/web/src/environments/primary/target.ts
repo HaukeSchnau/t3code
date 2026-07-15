@@ -73,6 +73,10 @@ export interface PrimaryEnvironmentTarget {
   };
 }
 
+export function primaryEnvironmentTargetSignature(target: PrimaryEnvironmentTarget): string {
+  return `${target.target.httpBaseUrl}|${target.target.wsBaseUrl}`;
+}
+
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 
 function getDesktopLocalEnvironmentBootstrap(): DesktopEnvironmentBootstrap | null {

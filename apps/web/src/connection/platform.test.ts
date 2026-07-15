@@ -5,19 +5,38 @@ import {
   type DesktopBridge,
   type DesktopSshEnvironmentTarget,
 } from "@t3tools/contracts";
-import { describe, expect, it } from "@effect/vitest";
+import { afterEach, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
 import {
   canRetainCachedPlatformRegistrationAfterRefreshFailure,
   canReuseCachedPlatformRegistration,
   primaryRegistrationToRetainAfterTopologyRead,
+  persistPrimaryEnvironmentDescriptor,
   provisionDesktopSshEnvironment,
   readPrimaryEnvironmentTargetResult,
+  readPersistedPrimaryConnectionRegistration,
+  retainPrimaryRegistrationAfterRefreshFailure,
   secondaryRegistrationsToRetainAfterTopologyRead,
   secondaryBearerExpiresAtEpochMs,
   secondaryBearerRefreshAtEpochMs,
 } from "./platform.ts";
+
+function makeStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  };
+}
+
+afterEach(() => vi.unstubAllGlobals());
 
 const TARGET: DesktopSshEnvironmentTarget = {
   alias: "devbox",
@@ -190,7 +209,7 @@ describe("desktop-local bearer cache", () => {
 describe("primary topology cache", () => {
   const registration = {} as never;
   const cached = {
-    signature: "primary|http://127.0.0.1:3773/|ws://127.0.0.1:3773/",
+    signature: "http://127.0.0.1:3773/|ws://127.0.0.1:3773/",
     registration,
   };
   const previous = new Map([[PRIMARY_LOCAL_ENVIRONMENT_ID, cached]]);
@@ -221,5 +240,90 @@ describe("primary topology cache", () => {
         target: null,
       }),
     ).toBeUndefined();
+  });
+
+  it("backs off descriptor refresh failures and never retains a changed target", () => {
+    const first = retainPrimaryRegistrationAfterRefreshFailure(cached, cached.signature, 10_000);
+    expect(first).toMatchObject({ primaryRefreshFailureCount: 1, refreshAtEpochMs: 13_000 });
+    expect(
+      retainPrimaryRegistrationAfterRefreshFailure(first!, cached.signature, 13_000),
+    ).toMatchObject({ primaryRefreshFailureCount: 2, refreshAtEpochMs: 19_000 });
+    expect(
+      retainPrimaryRegistrationAfterRefreshFailure(
+        cached,
+        "https://new.example/|wss://new.example/",
+        10_000,
+      ),
+    ).toBeNull();
+  });
+
+  it("reconstructs a target-bound primary registration for an authenticated offline reload", () => {
+    const origin = "https://app.example.test";
+    const localStorage = makeStorage();
+    vi.stubGlobal("window", {
+      location: new URL(`${origin}/environment/thread`),
+      localStorage,
+    });
+    localStorage.setItem(
+      "t3code:primary-authenticated:v1",
+      JSON.stringify({
+        version: 1,
+        browserOrigin: origin,
+        primaryTargetSignature: `${origin}/|wss://app.example.test/`,
+        expiresAt: "2099-01-01T00:00:00.000Z",
+      }),
+    );
+    const target = {
+      source: "window-origin",
+      target: { httpBaseUrl: `${origin}/`, wsBaseUrl: `wss://app.example.test/` },
+    } as const;
+    persistPrimaryEnvironmentDescriptor(target, {
+      environmentId: EnvironmentId.make("environment-cached"),
+      label: "Cached environment",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "0.0.0-test",
+      capabilities: { repositoryIdentity: true },
+    });
+
+    expect(readPersistedPrimaryConnectionRegistration(target)?.target).toMatchObject({
+      environmentId: "environment-cached",
+      label: "Cached environment",
+      httpBaseUrl: `${origin}/`,
+      wsBaseUrl: "wss://app.example.test/",
+    });
+
+    persistPrimaryEnvironmentDescriptor(target, {
+      environmentId: EnvironmentId.make("environment-replaced"),
+      label: "Recovered environment",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "0.0.1-test",
+      capabilities: { repositoryIdentity: true },
+    });
+    expect(readPersistedPrimaryConnectionRegistration(target)?.target).toMatchObject({
+      environmentId: "environment-replaced",
+      label: "Recovered environment",
+    });
+  });
+
+  it("does not reconstruct a primary registration without exact authenticated proof", () => {
+    const origin = "https://app.example.test";
+    const localStorage = makeStorage();
+    vi.stubGlobal("window", {
+      location: new URL(`${origin}/`),
+      localStorage,
+    });
+    const target = {
+      source: "window-origin",
+      target: { httpBaseUrl: `${origin}/`, wsBaseUrl: "wss://app.example.test/" },
+    } as const;
+    persistPrimaryEnvironmentDescriptor(target, {
+      environmentId: EnvironmentId.make("environment-cached"),
+      label: "Cached environment",
+      platform: { os: "linux", arch: "x64" },
+      serverVersion: "0.0.0-test",
+      capabilities: { repositoryIdentity: true },
+    });
+
+    expect(readPersistedPrimaryConnectionRegistration(target)).toBeNull();
   });
 });

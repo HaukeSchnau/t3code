@@ -117,6 +117,7 @@ export const Route = createFileRoute("/settings")({
   beforeLoad: async ({ context, location }) => {
     if (
       context.authGateState.status !== "authenticated" &&
+      context.authGateState.status !== "offline-authenticated" &&
       context.authGateState.status !== "hosted-static"
     ) {
       throw redirect({ to: "/pair", replace: true });

@@ -27,6 +27,8 @@ import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/cl
 import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
 import {
   AuthStandardClientScopes,
+  ExecutionEnvironmentDescriptor,
+  type ExecutionEnvironmentDescriptor as ExecutionEnvironmentDescriptorType,
   type DesktopBridge,
   type DesktopEnvironmentBootstrap,
   type DesktopSshEnvironmentTarget,
@@ -39,12 +41,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { FetchHttpClient } from "effect/unstable/http";
 
 import { readDesktopPrimaryBearerToken } from "../environments/primary/desktopAuth";
+import { hasValidOfflineAuthProof } from "../environments/primary/auth";
 import { primaryEnvironmentHttpLayer } from "../environments/primary/httpLayer";
 import {
+  primaryEnvironmentTargetSignature,
   readPrimaryEnvironmentTarget,
   type PrimaryEnvironmentTarget,
 } from "../environments/primary/target";
@@ -289,6 +294,7 @@ const loadPrimaryConnectionRegistration = Effect.fn(
   const descriptor = yield* fetchRemoteEnvironmentDescriptor({
     httpBaseUrl: resolved.target.httpBaseUrl,
   }).pipe(Effect.provide(primaryEnvironmentHttpLayer), Effect.mapError(mapRemoteEnvironmentError));
+  persistPrimaryEnvironmentDescriptor(resolved, descriptor);
   return new PrimaryConnectionRegistration({
     target: new PrimaryConnectionTarget({
       environmentId: descriptor.environmentId,
@@ -298,6 +304,63 @@ const loadPrimaryConnectionRegistration = Effect.fn(
     }),
   });
 });
+
+const PRIMARY_DESCRIPTOR_STORAGE_KEY = "t3code:primary-environment-descriptor:v1";
+const PersistedPrimaryEnvironmentDescriptor = Schema.Struct({
+  version: Schema.Literal(1),
+  browserOrigin: Schema.String,
+  signature: Schema.String,
+  descriptor: ExecutionEnvironmentDescriptor,
+});
+const decodePersistedPrimaryEnvironmentDescriptor = Schema.decodeUnknownSync(
+  PersistedPrimaryEnvironmentDescriptor,
+);
+
+export function persistPrimaryEnvironmentDescriptor(
+  target: PrimaryEnvironmentTarget,
+  descriptor: ExecutionEnvironmentDescriptorType,
+): void {
+  try {
+    window.localStorage.setItem(
+      PRIMARY_DESCRIPTOR_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        browserOrigin: window.location.origin,
+        signature: primaryEnvironmentTargetSignature(target),
+        descriptor,
+      }),
+    );
+  } catch {
+    // The live registration remains usable when durable browser storage is unavailable.
+  }
+}
+
+export function readPersistedPrimaryConnectionRegistration(
+  target: PrimaryEnvironmentTarget,
+): PrimaryConnectionRegistration | null {
+  if (!hasValidOfflineAuthProof()) return null;
+  try {
+    const raw = window.localStorage.getItem(PRIMARY_DESCRIPTOR_STORAGE_KEY);
+    if (raw === null) return null;
+    const persisted = decodePersistedPrimaryEnvironmentDescriptor(JSON.parse(raw));
+    if (
+      persisted.browserOrigin !== window.location.origin ||
+      persisted.signature !== primaryEnvironmentTargetSignature(target)
+    ) {
+      return null;
+    }
+    return new PrimaryConnectionRegistration({
+      target: new PrimaryConnectionTarget({
+        environmentId: persisted.descriptor.environmentId,
+        label: persisted.descriptor.label,
+        httpBaseUrl: target.target.httpBaseUrl,
+        wsBaseUrl: target.target.wsBaseUrl,
+      }),
+    });
+  } catch {
+    return null;
+  }
+}
 
 // A desktop-local secondary backend (e.g. a parallel WSL backend) lives on its
 // own loopback origin, so — unlike the same-origin primary — it authenticates
@@ -361,6 +424,8 @@ const loadSecondaryConnectionRegistration = Effect.fn(
 // the bridge, so the renderer polls; successful registrations are cached by a
 // signature of their endpoint + token until bearer credentials approach expiry.
 const PLATFORM_POLL_INTERVAL = "3 seconds";
+const PRIMARY_DESCRIPTOR_RETRY_BASE_MS = 3_000;
+const PRIMARY_DESCRIPTOR_RETRY_MAX_MS = 60_000;
 const SECONDARY_BEARER_REFRESH_SKEW_MS = 5_000;
 
 export function secondaryBearerExpiresAtEpochMs(
@@ -386,6 +451,25 @@ interface CachedPlatformRegistration {
   readonly registration: PlatformConnectionRegistration;
   readonly expiresAtEpochMs?: number;
   readonly refreshAtEpochMs?: number;
+  readonly primaryRefreshFailureCount?: number;
+}
+
+export function retainPrimaryRegistrationAfterRefreshFailure(
+  cached: CachedPlatformRegistration,
+  signature: string,
+  nowEpochMs: number,
+): CachedPlatformRegistration | null {
+  if (cached.signature !== signature) return null;
+  const primaryRefreshFailureCount = Math.min((cached.primaryRefreshFailureCount ?? 0) + 1, 6);
+  const retryDelayMs = Math.min(
+    PRIMARY_DESCRIPTOR_RETRY_BASE_MS * 2 ** (primaryRefreshFailureCount - 1),
+    PRIMARY_DESCRIPTOR_RETRY_MAX_MS,
+  );
+  return {
+    ...cached,
+    primaryRefreshFailureCount,
+    refreshAtEpochMs: nowEpochMs + retryDelayMs,
+  };
 }
 
 export type PrimaryEnvironmentTargetRead =
@@ -489,7 +573,7 @@ const platformConnectionSourceLayer = Layer.effect(
         });
       } else if (primaryTopologyRead.target !== null) {
         const primaryTarget = primaryTopologyRead.target;
-        const signature = `primary|${primaryTarget.target.httpBaseUrl}|${primaryTarget.target.wsBaseUrl}`;
+        const signature = primaryEnvironmentTargetSignature(primaryTarget);
         const cached = previous.get(PRIMARY_LOCAL_ENVIRONMENT_ID);
         if (
           cached !== undefined &&
@@ -508,6 +592,27 @@ const platformConnectionSourceLayer = Layer.effect(
             const cacheEntry = { signature, registration: built.value };
             next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cacheEntry);
             registrations.push(built.value);
+          } else {
+            const retained =
+              cached === undefined
+                ? null
+                : retainPrimaryRegistrationAfterRefreshFailure(cached, signature, nowEpochMs);
+            if (retained !== null) {
+              next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, retained);
+              registrations.push(retained.registration);
+            } else {
+              const persisted = readPersistedPrimaryConnectionRegistration(primaryTarget);
+              if (persisted !== null) {
+                const cacheEntry = {
+                  signature,
+                  registration: persisted,
+                  primaryRefreshFailureCount: 1,
+                  refreshAtEpochMs: nowEpochMs + PRIMARY_DESCRIPTOR_RETRY_BASE_MS,
+                };
+                next.set(PRIMARY_LOCAL_ENVIRONMENT_ID, cacheEntry);
+                registrations.push(persisted);
+              }
+            }
           }
         }
       }

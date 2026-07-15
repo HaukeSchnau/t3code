@@ -17,6 +17,7 @@ import { __setPrimaryHttpRunnerForTests, type PrimaryHttpEffectRunner } from "./
 
 type TestWindow = {
   location: URL;
+  localStorage: Storage;
   history: {
     replaceState: (_data: unknown, _unused: string, url: string) => void;
   };
@@ -62,8 +63,20 @@ const browserSession = (scopes: AuthBrowserSessionResult["scopes"]): AuthBrowser
 });
 
 function installTestBrowser(url: string) {
+  const values = new Map<string, string>();
+  const localStorage: Storage = {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  };
   const testWindow: TestWindow = {
     location: new URL(url),
+    localStorage,
     history: {
       replaceState: (_data, _unused, nextUrl) => {
         testWindow.location = new URL(nextUrl, testWindow.location.href);
@@ -90,6 +103,19 @@ function installDesktopBootstrap() {
       },
     ],
   } as unknown as DesktopBridge;
+}
+
+function installValidAuthenticatedProof(overrides?: Record<string, unknown>) {
+  window.localStorage.setItem(
+    "t3code:primary-authenticated:v1",
+    JSON.stringify({
+      version: 1,
+      browserOrigin: window.location.origin,
+      primaryTargetSignature: `${window.location.origin}/|ws://${window.location.host}/`,
+      expiresAt: "2099-01-01T00:00:00.000Z",
+      ...overrides,
+    }),
+  );
 }
 
 function sequence<A>(...values: ReadonlyArray<A>) {
@@ -273,6 +299,147 @@ describe("resolveInitialServerAuthGateState", () => {
       auth: LOOPBACK_AUTH,
     });
     expect(attempts).toBe(4);
+  });
+
+  it("boots a previously authenticated browser from cached state while the primary is offline", async () => {
+    vi.useFakeTimers();
+    installValidAuthenticatedProof();
+    const request = HttpClientRequest.get("http://localhost/api/auth/session");
+    const response = HttpClientResponse.fromWeb(
+      request,
+      new Response("Bad Gateway", { status: 502 }),
+    );
+    __setPrimaryHttpRunnerForTests(async () => {
+      throw new HttpClientError.HttpClientError({
+        reason: new HttpClientError.StatusCodeError({ request, response }),
+      });
+    });
+
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    const gateStatePromise = resolveInitialServerAuthGateState();
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(gateStatePromise).resolves.toEqual({ status: "offline-authenticated" });
+  });
+
+  it("boots cached state immediately after a raw network failure", async () => {
+    installValidAuthenticatedProof();
+    __setPrimaryHttpRunnerForTests(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "offline-authenticated",
+    });
+  });
+
+  it("does not let a first-time browser enter cached state on a transient failure", async () => {
+    vi.useFakeTimers();
+    __setPrimaryHttpRunnerForTests(async () => {
+      throw new TypeError("Failed to fetch");
+    });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    const gateStatePromise = resolveInitialServerAuthGateState();
+    const rejection = expect(gateStatePromise).rejects.toMatchObject({
+      _tag: "PrimaryEnvironmentRequestError",
+    });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejection;
+  });
+
+  it("rejects expired and target-mismatched authenticated proofs", async () => {
+    for (const overrides of [
+      { expiresAt: "2000-01-01T00:00:00.000Z" },
+      { primaryTargetSignature: "https://different.example/|wss://different.example/" },
+    ]) {
+      vi.useFakeTimers();
+      installValidAuthenticatedProof(overrides);
+      __setPrimaryHttpRunnerForTests(async () => {
+        throw new TypeError("Failed to fetch");
+      });
+      const { resolveInitialServerAuthGateState, __resetServerAuthBootstrapForTests } =
+        await import("./environments/primary");
+      const gateStatePromise = resolveInitialServerAuthGateState();
+      const rejection = expect(gateStatePromise).rejects.toMatchObject({
+        _tag: "PrimaryEnvironmentRequestError",
+      });
+      await vi.advanceTimersByTimeAsync(15_000);
+      await rejection;
+      __resetServerAuthBootstrapForTests();
+    }
+  });
+
+  it.each([401, 403])("never uses cached authentication for HTTP %i", async (status) => {
+    installValidAuthenticatedProof();
+    const request = HttpClientRequest.get("http://localhost/api/auth/session");
+    const response = HttpClientResponse.fromWeb(request, new Response("Denied", { status }));
+    __setPrimaryHttpRunnerForTests(async () => {
+      throw new HttpClientError.HttpClientError({
+        reason: new HttpClientError.StatusCodeError({ request, response }),
+      });
+    });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).rejects.toMatchObject({ status });
+    expect(window.localStorage.getItem("t3code:primary-authenticated:v1")).toBeNull();
+  });
+
+  it("persists only non-secret session metadata after successful authentication", async () => {
+    await installAuthApi({ session: () => authenticatedSession(LOOPBACK_AUTH) });
+    const { resolveInitialServerAuthGateState } = await import("./environments/primary");
+
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "authenticated",
+    });
+    const proof = window.localStorage.getItem("t3code:primary-authenticated:v1");
+    expect(proof).not.toBeNull();
+    expect(JSON.parse(proof!)).toEqual({
+      version: 1,
+      browserOrigin: "http://localhost",
+      primaryTargetSignature: "http://localhost/|ws://localhost/",
+      expiresAt: "2026-04-05T00:00:00.000Z",
+    });
+    expect(proof).not.toMatch(/token|credential|cookie|sessionId/i);
+  });
+
+  it("ejects cached authentication when revalidation reports an unauthenticated session", async () => {
+    installValidAuthenticatedProof();
+    const testApi = await installAuthApi({ session: () => unauthenticatedSession(LOOPBACK_AUTH) });
+    const { revalidateOfflineServerAuthGateState, resolveInitialServerAuthGateState } =
+      await import("./environments/primary");
+
+    await expect(revalidateOfflineServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: LOOPBACK_AUTH,
+    });
+    expect(window.localStorage.getItem("t3code:primary-authenticated:v1")).toBeNull();
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: LOOPBACK_AUTH,
+    });
+    await expect(resolveInitialServerAuthGateState()).resolves.toEqual({
+      status: "requires-auth",
+      auth: LOOPBACK_AUTH,
+    });
+    expect(testApi.calls.session).toBe(1);
+  });
+
+  it("performs one request per offline revalidation attempt", async () => {
+    installValidAuthenticatedProof();
+    let attempts = 0;
+    __setPrimaryHttpRunnerForTests(async () => {
+      attempts += 1;
+      throw new TypeError("Failed to fetch");
+    });
+    const { revalidateOfflineServerAuthGateState } = await import("./environments/primary");
+
+    await expect(revalidateOfflineServerAuthGateState()).rejects.toMatchObject({
+      _tag: "PrimaryEnvironmentRequestError",
+    });
+    expect(attempts).toBe(1);
   });
 
   it("takes a pairing token from the location hash and strips it immediately", async () => {

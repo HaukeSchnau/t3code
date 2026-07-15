@@ -110,6 +110,24 @@ again. Implementers do not approve their own packets.
 
 ## Current State
 
+- 2026-07-15 final hardening: web/mobile durable outboxes, interruption-safe persistence, server receipts,
+  crash-safe preprocessing, replay observability, shared connection UX, and the Chromium comparator are
+  independently approved. The comparator's full six-profile production matrix remains truthfully non-gating
+  until an authenticated deterministic browser fixture composes the NL1 provider/oracle.
+- Real-browser review found and closed three integration-only defects: accepted web intent disappearing between
+  outbox cleanup and authoritative projection, session/generation races that could leave cached freshness stuck,
+  and a deferred replay observer missing `ReplayLogPublisher` in the live WebSocket stream context.
+- A paired browser now boots its cached workspace after a cold offline reload using exact-target, unexpired,
+  metadata-only auth proof plus a persisted primary descriptor. Independent security review approved fail-closed
+  status handling, chunked 30-day expiry, revalidation/ejection, and changed-environment cache isolation.
+- Final browser flow is approved: offline intent is immediately visible with stable command id and retry state;
+  cold reload retains cached content and remote/local intent; recovery removes reconnect/updating banners and
+  retains the authoritative queued message. Narrow 320 px rendering remains usable without horizontal overflow.
+- Mobile has strong renderer, persistence, drain, accessibility-label, and typecheck coverage, but no simulator
+  or physical device was available for final screenshot evidence. Do not claim device-level visual validation.
+- Remaining completion work: update patch notes/history, run full repository gates, clean empty JJ changes, stop
+  temporary services/browser sessions, and push `main`.
+
 - 2026-07-15: fetched origin/upstream, merged `main@upstream` at `ecb35f758399` without conflicts.
 - Baseline `vp check` passed with 10 existing React warnings.
 - Baseline full typecheck passed.

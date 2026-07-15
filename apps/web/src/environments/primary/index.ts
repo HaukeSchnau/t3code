@@ -15,7 +15,10 @@ export {
 
 export {
   createServerPairingCredential,
+  clearOfflineAuthProof,
   fetchSessionState,
+  hasValidOfflineAuthProof,
+  offlineAuthProofExpiresAtEpochMs,
   isPrimaryEnvironmentPairingCredentialRejectedError,
   isPrimaryEnvironmentRequestError,
   listServerClientSessions,
@@ -24,6 +27,7 @@ export {
   PrimaryEnvironmentPairingCredentialRejectedError,
   PrimaryEnvironmentRequestError,
   reauthenticatePrimaryEnvironment,
+  revalidateOfflineServerAuthGateState,
   resolveInitialServerAuthGateState,
   revokeOtherServerClientSessions,
   revokeServerClientSession,
