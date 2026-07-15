@@ -33,30 +33,30 @@ injection, independent review, real-browser validation, and the repository's ful
 
 ### Wave 1 — Independent foundations
 
-| ID | Objective | Ownership | Dependencies |
-|---|---|---|---|
-| `NL0` | Versioned scenario/result model and minimal deterministic network-lab runner | `scripts/network-lab/**`, focused root/package scripts | none |
-| `OB1` | Shared durable outbox core with immutable delivery plans and lifecycle tests | new client-runtime outbox modules, operations/platform exports | none |
-| `LC1` | Lock in existing RPC ping/pong and single-session liveness behavior | client-runtime RPC session and focused patch doc | none |
-| `RC1` | Add receipt/idempotency regression coverage for turn start and server queue | orchestration engine tests; production only if a test exposes a defect | none |
+| ID    | Objective                                                                    | Ownership                                                              | Dependencies |
+| ----- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------ |
+| `NL0` | Versioned scenario/result model and minimal deterministic network-lab runner | `scripts/network-lab/**`, focused root/package scripts                 | none         |
+| `OB1` | Shared durable outbox core with immutable delivery plans and lifecycle tests | new client-runtime outbox modules, operations/platform exports         | none         |
+| `LC1` | Lock in existing RPC ping/pong and single-session liveness behavior          | client-runtime RPC session and focused patch doc                       | none         |
+| `RC1` | Add receipt/idempotency regression coverage for turn start and server queue  | orchestration engine tests; production only if a test exposes a defect | none         |
 
 ### Wave 2 — Platform integration
 
-| ID | Objective | Ownership | Dependencies |
-|---|---|---|---|
-| `OB2` | Migrate mobile to shared outbox without losing legacy records or behavior | mobile thread-outbox state, storage, drain, and tests | `OB1`, `RC1` |
-| `OB3` | Add IndexedDB-backed web outbox and offline composer submission | web storage, focused send-intent/outbox modules, composer integration | `OB1`, `RC1` |
-| `UX1` | Shared connection/freshness projection with stage, attempt, and retry time | client-runtime connection/state presentation | `LC1` |
-| `NL1` | Real server/provider fixture and protocol-aware acknowledgement-loss gate | server integration network-recovery fixture/tests | `NL0`, `RC1` |
+| ID    | Objective                                                                  | Ownership                                                             | Dependencies |
+| ----- | -------------------------------------------------------------------------- | --------------------------------------------------------------------- | ------------ |
+| `OB2` | Migrate mobile to shared outbox without losing legacy records or behavior  | mobile thread-outbox state, storage, drain, and tests                 | `OB1`, `RC1` |
+| `OB3` | Add IndexedDB-backed web outbox and offline composer submission            | web storage, focused send-intent/outbox modules, composer integration | `OB1`, `RC1` |
+| `UX1` | Shared connection/freshness projection with stage, attempt, and retry time | client-runtime connection/state presentation                          | `LC1`        |
+| `NL1` | Real server/provider fixture and protocol-aware acknowledgement-loss gate  | server integration network-recovery fixture/tests                     | `NL0`, `RC1` |
 
 ### Wave 3 — Experience and measurement
 
-| ID | Objective | Ownership | Dependencies |
-|---|---|---|---|
-| `UX2` | Web cached/offline/queued/loading experience | web chat presentation and tests | `OB3`, `UX1` |
-| `UX3` | Mobile queued-item recovery and connection/freshness experience | mobile thread/connection presentation and tests | `OB2`, `UX1` |
-| `NL2` | Real Chromium scenario, baseline/candidate comparator, CI-sized direct matrix | web browser test entry and network-lab runner/comparator | `NL1`, `OB3`, `UX2` |
-| `RP1` | Replay metrics: tail, pages, scanned/emitted events, duration, buffer high-water mark | server replay and workload diagnostics | `NL1` |
+| ID    | Objective                                                                             | Ownership                                                | Dependencies        |
+| ----- | ------------------------------------------------------------------------------------- | -------------------------------------------------------- | ------------------- |
+| `UX2` | Web cached/offline/queued/loading experience                                          | web chat presentation and tests                          | `OB3`, `UX1`        |
+| `UX3` | Mobile queued-item recovery and connection/freshness experience                       | mobile thread/connection presentation and tests          | `OB2`, `UX1`        |
+| `NL2` | Real Chromium scenario, baseline/candidate comparator, CI-sized direct matrix         | web browser test entry and network-lab runner/comparator | `NL1`, `OB3`, `UX2` |
+| `RP1` | Replay metrics: tail, pages, scanned/emitted events, duration, buffer high-water mark | server replay and workload diagnostics                   | `NL1`               |
 
 ### Wave 4 — Evidence-driven hardening
 
