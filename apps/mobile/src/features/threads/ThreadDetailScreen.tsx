@@ -1,4 +1,5 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import type { EnvironmentConnectionFreshnessProjection } from "@t3tools/client-runtime/state/connection-freshness";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
@@ -44,6 +45,7 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
+import type { LocalIntentPresentation } from "./trainNetworkPresentation";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
@@ -62,6 +64,7 @@ export interface ThreadDetailScreenProps {
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
+  readonly connectionFreshness: EnvironmentConnectionFreshnessProjection | null;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   readonly activeThreadBusy: boolean;
@@ -71,7 +74,17 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadQueueCount: number;
   readonly selectedThreadQueueStatus: string;
   readonly selectedThreadRejectedCount: number;
+  readonly selectedThreadQueuedIntents: ReadonlyArray<{
+    readonly message: { readonly messageId: MessageId; readonly text: string };
+    readonly presentation: LocalIntentPresentation;
+  }>;
+  readonly editingQueuedMessageId: MessageId | null;
+  readonly remoteQueueCount: number;
   readonly onDiscardRejectedMessages: () => Promise<void>;
+  readonly onEditPendingMessage: (messageId: MessageId) => void;
+  readonly onCancelPendingMessage: (messageId: MessageId) => Promise<void>;
+  readonly onDiscardRejectedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onCancelQueuedMessageEdit: () => void;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -506,6 +519,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 placeholder="Ask the repo agent, or run a command…"
                 contentMaxWidth={contentMaxWidth}
                 connectionState={props.connectionStateLabel}
+                connectionFreshness={props.connectionFreshness}
+                hasThreadContent={contentPresentationKind === "ready"}
                 connectionError={props.connectionError}
                 environmentLabel={props.environmentLabel}
                 threadSyncPhase={threadSyncPhase}
@@ -514,7 +529,14 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 queueCount={props.selectedThreadQueueCount}
                 queueStatus={props.selectedThreadQueueStatus}
                 rejectedCount={props.selectedThreadRejectedCount}
+                queuedIntents={props.selectedThreadQueuedIntents}
+                editingQueuedMessageId={props.editingQueuedMessageId}
+                remoteQueueCount={props.remoteQueueCount}
                 onDiscardRejected={props.onDiscardRejectedMessages}
+                onEditPendingMessage={props.onEditPendingMessage}
+                onCancelPendingMessage={props.onCancelPendingMessage}
+                onDiscardRejectedMessage={props.onDiscardRejectedMessage}
+                onCancelQueuedMessageEdit={props.onCancelQueuedMessageEdit}
                 activeThreadBusy={props.activeThreadBusy}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}

@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   CommandId,
@@ -31,6 +31,7 @@ import {
   ensureComposerDraftsLoaded,
   getComposerDraftSnapshot,
   removeComposerDraftAttachment,
+  replaceComposerDraftAttachments,
   setComposerDraftText,
   updateComposerDraftSettings,
   useComposerDraft,
@@ -40,9 +41,12 @@ import { useSelectedThreadDetail } from "../state/use-thread-detail";
 import { useThreadSelection } from "../state/use-thread-selection";
 import { enqueueThreadOutboxMessage, threadOutboxManager } from "./thread-outbox";
 import {
+  holdEditingQueuedMessage,
+  releaseEditingQueuedMessage,
   useThreadOutboxDeliveryStates,
   useThreadOutboxMessages,
 } from "./use-thread-outbox";
+import { presentLocalIntent } from "../features/threads/trainNetworkPresentation";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -81,6 +85,14 @@ export function useThreadComposerState() {
   const composerDrafts = useAtomValue(composerDraftsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const outboxDeliveryStates = useThreadOutboxDeliveryStates();
+  const [editingQueuedMessageId, setEditingQueuedMessageId] = useState<MessageId | null>(null);
+
+  useEffect(
+    () => () => {
+      if (editingQueuedMessageId !== null) releaseEditingQueuedMessage(editingQueuedMessageId);
+    },
+    [editingQueuedMessageId],
+  );
 
   useEffect(() => {
     ensureComposerDraftsLoaded();
@@ -93,6 +105,15 @@ export function useThreadComposerState() {
     () => (selectedThreadKey ? (queuedMessagesByThreadKey[selectedThreadKey] ?? []) : []),
     [queuedMessagesByThreadKey, selectedThreadKey],
   );
+  useEffect(() => {
+    if (
+      editingQueuedMessageId !== null &&
+      !selectedThreadQueuedMessages.some((message) => message.messageId === editingQueuedMessageId)
+    ) {
+      releaseEditingQueuedMessage(editingQueuedMessageId);
+      setEditingQueuedMessageId(null);
+    }
+  }, [editingQueuedMessageId, selectedThreadQueuedMessages]);
   const selectedThreadFeed = useMemo(
     () => (selectedThreadDetail ? buildThreadFeed(selectedThreadDetail) : []),
     [selectedThreadDetail],
@@ -107,24 +128,32 @@ export function useThreadComposerState() {
   );
   const selectedThreadQueueStatus = (() => {
     if (selectedThreadRejectedMessages.length > 0) {
-      return `${selectedThreadRejectedMessages.length} message${selectedThreadRejectedMessages.length === 1 ? "" : "s"} failed permanently`;
+      return `${selectedThreadRejectedMessages.length} locally saved message${selectedThreadRejectedMessages.length === 1 ? "" : "s"} could not send`;
     }
     if (
       selectedThreadQueuedMessages.some(
         (message) => outboxDeliveryStates[message.commandId]?._tag === "Delivering",
       )
     ) {
-      return "Sending saved message…";
+      return "Sending from this device…";
     }
     if (
       selectedThreadQueuedMessages.some(
         (message) => outboxDeliveryStates[message.commandId]?._tag === "Retrying",
       )
     ) {
-      return "Saved message waiting to retry";
+      return "Saved on this device · retrying automatically";
     }
-    return `${selectedThreadQueueCount} saved message${selectedThreadQueueCount === 1 ? "" : "s"} waiting to send`;
+    return `${selectedThreadQueueCount} message${selectedThreadQueueCount === 1 ? "" : "s"} saved on this device`;
   })();
+  const selectedThreadQueuedIntents = useMemo(
+    () =>
+      selectedThreadQueuedMessages.map((message) => ({
+        message,
+        presentation: presentLocalIntent(outboxDeliveryStates[message.commandId]),
+      })),
+    [outboxDeliveryStates, selectedThreadQueuedMessages],
+  );
   const discardRejectedMessages = useCallback(async () => {
     for (const message of selectedThreadRejectedMessages) {
       await threadOutboxManager.discardRejected(message);
@@ -181,6 +210,27 @@ export function useThreadComposerState() {
     const metadata = makeQueuedMessageMetadata();
     const messageId = MessageId.make(metadata.messageId);
     try {
+      const editingMessage = selectedThreadQueuedMessages.find(
+        (message) => message.messageId === editingQueuedMessageId,
+      );
+      if (editingMessage) {
+        const updated = await threadOutboxManager.update(editingMessage, {
+          ...editingMessage,
+          messageId,
+          commandId: CommandId.make(metadata.commandId),
+          text,
+          attachments,
+          modelSelection: draft.modelSelection ?? thread.modelSelection,
+          runtimeMode: draft.runtimeMode ?? thread.runtimeMode,
+          interactionMode: draft.interactionMode ?? thread.interactionMode,
+          createdAt: metadata.createdAt,
+        });
+        if (!updated) return null;
+        releaseEditingQueuedMessage(editingMessage.messageId);
+        setEditingQueuedMessageId(null);
+        clearComposerDraftContent(threadKey);
+        return messageId;
+      }
       await enqueueThreadOutboxMessage({
         environmentId: selectedThreadShell.environmentId,
         threadId: selectedThreadShell.id,
@@ -201,7 +251,60 @@ export function useThreadComposerState() {
       );
       return null;
     }
-  }, [selectedThreadDetail, selectedThreadShell]);
+  }, [editingQueuedMessageId, selectedThreadDetail, selectedThreadQueuedMessages, selectedThreadShell]);
+
+  const editPendingMessage = useCallback(
+    (messageId: MessageId) => {
+      if (!selectedThreadKey) return;
+      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Pending") return;
+      const draft = getComposerDraftSnapshot(selectedThreadKey);
+      if (draft.text.trim().length > 0 || draft.attachments.length > 0) {
+        setPendingConnectionError("Send or clear the current draft before editing a saved message.");
+        return;
+      }
+      holdEditingQueuedMessage(message.messageId);
+      setEditingQueuedMessageId(message.messageId);
+      setComposerDraftText(selectedThreadKey, message.text);
+      replaceComposerDraftAttachments(selectedThreadKey, message.attachments);
+      updateComposerDraftSettings(selectedThreadKey, {
+        modelSelection: message.modelSelection,
+        runtimeMode: message.runtimeMode,
+        interactionMode: message.interactionMode,
+      });
+    },
+    [outboxDeliveryStates, selectedThreadKey, selectedThreadQueuedMessages],
+  );
+
+  const cancelPendingMessage = useCallback(
+    async (messageId: MessageId) => {
+      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Pending") return;
+      await threadOutboxManager.remove(message);
+      if (editingQueuedMessageId === messageId && selectedThreadKey) {
+        releaseEditingQueuedMessage(messageId);
+        setEditingQueuedMessageId(null);
+        clearComposerDraftContent(selectedThreadKey);
+      }
+    },
+    [editingQueuedMessageId, outboxDeliveryStates, selectedThreadKey, selectedThreadQueuedMessages],
+  );
+
+  const discardRejectedMessage = useCallback(
+    async (messageId: MessageId) => {
+      const message = selectedThreadQueuedMessages.find((candidate) => candidate.messageId === messageId);
+      if (!message || outboxDeliveryStates[message.commandId]?._tag !== "Rejected") return;
+      await threadOutboxManager.discardRejected(message);
+    },
+    [outboxDeliveryStates, selectedThreadQueuedMessages],
+  );
+
+  const cancelQueuedMessageEdit = useCallback(() => {
+    if (editingQueuedMessageId === null || selectedThreadKey === null) return;
+    releaseEditingQueuedMessage(editingQueuedMessageId);
+    setEditingQueuedMessageId(null);
+    clearComposerDraftContent(selectedThreadKey);
+  }, [editingQueuedMessageId, selectedThreadKey]);
 
   const onChangeDraftMessage = useCallback(
     (value: string) => {
@@ -326,6 +429,12 @@ export function useThreadComposerState() {
     selectedThreadQueueCount,
     selectedThreadQueueStatus,
     selectedThreadRejectedCount: selectedThreadRejectedMessages.length,
+    selectedThreadQueuedIntents,
+    editingQueuedMessageId,
+    editPendingMessage,
+    cancelPendingMessage,
+    discardRejectedMessage,
+    cancelQueuedMessageEdit,
     discardRejectedMessages,
     activeWorkStartedAt,
     draftMessage,

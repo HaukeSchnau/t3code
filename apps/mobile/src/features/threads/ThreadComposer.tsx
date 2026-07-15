@@ -50,6 +50,7 @@ import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
+import type { EnvironmentConnectionFreshnessProjection } from "@t3tools/client-runtime/state/connection-freshness";
 import {
   insertRankedSearchResult,
   normalizeSearchQuery,
@@ -63,6 +64,13 @@ import {
 } from "../../lib/providerOptions";
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
+import {
+  presentRemoteQueue,
+  presentTrainConnectionStatus,
+  trainStatusVisibilityDelayMs,
+  type TrainConnectionStatus,
+  type LocalIntentPresentation,
+} from "./trainNetworkPresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -83,6 +91,8 @@ export interface ThreadComposerProps {
   readonly contentMaxWidth?: number;
   readonly bottomInset?: number;
   readonly connectionState: RemoteClientConnectionState;
+  readonly connectionFreshness: EnvironmentConnectionFreshnessProjection | null;
+  readonly hasThreadContent: boolean;
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
   /**
@@ -96,7 +106,17 @@ export interface ThreadComposerProps {
   readonly queueCount: number;
   readonly queueStatus: string;
   readonly rejectedCount: number;
+  readonly queuedIntents: ReadonlyArray<{
+    readonly message: { readonly messageId: MessageId; readonly text: string };
+    readonly presentation: LocalIntentPresentation;
+  }>;
+  readonly editingQueuedMessageId: MessageId | null;
+  readonly remoteQueueCount: number;
   readonly onDiscardRejected: () => Promise<void>;
+  readonly onEditPendingMessage: (messageId: MessageId) => void;
+  readonly onCancelPendingMessage: (messageId: MessageId) => Promise<void>;
+  readonly onDiscardRejectedMessage: (messageId: MessageId) => Promise<void>;
+  readonly onCancelQueuedMessageEdit: () => void;
   readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectCwd: string | null;
@@ -177,10 +197,7 @@ export function ComposerSurface(props: {
   );
 }
 
-type ComposerStatusPillState = {
-  readonly kind: "unavailable" | "reconnecting" | "syncing";
-  readonly label: string;
-};
+type ComposerStatusPillState = TrainConnectionStatus;
 
 function composerConnectionStatus(input: {
   readonly connectionError: string | null;
@@ -199,18 +216,20 @@ function composerConnectionStatus(input: {
           input.connectionError === null
             ? `Reconnecting to ${environmentLabel}...`
             : `Failed to connect. Retrying ${environmentLabel}...`,
+        accessibilityLabel: `Reconnecting to ${environmentLabel}.`,
       };
     case "offline":
-      return { kind: "unavailable", label: "You are offline" };
+      return { kind: "unavailable", label: "You are offline", accessibilityLabel: "You are offline." };
     case "error":
       return {
         kind: "unavailable",
         label: input.connectionError
           ? `Failed to connect to ${environmentLabel}: ${input.connectionError}`
           : `Failed to connect to ${environmentLabel}`,
+        accessibilityLabel: `Failed to connect to ${environmentLabel}.`,
       };
     case "available":
-      return { kind: "unavailable", label: `${environmentLabel} is not connected` };
+      return { kind: "unavailable", label: `${environmentLabel} is not connected`, accessibilityLabel: `${environmentLabel} is not connected.` };
     case "connected":
       break;
   }
@@ -220,9 +239,9 @@ function composerConnectionStatus(input: {
   // cached messages are already visible.
   switch (input.threadSyncPhase) {
     case "loading":
-      return { kind: "syncing", label: "Loading messages..." };
+      return { kind: "syncing", label: "Loading messages...", accessibilityLabel: "Loading messages." };
     case "syncing":
-      return { kind: "syncing", label: "Syncing messages..." };
+      return { kind: "syncing", label: "Syncing messages...", accessibilityLabel: "Syncing messages." };
     default:
       return null;
   }
@@ -238,6 +257,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
     <View className="items-center pb-2">
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel={props.status.accessibilityLabel}
         onPress={props.onPress}
         className="max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm active:opacity-70 dark:bg-neutral-900/90"
       >
@@ -247,12 +267,56 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
           <View className="h-2 w-2 rounded-full bg-red-500" />
         )}
         <Text
+          accessibilityLiveRegion="polite"
           className="max-w-[260px] text-sm font-t3-bold leading-snug text-foreground"
           numberOfLines={1}
         >
           {props.status.label}
         </Text>
       </Pressable>
+    </View>
+  );
+});
+
+const LocalIntentRow = memo(function LocalIntentRow(props: {
+  readonly editing: boolean;
+  readonly messageId: MessageId;
+  readonly text: string;
+  readonly presentation: LocalIntentPresentation;
+  readonly onEdit: (messageId: MessageId) => void;
+  readonly onCancel: (messageId: MessageId) => Promise<void>;
+  readonly onDiscard: (messageId: MessageId) => Promise<void>;
+  readonly onCancelEdit: () => void;
+}) {
+  const toneClass = props.presentation.tone === "danger" ? "text-danger" : "text-foreground";
+  return (
+    <View className="mt-2 rounded-xl border border-neutral-200/80 bg-white/90 px-3 py-2 dark:border-white/[0.08] dark:bg-neutral-900/90">
+      <Text accessibilityLiveRegion="polite" className={`text-xs font-t3-bold ${toneClass}`}>{props.presentation.label}</Text>
+      <Text numberOfLines={1} className="pt-0.5 text-xs text-foreground-muted">
+        {props.text.trim() || "Message with attachments"}
+      </Text>
+      <Text className="pt-0.5 text-2xs text-foreground-muted">{props.presentation.detail}</Text>
+      <View className="flex-row gap-4 pt-1.5">
+        {props.editing ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Cancel editing saved message" onPress={props.onCancelEdit}>
+            <Text className="text-xs font-t3-bold text-accent">Cancel edit</Text>
+          </Pressable>
+        ) : props.presentation.canEdit ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Edit saved message" onPress={() => props.onEdit(props.messageId)}>
+            <Text className="text-xs font-t3-bold text-accent">Edit</Text>
+          </Pressable>
+        ) : null}
+        {props.presentation.canCancel && !props.editing ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Cancel saved message" onPress={() => void props.onCancel(props.messageId)}>
+            <Text className="text-xs font-t3-bold text-danger">Cancel</Text>
+          </Pressable>
+        ) : null}
+        {props.presentation.canDiscard ? (
+          <Pressable accessibilityRole="button" accessibilityLabel="Discard failed saved message" onPress={() => void props.onDiscard(props.messageId)}>
+            <Text className="text-xs font-t3-bold text-danger">Discard</Text>
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 });
@@ -264,6 +328,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
   const [isFocused, setIsFocused] = useState(false);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const [visibleConnectionStatus, setVisibleConnectionStatus] =
+    useState<ComposerStatusPillState | null>(null);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -308,12 +375,51 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
-  const connectionStatus = composerConnectionStatus({
-    connectionError: props.connectionError,
-    connectionState: props.connectionState,
-    environmentLabel: props.environmentLabel,
-    threadSyncPhase: props.threadSyncPhase,
-  });
+  const connectionStatus = useMemo(
+    () =>
+      props.connectionFreshness
+        ? presentTrainConnectionStatus({
+            projection: props.connectionFreshness,
+            environmentLabel: props.environmentLabel,
+            nowMs,
+            hasThreadContent: props.hasThreadContent,
+          })
+        : composerConnectionStatus({
+            connectionError: props.connectionError,
+            connectionState: props.connectionState,
+            environmentLabel: props.environmentLabel,
+            threadSyncPhase: props.threadSyncPhase,
+          }),
+    [
+      nowMs,
+      props.connectionError,
+      props.connectionFreshness,
+      props.connectionState,
+      props.environmentLabel,
+      props.hasThreadContent,
+      props.threadSyncPhase,
+    ],
+  );
+  const retryDeadline =
+    props.connectionFreshness?.connection.stage === "waiting-to-retry"
+      ? props.connectionFreshness.connection.retryAt
+      : null;
+  useEffect(() => {
+    if (retryDeadline === null) return;
+    setNowMs(Date.now());
+    const interval = setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => clearInterval(interval);
+  }, [retryDeadline]);
+  useEffect(() => {
+    const delay = trainStatusVisibilityDelayMs(visibleConnectionStatus, connectionStatus);
+    if (delay === 0) {
+      setVisibleConnectionStatus(connectionStatus);
+      return;
+    }
+    const timeout = setTimeout(() => setVisibleConnectionStatus(connectionStatus), delay);
+    return () => clearTimeout(timeout);
+  }, [connectionStatus, visibleConnectionStatus]);
+  const remoteQueueStatus = presentRemoteQueue(props.remoteQueueCount);
   const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
   const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
   const selectedProviderStatus = useMemo(() => {
@@ -724,9 +830,9 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           </View>
         ) : null}
 
-        {connectionStatus ? (
+        {visibleConnectionStatus ? (
           <ComposerConnectionStatusPill
-            status={connectionStatus}
+            status={visibleConnectionStatus}
             onPress={props.onReconnectEnvironment}
           />
         ) : null}
@@ -901,10 +1007,23 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         {/* Queue count */}
         {props.queueCount > 0 ? (
           <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(120)}>
-            <Text className="pt-2 text-xs text-foreground-muted">
+            <Text accessibilityLiveRegion="polite" className="pt-2 text-xs font-t3-bold text-foreground-muted">
               {props.queueStatus}
             </Text>
-            {props.rejectedCount > 0 ? (
+            {props.queuedIntents.map(({ message, presentation }) => (
+              <LocalIntentRow
+                key={message.messageId}
+                messageId={message.messageId}
+                text={message.text}
+                presentation={presentation}
+                editing={props.editingQueuedMessageId === message.messageId}
+                onEdit={props.onEditPendingMessage}
+                onCancel={props.onCancelPendingMessage}
+                onDiscard={props.onDiscardRejectedMessage}
+                onCancelEdit={props.onCancelQueuedMessageEdit}
+              />
+            ))}
+            {props.rejectedCount > 1 ? (
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Discard permanently failed messages"
@@ -914,6 +1033,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
               </Pressable>
             ) : null}
           </Animated.View>
+        ) : null}
+        {remoteQueueStatus ? (
+          <Text accessibilityLiveRegion="polite" className="pt-2 text-xs text-foreground-muted">
+            {remoteQueueStatus}
+          </Text>
         ) : null}
       </Animated.View>
 
