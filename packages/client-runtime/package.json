@@ -63,6 +63,10 @@
       "types": "./src/state/connections.ts",
       "default": "./src/state/connections.ts"
     },
+    "./state/connection-freshness": {
+      "types": "./src/state/connectionFreshness.ts",
+      "default": "./src/state/connectionFreshness.ts"
+    },
     "./state/entities": {
       "types": "./src/state/entities.ts",
       "default": "./src/state/entities.ts"
