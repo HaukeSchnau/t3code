@@ -70,6 +70,7 @@ import { readEnvironmentApi } from "../environmentApi";
 import {
   durableCommandOutbox,
   selectDurableOutboxMessages,
+  shouldClearComposerAfterDurableEnqueue,
   useDurableCommandOutboxEntries,
 } from "../durableCommandOutbox";
 import { readLocalApi } from "../localApi";
@@ -1488,6 +1489,11 @@ function ChatViewContent(props: ChatViewProps) {
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
+  useEffect(() => {
+    if (activeEnvironmentConnectionPhase === "connected") {
+      durableCommandOutbox().wake();
+    }
+  }, [activeEnvironmentConnectionPhase]);
   const activeEnvironmentUnavailableLabel = activeEnvironment?.label ?? null;
   const activeEnvironmentUnavailableState = useMemo<EnvironmentUnavailableState | null>(() => {
     if (!activeEnvironmentUnavailable || !activeEnvironmentUnavailableLabel || !activeEnvironment) {
@@ -1713,8 +1719,38 @@ function ChatViewContent(props: ChatViewProps) {
     hasMultipleRegisteredEnvironments && activeThread
       ? `${environmentById.get(activeThread.environmentId)?.label ?? serverConfig?.environment.label ?? activeThread.environmentId} server`
       : "server";
+  const activeRejectedOutboxEntry = activeThread
+    ? (durableOutboxEntries.find(
+        (entry) =>
+          entry.plan.environmentId === activeThread.environmentId &&
+          entry.plan.command.threadId === activeThread.id &&
+          entry.state._tag === "Rejected",
+      ) ?? null)
+    : null;
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
+    if (activeRejectedOutboxEntry?.state._tag === "Rejected") {
+      const rejected = activeRejectedOutboxEntry;
+      const rejection = activeRejectedOutboxEntry.state;
+      items.push({
+        id: `outbox-rejected:${rejected.plan.command.commandId}`,
+        variant: "error",
+        icon: <TriangleAlertIcon />,
+        title: "Saved message was rejected",
+        description: rejection.failure.message,
+        actions: (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() =>
+              void durableCommandOutbox().discardRejected(rejected.plan.command.commandId)
+            }
+          >
+            Discard
+          </Button>
+        ),
+      });
+    }
     if (activeEnvironmentUnavailableState) {
       const connection = activeEnvironmentUnavailableState.connection;
       const isReconnecting =
@@ -1772,6 +1808,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return items;
   }, [
+    activeRejectedOutboxEntry,
     activeEnvironmentUnavailableState,
     handleReconnectActiveEnvironment,
     navigate,
@@ -2023,6 +2060,7 @@ function ChatViewContent(props: ChatViewProps) {
       durableOutboxEntries,
       activeThread.environmentId,
       activeThread.id,
+      new Set((activeThread.queuedMessages ?? []).map((message) => message.messageId)),
     ).map((message) => {
       const entry = durableOutboxEntries.find(
         (candidate) => candidate.plan.command.message.messageId === message.messageId,
@@ -4054,6 +4092,7 @@ function ChatViewContent(props: ChatViewProps) {
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
     if (!activeThread || isSendBusy || sendInFlightRef.current) return;
+    if (activeEnvironmentUnavailable && (activePendingProgress || showPlanFollowUpPrompt)) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -4092,9 +4131,11 @@ function ChatViewContent(props: ChatViewProps) {
         draftText: trimmed,
         planMarkdown: activeProposedPlan.planMarkdown,
       });
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      readComposerHandle(composerRef)?.resetCursorState();
+      if (shouldClearComposerAfterDurableEnqueue(promptForSend, promptRef.current)) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        readComposerHandle(composerRef)?.resetCursorState();
+      }
       await onSubmitPlanFollowUp({
         text: followUp.text,
         interactionMode: followUp.interactionMode,
@@ -4111,9 +4152,11 @@ function ChatViewContent(props: ChatViewProps) {
         : null;
     if (standaloneSlashCommand) {
       handleInteractionModeChange(standaloneSlashCommand);
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      readComposerHandle(composerRef)?.resetCursorState();
+      if (shouldClearComposerAfterDurableEnqueue(promptForSend, promptRef.current)) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        readComposerHandle(composerRef)?.resetCursorState();
+      }
       return;
     }
     if (!hasSendableContent) {
@@ -4203,19 +4246,6 @@ function ChatViewContent(props: ChatViewProps) {
         threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
         messageId: messageIdForSend,
       });
-      setOptimisticUserMessages((existing) => [
-        ...existing,
-        {
-          id: messageIdForSend,
-          role: "user",
-          text: outgoingMessageText,
-          ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-          turnId: null,
-          createdAt: messageCreatedAt,
-          updatedAt: messageCreatedAt,
-          streaming: false,
-        },
-      ]);
     }
     setThreadError(threadIdForSend, null);
     if (expiredTerminalContextCount > 0) {
@@ -4231,10 +4261,6 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       );
     }
-    promptRef.current = "";
-    clearComposerDraftContent(composerDraftTarget);
-    readComposerHandle(composerRef)?.resetCursorState();
-
     let firstComposerImageName: string | null = null;
     if (composerImagesSnapshot.length > 0) {
       const firstComposerImage = composerImagesSnapshot[0];
@@ -4405,6 +4431,28 @@ function ChatViewContent(props: ChatViewProps) {
           threadIdForSend,
           error instanceof Error ? error.message : "Failed to send message.",
         );
+      }
+    }
+    if (sendOrQueueSucceeded) {
+      if (!shouldQueueMessage) {
+        setOptimisticUserMessages((existing) => [
+          ...existing,
+          {
+            id: messageIdForSend,
+            role: "user",
+            text: outgoingMessageText,
+            ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+            turnId: null,
+            createdAt: messageCreatedAt,
+            updatedAt: messageCreatedAt,
+            streaming: false,
+          },
+        ]);
+      }
+      if (shouldClearComposerAfterDurableEnqueue(promptForSend, promptRef.current)) {
+        promptRef.current = "";
+        clearComposerDraftContent(composerDraftTarget);
+        readComposerHandle(composerRef)?.resetCursorState();
       }
     }
     sendInFlightRef.current = false;
