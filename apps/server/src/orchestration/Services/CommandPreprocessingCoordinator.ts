@@ -20,8 +20,20 @@ export type CommandPreprocessingStep =
   | "deferred-preprocessing-completed"
   | "thread-created"
   | "workspace-prepared"
-  | "setup-claimed"
   | "setup-completed";
+
+export interface SetupExecutionIdentity {
+  readonly executionKey: string;
+  readonly scriptDigest: string;
+}
+
+export type CommandPreprocessingSetupState =
+  | { readonly status: "pending" }
+  | { readonly status: "claimed"; readonly execution: SetupExecutionIdentity }
+  | {
+      readonly status: "completed";
+      readonly execution: SetupExecutionIdentity | null;
+    };
 
 export interface CommandPreprocessingProgress {
   readonly commandId: CommandId;
@@ -32,8 +44,7 @@ export interface CommandPreprocessingProgress {
   readonly deferredPreprocessingCompleted: boolean;
   readonly threadCreated: boolean;
   readonly workspacePrepared: boolean;
-  readonly setupClaimed: boolean;
-  readonly setupCompleted: boolean;
+  readonly setup: CommandPreprocessingSetupState;
 }
 
 interface ProgressRow {
@@ -47,6 +58,8 @@ interface ProgressRow {
   readonly workspacePrepared: number;
   readonly setupClaimed: number;
   readonly setupCompleted: number;
+  readonly setupExecutionKey: string | null;
+  readonly setupScriptDigest: string | null;
 }
 
 type CommandPreprocessingError = PersistenceSqlError | OrchestrationCommandReceiptMismatchError;
@@ -67,15 +80,37 @@ function aggregateRef(command: OrchestrationCommand): {
   }
 }
 
-function toProgress(row: ProgressRow): CommandPreprocessingProgress {
-  return {
+function toProgress(
+  row: ProgressRow,
+): Effect.Effect<CommandPreprocessingProgress, PersistenceSqlError> {
+  const setupClaimed = row.setupClaimed === 1;
+  const setupCompleted = row.setupCompleted === 1;
+  const hasExecutionKey = row.setupExecutionKey !== null;
+  const hasScriptDigest = row.setupScriptDigest !== null;
+  if (hasExecutionKey !== hasScriptDigest || (setupClaimed && !hasExecutionKey)) {
+    return Effect.fail(
+      new PersistenceSqlError({
+        operation: "CommandPreprocessingCoordinator.readProgress",
+        detail: `Preprocessing progress '${row.commandId}' has an invalid durable setup identity.`,
+      }),
+    );
+  }
+  const execution =
+    row.setupExecutionKey !== null && row.setupScriptDigest !== null
+      ? { executionKey: row.setupExecutionKey, scriptDigest: row.setupScriptDigest }
+      : null;
+  const setup: CommandPreprocessingSetupState = setupCompleted
+    ? { status: "completed", execution }
+    : setupClaimed && execution
+      ? { status: "claimed", execution }
+      : { status: "pending" };
+  return Effect.succeed({
     ...row,
     deferredPreprocessingCompleted: row.deferredPreprocessingCompleted === 1,
     threadCreated: row.threadCreated === 1,
     workspacePrepared: row.workspacePrepared === 1,
-    setupClaimed: row.setupClaimed === 1,
-    setupCompleted: row.setupCompleted === 1,
-  };
+    setup,
+  });
 }
 
 export class CommandPreprocessingCoordinator extends Context.Service<
@@ -91,6 +126,10 @@ export class CommandPreprocessingCoordinator extends Context.Service<
     readonly markCompleted: (
       command: OrchestrationCommand,
       step: CommandPreprocessingStep,
+    ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
+    readonly claimSetup: (
+      command: OrchestrationCommand,
+      execution: SetupExecutionIdentity,
     ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
   }
 >()("t3/orchestration/Services/CommandPreprocessingCoordinator") {}
@@ -117,14 +156,16 @@ export const make = Effect.gen(function* () {
         thread_created AS "threadCreated",
         workspace_prepared AS "workspacePrepared",
         setup_claimed AS "setupClaimed",
-        setup_completed AS "setupCompleted"
+        setup_completed AS "setupCompleted",
+        setup_execution_key AS "setupExecutionKey",
+        setup_script_digest AS "setupScriptDigest"
       FROM orchestration_command_preprocessing
       WHERE command_id = ${commandId}
     `.pipe(
       Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.readProgress")),
       Effect.flatMap((rows) =>
         rows[0]
-          ? Effect.succeed(toProgress(rows[0]))
+          ? toProgress(rows[0])
           : Effect.fail(
               new PersistenceSqlError({
                 operation: "CommandPreprocessingCoordinator.readProgress",
@@ -219,8 +260,6 @@ export const make = Effect.gen(function* () {
             return sql`UPDATE orchestration_command_preprocessing SET thread_created = 1, updated_at = ${timestamp} WHERE command_id = ${command.commandId}`;
           case "workspace-prepared":
             return sql`UPDATE orchestration_command_preprocessing SET workspace_prepared = 1, updated_at = ${timestamp} WHERE command_id = ${command.commandId}`;
-          case "setup-claimed":
-            return sql`UPDATE orchestration_command_preprocessing SET setup_claimed = 1, updated_at = ${timestamp} WHERE command_id = ${command.commandId}`;
           case "setup-completed":
             return sql`UPDATE orchestration_command_preprocessing SET setup_completed = 1, updated_at = ${timestamp} WHERE command_id = ${command.commandId}`;
         }
@@ -230,6 +269,56 @@ export const make = Effect.gen(function* () {
       );
       return yield* readProgress(command.commandId).pipe(
         Effect.flatMap((progress) => validateProgress(command, progress)),
+      );
+    });
+
+  const claimSetup: CommandPreprocessingCoordinator["Service"]["claimSetup"] = (
+    command,
+    execution,
+  ) =>
+    Effect.gen(function* () {
+      const progress = yield* claim(command);
+      if (progress.setup.status !== "pending") {
+        const durableExecution = progress.setup.execution;
+        if (
+          durableExecution?.executionKey !== execution.executionKey ||
+          durableExecution.scriptDigest !== execution.scriptDigest
+        ) {
+          return yield* new OrchestrationCommandReceiptMismatchError({
+            commandId: command.commandId,
+            reason: "payload-mismatch",
+            detail: "The setup execution identity differs from the durable preprocessing claim.",
+          });
+        }
+        return progress;
+      }
+      const timestamp = yield* nowIso;
+      yield* sql`
+        UPDATE orchestration_command_preprocessing
+        SET
+          setup_claimed = 1,
+          setup_execution_key = ${execution.executionKey},
+          setup_script_digest = ${execution.scriptDigest},
+          updated_at = ${timestamp}
+        WHERE command_id = ${command.commandId} AND setup_claimed = 0 AND setup_completed = 0
+      `.pipe(Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.claimSetup")));
+      return yield* readProgress(command.commandId).pipe(
+        Effect.flatMap((next) => validateProgress(command, next)),
+        Effect.flatMap((next) => {
+          const durableExecution =
+            next.setup.status === "pending" ? null : next.setup.execution;
+          return durableExecution !== null &&
+            durableExecution?.executionKey === execution.executionKey &&
+            durableExecution.scriptDigest === execution.scriptDigest
+            ? Effect.succeed(next)
+            : Effect.fail(
+                new OrchestrationCommandReceiptMismatchError({
+                  commandId: command.commandId,
+                  reason: "payload-mismatch",
+                  detail: "The setup execution identity differs from the durable preprocessing claim.",
+                }),
+              );
+        }),
       );
     });
 
@@ -258,7 +347,7 @@ export const make = Effect.gen(function* () {
         }),
     );
 
-  return CommandPreprocessingCoordinator.of({ withCommandLock, claim, markCompleted });
+  return CommandPreprocessingCoordinator.of({ withCommandLock, claim, markCompleted, claimSetup });
 });
 
 export const layer = Layer.effect(CommandPreprocessingCoordinator, make);

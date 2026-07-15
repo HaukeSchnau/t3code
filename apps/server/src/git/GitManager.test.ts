@@ -673,6 +673,7 @@ function makeManager(input?: {
       ProjectSetupScriptRunner.ProjectSetupScriptRunner,
       input?.setupScriptRunner ?? {
         runForThread: () => Effect.succeed({ status: "no-script" as const }),
+        resolveForThread: () => Effect.succeed({ status: "no-script" as const }),
       },
     ),
     vcsDriverLayer,
@@ -2822,6 +2823,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           },
         },
         setupScriptRunner: {
+          resolveForThread: () => Effect.succeed({ status: "no-script" as const }),
           runForThread: (setupInput) =>
             Effect.sync(() => {
               setupCalls.push(setupInput);
@@ -3048,6 +3050,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           },
         },
         setupScriptRunner: {
+          resolveForThread: () => Effect.succeed({ status: "no-script" as const }),
           runForThread: (setupInput) =>
             Effect.sync(() => {
               setupCalls.push(setupInput);
@@ -3278,6 +3281,7 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           },
         },
         setupScriptRunner: {
+          resolveForThread: () => Effect.succeed({ status: "no-script" as const }),
           runForThread: (input) =>
             Effect.fail(
               new ProjectSetupScriptRunner.ProjectSetupScriptOperationError({

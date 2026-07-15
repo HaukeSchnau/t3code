@@ -701,6 +701,17 @@ const buildAppUnderTest = (options?: {
       Layer.provide(
         Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({
           runForThread: () => Effect.succeed({ status: "no-script" as const }),
+          resolveForThread: (input) =>
+            options?.layers?.projectSetupScriptRunner?.runForThread
+              ? Effect.succeed({
+                  status: "resolved" as const,
+                  execution: ProjectSetupScriptRunner.setupExecutionIdentity(
+                    input.threadId,
+                    input.preferredTerminalId ?? "setup-setup",
+                    "test setup script",
+                  ),
+                })
+              : Effect.succeed({ status: "no-script" as const }),
           ...options?.layers?.projectSetupScriptRunner,
         }),
       ),
@@ -7031,6 +7042,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           preferredTerminalId:
             "setup-preprocess:cmd-bootstrap-turn-start:10988b73a3ad0991:setup-run",
           reconcileClaimedLaunch: false,
+          expectedExecution: ProjectSetupScriptRunner.setupExecutionIdentity(
+            ThreadId.make("thread-bootstrap"),
+            "setup-preprocess:cmd-bootstrap-turn-start:10988b73a3ad0991:setup-run",
+            "test setup script",
+          ),
         });
         assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
         assert.equal(prepareWorkspace.mock.calls.length, 1);
@@ -7066,6 +7082,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       const workspacePath = path.join(baseDir, "workspace");
       const setupCommand = "printf setup-complete";
+      let liveSetupCommand = setupCommand;
       const threadId = ThreadId.make("thread-bootstrap-restart");
       const commandId = CommandId.make("cmd-bootstrap-restart");
       const createdAt = "2026-01-01T00:00:00.000Z";
@@ -7109,6 +7126,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         updatedAt: createdAt,
         deletedAt: null,
       };
+      const liveProject = () => ({
+        ...project,
+        scripts: project.scripts.map((script) => ({
+          ...script,
+          command: liveSetupCommand,
+        })),
+      });
 
       const makeFreshSetupRunner = () =>
         ProjectSetupScriptRunner.make.pipe(
@@ -7116,10 +7140,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             Layer.mergeAll(
               Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
                 getProjectShellById: (projectId) =>
-                  Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+                  Effect.succeed(
+                    projectId === project.id ? Option.some(liveProject()) : Option.none(),
+                  ),
                 getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
                   Effect.succeed(
-                    workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
+                    workspaceRoot === project.workspaceRoot
+                      ? Option.some(liveProject())
+                      : Option.none(),
                   ),
               }),
               Layer.mock(TerminalManager.TerminalManager)({
@@ -7222,7 +7250,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               projectSetupScriptRunner: setupRunner,
               projectionSnapshotQuery: {
                 getProjectShellById: (projectId) =>
-                  Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+                  Effect.succeed(
+                    projectId === project.id ? Option.some(liveProject()) : Option.none(),
+                  ),
               },
               threadWorkspaceService: {
                 prepareWorkspace: (input) =>
@@ -7388,6 +7418,27 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(changedEnvelope._tag === "Failure");
       assertInclude(String(changedEnvelope.failure), "payload-mismatch");
 
+      liveSetupCommand = "printf changed-setup";
+      const changedLiveScript = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      ).pipe(Effect.result);
+      assertTrue(changedLiveScript._tag === "Failure");
+      assertInclude(String(changedLiveScript.failure), "no longer matches the durable execution");
+      assert.equal(terminalOpenCount, 1);
+      assert.equal(terminalWriteCount, 1);
+      assert.equal(workspaceProvisionCount, 1);
+      assert.equal(
+        dispatchedCommands.filter((entry) => entry.type === "thread.turn.start").length,
+        0,
+      );
+      const attachmentFilesAfterScriptMismatch = yield* fileSystem.readDirectory(
+        secondServer.config.attachmentsDir,
+      );
+      assert.equal(attachmentFilesAfterScriptMismatch.length, 1);
+      liveSetupCommand = setupCommand;
+
       const executionDirectory = claimedExecutionDirectory!;
       const terminalId = claimedTerminalId!;
       const completionPath = path.join(executionDirectory, "completed.json");
@@ -7416,7 +7467,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertInclude(String(changedScriptDigest.failure), "reconcileExecution");
       assert.deepEqual(
         dispatchedCommands.map((entry) => entry.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append"],
+        [
+          "thread.create",
+          "thread.meta.update",
+          "thread.activity.append",
+          "thread.activity.append",
+        ],
       );
       assert.equal(terminalOpenCount, 1);
       assert.equal(terminalWriteCount, 1);
@@ -7451,6 +7507,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           "thread.activity.append",
           "thread.activity.append",
           "thread.activity.append",
+          "thread.activity.append",
           "thread.turn.start",
         ],
       );
@@ -7458,7 +7515,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         dispatchedCommands.flatMap((entry) =>
           entry.type === "thread.activity.append" ? [entry.activity.kind] : [],
         ),
-        ["setup-script.failed", "setup-script.requested", "setup-script.started"],
+        [
+          "setup-script.failed",
+          "setup-script.failed",
+          "setup-script.requested",
+          "setup-script.started",
+        ],
       );
       assert.equal(
         dispatchedCommands.filter((entry) => entry.type === "thread.turn.start").length,

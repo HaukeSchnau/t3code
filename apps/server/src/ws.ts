@@ -296,6 +296,8 @@ function projectSetupScriptCompatibilityDetail(
       return "Project was not found for setup script execution.";
     case "ProjectSetupScriptReconciliationTimeoutError":
       return error.message;
+    case "ProjectSetupScriptIdentityMismatchError":
+      return error.message;
     default:
       return unexpectedCompatibilityError(error);
   }
@@ -1141,23 +1143,35 @@ const makeWsRpcLayer = (
               if (!bootstrap?.runSetupScript || !targetWorktreePath) {
                 return;
               }
-              if (progress.setupCompleted) {
+              if (progress.setup.status === "completed") {
                 return;
               }
-              const reconcileClaimedLaunch = progress.setupClaimed;
-              if (!reconcileClaimedLaunch) {
-                progress = yield* commandPreprocessing.markCompleted(command, "setup-claimed");
-              }
               const worktreePath = targetWorktreePath;
+              const runnerInput = {
+                threadId: command.threadId,
+                ...(targetProjectId ? { projectId: targetProjectId } : {}),
+                ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
+                worktreePath,
+                preferredTerminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
+              };
+              const reconcileClaimedLaunch = progress.setup.status === "claimed";
+              if (progress.setup.status === "pending") {
+                const resolution = yield* projectSetupScriptRunner.resolveForThread(runnerInput);
+                if (resolution.status === "no-script") {
+                  progress = yield* commandPreprocessing.markCompleted(command, "setup-completed");
+                  return;
+                }
+                progress = yield* commandPreprocessing.claimSetup(command, resolution.execution);
+              }
+              if (progress.setup.status !== "claimed") {
+                return;
+              }
               const requestedAt = yield* nowIso;
               yield* projectSetupScriptRunner
                 .runForThread({
-                  threadId: command.threadId,
-                  ...(targetProjectId ? { projectId: targetProjectId } : {}),
-                  ...(targetProjectCwd ? { projectCwd: targetProjectCwd } : {}),
-                  worktreePath,
-                  preferredTerminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
+                  ...runnerInput,
                   reconcileClaimedLaunch,
+                  expectedExecution: progress.setup.execution,
                 })
                 .pipe(
                   Effect.matchEffect({
