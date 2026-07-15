@@ -30,6 +30,7 @@ export const WORKLOAD_COUNTER_NAMES = [
   "replay.events_scanned",
   "replay.events_emitted",
   "replay.overlap_deduped",
+  "replay.logs_dropped",
   "provider_log.candidates",
   "provider_log.records",
   "provider_log.sampled_suppressed",
@@ -50,6 +51,7 @@ export interface WorkloadDiagnosticsRegistry {
   readonly increment: (name: WorkloadCounterName, amount?: number) => void;
   readonly adjustGauge: (name: WorkloadGaugeName, amount: number) => void;
   readonly snapshot: () => WorkloadDiagnosticsSnapshot;
+  readonly reset: () => void;
 }
 
 function zeroRecord<const Names extends ReadonlyArray<string>>(
@@ -85,6 +87,10 @@ export function makeWorkloadDiagnosticsRegistry(
         gauges: { ...gauges },
       };
     },
+    reset() {
+      for (const name of WORKLOAD_COUNTER_NAMES) counters[name] = 0;
+      for (const name of WORKLOAD_GAUGE_NAMES) gauges[name] = 0;
+    },
   };
 }
 
@@ -100,6 +106,10 @@ export function adjustWorkloadGauge(name: WorkloadGaugeName, amount: number): vo
 
 export function readWorkloadDiagnosticsSnapshot(): WorkloadDiagnosticsSnapshot {
   return liveRegistry.snapshot();
+}
+
+export function resetWorkloadDiagnosticsForTesting(): void {
+  liveRegistry.reset();
 }
 
 export class WorkloadDiagnostics extends Context.Service<

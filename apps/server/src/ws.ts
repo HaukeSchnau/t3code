@@ -338,6 +338,7 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
 const SHELL_CURSOR_COMPACTION_INTERVAL = 128;
 const REPLAY_PAGE_SIZE = 256;
 const LIVE_REPLAY_BUFFER_SIZE = 1_024;
+type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
 
 export function shouldIncludeShellStreamItem(
   item: OrchestrationShellStreamItem,
@@ -352,9 +353,9 @@ export function shouldIncludeShellStreamItem(
  * tail; a live stream emits progress at a fixed event-count cadence.
  */
 export function compactShellCursorItems<E, R>(
-  stream: Stream.Stream<OrchestrationShellStreamItem, E, R>,
+  stream: Stream.Stream<ShellDeltaItem, E, R>,
   interval = SHELL_CURSOR_COMPACTION_INTERVAL,
-): Stream.Stream<OrchestrationShellStreamItem, E, R> {
+): Stream.Stream<ShellDeltaItem, E, R> {
   const boundedInterval = Math.max(1, Math.floor(interval));
   interface CursorCompactionState {
     readonly count: number;
@@ -363,8 +364,8 @@ export function compactShellCursorItems<E, R>(
   const initial = (): CursorCompactionState => ({ count: 0, pending: null });
   const compact = (
     state: CursorCompactionState,
-    item: OrchestrationShellStreamItem,
-  ): readonly [CursorCompactionState, ReadonlyArray<OrchestrationShellStreamItem>] => {
+    item: ShellDeltaItem,
+  ): readonly [CursorCompactionState, ReadonlyArray<ShellDeltaItem>] => {
     if (item.kind !== "cursor") {
       incrementWorkloadCounter("shell.suppressed", state.count);
       return [initial(), [item]];
@@ -376,15 +377,14 @@ export function compactShellCursorItems<E, R>(
     }
     return [{ count, pending: item }, []];
   };
-  return Stream.mapAccum<
-    OrchestrationShellStreamItem,
-    E,
-    R,
-    CursorCompactionState,
-    OrchestrationShellStreamItem
-  >(stream, initial, compact, {
-    onHalt: (state) => (state.pending === null ? [] : [state.pending]),
-  });
+  return Stream.mapAccum<ShellDeltaItem, E, R, CursorCompactionState, ShellDeltaItem>(
+    stream,
+    initial,
+    compact,
+    {
+      onHalt: (state) => (state.pending === null ? [] : [state.pending]),
+    },
+  );
 }
 
 const PROVIDER_STATUS_DEBOUNCE_MS = 200;
@@ -962,7 +962,6 @@ const makeWsRpcLayer = (
           ),
         );
 
-      type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
       const shellCursor = (event: OrchestrationEvent): OrchestrationShellCursorItem => ({
         kind: "cursor",
         sequence: event.sequence,
