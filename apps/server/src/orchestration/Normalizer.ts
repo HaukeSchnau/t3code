@@ -4,6 +4,7 @@ import * as NodeCrypto from "node:crypto";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import {
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
@@ -16,12 +17,11 @@ import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
+const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+
 export interface PreparedDispatchCommand {
   readonly command: OrchestrationCommand;
-  readonly performDeferredPreprocessing: Effect.Effect<
-    void,
-    OrchestrationDispatchCommandError
-  >;
+  readonly performDeferredPreprocessing: Effect.Effect<void, OrchestrationDispatchCommandError>;
 }
 
 export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
@@ -190,7 +190,7 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
               );
             }).pipe(
               Effect.mapError((cause) =>
-                cause instanceof OrchestrationDispatchCommandError
+                isOrchestrationDispatchCommandError(cause)
                   ? cause
                   : new OrchestrationDispatchCommandError({
                       message: `Failed to persist attachment '${attachment.name}'.`,

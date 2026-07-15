@@ -58,11 +58,15 @@ committed:
   checkout before provisioning it again, preventing orphan workspaces.
 
 Setup scripts are arbitrary user shell programs and cannot be transactionally coupled to SQLite.
-The coordinator therefore durably claims setup before launching its deterministic terminal and never
-launches that setup identity twice. A process crash in the narrow interval after the claim but before
-the terminal write leaves setup outcome indeterminate; retry safely completes the original turn
-without relaunching the script. Scripts that require recovery from that interval must remain
-restart-safe themselves.
+The coordinator therefore treats `setup-claimed` as a reconciliation requirement, not as proof that
+setup was launched. The deterministic terminal writes a generated wrapper whose filesystem `mkdir`
+atomically claims the execution identity before invoking the user command and whose completion record
+is atomically published after exit. An exact retry with no execution claim safely resubmits the same
+wrapper; competing writes still execute the user command once. A completed execution is reused. A
+claimed execution without a completion record fails closed because the prior process may have run
+part of an arbitrary command. Only `setup-completed` permits preprocessing to skip reconciliation and
+dispatch the original turn. Terminal launch/reconciliation errors are recorded as setup activity and
+then returned; they no longer fall through to final turn dispatch.
 
 ## Claim and transaction boundary
 
@@ -103,13 +107,20 @@ mismatch, and legacy rules as dispatch.
 `apps/server/src/server.test.ts` covers the WebSocket preprocessing seam for attachment-free and
 image-bearing turn start/message queue commands, concurrent replay, changed image payload reuse,
 commit-then-lost-ack replay, and local, worktree, and explicit-workspace bootstrap replay without
-repeated thread/workspace/setup resources. Its concurrent clients instantiate independent WebSocket
-route layers and prove that their shared coordinator serializes preprocessing.
+repeated thread/workspace/setup resources. It also races one HTTP dispatch against one WebSocket
+dispatch for the exact same image-bearing command over a shared runtime/coordinator, asserting an
+identical receipt, one engine dispatch, one published attachment, and no pending publication file.
 
 `apps/server/src/orchestration/Services/CommandPreprocessingCoordinator.test.ts` reopens the same
 SQLite file with fresh coordinator instances at crash checkpoints after attachment materialization,
-thread creation/during workspace preparation, workspace completion, and setup completion. It also
-checks changed-envelope fail-closed behavior after restart and shared-service lock serialization.
+thread creation/during workspace preparation, workspace completion, setup claim, and setup
+completion. It also checks changed-envelope fail-closed behavior after restart and shared-service
+lock serialization.
+
+`apps/server/src/project/ProjectSetupScriptRunner.test.ts` covers the durable terminal execution
+journal: a claimed execution without completion fails closed without reopening or rewriting the
+terminal, while publishing the deterministic completion record lets the same claimed launch be
+reused without another terminal effect.
 
 `apps/server/src/persistence/Migrations/038_OrchestrationCommandReceiptEnvelopes.test.ts` verifies that
 the migration preserves existing terminal receipt data while marking its missing envelope identity as

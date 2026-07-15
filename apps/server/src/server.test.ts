@@ -55,6 +55,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -73,6 +74,7 @@ import * as Socket from "effect/unstable/socket/Socket";
 import { vi } from "vite-plus/test";
 
 const TEST_EPOCH = DateTime.makeUnsafe("1970-01-01T00:00:00.000Z");
+const encodeTestJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
@@ -6441,7 +6443,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 if (!receipt) {
                   return Effect.succeed(Option.none());
                 }
-                if (receipt.envelope !== JSON.stringify(command)) {
+                if (receipt.envelope !== encodeTestJson(command)) {
                   return Effect.fail(
                     new OrchestrationCommandReceiptMismatchError({
                       commandId: command.commandId,
@@ -6456,7 +6458,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.suspend(() => {
                 const sequence = 100 + receipts.size;
                 receipts.set(command.commandId, {
-                  envelope: JSON.stringify(command),
+                  envelope: encodeTestJson(command),
                   sequence,
                 });
                 dispatchCounts.set(
@@ -6611,6 +6613,88 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serializes the same command across HTTP and WebSocket dispatch", () =>
+    Effect.gen(function* () {
+      const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
+      const dispatch = vi.fn((command: OrchestrationCommand) =>
+        Effect.sync(() => {
+          const receipt = { envelope: encodeTestJson(command), sequence: 41 };
+          receipts.set(command.commandId, receipt);
+          return { sequence: receipt.sequence };
+        }),
+      );
+      const config = yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            resolveReceipt: (command) =>
+              Effect.sync(() => {
+                const receipt = receipts.get(command.commandId);
+                return receipt && receipt.envelope === encodeTestJson(command)
+                  ? Option.some({ sequence: receipt.sequence })
+                  : Option.none();
+              }),
+            dispatch,
+            readEvents: () => Stream.empty,
+          },
+        },
+      });
+      const accessToken = yield* getAuthenticatedBearerSessionToken();
+      const command = {
+        type: "thread.turn.start" as const,
+        commandId: CommandId.make("cmd-http-ws-concurrency"),
+        threadId: ThreadId.make("thread-http-ws-concurrency"),
+        message: {
+          messageId: MessageId.make("msg-http-ws-concurrency"),
+          role: "user" as const,
+          text: "one transport-neutral command",
+          attachments: [
+            {
+              type: "image" as const,
+              name: "one.png",
+              mimeType: "image/png",
+              sizeBytes: 1,
+              dataUrl: "data:image/png;base64,AQ==",
+            },
+          ],
+        },
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        createdAt: "2026-01-01T00:00:00.000Z",
+      };
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const httpUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
+
+      const [wsReceipt, httpResponse] = yield* Effect.all(
+        [
+          Effect.scoped(
+            withWsRpcClient(wsUrl, (client) =>
+              client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+            ),
+          ),
+          fetchEffect(httpUrl, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${accessToken}`,
+              "content-type": "application/json",
+            },
+            body: jsonRequestBody(command),
+          }),
+        ],
+        { concurrency: "unbounded" },
+      );
+      const httpReceipt = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
+      const attachmentFiles = yield* FileSystem.FileSystem.pipe(
+        Effect.flatMap((fileSystem) => fileSystem.readDirectory(config.attachmentsDir)),
+      );
+
+      assert.equal(httpResponse.status, 200);
+      assert.deepEqual(httpReceipt, wsReceipt);
+      assert.equal(dispatch.mock.calls.length, 1);
+      assert.equal(attachmentFiles.filter((name) => !name.includes(".pending-")).length, 1);
+      assert.equal(attachmentFiles.some((name) => name.includes(".pending-")), false);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect(
     "bootstraps first-send worktree turns on the server before dispatching turn start",
     () =>
@@ -6709,7 +6793,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   if (!receipt) {
                     return Effect.succeed(Option.none());
                   }
-                  if (receipt.envelope !== JSON.stringify(command)) {
+                  if (receipt.envelope !== encodeTestJson(command)) {
                     return Effect.fail(
                       new OrchestrationCommandReceiptMismatchError({
                         commandId: command.commandId,
@@ -6725,7 +6809,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   dispatchedCommands.push(command);
                   const result = { sequence: dispatchedCommands.length };
                   receipts.set(command.commandId, {
-                    envelope: JSON.stringify(command),
+                    envelope: encodeTestJson(command),
                     sequence: result.sequence,
                   });
                   return result;
@@ -6829,6 +6913,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           worktreePath: "/tmp/bootstrap-worktree",
           preferredTerminalId:
             "setup-preprocess:cmd-bootstrap-turn-start:10988b73a3ad0991:setup-run",
+          reconcileClaimedLaunch: false,
         });
         assert.deepEqual(refreshStatus.mock.calls[0]?.[0], "/tmp/bootstrap-worktree");
         assert.equal(prepareWorkspace.mock.calls.length, 1);
@@ -6909,7 +6994,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 if (!receipt) {
                   return Effect.succeed(Option.none());
                 }
-                if (receipt.envelope !== JSON.stringify(command)) {
+                if (receipt.envelope !== encodeTestJson(command)) {
                   return Effect.fail(
                     new OrchestrationCommandReceiptMismatchError({
                       commandId: command.commandId,
@@ -6925,7 +7010,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 dispatchedCommands.push(command);
                 const sequence = dispatchedCommands.length;
                 receipts.set(command.commandId, {
-                  envelope: JSON.stringify(command),
+                  envelope: encodeTestJson(command),
                   sequence,
                 });
                 return { sequence };
@@ -7008,7 +7093,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("records setup-script failures without aborting bootstrap turn start", () =>
+  it.effect("records setup-script failures and fails closed before bootstrap turn start", () =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const createWorktree = vi.fn(
@@ -7093,12 +7178,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             createdAt,
           }),
         ),
-      );
+      ).pipe(Effect.result);
 
-      assert.equal(response.sequence, 4);
+      assertTrue(response._tag === "Failure");
       assert.deepEqual(
         dispatchedCommands.map((command) => command.type),
-        ["thread.create", "thread.meta.update", "thread.activity.append", "thread.turn.start"],
+        ["thread.create", "thread.meta.update", "thread.activity.append"],
       );
       const setupFailureActivity = dispatchedCommands.find(
         (command): command is Extract<OrchestrationCommand, { type: "thread.activity.append" }> =>
