@@ -259,6 +259,79 @@ describe("web durable command outbox", () => {
     second.dispose();
   });
 
+  it("automatically re-elects after a crashed leader and drains the same identity plus its successor", async () => {
+    const memory = memoryStorage();
+    let mutationTail = Promise.resolve();
+    const withMutationLock = <A>(task: () => Promise<A>): Promise<A> => {
+      const result = mutationTail.then(task);
+      mutationTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
+      return result;
+    };
+    let leaderHeld = false;
+    const withDrainLeadership = async (task: () => Promise<void>) => {
+      if (leaderHeld) return false;
+      leaderHeld = true;
+      await task();
+      leaderHeld = false;
+      return true;
+    };
+    let markFirstDispatchStarted: (() => void) | undefined;
+    const firstDispatchStarted = new Promise<void>(
+      (resolve) => void (markFirstDispatchStarted = resolve),
+    );
+    const firstDispatches: string[] = [];
+    const first = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withMutationLock,
+      withDrainLeadership,
+      dispatch: async (_environmentId, value) => {
+        firstDispatches.push(value.commandId);
+        markFirstDispatchStarted?.();
+        await new Promise<void>(() => undefined);
+      },
+    });
+    await first.enqueue(environmentId, command("command-1", "message-1"));
+    await firstDispatchStarted;
+
+    const electionTimers: Array<() => void> = [];
+    const secondDispatches: string[] = [];
+    const second = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withMutationLock,
+      withDrainLeadership,
+      setTimer: (callback) => {
+        electionTimers.push(callback);
+        return callback;
+      },
+      clearTimer: () => undefined,
+      dispatch: async (_environmentId, value) => void secondDispatches.push(value.commandId),
+    });
+    await second.enqueue(environmentId, command("command-2", "message-2"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(electionTimers).toHaveLength(1);
+    expect(memory.read().entries.map((entry) => entry.state._tag)).toEqual([
+      "Delivering",
+      "Pending",
+    ]);
+
+    // Simulate the browser terminating controller A: its Web Lock disappears,
+    // but no completion/failure transition runs and no external wake is sent.
+    first.dispose();
+    leaderHeld = false;
+    electionTimers.shift()?.();
+    await second.flush();
+
+    expect(firstDispatches).toEqual(["command-1"]);
+    expect(secondDispatches).toEqual(["command-1", "command-2"]);
+    expect(memory.read().entries).toEqual([]);
+    second.dispose();
+  });
+
   it("accepts and persists a message while transport is offline", async () => {
     const memory = memoryStorage();
     const controller = createDurableCommandOutboxController({

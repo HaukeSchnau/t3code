@@ -76,7 +76,9 @@ storage and decide when to drain ready thread heads.
 - Cross-tab coordination uses separate Web Locks: a nonblocking drain-leadership lock spans delivery, while a
   short mutation lock protects reload-plus-transition transactions. RPC waits never hold the mutation lock, so
   another tab can durably enqueue without becoming a second drainer. Ordinary locked reloads preserve an
-  active `Delivering` state; only new drain leadership recovers a delivery abandoned by a prior leader.
+  active `Delivering` state; only new drain leadership recovers a delivery abandoned by a prior leader. A
+  controller that loses the nonblocking leadership election schedules its own bounded re-election, so a leader
+  tab disappearing cannot strand work until an unrelated browser or network event.
 - A turn-start command atomically emits any selected model, runtime-mode, and interaction-mode projection
   changes before its message and turn request. These settings therefore share the command receipt/replay
   boundary instead of depending on unaudited preflight RPCs.

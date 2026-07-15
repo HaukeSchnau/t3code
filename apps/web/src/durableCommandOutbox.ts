@@ -211,7 +211,7 @@ export function createDurableCommandOutboxController(
 
   const runFlush = async () => {
     try {
-      await withDrainLeadership(async () => {
+      const acquiredLeadership = await withDrainLeadership(async () => {
         await withMutationLock(async () => {
           const recovered = await loadService(true);
           await publish(recovered);
@@ -256,6 +256,9 @@ export function createDurableCommandOutboxController(
           });
         }
       });
+      if (!acquiredLeadership) {
+        scheduleRecovery();
+      }
     } catch (cause) {
       console.error("Durable command outbox recovery failed", cause);
       scheduleRecovery();
