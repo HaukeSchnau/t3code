@@ -152,6 +152,8 @@ export const make = Effect.gen(function* () {
     const protocolLayer = Layer.effect(
       RpcClient.Protocol,
       RpcClient.makeProtocolSocket({
+        // EnvironmentSupervisor owns reconnects. This scoped protocol must surface
+        // Effect's ping timeout as a closed session instead of replacing its socket.
         retryTransientErrors: false,
         retryPolicy: Schedule.recurs(0),
       }),

@@ -232,6 +232,41 @@ describe("RpcSessionFactory", () => {
     }),
   );
 
+  it.effect("uses Effect ping/pong liveness without replacing the scoped websocket", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const session = yield* factory.connect(PREPARED);
+      const readyFiber = yield* Effect.forkChild(session.ready);
+      const socket = yield* awaitSocket(sockets);
+
+      socket.open();
+      yield* completeInitialConfig(socket);
+      yield* Fiber.join(readyFiber);
+
+      yield* TestClock.adjust("5 seconds");
+      expect(socket.sent).toHaveLength(2);
+      expect(decodeJson(socket.sent[1])).toEqual({ _tag: "Ping" });
+
+      socket.serverMessage(encodeJson({ _tag: "Pong" }));
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust("5 seconds");
+      expect(socket.sent).toHaveLength(3);
+      expect(decodeJson(socket.sent[2])).toEqual({ _tag: "Ping" });
+
+      const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
+      yield* TestClock.adjust("5 seconds");
+      const error = yield* Fiber.join(closedFiber);
+
+      expect(error).toBeInstanceOf(ConnectionTransientError);
+      expect(error).toMatchObject({
+        reason: "transport",
+        message: "Test environment disconnected.",
+      });
+      expect(socket.readyState).toBe(TestWebSocket.CLOSED);
+      expect(sockets).toHaveLength(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("includes websocket close diagnostics when the connection drops before ready", () =>
     Effect.gen(function* () {
       const { factory, sockets } = yield* makeFactory();
