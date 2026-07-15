@@ -10,6 +10,7 @@ import {
 
 export const EvidenceStatus = Schema.Literals(["passed", "failed", "unavailable"]);
 export type EvidenceStatus = typeof EvidenceStatus.Type;
+const NonPassedEvidenceStatus = Schema.Literals(["failed", "unavailable"]);
 
 export const ObservationEvidence = Schema.Struct({
   key: NonEmptyString,
@@ -26,10 +27,30 @@ export const CorrectnessAssertion = Schema.Struct({
 });
 export type CorrectnessAssertion = typeof CorrectnessAssertion.Type;
 
-export const CorrectnessEvidence = Schema.Struct({
-  status: EvidenceStatus,
+export const PassedCorrectnessAssertion = Schema.Struct({
+  id: NonEmptyString,
+  passed: Schema.Literal(true),
+  expected: Schema.Json,
+  observed: Schema.Json,
+});
+export type PassedCorrectnessAssertion = typeof PassedCorrectnessAssertion.Type;
+
+export const PassedCorrectnessEvidence = Schema.Struct({
+  status: Schema.Literal("passed"),
+  assertions: Schema.Array(PassedCorrectnessAssertion).check(Schema.isMinLength(1)),
+});
+export type PassedCorrectnessEvidence = typeof PassedCorrectnessEvidence.Type;
+
+export const NonPassedCorrectnessEvidence = Schema.Struct({
+  status: NonPassedEvidenceStatus,
   assertions: Schema.Array(CorrectnessAssertion),
 });
+export type NonPassedCorrectnessEvidence = typeof NonPassedCorrectnessEvidence.Type;
+
+export const CorrectnessEvidence = Schema.Union([
+  PassedCorrectnessEvidence,
+  NonPassedCorrectnessEvidence,
+]);
 export type CorrectnessEvidence = typeof CorrectnessEvidence.Type;
 
 export const FaultOperationEvidence = Schema.Struct({
@@ -41,11 +62,21 @@ export const FaultOperationEvidence = Schema.Struct({
 });
 export type FaultOperationEvidence = typeof FaultOperationEvidence.Type;
 
-export const FaultEvidence = Schema.Struct({
-  status: EvidenceStatus,
+export const PassedFaultEvidence = Schema.Struct({
+  status: Schema.Literal("passed"),
+  originPathUnshaped: Schema.Literal(true),
+  operations: Schema.Array(FaultOperationEvidence).check(Schema.isMinLength(1)),
+});
+export type PassedFaultEvidence = typeof PassedFaultEvidence.Type;
+
+export const NonPassedFaultEvidence = Schema.Struct({
+  status: NonPassedEvidenceStatus,
   originPathUnshaped: Schema.Boolean,
   operations: Schema.Array(FaultOperationEvidence),
 });
+export type NonPassedFaultEvidence = typeof NonPassedFaultEvidence.Type;
+
+export const FaultEvidence = Schema.Union([PassedFaultEvidence, NonPassedFaultEvidence]);
 export type FaultEvidence = typeof FaultEvidence.Type;
 
 export const CleanupResourceEvidence = Schema.Struct({
@@ -57,11 +88,30 @@ export const CleanupResourceEvidence = Schema.Struct({
 });
 export type CleanupResourceEvidence = typeof CleanupResourceEvidence.Type;
 
-export const CleanupEvidence = Schema.Struct({
-  status: EvidenceStatus,
+export const PassedCleanupResourceEvidence = Schema.Struct({
+  kind: NonEmptyString,
+  id: NonEmptyString,
+  released: Schema.Literal(true),
+  details: Schema.Record(Schema.String, Schema.Json),
+  error: Schema.Null,
+});
+export type PassedCleanupResourceEvidence = typeof PassedCleanupResourceEvidence.Type;
+
+export const PassedCleanupEvidence = Schema.Struct({
+  status: Schema.Literal("passed"),
+  leaseId: NonEmptyString,
+  resources: Schema.Array(PassedCleanupResourceEvidence).check(Schema.isMinLength(1)),
+});
+export type PassedCleanupEvidence = typeof PassedCleanupEvidence.Type;
+
+export const NonPassedCleanupEvidence = Schema.Struct({
+  status: NonPassedEvidenceStatus,
   leaseId: Schema.Union([NonEmptyString, Schema.Null]),
   resources: Schema.Array(CleanupResourceEvidence),
 });
+export type NonPassedCleanupEvidence = typeof NonPassedCleanupEvidence.Type;
+
+export const CleanupEvidence = Schema.Union([PassedCleanupEvidence, NonPassedCleanupEvidence]);
 export type CleanupEvidence = typeof CleanupEvidence.Type;
 
 export const RunnerPhase = Schema.Literals([
@@ -92,11 +142,27 @@ export const StepResult = Schema.Struct({
 });
 export type StepResult = typeof StepResult.Type;
 
-export const NetworkLabResult = Schema.Struct({
+const ResultBase = {
   schemaVersion: Schema.Literal(NETWORK_LAB_RESULT_SCHEMA_VERSION),
   identity: RunIdentity,
-  status: Schema.Literals(["passed", "failed"]),
   steps: Schema.Array(StepResult),
+} as const;
+
+export const PassedNetworkLabResult = Schema.Struct({
+  ...ResultBase,
+  status: Schema.Literal("passed"),
+  evidence: Schema.Struct({
+    correctness: PassedCorrectnessEvidence,
+    fault: PassedFaultEvidence,
+    cleanup: PassedCleanupEvidence,
+  }),
+  errors: Schema.Tuple([]),
+});
+export type PassedNetworkLabResult = typeof PassedNetworkLabResult.Type;
+
+export const FailedNetworkLabResult = Schema.Struct({
+  ...ResultBase,
+  status: Schema.Literal("failed"),
   evidence: Schema.Struct({
     correctness: CorrectnessEvidence,
     fault: FaultEvidence,
@@ -104,4 +170,7 @@ export const NetworkLabResult = Schema.Struct({
   }),
   errors: Schema.Array(RunnerErrorEvidence),
 });
+export type FailedNetworkLabResult = typeof FailedNetworkLabResult.Type;
+
+export const NetworkLabResult = Schema.Union([PassedNetworkLabResult, FailedNetworkLabResult]);
 export type NetworkLabResult = typeof NetworkLabResult.Type;

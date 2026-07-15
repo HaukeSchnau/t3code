@@ -26,10 +26,22 @@ export const NetworkLinkProfile = Schema.Struct({
 });
 export type NetworkLinkProfile = typeof NetworkLinkProfile.Type;
 
+export const NetworkImpairmentSemantics = Schema.Struct({
+  latency: Schema.Literal("constant-one-way-delay-ms-v1"),
+  jitter: Schema.Literal("uniform-plus-or-minus-delay-ms-clamped-at-zero-v1"),
+  loss: Schema.Literal("independent-per-packet-percent-v1"),
+  bandwidth: Schema.Struct({
+    limited: Schema.Literal("maximum-throughput-kilobits-per-second-v1"),
+    unlimited: Schema.Literal("null-means-unlimited-no-rate-limit-v1"),
+  }),
+});
+export type NetworkImpairmentSemantics = typeof NetworkImpairmentSemantics.Type;
+
 export const NetworkProfile = Schema.Struct({
   schemaVersion: Schema.Literal(NETWORK_LAB_SCENARIO_SCHEMA_VERSION),
   identity: VersionedIdentity,
   clientPath: NetworkLinkProfile,
+  semantics: NetworkImpairmentSemantics,
   originPath: Schema.Literal("unshaped"),
 });
 export type NetworkProfile = typeof NetworkProfile.Type;
@@ -100,12 +112,7 @@ export const DirectionalImpairmentControl = Schema.Struct({
   direction: ClientPathDirection,
   lifecycle: ControlLifecycle,
   parameters: NetworkLinkProfile,
-  semantics: Schema.Struct({
-    latency: Schema.Literal("constant-one-way-delay-ms-v1"),
-    jitter: Schema.Literal("uniform-plus-or-minus-delay-ms-v1"),
-    loss: Schema.Literal("independent-per-packet-percent-v1"),
-    bandwidth: Schema.Literal("maximum-throughput-kilobits-per-second-v1"),
-  }),
+  semantics: NetworkImpairmentSemantics,
 });
 export type DirectionalImpairmentControl = typeof DirectionalImpairmentControl.Type;
 

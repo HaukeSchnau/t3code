@@ -8,6 +8,7 @@ import {
   type ScenarioExecutionPlan,
 } from "./model.ts";
 import {
+  type CorrectnessEvidence,
   type FaultEvidence,
   type FaultOperationEvidence,
   NetworkLabResult,
@@ -61,6 +62,15 @@ const profile = decodeProfile({
   schemaVersion: 1,
   identity: { id: "clean", version: 1 },
   clientPath: { latencyMs: 0, jitterMs: 0, lossPercent: 0, bandwidthKbps: null },
+  semantics: {
+    latency: "constant-one-way-delay-ms-v1",
+    jitter: "uniform-plus-or-minus-delay-ms-clamped-at-zero-v1",
+    loss: "independent-per-packet-percent-v1",
+    bandwidth: {
+      limited: "maximum-throughput-kilobits-per-second-v1",
+      unlimited: "null-means-unlimited-no-rate-limit-v1",
+    },
+  },
   originPath: "unshaped",
 });
 const plan = makeScenarioExecutionPlan(scenario, profile, 17, provenance);
@@ -160,6 +170,99 @@ describe("network-lab runner", () => {
     assert.doesNotThrow(() => decodeResult(result));
   });
 
+  it("cannot pass a forged compiled plan with no control steps", async () => {
+    const zeroControlPlan: ScenarioExecutionPlan = {
+      ...plan,
+      steps: plan.steps.filter((plannedStep) => plannedStep.step.kind === "action"),
+    };
+    const result = await runNetworkLabScenario(
+      zeroControlPlan,
+      makeAdapter([], {
+        collectFaultEvidence: async () =>
+          ({
+            status: "passed",
+            originPathUnshaped: true,
+            operations: [],
+          }) as unknown as FaultEvidence,
+      }),
+    );
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.evidence.fault.status, "failed");
+  });
+
+  it("rejects forged passing results at the public schema boundary", async () => {
+    const valid = await runNetworkLabScenario(plan, makeAdapter([]));
+    assert.equal(valid.status, "passed");
+
+    const forged = [
+      {
+        ...valid,
+        evidence: {
+          ...valid.evidence,
+          correctness: { status: "passed", assertions: [] },
+        },
+      },
+      {
+        ...valid,
+        evidence: {
+          ...valid.evidence,
+          correctness: {
+            status: "passed",
+            assertions: [{ id: "false", passed: false, expected: 1, observed: 2 }],
+          },
+        },
+      },
+      {
+        ...valid,
+        evidence: { ...valid.evidence, fault: { ...valid.evidence.fault, operations: [] } },
+      },
+      {
+        ...valid,
+        evidence: { ...valid.evidence, cleanup: { ...valid.evidence.cleanup, leaseId: null } },
+      },
+      {
+        ...valid,
+        evidence: { ...valid.evidence, cleanup: { ...valid.evidence.cleanup, resources: [] } },
+      },
+      {
+        ...valid,
+        evidence: {
+          ...valid.evidence,
+          cleanup: {
+            ...valid.evidence.cleanup,
+            resources: [
+              { ...valid.evidence.cleanup.resources[0]!, released: false, error: "still present" },
+            ],
+          },
+        },
+      },
+      {
+        ...valid,
+        evidence: {
+          ...valid.evidence,
+          fault: { status: "failed", originPathUnshaped: true, operations: [] },
+        },
+      },
+      {
+        ...valid,
+        errors: [
+          {
+            phase: "fault-evidence",
+            stepId: null,
+            resourceId: null,
+            name: "ForgedError",
+            message: "A passed result cannot contain errors.",
+          },
+        ],
+      },
+    ];
+
+    for (const value of forged) {
+      assert.throws(() => decodeResult(value));
+    }
+  });
+
   it("rejects empty or duplicate named correctness assertions", async () => {
     for (const assertions of [
       [],
@@ -171,7 +274,8 @@ describe("network-lab runner", () => {
       const result = await runNetworkLabScenario(
         plan,
         makeAdapter([], {
-          collectCorrectnessEvidence: async () => ({ status: "passed", assertions }),
+          collectCorrectnessEvidence: async () =>
+            ({ status: "passed", assertions }) as unknown as CorrectnessEvidence,
         }),
       );
       assert.equal(result.status, "failed");
@@ -192,7 +296,7 @@ describe("network-lab runner", () => {
         semantics: "terminate-active-matching-connections-v1" as const,
       },
     };
-    const variants: Array<FaultEvidence> = [
+    const variants = [
       { ...matching, operations: [] },
       { ...matching, operations: [matching.operations[0]!, matching.operations[0]!] },
       { ...matching, operations: matching.operations.toReversed() },
@@ -206,7 +310,9 @@ describe("network-lab runner", () => {
     for (const evidence of variants) {
       const result = await runNetworkLabScenario(
         plan,
-        makeAdapter([], { collectFaultEvidence: async () => evidence }),
+        makeAdapter([], {
+          collectFaultEvidence: async () => evidence as unknown as FaultEvidence,
+        }),
       );
       assert.equal(result.status, "failed");
       assert.equal(result.evidence.fault.status, "failed");
@@ -269,7 +375,9 @@ describe("network-lab runner", () => {
   it("rejects missing cleanup registration and adapter provenance drift", async () => {
     const noResources = await runNetworkLabScenario(
       plan,
-      makeAdapter([], { prepare: async () => ({ id: "empty", resources: [] }) }),
+      makeAdapter([], {
+        prepare: async () => ({ id: "empty", resources: [] }) as unknown as ResourceLease,
+      }),
     );
     assert.equal(noResources.status, "failed");
     assert.deepStrictEqual(noResources.evidence.cleanup.resources, []);

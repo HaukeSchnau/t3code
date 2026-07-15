@@ -9,9 +9,12 @@ const decodeProfile = Schema.decodeUnknownSync(NetworkProfile);
 
 const impairmentSemantics = {
   latency: "constant-one-way-delay-ms-v1",
-  jitter: "uniform-plus-or-minus-delay-ms-v1",
+  jitter: "uniform-plus-or-minus-delay-ms-clamped-at-zero-v1",
   loss: "independent-per-packet-percent-v1",
-  bandwidth: "maximum-throughput-kilobits-per-second-v1",
+  bandwidth: {
+    limited: "maximum-throughput-kilobits-per-second-v1",
+    unlimited: "null-means-unlimited-no-rate-limit-v1",
+  },
 } as const;
 
 const scenario = decodeScenario({
@@ -46,6 +49,7 @@ const profile = decodeProfile({
   schemaVersion: 1,
   identity: { id: "poor-250ms-2pct-1mbit", version: 1 },
   clientPath: { latencyMs: 250, jitterMs: 25, lossPercent: 2, bandwidthKbps: 1_000 },
+  semantics: impairmentSemantics,
   originPath: "unshaped",
 });
 
@@ -63,7 +67,7 @@ describe("network-lab scenario model", () => {
     assert.equal(first.identity.scenario.id, "direct.ack-loss-recovery");
     assert.equal(first.identity.profile.id, "poor-250ms-2pct-1mbit");
     assert.equal(first.identity.seed, 104_729);
-    assert.equal(first.identity.definitionHash, "b6f6c633828b2f29");
+    assert.equal(first.identity.definitionHash, "0d89038a19f8b658");
     assert.deepStrictEqual(
       first.steps.map(({ decisionToken }) => decisionToken),
       ["5776b188", "a9b9d44b", "f52f47b3"],
@@ -90,6 +94,46 @@ describe("network-lab scenario model", () => {
 
     assert.notEqual(baseline.identity.definitionHash, changedAdapter.identity.definitionHash);
     assert.notEqual(baseline.identity.definitionHash, changedLab.identity.definitionHash);
+  });
+
+  it("defines unlimited bandwidth and clamps negative jitter samples at zero", () => {
+    const decoded = decodeScenario({
+      ...scenario,
+      steps: [
+        {
+          kind: "control",
+          id: "high-jitter-unlimited",
+          control: {
+            schemaVersion: 1,
+            kind: "directional-impairment",
+            surface: "client-path",
+            direction: "client-to-origin",
+            lifecycle: "apply",
+            parameters: { latencyMs: 10, jitterMs: 25, lossPercent: 0, bandwidthKbps: null },
+            semantics: impairmentSemantics,
+          },
+        },
+      ],
+    });
+
+    assert.equal(decoded.steps[0]?.kind, "control");
+    assert.throws(() =>
+      decodeScenario({
+        ...decoded,
+        steps: [
+          {
+            ...decoded.steps[0],
+            control: {
+              ...(decoded.steps[0]?.kind === "control" ? decoded.steps[0].control : {}),
+              semantics: {
+                ...impairmentSemantics,
+                jitter: "uniform-plus-or-minus-delay-ms-v1",
+              },
+            },
+          },
+        ],
+      }),
+    );
   });
 
   it("changes only seeded decisions when the seed changes", () => {
@@ -147,5 +191,24 @@ describe("network-lab scenario model", () => {
 
     assert.ok(caught instanceof NetworkLabScenarioError);
     assert.equal(caught.reason, "duplicate-step-id");
+  });
+
+  it("rejects action-only scenarios before compiling a plan", () => {
+    const actionOnly = decodeScenario({
+      ...scenario,
+      steps: [
+        { kind: "action", id: "dispatch", action: "client.command.dispatch", parameters: {} },
+      ],
+    });
+
+    let caught: unknown;
+    try {
+      makeScenarioExecutionPlan(actionOnly, profile, 1, provenance);
+    } catch (error) {
+      caught = error;
+    }
+
+    assert.ok(caught instanceof NetworkLabScenarioError);
+    assert.equal(caught.reason, "missing-control-step");
   });
 });
