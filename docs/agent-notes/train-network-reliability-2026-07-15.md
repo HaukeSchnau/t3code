@@ -100,13 +100,35 @@ again. Implementers do not approve their own packets.
 - Baseline `vp check` passed with 10 existing React warnings.
 - Baseline full typecheck passed.
 - Explorer threads completed for outbox, network lab, and UX/transport decomposition.
-- Current step: start Wave 1 implementation in isolated worktrees.
+- Wave 1 integrated as four atomic changes: shared durable outbox, accepted-receipt preservation,
+  single-owner liveness coverage, and the deterministic network-lab foundation.
+- Integrated Wave 1 verification passed: 8 focused files / 76 tests, full `vp check` with the 10
+  baseline React warnings, and full workspace typecheck with only baseline Effect suggestions.
+- `REV-N` found blocking lab-model issues: opaque fault classes, false-green evidence, insufficient
+  cleanup guarantees, and locale-dependent identity. It also requested a less brittle liveness test
+  and a precise public timeout envelope. Correction packets `NL0-R1` and `LC1-R1` are active.
+- The documentation formatting gate identified by `REV-N` was resolved atomically and full
+  `vp check` was rerun successfully.
+- `REV-O` is independently reviewing the outbox/receipt interaction before platform integration.
+- Current step: close Wave 1 review findings, rerun integrated gates, then start Wave 2 packets from
+  the reviewed foundation.
 
 ## Explorer Threads
 
 - Outbox: `mcp:thread:aad8a427-6be3-4741-a542-acda61122b12`
 - Network lab: `mcp:thread:c4052884-986d-41c1-81c0-d47c089e6243`
 - UX/transport: `mcp:thread:8b9da51c-62df-4fc5-bccb-bcb84fc65a00`
+
+## Wave 1 Threads
+
+- Network-lab implementation: `mcp:thread:50e9de5c-9774-46f0-b995-1703436f4c08`
+- Shared outbox implementation: `mcp:thread:6248f5cc-0b63-4b51-935d-49fed9647450`
+- Liveness implementation: `mcp:thread:8e48536d-9381-41a2-a025-72ad19129c4e`
+- Receipt implementation: `mcp:thread:f4d1341a-2eb7-4bfc-a866-288b264e524a`
+- Network/liveness review: `mcp:thread:9be9da98-b438-4a72-a9bb-154aadddcf36`
+- Outbox/receipt review: `mcp:thread:ed8af283-eaa5-4354-8d78-7402ca9fc892`
+- Network-lab correction: `mcp:thread:577e75b3-0e7c-4dbd-bba5-7f9b81364617`
+- Liveness correction: `mcp:thread:ea5a2a60-e965-4124-9d7e-ca21197106c2`
 
 ## Verification Notes
 
