@@ -106,6 +106,43 @@ client action with Chromium production UI behavior and DOM-visible reconnect che
 server/provider recovery fixture remains the unshaped downstream oracle rather than becoming a
 browser-specific fault surface.
 
+## NL2 Chromium measurement and comparison gate
+
+NL2 adds a version-1 browser measurement artifact and comparator under `scripts/network-lab/`.
+Measurements retain the compiled run identity and record durable local acceptance samples,
+DOM-visible connection-status samples, recovery latency, exactly-once command/effect counts,
+semantic and replay hashes, cached-content visibility, deterministic fault tokens, traffic counters,
+and explicit fault/cleanup proof. The comparator refuses mismatched identities or non-reproducible
+candidate fault sequences. Correctness is absolute; the CI thresholds require offline acceptance at
+or below 150 ms p95 and connection feedback at or below 300 ms p95. Recovery and traffic use
+versioned relative ceilings with fixed allowances so small baseline values do not create unstable
+ratios.
+
+`browser-runner.ts` is the executable, fail-closed orchestration seam. Given a compiled direct plan
+and browser-ready baseline/candidate fixtures, it navigates the production T3 URL, verifies the real
+composer and cached-timeline surfaces, submits via the production send button, waits for the durable
+outbox strip, executes reload steps, applies each typed control with its planned decision token,
+waits for the production connection status and recovery, collects the NL1 oracle, and proves browser
+and fixture cleanup. The comparison gate runs baseline, candidate, and a second candidate with the
+same plan/seed, then throws if any threshold or correctness assertion fails. The direct matrix covers
+clean, poor, blackhole, flap/handover, reload, and lost acknowledgement; hosted relay remains
+non-gating.
+
+The pinned Playwright-core driver lives beside the desktop browser runtime. It launches a real
+Chromium persistent context with an isolated temporary profile, applies client-only CDP network
+conditions, measures HTTP/WebSocket traffic, drives production selectors, and proves browser/profile
+cleanup. Protocol suppression is deliberately not emulated by CDP: it must be delegated to the real
+NL1 server fixture, and missing delegation fails before recording fault evidence.
+
+There is currently no repository fixture that serves both the complete authenticated T3 web app and
+the deterministic NL1 provider/RPC state. NL1 serves an Effect-RPC-only WebSocket endpoint, which is
+not enough for `ChatView` to load an active thread. Consequently the production runner is callable
+and contract-tested, while the checked real-Chromium smoke proves CDP shaping, traffic collection,
+DOM timing, and process/port/profile cleanup against an ephemeral page. That smoke is not claimed as
+end-to-end production UX evidence. A future fixture must compose the normal server HTTP/web/auth
+routes with the NL1 deterministic provider before the six-scenario production matrix can become a
+gating CI command.
+
 ## Verification
 
 Focused coverage validates control schema boundaries, locale-independent golden planning,
@@ -117,6 +154,10 @@ nix develop --command ./node_modules/.bin/vp test run scripts/network-lab
 nix develop --command ./node_modules/.bin/vp run --filter @t3tools/scripts typecheck
 ./node_modules/.bin/vp test run apps/server/integration/networkRecovery.integration.test.ts
 ./node_modules/.bin/vp run --filter t3 typecheck
+./node_modules/.bin/vp test run scripts/network-lab
+T3_NETWORK_LAB_CHROMIUM=/path/to/chromium ./node_modules/.bin/vp test run \
+  apps/desktop/src/network-lab/ChromiumNetworkLabHarness.test.ts
+./node_modules/.bin/vp run --filter @t3tools/scripts --filter @t3tools/desktop typecheck
 ```
 
 Repository gates remain `vp check` and `vp run typecheck` from the Nix development shell.
