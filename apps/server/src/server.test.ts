@@ -6,6 +6,8 @@ import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
   AuthAccessTokenType,
+  AuthSessionId,
+  AuthStandardClientScopes,
   AuthEnvironmentBootstrapTokenType,
   AuthTokenExchangeGrantType,
   CommandId,
@@ -51,12 +53,14 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
@@ -90,7 +94,7 @@ import {
   OrchestrationListenerCallbackError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
-import { SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
+import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderSessionDirectory from "./provider/Services/ProviderSessionDirectory.ts";
@@ -120,6 +124,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
+import * as SessionStore from "./auth/SessionStore.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -328,7 +333,9 @@ const makeBrowserOtlpPayload = (spanName: string) =>
   });
 
 const buildAppUnderTest = (options?: {
+  scope?: Scope.Scope;
   config?: Partial<ServerConfig.ServerConfig["Service"]>;
+  webSocketSession?: EnvironmentAuth.AuthenticatedSession;
   layers?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
@@ -404,6 +411,20 @@ const buildAppUnderTest = (options?: {
       ...options?.config,
     };
     const layerConfig = ServerConfig.layer(config);
+    const authTestLayer = options?.webSocketSession
+      ? Layer.mergeAll(
+          makeAuthTestLayer(),
+          Layer.mock(EnvironmentAuth.EnvironmentAuth)({
+            authenticateWebSocketUpgrade: () => Effect.succeed(options.webSocketSession!),
+          }),
+          Layer.mock(SessionStore.SessionStore)({
+            cookieName: "t3-test-session",
+            streamChanges: Stream.empty,
+            markConnected: () => Effect.void,
+            markDisconnected: () => Effect.void,
+          }),
+        )
+      : makeAuthTestLayer();
     const defaultVcsDriver: VcsDriver.VcsDriver["Service"] = {
       capabilities: {
         kind: "git",
@@ -539,8 +560,7 @@ const buildAppUnderTest = (options?: {
           ...options.layers.vcsStatusBroadcaster,
         })
       : VcsStatusBroadcaster.layer.pipe(Layer.provide(gitWorkflowLayer));
-    const commandPreprocessingCoordinatorLayer = options?.layers
-      ?.commandPreprocessingCoordinator
+    const commandPreprocessingCoordinatorLayer = options?.layers?.commandPreprocessingCoordinator
       ? Layer.succeed(
           CommandPreprocessingCoordinator.CommandPreprocessingCoordinator,
           options.layers.commandPreprocessingCoordinator,
@@ -895,14 +915,14 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.cloudCliTokenManager,
         }),
       ),
-      Layer.provideMerge(makeAuthTestLayer()),
+      Layer.provideMerge(authTestLayer),
       Layer.provideMerge(ServerSecretStore.layer),
       Layer.provide(workspaceAndProjectServicesLayer),
       Layer.provideMerge(FetchHttpClient.layer),
       Layer.provide(layerConfig),
     );
 
-    yield* Layer.build(appLayer);
+    yield* options?.scope ? Layer.buildWithScope(appLayer, options.scope) : Layer.build(appLayer);
     return config;
   });
 
@@ -6430,188 +6450,191 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect(
     "shares preprocessing serialization across websocket route layers and lost acknowledgements",
     () =>
-    Effect.gen(function* () {
-      const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
-      const dispatchCounts = new Map<string, number>();
-      const loseAcknowledgement = new Set<string>();
+      Effect.gen(function* () {
+        const receipts = new Map<
+          string,
+          { readonly envelope: string; readonly sequence: number }
+        >();
+        const dispatchCounts = new Map<string, number>();
+        const loseAcknowledgement = new Set<string>();
 
-      const config = yield* buildAppUnderTest({
-        layers: {
-          orchestrationEngine: {
-            resolveReceipt: (command) =>
-              Effect.suspend(() => {
-                const receipt = receipts.get(command.commandId);
-                if (!receipt) {
-                  return Effect.succeed(Option.none());
-                }
-                if (receipt.envelope !== encodeTestJson(command)) {
-                  return Effect.fail(
-                    new OrchestrationCommandReceiptMismatchError({
-                      commandId: command.commandId,
-                      reason: "payload-mismatch",
-                      detail: "test receipt envelope differs",
-                    }),
+        const config = yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: {
+              resolveReceipt: (command) =>
+                Effect.suspend(() => {
+                  const receipt = receipts.get(command.commandId);
+                  if (!receipt) {
+                    return Effect.succeed(Option.none());
+                  }
+                  if (receipt.envelope !== encodeTestJson(command)) {
+                    return Effect.fail(
+                      new OrchestrationCommandReceiptMismatchError({
+                        commandId: command.commandId,
+                        reason: "payload-mismatch",
+                        detail: "test receipt envelope differs",
+                      }),
+                    );
+                  }
+                  return Effect.succeed(Option.some({ sequence: receipt.sequence }));
+                }),
+              dispatch: (command) =>
+                Effect.suspend(() => {
+                  const sequence = 100 + receipts.size;
+                  receipts.set(command.commandId, {
+                    envelope: encodeTestJson(command),
+                    sequence,
+                  });
+                  dispatchCounts.set(
+                    command.commandId,
+                    (dispatchCounts.get(command.commandId) ?? 0) + 1,
                   );
-                }
-                return Effect.succeed(Option.some({ sequence: receipt.sequence }));
-              }),
-            dispatch: (command) =>
-              Effect.suspend(() => {
-                const sequence = 100 + receipts.size;
-                receipts.set(command.commandId, {
-                  envelope: encodeTestJson(command),
-                  sequence,
-                });
-                dispatchCounts.set(
-                  command.commandId,
-                  (dispatchCounts.get(command.commandId) ?? 0) + 1,
-                );
-                if (loseAcknowledgement.delete(command.commandId)) {
-                  return Effect.fail(
-                    new OrchestrationListenerCallbackError({
-                      listener: "domain-event",
-                      detail: "simulated acknowledgement loss after commit",
-                    }),
-                  );
-                }
-                return Effect.succeed({ sequence });
-              }),
+                  if (loseAcknowledgement.delete(command.commandId)) {
+                    return Effect.fail(
+                      new OrchestrationListenerCallbackError({
+                        listener: "domain-event",
+                        detail: "simulated acknowledgement loss after commit",
+                      }),
+                    );
+                  }
+                  return Effect.succeed({ sequence });
+                }),
+            },
           },
-        },
-      });
+        });
 
-      const createdAt = "2026-01-01T00:00:00.000Z";
-      const image = {
-        type: "image" as const,
-        name: "pixel.png",
-        mimeType: "image/png",
-        sizeBytes: 1,
-        dataUrl: "data:image/png;base64,AQ==",
-      };
-      const commands = [
-        {
-          type: "thread.turn.start" as const,
-          commandId: CommandId.make("cmd-preprocess-start-empty"),
-          threadId: ThreadId.make("thread-preprocess-start-empty"),
-          message: {
-            messageId: MessageId.make("msg-preprocess-start-empty"),
-            role: "user" as const,
-            text: "start empty",
-            attachments: [],
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const image = {
+          type: "image" as const,
+          name: "pixel.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+          dataUrl: "data:image/png;base64,AQ==",
+        };
+        const commands = [
+          {
+            type: "thread.turn.start" as const,
+            commandId: CommandId.make("cmd-preprocess-start-empty"),
+            threadId: ThreadId.make("thread-preprocess-start-empty"),
+            message: {
+              messageId: MessageId.make("msg-preprocess-start-empty"),
+              role: "user" as const,
+              text: "start empty",
+              attachments: [],
+            },
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            createdAt,
           },
-          runtimeMode: "full-access" as const,
-          interactionMode: "default" as const,
-          createdAt,
-        },
-        {
-          type: "thread.turn.start" as const,
-          commandId: CommandId.make("cmd-preprocess-start-image"),
-          threadId: ThreadId.make("thread-preprocess-start-image"),
-          message: {
-            messageId: MessageId.make("msg-preprocess-start-image"),
-            role: "user" as const,
-            text: "start image",
-            attachments: [image],
+          {
+            type: "thread.turn.start" as const,
+            commandId: CommandId.make("cmd-preprocess-start-image"),
+            threadId: ThreadId.make("thread-preprocess-start-image"),
+            message: {
+              messageId: MessageId.make("msg-preprocess-start-image"),
+              role: "user" as const,
+              text: "start image",
+              attachments: [image],
+            },
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            createdAt,
           },
-          runtimeMode: "full-access" as const,
-          interactionMode: "default" as const,
-          createdAt,
-        },
-        {
-          type: "thread.message.queue" as const,
-          commandId: CommandId.make("cmd-preprocess-queue-empty"),
-          threadId: ThreadId.make("thread-preprocess-queue-empty"),
-          message: {
-            messageId: MessageId.make("msg-preprocess-queue-empty"),
-            role: "user" as const,
-            text: "queue empty",
-            attachments: [],
+          {
+            type: "thread.message.queue" as const,
+            commandId: CommandId.make("cmd-preprocess-queue-empty"),
+            threadId: ThreadId.make("thread-preprocess-queue-empty"),
+            message: {
+              messageId: MessageId.make("msg-preprocess-queue-empty"),
+              role: "user" as const,
+              text: "queue empty",
+              attachments: [],
+            },
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            createdAt,
           },
-          runtimeMode: "full-access" as const,
-          interactionMode: "default" as const,
-          createdAt,
-        },
-        {
-          type: "thread.message.queue" as const,
-          commandId: CommandId.make("cmd-preprocess-queue-image"),
-          threadId: ThreadId.make("thread-preprocess-queue-image"),
-          message: {
-            messageId: MessageId.make("msg-preprocess-queue-image"),
-            role: "user" as const,
-            text: "queue image",
-            attachments: [image],
+          {
+            type: "thread.message.queue" as const,
+            commandId: CommandId.make("cmd-preprocess-queue-image"),
+            threadId: ThreadId.make("thread-preprocess-queue-image"),
+            message: {
+              messageId: MessageId.make("msg-preprocess-queue-image"),
+              role: "user" as const,
+              text: "queue image",
+              attachments: [image],
+            },
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            createdAt,
           },
-          runtimeMode: "full-access" as const,
-          interactionMode: "default" as const,
-          createdAt,
-        },
-      ];
-      const wsUrl = yield* getWsServerUrl("/ws");
+        ];
+        const wsUrl = yield* getWsServerUrl("/ws");
 
-      for (const command of commands) {
-        const results = yield* Effect.all(
-          [
-            Effect.scoped(
-              withWsRpcClient(wsUrl, (client) =>
-                client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        for (const command of commands) {
+          const results = yield* Effect.all(
+            [
+              Effect.scoped(
+                withWsRpcClient(wsUrl, (client) =>
+                  client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+                ),
               ),
-            ),
-            Effect.scoped(
-              withWsRpcClient(wsUrl, (client) =>
-                client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+              Effect.scoped(
+                withWsRpcClient(wsUrl, (client) =>
+                  client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+                ),
               ),
-            ),
-          ],
-          { concurrency: "unbounded" },
+            ],
+            { concurrency: "unbounded" },
+          );
+          assert.equal(results[0].sequence, results[1].sequence);
+          assert.equal(dispatchCounts.get(command.commandId), 1);
+        }
+
+        const lostAckCommand = {
+          ...commands[3]!,
+          commandId: CommandId.make("cmd-preprocess-lost-ack"),
+          message: {
+            ...commands[3]!.message,
+            messageId: MessageId.make("msg-preprocess-lost-ack"),
+          },
+        };
+        loseAcknowledgement.add(lostAckCommand.commandId);
+        const lostAckResult = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand](lostAckCommand),
+          ),
+        ).pipe(Effect.result);
+        assertTrue(lostAckResult._tag === "Failure");
+
+        const replayed = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand](lostAckCommand),
+          ),
         );
-        assert.equal(results[0].sequence, results[1].sequence);
-        assert.equal(dispatchCounts.get(command.commandId), 1);
-      }
+        assert.equal(replayed.sequence, receipts.get(lostAckCommand.commandId)?.sequence);
+        assert.equal(dispatchCounts.get(lostAckCommand.commandId), 1);
 
-      const lostAckCommand = {
-        ...commands[3]!,
-        commandId: CommandId.make("cmd-preprocess-lost-ack"),
-        message: {
-          ...commands[3]!.message,
-          messageId: MessageId.make("msg-preprocess-lost-ack"),
-        },
-      };
-      loseAcknowledgement.add(lostAckCommand.commandId);
-      const lostAckResult = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.dispatchCommand](lostAckCommand),
-        ),
-      ).pipe(Effect.result);
-      assertTrue(lostAckResult._tag === "Failure");
+        const changedReplay = {
+          ...lostAckCommand,
+          message: {
+            ...lostAckCommand.message,
+            attachments: [{ ...image, dataUrl: "data:image/png;base64,Ag==" }],
+          },
+        };
+        const changedResult = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand](changedReplay),
+          ),
+        ).pipe(Effect.result);
+        assertTrue(changedResult._tag === "Failure");
+        assertInclude(String(changedResult.failure), "payload-mismatch");
 
-      const replayed = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.dispatchCommand](lostAckCommand),
-        ),
-      );
-      assert.equal(replayed.sequence, receipts.get(lostAckCommand.commandId)?.sequence);
-      assert.equal(dispatchCounts.get(lostAckCommand.commandId), 1);
-
-      const changedReplay = {
-        ...lostAckCommand,
-        message: {
-          ...lostAckCommand.message,
-          attachments: [{ ...image, dataUrl: "data:image/png;base64,Ag==" }],
-        },
-      };
-      const changedResult = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.dispatchCommand](changedReplay),
-        ),
-      ).pipe(Effect.result);
-      assertTrue(changedResult._tag === "Failure");
-      assertInclude(String(changedResult.failure), "payload-mismatch");
-
-      const attachmentFiles = yield* FileSystem.FileSystem.pipe(
-        Effect.flatMap((fileSystem) => fileSystem.readDirectory(config.attachmentsDir)),
-      );
-      assert.equal(attachmentFiles.length, 3);
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        const attachmentFiles = yield* FileSystem.FileSystem.pipe(
+          Effect.flatMap((fileSystem) => fileSystem.readDirectory(config.attachmentsDir)),
+        );
+        assert.equal(attachmentFiles.length, 3);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("serializes the same command across HTTP and WebSocket dispatch", () =>
@@ -6722,7 +6745,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isAtLeast(initialLookupCount, 2);
       assert.equal(dispatch.mock.calls.length, 1);
       assert.equal(attachmentFiles.filter((name) => !name.includes(".pending-")).length, 1);
-      assert.equal(attachmentFiles.some((name) => name.includes(".pending-")), false);
+      assert.equal(
+        attachmentFiles.some((name) => name.includes(".pending-")),
+        false,
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -7025,6 +7051,429 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           assert.deepEqual(finalCommand.bootstrap, command.bootstrap);
         }
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("resumes a claimed bootstrap setup after a fresh websocket server rebuild", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const baseDir = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-bootstrap-restart-",
+      });
+      const dbPath = path.join(baseDir, "restart.sqlite");
+      const persistenceLayer = makeSqlitePersistenceLive(dbPath).pipe(
+        Layer.provide(NodeServices.layer),
+      );
+      const workspacePath = path.join(baseDir, "workspace");
+      const setupCommand = "printf setup-complete";
+      const threadId = ThreadId.make("thread-bootstrap-restart");
+      const commandId = CommandId.make("cmd-bootstrap-restart");
+      const createdAt = "2026-01-01T00:00:00.000Z";
+      const dispatchedCommands: OrchestrationCommand[] = [];
+      let workspaceProvisionCount = 0;
+      let terminalOpenCount = 0;
+      let terminalWriteCount = 0;
+      let claimedExecutionDirectory: string | undefined;
+      let claimedTerminalId: string | undefined;
+      let interruptAfterClaim = true;
+
+      const decodeShellLiteral = (literal: string) => {
+        if (!literal.startsWith("'") || !literal.endsWith("'")) {
+          throw new Error(`Invalid POSIX shell literal: ${literal}`);
+        }
+        return literal.slice(1, -1).replaceAll(`'\\''`, "'");
+      };
+      const wrapperPathFromWrite = (data: string) => {
+        const boundary = data.trim().indexOf("' '");
+        if (boundary < 0) {
+          throw new Error(`Missing setup wrapper path in terminal write: ${data}`);
+        }
+        return decodeShellLiteral(data.trim().slice(boundary + 2));
+      };
+
+      const project = {
+        id: defaultProjectId,
+        title: "Restart Project",
+        workspaceRoot: baseDir,
+        defaultModelSelection,
+        scripts: [
+          {
+            id: "setup",
+            name: "Setup",
+            command: setupCommand,
+            icon: "configure" as const,
+            runOnWorktreeCreate: true,
+          },
+        ],
+        createdAt,
+        updatedAt: createdAt,
+        deletedAt: null,
+      };
+
+      const makeFreshSetupRunner = () =>
+        ProjectSetupScriptRunner.make.pipe(
+          Effect.provide(
+            Layer.mergeAll(
+              Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
+                getProjectShellById: (projectId) =>
+                  Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+                getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
+                  Effect.succeed(
+                    workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
+                  ),
+              }),
+              Layer.mock(TerminalManager.TerminalManager)({
+                open: (input) =>
+                  Effect.sync(() => {
+                    terminalOpenCount += 1;
+                    claimedTerminalId = input.terminalId;
+                    return {
+                      threadId: input.threadId,
+                      terminalId: input.terminalId,
+                      cwd: input.cwd,
+                      worktreePath: input.worktreePath ?? null,
+                      status: "running" as const,
+                      pid: 42,
+                      history: "",
+                      exitCode: null,
+                      exitSignal: null,
+                      label: input.terminalId,
+                      updatedAt: createdAt,
+                    };
+                  }),
+                write: (input) =>
+                  Effect.gen(function* () {
+                    terminalWriteCount += 1;
+                    const wrapperPath = wrapperPathFromWrite(input.data);
+                    claimedExecutionDirectory = path.dirname(wrapperPath);
+                    yield* fileSystem
+                      .makeDirectory(path.join(claimedExecutionDirectory, "claimed"))
+                      .pipe(Effect.orDie);
+                    if (interruptAfterClaim) {
+                      return yield* Effect.die(
+                        new Error("simulated process interruption after durable setup claim"),
+                      );
+                    }
+                  }),
+              }),
+              ServerConfig.layerTest(process.cwd(), baseDir).pipe(
+                Layer.provide(NodeServices.layer),
+              ),
+              NodeServices.layer,
+            ),
+          ),
+        );
+
+      const makeFreshEngine = () => {
+        const receipts = new Map<
+          string,
+          { readonly envelope: string; readonly sequence: number }
+        >();
+        return {
+          resolveReceipt: (command: OrchestrationCommand) =>
+            Effect.suspend(() => {
+              const receipt = receipts.get(command.commandId);
+              if (!receipt) return Effect.succeed(Option.none());
+              if (receipt.envelope !== encodeTestJson(command)) {
+                return Effect.fail(
+                  new OrchestrationCommandReceiptMismatchError({
+                    commandId: command.commandId,
+                    reason: "payload-mismatch",
+                    detail: "restart-gate receipt envelope differs",
+                  }),
+                );
+              }
+              return Effect.succeed(Option.some({ sequence: receipt.sequence }));
+            }),
+          dispatch: (command: OrchestrationCommand) =>
+            Effect.sync(() => {
+              dispatchedCommands.push(command);
+              const result = { sequence: dispatchedCommands.length };
+              receipts.set(command.commandId, {
+                envelope: encodeTestJson(command),
+                sequence: result.sequence,
+              });
+              return result;
+            }),
+          readEvents: () => Stream.empty,
+        };
+      };
+
+      const buildFreshServer = (scope: Scope.Scope) =>
+        Effect.gen(function* () {
+          const httpContext = yield* Layer.buildWithScope(NodeHttpServer.layerTest, scope);
+          const persistenceContext = yield* Layer.buildWithScope(persistenceLayer, scope);
+          const preprocessingCoordinator = yield* CommandPreprocessingCoordinator.make.pipe(
+            Effect.provide(persistenceContext),
+          );
+          const setupRunner = yield* makeFreshSetupRunner();
+          const config = yield* buildAppUnderTest({
+            scope,
+            config: { baseDir },
+            webSocketSession: {
+              sessionId: AuthSessionId.make("session-bootstrap-restart"),
+              subject: "restart-gate",
+              method: "browser-session-cookie",
+              scopes: AuthStandardClientScopes,
+            },
+            layers: {
+              commandPreprocessingCoordinator: preprocessingCoordinator,
+              orchestrationEngine: makeFreshEngine(),
+              projectSetupScriptRunner: setupRunner,
+              projectionSnapshotQuery: {
+                getProjectShellById: (projectId) =>
+                  Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+              },
+              threadWorkspaceService: {
+                prepareWorkspace: (input) =>
+                  Effect.gen(function* () {
+                    if (!(yield* fileSystem.exists(workspacePath))) {
+                      workspaceProvisionCount += 1;
+                      yield* fileSystem.makeDirectory(workspacePath, { recursive: true });
+                    }
+                    const workspaceId = ThreadWorkspaceId.make(`workspace:${input.threadId}`);
+                    const rootId = ThreadWorkspaceRootId.make(`workspace-root:${input.threadId}`);
+                    const root = input.roots[0]!;
+                    return {
+                      workspace: {
+                        id: workspaceId,
+                        kind: "git-detached" as const,
+                        lifecycle: "active" as const,
+                        displayName: input.displayNameSeed ?? "Restart Workspace",
+                        managed: true,
+                        primaryRootId: rootId,
+                        roots: [
+                          {
+                            id: rootId,
+                            workspaceId,
+                            projectId: root.projectId,
+                            role: root.role,
+                            sourcePath: root.sourcePath,
+                            checkoutPath: workspacePath,
+                            vcsKind: "git" as const,
+                            repositoryRoot: root.sourcePath,
+                            baseRevision: root.baseRevision ?? null,
+                            headRevision: null,
+                            metadata: {},
+                          },
+                        ],
+                        createdForThreadId: input.threadId,
+                        retentionPolicy: input.retentionPolicy ?? "explicit-delete",
+                        createdAt,
+                        updatedAt: createdAt,
+                        deletedAt: null,
+                        failureDetail: null,
+                        metadata: {},
+                      },
+                      primaryCwd: workspacePath,
+                      compatibilityWorktreePath: workspacePath,
+                      compatibilityBranch: null,
+                    };
+                  }).pipe(Effect.orDie),
+              },
+              vcsStatusBroadcaster: {
+                refreshStatus: () =>
+                  Effect.succeed({
+                    isRepo: true,
+                    hasPrimaryRemote: true,
+                    isDefaultRef: false,
+                    refName: "t3code/bootstrap-restart",
+                    hasWorkingTreeChanges: false,
+                    workingTree: { files: [], insertions: 0, deletions: 0 },
+                    hasUpstream: true,
+                    aheadCount: 0,
+                    behindCount: 0,
+                    pr: null,
+                  }),
+              },
+            },
+          }).pipe(Effect.provide(httpContext));
+          const wsUrl = yield* getWsServerUrl("/ws", { authenticated: false }).pipe(
+            Effect.provide(httpContext),
+          );
+          return { config, wsUrl };
+        });
+
+      const command = {
+        type: "thread.turn.start" as const,
+        commandId,
+        threadId,
+        message: {
+          messageId: MessageId.make("msg-bootstrap-restart"),
+          role: "user" as const,
+          text: "survive a server restart",
+          attachments: [
+            {
+              type: "image" as const,
+              name: "one-byte.png",
+              mimeType: "image/png",
+              sizeBytes: 1,
+              dataUrl: "data:image/png;base64,AQ==",
+            },
+          ],
+        },
+        modelSelection: defaultModelSelection,
+        runtimeMode: "full-access" as const,
+        interactionMode: "default" as const,
+        bootstrap: {
+          createThread: {
+            projectId: defaultProjectId,
+            title: "Restart Bootstrap",
+            modelSelection: defaultModelSelection,
+            runtimeMode: "full-access" as const,
+            interactionMode: "default" as const,
+            branch: "main",
+            worktreePath: null,
+            createdAt,
+          },
+          prepareWorkspace: {
+            kind: "git-detached" as const,
+            roots: [
+              {
+                projectId: defaultProjectId,
+                sourcePath: baseDir,
+                role: "primary" as const,
+                baseRevision: "main",
+              },
+            ],
+            retentionPolicy: "explicit-delete" as const,
+          },
+          runSetupScript: true,
+        },
+        createdAt,
+      };
+
+      const firstScope = yield* Effect.acquireRelease(Scope.make("sequential"), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const firstServer = yield* buildFreshServer(firstScope);
+      let wsUrl = firstServer.wsUrl;
+      const firstAttempt = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      ).pipe(Effect.result);
+      assertTrue(firstAttempt._tag === "Failure");
+      assertInclude(String(firstAttempt.failure), "simulated process interruption");
+      assert.equal(terminalOpenCount, 1);
+      assert.equal(terminalWriteCount, 1);
+      assert.equal(workspaceProvisionCount, 1);
+      assert.deepEqual(
+        dispatchedCommands.map((entry) => entry.type),
+        ["thread.create", "thread.meta.update"],
+      );
+
+      yield* Scope.close(firstScope, Exit.void);
+
+      const attachmentFilesAfterCrash = yield* fileSystem.readDirectory(
+        firstServer.config.attachmentsDir,
+      );
+      assert.equal(attachmentFilesAfterCrash.length, 1);
+
+      const secondScope = yield* Effect.acquireRelease(Scope.make("sequential"), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      interruptAfterClaim = false;
+      const secondServer = yield* buildFreshServer(secondScope);
+      wsUrl = secondServer.wsUrl;
+
+      const changedEnvelope = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+            ...command,
+            message: { ...command.message, text: "changed after durable claim" },
+          }),
+        ),
+      ).pipe(Effect.result);
+      assertTrue(changedEnvelope._tag === "Failure");
+      assertInclude(String(changedEnvelope.failure), "payload-mismatch");
+
+      const executionDirectory = claimedExecutionDirectory!;
+      const terminalId = claimedTerminalId!;
+      const completionPath = path.join(executionDirectory, "completed.json");
+      const identity = ProjectSetupScriptRunner.setupExecutionIdentity(
+        threadId,
+        terminalId,
+        setupCommand,
+      );
+      yield* fileSystem.writeFileString(
+        completionPath,
+        encodeTestJson({
+          version: 1,
+          ...identity,
+          scriptDigest: "changed-script-digest",
+          exitCode: 0,
+          signal: null,
+          error: null,
+        }),
+      );
+      const changedScriptDigest = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      ).pipe(Effect.result);
+      assertTrue(changedScriptDigest._tag === "Failure");
+      assertInclude(String(changedScriptDigest.failure), "reconcileExecution");
+      assert.deepEqual(
+        dispatchedCommands.map((entry) => entry.type),
+        ["thread.create", "thread.meta.update", "thread.activity.append"],
+      );
+      assert.equal(terminalOpenCount, 1);
+      assert.equal(terminalWriteCount, 1);
+
+      yield* fileSystem.writeFileString(
+        completionPath,
+        encodeTestJson({
+          version: 1,
+          ...identity,
+          exitCode: 0,
+          signal: null,
+          error: null,
+        }),
+      );
+      const completed = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      );
+      const replayed = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
+        ),
+      );
+
+      assert.deepEqual(replayed, completed);
+      assert.deepEqual(
+        dispatchedCommands.map((entry) => entry.type),
+        [
+          "thread.create",
+          "thread.meta.update",
+          "thread.activity.append",
+          "thread.activity.append",
+          "thread.activity.append",
+          "thread.turn.start",
+        ],
+      );
+      assert.deepEqual(
+        dispatchedCommands.flatMap((entry) =>
+          entry.type === "thread.activity.append" ? [entry.activity.kind] : [],
+        ),
+        ["setup-script.failed", "setup-script.requested", "setup-script.started"],
+      );
+      assert.equal(
+        dispatchedCommands.filter((entry) => entry.type === "thread.turn.start").length,
+        1,
+      );
+      assert.equal(workspaceProvisionCount, 1);
+      assert.equal(terminalOpenCount, 1);
+      assert.equal(terminalWriteCount, 1);
+      assert.deepEqual(
+        yield* fileSystem.readDirectory(firstServer.config.attachmentsDir),
+        attachmentFilesAfterCrash,
+      );
+
+      yield* Scope.close(secondScope, Exit.void);
+    }),
   );
 
   it.effect("deduplicates local and explicit workspace bootstrap replay", () =>
@@ -7412,75 +7861,77 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("retains a durably identified bootstrap thread when workspace preparation defects", () =>
-    Effect.gen(function* () {
-      const dispatchedCommands: Array<OrchestrationCommand> = [];
-      const prepareWorkspace = vi.fn<ThreadWorkspaceService["Service"]["prepareWorkspace"]>(() =>
-        Effect.die(new Error("workspace exploded")),
-      );
+  it.effect(
+    "retains a durably identified bootstrap thread when workspace preparation defects",
+    () =>
+      Effect.gen(function* () {
+        const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const prepareWorkspace = vi.fn<ThreadWorkspaceService["Service"]["prepareWorkspace"]>(() =>
+          Effect.die(new Error("workspace exploded")),
+        );
 
-      yield* buildAppUnderTest({
-        layers: {
-          threadWorkspaceService: { prepareWorkspace },
-          orchestrationEngine: {
-            dispatch: (command) =>
-              Effect.sync(() => {
-                dispatchedCommands.push(command);
-                return { sequence: dispatchedCommands.length };
-              }),
-            readEvents: () => Stream.empty,
+        yield* buildAppUnderTest({
+          layers: {
+            threadWorkspaceService: { prepareWorkspace },
+            orchestrationEngine: {
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  dispatchedCommands.push(command);
+                  return { sequence: dispatchedCommands.length };
+                }),
+              readEvents: () => Stream.empty,
+            },
           },
-        },
-      });
+        });
 
-      const createdAt = "2026-01-01T00:00:00.000Z";
-      const wsUrl = yield* getWsServerUrl("/ws");
-      const result = yield* Effect.scoped(
-        withWsRpcClient(wsUrl, (client) =>
-          client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
-            type: "thread.turn.start",
-            commandId: CommandId.make("cmd-bootstrap-turn-start-defect"),
-            threadId: ThreadId.make("thread-bootstrap-defect"),
-            message: {
-              messageId: MessageId.make("msg-bootstrap-defect"),
-              role: "user",
-              text: "hello",
-              attachments: [],
-            },
-            modelSelection: defaultModelSelection,
-            runtimeMode: "full-access",
-            interactionMode: "default",
-            bootstrap: {
-              createThread: {
-                projectId: defaultProjectId,
-                title: "Bootstrap Thread",
-                modelSelection: defaultModelSelection,
-                runtimeMode: "full-access",
-                interactionMode: "default",
-                branch: "main",
-                worktreePath: null,
-                createdAt,
+        const createdAt = "2026-01-01T00:00:00.000Z";
+        const wsUrl = yield* getWsServerUrl("/ws");
+        const result = yield* Effect.scoped(
+          withWsRpcClient(wsUrl, (client) =>
+            client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+              type: "thread.turn.start",
+              commandId: CommandId.make("cmd-bootstrap-turn-start-defect"),
+              threadId: ThreadId.make("thread-bootstrap-defect"),
+              message: {
+                messageId: MessageId.make("msg-bootstrap-defect"),
+                role: "user",
+                text: "hello",
+                attachments: [],
               },
-              prepareWorktree: {
-                projectCwd: "/tmp/project",
-                baseBranch: "main",
-                branch: "t3code/bootstrap-refName",
+              modelSelection: defaultModelSelection,
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              bootstrap: {
+                createThread: {
+                  projectId: defaultProjectId,
+                  title: "Bootstrap Thread",
+                  modelSelection: defaultModelSelection,
+                  runtimeMode: "full-access",
+                  interactionMode: "default",
+                  branch: "main",
+                  worktreePath: null,
+                  createdAt,
+                },
+                prepareWorktree: {
+                  projectCwd: "/tmp/project",
+                  baseBranch: "main",
+                  branch: "t3code/bootstrap-refName",
+                },
+                runSetupScript: false,
               },
-              runSetupScript: false,
-            },
-            createdAt,
-          }),
-        ).pipe(Effect.result),
-      );
+              createdAt,
+            }),
+          ).pipe(Effect.result),
+        );
 
-      assertTrue(result._tag === "Failure");
-      assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
-      assert.include(result.failure.message, "workspace exploded");
-      assert.deepEqual(
-        dispatchedCommands.map((command) => command.type),
-        ["thread.create"],
-      );
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+        assertTrue(result._tag === "Failure");
+        assertTrue(result.failure._tag === "OrchestrationDispatchCommandError");
+        assert.include(result.failure.message, "workspace exploded");
+        assert.deepEqual(
+          dispatchedCommands.map((command) => command.type),
+          ["thread.create"],
+        );
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
   it.effect("routes websocket rpc terminal methods", () =>
