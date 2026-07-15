@@ -6,6 +6,7 @@ import {
   ProjectId,
   ThreadId,
   TurnId,
+  type OrchestrationCommand,
   type OrchestrationEvent,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -71,6 +72,79 @@ async function createOrchestrationSystem() {
     run: <A, E>(effect: Effect.Effect<A, E>) => runtime.runPromise(effect),
     dispose: () => runtime.dispose(),
   };
+}
+
+type OrchestrationSystem = Awaited<ReturnType<typeof createOrchestrationSystem>>;
+type AmbiguousAckCommand = Extract<
+  OrchestrationCommand,
+  { type: "thread.turn.start" | "thread.message.queue" }
+>;
+
+async function createReceiptTestThreads(
+  system: OrchestrationSystem,
+  slug: string,
+  threadIds: ReadonlyArray<ThreadId>,
+) {
+  const projectId = asProjectId(`project-receipt-${slug}`);
+  const createdAt = now();
+  await system.run(
+    system.engine.dispatch({
+      type: "project.create",
+      commandId: CommandId.make(`cmd-project-receipt-${slug}`),
+      projectId,
+      title: `Receipt ${slug}`,
+      workspaceRoot: `/tmp/project-receipt-${slug}`,
+      defaultModelSelection: {
+        instanceId: ProviderInstanceId.make("codex"),
+        model: "gpt-5-codex",
+      },
+      createdAt,
+    }),
+  );
+  for (const [index, threadId] of threadIds.entries()) {
+    await system.run(
+      system.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make(`cmd-thread-receipt-${slug}-${index + 1}`),
+        threadId,
+        projectId,
+        title: `Receipt thread ${index + 1}`,
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        branch: null,
+        worktreePath: null,
+        createdAt,
+      }),
+    );
+  }
+}
+
+function makeAmbiguousAckCommand(input: {
+  readonly type: AmbiguousAckCommand["type"];
+  readonly commandId: CommandId;
+  readonly threadId: ThreadId;
+  readonly messageId: MessageId;
+}): AmbiguousAckCommand {
+  const command = {
+    commandId: input.commandId,
+    threadId: input.threadId,
+    message: {
+      messageId: input.messageId,
+      role: "user" as const,
+      text: `Retry ${input.type}`,
+      attachments: [],
+    },
+    interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+    runtimeMode: "approval-required" as const,
+    createdAt: now(),
+  };
+  return input.type === "thread.turn.start"
+    ? { ...command, type: "thread.turn.start" }
+    : { ...command, type: "thread.message.queue" };
 }
 
 function now() {
@@ -1188,6 +1262,148 @@ describe("OrchestrationEngine", () => {
         }),
       ),
     ).rejects.toThrow("already exists");
+
+    await system.dispose();
+  });
+
+  for (const scenario of [
+    {
+      commandType: "thread.turn.start",
+      slug: "turn-start",
+      expectedEventTypes: ["thread.message-sent", "thread.turn-start-requested"],
+    },
+    {
+      commandType: "thread.message.queue",
+      slug: "message-queue",
+      expectedEventTypes: [
+        "thread.message-queued",
+        "thread.queued-message-dispatched",
+        "thread.message-sent",
+        "thread.turn-start-requested",
+      ],
+    },
+  ] as const) {
+    it(`deduplicates ${scenario.commandType} when its acknowledgement is ambiguous`, async () => {
+      const system = await createOrchestrationSystem();
+      const threadId = ThreadId.make(`thread-receipt-${scenario.slug}-a`);
+      const collisionThreadId = ThreadId.make(`thread-receipt-${scenario.slug}-b`);
+      await createReceiptTestThreads(system, scenario.slug, [threadId, collisionThreadId]);
+
+      const commandId = CommandId.make(`cmd-receipt-${scenario.slug}`);
+      const command = makeAmbiguousAckCommand({
+        type: scenario.commandType,
+        commandId,
+        threadId,
+        messageId: asMessageId(`msg-receipt-${scenario.slug}`),
+      });
+
+      const streamed = await system.run(
+        Effect.gen(function* () {
+          const eventQueue = yield* Queue.unbounded<OrchestrationEvent>();
+          yield* Effect.forkScoped(
+            system.engine.streamDomainEvents.pipe(
+              Stream.runForEach((event) => Queue.offer(eventQueue, event).pipe(Effect.asVoid)),
+            ),
+          );
+          yield* Effect.sleep("10 millis");
+
+          const accepted = yield* system.engine.dispatch(command);
+          const acceptedEvents: OrchestrationEvent[] = [];
+          for (const _ of scenario.expectedEventTypes) {
+            acceptedEvents.push(yield* Queue.take(eventQueue));
+          }
+
+          // Simulate the client losing the successful acknowledgement and retrying
+          // the exact immutable command with its original identity.
+          const replayed = yield* system.engine.dispatch(command);
+          yield* system.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make(`cmd-receipt-${scenario.slug}-stream-barrier`),
+            threadId,
+            title: "Stream barrier",
+          });
+          const eventAfterReplay = yield* Queue.take(eventQueue);
+
+          return { accepted, acceptedEvents, eventAfterReplay, replayed };
+        }).pipe(Effect.scoped),
+      );
+
+      expect(streamed.acceptedEvents.map((event) => event.type)).toEqual(
+        scenario.expectedEventTypes,
+      );
+      expect(
+        streamed.acceptedEvents.filter((event) => event.type === "thread.turn-start-requested"),
+      ).toHaveLength(1);
+      expect(streamed.replayed).toEqual(streamed.accepted);
+      expect(streamed.eventAfterReplay.type).toBe("thread.meta-updated");
+
+      const collidingCommand = makeAmbiguousAckCommand({
+        type: scenario.commandType,
+        commandId,
+        threadId: collisionThreadId,
+        messageId: asMessageId(`msg-receipt-${scenario.slug}-collision`),
+      });
+      await expect(system.run(system.engine.dispatch(collidingCommand))).rejects.toThrow(
+        `already bound to thread '${threadId}'`,
+      );
+
+      const replayAfterCollision = await system.run(system.engine.dispatch(command));
+      expect(replayAfterCollision).toEqual(streamed.accepted);
+
+      const commandEvents = await system.run(
+        Stream.runCollect(system.engine.readEvents(0)).pipe(
+          Effect.map((events) =>
+            Array.from(events).filter((event) => event.commandId === commandId),
+          ),
+        ),
+      );
+      expect(commandEvents.map((event) => event.type)).toEqual(scenario.expectedEventTypes);
+      expect(streamed.accepted.sequence).toBe(commandEvents.at(-1)?.sequence);
+
+      await system.dispose();
+    });
+  }
+
+  it("keeps a rejected command id rejected after its original invariant becomes valid", async () => {
+    const system = await createOrchestrationSystem();
+    const commandId = CommandId.make("cmd-receipt-sticky-rejection");
+    const threadId = ThreadId.make("thread-receipt-sticky-rejection-a");
+    const collisionThreadId = ThreadId.make("thread-receipt-sticky-rejection-b");
+    const rejectedCommand = makeAmbiguousAckCommand({
+      type: "thread.turn.start",
+      commandId,
+      threadId,
+      messageId: asMessageId("msg-receipt-sticky-rejection"),
+    });
+
+    await expect(system.run(system.engine.dispatch(rejectedCommand))).rejects.toThrow(
+      `Thread '${threadId}' does not exist`,
+    );
+
+    await createReceiptTestThreads(system, "sticky-rejection", [threadId, collisionThreadId]);
+
+    await expect(system.run(system.engine.dispatch(rejectedCommand))).rejects.toThrow(
+      "Command previously rejected",
+    );
+    await expect(
+      system.run(
+        system.engine.dispatch(
+          makeAmbiguousAckCommand({
+            type: "thread.turn.start",
+            commandId,
+            threadId: collisionThreadId,
+            messageId: asMessageId("msg-receipt-sticky-rejection-collision"),
+          }),
+        ),
+      ),
+    ).rejects.toThrow("Command previously rejected");
+
+    const rejectedCommandEvents = await system.run(
+      Stream.runCollect(system.engine.readEvents(0)).pipe(
+        Effect.map((events) => Array.from(events).filter((event) => event.commandId === commandId)),
+      ),
+    );
+    expect(rejectedCommandEvents).toEqual([]);
 
     await system.dispose();
   });

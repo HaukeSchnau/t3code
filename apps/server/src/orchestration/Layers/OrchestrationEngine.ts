@@ -112,6 +112,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     let processingStartedAtMs = 0;
+    let receiptAlreadyExists = false;
     const aggregateRef = commandToAggregateRef(envelope.command);
     const baseMetricAttributes = {
       commandType: envelope.command.type,
@@ -146,6 +147,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
+          receiptAlreadyExists = true;
           if (existingReceipt.value.status === "accepted") {
             if (
               existingReceipt.value.aggregateKind !== aggregateRef.aggregateKind ||
@@ -296,7 +298,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               ),
             );
 
-            if (isOrchestrationCommandInvariantError(error)) {
+            if (isOrchestrationCommandInvariantError(error) && !receiptAlreadyExists) {
               yield* commandReceiptRepository
                 .upsert({
                   commandId: envelope.command.commandId,
