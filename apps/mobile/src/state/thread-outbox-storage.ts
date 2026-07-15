@@ -16,6 +16,26 @@ import {
 const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
 const COMMAND_OUTBOX_FILE = "command-outbox.json";
 const COMMAND_OUTBOX_GENERATION_PREFIX = "command-outbox.";
+const COMMAND_OUTBOX_MANIFEST_FILE = "command-outbox.manifest.json";
+let commandOutboxSaveQueue: Promise<void> = Promise.resolve();
+
+function generationFileName(sequence: number): string {
+  return `${COMMAND_OUTBOX_GENERATION_PREFIX}${sequence.toString().padStart(16, "0")}.json`;
+}
+
+function generationSequence(fileName: string): number | null {
+  const match = /^command-outbox\.(\d{16})\.json$/.exec(fileName);
+  return match ? Number(match[1]) : null;
+}
+
+export function nextCommandOutboxGenerationSequence(
+  fileNames: ReadonlyArray<string>,
+  manifestSequence = 0,
+): number {
+  return (
+    Math.max(manifestSequence, ...fileNames.map((name) => generationSequence(name) ?? 0)) + 1
+  );
+}
 
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
@@ -62,14 +82,41 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
     try {
       const { File } = await import("expo-file-system");
       const directory = await getOutboxDirectory();
+      const manifest = new File(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+      if (manifest.exists) {
+        try {
+          const value = JSON.parse(await manifest.text()) as {
+            version?: unknown;
+            sequence?: unknown;
+            fileName?: unknown;
+          };
+          if (
+            value.version !== 1 ||
+            typeof value.sequence !== "number" ||
+            typeof value.fileName !== "string" ||
+            value.fileName !== generationFileName(value.sequence)
+          ) {
+            throw new Error("Invalid command outbox manifest");
+          }
+          const authoritative = new File(directory, value.fileName);
+          return decodeDurableCommandOutboxDocument(
+            JSON.parse(await authoritative.text()) as unknown,
+          );
+        } catch (cause) {
+          // The manifest sequence is the high-water mark. Falling back to an
+          // older lifecycle after its authoritative removal generation is
+          // corrupt could resurrect acknowledged or discarded commands.
+          console.warn("[thread-outbox] rebuilding corrupt authoritative command outbox", cause);
+          return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+        }
+      }
       const candidates = directory
         .list()
         .filter(
           (entry): entry is InstanceType<typeof File> =>
             entry instanceof File &&
             (entry.name === COMMAND_OUTBOX_FILE ||
-              (entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX) &&
-                entry.name.endsWith(".json"))),
+              generationSequence(entry.name) !== null),
         )
         .sort((left, right) => {
           if (left.name === COMMAND_OUTBOX_FILE) return 1;
@@ -98,16 +145,36 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
       });
     }
   },
-  saveCommandOutbox: async (document) => {
-    try {
+  saveCommandOutbox: (document) => {
+    const save = commandOutboxSaveQueue.then(async () => {
+      try {
       const { File } = await import("expo-file-system");
       const directory = await getOutboxDirectory();
-      const generation = `${COMMAND_OUTBOX_GENERATION_PREFIX}${Date.now().toString().padStart(16, "0")}.${Math.random().toString(16).slice(2)}.json`;
+      const manifest = new File(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+      let previousSequence = 0;
+      if (manifest.exists) {
+        try {
+          const value = JSON.parse(await manifest.text()) as { sequence?: unknown };
+          if (typeof value.sequence === "number") previousSequence = value.sequence;
+        } catch {
+          // Recover the high-water value from immutable generation names.
+        }
+      }
+      const sequence = nextCommandOutboxGenerationSequence(
+        directory.list().filter((entry) => entry instanceof File).map((entry) => entry.name),
+        previousSequence,
+      );
+      const generation = generationFileName(sequence);
       const destination = new File(directory, generation);
       const temporary = new File(directory, `${generation}.tmp`);
       temporary.create({ intermediates: true, overwrite: true });
       temporary.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
       await temporary.move(destination, { overwrite: false });
+
+      const manifestTemporary = new File(directory, `${COMMAND_OUTBOX_MANIFEST_FILE}.tmp`);
+      manifestTemporary.create({ intermediates: true, overwrite: true });
+      manifestTemporary.write(JSON.stringify({ version: 1, sequence, fileName: generation }));
+      await manifestTemporary.move(manifest, { overwrite: true });
 
       // Keep multiple immutable generations so a corrupt newest record can
       // fall back to the prior complete lifecycle snapshot.
@@ -116,14 +183,13 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         .filter(
           (entry): entry is InstanceType<typeof File> =>
             entry instanceof File &&
-            entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX) &&
-            entry.name.endsWith(".json") &&
+            generationSequence(entry.name) !== null &&
             entry.name !== generation,
         )
         .sort((left, right) => right.name.localeCompare(left.name))
         .slice(2);
       for (const file of older) file.delete();
-    } catch (cause) {
+      } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "write",
         environmentId: null,
@@ -132,7 +198,10 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         fileName: COMMAND_OUTBOX_FILE,
         cause,
       });
-    }
+      }
+    });
+    commandOutboxSaveQueue = save.catch(() => undefined);
+    return save;
   },
   load: async () => {
     const messages: QueuedThreadMessage[] = [];

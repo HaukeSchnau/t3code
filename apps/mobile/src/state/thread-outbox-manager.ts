@@ -181,18 +181,50 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       // committed, the replacement wins and stale presentation is removed;
       // otherwise the old intent wins and the uncommitted replacement is
       // discarded. Both crash boundaries converge idempotently on load.
-      for (const replacement of messages.filter((message) => message.replacesCommandId)) {
-        const replacementCommitted = queuedIds.has(replacement.commandId);
-        const obsolete = replacementCommitted
-          ? messages.find((message) => message.commandId === replacement.replacesCommandId)
-          : replacement;
-        if (obsolete) {
-          await options.storage.remove(obsolete).catch((cause) =>
+      const committedReplacements = messages.filter(
+        (message) => message.replacesCommandId && queuedIds.has(message.commandId),
+      );
+      const supersededIds = new Set(
+        committedReplacements.flatMap((message) => [
+          ...(message.supersedesCommandIds ?? []),
+          message.replacesCommandId!,
+        ]),
+      );
+      for (const candidate of messages) {
+        const uncommittedReplacement =
+          candidate.replacesCommandId !== undefined && !queuedIds.has(candidate.commandId);
+        if (supersededIds.has(candidate.commandId) || uncommittedReplacement) {
+          await options.storage.remove(candidate).catch((cause) =>
             warn("[thread-outbox] deferred replacement record cleanup", cause),
           );
-          messages = messages.filter((message) => message.messageId !== obsolete.messageId);
+          messages = messages.filter((message) => message.messageId !== candidate.messageId);
         }
       }
+      // A lifecycle without presentation cannot be a legitimate accepted
+      // intent: presentation is always written first. It is an obsolete entry
+      // from an older fallback generation, so retire it before it can block a
+      // newer command on the same thread.
+      const presentedIds = new Set(messages.map((message) => message.commandId));
+      for (const entry of await Effect.runPromise(service.entries)) {
+        const commandId = entry.plan.command.commandId;
+        if (presentedIds.has(commandId)) continue;
+        if (entry.state._tag === "Pending") {
+          await Effect.runPromise(service.cancelPending(commandId));
+        } else if (entry.state._tag === "Rejected") {
+          await Effect.runPromise(service.removeRejected(commandId));
+        } else {
+          const readyAt =
+            entry.state._tag === "Retrying"
+              ? entry.state.retryNotBefore
+              : entry.state.startedAt;
+          if (entry.state._tag !== "Delivering") {
+            await Effect.runPromise(service.begin(commandId, readyAt));
+          }
+          await Effect.runPromise(service.complete(commandId));
+        }
+      }
+      entries = await Effect.runPromise(service.entries);
+      queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
       // Old mobile outbox files are upgraded before becoming visible. This is
       // also the crash reconciliation for a message file written immediately
       // before its shared lifecycle record.
@@ -256,6 +288,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const replacement: QueuedThreadMessage = {
         ...message,
         replacesCommandId: previous.commandId,
+        supersedesCommandIds: [
+          previous.commandId,
+          ...(previous.supersedesCommandIds ?? []),
+          ...(previous.replacesCommandId ? [previous.replacesCommandId] : []),
+        ],
       };
       try {
         await options.storage.write(replacement);

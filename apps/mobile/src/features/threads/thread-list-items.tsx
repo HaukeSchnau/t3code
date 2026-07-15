@@ -277,6 +277,7 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
   const pressedBackgroundColor = useThemeColor("--color-subtle");
 
   const { pendingTask, onSelectPendingTask, onDeletePendingTask } = props;
+  const rejected = pendingTask.deliveryState?._tag === "Rejected";
   const timestamp = relativeTime(pendingTask.message.createdAt);
   const subtitleParts = [props.environmentLabel, pendingTask.creation.branch].filter(
     (part): part is string => Boolean(part),
@@ -290,8 +291,22 @@ export const PendingTaskListRow = memo(function PendingTaskListRow(props: {
   );
 
   const statusPill = (
-    <View className="rounded-full bg-zinc-500/12 px-1.5 py-0.5 dark:bg-zinc-500/16">
-      <Text className="text-3xs font-t3-bold text-zinc-600 dark:text-zinc-300">Pending</Text>
+    <View
+      className={
+        rejected
+          ? "rounded-full bg-red-500/12 px-1.5 py-0.5 dark:bg-red-500/16"
+          : "rounded-full bg-zinc-500/12 px-1.5 py-0.5 dark:bg-zinc-500/16"
+      }
+    >
+      <Text
+        className={
+          rejected
+            ? "text-3xs font-t3-bold text-red-700 dark:text-red-300"
+            : "text-3xs font-t3-bold text-zinc-600 dark:text-zinc-300"
+        }
+      >
+        {rejected ? "Rejected" : "Pending"}
+      </Text>
     </View>
   );
 
