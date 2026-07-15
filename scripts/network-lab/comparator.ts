@@ -21,16 +21,24 @@ export const BrowserNetworkLabMeasurement = Schema.Struct({
   localAcceptanceMs: Schema.Array(FiniteNonNegative).check(Schema.isMinLength(1)),
   statusVisibilityMs: Schema.Array(FiniteNonNegative).check(Schema.isMinLength(1)),
   recoveryLatencyMs: FiniteNonNegative,
+  submissionCount: PositiveInt,
   commandCount: NonNegativeInt,
   effectCount: NonNegativeInt,
   semanticHash: NonEmptyString,
   replayHash: NonEmptyString,
   cachedContentNonblank: Schema.Boolean,
   connectionStatusVisible: Schema.Boolean,
+  recoveryObserved: Schema.Boolean,
   faultSequence: Schema.Array(NonEmptyString).check(Schema.isMinLength(1)),
   traffic: BrowserTrafficMetrics,
   faultEvidenceComplete: Schema.Boolean,
   cleanupEvidenceComplete: Schema.Boolean,
+  isolation: Schema.Struct({
+    id: NonEmptyString,
+    executionId: NonEmptyString,
+    variant: Schema.Literals(["baseline", "candidate"]),
+    exclusive: Schema.Literal(true),
+  }),
 });
 export type BrowserNetworkLabMeasurement = typeof BrowserNetworkLabMeasurement.Type;
 
@@ -39,6 +47,8 @@ export const BrowserNetworkLabThresholds = Schema.Struct({
   identity: Schema.Struct({ id: NonEmptyString, version: PositiveInt }),
   offlineAcceptanceP95Ms: FiniteNonNegative,
   statusVisibilityP95Ms: FiniteNonNegative,
+  minimumAcceptanceSamples: PositiveInt,
+  minimumStatusSamples: PositiveInt,
   recovery: Schema.Struct({ maxRatio: FiniteNonNegative, allowanceMs: FiniteNonNegative }),
   traffic: Schema.Struct({
     maxRatio: FiniteNonNegative,
@@ -54,6 +64,8 @@ export const CI_BROWSER_NETWORK_LAB_THRESHOLDS_V1 = {
   identity: { id: "direct-browser-ci", version: 1 },
   offlineAcceptanceP95Ms: 150,
   statusVisibilityP95Ms: 300,
+  minimumAcceptanceSamples: 20,
+  minimumStatusSamples: 5,
   recovery: { maxRatio: 1.25, allowanceMs: 1_000 },
   traffic: {
     maxRatio: 1.25,
@@ -139,6 +151,22 @@ export function compareBrowserNetworkLabMeasurements(
       repeatedCandidate.faultSequence.join(","),
     );
   }
+  if (new Set([baseline.isolation.id, candidate.isolation.id, repeatedCandidate.isolation.id]).size !== 3) {
+    fail("isolation.unique-runs", "three distinct isolation ids", "reused isolation id");
+  }
+  for (const [name, measurement] of [
+    ["baseline", baseline],
+    ["candidate", candidate],
+    ["repeat", repeatedCandidate],
+  ] as const) {
+    if (
+      measurement.isolation.executionId !== measurement.identity.executionId ||
+      measurement.isolation.variant !== measurement.variant ||
+      !measurement.isolation.exclusive
+    ) {
+      fail(`isolation.${name}`, true, false);
+    }
+  }
   for (const [name, value] of [
     ["baseline.fault-evidence", baseline.faultEvidenceComplete],
     ["candidate.fault-evidence", candidate.faultEvidenceComplete],
@@ -150,23 +178,57 @@ export function compareBrowserNetworkLabMeasurements(
     if (!value) fail(name, true, value);
   }
 
-  for (const [name, value] of [
-    ["cached-content", candidate.cachedContentNonblank],
-    ["connection-status", candidate.connectionStatusVisible],
+  for (const [name, measurement] of [
+    ["baseline", baseline],
+    ["candidate", candidate],
+    ["repeat", repeatedCandidate],
   ] as const) {
-    if (!value) fail(`correctness.${name}`, true, value);
+    if (!measurement.cachedContentNonblank) fail(`correctness.${name}.cached-content`, true, false);
+    if (!measurement.connectionStatusVisible) fail(`correctness.${name}.connection-status`, true, false);
+    if (!measurement.recoveryObserved) fail(`correctness.${name}.recovery-observed`, true, false);
+    if (measurement.commandCount !== measurement.submissionCount) {
+      fail(`correctness.${name}.command-count`, measurement.submissionCount, measurement.commandCount);
+    }
+    if (measurement.effectCount !== measurement.submissionCount) {
+      fail(`correctness.${name}.effect-count`, measurement.submissionCount, measurement.effectCount);
+    }
+    if (measurement.semanticHash !== baseline.semanticHash) {
+      fail(`correctness.${name}.semantic-hash`, baseline.semanticHash, measurement.semanticHash);
+    }
+    if (measurement.replayHash !== baseline.replayHash) {
+      fail(`correctness.${name}.replay-hash`, baseline.replayHash, measurement.replayHash);
+    }
   }
-  if (candidate.commandCount !== 1) fail("correctness.command-count", 1, candidate.commandCount);
-  if (candidate.effectCount !== 1) fail("correctness.effect-count", 1, candidate.effectCount);
-  if (candidate.semanticHash !== baseline.semanticHash) {
-    fail("correctness.semantic-hash", baseline.semanticHash, candidate.semanticHash);
-  }
-  if (candidate.replayHash !== baseline.replayHash) {
-    fail("correctness.replay-hash", baseline.replayHash, candidate.replayHash);
+  if (
+    candidate.submissionCount !== repeatedCandidate.submissionCount ||
+    candidate.commandCount !== repeatedCandidate.commandCount ||
+    candidate.effectCount !== repeatedCandidate.effectCount
+  ) {
+    fail("reproducibility.correctness-counts", true, false);
   }
 
   const localAcceptanceP95Ms = percentile95(candidate.localAcceptanceMs);
   const statusVisibilityP95Ms = percentile95(candidate.statusVisibilityMs);
+  for (const [name, measurement] of [
+    ["baseline", baseline],
+    ["candidate", candidate],
+    ["repeat", repeatedCandidate],
+  ] as const) {
+    if (measurement.localAcceptanceMs.length < thresholds.minimumAcceptanceSamples) {
+      fail(
+        `samples.${name}.offline-acceptance`,
+        thresholds.minimumAcceptanceSamples,
+        measurement.localAcceptanceMs.length,
+      );
+    }
+    if (measurement.statusVisibilityMs.length < thresholds.minimumStatusSamples) {
+      fail(
+        `samples.${name}.status-visibility`,
+        thresholds.minimumStatusSamples,
+        measurement.statusVisibilityMs.length,
+      );
+    }
+  }
   if (localAcceptanceP95Ms > thresholds.offlineAcceptanceP95Ms) {
     fail(
       "latency.offline-acceptance-p95-ms",
@@ -181,6 +243,14 @@ export function compareBrowserNetworkLabMeasurements(
       statusVisibilityP95Ms,
     );
   }
+  const repeatedAcceptanceP95Ms = percentile95(repeatedCandidate.localAcceptanceMs);
+  const repeatedStatusP95Ms = percentile95(repeatedCandidate.statusVisibilityMs);
+  if (repeatedAcceptanceP95Ms > thresholds.offlineAcceptanceP95Ms) {
+    fail("latency.repeat.offline-acceptance-p95-ms", thresholds.offlineAcceptanceP95Ms, repeatedAcceptanceP95Ms);
+  }
+  if (repeatedStatusP95Ms > thresholds.statusVisibilityP95Ms) {
+    fail("latency.repeat.status-visibility-p95-ms", thresholds.statusVisibilityP95Ms, repeatedStatusP95Ms);
+  }
   if (
     !boundedRelative(
       candidate.recoveryLatencyMs,
@@ -193,6 +263,20 @@ export function compareBrowserNetworkLabMeasurements(
       "latency.recovery-ms",
       baseline.recoveryLatencyMs * thresholds.recovery.maxRatio + thresholds.recovery.allowanceMs,
       candidate.recoveryLatencyMs,
+    );
+  }
+  if (
+    !boundedRelative(
+      repeatedCandidate.recoveryLatencyMs,
+      baseline.recoveryLatencyMs,
+      thresholds.recovery.maxRatio,
+      thresholds.recovery.allowanceMs,
+    )
+  ) {
+    fail(
+      "latency.repeat.recovery-ms",
+      baseline.recoveryLatencyMs * thresholds.recovery.maxRatio + thresholds.recovery.allowanceMs,
+      repeatedCandidate.recoveryLatencyMs,
     );
   }
 
@@ -224,6 +308,15 @@ export function compareBrowserNetworkLabMeasurements(
   ] as const) {
     const maximum = baselineValue * thresholds.traffic.maxRatio + allowance;
     if (candidateValue > maximum) fail(`traffic.${name}`, maximum, candidateValue);
+  }
+  for (const [name, repeatValue, baselineValue, allowance] of [
+    ["bytes-sent", repeatedCandidate.traffic.bytesSent, baseline.traffic.bytesSent, thresholds.traffic.bytesAllowance],
+    ["bytes-received", repeatedCandidate.traffic.bytesReceived, baseline.traffic.bytesReceived, thresholds.traffic.bytesAllowance],
+    ["requests", repeatedCandidate.traffic.requestCount, baseline.traffic.requestCount, thresholds.traffic.requestAllowance],
+    ["events", repeatedCandidate.traffic.eventCount, baseline.traffic.eventCount, thresholds.traffic.eventAllowance],
+  ] as const) {
+    const maximum = baselineValue * thresholds.traffic.maxRatio + allowance;
+    if (repeatValue > maximum) fail(`traffic.repeat.${name}`, maximum, repeatValue);
   }
 
   return {

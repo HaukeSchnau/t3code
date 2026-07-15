@@ -18,7 +18,7 @@ export const PRODUCTION_BROWSER_SELECTORS_V1 = {
 
 export interface DirectBrowserScenarioDefinition {
   readonly id: DirectBrowserNetworkScenario;
-  readonly gating: boolean;
+  readonly gating: false;
   readonly requiresReload: boolean;
   readonly requiresProtocolSuppression: boolean;
   readonly faultKinds: ReadonlyArray<string>;
@@ -27,47 +27,69 @@ export interface DirectBrowserScenarioDefinition {
 export const DIRECT_BROWSER_NETWORK_MATRIX_V1: ReadonlyArray<DirectBrowserScenarioDefinition> = [
   {
     id: "clean",
-    gating: true,
+    gating: false,
     requiresReload: false,
     requiresProtocolSuppression: false,
     faultKinds: ["directional-impairment"],
   },
   {
     id: "poor",
-    gating: true,
+    gating: false,
     requiresReload: false,
     requiresProtocolSuppression: false,
     faultKinds: ["directional-impairment"],
   },
   {
     id: "blackhole",
-    gating: true,
+    gating: false,
     requiresReload: false,
     requiresProtocolSuppression: false,
     faultKinds: ["data-plane-blackhole"],
   },
   {
     id: "flap-handover",
-    gating: true,
+    gating: false,
     requiresReload: false,
     requiresProtocolSuppression: false,
     faultKinds: ["link-state", "data-plane-reset"],
   },
   {
     id: "reload",
-    gating: true,
+    gating: false,
     requiresReload: true,
     requiresProtocolSuppression: false,
     faultKinds: ["link-state"],
   },
   {
     id: "lost-acknowledgement",
-    gating: true,
+    gating: false,
     requiresReload: false,
     requiresProtocolSuppression: true,
     faultKinds: ["protocol-suppression"],
   },
 ];
+
+export const DIRECT_BROWSER_NETWORK_MATRIX_READINESS_V1 = {
+  schemaVersion: 1,
+  status: "blocked",
+  gating: false,
+  blockerId: "browser-ready-deterministic-t3-fixture",
+  reason:
+    "The repository has no fixture that composes the production authenticated web surface with deterministic provider/oracle state and protocol suppression.",
+  requiredCapabilities: [
+    "production-http-web-auth",
+    "active-deterministic-thread",
+    "deterministic-provider-oracle",
+    "external-protocol-suppression-adapter",
+    "isolated-baseline-candidate-runs",
+  ],
+} as const;
+
+export function assertDirectBrowserNetworkMatrixReady(): never {
+  throw new Error(
+    `${DIRECT_BROWSER_NETWORK_MATRIX_READINESS_V1.blockerId}: ${DIRECT_BROWSER_NETWORK_MATRIX_READINESS_V1.reason}`,
+  );
+}
 
 export const HOSTED_RELAY_BROWSER_MATRIX_V1 = {
   topology: "managed-relay",

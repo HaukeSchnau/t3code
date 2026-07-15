@@ -5,21 +5,32 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright-core";
+import type {
+  ProductionBrowserDriver,
+  ProductionBrowserSubmissionEvidence,
+} from "../../../../scripts/lib/production-browser-driver.ts";
 
 export interface ChromiumNetworkFaultControl {
+  readonly schemaVersion?: number;
   readonly kind:
     | "protocol-suppression"
     | "data-plane-reset"
     | "link-state"
     | "data-plane-blackhole"
     | "directional-impairment";
-  readonly lifecycle?: "apply" | "remove";
+  readonly lifecycle: "apply" | "remove";
+  readonly surface?: string;
+  readonly direction?: string;
+  readonly state?: string;
+  readonly semantics?: unknown;
+  readonly protocol?: string;
+  readonly message?: string;
+  readonly count?: number;
   readonly parameters?: {
     readonly latencyMs: number;
     readonly lossPercent: number;
     readonly bandwidthKbps: number | null;
   };
-  readonly [key: string]: unknown;
 }
 
 export interface ChromiumTrafficSnapshot {
@@ -33,7 +44,7 @@ export interface AppliedChromiumFault {
   readonly decisionToken: string;
   readonly control: ChromiumNetworkFaultControl;
   readonly appliedAtMs: number;
-  readonly mechanism: "cdp-network" | "protocol-fixture";
+  readonly mechanism: "chromium-cdp" | "external-protocol-suppression-adapter";
 }
 
 export interface ChromiumNetworkLabHarnessOptions {
@@ -53,7 +64,10 @@ export interface ChromiumNetworkLabHarness {
   readonly applyFault: (
     control: ChromiumNetworkFaultControl,
     decisionToken: string,
-  ) => Promise<void>;
+  ) => Promise<{
+    readonly decisionToken: string;
+    readonly effectiveControl: ChromiumNetworkFaultControl;
+  }>;
   readonly waitForVisible: (selector: string, timeoutMs: number) => Promise<number>;
   readonly close: () => Promise<{
     readonly browserDisconnected: boolean;
@@ -61,26 +75,7 @@ export interface ChromiumNetworkLabHarness {
   }>;
 }
 
-export interface ChromiumProductionT3Driver {
-  readonly navigate: (url: string) => Promise<void>;
-  readonly assertProductionSurface: (selectors: {
-    readonly composer: string;
-    readonly cachedTimeline: string;
-  }) => Promise<void>;
-  readonly cachedContentNonblank: (selector: string) => Promise<boolean>;
-  readonly submitComposer: (input: {
-    readonly composerSelector: string;
-    readonly submitSelector: string;
-    readonly durableIntentSelector: string;
-    readonly text: string;
-  }) => Promise<number>;
-  readonly waitForConnectionStatus: (selector: string, timeoutMs: number) => Promise<number>;
-  readonly waitForRecovery: (selector: string, timeoutMs: number) => Promise<number>;
-  readonly reload: () => Promise<void>;
-  readonly applyControl: ChromiumNetworkLabHarness["applyFault"];
-  readonly traffic: ChromiumNetworkLabHarness["traffic"];
-  readonly close: () => Promise<{ readonly complete: boolean; readonly details: string }>;
-}
+export type ChromiumProductionT3Driver = ProductionBrowserDriver<ChromiumNetworkFaultControl>;
 
 interface MutableTraffic {
   bytesSent: number;
@@ -91,6 +86,22 @@ interface MutableTraffic {
 
 function payloadBytes(payload: string): number {
   return Buffer.byteLength(payload, "utf8");
+}
+
+export async function finalizeChromiumIsolation(input: {
+  readonly closeContext: () => Promise<void>;
+  readonly removeProfile: () => Promise<void>;
+  readonly browserIsConnected: () => boolean;
+  readonly profileExists: () => boolean;
+}): Promise<{ readonly browserDisconnected: boolean; readonly temporaryDirectoryRemoved: boolean }> {
+  const [contextClose] = await Promise.allSettled([input.closeContext()]);
+  const [profileRemoval] = await Promise.allSettled([input.removeProfile()]);
+  return {
+    browserDisconnected:
+      contextClose?.status === "fulfilled" && !input.browserIsConnected(),
+    temporaryDirectoryRemoved:
+      profileRemoval?.status === "fulfilled" && !input.profileExists(),
+  };
 }
 
 async function applyCdpNetworkControl(
@@ -126,6 +137,9 @@ async function applyCdpNetworkControl(
     return;
   }
 
+  if (control.kind !== "directional-impairment") {
+    throw new Error(`Unsupported Chromium network control '${control.kind}'.`);
+  }
   const enabled = control.lifecycle === "apply";
   const parameters = control.parameters;
   if (!parameters) throw new Error("Directional impairment requires network parameters.");
@@ -180,6 +194,9 @@ export async function launchChromiumNetworkLabHarness(
     };
     const faultEvidence: Array<AppliedChromiumFault> = [];
     let closed = false;
+    let cleanupResult:
+      | { readonly browserDisconnected: boolean; readonly temporaryDirectoryRemoved: boolean }
+      | undefined;
 
     await cdp.send("Network.enable");
     cdp.on("Network.requestWillBeSent", (event) => {
@@ -222,17 +239,18 @@ export async function launchChromiumNetworkLabHarness(
             decisionToken,
             control,
             appliedAtMs: now(),
-            mechanism: "protocol-fixture",
+            mechanism: "external-protocol-suppression-adapter",
           });
-          return;
+          return { decisionToken, effectiveControl: control };
         }
         await applyCdpNetworkControl(cdp, control);
         faultEvidence.push({
           decisionToken,
           control,
           appliedAtMs: now(),
-          mechanism: "cdp-network",
+          mechanism: "chromium-cdp",
         });
+        return { decisionToken, effectiveControl: control };
       },
       waitForVisible: async (selector, timeoutMs) => {
         const startedAt = now();
@@ -240,20 +258,32 @@ export async function launchChromiumNetworkLabHarness(
         return now() - startedAt;
       },
       close: async () => {
+        if (cleanupResult) return cleanupResult;
         if (!closed) {
           closed = true;
-          await context?.close();
-          await NodeFSP.rm(userDataDir, { recursive: true, force: true });
+          cleanupResult = await finalizeChromiumIsolation({
+            closeContext: async () => context?.close(),
+            removeProfile: () => NodeFSP.rm(userDataDir, { recursive: true, force: true }),
+            browserIsConnected: () => context?.browser()?.isConnected() === true,
+            profileExists: () => NodeFS.existsSync(userDataDir),
+          });
         }
-        return {
-          browserDisconnected: context?.browser()?.isConnected() !== true,
-          temporaryDirectoryRemoved: !NodeFS.existsSync(userDataDir),
-        };
+        return cleanupResult ?? { browserDisconnected: false, temporaryDirectoryRemoved: false };
       },
     };
   } catch (error) {
-    await context?.close().catch(() => undefined);
-    await NodeFSP.rm(userDataDir, { recursive: true, force: true });
+    const contextCleanup = await Promise.allSettled([context?.close()]);
+    const directoryCleanup = await Promise.allSettled([
+      NodeFSP.rm(userDataDir, { recursive: true, force: true }),
+    ]);
+    const cleanup = [...contextCleanup, ...directoryCleanup];
+    const cleanupFailed = cleanup.some(({ status }) => status === "rejected");
+    if (cleanupFailed || NodeFS.existsSync(userDataDir)) {
+      throw new AggregateError(
+        [error, ...cleanup.flatMap((result) => result.status === "rejected" ? [result.reason] : [])],
+        "Chromium launch failed and its isolated profile could not be fully cleaned up.",
+      );
+    }
     throw error;
   }
 }
@@ -279,11 +309,37 @@ export function makeChromiumProductionT3Driver(
       return content.trim().length > 0;
     },
     submitComposer: async (input) => {
+      const existingIds = await harness.page
+        .locator(`${input.durableIntentSelector} [data-outbox-command-id]`)
+        .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-outbox-command-id")));
       const startedAt = now();
       await harness.page.locator(input.composerSelector).fill(input.text);
-      await harness.page.locator(input.submitSelector).first().click();
-      await harness.page.locator(input.durableIntentSelector).waitFor({ state: "visible" });
-      return now() - startedAt;
+      const submitControl = harness.page.locator(input.submitSelector).first();
+      const submitLabel = await submitControl.getAttribute("aria-label");
+      if (submitLabel !== "Save message for delivery") {
+        throw new Error(
+          `Offline acceptance sampling requires 'Save message for delivery', observed '${String(submitLabel)}'.`,
+        );
+      }
+      await submitControl.click();
+      const identityExclusions = existingIds
+        .filter((id): id is string => id !== null)
+        .map((id) => `:not([data-outbox-command-id=${JSON.stringify(id)}])`)
+        .join("");
+      const newIntent = harness.page
+        .locator(`${input.durableIntentSelector} [data-outbox-command-id]${identityExclusions}`)
+        .filter({ hasText: input.text })
+        .first();
+      await newIntent.waitFor({ state: "visible" });
+      const commandId = await newIntent.getAttribute("data-outbox-command-id");
+      if (!commandId || existingIds.includes(commandId)) {
+        throw new Error("The durable outbox did not expose a new command identity for this message.");
+      }
+      return {
+        localAcceptanceMs: now() - startedAt,
+        commandId,
+        text: input.text,
+      } satisfies ProductionBrowserSubmissionEvidence;
     },
     waitForConnectionStatus: (selector, timeoutMs) => harness.waitForVisible(selector, timeoutMs),
     waitForRecovery: async (selector, timeoutMs) => {
