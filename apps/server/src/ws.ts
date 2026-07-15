@@ -40,7 +40,6 @@ import {
   type OrchestrationShellStreamItem,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
-  type OrchestrationThreadStreamItem,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
@@ -105,7 +104,8 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import {
   makeReplayObserver,
-  observeReplayEffect,
+  replayCatchUpWithLive,
+  replayEventBatch,
   type ReplayObserver,
 } from "./observability/ReplayObservability.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -1888,41 +1888,19 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.replayEvents]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.replayEvents,
-            observeReplayEffect(
-              "rpc",
-              clamp(input.fromSequenceExclusive, {
+            replayEventBatch({
+              initialSequence: clamp(input.fromSequenceExclusive, {
                 maximum: Number.MAX_SAFE_INTEGER,
                 minimum: 0,
               }),
-              (observer) => {
-                observer.recordPage();
-                return Stream.runCollect(
-                  orchestrationEngine
-                    .readEvents(
-                      clamp(input.fromSequenceExclusive, {
-                        maximum: Number.MAX_SAFE_INTEGER,
-                        minimum: 0,
-                      }),
-                    )
-                    .pipe(
-                      Stream.tap((event) =>
-                        Effect.sync(() => observer.recordScanned(event.sequence)),
-                      ),
-                    ),
-                ).pipe(
-                  Effect.map((events) => {
-                    const collected = Array.from(events);
-                    return collected;
-                  }),
-                  Effect.flatMap(enrichOrchestrationEvents),
-                  Effect.tap((events) =>
-                    Effect.sync(() => {
-                      for (const event of events) observer.recordEmitted(event.sequence);
-                    }),
-                  ),
-                );
-              },
-            ).pipe(
+              events: orchestrationEngine.readEvents(
+                clamp(input.fromSequenceExclusive, {
+                  maximum: Number.MAX_SAFE_INTEGER,
+                  minimum: 0,
+                }),
+              ),
+              transform: enrichOrchestrationEvents,
+            }).pipe(
               Effect.mapError(
                 (cause) =>
                   new OrchestrationReplayEventsError({
@@ -1942,7 +1920,9 @@ const makeWsRpcLayer = (
                 () => Effect.sync(() => adjustWorkloadGauge("subscriptions.shell.active", -1)),
               );
               const includeCursorItems = input.includeCursorItems === true;
-              const toShellStream = <E, R>(events: Stream.Stream<OrchestrationEvent, E, R>) =>
+              const toShellStream = <E, R>(
+                events: Stream.Stream<OrchestrationEvent, E, R>,
+              ): Stream.Stream<ShellDeltaItem, E, R> =>
                 events.pipe(
                   Stream.tap(() => Effect.sync(() => incrementWorkloadCounter("shell.candidates"))),
                   Stream.mapEffect(toShellStreamEvent),
@@ -1975,28 +1955,14 @@ const makeWsRpcLayer = (
               // page limit) since the shell filter runs after reading.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                return Stream.unwrap(
-                  Effect.gen(function* () {
-                    const observer = yield* makeReplayObserver("shell", afterSequence);
-                    yield* Effect.addFinalizer(observer.finish);
-                    const liveBuffer =
-                      yield* Queue.bounded<OrchestrationShellStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
-                    yield* Effect.forkScoped(
-                      liveStream.pipe(
-                        Stream.runForEach((item) =>
-                          Queue.offer(liveBuffer, item).pipe(
-                            Effect.tap(() =>
-                              Effect.sync(() => observer.recordLiveBuffered(item.sequence)),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                    const catchUpStream = readEventsPaginated(afterSequence, observer).pipe(
+                return replayCatchUpWithLive({
+                  observer: makeReplayObserver("shell", afterSequence),
+                  live: liveStream,
+                  sequence: (item) => item.sequence,
+                  bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
+                  catchUp: (observer) =>
+                    readEventsPaginated(afterSequence, observer).pipe(
                       toShellStream,
-                      Stream.tap((item) =>
-                        Effect.sync(() => observer.recordEmitted(item.sequence)),
-                      ),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({
@@ -2004,14 +1970,8 @@ const makeWsRpcLayer = (
                             cause,
                           }),
                       ),
-                      Stream.onExit(observer.finish),
-                    );
-                    const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
-                      Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
-                    );
-                    return Stream.concat(catchUpStream, bufferedLiveStream);
-                  }),
-                );
+                    ),
+                });
               }
 
               const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
@@ -2097,28 +2057,13 @@ const makeWsRpcLayer = (
               // so a global cap could otherwise omit this thread's events.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                return Stream.unwrap(
-                  Effect.gen(function* () {
-                    const observer = yield* makeReplayObserver("thread", afterSequence);
-                    yield* Effect.addFinalizer(observer.finish);
-                    const liveBuffer =
-                      yield* Queue.bounded<OrchestrationThreadStreamItem>(LIVE_REPLAY_BUFFER_SIZE);
-                    yield* Effect.forkScoped(
-                      liveStream.pipe(
-                        Stream.runForEach((item) =>
-                          Queue.offer(liveBuffer, item).pipe(
-                            Effect.tap(() =>
-                              Effect.sync(() =>
-                                observer.recordLiveBuffered(
-                                  item.kind === "event" ? item.event.sequence : afterSequence,
-                                ),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                    const catchUpStream = readEventsPaginated(afterSequence, observer).pipe(
+                return replayCatchUpWithLive({
+                  observer: makeReplayObserver("thread", afterSequence),
+                  live: liveStream,
+                  sequence: (item) => item.event.sequence,
+                  bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
+                  catchUp: (observer) =>
+                    readEventsPaginated(afterSequence, observer).pipe(
                       Stream.filter(isThisThreadDetailEvent),
                       Stream.tap(() =>
                         Effect.sync(() =>
@@ -2126,9 +2071,6 @@ const makeWsRpcLayer = (
                         ),
                       ),
                       Stream.map((event) => ({ kind: "event" as const, event })),
-                      Stream.tap((item) =>
-                        Effect.sync(() => observer.recordEmitted(item.event.sequence)),
-                      ),
                       Stream.mapError(
                         (cause) =>
                           new OrchestrationGetSnapshotError({
@@ -2136,14 +2078,8 @@ const makeWsRpcLayer = (
                             cause,
                           }),
                       ),
-                      Stream.onExit(observer.finish),
-                    );
-                    const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
-                      Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
-                    );
-                    return Stream.concat(catchUpStream, bufferedLiveStream);
-                  }),
-                );
+                    ),
+                });
               }
 
               const snapshot = yield* projectionSnapshotQuery

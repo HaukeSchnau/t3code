@@ -1,4 +1,6 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as Data from "effect/Data";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
@@ -6,7 +8,16 @@ import * as Fiber from "effect/Fiber";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { makeReplayObserver, type ReplayObservationReport } from "./ReplayObservability.ts";
+import {
+  makeReplayObserver,
+  replayCatchUpWithLive,
+  replayEventBatch,
+  type ReplayObservationReport,
+} from "./ReplayObservability.ts";
+
+class ReplayTestError extends Data.TaggedError("ReplayTestError")<{
+  readonly message: string;
+}> {}
 
 describe("ReplayObservability", () => {
   it.effect("reports deterministic replay work, overlap, and live-buffer high-water", () =>
@@ -59,7 +70,7 @@ describe("ReplayObservability", () => {
             observer.recordEmitted(event.sequence);
           }),
         ),
-        Stream.concat(Stream.fail("storage unavailable")),
+        Stream.concat(Stream.fail(new ReplayTestError({ message: "storage unavailable" }))),
         Stream.onExit(observer.finish),
       );
 
@@ -87,9 +98,9 @@ describe("ReplayObservability", () => {
       const observer = yield* makeReplayObserver("rpc", 30, (report) =>
         Effect.sync(() => reports.push(report)),
       );
-      const fiber = yield* Stream.runDrain(Stream.never.pipe(Stream.onExit(observer.finish))).pipe(
-        Effect.forkChild,
-      );
+      const fiber = yield* Stream.runDrain(
+        (Stream.never as Stream.Stream<never, never>).pipe(Stream.onExit(observer.finish)),
+      ).pipe(Effect.forkChild);
 
       yield* Effect.yieldNow;
       yield* TestClock.adjust(Duration.millis(75));
@@ -108,5 +119,189 @@ describe("ReplayObservability", () => {
         liveBufferHighWaterMark: 0,
       });
     }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("observes unary batches and finalizes partial scans on failure", () =>
+    Effect.gen(function* () {
+      const reports: Array<ReplayObservationReport> = [];
+      const recorder = (report: ReplayObservationReport) => Effect.sync(() => reports.push(report));
+
+      const replayed = yield* replayEventBatch({
+        initialSequence: 40,
+        events: Stream.make({ sequence: 41 }, { sequence: 42 }),
+        transform: (events) => Effect.succeed(events),
+        recorder,
+      });
+      const failed = yield* replayEventBatch({
+        initialSequence: 42,
+        events: Stream.make({ sequence: 43 }).pipe(
+          Stream.concat(Stream.fail(new ReplayTestError({ message: "read failed" }))),
+        ),
+        transform: (events) => Effect.succeed(events),
+        recorder,
+      }).pipe(Effect.exit);
+
+      assert.deepStrictEqual(
+        replayed.map((event) => event.sequence),
+        [41, 42],
+      );
+      assert.equal(Exit.isFailure(failed), true);
+      assert.deepStrictEqual(
+        reports.map(({ outcome, pages, scannedEvents, emittedEvents }) => ({
+          outcome,
+          pages,
+          scannedEvents,
+          emittedEvents,
+        })),
+        [
+          { outcome: "success", pages: 1, scannedEvents: 2, emittedEvents: 2 },
+          { outcome: "failure", pages: 1, scannedEvents: 1, emittedEvents: 0 },
+        ],
+      );
+    }),
+  );
+
+  it.effect("keeps shell catch-up before a bounded live buffer and reports pre-filter work", () =>
+    Effect.gen(function* () {
+      const reports: Array<ReplayObservationReport> = [];
+      const thirdLiveAttempted = yield* Deferred.make<void>();
+      const observer = makeReplayObserver("shell", 0, (report) =>
+        Effect.sync(() => reports.push(report)),
+      );
+      const live = Stream.make(2, 4, 5).pipe(
+        Stream.tap((sequence) =>
+          sequence === 5 ? Deferred.succeed(thirdLiveAttempted, undefined) : Effect.void,
+        ),
+      );
+      const stream = replayCatchUpWithLive({
+        observer,
+        live,
+        sequence: (sequence) => sequence,
+        bufferCapacity: 2,
+        catchUp: (replayObserver) =>
+          Stream.fromEffect(
+            Deferred.await(thirdLiveAttempted).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  replayObserver.recordBatch([
+                    { sequence: 1 },
+                    { sequence: 2 },
+                    { sequence: 3 },
+                    { sequence: 4 },
+                  ]),
+                ),
+              ),
+              Effect.as([1, 4] as const),
+            ),
+          ).pipe(Stream.flattenIterable),
+      });
+
+      const output = yield* stream.pipe(Stream.take(5), Stream.runCollect, Effect.scoped);
+
+      assert.deepStrictEqual(Array.from(output), [1, 4, 2, 4, 5]);
+      assert.equal(reports.length, 1);
+      assert.deepStrictEqual(reports[0], {
+        flow: "shell",
+        outcome: "success",
+        durationMs: 0,
+        persistedTailSequence: 4,
+        pages: 1,
+        scannedEvents: 4,
+        emittedEvents: 2,
+        dedupedOverlapEvents: 2,
+        liveBufferHighWaterMark: 2,
+      });
+    }),
+  );
+
+  it.effect("reports global scans separately from filtered thread catch-up", () =>
+    Effect.gen(function* () {
+      const reports: Array<ReplayObservationReport> = [];
+      const thirdLiveAttempted = yield* Deferred.make<void>();
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserver("thread", 10, (report) =>
+          Effect.sync(() => reports.push(report)),
+        ),
+        live: Stream.make(12, 14, 15).pipe(
+          Stream.tap((sequence) =>
+            sequence === 15 ? Deferred.succeed(thirdLiveAttempted, undefined) : Effect.void,
+          ),
+        ),
+        sequence: (sequence) => sequence,
+        bufferCapacity: 2,
+        catchUp: (observer) =>
+          Stream.fromEffect(
+            Deferred.await(thirdLiveAttempted).pipe(
+              Effect.tap(() =>
+                Effect.sync(() =>
+                  observer.recordBatch([{ sequence: 11 }, { sequence: 12 }, { sequence: 13 }]),
+                ),
+              ),
+              Effect.as(13),
+            ),
+          ),
+      });
+
+      const output = yield* stream.pipe(Stream.take(4), Stream.runCollect, Effect.scoped);
+
+      assert.deepStrictEqual(Array.from(output), [13, 12, 14, 15]);
+      assert.equal(reports.length, 1);
+      assert.deepStrictEqual(reports[0], {
+        flow: "thread",
+        outcome: "success",
+        durationMs: 0,
+        persistedTailSequence: 13,
+        pages: 1,
+        scannedEvents: 3,
+        emittedEvents: 1,
+        dedupedOverlapEvents: 1,
+        liveBufferHighWaterMark: 2,
+      });
+    }),
+  );
+
+  it.effect("finalizes setup defects exactly once through the replay scope", () =>
+    Effect.gen(function* () {
+      const reports: Array<ReplayObservationReport> = [];
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserver("shell", 50, (report) =>
+          Effect.sync(() => reports.push(report)),
+        ),
+        live: Stream.empty,
+        sequence: (sequence: number) => sequence,
+        bufferCapacity: 1,
+        catchUp: () => {
+          throw new Error("catch-up construction failed");
+        },
+      });
+
+      const exit = yield* stream.pipe(Stream.runDrain, Effect.scoped, Effect.exit);
+
+      assert.equal(Exit.isFailure(exit), true);
+      assert.equal(reports.length, 1);
+      assert.equal(reports[0]?.outcome, "failure");
+    }),
+  );
+
+  it.effect("finalizes actual catch-up cancellation exactly once", () =>
+    Effect.gen(function* () {
+      const reports: Array<ReplayObservationReport> = [];
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserver("thread", 60, (report) =>
+          Effect.sync(() => reports.push(report)),
+        ),
+        live: Stream.empty,
+        sequence: (sequence: number) => sequence,
+        bufferCapacity: 1,
+        catchUp: () => Stream.never as Stream.Stream<number, never>,
+      });
+      const fiber = yield* stream.pipe(Stream.runDrain, Effect.scoped, Effect.forkChild);
+
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+
+      assert.equal(reports.length, 1);
+      assert.equal(reports[0]?.outcome, "interrupt");
+    }),
   );
 });
