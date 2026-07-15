@@ -96,4 +96,26 @@ describe("durable outbox presentation", () => {
       ),
     ).toHaveLength(1);
   });
+
+  it("hands ownership to the remote queue after acknowledgement loss", () => {
+    expect(
+      selectThreadDurableOutboxEntries(
+        [
+          entry({
+            _tag: "Retrying",
+            attempt: 1,
+            retryNotBefore: "2026-07-15T10:00:05.000Z",
+            failure: {
+              classification: "ambiguous",
+              message: "Ack lost",
+              failedAt: "2026-07-15T10:00:01.000Z",
+            },
+          }),
+        ],
+        environmentId,
+        threadId,
+        new Set(["message-1"]),
+      ),
+    ).toEqual([]);
+  });
 });

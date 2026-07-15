@@ -111,7 +111,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                       setEditText(command.message.text);
                     }}
                   >
-                    <PencilIcon className="size-3" />
+                    <PencilIcon className="size-3" aria-hidden="true" />
                     Edit
                   </Button>
                 ) : null}
@@ -138,7 +138,10 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                       )
                     }
                   >
-                    <RotateCwIcon className={cn("size-3", busy && "animate-spin")} />
+                    <RotateCwIcon
+                      className={cn("size-3", busy && "animate-spin motion-reduce:animate-none")}
+                      aria-hidden="true"
+                    />
                     Retry
                   </Button>
                 ) : null}
@@ -151,7 +154,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                     disabled={busy}
                     onClick={() => void run(commandId, () => onDiscard(commandId))}
                   >
-                    <Trash2Icon className="size-3.5" />
+                    <Trash2Icon className="size-3.5" aria-hidden="true" />
                   </Button>
                 ) : null}
               </div>
@@ -202,6 +205,9 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                 </Button>
               </form>
             ) : null}
+            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+              {view.title}. {view.detail}
+            </span>
           </div>
         );
       })}
@@ -210,9 +216,6 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
           {actionError}
         </p>
       ) : null}
-      <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-        {views.map((view) => `${view.title}. ${view.detail}`).join(" ")}
-      </span>
     </div>
   );
 });

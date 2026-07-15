@@ -140,27 +140,32 @@ describe("web durable command outbox", () => {
 
   it("edits and cancels only pending browser intents through durable lifecycle transitions", async () => {
     const memory = memoryStorage();
-    const controller = createDurableCommandOutboxController({
+    const options = {
       storage: memory.storage,
       now: () => T0,
       withDrainLeadership: async () => false,
       setTimer: () => 1,
       clearTimer: () => undefined,
       dispatch: async () => undefined,
-    });
+    };
+    const first = createDurableCommandOutboxController(options);
 
-    await controller.enqueue(environmentId, command("original"));
-    await controller.replacePending(CommandId.make("original"), {
+    await first.enqueue(environmentId, command("original"));
+    first.dispose();
+    const editor = createDurableCommandOutboxController(options);
+    await editor.replacePending(CommandId.make("original"), {
       ...command("replacement"),
       message: { ...command("replacement").message, text: "Edited on the train" },
     });
+    editor.dispose();
 
     expect(memory.read().entries).toHaveLength(1);
     expect(memory.read().entries[0]?.plan.command.commandId).toBe("replacement");
     expect(memory.read().entries[0]?.plan.command.message.text).toBe("Edited on the train");
-    await controller.cancelPending(CommandId.make("replacement"));
+    const canceller = createDurableCommandOutboxController(options);
+    await canceller.cancelPending(CommandId.make("replacement"));
     expect(memory.read().entries).toEqual([]);
-    controller.dispose();
+    canceller.dispose();
   });
 
   it("does not publish or accept intent when its enqueue save fails", async () => {
@@ -572,10 +577,18 @@ describe("web durable command outbox", () => {
 
     expect(memory.read().entries[0]?.state._tag).toBe("Rejected");
     expect(delivered).toEqual(["command-1", "command-1"]);
-    await controller.discardRejected(CommandId.make("command-1"));
-    await controller.flush();
-    expect(delivered).toEqual(["command-1", "command-1", "command-2"]);
     controller.dispose();
+    const recovered = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => clock,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async (_environmentId, value) => void delivered.push(value.commandId),
+    });
+    await recovered.discardRejected(CommandId.make("command-1"));
+    await recovered.flush();
+    expect(delivered).toEqual(["command-1", "command-1", "command-2"]);
+    recovered.dispose();
   });
 
   it("retries a rejected browser intent with a fresh durable identity", async () => {
@@ -603,12 +616,21 @@ describe("web durable command outbox", () => {
     await controller.flush();
     expect(memory.read().entries[0]?.state._tag).toBe("Rejected");
 
+    controller.dispose();
     canLead = false;
-    await controller.replaceRejected(CommandId.make("rejected"), command("replacement"));
+    const recovered = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      withDrainLeadership: async () => false,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      dispatch: async () => undefined,
+    });
+    await recovered.replaceRejected(CommandId.make("rejected"), command("replacement"));
     expect(memory.read().entries).toHaveLength(1);
     expect(memory.read().entries[0]?.plan.command.commandId).toBe("replacement");
     expect(memory.read().entries[0]?.state._tag).toBe("Pending");
-    controller.dispose();
+    recovered.dispose();
   });
 
   it("uses independent bounded recovery wakes after consecutive load failures", async () => {

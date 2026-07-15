@@ -1737,6 +1737,7 @@ function ChatViewContent(props: ChatViewProps) {
             durableOutboxEntries,
             activeThread.environmentId,
             activeThread.id,
+            new Set((activeThread.queuedMessages ?? []).map((message) => message.messageId)),
           )
         : [],
     [activeThread, durableOutboxEntries],

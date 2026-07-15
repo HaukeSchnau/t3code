@@ -41,6 +41,39 @@ describe("train network experience presentation", () => {
     });
   });
 
+  it("presents an idle available supervisor as not connected rather than offline", () => {
+    const view = deriveTrainNetworkExperience(
+      projection({
+        phase: "available",
+        stage: "idle",
+        attempt: 0,
+        generation: 0,
+        failure: null,
+      }),
+      0,
+    );
+
+    expect(view).toMatchObject({ title: "Not connected", detail: "Showing saved content." });
+  });
+
+  it("states cached freshness independently when transport is blocked", () => {
+    const view = deriveTrainNetworkExperience(
+      projection({
+        phase: "error",
+        stage: "blocked",
+        attempt: 2,
+        generation: 1,
+        failure: { reason: "authentication", message: "Sign in again", traceId: null },
+      }),
+      0,
+    );
+
+    expect(view).toMatchObject({
+      title: "Connection failed",
+      detail: "Sign in again. Showing saved content.",
+    });
+  });
+
   it("does not claim saved content when no cached snapshot exists", () => {
     const view = deriveTrainNetworkExperience(
       projection(

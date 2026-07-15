@@ -17,10 +17,13 @@ export function selectThreadDurableOutboxEntries(
   entries: ReadonlyArray<DurableCommandOutboxEntry>,
   environmentId: EnvironmentId,
   threadId: ThreadId,
+  remotelyQueuedMessageIds: ReadonlySet<string> = new Set(),
 ): ReadonlyArray<DurableCommandOutboxEntry> {
   return entries.filter(
     (entry) =>
-      entry.plan.environmentId === environmentId && entry.plan.command.threadId === threadId,
+      entry.plan.environmentId === environmentId &&
+      entry.plan.command.threadId === threadId &&
+      !remotelyQueuedMessageIds.has(entry.plan.command.message.messageId),
   );
 }
 

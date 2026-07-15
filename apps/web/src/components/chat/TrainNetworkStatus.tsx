@@ -76,6 +76,11 @@ export function TrainNetworkStatus({
 
   const retryText = retryCountdownText(displayedView.retryRemainingMs);
   const recovered = displayedView.kind === "recovered";
+  const canReconnect =
+    displayedView.kind === "degraded" &&
+    (displayedView.title === "Not connected" ||
+      displayedView.title === "Offline" ||
+      displayedView.title === "Connection failed");
 
   return (
     <div
@@ -115,7 +120,7 @@ export function TrainNetworkStatus({
           {retryText}
         </span>
       ) : null}
-      {displayedView.kind === "degraded" && displayedView.title === "Connection failed" ? (
+      {canReconnect ? (
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {onReconnect ? (
             <Button type="button" size="xs" onClick={onReconnect}>
