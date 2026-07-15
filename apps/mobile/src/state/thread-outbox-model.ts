@@ -59,6 +59,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   // bootstrap intent rather than generating a new worktree branch.
   deliveryWorktreeBranchName: Schema.optional(Schema.String),
   replacesCommandId: Schema.optional(CommandId),
+  supersedesCommandIds: Schema.optional(Schema.Array(CommandId)),
   acknowledgedAt: Schema.optional(IsoDateTime),
   discardedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
@@ -90,6 +91,7 @@ export interface QueuedThreadMessage {
   readonly creation?: QueuedThreadCreation;
   readonly deliveryWorktreeBranchName?: string;
   readonly replacesCommandId?: CommandId;
+  readonly supersedesCommandIds?: ReadonlyArray<CommandId>;
   readonly acknowledgedAt?: string;
   readonly discardedAt?: string;
   readonly createdAt: string;
