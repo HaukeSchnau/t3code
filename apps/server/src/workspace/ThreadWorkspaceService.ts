@@ -886,57 +886,58 @@ export const make = Effect.gen(function* () {
           AND lifecycle = 'active'
           AND deleted_at IS NULL
         LIMIT 1
-      `.pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.getPreparedWorkspace")));
+      `;
       if (!rows[0]) {
         return Option.none();
       }
-      const workspace = yield* readWorkspace(workspaceId).pipe(
-        Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.getPreparedWorkspace")),
-      );
+      const workspace = yield* readWorkspace(workspaceId);
       return Option.some(toPreparedWorkspace(workspace));
     },
+    Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.getPreparedWorkspace")),
   );
 
-  const clearIncompleteWorkspace = Effect.fn(
-    "ThreadWorkspaceService.clearIncompleteWorkspace",
-  )(function* (threadId: ThreadId) {
-    const workspaceId = makeWorkspaceId(threadId);
-    const rows = yield* sql<{ readonly id: string }>`
+  const clearIncompleteWorkspace = Effect.fn("ThreadWorkspaceService.clearIncompleteWorkspace")(
+    function* (threadId: ThreadId) {
+      const workspaceId = makeWorkspaceId(threadId);
+      const rows = yield* sql<{ readonly id: string }>`
       SELECT id
       FROM projection_thread_workspaces
       WHERE id = ${workspaceId}
         AND lifecycle <> 'active'
       LIMIT 1
     `;
-    if (!rows[0]) {
-      return;
-    }
-    const workspace = yield* readWorkspace(workspaceId);
-    const primary = workspace.roots.find((root) => root.id === workspace.primaryRootId);
-    if (primary) {
-      if (workspace.kind === "git-detached") {
-        yield* gitWorkflow
-          .removeWorktree({ cwd: primary.sourcePath, path: primary.checkoutPath, force: true })
-          .pipe(Effect.ignore);
-      } else if (workspace.kind === "jj-workspace") {
-        const workspaceName = String(primary.metadata.jjWorkspaceName ?? "");
-        if (workspaceName) {
-          yield* Effect.try({
-            try: () =>
-              runCommand({
-                command: "jj",
-                args: ["workspace", "forget", workspaceName],
-                cwd: primary.sourcePath,
-              }),
-            catch: () => undefined,
-          }).pipe(Effect.ignore);
-        }
+      if (!rows[0]) {
+        return;
       }
-      yield* Effect.sync(() => removeWorkspaceDirectory(primary.checkoutPath)).pipe(Effect.ignore);
-    }
-    yield* sql`DELETE FROM projection_thread_workspace_roots WHERE workspace_id = ${workspaceId}`;
-    yield* sql`DELETE FROM projection_thread_workspaces WHERE id = ${workspaceId}`;
-  });
+      const workspace = yield* readWorkspace(workspaceId);
+      const primary = workspace.roots.find((root) => root.id === workspace.primaryRootId);
+      if (primary) {
+        if (workspace.kind === "git-detached") {
+          yield* gitWorkflow
+            .removeWorktree({ cwd: primary.sourcePath, path: primary.checkoutPath, force: true })
+            .pipe(Effect.ignore);
+        } else if (workspace.kind === "jj-workspace") {
+          const workspaceName = String(primary.metadata.jjWorkspaceName ?? "");
+          if (workspaceName) {
+            yield* Effect.try({
+              try: () =>
+                runCommand({
+                  command: "jj",
+                  args: ["workspace", "forget", workspaceName],
+                  cwd: primary.sourcePath,
+                }),
+              catch: () => undefined,
+            }).pipe(Effect.ignore);
+          }
+        }
+        yield* Effect.sync(() => removeWorkspaceDirectory(primary.checkoutPath)).pipe(
+          Effect.ignore,
+        );
+      }
+      yield* sql`DELETE FROM projection_thread_workspace_roots WHERE workspace_id = ${workspaceId}`;
+      yield* sql`DELETE FROM projection_thread_workspaces WHERE id = ${workspaceId}`;
+    },
+  );
 
   const makeWorkspace = (input: {
     readonly request: PrepareThreadWorkspaceInput;

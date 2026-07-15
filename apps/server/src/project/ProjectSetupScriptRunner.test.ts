@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
-import * as NodeFS from "node:fs";
-import * as NodePath from "node:path";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 
 import * as ServerConfig from "../config.ts";
@@ -78,18 +78,23 @@ const testLayer = (
         Layer.provide(NodeServices.layer),
       ),
     ),
-    Layer.provide(NodeServices.layer),
+    Layer.provideMerge(NodeServices.layer),
   );
 
 const claimWrapperExecution = (data: string) =>
-  Effect.sync(() => {
+  Effect.gen(function* () {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const wrapperLiteral = data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
     if (!wrapperLiteral) throw new Error(`Missing wrapper path in terminal write: ${data}`);
     const wrapperPath = decodeJsonString(wrapperLiteral);
-    const executionDirectory = NodePath.dirname(wrapperPath);
-    NodeFS.mkdirSync(NodePath.join(executionDirectory, "claimed"));
-    NodeFS.writeFileSync(NodePath.join(executionDirectory, "completed.json"), '{"exitCode":0}\n');
-  });
+    const executionDirectory = path.dirname(wrapperPath);
+    yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
+    yield* fileSystem.writeFileString(
+      path.join(executionDirectory, "completed.json"),
+      '{"exitCode":0}\n',
+    );
+  }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
 describe("ProjectSetupScriptRunner", () => {
   it.effect("returns no-script when no setup script exists", () => {
@@ -195,17 +200,19 @@ describe("ProjectSetupScriptRunner", () => {
     );
     const write = vi.fn(
       (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
           const wrapperLiteral = input.data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
           if (!wrapperLiteral) throw new Error("missing wrapper path");
           wrapperPath = decodeJsonString(wrapperLiteral);
-          const executionDirectory = NodePath.dirname(wrapperPath);
-          NodeFS.mkdirSync(NodePath.join(executionDirectory, "claimed"));
-          NodeFS.writeFileSync(
-            NodePath.join(executionDirectory, "completed.json"),
+          const executionDirectory = path.dirname(wrapperPath);
+          yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
+          yield* fileSystem.writeFileString(
+            path.join(executionDirectory, "completed.json"),
             '{"exitCode":0}\n',
           );
-        }),
+        }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
     );
     const project = makeProject([
       {
@@ -218,6 +225,8 @@ describe("ProjectSetupScriptRunner", () => {
     ]);
 
     return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
       const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const input = {
         threadId: "thread-1",
@@ -226,7 +235,7 @@ describe("ProjectSetupScriptRunner", () => {
         preferredTerminalId: "setup-setup",
       };
       yield* runner.runForThread(input);
-      NodeFS.rmSync(NodePath.join(NodePath.dirname(wrapperPath), "completed.json"));
+      yield* fileSystem.remove(path.join(path.dirname(wrapperPath), "completed.json"));
 
       const incomplete = yield* runner
         .runForThread({ ...input, reconcileClaimedLaunch: true })
@@ -238,8 +247,8 @@ describe("ProjectSetupScriptRunner", () => {
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
 
-      NodeFS.writeFileSync(
-        NodePath.join(NodePath.dirname(wrapperPath), "completed.json"),
+      yield* fileSystem.writeFileString(
+        path.join(path.dirname(wrapperPath), "completed.json"),
         '{"exitCode":0}\n',
       );
       const completed = yield* runner.runForThread({
