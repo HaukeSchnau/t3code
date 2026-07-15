@@ -23,8 +23,9 @@ storage and decide when to drain ready thread heads.
 - `CommandOutboxStorage` is a platform service with `load` and atomic whole-document `save`. The shared package
   intentionally contains no IndexedDB, filesystem, Expo, React, or React Native implementation.
 - `@t3tools/client-runtime/state/command-outbox` exports the serialized state machine and Effect layer. Every
-  mutation saves the next document before publishing it in memory. A failed save leaves observable state
-  unchanged.
+  mutation saves the next document before publishing it in memory. Durable save and in-memory publication are
+  one uninterruptible commit section, while mutation serialization and unrelated work remain interruptible. A
+  failed save leaves observable state unchanged.
 
 ## Delivery requirements
 
@@ -32,8 +33,10 @@ storage and decide when to drain ready thread heads.
   `prepareQueueThreadMessage` create complete commands without requiring a live environment connection.
 - Retry transient and ambiguous failures with the exact frozen command and command id. An interrupted
   `Delivering` record becomes an immediate ambiguous retry during startup recovery.
-- A permanent rejection remains at the thread head. Removing it unblocks the next item; edit-and-retry uses the
-  atomic `replaceRejected` transition and must provide a new command id in the same environment and thread.
+- A permanent rejection remains at the thread head. Only `removeRejected` may discard an entry, and it rejects
+  pending, delivering, transient-retry, and ambiguous-retry states. Removing a rejected head unblocks the next
+  item; edit-and-retry uses the atomic `replaceRejected` transition and must provide a new command id in the
+  same environment and thread.
 - Only the first item for each `(environmentId, threadId)` can become ready. A delivering, delayed-retry, or
   rejected head blocks that thread but does not prevent another thread from draining.
 - Unknown failures default to ambiguous so the core does not silently lose a possibly accepted command.

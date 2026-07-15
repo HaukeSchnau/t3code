@@ -7,7 +7,10 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 
 import {
   decodeDurableCommandOutboxDocument,
@@ -92,6 +95,60 @@ describe("command outbox lifecycle", () => {
       expect(error._tag).toBe("CommandOutboxStorageError");
       expect(yield* outbox.entries).toEqual([]);
       expect(harness.persisted()).toEqual(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT);
+    }),
+  );
+
+  it.effect("cannot be interrupted between an async durable save and memory publication", () =>
+    Effect.gen(function* () {
+      let persisted = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+      let firstSave = true;
+      let completeFirstSave: (() => void) | undefined;
+      const firstSaveCommitted = yield* Deferred.make<void>();
+      const storage = CommandOutboxStorage.of({
+        load: Effect.sync(() => persisted),
+        save: (document) => {
+          if (!firstSave) {
+            return Effect.sync(() => {
+              persisted = document;
+            });
+          }
+          firstSave = false;
+          return Effect.callback<void>((resume) => {
+            persisted = document;
+            Deferred.doneUnsafe(firstSaveCommitted, Effect.void);
+            completeFirstSave = () => resume(Effect.void);
+          });
+        },
+      });
+      const outbox = yield* makeCommandOutbox(storage, T0);
+      const firstEnqueue = yield* outbox
+        .enqueue(plan({ commandId: "first" }))
+        .pipe(Effect.forkChild({ startImmediately: true }));
+
+      yield* Deferred.await(firstSaveCommitted);
+      const interrupted = yield* Effect.sync(() => {
+        if (completeFirstSave === undefined) {
+          throw new Error("Expected the controlled async save to be waiting for completion");
+        }
+        firstEnqueue.interruptUnsafe();
+        completeFirstSave();
+      }).pipe(Effect.andThen(Fiber.await(firstEnqueue)));
+
+      expect(Exit.hasInterrupts(interrupted)).toBe(true);
+      expect((yield* outbox.entries).map((entry) => entry.plan.command.commandId)).toEqual([
+        "first",
+      ]);
+      expect(persisted.entries.map((entry) => entry.plan.command.commandId)).toEqual(["first"]);
+
+      yield* outbox.enqueue(plan({ commandId: "second" }));
+      expect((yield* outbox.entries).map((entry) => entry.plan.command.commandId)).toEqual([
+        "first",
+        "second",
+      ]);
+      expect(persisted.entries.map((entry) => entry.plan.command.commandId)).toEqual([
+        "first",
+        "second",
+      ]);
     }),
   );
 
@@ -189,7 +246,59 @@ describe("command outbox lifecycle", () => {
     }),
   );
 
-  it.effect("removing a failed head unblocks its successor", () =>
+  it.effect("rejects removing non-rejected entries without disturbing per-thread FIFO", () =>
+    Effect.gen(function* () {
+      const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
+      for (const [head, successor, threadId] of [
+        ["pending", "pending-next", "thread-pending"],
+        ["delivering", "delivering-next", "thread-delivering"],
+        ["transient", "transient-next", "thread-transient"],
+        ["ambiguous", "ambiguous-next", "thread-ambiguous"],
+      ] as const) {
+        yield* outbox.enqueue(plan({ commandId: head, threadId }));
+        yield* outbox.enqueue(plan({ commandId: successor, threadId }));
+      }
+      yield* outbox.begin(CommandId.make("delivering"), T0);
+      yield* outbox.begin(CommandId.make("transient"), T0);
+      yield* outbox.fail(
+        CommandId.make("transient"),
+        { classification: "transient", message: "offline" },
+        T0,
+      );
+      yield* outbox.begin(CommandId.make("ambiguous"), T0);
+      yield* outbox.fail(
+        CommandId.make("ambiguous"),
+        { classification: "ambiguous", message: "ack lost" },
+        T0,
+      );
+
+      for (const commandId of ["pending", "delivering", "transient", "ambiguous"]) {
+        const error = yield* Effect.flip(outbox.removeRejected(CommandId.make(commandId)));
+        expect(error).toMatchObject({
+          _tag: "CommandOutboxStateError",
+          reason: "invalid-transition",
+        });
+      }
+
+      expect((yield* outbox.entries).map((entry) => entry.plan.command.commandId)).toEqual([
+        "pending",
+        "pending-next",
+        "delivering",
+        "delivering-next",
+        "transient",
+        "transient-next",
+        "ambiguous",
+        "ambiguous-next",
+      ]);
+      expect((yield* outbox.ready(T2)).map((entry) => entry.plan.command.commandId)).toEqual([
+        "pending",
+        "transient",
+        "ambiguous",
+      ]);
+    }),
+  );
+
+  it.effect("removing a rejected head unblocks its successor", () =>
     Effect.gen(function* () {
       const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
       yield* outbox.enqueue(plan({ commandId: "first" }));
@@ -200,7 +309,7 @@ describe("command outbox lifecycle", () => {
         { classification: "permanent", message: "rejected" },
         T0,
       );
-      yield* outbox.remove(CommandId.make("first"));
+      yield* outbox.removeRejected(CommandId.make("first"));
 
       expect((yield* outbox.ready(T0))[0]?.plan.command.commandId).toBe("second");
     }),

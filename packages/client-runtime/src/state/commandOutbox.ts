@@ -153,7 +153,7 @@ export interface CommandOutboxService {
     DurableCommandOutboxEntry,
     CommandOutboxStorageError | CommandOutboxStateError
   >;
-  readonly remove: (
+  readonly removeRejected: (
     commandId: CommandIdType,
   ) => Effect.Effect<void, CommandOutboxStorageError | CommandOutboxStateError>;
   readonly replaceRejected: (
@@ -226,8 +226,10 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
         }
         const [value, nextInput] = result;
         const next = decodeDurableCommandOutboxDocument(nextInput);
-        yield* storage.save(next);
-        yield* Ref.set(document, next);
+        yield* Effect.gen(function* () {
+          yield* storage.save(next);
+          yield* Ref.set(document, next);
+        }).pipe(Effect.uninterruptible);
         return value;
       }),
     );
@@ -335,17 +337,19 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
     });
   });
 
-  const remove = Effect.fn("CommandOutbox.remove")(function* (commandId: CommandIdType) {
+  const removeRejected = Effect.fn("CommandOutbox.removeRejected")(function* (
+    commandId: CommandIdType,
+  ) {
     return yield* persist((current) => {
       const entry = current.entries.find((candidate) => commandIdOf(candidate) === commandId);
       if (entry === undefined) {
         return stateError("missing-command", commandId, `Command ${commandId} is not queued`);
       }
-      if (entry.state._tag === "Delivering") {
+      if (entry.state._tag !== "Rejected") {
         return stateError(
           "invalid-transition",
           commandId,
-          `Command ${commandId} cannot be removed while delivery is in progress`,
+          `Command ${commandId} has not been permanently rejected`,
         );
       }
       return [
@@ -413,7 +417,7 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
     begin,
     complete,
     fail,
-    remove,
+    removeRejected,
     replaceRejected,
   });
 });
