@@ -31,9 +31,17 @@
       "types": "./src/operations/projects.ts",
       "default": "./src/operations/projects.ts"
     },
+    "./operations/command-outbox": {
+      "types": "./src/operations/commandOutbox.ts",
+      "default": "./src/operations/commandOutbox.ts"
+    },
     "./platform": {
       "types": "./src/platform/index.ts",
       "default": "./src/platform/index.ts"
+    },
+    "./platform/command-outbox": {
+      "types": "./src/platform/commandOutbox.ts",
+      "default": "./src/platform/commandOutbox.ts"
     },
     "./relay": {
       "types": "./src/relay/index.ts",
@@ -42,6 +50,10 @@
     "./state/auth": {
       "types": "./src/state/auth.ts",
       "default": "./src/state/auth.ts"
+    },
+    "./state/command-outbox": {
+      "types": "./src/state/commandOutbox.ts",
+      "default": "./src/state/commandOutbox.ts"
     },
     "./state/assets": {
       "types": "./src/state/assets.ts",

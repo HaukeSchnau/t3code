@@ -39,6 +39,7 @@ export type UpdateThreadMetadataInput = CommandInput<"thread.meta.update">;
 export type SetThreadRuntimeModeInput = CommandInput<"thread.runtime-mode.set">;
 export type SetThreadInteractionModeInput = CommandInput<"thread.interaction-mode.set">;
 export type StartThreadTurnInput = CommandInput<"thread.turn.start">;
+export type QueueThreadMessageInput = CommandInput<"thread.message.queue">;
 export type InterruptThreadTurnInput = CommandInput<"thread.turn.interrupt">;
 export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond">;
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
@@ -187,16 +188,44 @@ export const setThreadInteractionMode: (input: SetThreadInteractionModeInput) =>
     });
   });
 
+export const prepareStartThreadTurn = Effect.fn("EnvironmentCommands.prepareStartThreadTurn")(
+  function* (
+    input: StartThreadTurnInput,
+  ): Effect.fn.Return<CommandOf<"thread.turn.start">, never, Crypto.Crypto> {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return {
+      ...input,
+      type: "thread.turn.start",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    };
+  },
+);
+
 export const startThreadTurn: (input: StartThreadTurnInput) => CommandEffect = Effect.fn(
   "EnvironmentCommands.startThreadTurn",
 )(function* (input) {
-  const metadata = yield* timestampedCommandMetadata(input);
-  return yield* dispatch({
-    ...input,
-    type: "thread.turn.start",
-    commandId: metadata.commandId,
-    createdAt: metadata.createdAt,
-  });
+  return yield* dispatch(yield* prepareStartThreadTurn(input));
+});
+
+export const prepareQueueThreadMessage = Effect.fn("EnvironmentCommands.prepareQueueThreadMessage")(
+  function* (
+    input: QueueThreadMessageInput,
+  ): Effect.fn.Return<CommandOf<"thread.message.queue">, never, Crypto.Crypto> {
+    const metadata = yield* timestampedCommandMetadata(input);
+    return {
+      ...input,
+      type: "thread.message.queue",
+      commandId: metadata.commandId,
+      createdAt: metadata.createdAt,
+    };
+  },
+);
+
+export const queueThreadMessage: (input: QueueThreadMessageInput) => CommandEffect = Effect.fn(
+  "EnvironmentCommands.queueThreadMessage",
+)(function* (input) {
+  return yield* dispatch(yield* prepareQueueThreadMessage(input));
 });
 
 export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEffect = Effect.fn(
