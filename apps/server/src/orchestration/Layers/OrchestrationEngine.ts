@@ -453,6 +453,28 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
+  const readAggregateEvents: OrchestrationEngineShape["readAggregateEvents"] = (
+    aggregateKind,
+    aggregateId,
+    fromSequenceExclusive,
+    limit,
+  ) => {
+    if (eventStore.readAggregateFromSequence !== undefined) {
+      return eventStore.readAggregateFromSequence(
+        aggregateKind,
+        aggregateId,
+        fromSequenceExclusive,
+        limit,
+      );
+    }
+    return eventStore.readFromSequence(fromSequenceExclusive, Number.MAX_SAFE_INTEGER).pipe(
+      Stream.filter(
+        (event) =>
+          event.aggregateKind === aggregateKind && event.aggregateId === String(aggregateId),
+      ),
+      Stream.take(limit ?? 1_000),
+    );
+  };
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
@@ -467,6 +489,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     readEvents,
+    readAggregateEvents,
     dispatch,
     resolveReceipt,
     // Each access creates a fresh PubSub subscription so that multiple

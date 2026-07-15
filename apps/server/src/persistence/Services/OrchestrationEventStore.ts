@@ -9,7 +9,13 @@
  *
  * @module OrchestrationEventStore
  */
-import { OrchestrationEvent } from "@t3tools/contracts";
+import type {
+  OrchestrationAggregateKind,
+  OrchestrationEvent,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Stream from "effect/Stream";
@@ -42,6 +48,14 @@ export interface OrchestrationEventStoreShape {
    * Reads in fixed-size pages and normalizes non-integer/negative limits.
    */
   readonly readFromSequence: (
+    sequenceExclusive: number,
+    limit?: number,
+  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /** Replay one aggregate stream without decoding unrelated global events. */
+  readonly readAggregateFromSequence?: (
+    aggregateKind: OrchestrationAggregateKind,
+    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
     sequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;

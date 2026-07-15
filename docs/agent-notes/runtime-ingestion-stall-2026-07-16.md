@@ -47,5 +47,6 @@ accepted turn is visibly working while its concrete provider turn identity is st
   restored lockfile-declared workspace dependencies.
 - Local deterministic regression: keyed worker and real command-reactor blocking-session coverage pass.
 - Implementation: keyed FIFO scheduling is complete for provider command dispatch and runtime ingestion. The
-  command reactor now durably publishes `starting` before provider session work can block.
+  command reactor now durably publishes `starting` before provider session work can block. Thread reconnect
+  replay now queries the indexed aggregate stream instead of decoding the global event range.
 - Deployment verification: pending.

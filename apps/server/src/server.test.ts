@@ -6093,6 +6093,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         layers: {
           orchestrationEngine: {
             readEvents: () => Stream.fromIterable(persistedEvents),
+            readAggregateEvents: (_aggregateKind, aggregateId) =>
+              Stream.fromIterable(
+                persistedEvents.filter((event) => event.aggregateId === aggregateId),
+              ),
             streamDomainEvents: Stream.empty,
           },
         },
@@ -6147,7 +6151,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         flow: "thread",
         outcome: "success",
         pages: 1,
-        scannedEvents: 2,
+        scannedEvents: 1,
         emittedEvents: 1,
         dedupedOverlapEvents: 0,
         liveBufferHighWaterMark: 0,
