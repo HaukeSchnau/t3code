@@ -8,6 +8,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -85,7 +86,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
-import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
+import { normalizeDispatchCommand, prepareDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { isShellVisibleThreadEvent } from "./orchestration/shellVisibility.ts";
@@ -627,6 +628,7 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
+  preprocessingLocks: Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -653,6 +655,30 @@ const makeWsRpcLayer = (
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
+      const withPreprocessingLock = <A, E, R>(
+        commandId: string,
+        effect: Effect.Effect<A, E, R>,
+      ): Effect.Effect<A, E, R> =>
+        Effect.acquireUseRelease(
+          Effect.sync(() => {
+            const existing = preprocessingLocks.get(commandId);
+            if (existing) {
+              existing.users += 1;
+              return existing;
+            }
+            const created = { semaphore: Semaphore.makeUnsafe(1), users: 1 };
+            preprocessingLocks.set(commandId, created);
+            return created;
+          }),
+          ({ semaphore }) => semaphore.withPermits(1)(effect),
+          (entry) =>
+            Effect.sync(() => {
+              entry.users -= 1;
+              if (entry.users === 0) {
+                preprocessingLocks.delete(commandId);
+              }
+            }),
+        );
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFileSystem = yield* WorkspaceFileSystem.WorkspaceFileSystem;
       const threadWorkspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
@@ -1026,7 +1052,6 @@ const makeWsRpcLayer = (
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
         Effect.gen(function* () {
           const bootstrap = command.bootstrap;
-          const { bootstrap: _bootstrap, ...finalTurnStartCommand } = command;
           let createdThread = false;
           let targetProjectId = bootstrap?.createThread?.projectId;
           let targetProjectCwd =
@@ -1228,7 +1253,9 @@ const makeWsRpcLayer = (
 
             yield* runSetupProgram();
 
-            return yield* orchestrationEngine.dispatch(finalTurnStartCommand);
+            // Keep bootstrap in the durable envelope fingerprint. The decider intentionally
+            // excludes it from events, but receipt replay must validate every client field.
+            return yield* orchestrationEngine.dispatch(command);
           });
 
           return yield* bootstrapProgram.pipe(
@@ -1244,25 +1271,41 @@ const makeWsRpcLayer = (
 
       const dispatchNormalizedCommand = (
         normalizedCommand: OrchestrationCommand,
+        materializeAttachments: Effect.Effect<
+          void,
+          OrchestrationDispatchCommandError
+        > = Effect.void,
       ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-        const dispatchEffect =
-          normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap
-            ? dispatchBootstrapTurnStart(normalizedCommand)
-            : orchestrationEngine
-                .dispatch(normalizedCommand)
-                .pipe(
-                  Effect.mapError((cause) =>
-                    toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-                  ),
-                );
+        const dispatchEffect = orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.gen(function* () {
+                  yield* materializeAttachments;
+                  if (
+                    normalizedCommand.type === "thread.turn.start" &&
+                    normalizedCommand.bootstrap
+                  ) {
+                    return yield* dispatchBootstrapTurnStart(normalizedCommand);
+                  }
+                  return yield* orchestrationEngine.dispatch(normalizedCommand);
+                }),
+              onSome: Effect.succeed,
+            }),
+          ),
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
+        );
 
-        return startup
-          .enqueueCommand(dispatchEffect)
-          .pipe(
-            Effect.mapError((cause) =>
-              toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-            ),
-          );
+        return withPreprocessingLock(
+          normalizedCommand.commandId,
+          startup.enqueueCommand(dispatchEffect),
+        ).pipe(
+          Effect.mapError((cause) =>
+            toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+          ),
+        );
       };
 
       const resumeCodexThread = (input: { readonly threadId: string }) =>
@@ -1721,7 +1764,8 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,
             Effect.gen(function* () {
-              const normalizedCommand = yield* normalizeDispatchCommand(command);
+              const preparedCommand = yield* prepareDispatchCommand(command);
+              const normalizedCommand = preparedCommand.command;
               const shouldStopSessionAfterArchive =
                 normalizedCommand.type === "thread.archive"
                   ? yield* projectionSnapshotQuery
@@ -1737,7 +1781,10 @@ const makeWsRpcLayer = (
                         Effect.orElseSucceed(() => false),
                       )
                   : false;
-              const result = yield* dispatchNormalizedCommand(normalizedCommand);
+              const result = yield* dispatchNormalizedCommand(
+                normalizedCommand,
+                preparedCommand.materializeAttachments,
+              );
               if (normalizedCommand.type === "thread.archive") {
                 if (shouldStopSessionAfterArchive) {
                   yield* Effect.gen(function* () {
@@ -2708,6 +2755,10 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
+    const preprocessingLocks = new Map<
+      string,
+      { readonly semaphore: Semaphore.Semaphore; users: number }
+    >();
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2727,7 +2778,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, previewAutomationBroker, energyCaptureRequests).pipe(
+            makeWsRpcLayer(
+              session,
+              previewAutomationBroker,
+              energyCaptureRequests,
+              preprocessingLocks,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),
               Layer.provide(ProviderMaintenanceRunner.layer),

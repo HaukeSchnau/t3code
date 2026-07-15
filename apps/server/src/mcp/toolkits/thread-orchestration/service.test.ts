@@ -312,6 +312,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         streamDomainEvents: Stream.empty,
       }),
@@ -392,6 +393,7 @@ it.effect("lists environments and projects without provider model metadata", () 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         streamDomainEvents: Stream.empty,
       }),
@@ -503,6 +505,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         streamDomainEvents: Stream.empty,
       }),
@@ -582,6 +585,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -671,6 +675,7 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -797,6 +802,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         streamDomainEvents: Stream.empty,
       }),
@@ -855,6 +861,7 @@ it.effect("creates threads before starting their initial turn", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -984,6 +991,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         streamDomainEvents: Stream.empty,
       }),
@@ -1063,6 +1071,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -1198,6 +1207,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("dispatch should not be called for a running source thread"),
         streamDomainEvents: Stream.empty,
       }),
@@ -1257,6 +1267,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () =>
           Effect.fail(
             new OrchestrationCommandInvariantError({
@@ -1368,6 +1379,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -1453,6 +1465,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -1567,6 +1580,7 @@ it.effect("reads compact thread results without recording read relationships", (
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -1622,6 +1636,7 @@ it.effect("awaits idle threads without polling side effects", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
@@ -1722,6 +1737,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);

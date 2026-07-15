@@ -42,6 +42,23 @@ export function createAttachmentId(threadId: string): string | null {
   return `${threadSegment}-${NodeCrypto.randomUUID()}`;
 }
 
+/**
+ * Derive a stable attachment id for preprocessing a durable client command.
+ * The UUID-shaped suffix keeps the existing attachment-path validation contract.
+ */
+export function createDeterministicAttachmentId(threadId: string, identity: string): string | null {
+  const threadSegment = toSafeThreadAttachmentSegment(threadId);
+  if (!threadSegment) {
+    return null;
+  }
+  const bytes = NodeCrypto.createHash("sha256").update(identity).digest();
+  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+  return `${threadSegment}-${uuid}`;
+}
+
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
   const normalizedId = normalizeAttachmentRelativePath(attachmentId);
   if (!normalizedId || normalizedId.includes("/") || normalizedId.includes(".")) {

@@ -13,6 +13,7 @@
 import type { OrchestrationCommand, OrchestrationEvent } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type * as Option from "effect/Option";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
@@ -49,6 +50,18 @@ export interface OrchestrationEngineShape {
   readonly dispatch: (
     command: OrchestrationCommand,
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
+
+  /**
+   * Validate a command against an existing immutable receipt without executing it.
+   * None means the command id has not yet reached the durable receipt boundary.
+   */
+  readonly resolveReceipt: (
+    command: OrchestrationCommand,
+  ) => Effect.Effect<
+    Option.Option<{ readonly sequence: number }>,
+    OrchestrationDispatchError,
+    never
+  >;
 
   /**
    * Stream persisted domain events in dispatch order.

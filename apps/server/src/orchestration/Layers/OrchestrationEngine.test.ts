@@ -1405,6 +1405,7 @@ describe("OrchestrationEngine", () => {
           yield* Effect.sleep("10 millis");
 
           const accepted = yield* system.engine.dispatch(command);
+          const resolved = yield* system.engine.resolveReceipt(command);
           const acceptedEvents: OrchestrationEvent[] = [];
           for (const _ of scenario.expectedEventTypes) {
             acceptedEvents.push(yield* Queue.take(eventQueue));
@@ -1421,7 +1422,7 @@ describe("OrchestrationEngine", () => {
           });
           const eventAfterReplay = yield* Queue.take(eventQueue);
 
-          return { accepted, acceptedEvents, eventAfterReplay, replayed };
+          return { accepted, acceptedEvents, eventAfterReplay, replayed, resolved };
         }).pipe(Effect.scoped),
       );
 
@@ -1432,6 +1433,7 @@ describe("OrchestrationEngine", () => {
         streamed.acceptedEvents.filter((event) => event.type === "thread.turn-start-requested"),
       ).toHaveLength(1);
       expect(streamed.replayed).toEqual(streamed.accepted);
+      expect(streamed.resolved).toEqual(Option.some(streamed.accepted));
       expect(streamed.eventAfterReplay.type).toBe("thread.meta-updated");
 
       const collidingCommand = makeAmbiguousAckCommand({
@@ -1452,6 +1454,9 @@ describe("OrchestrationEngine", () => {
         },
       };
       await expect(system.run(system.engine.dispatch(changedPayloadCommand))).rejects.toThrow(
+        "payload-mismatch",
+      );
+      await expect(system.run(system.engine.resolveReceipt(changedPayloadCommand))).rejects.toThrow(
         "payload-mismatch",
       );
 
@@ -1671,6 +1676,9 @@ describe("OrchestrationEngine", () => {
     });
 
     await expect(system.run(system.engine.dispatch(command))).rejects.toThrow(
+      "legacy-unverifiable",
+    );
+    await expect(system.run(system.engine.resolveReceipt(command))).rejects.toThrow(
       "legacy-unverifiable",
     );
     const events = await system.run(Stream.runCollect(system.engine.readEvents(0)));

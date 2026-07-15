@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
+
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -8,12 +11,17 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 
-import { createAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
+import { createDeterministicAttachmentId, resolveAttachmentPath } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { parseBase64DataUrl } from "../imageMime.ts";
 import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 
-export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
+export interface PreparedDispatchCommand {
+  readonly command: OrchestrationCommand;
+  readonly materializeAttachments: Effect.Effect<void, OrchestrationDispatchCommandError>;
+}
+
+export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -49,29 +57,38 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     if (command.type === "project.create") {
       return {
-        ...command,
-        workspaceRoot: yield* normalizeProjectWorkspaceRootForCreate(
-          command.workspaceRoot,
-          command.createWorkspaceRootIfMissing,
-        ),
-        createWorkspaceRootIfMissing: command.createWorkspaceRootIfMissing === true,
-      } satisfies OrchestrationCommand;
+        command: {
+          ...command,
+          workspaceRoot: yield* normalizeProjectWorkspaceRootForCreate(
+            command.workspaceRoot,
+            command.createWorkspaceRootIfMissing,
+          ),
+          createWorkspaceRootIfMissing: command.createWorkspaceRootIfMissing === true,
+        },
+        materializeAttachments: Effect.void,
+      } satisfies PreparedDispatchCommand;
     }
 
     if (command.type === "project.meta.update" && command.workspaceRoot !== undefined) {
       return {
-        ...command,
-        workspaceRoot: yield* normalizeProjectWorkspaceRoot(command.workspaceRoot),
-      } satisfies OrchestrationCommand;
+        command: {
+          ...command,
+          workspaceRoot: yield* normalizeProjectWorkspaceRoot(command.workspaceRoot),
+        },
+        materializeAttachments: Effect.void,
+      } satisfies PreparedDispatchCommand;
     }
 
     if (command.type !== "thread.turn.start" && command.type !== "thread.message.queue") {
-      return command as OrchestrationCommand;
+      return {
+        command: command as OrchestrationCommand,
+        materializeAttachments: Effect.void,
+      } satisfies PreparedDispatchCommand;
     }
 
-    const normalizedAttachments = yield* Effect.forEach(
+    const preparedAttachments = yield* Effect.forEach(
       command.message.attachments,
-      (attachment) =>
+      (attachment, index) =>
         Effect.gen(function* () {
           const parsed = parseBase64DataUrl(attachment.dataUrl);
           if (!parsed || !parsed.mimeType.startsWith("image/")) {
@@ -86,8 +103,20 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
               message: `Image attachment '${attachment.name}' is empty or too large.`,
             });
           }
+          if (
+            attachment.mimeType.toLowerCase() !== parsed.mimeType.toLowerCase() ||
+            attachment.sizeBytes !== bytes.byteLength
+          ) {
+            return yield* new OrchestrationDispatchCommandError({
+              message: `Image attachment metadata does not match the payload for '${attachment.name}'.`,
+            });
+          }
 
-          const attachmentId = createAttachmentId(command.threadId);
+          const contentDigest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
+          const attachmentId = createDeterministicAttachmentId(
+            command.threadId,
+            `${command.commandId}\u0000${index}\u0000${attachment.name}\u0000${attachment.mimeType}\u0000${attachment.sizeBytes}\u0000${contentDigest}`,
+          );
           if (!attachmentId) {
             return yield* new OrchestrationDispatchCommandError({
               message: "Failed to create a safe attachment id.",
@@ -112,33 +141,60 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
             });
           }
 
-          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
-            Effect.mapError(
-              () =>
-                new OrchestrationDispatchCommandError({
-                  message: `Failed to create attachment directory for '${attachment.name}'.`,
-                }),
-            ),
-          );
-          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-            Effect.mapError(
-              () =>
-                new OrchestrationDispatchCommandError({
-                  message: `Failed to persist attachment '${attachment.name}'.`,
-                }),
-            ),
-          );
+          const materialize = Effect.gen(function* () {
+            const existing = yield* fileSystem.readFile(attachmentPath).pipe(
+              Effect.map((value) => Buffer.from(value)),
+              Effect.orElseSucceed(() => null),
+            );
+            if (existing?.equals(bytes)) {
+              return;
+            }
+            if (existing !== null) {
+              return yield* new OrchestrationDispatchCommandError({
+                message: `Persisted attachment identity collision for '${attachment.name}'.`,
+              });
+            }
+            yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  }),
+              ),
+            );
+            yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+              Effect.mapError(
+                () =>
+                  new OrchestrationDispatchCommandError({
+                    message: `Failed to persist attachment '${attachment.name}'.`,
+                  }),
+              ),
+            );
+          });
 
-          return persistedAttachment;
+          return { attachment: persistedAttachment, materialize };
         }),
       { concurrency: 1 },
     );
 
     return {
-      ...command,
-      message: {
-        ...command.message,
-        attachments: normalizedAttachments,
+      command: {
+        ...command,
+        message: {
+          ...command.message,
+          attachments: preparedAttachments.map(({ attachment }) => attachment),
+        },
       },
-    } satisfies OrchestrationCommand;
+      materializeAttachments: Effect.forEach(
+        preparedAttachments,
+        ({ materialize }) => materialize,
+        { concurrency: 1, discard: true },
+      ),
+    } satisfies PreparedDispatchCommand;
   });
+
+export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
+  prepareDispatchCommand(command).pipe(
+    Effect.tap(({ materializeAttachments }) => materializeAttachments),
+    Effect.map(({ command: normalizedCommand }) => normalizedCommand),
+  );

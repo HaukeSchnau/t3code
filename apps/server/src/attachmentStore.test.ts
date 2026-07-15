@@ -7,11 +7,22 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   createAttachmentId,
+  createDeterministicAttachmentId,
   parseThreadSegmentFromAttachmentId,
   resolveAttachmentPathById,
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
+  it("derives stable safe ids from durable preprocessing identity", () => {
+    const first = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
+    const replay = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
+    const changed = createDeterministicAttachmentId("Thread.Foo", "command:attachment:changed");
+
+    expect(replay).toBe(first);
+    expect(changed).not.toBe(first);
+    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-foo");
+  });
+
   it("sanitizes thread ids when creating attachment ids", () => {
     const attachmentId = createAttachmentId("thread.folder/unsafe space");
     expect(attachmentId).toBeTruthy();
