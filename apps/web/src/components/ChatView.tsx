@@ -21,10 +21,8 @@ import {
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
-import {
-  connectionStatusText,
-  type EnvironmentConnectionPresentation,
-} from "@t3tools/client-runtime/connection";
+import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import { projectEnvironmentConnectionFreshness } from "@t3tools/client-runtime/state/connection-freshness";
 import {
   parseScopedThreadKey,
   scopedThreadKey,
@@ -145,7 +143,7 @@ import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
-import { ChevronDownIcon, TriangleAlertIcon, WifiOffIcon } from "lucide-react";
+import { ChevronDownIcon, TriangleAlertIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { stackedThreadToast, toastManager } from "./ui/toast";
@@ -223,6 +221,9 @@ import { resolveEffectiveEnvMode } from "./BranchToolbar.logic";
 import { ProviderStatusBanner } from "./chat/ProviderStatusBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
+import { DurableOutboxStrip } from "./chat/DurableOutboxStrip";
+import { selectThreadDurableOutboxEntries } from "./chat/durableOutboxPresentation";
+import { TrainNetworkStatus } from "./chat/TrainNetworkStatus";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { usePreviousMessageEditing } from "./chat/usePreviousMessageEditing";
 import {
@@ -255,7 +256,6 @@ import { RightPanelSheet } from "./RightPanelSheet";
 import { SubagentInspector } from "./SubagentInspector";
 import { previewEnvironment } from "../state/preview";
 import { useAtomCommand } from "../state/use-atom-command";
-import { Button } from "./ui/button";
 import { deriveSubagentTimelineEntries } from "../subagents";
 import {
   buildVersionMismatchDismissalKey,
@@ -1409,6 +1409,19 @@ function ChatViewContent(props: ChatViewProps) {
   const activeEnvironmentShell = useEnvironmentQuery(
     activeThread ? environmentShell.stateAtom(activeThread.environmentId) : null,
   );
+  const activeEnvironmentConnection = useEnvironmentQuery(
+    activeThread ? environmentCatalog.stateAtom(activeThread.environmentId) : null,
+  );
+  const activeConnectionFreshness = useMemo(
+    () =>
+      activeEnvironmentConnection.data !== null && activeEnvironmentShell.data !== null
+        ? projectEnvironmentConnectionFreshness(
+            activeEnvironmentConnection.data,
+            activeEnvironmentShell.data,
+          )
+        : null,
+    [activeEnvironmentConnection.data, activeEnvironmentShell.data],
+  );
   const activeEnvironmentBootstrapComplete = activeEnvironmentShell.data?.snapshot._tag === "Some";
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
@@ -1506,22 +1519,20 @@ function ChatViewContent(props: ChatViewProps) {
       connection: activeEnvironment.connection,
     };
   }, [activeEnvironment, activeEnvironmentUnavailable, activeEnvironmentUnavailableLabel]);
-  const handleReconnectActiveEnvironment = useCallback(
-    async (environmentId: EnvironmentId) => {
-      const result = await retryEnvironment(environmentId);
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not reconnect environment",
-            description: error instanceof Error ? error.message : "Failed to reconnect.",
-          }),
-        );
-      }
-    },
-    [retryEnvironment],
-  );
+  const handleReconnectActiveEnvironment = useCallback(async () => {
+    if (!activeThread) return;
+    const result = await retryEnvironment(activeThread.environmentId);
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      toastManager.add(
+        stackedThreadToast({
+          type: "error",
+          title: "Could not reconnect environment",
+          description: error instanceof Error ? error.message : "Failed to reconnect.",
+        }),
+      );
+    }
+  }, [activeThread, retryEnvironment]);
   const projectGroupingSettings = selectProjectGroupingSettings(settings);
   const composerProjectKey =
     draftThread?.logicalProjectKey ??
@@ -1719,74 +1730,44 @@ function ChatViewContent(props: ChatViewProps) {
     hasMultipleRegisteredEnvironments && activeThread
       ? `${environmentById.get(activeThread.environmentId)?.label ?? serverConfig?.environment.label ?? activeThread.environmentId} server`
       : "server";
-  const activeRejectedOutboxEntry = activeThread
-    ? (durableOutboxEntries.find(
-        (entry) =>
-          entry.plan.environmentId === activeThread.environmentId &&
-          entry.plan.command.threadId === activeThread.id &&
-          entry.state._tag === "Rejected",
-      ) ?? null)
-    : null;
+  const activeDurableOutboxEntries = useMemo(
+    () =>
+      activeThread
+        ? selectThreadDurableOutboxEntries(
+            durableOutboxEntries,
+            activeThread.environmentId,
+            activeThread.id,
+          )
+        : [],
+    [activeThread, durableOutboxEntries],
+  );
+  const cancelDurableOutboxEntry = useCallback(
+    (commandId: Parameters<ReturnType<typeof durableCommandOutbox>["cancelPending"]>[0]) =>
+      durableCommandOutbox().cancelPending(commandId),
+    [],
+  );
+  const replaceDurableOutboxEntry = useCallback(
+    (
+      commandId: Parameters<ReturnType<typeof durableCommandOutbox>["replacePending"]>[0],
+      replacement: Parameters<ReturnType<typeof durableCommandOutbox>["replacePending"]>[1],
+      state: "Pending" | "Rejected",
+    ) =>
+      state === "Pending"
+        ? durableCommandOutbox()
+            .replacePending(commandId, replacement)
+            .then(() => undefined)
+        : durableCommandOutbox()
+            .replaceRejected(commandId, replacement)
+            .then(() => undefined),
+    [],
+  );
+  const discardDurableOutboxEntry = useCallback(
+    (commandId: Parameters<ReturnType<typeof durableCommandOutbox>["discardRejected"]>[0]) =>
+      durableCommandOutbox().discardRejected(commandId),
+    [],
+  );
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const items: ComposerBannerStackItem[] = [];
-    if (activeRejectedOutboxEntry?.state._tag === "Rejected") {
-      const rejected = activeRejectedOutboxEntry;
-      const rejection = activeRejectedOutboxEntry.state;
-      items.push({
-        id: `outbox-rejected:${rejected.plan.command.commandId}`,
-        variant: "error",
-        icon: <TriangleAlertIcon />,
-        title: "Saved message was rejected",
-        description: rejection.failure.message,
-        actions: (
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={() =>
-              void durableCommandOutbox().discardRejected(rejected.plan.command.commandId)
-            }
-          >
-            Discard
-          </Button>
-        ),
-      });
-    }
-    if (activeEnvironmentUnavailableState) {
-      const connection = activeEnvironmentUnavailableState.connection;
-      const isReconnecting =
-        connection.phase === "connecting" || connection.phase === "reconnecting";
-      items.push({
-        id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
-        variant: connection.phase === "error" ? "error" : "warning",
-        icon: <WifiOffIcon />,
-        title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusText(connection)}`,
-        description:
-          connection.error ??
-          "Messages are saved locally for delivery; other actions need this environment to reconnect.",
-        actions: (
-          <>
-            <Button
-              size="xs"
-              disabled={isReconnecting}
-              onClick={() =>
-                void handleReconnectActiveEnvironment(
-                  activeEnvironmentUnavailableState.environmentId,
-                )
-              }
-            >
-              {isReconnecting ? "Reconnecting..." : "Reconnect"}
-            </Button>
-            <Button
-              size="xs"
-              variant="outline"
-              onClick={() => void navigate({ to: "/settings/connections" })}
-            >
-              Connections
-            </Button>
-          </>
-        ),
-      });
-    }
     if (showVersionMismatchBanner && versionMismatch && versionMismatchDismissKey) {
       items.push({
         id: `version-mismatch:${versionMismatchDismissKey}`,
@@ -1808,10 +1789,6 @@ function ChatViewContent(props: ChatViewProps) {
     }
     return items;
   }, [
-    activeRejectedOutboxEntry,
-    activeEnvironmentUnavailableState,
-    handleReconnectActiveEnvironment,
-    navigate,
     showVersionMismatchBanner,
     versionMismatch,
     versionMismatchDismissKey,
@@ -5574,7 +5551,20 @@ function ChatViewContent(props: ChatViewProps) {
               </div>
               <div className="chat-composer-horizontal-inset">
                 <div className="pointer-events-auto relative z-10 isolate">
+                  <TrainNetworkStatus
+                    projection={activeConnectionFreshness}
+                    onReconnect={() => void handleReconnectActiveEnvironment()}
+                    onOpenConnections={() => void navigate({ to: "/settings/connections" })}
+                  />
                   <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
+                  {previousMessageEditing.isEditing ? null : (
+                    <DurableOutboxStrip
+                      entries={activeDurableOutboxEntries}
+                      onCancel={cancelDurableOutboxEntry}
+                      onReplace={replaceDurableOutboxEntry}
+                      onDiscard={discardDurableOutboxEntry}
+                    />
+                  )}
                   {previousMessageEditing.isEditing ? null : (
                     <QueuedMessagesStrip
                       queuedMessages={activeThread?.queuedMessages ?? []}

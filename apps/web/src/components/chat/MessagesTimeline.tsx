@@ -76,6 +76,7 @@ import {
   resolveTimelineMinimapHeightStyle,
   resolveTimelineMinimapIndexFromPointer,
   resolveTimelineMinimapTopPercent,
+  shouldShowInitialConversationLoader,
   type StableMessagesTimelineRowsState,
   type MessagesTimelineRow,
   TIMELINE_MINIMAP_MIN_ITEMS,
@@ -506,7 +507,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     [],
   );
 
-  if (rows.length === 0 && isLoadingInitialThreadDetail) {
+  if (shouldShowInitialConversationLoader(rows.length, isLoadingInitialThreadDetail)) {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="flex items-center gap-2 rounded-md border border-border/50 bg-card/60 px-3 py-2 text-muted-foreground text-sm shadow-sm">

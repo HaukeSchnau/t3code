@@ -16,6 +16,13 @@ export const TIMELINE_MINIMAP_MAX_HEIGHT_CSS = "calc(100vh - 18rem)";
 export const TIMELINE_CONTENT_MAX_WIDTH = 768;
 export const TIMELINE_MINIMAP_PERSISTENT_GUTTER = 48;
 
+export function shouldShowInitialConversationLoader(
+  rowCount: number,
+  isLoadingInitialThreadDetail: boolean,
+): boolean {
+  return rowCount === 0 && isLoadingInitialThreadDetail;
+}
+
 export interface TimelineEndState {
   readonly isAtEnd?: boolean;
   readonly isNearEnd?: boolean;

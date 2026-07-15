@@ -39,7 +39,7 @@ export const QueuedMessagesStrip = memo(function QueuedMessagesStrip({
 
   return (
     <div
-      aria-label={`Queued messages (${queuedMessages.length})`}
+      aria-label={`Messages queued remotely (${queuedMessages.length})`}
       data-queued-messages-strip="true"
       role="list"
       className={cn(
@@ -50,14 +50,12 @@ export const QueuedMessagesStrip = memo(function QueuedMessagesStrip({
         className,
       )}
     >
-      {queuedMessages.length > 1 ? (
-        <div className="relative z-0 flex items-center justify-between gap-3 px-2 pb-0.5 text-[11px] font-medium text-muted-foreground">
-          <span>Queued</span>
-          <span className="tabular-nums">
-            {queuedMessages.length} message{queuedMessages.length === 1 ? "" : "s"}
-          </span>
-        </div>
-      ) : null}
+      <div className="relative z-0 flex items-center justify-between gap-3 px-2 pb-0.5 text-[11px] font-medium text-muted-foreground">
+        <span>Queued remotely</span>
+        <span className="tabular-nums">
+          {queuedMessages.length} message{queuedMessages.length === 1 ? "" : "s"}
+        </span>
+      </div>
       {queuedMessages.map((message) => {
         const messageLabel = actionLabelForQueuedMessage(message);
 
