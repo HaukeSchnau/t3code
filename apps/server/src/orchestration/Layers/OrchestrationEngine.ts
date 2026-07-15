@@ -84,6 +84,14 @@ interface CommandEnvelope {
   startedAtMs: number;
 }
 
+interface CommandReceiptIdentity {
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly aggregateKind: "project" | "thread" | "provider";
+  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
+  readonly commandVariant: OrchestrationCommand["type"];
+  readonly envelopeFingerprint: string;
+}
+
 function commandToAggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: "project" | "thread" | "provider";
   readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
@@ -135,18 +143,94 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return nextReadModel;
     });
 
+  const commandReceiptIdentity = (command: OrchestrationCommand): CommandReceiptIdentity => {
+    const aggregateRef = commandToAggregateRef(command);
+    return {
+      commandId: command.commandId,
+      aggregateKind: aggregateRef.aggregateKind,
+      aggregateId: aggregateRef.aggregateId,
+      commandVariant: command.type,
+      envelopeFingerprint: commandEnvelopeFingerprint(command),
+    };
+  };
+
+  const resolveExistingReceipt = (
+    receipt: OrchestrationCommandReceipt,
+    receiptIdentity: CommandReceiptIdentity,
+  ): Effect.Effect<
+    { sequence: number },
+    OrchestrationCommandReceiptMismatchError | OrchestrationCommandPreviouslyRejectedError
+  > => {
+    if (
+      receipt.aggregateKind !== receiptIdentity.aggregateKind ||
+      receipt.aggregateId !== receiptIdentity.aggregateId
+    ) {
+      return Effect.fail(
+        new OrchestrationCommandReceiptMismatchError({
+          commandId: receiptIdentity.commandId,
+          reason: "aggregate-mismatch",
+          detail: `Receipt belongs to ${receipt.aggregateKind} '${receipt.aggregateId}', not ${receiptIdentity.aggregateKind} '${receiptIdentity.aggregateId}'.`,
+        }),
+      );
+    }
+    if (receipt.commandVariant === null || receipt.envelopeFingerprint === null) {
+      return Effect.fail(
+        new OrchestrationCommandReceiptMismatchError({
+          commandId: receiptIdentity.commandId,
+          reason: "legacy-unverifiable",
+          detail:
+            "The durable receipt predates command envelope fingerprints and cannot be replayed safely.",
+        }),
+      );
+    }
+    if (receipt.commandVariant !== receiptIdentity.commandVariant) {
+      return Effect.fail(
+        new OrchestrationCommandReceiptMismatchError({
+          commandId: receiptIdentity.commandId,
+          reason: "variant-mismatch",
+          detail: `Receipt variant '${receipt.commandVariant}' does not match '${receiptIdentity.commandVariant}'.`,
+        }),
+      );
+    }
+    if (receipt.envelopeFingerprint !== receiptIdentity.envelopeFingerprint) {
+      return Effect.fail(
+        new OrchestrationCommandReceiptMismatchError({
+          commandId: receiptIdentity.commandId,
+          reason: "payload-mismatch",
+          detail: "The canonical command envelope differs from the original command.",
+        }),
+      );
+    }
+    if (receipt.status === "accepted") {
+      return Effect.succeed({ sequence: receipt.resultSequence });
+    }
+    return Effect.fail(
+      new OrchestrationCommandPreviouslyRejectedError({
+        commandId: receiptIdentity.commandId,
+        detail: receipt.error ?? "Previously rejected.",
+      }),
+    );
+  };
+
+  const resolveReceipt: OrchestrationEngineShape["resolveReceipt"] = (command) => {
+    const receiptIdentity = commandReceiptIdentity(command);
+    return commandReceiptRepository.getByCommandId({ commandId: command.commandId }).pipe(
+      Effect.flatMap(
+        Option.match({
+          onNone: () => Effect.succeed(Option.none()),
+          onSome: (receipt) =>
+            resolveExistingReceipt(receipt, receiptIdentity).pipe(Effect.map(Option.some)),
+        }),
+      ),
+    );
+  };
+
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     let processingStartedAtMs = 0;
     let dispatchAttemptedEffects = false;
     const aggregateRef = commandToAggregateRef(envelope.command);
-    const receiptIdentity = {
-      commandId: envelope.command.commandId,
-      aggregateKind: aggregateRef.aggregateKind,
-      aggregateId: aggregateRef.aggregateId,
-      commandVariant: envelope.command.type,
-      envelopeFingerprint: commandEnvelopeFingerprint(envelope.command),
-    } as const;
+    const receiptIdentity = commandReceiptIdentity(envelope.command);
     const baseMetricAttributes = {
       commandType: envelope.command.type,
       aggregateKind: aggregateRef.aggregateKind,
@@ -166,63 +250,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       }
     });
 
-    const resolveExistingReceipt = (
-      receipt: OrchestrationCommandReceipt,
-    ): Effect.Effect<
-      { sequence: number },
-      OrchestrationCommandReceiptMismatchError | OrchestrationCommandPreviouslyRejectedError
-    > => {
-      if (
-        receipt.aggregateKind !== receiptIdentity.aggregateKind ||
-        receipt.aggregateId !== receiptIdentity.aggregateId
-      ) {
-        return Effect.fail(
-          new OrchestrationCommandReceiptMismatchError({
-            commandId: receiptIdentity.commandId,
-            reason: "aggregate-mismatch",
-            detail: `Receipt belongs to ${receipt.aggregateKind} '${receipt.aggregateId}', not ${receiptIdentity.aggregateKind} '${receiptIdentity.aggregateId}'.`,
-          }),
-        );
-      }
-      if (receipt.commandVariant === null || receipt.envelopeFingerprint === null) {
-        return Effect.fail(
-          new OrchestrationCommandReceiptMismatchError({
-            commandId: receiptIdentity.commandId,
-            reason: "legacy-unverifiable",
-            detail:
-              "The durable receipt predates command envelope fingerprints and cannot be replayed safely.",
-          }),
-        );
-      }
-      if (receipt.commandVariant !== receiptIdentity.commandVariant) {
-        return Effect.fail(
-          new OrchestrationCommandReceiptMismatchError({
-            commandId: receiptIdentity.commandId,
-            reason: "variant-mismatch",
-            detail: `Receipt variant '${receipt.commandVariant}' does not match '${receiptIdentity.commandVariant}'.`,
-          }),
-        );
-      }
-      if (receipt.envelopeFingerprint !== receiptIdentity.envelopeFingerprint) {
-        return Effect.fail(
-          new OrchestrationCommandReceiptMismatchError({
-            commandId: receiptIdentity.commandId,
-            reason: "payload-mismatch",
-            detail: "The canonical command envelope differs from the original command.",
-          }),
-        );
-      }
-      if (receipt.status === "accepted") {
-        return Effect.succeed({ sequence: receipt.resultSequence });
-      }
-      return Effect.fail(
-        new OrchestrationCommandPreviouslyRejectedError({
-          commandId: receiptIdentity.commandId,
-          detail: receipt.error ?? "Previously rejected.",
-        }),
-      );
-    };
-
     return Effect.exit(
       Effect.gen(function* () {
         processingStartedAtMs = yield* Clock.currentTimeMillis;
@@ -237,7 +264,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
-          return yield* resolveExistingReceipt(existingReceipt.value);
+          return yield* resolveExistingReceipt(existingReceipt.value, receiptIdentity);
         }
 
         const eventBase = yield* decideOrchestrationCommand({
@@ -276,7 +303,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 }
                 return {
                   _tag: "replayed" as const,
-                  result: yield* resolveExistingReceipt(winningReceipt.value),
+                  result: yield* resolveExistingReceipt(winningReceipt.value, receiptIdentity),
                 };
               }
 
@@ -421,7 +448,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                       "Rejected command receipt insert lost without a durable winning receipt.",
                   });
                 }
-                return yield* resolveExistingReceipt(winningReceipt.value);
+                return yield* resolveExistingReceipt(winningReceipt.value, receiptIdentity);
               }),
             );
             if (Exit.isSuccess(durableRejection)) {
@@ -467,6 +494,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   return {
     readEvents,
     dispatch,
+    resolveReceipt,
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)
     // each independently receive all domain events.
