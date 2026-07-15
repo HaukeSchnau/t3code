@@ -54,8 +54,8 @@ export type EnvironmentConnectionProgress =
     });
 
 export interface SnapshotIdentity {
-  /** Replay cursor coupled to this exact cached or live snapshot. */
-  readonly sequence: number;
+  /** Sequence embedded in this content snapshot; the private replay cursor may be newer. */
+  readonly contentSequence: number;
   /** Server-authored content update time, not a client receipt time. */
   readonly updatedAt: string;
 }
@@ -107,9 +107,34 @@ function requireFailure(
   state: SupervisorConnectionState,
   phase: "backoff" | "blocked",
 ): PresentedConnectionFailure {
-  return state.lastFailure === null
-    ? invalidProjectionSource(`${phase} connection has no failure`)
-    : presentFailure(state.lastFailure);
+  if (state.lastFailure === null) {
+    return invalidProjectionSource(`${phase} connection has no failure`);
+  }
+  if (phase === "backoff" && state.lastFailure._tag !== "ConnectionTransientError") {
+    return invalidProjectionSource("backoff connection carries a blocked failure");
+  }
+  if (phase === "blocked" && state.lastFailure._tag !== "ConnectionBlockedError") {
+    return invalidProjectionSource("blocked connection carries a transient failure");
+  }
+  return presentFailure(state.lastFailure);
+}
+
+function requireDesiredState(state: SupervisorConnectionState): void {
+  if (!state.desired) {
+    invalidProjectionSource(`${state.phase} connection is not desired`);
+  }
+}
+
+function requireAvailableNetwork(state: SupervisorConnectionState): void {
+  if (state.network === "offline") {
+    invalidProjectionSource(`${state.phase} connection claims an offline network`);
+  }
+}
+
+function requirePositiveAttempt(state: SupervisorConnectionState): void {
+  if (!Number.isInteger(state.attempt) || state.attempt <= 0) {
+    invalidProjectionSource(`${state.phase} connection has a non-positive attempt`);
+  }
 }
 
 export function projectEnvironmentConnectionProgress(
@@ -118,6 +143,7 @@ export function projectEnvironmentConnectionProgress(
   switch (state.phase) {
     case "available":
       if (
+        state.desired ||
         state.attempt !== 0 ||
         state.stage !== null ||
         state.lastFailure !== null ||
@@ -133,8 +159,17 @@ export function projectEnvironmentConnectionProgress(
         failure: null,
       };
     case "offline":
-      if (state.stage !== null || state.retryAt !== null) {
-        return invalidProjectionSource("offline connection carries an active stage or retry time");
+      if (
+        !state.desired ||
+        state.network !== "offline" ||
+        !Number.isInteger(state.attempt) ||
+        state.attempt < 0 ||
+        state.stage !== null ||
+        state.retryAt !== null
+      ) {
+        return invalidProjectionSource(
+          "offline connection violates desired, network, attempt, stage, or retry invariants",
+        );
       }
       return {
         phase: "offline",
@@ -144,6 +179,9 @@ export function projectEnvironmentConnectionProgress(
         failure: optionalFailure(state.lastFailure),
       };
     case "connecting":
+      requireDesiredState(state);
+      requireAvailableNetwork(state);
+      requirePositiveAttempt(state);
       if (state.stage === null || state.retryAt !== null) {
         return invalidProjectionSource(
           "connecting connection lacks a stage or carries a retry time",
@@ -157,6 +195,9 @@ export function projectEnvironmentConnectionProgress(
         failure: optionalFailure(state.lastFailure),
       };
     case "backoff":
+      requireDesiredState(state);
+      requireAvailableNetwork(state);
+      requirePositiveAttempt(state);
       if (state.stage !== null || state.retryAt === null) {
         return invalidProjectionSource("backoff connection lacks an exclusive retry time");
       }
@@ -169,6 +210,9 @@ export function projectEnvironmentConnectionProgress(
         failure: requireFailure(state, "backoff"),
       };
     case "connected":
+      requireDesiredState(state);
+      requireAvailableNetwork(state);
+      requirePositiveAttempt(state);
       if (state.stage !== null || state.lastFailure !== null || state.retryAt !== null) {
         return invalidProjectionSource("connected connection carries pending attempt state");
       }
@@ -180,6 +224,9 @@ export function projectEnvironmentConnectionProgress(
         failure: null,
       };
     case "blocked":
+      requireDesiredState(state);
+      requireAvailableNetwork(state);
+      requirePositiveAttempt(state);
       if (state.stage !== null || state.retryAt !== null) {
         return invalidProjectionSource("blocked connection carries an active stage or retry time");
       }
@@ -197,7 +244,7 @@ function snapshotIdentity(state: EnvironmentShellState): SnapshotIdentity | null
   return Option.match(state.snapshot, {
     onNone: () => null,
     onSome: (snapshot) => ({
-      sequence: snapshot.snapshotSequence,
+      contentSequence: snapshot.snapshotSequence,
       updatedAt: snapshot.updatedAt,
     }),
   });
@@ -237,9 +284,20 @@ export function projectEnvironmentConnectionFreshness(
   state: SupervisorConnectionState,
   shell: EnvironmentShellState,
 ): EnvironmentConnectionFreshnessProjection {
+  const connection = projectEnvironmentConnectionProgress(state);
+  const snapshot = projectEnvironmentSnapshotFreshness(shell);
+
+  // Supervisor and shell SubscriptionRefs update independently. Immediately
+  // after a disconnect the shell may still say "live" for one observation.
+  // Retain the content, but never claim live freshness without a ready transport.
+  const reconciledSnapshot: EnvironmentSnapshotFreshness =
+    connection.phase !== "connected" && snapshot.status === "live"
+      ? { status: "cached", snapshot: snapshot.snapshot, error: null }
+      : snapshot;
+
   return {
-    connection: projectEnvironmentConnectionProgress(state),
-    snapshot: projectEnvironmentSnapshotFreshness(shell),
+    connection,
+    snapshot: reconciledSnapshot,
   };
 }
 
