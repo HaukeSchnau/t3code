@@ -294,6 +294,8 @@ function projectSetupScriptCompatibilityDetail(
       return legacySetupFailureDescription(error.cause);
     case "ProjectSetupScriptProjectNotFoundError":
       return "Project was not found for setup script execution.";
+    case "ProjectSetupScriptReconciliationTimeoutError":
+      return error.message;
     default:
       return unexpectedCompatibilityError(error);
   }

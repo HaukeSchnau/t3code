@@ -50,6 +50,7 @@ import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
@@ -6617,9 +6618,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
       const bothInitialLookups = yield* Deferred.make<void>();
+      const firstDispatchEntered = yield* Deferred.make<void>();
+      const releaseFirstDispatch = yield* Deferred.make<void>();
       let initialLookupCount = 0;
+      let dispatchEntrants = 0;
       const dispatch = vi.fn((command: OrchestrationCommand) =>
-        Effect.sync(() => {
+        Effect.gen(function* () {
+          dispatchEntrants += 1;
+          if (dispatchEntrants === 1) {
+            yield* Deferred.succeed(firstDispatchEntered, undefined);
+          }
+          yield* Deferred.await(releaseFirstDispatch);
           const receipt = { envelope: encodeTestJson(command), sequence: 41 };
           receipts.set(command.commandId, receipt);
           return { sequence: receipt.sequence };
@@ -6674,7 +6683,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const httpUrl = yield* getHttpServerUrl("/api/orchestration/dispatch");
 
-      const [wsReceipt, httpResponse] = yield* Effect.all(
+      const concurrentRequests = Effect.all(
         [
           Effect.scoped(
             withWsRpcClient(wsUrl, (client) =>
@@ -6692,6 +6701,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ],
         { concurrency: "unbounded" },
       );
+      const requestsFiber = yield* concurrentRequests.pipe(Effect.forkChild);
+      yield* Deferred.await(firstDispatchEntered);
+      yield* Effect.yieldNow;
+      yield* Effect.yieldNow;
+      assert.equal(
+        dispatchEntrants,
+        1,
+        "a missing shared command lock lets both transports enter the deferred effect",
+      );
+      yield* Deferred.succeed(releaseFirstDispatch, undefined);
+      const [wsReceipt, httpResponse] = yield* Fiber.join(requestsFiber);
       const httpReceipt = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
       const attachmentFiles = yield* FileSystem.FileSystem.pipe(
         Effect.flatMap((fileSystem) => fileSystem.readDirectory(config.attachmentsDir)),

@@ -63,9 +63,11 @@ setup was launched. The deterministic terminal writes a generated wrapper whose 
 atomically claims the execution identity before invoking the user command and whose completion record
 is atomically published after exit. An exact retry with no execution claim safely resubmits the same
 wrapper; competing writes still execute the user command once. A completed execution is reused. A
-normal launch waits interruptibly for the wrapper's atomic completion journal. An exact retry of a
-claimed execution waits for that same completion for a bounded interval and then returns a typed
-reconciliation error rather than falling through. Only durable wrapper completion permits
+normal launch waits interruptibly for the wrapper's atomic completion journal. The journal is
+Schema-decoded and must match its version, deterministic execution key, SHA-256 setup-command digest,
+exit code, signal, and error fields; malformed or stale journals fail closed. Both a normal launch and
+an exact claimed retry use the same explicit 30-second watchdog and return a typed, retryable
+reconciliation timeout rather than falling through. Only valid durable wrapper completion permits
 `setup-completed` to be persisted and the original turn to dispatch. Terminal
 launch/reconciliation errors are recorded as setup activity and returned.
 
