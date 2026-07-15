@@ -2,18 +2,22 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   DIRECT_BROWSER_NETWORK_MATRIX_V1,
+  DIRECT_BROWSER_NETWORK_MATRIX_READINESS_V1,
   DIRECT_BROWSER_NETWORK_SCENARIOS_V1,
   HOSTED_RELAY_BROWSER_MATRIX_V1,
   PRODUCTION_BROWSER_SELECTORS_V1,
+  assertDirectBrowserNetworkMatrixReady,
 } from "./browser-matrix.ts";
 
 describe("direct Chromium network matrix", () => {
-  it("keeps every required scenario in the CI-sized direct gate", () => {
+  it("keeps every required scenario explicit without claiming a runnable gate", () => {
     assert.deepStrictEqual(
       DIRECT_BROWSER_NETWORK_MATRIX_V1.map(({ id }) => id),
       [...DIRECT_BROWSER_NETWORK_SCENARIOS_V1],
     );
-    assert.ok(DIRECT_BROWSER_NETWORK_MATRIX_V1.every(({ gating }) => gating));
+    assert.ok(DIRECT_BROWSER_NETWORK_MATRIX_V1.every(({ gating }) => !gating));
+    assert.equal(DIRECT_BROWSER_NETWORK_MATRIX_READINESS_V1.status, "blocked");
+    assert.throws(assertDirectBrowserNetworkMatrixReady, /browser-ready-deterministic-t3-fixture/);
     assert.equal(
       DIRECT_BROWSER_NETWORK_MATRIX_V1.find(({ id }) => id === "lost-acknowledgement")
         ?.requiresProtocolSuppression,

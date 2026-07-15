@@ -96,12 +96,13 @@ again. Implementers do not approve their own packets.
 
 ### NL2 browser comparator status
 
-- Implemented a versioned browser measurement/comparator, direct six-scenario matrix, and executable
-  baseline/candidate/repeat production-browser runner contract. The runner fails the command on
+- Implemented a versioned browser measurement/comparator and a direct six-scenario readiness matrix.
+  The matrix is explicitly blocked/non-gating until the browser-ready deterministic T3 fixture
+  exists; the baseline/candidate/repeat runner contract fails the command on
   identity, reproducibility, correctness, latency, traffic, fault-proof, or cleanup regressions.
 - Implemented a pinned Playwright-core Chromium driver with real client-path CDP controls,
-  HTTP/WebSocket traffic accounting, production composer/outbox/timeline/status interactions, and
-  process/profile cleanup proof. Real Chromium smoke passes when
+  HTTP/WebSocket traffic accounting, new-command-correlated composer/outbox interactions, explicit
+  status/recovery checkpoints, and isolated process/profile cleanup proof. Real Chromium smoke passes when
   `T3_NETWORK_LAB_CHROMIUM=/run/current-system/sw/bin/chromium` is supplied.
 - Remaining integration blocker: NL1 exposes Effect RPC but not a browser-ready authenticated T3
   app with an active deterministic thread. The full production six-profile run needs a fixture that

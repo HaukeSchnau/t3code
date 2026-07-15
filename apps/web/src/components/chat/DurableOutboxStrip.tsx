@@ -80,6 +80,7 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
           <div
             key={commandId}
             className="rounded-lg px-2 py-1.5 text-xs text-muted-foreground"
+            data-outbox-command-id={commandId}
             data-outbox-state={view.entry.state._tag}
           >
             <div className="flex min-w-0 items-center gap-2">

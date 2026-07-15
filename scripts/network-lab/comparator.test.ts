@@ -19,25 +19,35 @@ const identity = {
   executionId: "execution-17",
   definitionHash: "definition-17",
 } as const;
+let isolationGeneration = 0;
 
 function measurement(variant: "baseline" | "candidate", overrides: Record<string, unknown> = {}) {
+  isolationGeneration += 1;
   return decode({
     schemaVersion: 1,
     identity,
     variant,
-    localAcceptanceMs: [20, 30, 40],
-    statusVisibilityMs: [30, 40, 50],
+    localAcceptanceMs: Array.from({ length: 20 }, (_, index) => 20 + index),
+    statusVisibilityMs: [30, 35, 40, 45, 50],
     recoveryLatencyMs: 1_000,
+    submissionCount: 1,
     commandCount: 1,
     effectCount: 1,
     semanticHash: "semantic",
     replayHash: "replay",
     cachedContentNonblank: true,
     connectionStatusVisible: true,
+    recoveryObserved: true,
     faultSequence: ["poor-on:abc", "poor-off:def"],
     traffic: { bytesSent: 1_000, bytesReceived: 2_000, requestCount: 5, eventCount: 7 },
     faultEvidenceComplete: true,
     cleanupEvidenceComplete: true,
+    isolation: {
+      id: `${variant}-${isolationGeneration}`,
+      executionId: identity.executionId,
+      variant,
+      exclusive: true,
+    },
     ...overrides,
   });
 }
@@ -51,7 +61,7 @@ describe("browser network-lab comparator", () => {
     );
 
     assert.equal(result.status, "passed");
-    assert.equal(result.metrics.localAcceptanceP95Ms, 40);
+    assert.equal(result.metrics.localAcceptanceP95Ms, 38);
     assert.deepStrictEqual(result.failures, []);
   });
 
@@ -73,12 +83,13 @@ describe("browser network-lab comparator", () => {
     assert.deepStrictEqual(
       result.failures.map(({ id }) => id),
       [
-        "correctness.cached-content",
-        "correctness.connection-status",
-        "correctness.command-count",
-        "correctness.effect-count",
-        "correctness.semantic-hash",
-        "correctness.replay-hash",
+        "correctness.candidate.cached-content",
+        "correctness.candidate.connection-status",
+        "correctness.candidate.command-count",
+        "correctness.candidate.effect-count",
+        "correctness.candidate.semantic-hash",
+        "correctness.candidate.replay-hash",
+        "reproducibility.correctness-counts",
       ],
     );
   });
@@ -113,8 +124,8 @@ describe("browser network-lab comparator", () => {
 
   it("uses p95 rather than averages and enforces relative recovery and traffic ceilings", () => {
     const candidate = measurement("candidate", {
-      localAcceptanceMs: [1, 1, 1, 151],
-      statusVisibilityMs: [1, 1, 301],
+      localAcceptanceMs: [...Array.from({ length: 18 }, () => 1), 151, 151],
+      statusVisibilityMs: [1, 1, 1, 301, 301],
       recoveryLatencyMs: 2_251,
       traffic: {
         bytesSent: 66_787,
@@ -126,7 +137,7 @@ describe("browser network-lab comparator", () => {
     const result = compareBrowserNetworkLabMeasurements(
       measurement("baseline"),
       candidate,
-      candidate,
+      measurement("candidate"),
       CI_BROWSER_NETWORK_LAB_THRESHOLDS_V1,
     );
 
@@ -148,5 +159,25 @@ describe("browser network-lab comparator", () => {
   it("rejects empty samples and non-finite timings at the artifact boundary", () => {
     assert.throws(() => measurement("candidate", { localAcceptanceMs: [] }));
     assert.throws(() => measurement("candidate", { recoveryLatencyMs: Number.NaN }));
+  });
+
+  it("does not label undersampled timings as p95 evidence", () => {
+    const result = compareBrowserNetworkLabMeasurements(
+      measurement("baseline", { localAcceptanceMs: [40], statusVisibilityMs: [50] }),
+      measurement("candidate", { localAcceptanceMs: [40], statusVisibilityMs: [50] }),
+      measurement("candidate", { localAcceptanceMs: [40], statusVisibilityMs: [50] }),
+    );
+    assert.equal(result.status, "failed");
+    assert.deepStrictEqual(
+      result.failures.filter(({ id }) => id.startsWith("samples.")).map(({ id }) => id),
+      [
+        "samples.baseline.offline-acceptance",
+        "samples.baseline.status-visibility",
+        "samples.candidate.offline-acceptance",
+        "samples.candidate.status-visibility",
+        "samples.repeat.offline-acceptance",
+        "samples.repeat.status-visibility",
+      ],
+    );
   });
 });

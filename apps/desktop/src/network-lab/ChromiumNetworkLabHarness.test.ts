@@ -6,7 +6,9 @@ import * as NodeAssert from "node:assert/strict";
 import { assert, describe, it } from "@effect/vitest";
 
 import {
+  finalizeChromiumIsolation,
   launchChromiumNetworkLabHarness,
+  makeChromiumProductionT3Driver,
   type ChromiumNetworkFaultControl,
 } from "./ChromiumNetworkLabHarness.ts";
 
@@ -55,6 +57,37 @@ async function closeServer(server: NodeHttp.Server): Promise<void> {
 }
 
 describe("real Chromium network-lab harness", () => {
+  it("reports failed cleanup attempts even when post-state looks clean", async () => {
+    const attempts: Array<string> = [];
+    const contextFailure = await finalizeChromiumIsolation({
+      closeContext: async () => {
+        attempts.push("context");
+        throw new Error("close rejected");
+      },
+      removeProfile: async () => {
+        attempts.push("profile");
+      },
+      browserIsConnected: () => false,
+      profileExists: () => false,
+    });
+    assert.deepStrictEqual(attempts, ["context", "profile"]);
+    assert.deepStrictEqual(contextFailure, {
+      browserDisconnected: false,
+      temporaryDirectoryRemoved: true,
+    });
+
+    const removalFailure = await finalizeChromiumIsolation({
+      closeContext: async () => undefined,
+      removeProfile: async () => Promise.reject(new Error("rm rejected")),
+      browserIsConnected: () => false,
+      profileExists: () => false,
+    });
+    assert.deepStrictEqual(removalFailure, {
+      browserDisconnected: true,
+      temporaryDirectoryRemoved: false,
+    });
+  });
+
   it.skipIf(!executablePath)(
     "applies a proved fault and releases the browser, port, and temporary profile",
     async () => {
@@ -109,6 +142,37 @@ describe("real Chromium network-lab harness", () => {
         assert.deepStrictEqual(harness.faultEvidence, []);
       } finally {
         await harness.close();
+      }
+    },
+  );
+
+  it.skipIf(!executablePath)(
+    "refuses to sample a connected send control as offline durable acceptance",
+    async () => {
+      if (!executablePath) throw new Error("skipIf failed to omit missing Chromium.");
+      const server = NodeHttp.createServer((_request, response) => {
+        response.writeHead(200, { "content-type": "text/html" });
+        response.end(
+          '<input data-testid="composer-editor"><button aria-label="Send message">Send</button><main data-timeline-root="true">cached</main><div data-durable-outbox-strip="true"></div>',
+        );
+      });
+      const port = await listen(server);
+      const harness = await launchChromiumNetworkLabHarness({ executablePath });
+      try {
+        const driver = makeChromiumProductionT3Driver(harness);
+        await driver.navigate(`http://127.0.0.1:${String(port)}`);
+        await NodeAssert.rejects(
+          driver.submitComposer({
+            composerSelector: '[data-testid="composer-editor"]',
+            submitSelector: 'button[aria-label="Send message"]',
+            durableIntentSelector: '[data-durable-outbox-strip="true"]',
+            text: "must stay local",
+          }),
+          /requires 'Save message for delivery'/,
+        );
+      } finally {
+        await harness.close();
+        await closeServer(server);
       }
     },
   );
