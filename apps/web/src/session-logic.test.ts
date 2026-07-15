@@ -10,6 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  derivePhase,
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
@@ -24,6 +25,22 @@ import {
 } from "./session-logic";
 
 let nextActivityId = 0;
+
+describe("derivePhase", () => {
+  it("treats provider startup as connecting work", () => {
+    expect(
+      derivePhase({
+        threadId: ThreadId.make("thread-starting"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "full-access",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-07-16T00:00:00.000Z",
+      }),
+    ).toBe("connecting");
+  });
+});
 
 function makeActivity(overrides: {
   id?: string;
