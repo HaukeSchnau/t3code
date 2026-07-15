@@ -33,7 +33,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
-import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
+import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -3133,6 +3133,9 @@ const make = Effect.gen(function* () {
       const pending = yield* retryPersistence(transcriptJournal.listUndelivered);
       let fallbackWasJournaled = false;
       for (const { event } of pending) {
+        if (fallbackEvent !== undefined && event.threadId !== fallbackEvent.threadId) {
+          continue;
+        }
         if (
           fallbackEvent !== undefined &&
           event.eventId === fallbackEvent.eventId &&
@@ -3168,7 +3171,10 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processInputSafely);
+  const worker = yield* makeKeyedDrainableWorker({
+    concurrency: 8,
+    process: (input: RuntimeIngestionInput, _threadId: ThreadId) => processInputSafely(input),
+  });
   const drain = worker.drain.pipe(
     Effect.andThen(
       flushSubagentActivities().pipe(
@@ -3261,7 +3267,7 @@ const make = Effect.gen(function* () {
           liveSubscription === null
             ? providerService.streamEvents
             : Stream.fromSubscription(liveSubscription),
-          (event) => worker.enqueue({ source: "runtime", event }),
+          (event) => worker.enqueue(event.threadId, { source: "runtime", event }),
         ),
       );
       yield* Effect.forkScoped(
@@ -3269,7 +3275,7 @@ const make = Effect.gen(function* () {
           if (event.type !== "thread.turn-start-requested") {
             return Effect.void;
           }
-          return worker.enqueue({ source: "domain", event });
+          return worker.enqueue(event.payload.threadId, { source: "domain", event });
         }),
       );
     });
