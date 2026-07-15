@@ -17,7 +17,6 @@ const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
 const COMMAND_OUTBOX_FILE = "command-outbox.json";
 const COMMAND_OUTBOX_GENERATION_PREFIX = "command-outbox.";
 const COMMAND_OUTBOX_MANIFEST_FILE = "command-outbox.manifest.json";
-let commandOutboxSaveQueue: Promise<void> = Promise.resolve();
 
 function generationFileName(sequence: number): string {
   return `${COMMAND_OUTBOX_GENERATION_PREFIX}${sequence.toString().padStart(16, "0")}.json`;
@@ -61,28 +60,39 @@ export interface ThreadOutboxStorage {
   readonly saveCommandOutbox?: (document: DurableCommandOutboxDocument) => Promise<void>;
 }
 
+export interface ThreadOutboxStorageFile {
+  readonly name: string;
+  readonly exists: boolean;
+  text(): Promise<string>;
+  create(options: { intermediates: boolean; overwrite: boolean }): void;
+  write(contents: string): void;
+  delete(): void;
+}
+
+export interface ThreadOutboxFileSystem {
+  readonly directory: () => Promise<unknown>;
+  readonly list: (directory: unknown) => Promise<ReadonlyArray<ThreadOutboxStorageFile>>;
+  readonly file: (directory: unknown, name: string) => Promise<ThreadOutboxStorageFile>;
+  readonly move: (
+    source: ThreadOutboxStorageFile,
+    destination: ThreadOutboxStorageFile,
+    options: { overwrite: boolean },
+  ) => Promise<void>;
+}
+
 function messageFileName(messageId: MessageId): string {
   return `${encodeURIComponent(messageId)}.json`;
 }
 
-async function getOutboxDirectory() {
-  const { Directory, Paths } = await import("expo-file-system");
-  const directory = new Directory(Paths.document, THREAD_OUTBOX_DIRECTORY);
-  directory.create({ idempotent: true, intermediates: true });
-  return directory;
-}
-
-async function getMessageFile(messageId: MessageId) {
-  const { File } = await import("expo-file-system");
-  return new File(await getOutboxDirectory(), messageFileName(messageId));
-}
-
-export const expoThreadOutboxStorage: ThreadOutboxStorage = {
+export function createThreadOutboxStorage(
+  fileSystem: ThreadOutboxFileSystem,
+): ThreadOutboxStorage {
+  let commandOutboxSaveQueue: Promise<void> = Promise.resolve();
+  return {
   loadCommandOutbox: async () => {
     try {
-      const { File } = await import("expo-file-system");
-      const directory = await getOutboxDirectory();
-      const manifest = new File(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+      const directory = await fileSystem.directory();
+      const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
       if (manifest.exists) {
         try {
           const value = JSON.parse(await manifest.text()) as {
@@ -98,7 +108,7 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
           ) {
             throw new Error("Invalid command outbox manifest");
           }
-          const authoritative = new File(directory, value.fileName);
+          const authoritative = await fileSystem.file(directory, value.fileName);
           return decodeDurableCommandOutboxDocument(
             JSON.parse(await authoritative.text()) as unknown,
           );
@@ -110,13 +120,10 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
           return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
         }
       }
-      const candidates = directory
-        .list()
+      const candidates = (await fileSystem.list(directory))
         .filter(
-          (entry): entry is InstanceType<typeof File> =>
-            entry instanceof File &&
-            (entry.name === COMMAND_OUTBOX_FILE ||
-              generationSequence(entry.name) !== null),
+          (entry) =>
+            entry.name === COMMAND_OUTBOX_FILE || generationSequence(entry.name) !== null,
         )
         .sort((left, right) => {
           if (left.name === COMMAND_OUTBOX_FILE) return 1;
@@ -148,9 +155,8 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   saveCommandOutbox: (document) => {
     const save = commandOutboxSaveQueue.then(async () => {
       try {
-      const { File } = await import("expo-file-system");
-      const directory = await getOutboxDirectory();
-      const manifest = new File(directory, COMMAND_OUTBOX_MANIFEST_FILE);
+      const directory = await fileSystem.directory();
+      const manifest = await fileSystem.file(directory, COMMAND_OUTBOX_MANIFEST_FILE);
       let previousSequence = 0;
       if (manifest.exists) {
         try {
@@ -161,28 +167,29 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
         }
       }
       const sequence = nextCommandOutboxGenerationSequence(
-        directory.list().filter((entry) => entry instanceof File).map((entry) => entry.name),
+        (await fileSystem.list(directory)).map((entry) => entry.name),
         previousSequence,
       );
       const generation = generationFileName(sequence);
-      const destination = new File(directory, generation);
-      const temporary = new File(directory, `${generation}.tmp`);
+      const destination = await fileSystem.file(directory, generation);
+      const temporary = await fileSystem.file(directory, `${generation}.tmp`);
       temporary.create({ intermediates: true, overwrite: true });
       temporary.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
-      await temporary.move(destination, { overwrite: false });
+      await fileSystem.move(temporary, destination, { overwrite: false });
 
-      const manifestTemporary = new File(directory, `${COMMAND_OUTBOX_MANIFEST_FILE}.tmp`);
+      const manifestTemporary = await fileSystem.file(
+        directory,
+        `${COMMAND_OUTBOX_MANIFEST_FILE}.tmp`,
+      );
       manifestTemporary.create({ intermediates: true, overwrite: true });
       manifestTemporary.write(JSON.stringify({ version: 1, sequence, fileName: generation }));
-      await manifestTemporary.move(manifest, { overwrite: true });
+      await fileSystem.move(manifestTemporary, manifest, { overwrite: true });
 
       // Keep multiple immutable generations so a corrupt newest record can
       // fall back to the prior complete lifecycle snapshot.
-      const older = directory
-        .list()
+      const older = (await fileSystem.list(directory))
         .filter(
-          (entry): entry is InstanceType<typeof File> =>
-            entry instanceof File &&
+          (entry) =>
             generationSequence(entry.name) !== null &&
             entry.name !== generation,
         )
@@ -206,12 +213,10 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   load: async () => {
     const messages: QueuedThreadMessage[] = [];
     try {
-      const { File } = await import("expo-file-system");
-      const directory = await getOutboxDirectory();
+      const directory = await fileSystem.directory();
 
-      for (const entry of directory.list()) {
+      for (const entry of await fileSystem.list(directory)) {
         if (
-          !(entry instanceof File) ||
           !entry.name.endsWith(".json") ||
           entry.name === COMMAND_OUTBOX_FILE ||
           entry.name.startsWith(COMMAND_OUTBOX_GENERATION_PREFIX)
@@ -249,12 +254,12 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   write: async (message) => {
     const fileName = messageFileName(message.messageId);
     try {
-      const file = await getMessageFile(message.messageId);
-      const { File } = await import("expo-file-system");
-      const temporary = new File(file.parentDirectory, `${file.name}.${Date.now()}.tmp`);
+      const directory = await fileSystem.directory();
+      const file = await fileSystem.file(directory, fileName);
+      const temporary = await fileSystem.file(directory, `${file.name}.${Date.now()}.tmp`);
       temporary.create({ intermediates: true, overwrite: true });
       temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
-      await temporary.move(file, { overwrite: true });
+      await fileSystem.move(temporary, file, { overwrite: true });
     } catch (cause) {
       throw new ThreadOutboxStorageError({
         operation: "write",
@@ -269,7 +274,8 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
   remove: async (message) => {
     const fileName = messageFileName(message.messageId);
     try {
-      const file = await getMessageFile(message.messageId);
+      const directory = await fileSystem.directory();
+      const file = await fileSystem.file(directory, fileName);
       if (file.exists) {
         file.delete();
       }
@@ -284,4 +290,33 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
       });
     }
   },
+  };
+}
+
+const expoFileSystem: ThreadOutboxFileSystem = {
+  directory: async () => {
+    const { Directory, Paths } = await import("expo-file-system");
+    const directory = new Directory(Paths.document, THREAD_OUTBOX_DIRECTORY);
+    directory.create({ idempotent: true, intermediates: true });
+    return directory;
+  },
+  list: async (directory) => {
+    const { Directory, File } = await import("expo-file-system");
+    return (directory as InstanceType<typeof Directory>)
+      .list()
+      .filter((entry): entry is InstanceType<typeof File> => entry instanceof File);
+  },
+  file: async (directory, name) => {
+    const { Directory, File } = await import("expo-file-system");
+    return new File(directory as InstanceType<typeof Directory>, name);
+  },
+  move: async (source, destination, options) => {
+    const { File } = await import("expo-file-system");
+    await (source as InstanceType<typeof File>).move(
+      destination as InstanceType<typeof File>,
+      options,
+    );
+  },
 };
+
+export const expoThreadOutboxStorage = createThreadOutboxStorage(expoFileSystem);

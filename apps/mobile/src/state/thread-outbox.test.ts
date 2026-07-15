@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import {
+  decodeDurableCommandOutboxDocument,
   EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
   type DurableCommandOutboxDocument,
 } from "@t3tools/client-runtime/operations/command-outbox";
@@ -19,6 +20,7 @@ import {
   groupQueuedThreadMessages,
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
+  makeQueuedThreadDeliveryPlan,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
@@ -28,9 +30,57 @@ import {
 } from "./thread-outbox-model";
 import { createThreadOutboxManager, ThreadOutboxManagerError } from "./thread-outbox-manager";
 import {
-  nextCommandOutboxGenerationSequence,
+  createThreadOutboxStorage,
+  type ThreadOutboxFileSystem,
+  type ThreadOutboxStorageFile,
   type ThreadOutboxStorage,
 } from "./thread-outbox-storage";
+
+function makeMemoryOutboxFileSystem() {
+  const contents = new Map<string, string>();
+  const moves: Array<{ source: string; destination: string; overwrite: boolean }> = [];
+  const directory = {};
+  const file = (name: string): ThreadOutboxStorageFile => ({
+    name,
+    get exists() {
+      return contents.has(name);
+    },
+    text: async () => {
+      const value = contents.get(name);
+      if (value === undefined) throw new Error(`Missing file ${name}`);
+      return value;
+    },
+    create: ({ overwrite }) => {
+      if (!overwrite && contents.has(name)) throw new Error(`File exists ${name}`);
+      contents.set(name, "");
+    },
+    write: (value) => void contents.set(name, value),
+    delete: () => void contents.delete(name),
+  });
+  const fs: ThreadOutboxFileSystem = {
+    directory: async () => directory,
+    list: async () => [...contents.keys()].map(file),
+    file: async (_directory, name) => file(name),
+    move: async (source, destination, { overwrite }) => {
+      if (!overwrite && contents.has(destination.name)) {
+        throw new Error(`File exists ${destination.name}`);
+      }
+      const value = contents.get(source.name);
+      if (value === undefined) throw new Error(`Missing source ${source.name}`);
+      contents.set(destination.name, value);
+      contents.delete(source.name);
+      moves.push({ source: source.name, destination: destination.name, overwrite });
+    },
+  };
+  return { fs, contents, moves, storage: createThreadOutboxStorage(fs) };
+}
+
+function pendingDocument(message: QueuedThreadMessage): DurableCommandOutboxDocument {
+  return decodeDurableCommandOutboxDocument({
+    schemaVersion: 1,
+    entries: [{ plan: makeQueuedThreadDeliveryPlan(message), state: { _tag: "Pending" } }],
+  });
+}
 
 function queuedMessage(input: {
   readonly environmentId?: string;
@@ -50,6 +100,145 @@ function queuedMessage(input: {
 }
 
 describe("thread outbox", () => {
+  it("serializes real storage saves and publishes the later authoritative manifest", async () => {
+    const harness = makeMemoryOutboxFileSystem();
+    const a = queuedMessage({
+      messageId: "generation-a",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const b = queuedMessage({
+      messageId: "generation-b",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+
+    await Promise.all([
+      harness.storage.saveCommandOutbox!(pendingDocument(a)),
+      harness.storage.saveCommandOutbox!(pendingDocument(b)),
+    ]);
+
+    const manifest = JSON.parse(harness.contents.get("command-outbox.manifest.json")!) as {
+      sequence: number;
+      fileName: string;
+    };
+    expect(manifest).toEqual({
+      version: 1,
+      sequence: 2,
+      fileName: "command-outbox.0000000000000002.json",
+    });
+    expect(
+      (await harness.storage.loadCommandOutbox!()).entries[0]?.plan.command.commandId,
+    ).toBe(b.commandId);
+    expect(harness.moves.map((move) => move.destination)).toEqual([
+      "command-outbox.0000000000000001.json",
+      "command-outbox.manifest.json",
+      "command-outbox.0000000000000002.json",
+      "command-outbox.manifest.json",
+    ]);
+
+    await harness.storage.saveCommandOutbox!(pendingDocument(a));
+    await harness.storage.saveCommandOutbox!(pendingDocument(b));
+    expect(
+      [...harness.contents.keys()].filter((name) => /^command-outbox\.\d{16}\.json$/.test(name)),
+    ).toEqual([
+      "command-outbox.0000000000000002.json",
+      "command-outbox.0000000000000003.json",
+      "command-outbox.0000000000000004.json",
+    ]);
+  });
+
+  it("uses manifest high-water recovery and rehydrates only intact presentation", async () => {
+    const harness = makeMemoryOutboxFileSystem();
+    const staleA = queuedMessage({
+      messageId: "stale-a",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const intactB = queuedMessage({
+      messageId: "intact-b",
+      createdAt: "2026-07-15T10:00:01.000Z",
+    });
+    await harness.storage.saveCommandOutbox!(pendingDocument(staleA));
+    await harness.storage.saveCommandOutbox!(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT);
+    harness.contents.set("command-outbox.0000000000000002.json", "{corrupt");
+    await harness.storage.write(intactB);
+
+    expect(await harness.storage.loadCommandOutbox!()).toEqual(
+      EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
+    );
+    const registry = AtomRegistry.make();
+    const manager = createThreadOutboxManager({ registry, storage: harness.storage });
+    await manager.load();
+    expect((await manager.ready(intactB.createdAt)).map((message) => message.commandId)).toEqual([
+      intactB.commandId,
+    ]);
+    expect(
+      (await harness.storage.loadCommandOutbox!()).entries.map(
+        (entry) => entry.plan.command.commandId,
+      ),
+    ).toEqual([intactB.commandId]);
+    registry.dispose();
+  });
+
+  it("prunes lifecycle without presentation while preserving intact recoverable intent", async () => {
+    const harness = makeMemoryOutboxFileSystem();
+    const orphanA = queuedMessage({
+      messageId: "orphan-a",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const intactB = queuedMessage({
+      messageId: "recoverable-b",
+      createdAt: "2026-07-15T10:00:01.000Z",
+    });
+    await harness.storage.saveCommandOutbox!(pendingDocument(orphanA));
+    await harness.storage.write(intactB);
+    const registry = AtomRegistry.make();
+    const manager = createThreadOutboxManager({ registry, storage: harness.storage });
+    await manager.load();
+    expect((await manager.ready(intactB.createdAt)).map((message) => message.commandId)).toEqual([
+      intactB.commandId,
+    ]);
+    expect(
+      (await harness.storage.loadCommandOutbox!()).entries.map(
+        (entry) => entry.plan.command.commandId,
+      ),
+    ).toEqual([intactB.commandId]);
+    registry.dispose();
+  });
+
+  for (const lifecycleAlreadyRemoved of [false, true]) {
+    it(`converges discarded marker restart ${
+      lifecycleAlreadyRemoved
+        ? "after lifecycle removal before marker cleanup"
+        : "before lifecycle removal"
+    }`, async () => {
+      const harness = makeMemoryOutboxFileSystem();
+      const rejected = queuedMessage({
+        messageId: lifecycleAlreadyRemoved ? "discard-after" : "discard-before",
+        createdAt: "2026-07-15T10:00:00.000Z",
+      });
+      const firstRegistry = AtomRegistry.make();
+      const first = createThreadOutboxManager({ registry: firstRegistry, storage: harness.storage });
+      await first.enqueue(rejected);
+      await first.begin(rejected, rejected.createdAt);
+      await first.fail(rejected, new Error("permanent"), rejected.createdAt, "permanent");
+      await harness.storage.write({ ...rejected, discardedAt: "2026-07-15T10:00:01.000Z" });
+      if (lifecycleAlreadyRemoved) {
+        await harness.storage.saveCommandOutbox!(EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT);
+      }
+      firstRegistry.dispose();
+
+      const restartedRegistry = AtomRegistry.make();
+      const restarted = createThreadOutboxManager({
+        registry: restartedRegistry,
+        storage: harness.storage,
+      });
+      await restarted.load();
+      expect(await harness.storage.load()).toEqual([]);
+      expect((await harness.storage.loadCommandOutbox!()).entries).toEqual([]);
+      expect(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).toEqual({});
+      restartedRegistry.dispose();
+    });
+  }
+
   it("groups messages by scoped thread and preserves creation order", () => {
     const later = queuedMessage({
       messageId: "message-2",
@@ -137,14 +326,6 @@ describe("thread outbox", () => {
     expect([1, 2, 3, 4, 5, 6].map(threadOutboxRetryDelayMs)).toEqual([
       1_000, 2_000, 4_000, 8_000, 16_000, 16_000,
     ]);
-  });
-
-  it("orders lifecycle generations monotonically even for same-millisecond saves", () => {
-    const first = nextCommandOutboxGenerationSequence([], 0);
-    const firstName = `command-outbox.${first.toString().padStart(16, "0")}.json`;
-    const second = nextCommandOutboxGenerationSequence([firstName], first);
-    expect([first, second]).toEqual([1, 2]);
-    expect(second).toBeGreaterThan(first);
   });
 
   it("serializes mutations even when an earlier mutation is slower", async () => {
