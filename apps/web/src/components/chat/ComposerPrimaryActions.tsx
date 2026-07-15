@@ -131,13 +131,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
           size={compact ? "icon-sm" : "sm"}
           className={cn("rounded-full", compact ? "" : "px-3")}
           {...pointerFocusProps}
-          disabled={
-            isSendBusy ||
-            isConnecting ||
-            isEnvironmentUnavailable ||
-            isPreparingWorktree ||
-            !hasSendableContent
-          }
+          disabled={isSendBusy || isPreparingWorktree || !hasSendableContent}
           aria-label="Queue message"
         >
           <ListPlusIcon className="size-3.5" />
@@ -215,20 +209,18 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       type="submit"
       className="flex h-9 w-9 enabled:cursor-pointer items-center justify-center rounded-full bg-primary/90 text-primary-foreground shadow-xs enabled:shadow-primary/24 enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] transition-all duration-150 hover:bg-primary hover:scale-105 active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
       {...pointerFocusProps}
-      disabled={isSendBusy || isConnecting || isEnvironmentUnavailable || !hasSendableContent}
+      disabled={isSendBusy || !hasSendableContent}
       aria-label={
-        isEnvironmentUnavailable
-          ? "Environment disconnected"
-          : isConnecting
-            ? "Connecting"
-            : isPreparingWorktree
-              ? "Preparing workspace"
-              : isSendBusy
-                ? "Sending"
-                : "Send message"
+        isPreparingWorktree
+          ? "Preparing workspace"
+          : isSendBusy
+            ? "Saving message"
+            : isEnvironmentUnavailable || isConnecting
+              ? "Save message for delivery"
+              : "Send message"
       }
     >
-      {isConnecting || isSendBusy ? (
+      {isSendBusy ? (
         <Spinner className="size-3.5" aria-hidden="true" />
       ) : (
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" aria-hidden="true">

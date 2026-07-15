@@ -65,6 +65,20 @@ storage and decide when to drain ready thread heads.
 - Storage implementations must preserve document order. They may use a transaction, atomic file replacement,
   or an equivalent platform primitive, but must never expose a partially replaced snapshot.
 
+### Web adapter
+
+- `apps/web/src/durableCommandOutbox.ts` persists the versioned document in a dedicated IndexedDB database.
+  Composer submission waits for that transaction, not for the environment RPC, so an unavailable WebSocket
+  does not make accepted local intent look like a failed send.
+- The adapter owns one drain loop. It retries ready thread heads on the shared bounded backoff and wakes the
+  loop when the browser reports that it is online or foregrounded. RPC success is the durable acknowledgement;
+  ambiguous response loss keeps the frozen command in the outbox and retries the same command id.
+- Chat rendering projects persisted outbox messages alongside the existing in-memory optimistic messages and
+  server snapshot, deduplicated by message id. This makes reload recovery visible without rendering two copies
+  while the server projection catches up.
+- Connection loss no longer disables the ordinary Send or Queue action. Non-replayable actions, approval
+  responses, and prior-message editing retain their existing online requirements.
+
 ## Maintenance notes
 
 When syncing upstream, keep the durable command allowlist explicit and compare it against orchestration command
@@ -81,4 +95,7 @@ command schema, replace the local refinement rather than duplicating command pay
   edit/cancel, stale-ready invalidation, mandatory new IDs, duplicate IDs, durable-plan validation,
   FIFO/thread-head behavior,
   storage failure, and interruption during asynchronous saves.
+- `apps/web/src/durableCommandOutbox.test.ts` covers offline persistence, reconnect draining,
+  acknowledgement-loss replay with a stable identity, hydration after a new runtime, and exactly-one
+  optimistic projection.
 - Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.

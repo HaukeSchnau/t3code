@@ -67,6 +67,11 @@ import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
 import { readEnvironmentApi } from "../environmentApi";
+import {
+  durableCommandOutbox,
+  selectDurableOutboxMessages,
+  useDurableCommandOutboxEntries,
+} from "../durableCommandOutbox";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -1115,6 +1120,7 @@ function ChatViewContent(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
+  const durableOutboxEntries = useDurableCommandOutboxEntries();
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -1720,7 +1726,7 @@ function ChatViewContent(props: ChatViewProps) {
         title: `${activeEnvironmentUnavailableState.label}: ${connectionStatusText(connection)}`,
         description:
           connection.error ??
-          "Reconnect this environment before sending messages or running actions.",
+          "Messages are saved locally for delivery; other actions need this environment to reconnect.",
         actions: (
           <>
             <Button
@@ -2011,6 +2017,28 @@ function ChatViewContent(props: ChatViewProps) {
       };
     });
   }, [serverAttachmentUrlById, serverMessages]);
+  const durableOptimisticUserMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
+    if (!activeThread) return [];
+    return selectDurableOutboxMessages(
+      durableOutboxEntries,
+      activeThread.environmentId,
+      activeThread.id,
+    ).map((message) => {
+      const entry = durableOutboxEntries.find(
+        (candidate) => candidate.plan.command.message.messageId === message.messageId,
+      );
+      const createdAt = entry?.plan.command.createdAt ?? new Date(0).toISOString();
+      return {
+        id: message.messageId,
+        role: "user" as const,
+        text: message.text,
+        turnId: null,
+        createdAt,
+        updatedAt: createdAt,
+        streaming: false,
+      };
+    });
+  }, [activeThread, durableOutboxEntries]);
   useEffect(() => {
     if (typeof Image === "undefined" || displayServerMessages.length === 0) {
       return;
@@ -2137,16 +2165,28 @@ function ChatViewContent(props: ChatViewProps) {
             return changed ? { ...message, attachments } : message;
           });
 
-    if (optimisticUserMessages.length === 0) {
+    if (optimisticUserMessages.length === 0 && durableOptimisticUserMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     const serverIds = new Set(serverMessagesWithPreviewHandoff.map((message) => message.id));
-    const pendingMessages = optimisticUserMessages.filter((message) => !serverIds.has(message.id));
+    const pendingById = new Map<MessageId, ChatMessage>();
+    for (const message of durableOptimisticUserMessages) {
+      if (!serverIds.has(message.id)) pendingById.set(message.id, message);
+    }
+    for (const message of optimisticUserMessages) {
+      if (!serverIds.has(message.id)) pendingById.set(message.id, message);
+    }
+    const pendingMessages = [...pendingById.values()];
     if (pendingMessages.length === 0) {
       return serverMessagesWithPreviewHandoff;
     }
     return [...serverMessagesWithPreviewHandoff, ...pendingMessages];
-  }, [attachmentPreviewHandoffByMessageId, displayServerMessages, optimisticUserMessages]);
+  }, [
+    attachmentPreviewHandoffByMessageId,
+    displayServerMessages,
+    durableOptimisticUserMessages,
+    optimisticUserMessages,
+  ]);
   const timelineEntries = useMemo(
     () =>
       deriveTimelineEntries(timelineMessages, activeThread?.proposedPlans ?? [], workLogEntries),
@@ -4013,14 +4053,7 @@ function ChatViewContent(props: ChatViewProps) {
 
   const onSend = async (e?: { preventDefault: () => void }) => {
     e?.preventDefault();
-    if (
-      !activeThread ||
-      isSendBusy ||
-      isConnecting ||
-      activeEnvironmentUnavailable ||
-      sendInFlightRef.current
-    )
-      return;
+    if (!activeThread || isSendBusy || sendInFlightRef.current) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -4102,11 +4135,6 @@ function ChatViewContent(props: ChatViewProps) {
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const shouldQueueMessage = phase === "running";
-    const queueApi = shouldQueueMessage ? readEnvironmentApi(environmentId) : null;
-    if (shouldQueueMessage && !queueApi) {
-      setThreadError(threadIdForSend, "Environment API unavailable.");
-      return;
-    }
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const shouldPrepareWorkspace =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
@@ -4234,33 +4262,6 @@ function ChatViewContent(props: ChatViewProps) {
     );
 
     let failure: AtomCommandResult<unknown, unknown> | null = null;
-    // Auto-title from first message
-    if (!shouldQueueMessage && isFirstMessage && isServerThread) {
-      const titleResult = await updateThreadMetadata({
-        environmentId,
-        input: {
-          threadId: threadIdForSend,
-          title,
-        },
-      });
-      if (titleResult._tag === "Failure") {
-        failure = titleResult;
-      }
-    }
-
-    if (!shouldQueueMessage && failure === null && isServerThread) {
-      const settingsResult = await persistThreadSettingsForNextTurn({
-        threadId: threadIdForSend,
-        createdAt: messageCreatedAt,
-        ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
-        runtimeMode,
-        interactionMode,
-      });
-      if (settingsResult._tag === "Failure") {
-        failure = settingsResult;
-      }
-    }
-
     const turnAttachmentsResult = await settlePromise(() => turnAttachmentsPromise);
     if (failure === null && turnAttachmentsResult._tag === "Failure") {
       failure = turnAttachmentsResult;
@@ -4311,7 +4312,7 @@ function ChatViewContent(props: ChatViewProps) {
           : undefined;
       if (shouldQueueMessage) {
         const queueResult = await settlePromise(() =>
-          queueApi!.orchestration.dispatchCommand({
+          durableCommandOutbox().enqueue(environmentId, {
             type: "thread.message.queue",
             commandId: newCommandId(),
             threadId: threadIdForSend,
@@ -4335,9 +4336,10 @@ function ChatViewContent(props: ChatViewProps) {
         }
       } else {
         beginLocalDispatch({ preparingWorktree: false });
-        const startResult = await startThreadTurn({
-          environmentId,
-          input: {
+        const startResult = await settlePromise(() =>
+          durableCommandOutbox().enqueue(environmentId, {
+            type: "thread.turn.start",
+            commandId: newCommandId(),
             threadId: threadIdForSend,
             message: {
               messageId: messageIdForSend,
@@ -4351,8 +4353,8 @@ function ChatViewContent(props: ChatViewProps) {
             interactionMode,
             ...(bootstrap ? { bootstrap } : {}),
             createdAt: messageCreatedAt,
-          },
-        });
+          }),
+        );
         if (startResult._tag === "Failure") {
           failure = startResult;
         } else {
@@ -4406,7 +4408,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
     }
     sendInFlightRef.current = false;
-    if (!sendOrQueueSucceeded) {
+    if (!sendOrQueueSucceeded || activeEnvironmentUnavailable) {
       resetLocalDispatch();
     }
   };
