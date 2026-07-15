@@ -102,16 +102,22 @@ again. Implementers do not approve their own packets.
 - Explorer threads completed for outbox, network lab, and UX/transport decomposition.
 - Wave 1 integrated as four atomic changes: shared durable outbox, accepted-receipt preservation,
   single-owner liveness coverage, and the deterministic network-lab foundation.
-- Integrated Wave 1 verification passed: 8 focused files / 76 tests, full `vp check` with the 10
-  baseline React warnings, and full workspace typecheck with only baseline Effect suggestions.
-- `REV-N` found blocking lab-model issues: opaque fault classes, false-green evidence, insufficient
-  cleanup guarantees, and locale-dependent identity. It also requested a less brittle liveness test
-  and a precise public timeout envelope. Correction packets `NL0-R1` and `LC1-R1` are active.
-- The documentation formatting gate identified by `REV-N` was resolved atomically and full
-  `vp check` was rerun successfully.
-- `REV-O` is independently reviewing the outbox/receipt interaction before platform integration.
-- Current step: close Wave 1 review findings, rerun integrated gates, then start Wave 2 packets from
-  the reviewed foundation.
+- Wave 1 review corrections are integrated. The outbox now publishes persistence and in-memory
+  transitions interruption-safely; receipt replay verifies immutable command envelopes and survives
+  migration, concurrency, rollback, and restart; liveness tests exercise the installed Effect pinger
+  through the real supervisor boundary; and the network lab fails closed on unverifiable fault and
+  cleanup evidence.
+- Independent re-review approved the outbox, liveness, and network-lab corrections. The receipt
+  reviewer approved the production correction and requested two additional integration tests; those
+  now traverse the real repository decoder and dispose/reopen SQLite after finalization rollback. A
+  replacement bounded verdict is pending because the original final review turn stalled after
+  inspecting the requested lines.
+- Final integrated Wave 1 verification passed: 9 focused files / 94 tests and `vp check` with the 10
+  baseline React warnings. Full workspace typecheck exposed one raw timer in the network-lab runner;
+  it was replaced by an abortable `Effect.sleep` deadline, its 16 focused tests passed, and the full
+  15-workspace typecheck then passed with only baseline Effect suggestions.
+- Current step: obtain the bounded receipt test verdict and start Wave 2 platform-integration packets
+  from the reviewed foundation.
 
 ## Explorer Threads
 
@@ -129,6 +135,11 @@ again. Implementers do not approve their own packets.
 - Outbox/receipt review: `mcp:thread:ed8af283-eaa5-4354-8d78-7402ca9fc892`
 - Network-lab correction: `mcp:thread:577e75b3-0e7c-4dbd-bba5-7f9b81364617`
 - Liveness correction: `mcp:thread:ea5a2a60-e965-4124-9d7e-ca21197106c2`
+- Outbox correction re-review: `mcp:thread:59f58211-e76b-46ed-8e72-f37df812fd0c`
+- Liveness correction re-review: `mcp:thread:0f9c7599-1553-4921-8422-9c4b3bbd5306`
+- Network-lab final re-review: `mcp:thread:22e9fada-5636-4512-bc7c-bfd2d3a69143`
+- Receipt correction review: `mcp:thread:a11288d3-1354-407a-9a94-2ccd804521ab`
+- Receipt correction implementation: `mcp:thread:53bfceeb-9b8b-4758-8158-229146f0c017`
 
 ## Verification Notes
 
