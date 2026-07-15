@@ -46,6 +46,6 @@ accepted turn is visibly working while its concrete provider turn identity is st
 - Sync verification: `vp check` passed; `vp run typecheck` passed after `pnpm install --frozen-lockfile`
   restored lockfile-declared workspace dependencies.
 - Local deterministic regression: keyed worker and real command-reactor blocking-session coverage pass.
-- Implementation: keyed FIFO scheduling is complete for provider command dispatch and runtime ingestion;
-  accepted-turn starting state remains pending.
+- Implementation: keyed FIFO scheduling is complete for provider command dispatch and runtime ingestion. The
+  command reactor now durably publishes `starting` before provider session work can block.
 - Deployment verification: pending.

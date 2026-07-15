@@ -559,6 +559,11 @@ describe("ProviderCommandReactor", () => {
       }),
     );
     await blockedSessionStarted;
+    const blockedReadModel = await harness.readModel();
+    expect(
+      blockedReadModel.threads.find((thread) => thread.id === ThreadId.make("thread-1"))?.session
+        ?.status,
+    ).toBe("starting");
 
     await Effect.runPromise(
       harness.engine.dispatch({

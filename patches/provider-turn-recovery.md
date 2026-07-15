@@ -7,6 +7,9 @@ placeholder must not leave the thread looking permanently busy.
 
 ## Requirements
 
+- When the command reactor begins an accepted turn, it must durably publish a `starting` session before
+  provider session resume/start work can block. Shell and detail clients already map `starting` to visible
+  connecting/working state.
 - When a `thread.session-set` event leaves `running` with no active turn, any pending turn-start placeholder
   for the thread must become terminal instead of remaining `pending`.
 - Pending placeholders without a concrete provider turn id are settled as `interrupted` for ready, idle,
@@ -20,6 +23,7 @@ placeholder must not leave the thread looking permanently busy.
 
 - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
 - `apps/server/src/persistence/Services/ProjectionTurns.ts`
 - `apps/server/src/persistence/Layers/ProjectionTurns.ts`
 
