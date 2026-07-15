@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
+import * as NodePath from "@effect/platform-node/NodePath";
 import { type OrchestrationProject, ProjectId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Deferred from "effect/Deferred";
@@ -9,6 +11,8 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
+import * as Duration from "effect/Duration";
 
 import * as ServerConfig from "../config.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -18,6 +22,10 @@ import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
 const isProjectSetupScriptOperationError = Schema.is(
   ProjectSetupScriptRunner.ProjectSetupScriptOperationError,
 );
+const isProjectSetupScriptReconciliationTimeoutError = Schema.is(
+  ProjectSetupScriptRunner.ProjectSetupScriptReconciliationTimeoutError,
+);
+const encodeTestJson = Schema.encodeSync(Schema.UnknownFromJsonString);
 const decodePosixShellArgument = (literal: string): string => {
   if (!literal.startsWith("'") || !literal.endsWith("'")) {
     throw new Error(`Invalid POSIX shell argument: ${literal}`);
@@ -29,6 +37,25 @@ const wrapperPathFromWrite = (data: string): string => {
   const boundary = data.trim().indexOf("' '");
   if (boundary < 0) throw new Error(`Missing wrapper path in terminal write: ${data}`);
   return decodePosixShellArgument(data.trim().slice(boundary + 2));
+};
+
+const validCompletion = (
+  threadId = "thread-1",
+  terminalId = "setup-setup",
+  command = "bun install",
+) => {
+  const identity = ProjectSetupScriptRunner.setupExecutionIdentity(
+    threadId,
+    terminalId,
+    command,
+  );
+  return encodeTestJson({
+    version: 1,
+    ...identity,
+    exitCode: 0,
+    signal: null,
+    error: null,
+  });
 };
 
 const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationProject => ({
@@ -82,20 +109,22 @@ const makeTerminalManagerLayer = (
 const testLayer = (
   project: OrchestrationProject,
   terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
-) =>
-  Layer.merge(
+) => {
+  const nodeFileServices = Layer.merge(NodeFileSystem.layer, NodePath.layer);
+  return Layer.mergeAll(
     ProjectSetupScriptRunner.layer.pipe(
       Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
       Layer.provideMerge(makeTerminalManagerLayer(terminal)),
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "t3-setup-runner-test-" }).pipe(
-          Layer.provide(NodeServices.layer),
+          Layer.provide(nodeFileServices),
         ),
       ),
-      Layer.provide(NodeServices.layer),
+      Layer.provide(nodeFileServices),
     ),
-    NodeServices.layer,
+    nodeFileServices,
   );
+};
 
 const claimWrapperExecution = (data: string) =>
   Effect.gen(function* () {
@@ -106,7 +135,7 @@ const claimWrapperExecution = (data: string) =>
     yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
     yield* fileSystem.writeFileString(
       path.join(executionDirectory, "completed.json"),
-      '{"exitCode":0}\n',
+      validCompletion(),
     );
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
@@ -258,12 +287,142 @@ describe("ProjectSetupScriptRunner", () => {
       expect(write).toHaveBeenCalledOnce();
       yield* fileSystem.writeFileString(
         path.join(path.dirname(wrapperPath), "completed.json"),
-        '{"exitCode":0}\n',
+        validCompletion(),
       );
+      yield* TestClock.adjust(Duration.millis(100));
       const completed = yield* Fiber.join(retry);
       expect(completed.status).toBe("started");
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
+  it.effect("rejects malformed and mismatched completion journals", () => {
+    let wrapperPath = "";
+    let claimed!: Deferred.Deferred<void>;
+    const open = vi.fn(() =>
+      Effect.succeed({
+        threadId: "thread-1",
+        terminalId: "setup-setup",
+        cwd: "/repo/worktrees/a",
+        worktreePath: "/repo/worktrees/a",
+        status: "running" as const,
+        pid: 123,
+        history: "",
+        exitCode: null,
+        exitSignal: null,
+        label: "setup-setup",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    const write = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          wrapperPath = wrapperPathFromWrite(input.data);
+          yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
+          yield* Deferred.succeed(claimed, undefined);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      claimed = yield* Deferred.make<void>();
+      const input = {
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+        preferredTerminalId: "setup-setup",
+      };
+      const first = yield* runner.runForThread(input).pipe(Effect.forkChild);
+      yield* Deferred.await(claimed);
+      yield* Fiber.interrupt(first);
+      const completionPath = path.join(path.dirname(wrapperPath), "completed.json");
+
+      yield* fileSystem.writeFileString(completionPath, "not-json");
+      const malformed = yield* runner
+        .runForThread({ ...input, reconcileClaimedLaunch: true })
+        .pipe(Effect.flip);
+      expect(isProjectSetupScriptOperationError(malformed)).toBe(true);
+
+      yield* fileSystem.writeFileString(
+        completionPath,
+        encodeTestJson({
+          version: 1,
+          executionKey: "stale-execution",
+          scriptDigest: "stale-script",
+          exitCode: 0,
+          signal: null,
+          error: null,
+        }),
+      );
+      const mismatched = yield* runner
+        .runForThread({ ...input, reconcileClaimedLaunch: true })
+        .pipe(Effect.flip);
+      expect(isProjectSetupScriptOperationError(mismatched)).toBe(true);
+      if (isProjectSetupScriptOperationError(mismatched)) {
+        expect(String(mismatched.cause)).toContain("identity mismatch");
+      }
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
+  it.effect("classifies reconciliation watchdog expiry as typed and retryable", () => {
+    let claimed!: Deferred.Deferred<void>;
+    const open = vi.fn(() => Effect.succeed({} as never));
+    const write = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const wrapperPath = wrapperPathFromWrite(input.data);
+          yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
+          yield* Deferred.succeed(claimed, undefined);
+        }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      claimed = yield* Deferred.make<void>();
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const running = yield* runner
+        .runForThread({
+          threadId: "thread-1",
+          projectId: "project-1",
+          worktreePath: "/repo/worktrees/a",
+          preferredTerminalId: "setup-setup",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(claimed);
+      yield* Effect.yieldNow;
+      yield* TestClock.adjust(
+        Duration.millis(ProjectSetupScriptRunner.SETUP_RECONCILIATION_TIMEOUT_MILLIS),
+      );
+      const timeout = yield* Fiber.join(running).pipe(Effect.flip);
+      expect(isProjectSetupScriptReconciliationTimeoutError(timeout)).toBe(true);
+      if (isProjectSetupScriptReconciliationTimeoutError(timeout)) {
+        expect(timeout.retryable).toBe(true);
+        expect(timeout.timeoutMillis).toBe(30_000);
+      }
     }).pipe(Effect.provide(testLayer(project, { open, write })));
   });
 

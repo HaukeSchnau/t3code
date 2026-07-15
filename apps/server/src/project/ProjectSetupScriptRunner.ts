@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off -- setup journal identities require a stable cryptographic digest.
+import * as NodeCrypto from "node:crypto";
+
 import { ProjectId } from "@t3tools/contracts";
 import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
 import * as Encoding from "effect/Encoding";
@@ -14,12 +17,36 @@ import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSn
 import * as TerminalManager from "../terminal/Manager.ts";
 
 const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
-const SETUP_RECONCILIATION_ATTEMPTS = 200;
-const SETUP_RECONCILIATION_INTERVAL = "10 millis";
+export const SETUP_RECONCILIATION_TIMEOUT_MILLIS = 30_000;
+const SETUP_RECONCILIATION_INTERVAL_MILLIS = 100;
+
+const SetupExecutionCompletion = Schema.Struct({
+  version: Schema.Literal(1),
+  executionKey: Schema.String,
+  scriptDigest: Schema.String,
+  exitCode: Schema.Union([Schema.Int, Schema.Null]),
+  signal: Schema.Union([Schema.String, Schema.Null]),
+  error: Schema.Union([Schema.String, Schema.Null]),
+});
+const decodeSetupExecutionCompletion = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(SetupExecutionCompletion),
+);
 
 /** Quote one argument for a POSIX shell without permitting expansion or substitution. */
 export const quotePosixShellArgument = (value: string): string =>
   `'${value.replaceAll("'", `'\\''`)}'`;
+
+export const setupExecutionIdentity = (
+  threadId: string,
+  terminalId: string,
+  command: string,
+): { readonly executionKey: string; readonly scriptDigest: string } => {
+  const scriptDigest = NodeCrypto.createHash("sha256").update(command).digest("hex");
+  return {
+    executionKey: Encoding.encodeBase64Url(`${threadId}\u0000${terminalId}\u0000${scriptDigest}`),
+    scriptDigest,
+  };
+};
 
 export interface ProjectSetupScriptRunnerResultNoScript {
   readonly status: "no-script";
@@ -83,9 +110,24 @@ export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorCl
   }
 }
 
+export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedErrorClass<ProjectSetupScriptReconciliationTimeoutError>()(
+  "ProjectSetupScriptReconciliationTimeoutError",
+  {
+    threadId: Schema.String,
+    terminalId: Schema.String,
+    timeoutMillis: Schema.Number,
+    retryable: Schema.Literal(true),
+  },
+) {
+  override get message(): string {
+    return `Setup execution '${this.terminalId}' did not publish durable completion within ${this.timeoutMillis}ms.`;
+  }
+}
+
 export const ProjectSetupScriptRunnerError = Schema.Union([
   ProjectSetupScriptOperationError,
   ProjectSetupScriptProjectNotFoundError,
+  ProjectSetupScriptReconciliationTimeoutError,
 ]);
 export type ProjectSetupScriptRunnerError = typeof ProjectSetupScriptRunnerError.Type;
 
@@ -171,15 +213,53 @@ export const make = Effect.gen(function* () {
       project: { cwd: project.workspaceRoot },
       worktreePath: input.worktreePath,
     });
-    const executionKey = Encoding.encodeBase64Url(`${input.threadId}\u0000${terminalId}`);
+    const { executionKey, scriptDigest } = setupExecutionIdentity(
+      input.threadId,
+      terminalId,
+      script.command,
+    );
     const executionDir = path.join(terminalLogsDir, "setup-executions", executionKey);
     const claimDir = path.join(executionDir, "claimed");
     const completedPath = path.join(executionDir, "completed.json");
     const wrapperPath = path.join(executionDir, "run.cjs");
     const claimed = yield* executionExists(claimDir);
-    const completed = yield* executionExists(completedPath);
+    const readCompletion = Effect.fn("ProjectSetupScriptRunner.readCompletion")(function* () {
+      if (!(yield* executionExists(completedPath))) return Option.none();
+      const encoded = yield* fileSystem.readFileString(completedPath).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "reconcileExecution",
+              cause,
+            }),
+        ),
+      );
+      const completion = yield* decodeSetupExecutionCompletion(encoded).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ProjectSetupScriptOperationError({
+              ...errorContext,
+              operation: "reconcileExecution",
+              cause,
+            }),
+        ),
+      );
+      if (
+        completion.executionKey !== executionKey ||
+        completion.scriptDigest !== scriptDigest
+      ) {
+        return yield* new ProjectSetupScriptOperationError({
+          ...errorContext,
+          operation: "reconcileExecution",
+          cause: new Error(`Setup completion journal identity mismatch for '${terminalId}'.`),
+        });
+      }
+      return Option.some(completion);
+    });
+    const completed = yield* readCompletion();
 
-    if (completed) {
+    if (Option.isSome(completed)) {
       return {
         status: "started",
         scriptId: script.id,
@@ -189,31 +269,40 @@ export const make = Effect.gen(function* () {
       } as const;
     }
 
-    const awaitCompletion = (
-      remaining: number | null,
-    ): Effect.Effect<void, ProjectSetupScriptOperationError> =>
-      executionExists(completedPath).pipe(
-        Effect.flatMap((exists) => {
-          if (exists) return Effect.void;
-          if (remaining === 0) {
-            return Effect.fail(
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "reconcileExecution",
-                cause: new Error(
-                  `Setup execution '${terminalId}' remains claimed without a durable completion marker.`,
-                ),
-              }),
-            );
-          }
-          return Effect.sleep(SETUP_RECONCILIATION_INTERVAL).pipe(
-            Effect.andThen(awaitCompletion(remaining === null ? null : remaining - 1)),
-          );
+    const awaitJournal = <E>(
+      probe: Effect.Effect<boolean, E>,
+      onTimeout: () => ProjectSetupScriptReconciliationTimeoutError,
+    ): Effect.Effect<void, E | ProjectSetupScriptReconciliationTimeoutError> => {
+      const poll: Effect.Effect<void, E> = probe.pipe(
+        Effect.flatMap((ready) =>
+          ready
+            ? Effect.void
+            : Effect.sleep(`${SETUP_RECONCILIATION_INTERVAL_MILLIS} millis`).pipe(
+                Effect.andThen(Effect.suspend(() => poll)),
+              ),
+        ),
+      );
+      return poll.pipe(
+        Effect.timeoutOrElse({
+          duration: `${SETUP_RECONCILIATION_TIMEOUT_MILLIS} millis`,
+          orElse: () => Effect.fail(onTimeout()),
         }),
       );
+    };
+    const reconciliationTimeout = () =>
+      new ProjectSetupScriptReconciliationTimeoutError({
+        threadId: input.threadId,
+        terminalId,
+        timeoutMillis: SETUP_RECONCILIATION_TIMEOUT_MILLIS,
+        retryable: true,
+      });
+    const awaitCompletion = awaitJournal(
+      readCompletion().pipe(Effect.map(Option.isSome)),
+      reconciliationTimeout,
+    );
 
     if (claimed && input.reconcileClaimedLaunch) {
-      yield* awaitCompletion(SETUP_RECONCILIATION_ATTEMPTS);
+      yield* awaitCompletion;
       return {
         status: "started",
         scriptId: script.id,
@@ -223,7 +312,7 @@ export const make = Effect.gen(function* () {
       } as const;
     }
 
-    const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(claimDir)};\nconst completedPath = ${encodeJson(completedPath)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
+    const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(claimDir)};\nconst completedPath = ${encodeJson(completedPath)};\nconst executionKey = ${encodeJson(executionKey)};\nconst scriptDigest = ${encodeJson(scriptDigest)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ version: 1, executionKey, scriptDigest, exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(executionDir, { recursive: true });
@@ -279,28 +368,15 @@ export const make = Effect.gen(function* () {
     // A successful PTY write is not a durable launch acknowledgement. Wait until the
     // wrapper atomically claims the deterministic execution identity. A retry may
     // safely resubmit while this marker is absent; competing wrappers race on mkdir.
-    const awaitClaim = (
-      remaining: number,
-    ): Effect.Effect<boolean, ProjectSetupScriptOperationError> =>
-      executionExists(claimDir).pipe(
-        Effect.flatMap((exists) =>
-          exists || remaining === 0
-            ? Effect.succeed(exists)
-            : Effect.sleep("10 millis").pipe(Effect.andThen(awaitClaim(remaining - 1))),
-        ),
-      );
-    if (!(yield* awaitClaim(200))) {
-      return yield* new ProjectSetupScriptOperationError({
-        ...errorContext,
-        operation: "reconcileExecution",
-        cause: new Error(`Setup execution '${terminalId}' was not durably claimed after write.`),
-      });
-    }
+    yield* awaitJournal(
+      executionExists(claimDir),
+      reconciliationTimeout,
+    );
 
     // The caller may only persist `setup-completed` after this durable wrapper
     // completion exists. Waiting is interruptible, so shutdown leaves the durable
     // claim for a bounded exact-retry reconciliation.
-    yield* awaitCompletion(null);
+    yield* awaitCompletion;
 
     return {
       status: "started",
