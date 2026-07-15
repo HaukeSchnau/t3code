@@ -761,7 +761,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
       // Editing is replacement, not mutation: fresh identities prevent a
       // stale ready snapshot from delivering the superseded payload.
-      const message = buildPendingTaskMessage(makeTurnCommandMetadata());
+      const freshIdentity = makeTurnCommandMetadata();
+      const message = buildPendingTaskMessage({
+        ...freshIdentity,
+        threadId: editing.threadId,
+      });
 
       if (!message) {
         // The edits are currently unsendable (e.g. the prompt was cleared).

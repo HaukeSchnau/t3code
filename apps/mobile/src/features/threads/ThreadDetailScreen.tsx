@@ -69,6 +69,9 @@ export interface ThreadDetailScreenProps {
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
   readonly selectedThreadQueueCount: number;
+  readonly selectedThreadQueueStatus: string;
+  readonly selectedThreadRejectedCount: number;
+  readonly onDiscardRejectedMessages: () => Promise<void>;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
@@ -509,6 +512,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 selectedThread={props.selectedThread}
                 serverConfig={props.serverConfig}
                 queueCount={props.selectedThreadQueueCount}
+                queueStatus={props.selectedThreadQueueStatus}
+                rejectedCount={props.selectedThreadRejectedCount}
+                onDiscardRejected={props.onDiscardRejectedMessages}
                 activeThreadBusy={props.activeThreadBusy}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}
