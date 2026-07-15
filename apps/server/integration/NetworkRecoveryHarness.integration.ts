@@ -288,9 +288,7 @@ function makeOriginRuntime(
   });
 }
 
-function normalizeAttachmentFreeCommand(
-  command: ClientOrchestrationCommand,
-): OrchestrationCommand {
+function normalizeAttachmentFreeCommand(command: ClientOrchestrationCommand): OrchestrationCommand {
   if (command.type !== "thread.turn.start" || command.message.attachments.length !== 0) {
     throw new Error("NL1 accepts only an attachment-free thread.turn.start envelope.");
   }
@@ -401,7 +399,8 @@ function makeDecoratedSocket(input: {
       }
       const receipt = yield* input.harness.getCommandReceipt(COMMAND_ID);
       if (Option.isNone(receipt)) {
-        input.state.commitProofFailure = "Accepted receipt was not observable before Exit delivery.";
+        input.state.commitProofFailure =
+          "Accepted receipt was not observable before Exit delivery.";
         return false;
       }
       const value = receipt.value;
@@ -433,28 +432,31 @@ function makeDecoratedSocket(input: {
     Effect.scopedWith((scope) =>
       Scope.provide(input.base.writer, scope).pipe(
         Effect.flatMap((write) =>
-          input.base.runRaw((frame) =>
-            inspectOriginFrame(frame).pipe(
-              Effect.flatMap((suppress): Effect.Effect<void, Socket.SocketError | E, R> => {
-                if (!suppress) {
-                  const handled = handler(frame);
-                  return Effect.isEffect(handled) ? Effect.asVoid(handled) : Effect.void;
-                }
-                input.state.clientLinkClosedAfterSuppression = true;
-                return write(new Socket.CloseEvent(1012, "nl1-correlated-exit-suppressed"));
-              }),
-            ),
-          options),
+          input.base.runRaw(
+            (frame) =>
+              inspectOriginFrame(frame).pipe(
+                Effect.flatMap((suppress): Effect.Effect<void, Socket.SocketError | E, R> => {
+                  if (!suppress) {
+                    const handled = handler(frame);
+                    return Effect.isEffect(handled) ? Effect.asVoid(handled) : Effect.void;
+                  }
+                  input.state.clientLinkClosedAfterSuppression = true;
+                  return write(new Socket.CloseEvent(1012, "nl1-correlated-exit-suppressed"));
+                }),
+              ),
+            options,
+          ),
         ),
       ),
     );
 
   return Socket.make({
     writer: input.base.writer.pipe(
-      Effect.map((write) => (frame) =>
-        Socket.isCloseEvent(frame)
-          ? write(frame)
-          : onClientFrame(frame).pipe(Effect.andThen(write(frame))),
+      Effect.map(
+        (write) => (frame) =>
+          Socket.isCloseEvent(frame)
+            ? write(frame)
+            : onClientFrame(frame).pipe(Effect.andThen(write(frame))),
       ),
     ),
     runRaw,
@@ -487,9 +489,7 @@ function dispatchOnNewSession(input: {
         Layer.provide(RpcSerialization.layerJson),
       );
       return yield* makeRecoveryRpcClient.pipe(
-        Effect.flatMap((client) =>
-          client[ORCHESTRATION_WS_METHODS.dispatchCommand](frozenCommand),
-        ),
+        Effect.flatMap((client) => client[ORCHESTRATION_WS_METHODS.dispatchCommand](frozenCommand)),
         Effect.provide(protocol),
       );
     }).pipe(
@@ -605,8 +605,7 @@ export function makeNetworkRecoveryAdapter(
     }
     operation.signal.throwIfAborted();
     state.suppressionArmed = step.control.lifecycle === "apply";
-    state.suppressionTargetCount =
-      step.control.lifecycle === "apply" ? step.control.count : 0;
+    state.suppressionTargetCount = step.control.lifecycle === "apply" ? step.control.count : 0;
     state.controlOperations.push({
       stepId: step.id,
       sequence: plannedStep.sequence,
@@ -702,10 +701,9 @@ export function makeNetworkRecoveryAdapter(
       ),
       { signal: operation.signal },
     );
-    const receiptOption = await Effect.runPromise(
-      harness.getCommandReceipt(COMMAND_ID),
-      { signal: operation.signal },
-    );
+    const receiptOption = await Effect.runPromise(harness.getCommandReceipt(COMMAND_ID), {
+      signal: operation.signal,
+    });
     const receipt = Option.getOrNull(receiptOption);
     const commandEvents = Array.from(
       await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0)), {
@@ -739,7 +737,9 @@ export function makeNetworkRecoveryAdapter(
       },
       {
         id: "one-command-event-set",
-        passed: canonicalJson(commandEvents.map((event) => event.type)) === canonicalJson(expectedEventTypes),
+        passed:
+          canonicalJson(commandEvents.map((event) => event.type)) ===
+          canonicalJson(expectedEventTypes),
         expected: expectedEventTypes,
         observed: commandEvents.map((event) => event.type),
       },
@@ -764,7 +764,8 @@ export function makeNetworkRecoveryAdapter(
         expected: { userMessages: 1, assistantMessages: 1, state: "completed" },
         observed: {
           userMessages: thread.messages.filter((message) => message.role === "user").length,
-          assistantMessages: thread.messages.filter((message) => message.role === "assistant").length,
+          assistantMessages: thread.messages.filter((message) => message.role === "assistant")
+            .length,
           state: thread.latestTurn?.state ?? null,
         },
       },

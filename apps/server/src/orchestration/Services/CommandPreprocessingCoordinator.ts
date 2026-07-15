@@ -49,9 +49,7 @@ interface ProgressRow {
   readonly setupCompleted: number;
 }
 
-type CommandPreprocessingError =
-  | PersistenceSqlError
-  | OrchestrationCommandReceiptMismatchError;
+type CommandPreprocessingError = PersistenceSqlError | OrchestrationCommandReceiptMismatchError;
 
 function aggregateRef(command: OrchestrationCommand): {
   readonly aggregateKind: CommandPreprocessingProgress["aggregateKind"];
@@ -97,20 +95,14 @@ export class CommandPreprocessingCoordinator extends Context.Service<
   }
 >()("t3/orchestration/Services/CommandPreprocessingCoordinator") {}
 
-export function preprocessingCommandId(
-  command: OrchestrationCommand,
-  phase: string,
-): CommandId {
+export function preprocessingCommandId(command: OrchestrationCommand, phase: string): CommandId {
   const fingerprint = commandEnvelopeFingerprint(command).slice(0, 16);
   return CommandId.make(`preprocess:${command.commandId}:${fingerprint}:${phase}`);
 }
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const locks = new Map<
-    string,
-    { readonly semaphore: Semaphore.Semaphore; users: number }
-  >();
+  const locks = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
   const readProgress = (commandId: CommandId) =>
@@ -129,9 +121,7 @@ export const make = Effect.gen(function* () {
       FROM orchestration_command_preprocessing
       WHERE command_id = ${commandId}
     `.pipe(
-      Effect.mapError(
-        toPersistenceSqlError("CommandPreprocessingCoordinator.readProgress"),
-      ),
+      Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.readProgress")),
       Effect.flatMap((rows) =>
         rows[0]
           ? Effect.succeed(toProgress(rows[0]))
@@ -207,9 +197,7 @@ export const make = Effect.gen(function* () {
           ${timestamp}
         )
         ON CONFLICT(command_id) DO NOTHING
-      `.pipe(
-        Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.claim")),
-      );
+      `.pipe(Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.claim")));
       return yield* readProgress(command.commandId).pipe(
         Effect.flatMap((progress) => validateProgress(command, progress)),
       );

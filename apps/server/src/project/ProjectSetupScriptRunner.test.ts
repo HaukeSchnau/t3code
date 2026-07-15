@@ -44,11 +44,7 @@ const validCompletion = (
   terminalId = "setup-setup",
   command = "bun install",
 ) => {
-  const identity = ProjectSetupScriptRunner.setupExecutionIdentity(
-    threadId,
-    terminalId,
-    command,
-  );
+  const identity = ProjectSetupScriptRunner.setupExecutionIdentity(threadId, terminalId, command);
   return encodeTestJson({
     version: 1,
     ...identity,

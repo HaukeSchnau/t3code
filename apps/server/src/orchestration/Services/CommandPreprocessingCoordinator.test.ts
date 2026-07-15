@@ -186,9 +186,7 @@ it.effect("fails closed after restart when a command id is reused with a changed
     const filename = yield* makePersistentFilename;
     yield* withFreshCoordinator(
       filename,
-      Effect.flatMap(CommandPreprocessingCoordinator, (coordinator) =>
-        coordinator.claim(command),
-      ),
+      Effect.flatMap(CommandPreprocessingCoordinator, (coordinator) => coordinator.claim(command)),
     );
 
     const result = yield* withFreshCoordinator(
@@ -217,27 +215,29 @@ it.effect("serializes consumers that share one persistence-scoped coordinator", 
     let active = 0;
     let maximumActive = 0;
 
-    yield* Effect.scoped(Effect.gen(function* () {
-      const coordinator = yield* CommandPreprocessingCoordinator;
-      const criticalSection = Effect.acquireUseRelease(
-        Effect.sync(() => {
-          active += 1;
-          maximumActive = Math.max(maximumActive, active);
-        }),
-        () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-        () => Effect.sync(() => void (active -= 1)),
-      );
-      const first = yield* coordinator
-        .withCommandLock(command.commandId, criticalSection)
-        .pipe(Effect.forkScoped);
-      yield* Deferred.await(entered);
-      const second = yield* coordinator
-        .withCommandLock(command.commandId, criticalSection)
-        .pipe(Effect.forkScoped);
-      yield* Deferred.succeed(release, undefined);
-      yield* Fiber.join(first);
-      yield* Fiber.join(second);
-    }).pipe(Effect.provide(makePersistentLayer(":memory:"))));
+    yield* Effect.scoped(
+      Effect.gen(function* () {
+        const coordinator = yield* CommandPreprocessingCoordinator;
+        const criticalSection = Effect.acquireUseRelease(
+          Effect.sync(() => {
+            active += 1;
+            maximumActive = Math.max(maximumActive, active);
+          }),
+          () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          () => Effect.sync(() => void (active -= 1)),
+        );
+        const first = yield* coordinator
+          .withCommandLock(command.commandId, criticalSection)
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        const second = yield* coordinator
+          .withCommandLock(command.commandId, criticalSection)
+          .pipe(Effect.forkScoped);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+      }).pipe(Effect.provide(makePersistentLayer(":memory:"))),
+    );
 
     assert.equal(maximumActive, 1);
   }),

@@ -7,10 +7,7 @@ import {
   type ScenarioExecutionPlan,
 } from "../../../scripts/network-lab/model.ts";
 import { runNetworkLabScenario } from "../../../scripts/network-lab/runner.ts";
-import {
-  canonicalJson,
-  makeScenarioExecutionPlan,
-} from "../../../scripts/network-lab/scenario.ts";
+import { canonicalJson, makeScenarioExecutionPlan } from "../../../scripts/network-lab/scenario.ts";
 import {
   NETWORK_RECOVERY_PROTOCOL,
   NETWORK_RECOVERY_PROVENANCE,
@@ -147,11 +144,7 @@ describe("direct network recovery", () => {
     );
 
     const oracle = await runPlan(oraclePlan);
-    assert.equal(
-      oracle.result.status,
-      "passed",
-      canonicalJson(oracle.result as never),
-    );
+    assert.equal(oracle.result.status, "passed", canonicalJson(oracle.result as never));
     assert.isNotNull(oracle.summary);
     const first = await runPlan(recoveryPlan);
     assert.equal(first.result.status, "passed");
@@ -205,7 +198,10 @@ describe("direct network recovery", () => {
 
     assert.equal(first.result.evidence.cleanup.status, "passed");
     const repeatedCleanup = await first.adapter.retryCleanup();
-    assert.equal(repeatedCleanup.every((resource) => resource.released), true);
+    assert.equal(
+      repeatedCleanup.every((resource) => resource.released),
+      true,
+    );
     assert.equal(
       repeatedCleanup.every((resource) => resource.details.alreadyReleased === true),
       true,
