@@ -1,4 +1,8 @@
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
+import {
+  makeDurableCommandDeliveryPlan,
+  type DurableCommandDeliveryPlan,
+} from "@t3tools/client-runtime/operations/command-outbox";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import {
   CommandId,
@@ -19,6 +23,7 @@ import * as Schema from "effect/Schema";
 
 import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
 import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";
 
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
@@ -50,6 +55,9 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
+  // Frozen when queued so ambiguous retries replay byte-for-byte equivalent
+  // bootstrap intent rather than generating a new worktree branch.
+  deliveryWorktreeBranchName: Schema.optional(Schema.String),
   createdAt: IsoDateTime,
 });
 
@@ -77,7 +85,58 @@ export interface QueuedThreadMessage {
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
   readonly creation?: QueuedThreadCreation;
+  readonly deliveryWorktreeBranchName?: string;
   readonly createdAt: string;
+}
+
+export function makeQueuedThreadDeliveryPlan(
+  message: QueuedThreadMessage,
+): DurableCommandDeliveryPlan {
+  const settings = {
+    modelSelection: message.modelSelection,
+    runtimeMode: message.runtimeMode ?? "full-access",
+    interactionMode: message.interactionMode ?? "default",
+  } as const;
+  const command = message.creation
+    ? {
+        type: "thread.turn.start" as const,
+        ...buildProjectThreadStartTurnInput({
+          projectId: message.creation.projectId,
+          projectCwd: message.creation.projectCwd ?? "",
+          threadId: message.threadId,
+          commandId: message.commandId,
+          messageId: message.messageId,
+          createdAt: message.createdAt,
+          text: message.text.trim(),
+          attachments: message.attachments,
+          modelSelection: message.modelSelection!,
+          runtimeMode: settings.runtimeMode,
+          interactionMode: settings.interactionMode,
+          workspaceMode: message.creation.workspaceMode,
+          branch: message.creation.branch,
+          worktreePath: message.creation.worktreePath,
+          startFromOrigin: message.creation.startFromOrigin ?? false,
+          worktreeBranchName: message.deliveryWorktreeBranchName ?? `t3-code/${message.commandId}`,
+        }),
+      }
+    : {
+        type: "thread.turn.start" as const,
+        commandId: message.commandId,
+        threadId: message.threadId,
+        message: {
+          messageId: message.messageId,
+          role: "user" as const,
+          text: message.text,
+          attachments: message.attachments,
+        },
+        ...settings,
+        createdAt: message.createdAt,
+      };
+  return makeDurableCommandDeliveryPlan({
+    environmentId: message.environmentId,
+    enqueuedAt: message.createdAt,
+    command,
+  });
 }
 
 export interface ThreadSettingsSnapshot {

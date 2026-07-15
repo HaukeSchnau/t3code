@@ -19,7 +19,10 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
-import type { TurnCommandMetadata } from "../../lib/commandMetadata";
+import {
+  makeTurnCommandMetadata,
+  type TurnCommandMetadata,
+} from "../../lib/commandMetadata";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
@@ -756,12 +759,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         activeEditingMessageId = null;
       }
 
-      const message = buildPendingTaskMessage({
-        threadId: editing.threadId,
-        commandId: editing.commandId,
-        messageId: editing.messageId,
-        createdAt: editing.createdAt,
-      });
+      // Editing is replacement, not mutation: fresh identities prevent a
+      // stale ready snapshot from delivering the superseded payload.
+      const message = buildPendingTaskMessage(makeTurnCommandMetadata());
 
       if (!message) {
         // The edits are currently unsendable (e.g. the prompt was cleared).
@@ -773,7 +773,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
 
       // update() rewrites the task only if it is still queued — a concurrent
       // delete or delivery wins, so the flush cannot resurrect it.
-      void updateThreadOutboxMessage(message)
+      void updateThreadOutboxMessage(editing, message)
         .then(() => {
           // If this task was reopened (possibly in a fresh provider) while
           // the save was in flight, that session owns the draft and the lock.

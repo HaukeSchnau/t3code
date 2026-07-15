@@ -1,4 +1,10 @@
 import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import {
+  decodeDurableCommandOutboxDocument,
+  EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
+  encodeDurableCommandOutboxDocument,
+  type DurableCommandOutboxDocument,
+} from "@t3tools/client-runtime/operations/command-outbox";
 import * as Schema from "effect/Schema";
 
 import {
@@ -8,6 +14,7 @@ import {
 } from "./thread-outbox-model";
 
 const THREAD_OUTBOX_DIRECTORY = "thread-outbox";
+const COMMAND_OUTBOX_FILE = "command-outbox.json";
 
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
@@ -29,6 +36,8 @@ export interface ThreadOutboxStorage {
   readonly load: () => Promise<ReadonlyArray<QueuedThreadMessage>>;
   readonly write: (message: QueuedThreadMessage) => Promise<void>;
   readonly remove: (message: QueuedThreadMessage) => Promise<void>;
+  readonly loadCommandOutbox?: () => Promise<DurableCommandOutboxDocument>;
+  readonly saveCommandOutbox?: (document: DurableCommandOutboxDocument) => Promise<void>;
 }
 
 function messageFileName(messageId: MessageId): string {
@@ -48,6 +57,44 @@ async function getMessageFile(messageId: MessageId) {
 }
 
 export const expoThreadOutboxStorage: ThreadOutboxStorage = {
+  loadCommandOutbox: async () => {
+    try {
+      const { File } = await import("expo-file-system");
+      const file = new File(await getOutboxDirectory(), COMMAND_OUTBOX_FILE);
+      if (!file.exists) {
+        return EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+      }
+      return decodeDurableCommandOutboxDocument(JSON.parse(await file.text()) as unknown);
+    } catch (cause) {
+      throw new ThreadOutboxStorageError({
+        operation: "load",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        fileName: COMMAND_OUTBOX_FILE,
+        cause,
+      });
+    }
+  },
+  saveCommandOutbox: async (document) => {
+    try {
+      const { File } = await import("expo-file-system");
+      const file = new File(await getOutboxDirectory(), COMMAND_OUTBOX_FILE);
+      if (!file.exists) {
+        file.create({ intermediates: true, overwrite: true });
+      }
+      file.write(JSON.stringify(encodeDurableCommandOutboxDocument(document)));
+    } catch (cause) {
+      throw new ThreadOutboxStorageError({
+        operation: "write",
+        environmentId: null,
+        threadId: null,
+        messageId: null,
+        fileName: COMMAND_OUTBOX_FILE,
+        cause,
+      });
+    }
+  },
   load: async () => {
     const messages: QueuedThreadMessage[] = [];
     try {
@@ -55,7 +102,11 @@ export const expoThreadOutboxStorage: ThreadOutboxStorage = {
       const directory = await getOutboxDirectory();
 
       for (const entry of directory.list()) {
-        if (!(entry instanceof File) || !entry.name.endsWith(".json")) {
+        if (
+          !(entry instanceof File) ||
+          !entry.name.endsWith(".json") ||
+          entry.name === COMMAND_OUTBOX_FILE
+        ) {
           continue;
         }
         try {

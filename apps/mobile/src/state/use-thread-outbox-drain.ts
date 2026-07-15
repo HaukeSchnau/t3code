@@ -6,21 +6,20 @@ import type {
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   CommandId,
-  DEFAULT_PROVIDER_INTERACTION_MODE,
-  DEFAULT_RUNTIME_MODE,
   type MessageId,
 } from "@t3tools/contracts";
-import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
-import { randomHex } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
-import { ensureThreadOutboxLoaded, removeThreadOutboxMessage } from "./thread-outbox";
+import {
+  ensureThreadOutboxLoaded,
+  removeThreadOutboxMessage,
+  threadOutboxManager,
+} from "./thread-outbox";
 import {
   isQueuedThreadCreationSendable,
   modelSelectionsEqual,
@@ -92,6 +91,7 @@ export function useThreadOutboxDrain(): void {
     reportFailure: false,
   });
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
+  const deliveryStates = useAtomValue(threadOutboxManager.deliveryStatesAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useThreadOutboxShellStatuses();
@@ -140,12 +140,23 @@ export function useThreadOutboxDrain(): void {
     const completeDelivery = async (
       deliveryResult: AtomCommandResult<unknown, unknown>,
     ): Promise<boolean> => {
-      if (reportFailure(deliveryResult, "start-turn")) {
+      if (AsyncResult.isFailure(deliveryResult)) {
+        const error = Cause.squash(deliveryResult.cause);
+        const retry = reportFailure(deliveryResult, "start-turn");
+        await threadOutboxManager.fail(
+          queuedMessage,
+          error,
+          new Date().toISOString(),
+          retry ? undefined : "permanent",
+        );
         return false;
       }
 
       try {
-        await removeThreadOutboxMessage(queuedMessage);
+        // The RPC result is the durable server receipt boundary. Only now may
+        // the local intent be removed; a lost response remains retryable with
+        // the exact same frozen command identity.
+        await threadOutboxManager.complete(queuedMessage);
         return true;
       } catch (error) {
         console.warn("[thread-outbox] failed to remove delivered queued message", {
@@ -212,22 +223,12 @@ export function useThreadOutboxDrain(): void {
         }
       }
 
+      const begun = await threadOutboxManager.begin(queuedMessage, new Date().toISOString());
+      const command = begun.plan.command;
+      const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
-        input: {
-          commandId: queuedMessage.commandId,
-          threadId: queuedMessage.threadId,
-          message: {
-            messageId: queuedMessage.messageId,
-            role: "user",
-            text: queuedMessage.text,
-            attachments: queuedMessage.attachments,
-          },
-          modelSelection: settings.modelSelection,
-          runtimeMode: settings.runtimeMode,
-          interactionMode: settings.interactionMode,
-          createdAt: queuedMessage.createdAt,
-        },
+        input,
       });
       return completeDelivery(deliveryResult);
     },
@@ -251,26 +252,12 @@ export function useThreadOutboxDrain(): void {
         return false;
       }
       const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
+      const begun = await threadOutboxManager.begin(queuedMessage, new Date().toISOString());
+      const command = begun.plan.command;
+      const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
-        input: buildProjectThreadStartTurnInput({
-          projectId: creation.projectId,
-          projectCwd,
-          threadId: queuedMessage.threadId,
-          commandId: queuedMessage.commandId,
-          messageId: queuedMessage.messageId,
-          createdAt: queuedMessage.createdAt,
-          text: queuedMessage.text.trim(),
-          attachments: queuedMessage.attachments,
-          modelSelection,
-          runtimeMode: queuedMessage.runtimeMode ?? DEFAULT_RUNTIME_MODE,
-          interactionMode: queuedMessage.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE,
-          workspaceMode: creation.workspaceMode,
-          branch: creation.branch,
-          worktreePath: creation.worktreePath,
-          startFromOrigin: creation.startFromOrigin ?? false,
-          worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
-        }),
+        input,
       });
       return completeDelivery(deliveryResult);
     },
@@ -290,6 +277,24 @@ export function useThreadOutboxDrain(): void {
       if (editingQueuedMessageIds[nextQueuedMessage.messageId]) {
         continue;
       }
+      const deliveryState = deliveryStates[nextQueuedMessage.commandId];
+      if (deliveryState?._tag === "Rejected" || deliveryState?._tag === "Delivering") {
+        continue;
+      }
+      if (deliveryState?._tag === "Retrying") {
+        const retryAt = Date.parse(deliveryState.retryNotBefore);
+        if (retryAt > Date.now()) {
+          retryNotBeforeRef.current.set(nextQueuedMessage.messageId, retryAt);
+          if (!retryTimersRef.current.has(nextQueuedMessage.messageId)) {
+            const retryTimer = setTimeout(() => {
+              retryTimersRef.current.delete(nextQueuedMessage.messageId);
+              setRetryTick((current) => current + 1);
+            }, retryAt - Date.now());
+            retryTimersRef.current.set(nextQueuedMessage.messageId, retryTimer);
+          }
+          continue;
+        }
+      }
       if ((retryNotBeforeRef.current.get(nextQueuedMessage.messageId) ?? 0) > Date.now()) {
         continue;
       }
@@ -304,13 +309,21 @@ export function useThreadOutboxDrain(): void {
         (candidate) => candidate.environmentId === nextQueuedMessage.environmentId,
       );
       const shellStatus = shellStatuses.get(nextQueuedMessage.environmentId) ?? "empty";
-      const deliveryAction = resolveThreadOutboxDeliveryAction({
+      const projectedDeliveryAction = resolveThreadOutboxDeliveryAction({
         isCreation: creation !== undefined,
         threadExists: thread !== undefined,
         shellStatus,
         environmentConnected: environment?.connectionState === "connected",
         threadBusy: thread?.session?.status === "running" || thread?.session?.status === "starting",
       });
+      // If the bootstrap command was sent but its acknowledgement was lost,
+      // the newly visible thread is proof of effect, not proof that the local
+      // receipt was persisted. Replay the same immutable command identity so
+      // server deduplication can return the durable receipt.
+      const deliveryAction =
+        creation !== undefined && thread !== undefined && deliveryState?._tag === "Retrying"
+          ? "send"
+          : projectedDeliveryAction;
       if (deliveryAction === "wait") {
         continue;
       }
@@ -359,6 +372,15 @@ export function useThreadOutboxDrain(): void {
               ? sendQueuedMessage(nextQueuedMessage, thread)
               : Promise.resolve(false);
       void delivery
+        .catch((error) => {
+          console.warn("[thread-outbox] delivery lifecycle failed", {
+            environmentId: nextQueuedMessage.environmentId,
+            threadId: nextQueuedMessage.threadId,
+            messageId: nextQueuedMessage.messageId,
+            error,
+          });
+          return false;
+        })
         .then((sent) => {
           if (sent) {
             retryAttemptRef.current.delete(nextQueuedMessage.messageId);
@@ -392,6 +414,7 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     connectedEnvironments,
+    deliveryStates,
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,
     projects,
