@@ -53,6 +53,24 @@ export class OrchestrationCommandPreviouslyRejectedError extends Schema.TaggedEr
   }
 }
 
+export class OrchestrationCommandReceiptMismatchError extends Schema.TaggedErrorClass<OrchestrationCommandReceiptMismatchError>()(
+  "OrchestrationCommandReceiptMismatchError",
+  {
+    commandId: Schema.String,
+    reason: Schema.Literals([
+      "aggregate-mismatch",
+      "variant-mismatch",
+      "payload-mismatch",
+      "legacy-unverifiable",
+    ]),
+    detail: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Command id reuse rejected (${this.commandId}, ${this.reason}): ${this.detail}`;
+  }
+}
+
 export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<OrchestrationProjectorDecodeError>()(
   "OrchestrationProjectorDecodeError",
   {
@@ -83,6 +101,7 @@ export type OrchestrationDispatchError =
   | ProjectionRepositoryError
   | OrchestrationCommandInvariantError
   | OrchestrationCommandPreviouslyRejectedError
+  | OrchestrationCommandReceiptMismatchError
   | OrchestrationProjectorDecodeError
   | OrchestrationListenerCallbackError;
 

@@ -27,12 +27,43 @@ export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
   aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  commandVariant: Schema.NullOr(Schema.String),
+  envelopeFingerprint: Schema.NullOr(Schema.String),
   acceptedAt: IsoDateTime,
   resultSequence: NonNegativeInt,
   status: OrchestrationCommandReceiptStatus,
   error: Schema.NullOr(Schema.String),
 });
 export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Type;
+
+const newReceiptIdentityFields = {
+  commandId: CommandId,
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  commandVariant: Schema.String,
+  envelopeFingerprint: Schema.String,
+} as const;
+
+export const ClaimAcceptedReceiptInput = Schema.Struct({
+  ...newReceiptIdentityFields,
+  acceptedAt: IsoDateTime,
+});
+export type ClaimAcceptedReceiptInput = typeof ClaimAcceptedReceiptInput.Type;
+
+export const FinalizeAcceptedReceiptInput = Schema.Struct({
+  commandId: CommandId,
+  acceptedAt: IsoDateTime,
+  resultSequence: NonNegativeInt,
+});
+export type FinalizeAcceptedReceiptInput = typeof FinalizeAcceptedReceiptInput.Type;
+
+export const InsertRejectedReceiptInput = Schema.Struct({
+  ...newReceiptIdentityFields,
+  acceptedAt: IsoDateTime,
+  resultSequence: NonNegativeInt,
+  error: Schema.String,
+});
+export type InsertRejectedReceiptInput = typeof InsertRejectedReceiptInput.Type;
 
 export const GetByCommandIdInput = Schema.Struct({
   commandId: CommandId,
@@ -44,13 +75,22 @@ export type GetByCommandIdInput = typeof GetByCommandIdInput.Type;
  */
 export interface OrchestrationCommandReceiptRepositoryShape {
   /**
-   * Insert or replace a command receipt row.
-   *
-   * Upserts by `commandId` for idempotent command-result tracking.
+   * Claim an accepted command id as the first write in the event transaction.
+   * The provisional row must be finalized before that transaction commits.
    */
-  readonly upsert: (
-    receipt: OrchestrationCommandReceipt,
-  ) => Effect.Effect<void, OrchestrationCommandReceiptRepositoryError>;
+  readonly claimAccepted: (
+    input: ClaimAcceptedReceiptInput,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+
+  /** Finalize a provisional accepted claim using compare-and-set semantics. */
+  readonly finalizeAccepted: (
+    input: FinalizeAcceptedReceiptInput,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
+
+  /** Insert an immutable terminal rejection. */
+  readonly insertRejected: (
+    input: InsertRejectedReceiptInput,
+  ) => Effect.Effect<boolean, OrchestrationCommandReceiptRepositoryError>;
 
   /**
    * Read a command receipt by command id.
