@@ -66,12 +66,13 @@ describe("queued message edit lifecycle", () => {
     });
 
     let renderer: ReactTestRenderer;
-    act(() =>
-      void (renderer = create(
-        <RegistryContext.Provider value={appAtomRegistry}>
-          <EditingHoldProbe />
-        </RegistryContext.Provider>,
-      )),
+    act(
+      () =>
+        void (renderer = create(
+          <RegistryContext.Provider value={appAtomRegistry}>
+            <EditingHoldProbe />
+          </RegistryContext.Provider>,
+        )),
     );
     expect(mountedEditingIds[MESSAGE_ID]).toBe(true);
     act(() => renderer.unmount());
@@ -80,9 +81,7 @@ describe("queued message edit lifecycle", () => {
     // still blocks the original outbox intent, so it cannot deliver while a
     // stale copied draft could later create a duplicate.
     expect(appAtomRegistry.get(persistedQueuedEditIdsAtom)[MESSAGE_ID]).toBe(true);
-    expect(appAtomRegistry.get(composerDraftsAtom)[DRAFT_KEY]?.text).toBe(
-      "edited on the train",
-    );
+    expect(appAtomRegistry.get(composerDraftsAtom)[DRAFT_KEY]?.text).toBe("edited on the train");
 
     // Cancel clears copied content and edit identity in the same atom update;
     // only then does the original become eligible again.

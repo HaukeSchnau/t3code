@@ -225,10 +225,7 @@ function semanticProjection(thread: OrchestrationThread): unknown {
   };
 }
 
-function makeOriginRuntime(
-  harness: OrchestrationIntegrationHarness,
-  state: FixtureState,
-): Effect.Effect<OriginRuntime> {
+function makeOriginRuntime(harness: OrchestrationIntegrationHarness): Effect.Effect<OriginRuntime> {
   return Effect.gen(function* () {
     const handlers = RecoveryRpcGroup.toLayer(
       RecoveryRpcGroup.of({
@@ -573,7 +570,7 @@ export function makeNetworkRecoveryAdapter(
     );
     state.harness = harness;
     await Effect.runPromise(seedProjectAndThread(harness), { signal: operation.signal });
-    const origin = await Effect.runPromise(makeOriginRuntime(harness, state), {
+    const origin = await Effect.runPromise(makeOriginRuntime(harness), {
       signal: operation.signal,
     });
     state.origin = origin;

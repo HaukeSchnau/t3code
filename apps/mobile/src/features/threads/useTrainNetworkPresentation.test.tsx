@@ -111,9 +111,7 @@ describe("mounted mobile train network presentation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-15T10:00:00.000Z"));
     let renderer: ReactTestRenderer;
-    act(() =>
-      void (renderer = create(<Probe projection={reconnecting(Date.now() + 5_000, 3)} />)),
-    );
+    act(() => void (renderer = create(<Probe projection={reconnecting(Date.now() + 5_000, 3)} />)));
     act(() => vi.advanceTimersByTime(250));
     expect(latest?.connectionStatus?.label).toContain("Retrying in 5s · attempt 3");
     const stableAnnouncement = latest?.connectionStatus?.accessibilityLabel;
@@ -128,20 +126,19 @@ describe("mounted mobile train network presentation", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-15T10:00:00.000Z"));
     let renderer: ReactTestRenderer;
-    act(() =>
-      void (renderer = create(
-        <Probe
-          projection={reconnecting(Date.now() + 4_000)}
-          hasThreadContent
-          remoteQueueCount={2}
-        />,
-      )),
+    act(
+      () =>
+        void (renderer = create(
+          <Probe
+            projection={reconnecting(Date.now() + 4_000)}
+            hasThreadContent
+            remoteQueueCount={2}
+          />,
+        )),
     );
     act(() => vi.advanceTimersByTime(250));
     expect(latest?.connectionStatus?.label).toContain("showing saved conversation");
-    expect(latest?.remoteQueueStatus).toBe(
-      "Remote queue · 2 messages waiting behind current work",
-    );
+    expect(latest?.remoteQueueStatus).toBe("Remote queue · 2 messages waiting behind current work");
     act(() => renderer.unmount());
   });
 });

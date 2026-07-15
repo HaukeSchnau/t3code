@@ -25,10 +25,7 @@ import {
 
 import { PrimaryEnvironmentHttpClient } from "./httpClient";
 import { runPrimaryHttp } from "../../lib/runtime";
-import {
-  primaryEnvironmentTargetSignature,
-  readPrimaryEnvironmentTarget,
-} from "./target";
+import { primaryEnvironmentTargetSignature, readPrimaryEnvironmentTarget } from "./target";
 
 const PrimaryEnvironmentRequestOperation = Schema.Literals([
   "fetch-session-state",

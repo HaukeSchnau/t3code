@@ -4,7 +4,10 @@ import {
   type DurableCommandOutboxEntry,
   type DurableCommandState,
 } from "@t3tools/client-runtime/operations/command-outbox";
-import { CommandOutboxStorage, CommandOutboxStorageError } from "@t3tools/client-runtime/platform/command-outbox";
+import {
+  CommandOutboxStorage,
+  CommandOutboxStorageError,
+} from "@t3tools/client-runtime/platform/command-outbox";
 import {
   classifyCommandDeliveryFailure,
   makeCommandOutbox,
@@ -144,9 +147,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         if (entry?.state._tag === "Rejected") {
           await Effect.runPromise(service.removeRejected(discarded.commandId));
         }
-        await options.storage.remove(discarded).catch((cause) =>
-          warn("[thread-outbox] deferred discarded record cleanup", cause),
-        );
+        await options.storage
+          .remove(discarded)
+          .catch((cause) => warn("[thread-outbox] deferred discarded record cleanup", cause));
       }
       messages = messages.filter((message) => !message.discardedAt);
       entries = await Effect.runPromise(service.entries);
@@ -169,9 +172,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           }
           await Effect.runPromise(service.complete(acknowledged.commandId));
         }
-        await options.storage.remove(acknowledged).catch((cause) =>
-          warn("[thread-outbox] deferred acknowledged record cleanup", cause),
-        );
+        await options.storage
+          .remove(acknowledged)
+          .catch((cause) => warn("[thread-outbox] deferred acknowledged record cleanup", cause));
       }
       messages = messages.filter((message) => !message.acknowledgedAt);
       entries = await Effect.runPromise(service.entries);
@@ -194,9 +197,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         const uncommittedReplacement =
           candidate.replacesCommandId !== undefined && !queuedIds.has(candidate.commandId);
         if (supersededIds.has(candidate.commandId) || uncommittedReplacement) {
-          await options.storage.remove(candidate).catch((cause) =>
-            warn("[thread-outbox] deferred replacement record cleanup", cause),
-          );
+          await options.storage
+            .remove(candidate)
+            .catch((cause) => warn("[thread-outbox] deferred replacement record cleanup", cause));
           messages = messages.filter((message) => message.messageId !== candidate.messageId);
         }
       }
@@ -214,9 +217,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           await Effect.runPromise(service.removeRejected(commandId));
         } else {
           const readyAt =
-            entry.state._tag === "Retrying"
-              ? entry.state.retryNotBefore
-              : entry.state.startedAt;
+            entry.state._tag === "Retrying" ? entry.state.retryNotBefore : entry.state.startedAt;
           if (entry.state._tag !== "Delivering") {
             await Effect.runPromise(service.begin(commandId, readyAt));
           }
@@ -273,10 +274,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   // Rewrites an already-queued message. A no-op when the message has been
   // removed in the meantime (e.g. deleted or delivered), so a trailing editor
   // flush can never resurrect it. Returns whether the message was updated.
-  const update = (
-    previous: QueuedThreadMessage,
-    message: QueuedThreadMessage,
-  ): Promise<boolean> =>
+  const update = (previous: QueuedThreadMessage, message: QueuedThreadMessage): Promise<boolean> =>
     serialize(async () => {
       const exists = currentMessages().some(
         (candidate) => candidate.messageId === previous.messageId,
@@ -307,19 +305,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       }
       try {
         await Effect.runPromise(
-          service.replacePending(
-            previous.commandId,
-            makeQueuedThreadDeliveryPlan(replacement),
-          ),
+          service.replacePending(previous.commandId, makeQueuedThreadDeliveryPlan(replacement)),
         );
       } catch (cause) {
         await options.storage.remove(replacement).catch(() => undefined);
         throw cause;
       }
       await refreshDeliveryStates(service);
-      await options.storage.remove(previous).catch((cause) =>
-        warn("[thread-outbox] deferred obsolete replacement cleanup", cause),
-      );
+      await options.storage
+        .remove(previous)
+        .catch((cause) => warn("[thread-outbox] deferred obsolete replacement cleanup", cause));
       setMessages([
         ...currentMessages().filter((candidate) => candidate.messageId !== previous.messageId),
         replacement,
@@ -420,10 +415,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const acknowledged = { ...message, acknowledgedAt: new Date().toISOString() };
       await options.storage.write(acknowledged);
       await Effect.runPromise(service.complete(message.commandId));
-      await options.storage.remove(acknowledged).catch((cause) =>
-        warn("[thread-outbox] deferred acknowledged record cleanup", cause),
+      await options.storage
+        .remove(acknowledged)
+        .catch((cause) => warn("[thread-outbox] deferred acknowledged record cleanup", cause));
+      setMessages(
+        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       );
-      setMessages(currentMessages().filter((candidate) => candidate.messageId !== message.messageId));
       await refreshDeliveryStates(service);
     });
 
@@ -436,11 +433,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     serialize(async () => {
       const service = await outbox();
       const entry = await Effect.runPromise(
-        service.fail(
-          message.commandId,
-          classifyCommandDeliveryFailure(error, classification),
-          at,
-        ),
+        service.fail(message.commandId, classifyCommandDeliveryFailure(error, classification), at),
       );
       await refreshDeliveryStates(service);
       return entry;
@@ -452,10 +445,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const discarded = { ...message, discardedAt: new Date().toISOString() };
       await options.storage.write(discarded);
       await Effect.runPromise(service.removeRejected(message.commandId));
-      await options.storage.remove(discarded).catch((cause) =>
-        warn("[thread-outbox] deferred discarded record cleanup", cause),
+      await options.storage
+        .remove(discarded)
+        .catch((cause) => warn("[thread-outbox] deferred discarded record cleanup", cause));
+      setMessages(
+        currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       );
-      setMessages(currentMessages().filter((candidate) => candidate.messageId !== message.messageId));
       await refreshDeliveryStates(service);
     });
 

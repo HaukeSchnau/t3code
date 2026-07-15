@@ -16,7 +16,9 @@ export type LocalIntentPresentation = {
   readonly canDiscard: boolean;
 };
 
-export function presentLocalIntent(state: DurableCommandState | undefined): LocalIntentPresentation {
+export function presentLocalIntent(
+  state: DurableCommandState | undefined,
+): LocalIntentPresentation {
   switch (state?._tag) {
     case "Delivering":
       return {
@@ -111,13 +113,17 @@ export function presentTrainConnectionStatus(input: {
     case "error":
       return {
         kind: "unavailable",
-        label: input.hasThreadContent ? "Connection needs attention · showing saved conversation" : "Connection needs attention",
+        label: input.hasThreadContent
+          ? "Connection needs attention · showing saved conversation"
+          : "Connection needs attention",
         accessibilityLabel: `Could not connect to ${environment}. ${input.hasThreadContent ? "Showing saved conversation." : ""}`,
       };
     case "available":
       return {
         kind: "unavailable",
-        label: input.hasThreadContent ? "Not connected · showing saved conversation" : "Not connected",
+        label: input.hasThreadContent
+          ? "Not connected · showing saved conversation"
+          : "Not connected",
         accessibilityLabel: `${environment} is not connected. ${input.hasThreadContent ? "Showing saved conversation." : ""}`,
       };
     case "connected":
@@ -127,10 +133,9 @@ export function presentTrainConnectionStatus(input: {
           label: input.hasThreadContent
             ? "Checking saved conversation for updates"
             : "Loading conversation",
-          accessibilityLabel:
-            input.hasThreadContent
-              ? "Connected. Showing saved conversation while checking for updates."
-              : "Connected. Loading conversation.",
+          accessibilityLabel: input.hasThreadContent
+            ? "Connected. Showing saved conversation while checking for updates."
+            : "Connected. Loading conversation.",
         };
       }
       if (snapshot.status === "cached") {

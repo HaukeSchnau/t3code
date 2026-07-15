@@ -125,9 +125,9 @@ describe("thread outbox", () => {
       sequence: 2,
       fileName: "command-outbox.0000000000000002.json",
     });
-    expect(
-      (await harness.storage.loadCommandOutbox!()).entries[0]?.plan.command.commandId,
-    ).toBe(b.commandId);
+    expect((await harness.storage.loadCommandOutbox!()).entries[0]?.plan.command.commandId).toBe(
+      b.commandId,
+    );
     expect(harness.moves.map((move) => move.destination)).toEqual([
       "command-outbox.0000000000000001.json",
       "command-outbox.manifest.json",
@@ -216,7 +216,10 @@ describe("thread outbox", () => {
         createdAt: "2026-07-15T10:00:00.000Z",
       });
       const firstRegistry = AtomRegistry.make();
-      const first = createThreadOutboxManager({ registry: firstRegistry, storage: harness.storage });
+      const first = createThreadOutboxManager({
+        registry: firstRegistry,
+        storage: harness.storage,
+      });
       await first.enqueue(rejected);
       await first.begin(rejected, rejected.createdAt);
       await first.fail(rejected, new Error("permanent"), rejected.createdAt, "permanent");
@@ -526,9 +529,9 @@ describe("thread outbox", () => {
     expect(stored.get(edited.messageId)).toEqual(durableEditedPayload);
 
     await manager.remove(durableEditedPayload);
-    await expect(
-      manager.update(message, { ...editedPayload, text: "stale flush" }),
-    ).resolves.toBe(false);
+    await expect(manager.update(message, { ...editedPayload, text: "stale flush" })).resolves.toBe(
+      false,
+    );
     expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({});
     expect(stored.size).toBe(0);
     registry.dispose();
@@ -591,7 +594,11 @@ describe("thread outbox", () => {
       saveCommandOutbox: async (document) => void (commandDocument = document),
     };
     const firstRegistry = AtomRegistry.make();
-    const first = createThreadOutboxManager({ registry: firstRegistry, storage, warn: () => undefined });
+    const first = createThreadOutboxManager({
+      registry: firstRegistry,
+      storage,
+      warn: () => undefined,
+    });
     const replacement = queuedMessage({
       messageId: "new-message",
       createdAt: "2026-07-15T10:00:01.000Z",
@@ -605,8 +612,9 @@ describe("thread outbox", () => {
     const restarted = createThreadOutboxManager({ registry: restartedRegistry, storage });
     await restarted.load();
     expect([...stored.keys()]).toEqual([replacement.messageId]);
-    expect(Object.values(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).flat())
-      .toHaveLength(1);
+    expect(
+      Object.values(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).flat(),
+    ).toHaveLength(1);
     restartedRegistry.dispose();
   });
 
@@ -669,7 +677,11 @@ describe("thread outbox", () => {
       createdAt: "2026-07-15T10:00:00.000Z",
     });
     const firstRegistry = AtomRegistry.make();
-    const first = createThreadOutboxManager({ registry: firstRegistry, storage, warn: () => undefined });
+    const first = createThreadOutboxManager({
+      registry: firstRegistry,
+      storage,
+      warn: () => undefined,
+    });
     await first.enqueue(message);
     await first.begin(message, "2026-07-15T10:00:00.000Z");
     await first.complete(message);
@@ -758,10 +770,16 @@ describe("thread outbox", () => {
       createdAt: "2026-07-15T10:00:02.000Z",
     });
     const firstRegistry = AtomRegistry.make();
-    const first = createThreadOutboxManager({ registry: firstRegistry, storage, warn: () => undefined });
+    const first = createThreadOutboxManager({
+      registry: firstRegistry,
+      storage,
+      warn: () => undefined,
+    });
     await first.enqueue(original);
     await first.update(original, r1);
-    const durableR1 = Object.values(firstRegistry.get(first.queuedMessagesByThreadKeyAtom)).flat()[0]!;
+    const durableR1 = Object.values(
+      firstRegistry.get(first.queuedMessagesByThreadKeyAtom),
+    ).flat()[0]!;
     await first.update(durableR1, r2);
     expect(stored.size).toBe(3);
     firstRegistry.dispose();
@@ -804,8 +822,7 @@ describe("thread outbox", () => {
 
   it("hydrates retry state and replays the frozen identity after acknowledgement loss", async () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
-    let commandDocument: DurableCommandOutboxDocument =
-      EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+    let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const storage: ThreadOutboxStorage = {
       load: async () => [...stored.values()],
       write: async (message) => void stored.set(message.messageId, message),

@@ -305,8 +305,7 @@ export const make = Effect.gen(function* () {
       return yield* readProgress(command.commandId).pipe(
         Effect.flatMap((next) => validateProgress(command, next)),
         Effect.flatMap((next) => {
-          const durableExecution =
-            next.setup.status === "pending" ? null : next.setup.execution;
+          const durableExecution = next.setup.status === "pending" ? null : next.setup.execution;
           return durableExecution !== null &&
             durableExecution?.executionKey === execution.executionKey &&
             durableExecution.scriptDigest === execution.scriptDigest
@@ -315,7 +314,8 @@ export const make = Effect.gen(function* () {
                 new OrchestrationCommandReceiptMismatchError({
                   commandId: command.commandId,
                   reason: "payload-mismatch",
-                  detail: "The setup execution identity differs from the durable preprocessing claim.",
+                  detail:
+                    "The setup execution identity differs from the durable preprocessing claim.",
                 }),
               );
         }),

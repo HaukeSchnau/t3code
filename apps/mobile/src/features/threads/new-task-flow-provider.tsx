@@ -19,10 +19,7 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
-import {
-  makeTurnCommandMetadata,
-  type TurnCommandMetadata,
-} from "../../lib/commandMetadata";
+import { makeTurnCommandMetadata, type TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";

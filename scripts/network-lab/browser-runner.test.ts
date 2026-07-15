@@ -109,7 +109,11 @@ function makeFixture(
         cachedContentNonblank: async () => (calls.push("cached"), true),
         submitComposer: async ({ text }) => {
           calls.push(`submit:${text}`);
-          return { localAcceptanceMs: options.acceptanceMs ?? 40, commandId: `command-${generation}`, text };
+          return {
+            localAcceptanceMs: options.acceptanceMs ?? 40,
+            commandId: `command-${generation}`,
+            text,
+          };
         },
         waitForConnectionStatus: async () => (calls.push("status"), 50),
         waitForRecovery: async () => (calls.push("recovered"), 1_000),
