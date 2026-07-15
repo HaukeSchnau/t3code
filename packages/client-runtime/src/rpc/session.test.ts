@@ -9,15 +9,25 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import type { ConnectionCatalogEntry } from "../connection/catalog.ts";
+import * as Connectivity from "../connection/connectivity.ts";
+import * as ConnectionDriver from "../connection/driver.ts";
 import {
   ConnectionTransientError,
   PrimaryConnectionTarget,
   type PreparedConnection,
+  type SupervisorConnectionState,
 } from "../connection/model.ts";
+import * as ConnectionResolver from "../connection/resolver.ts";
+import * as EnvironmentSupervisor from "../connection/supervisor.ts";
+import * as ConnectionWakeups from "../connection/wakeups.ts";
 import * as RpcSession from "./session.ts";
 
 type SocketEventType = "open" | "message" | "close" | "error";
@@ -98,6 +108,11 @@ const PREPARED: PreparedConnection = {
   target: TARGET,
 };
 
+const TARGET_ENTRY: ConnectionCatalogEntry = {
+  target: TARGET,
+  profile: Option.none(),
+};
+
 const SERVER_CONFIG: ServerConfigType = {
   environment: {
     environmentId: TARGET.environmentId,
@@ -137,10 +152,16 @@ const RpcRequest = Schema.TaggedStruct("Request", {
   payload: Schema.Unknown,
   tag: Schema.String,
 });
+const TaggedRpcFrame = Schema.Struct({ _tag: Schema.String });
 const decodeJson = Schema.decodeUnknownSync(Schema.UnknownFromJsonString);
-const decodeRpcRequest = Schema.decodeUnknownSync(RpcRequest);
+const isRpcRequest = Schema.is(RpcRequest);
+const isTaggedRpcFrame = Schema.is(TaggedRpcFrame);
 const encodeJson = Schema.encodeUnknownSync(Schema.UnknownFromJsonString);
 const encodeServerConfig = Schema.encodeSync(ServerConfig);
+
+const DEPENDENCY_PING_CADENCE_MS = 5_000;
+const LIVENESS_OBSERVATION_STEP_MS = 1_000;
+const POST_CLOSURE_OBSERVATION_MS = DEPENDENCY_PING_CADENCE_MS + 1_000;
 
 const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* () {
   const sockets: TestWebSocket[] = [];
@@ -156,9 +177,10 @@ const makeFactory = Effect.fn("TestRpcSessionFactory.make")(function* () {
 
 const awaitSocket = Effect.fn("TestRpcSessionFactory.awaitSocket")(function* (
   sockets: ReadonlyArray<TestWebSocket>,
+  index = 0,
 ) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const socket = sockets[0];
+    const socket = sockets[index];
     if (socket) {
       return socket;
     }
@@ -167,13 +189,78 @@ const awaitSocket = Effect.fn("TestRpcSessionFactory.awaitSocket")(function* (
   return yield* Effect.die(new Error("Expected the RPC protocol to create a websocket."));
 });
 
+function framesWithTag(socket: TestWebSocket, tag: string) {
+  return socket.sent
+    .map((frame) => decodeJson(frame))
+    .filter(isTaggedRpcFrame)
+    .filter((frame) => frame._tag === tag);
+}
+
+const awaitNextPing = Effect.fn("TestRpcSessionFactory.awaitNextPing")(function* (
+  socket: TestWebSocket,
+  observedPingCount: number,
+) {
+  for (
+    let elapsedMs = 0;
+    elapsedMs <= DEPENDENCY_PING_CADENCE_MS;
+    elapsedMs += LIVENESS_OBSERVATION_STEP_MS
+  ) {
+    const pings = framesWithTag(socket, "Ping");
+    if (pings.length > observedPingCount) {
+      return pings.length;
+    }
+    if (elapsedMs < DEPENDENCY_PING_CADENCE_MS) {
+      yield* TestClock.adjust(LIVENESS_OBSERVATION_STEP_MS);
+    }
+  }
+  return yield* Effect.die(
+    new Error("Expected Effect RPC to emit a Ping within its five-second cadence."),
+  );
+});
+
+const awaitLivenessClosure = Effect.fn("TestRpcSessionFactory.awaitLivenessClosure")(function* (
+  socket: TestWebSocket,
+) {
+  for (
+    let elapsedMs = 0;
+    elapsedMs <= DEPENDENCY_PING_CADENCE_MS;
+    elapsedMs += LIVENESS_OBSERVATION_STEP_MS
+  ) {
+    if (socket.readyState === TestWebSocket.CLOSED) {
+      return;
+    }
+    if (elapsedMs < DEPENDENCY_PING_CADENCE_MS) {
+      yield* TestClock.adjust(LIVENESS_OBSERVATION_STEP_MS);
+    }
+  }
+  return yield* Effect.die(
+    new Error("Expected an unanswered Ping to close the session within five seconds."),
+  );
+});
+
+const eventuallySupervisorState = Effect.fn("TestRpcSessionFactory.eventuallySupervisorState")(
+  function* (
+    state: SubscriptionRef.SubscriptionRef<SupervisorConnectionState>,
+    predicate: (state: SupervisorConnectionState) => boolean,
+  ) {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const current = yield* SubscriptionRef.get(state);
+      if (predicate(current)) {
+        return current;
+      }
+      yield* Effect.yieldNow;
+    }
+    return yield* Effect.die(new Error("Expected EnvironmentSupervisor state was not observed."));
+  },
+);
+
 const awaitRequest = Effect.fn("TestRpcSessionFactory.awaitRequest")(function* (
   socket: TestWebSocket,
 ) {
   for (let attempt = 0; attempt < 100; attempt += 1) {
-    const request = socket.sent[0];
+    const request = socket.sent.map((frame) => decodeJson(frame)).find(isRpcRequest);
     if (request) {
-      return decodeRpcRequest(decodeJson(request));
+      return request;
     }
     yield* Effect.yieldNow;
   }
@@ -216,7 +303,6 @@ describe("RpcSessionFactory", () => {
 
       const config = yield* session.initialConfig;
       expect(config).toEqual(SERVER_CONFIG);
-      expect(socket.sent).toHaveLength(1);
 
       socket.close(1012, "service restart");
       const error = yield* Effect.flip(session.closed);
@@ -243,18 +329,14 @@ describe("RpcSessionFactory", () => {
       yield* completeInitialConfig(socket);
       yield* Fiber.join(readyFiber);
 
-      yield* TestClock.adjust("5 seconds");
-      expect(socket.sent).toHaveLength(2);
-      expect(decodeJson(socket.sent[1])).toEqual({ _tag: "Ping" });
+      const observedPingCount = yield* awaitNextPing(socket, 0);
 
       socket.serverMessage(encodeJson({ _tag: "Pong" }));
       yield* Effect.yieldNow;
-      yield* TestClock.adjust("5 seconds");
-      expect(socket.sent).toHaveLength(3);
-      expect(decodeJson(socket.sent[2])).toEqual({ _tag: "Ping" });
+      yield* awaitNextPing(socket, observedPingCount);
 
       const closedFiber = yield* Effect.forkChild(Effect.flip(session.closed));
-      yield* TestClock.adjust("5 seconds");
+      yield* awaitLivenessClosure(socket);
       const error = yield* Fiber.join(closedFiber);
 
       expect(error).toBeInstanceOf(ConnectionTransientError);
@@ -263,7 +345,69 @@ describe("RpcSessionFactory", () => {
         message: "Test environment disconnected.",
       });
       expect(socket.readyState).toBe(TestWebSocket.CLOSED);
+
+      // Keep the scoped session alive past another complete dependency cadence.
+      // Its configured zero-retry policy must never construct a delayed replacement.
+      yield* TestClock.adjust(POST_CLOSURE_OBSERVATION_MS);
+      yield* Effect.yieldNow;
       expect(sockets).toHaveLength(1);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
+  it.effect("hands an unanswered ping closure to the supervisor for one replacement", () =>
+    Effect.gen(function* () {
+      const { factory, sockets } = yield* makeFactory();
+      const resolver = ConnectionResolver.ConnectionResolver.of({
+        prepare: () => Effect.succeed(PREPARED),
+      });
+      const driver = yield* ConnectionDriver.make.pipe(
+        Effect.provideService(ConnectionResolver.ConnectionResolver, resolver),
+        Effect.provideService(RpcSession.RpcSessionFactory, factory),
+      );
+      const connectivity = Connectivity.Connectivity.of({
+        status: Effect.succeed("online"),
+        changes: Stream.never,
+      });
+      const wakeups = ConnectionWakeups.ConnectionWakeups.of({ changes: Stream.never });
+
+      const serveSocket = Effect.fn("TestRpcSessionFactory.serveSocket")(function* (index: number) {
+        const socket = yield* awaitSocket(sockets, index);
+        socket.open();
+        yield* completeInitialConfig(socket);
+        return socket;
+      });
+
+      const firstSocketFiber = yield* Effect.forkChild(serveSocket(0));
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(
+        Effect.provideService(ConnectionDriver.ConnectionDriver, driver),
+        Effect.provideService(Connectivity.Connectivity, connectivity),
+        Effect.provideService(ConnectionWakeups.ConnectionWakeups, wakeups),
+      );
+      yield* eventuallySupervisorState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 1,
+      );
+      const firstSocket = yield* Fiber.join(firstSocketFiber);
+
+      yield* awaitNextPing(firstSocket, 0);
+      yield* awaitLivenessClosure(firstSocket);
+      yield* eventuallySupervisorState(
+        supervisor.state,
+        (state) => state.phase === "backoff" && state.attempt === 1,
+      );
+      expect(sockets).toHaveLength(1);
+
+      const replacementSocketFiber = yield* Effect.forkChild(serveSocket(1));
+      yield* TestClock.adjust("1 second");
+      yield* eventuallySupervisorState(
+        supervisor.state,
+        (state) => state.phase === "connected" && state.generation === 2,
+      );
+      yield* Fiber.join(replacementSocketFiber);
+
+      expect(sockets).toHaveLength(2);
     }).pipe(Effect.provide(TestClock.layer())),
   );
 

@@ -20,18 +20,29 @@ reconnect.
 ## Verification Seam
 
 `packages/client-runtime/src/rpc/session.test.ts` uses a deterministic test clock and fake WebSocket at
-the public transport boundary. The test observes an encoded Effect RPC `Ping`, replies with `Pong`,
-then withholds the next pong and verifies that the session closes with exactly one constructed socket.
-This proves the application-visible liveness and ownership contract without importing Effect RPC
-internals.
+the public transport boundary. The dependency-wire test decodes outbound frames by tag rather than
+depending on a request's frame index or the socket's total message count. It observes an encoded Effect
+RPC `Ping`, replies with `Pong`, then observes and withholds the next pong.
 
-The test advances Effect's current five-second ping cadence because the dependency does not expose a
-pinger configuration or test service. That timing is dependency-owned, not a client-runtime policy;
-the test intentionally avoids duplicating it in production code. On Effect upgrades, review
-`patches/effect@4.0.0-beta.78.patch` and this transport-boundary test together.
+Liveness measurement starts when the fake transport observes that second outbound `Ping` and ends when
+`RpcSession.closed` resolves with a transient transport error and the WebSocket has closed. Effect's
+current pinger checks for an unanswered ping on its next five-second cadence, so the maximum expected
+timeout envelope is five seconds from the observed unanswered ping to closure. The test advances fake
+time in one-second increments within that envelope. After closure it keeps the scoped session alive for
+six more seconds—longer than another complete dependency cadence—before asserting that the session's
+configured zero-retry policy constructed only one socket.
 
-Existing supervisor tests separately verify that an involuntary session close causes a supervised
-reconnect, and that stalled connection setup and foreground probes retain their 15-second boundaries.
+That five-second cadence is dependency-owned, not a client-runtime policy; the test intentionally avoids
+duplicating it in production code. On Effect upgrades, review `patches/effect@4.0.0-beta.78.patch` and
+this transport-boundary test together.
+
+A focused composition test provides the real `RpcSessionFactory` through the real connection driver and
+`EnvironmentSupervisor`. It withholds a ping response, observes the supervisor's backoff while the
+session still owns exactly one socket, then advances the supervisor's one-second retry delay and verifies
+exactly one supervised replacement. This is application reconnect-ownership evidence, separate from the
+dependency-wire cadence evidence above. Existing supervisor tests continue to verify general involuntary
+closure behavior and that stalled connection setup and foreground probes retain their 15-second
+boundaries.
 
 ## Maintenance
 
