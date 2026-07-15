@@ -33,6 +33,7 @@ import {
   useThreadOutboxMessages,
   useThreadOutboxShellStatuses,
 } from "./use-thread-outbox";
+import { composerDraftsReadyAtom, ensureComposerDraftsLoaded } from "./use-composer-drafts";
 import { useRemoteConnectionStatus } from "./use-remote-environment-registry";
 
 export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
@@ -75,6 +76,7 @@ export function useThreadOutboxDrain(): void {
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
   const deliveryStates = useAtomValue(threadOutboxManager.deliveryStatesAtom);
   const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
+  const composerDraftsReady = useAtomValue(composerDraftsReadyAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
@@ -86,6 +88,7 @@ export function useThreadOutboxDrain(): void {
   const retryTimersRef = useRef(new Map<MessageId, ReturnType<typeof setTimeout>>());
 
   useEffect(() => {
+    ensureComposerDraftsLoaded();
     ensureThreadOutboxLoaded();
     return () => {
       for (const timer of retryTimersRef.current.values()) {
@@ -192,7 +195,7 @@ export function useThreadOutboxDrain(): void {
   );
 
   useEffect(() => {
-    if (dispatchingQueuedMessageId !== null) {
+    if (!composerDraftsReady || dispatchingQueuedMessageId !== null) {
       return;
     }
 
@@ -341,6 +344,7 @@ export function useThreadOutboxDrain(): void {
     }
   }, [
     connectedEnvironments,
+    composerDraftsReady,
     deliveryStates,
     dispatchingQueuedMessageId,
     editingQueuedMessageIds,

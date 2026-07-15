@@ -6,6 +6,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
+import { persistedQueuedEditIdsAtom } from "./use-composer-drafts";
 
 const threadOutboxShellStatusesAtom = Atom.make(
   (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
@@ -26,27 +27,35 @@ const threadOutboxShellStatusesAtom = Atom.make(
  * back yet (delivering those would send stale content). Editing sessions hold
  * their message id here and release it once the queued payload is current.
  */
-export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, true>>>({}).pipe(
+const manualEditingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, true>>>({}).pipe(
   Atom.keepAlive,
-  Atom.withLabel("mobile:thread-outbox:editing-message-ids"),
+  Atom.withLabel("mobile:thread-outbox:manual-editing-message-ids"),
 );
 
+export const editingQueuedMessageIdsAtom = Atom.make((get) => {
+  const editing: Record<MessageId, true> = {
+    ...get(manualEditingQueuedMessageIdsAtom),
+    ...get(persistedQueuedEditIdsAtom),
+  };
+  return editing as Readonly<Record<MessageId, true>>;
+}).pipe(Atom.withLabel("mobile:thread-outbox:editing-message-ids"));
+
 export function holdEditingQueuedMessage(messageId: MessageId): void {
-  const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
+  const current = appAtomRegistry.get(manualEditingQueuedMessageIdsAtom);
   if (current[messageId]) {
     return;
   }
-  appAtomRegistry.set(editingQueuedMessageIdsAtom, { ...current, [messageId]: true });
+  appAtomRegistry.set(manualEditingQueuedMessageIdsAtom, { ...current, [messageId]: true });
 }
 
 export function releaseEditingQueuedMessage(messageId: MessageId): void {
-  const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
+  const current = appAtomRegistry.get(manualEditingQueuedMessageIdsAtom);
   if (!current[messageId]) {
     return;
   }
   const next = { ...current };
   delete next[messageId];
-  appAtomRegistry.set(editingQueuedMessageIdsAtom, next);
+  appAtomRegistry.set(manualEditingQueuedMessageIdsAtom, next);
 }
 
 export function useThreadOutboxMessages() {

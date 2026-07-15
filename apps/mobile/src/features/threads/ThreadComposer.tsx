@@ -65,12 +65,10 @@ import {
 import { useComposerPathSearch } from "../../state/use-composer-path-search";
 import { ComposerCommandPopover, type ComposerCommandItem } from "./ComposerCommandPopover";
 import {
-  presentRemoteQueue,
-  presentTrainConnectionStatus,
-  trainStatusVisibilityDelayMs,
   type TrainConnectionStatus,
   type LocalIntentPresentation,
 } from "./trainNetworkPresentation";
+import { useTrainNetworkPresentation } from "./useTrainNetworkPresentation";
 
 /**
  * Height of the collapsed composer (pill + vertical padding, excluding safe-area inset).
@@ -258,8 +256,9 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={props.status.accessibilityLabel}
+        accessibilityLiveRegion="polite"
         onPress={props.onPress}
-        className="max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm active:opacity-70 dark:bg-neutral-900/90"
+        className="min-h-11 max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm active:opacity-70 dark:bg-neutral-900/90"
       >
         {isReconnecting ? (
           <ActivityIndicator size="small" color="#8e8e93" />
@@ -267,7 +266,8 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
           <View className="h-2 w-2 rounded-full bg-red-500" />
         )}
         <Text
-          accessibilityLiveRegion="polite"
+          accessible={false}
+          importantForAccessibility="no"
           className="max-w-[260px] text-sm font-t3-bold leading-snug text-foreground"
           numberOfLines={1}
         >
@@ -298,21 +298,21 @@ const LocalIntentRow = memo(function LocalIntentRow(props: {
       <Text className="pt-0.5 text-2xs text-foreground-muted">{props.presentation.detail}</Text>
       <View className="flex-row gap-4 pt-1.5">
         {props.editing ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Cancel editing saved message" onPress={props.onCancelEdit}>
+          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Cancel editing saved message" onPress={props.onCancelEdit}>
             <Text className="text-xs font-t3-bold text-accent">Cancel edit</Text>
           </Pressable>
         ) : props.presentation.canEdit ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Edit saved message" onPress={() => props.onEdit(props.messageId)}>
+          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Edit saved message" onPress={() => props.onEdit(props.messageId)}>
             <Text className="text-xs font-t3-bold text-accent">Edit</Text>
           </Pressable>
         ) : null}
         {props.presentation.canCancel && !props.editing ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Cancel saved message" onPress={() => void props.onCancel(props.messageId)}>
+          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Cancel saved message" onPress={() => void props.onCancel(props.messageId)}>
             <Text className="text-xs font-t3-bold text-danger">Cancel</Text>
           </Pressable>
         ) : null}
         {props.presentation.canDiscard ? (
-          <Pressable accessibilityRole="button" accessibilityLabel="Discard failed saved message" onPress={() => void props.onDiscard(props.messageId)}>
+          <Pressable hitSlop={10} className="min-h-11 justify-center" accessibilityRole="button" accessibilityLabel="Discard failed saved message" onPress={() => void props.onDiscard(props.messageId)}>
             <Text className="text-xs font-t3-bold text-danger">Discard</Text>
           </Pressable>
         ) : null}
@@ -328,9 +328,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
   const [isFocused, setIsFocused] = useState(false);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [visibleConnectionStatus, setVisibleConnectionStatus] =
-    useState<ComposerStatusPillState | null>(null);
   const wasExpandedBeforePreviewRef = useRef(false);
   const inFlightThreadIdsRef = useRef(new Set<string>());
   const { onExpandedChange } = props;
@@ -375,51 +372,29 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
-  const connectionStatus = useMemo(
+  const fallbackConnectionStatus = useMemo(
     () =>
-      props.connectionFreshness
-        ? presentTrainConnectionStatus({
-            projection: props.connectionFreshness,
-            environmentLabel: props.environmentLabel,
-            nowMs,
-            hasThreadContent: props.hasThreadContent,
-          })
-        : composerConnectionStatus({
-            connectionError: props.connectionError,
-            connectionState: props.connectionState,
-            environmentLabel: props.environmentLabel,
-            threadSyncPhase: props.threadSyncPhase,
-          }),
+      composerConnectionStatus({
+        connectionError: props.connectionError,
+        connectionState: props.connectionState,
+        environmentLabel: props.environmentLabel,
+        threadSyncPhase: props.threadSyncPhase,
+      }),
     [
-      nowMs,
       props.connectionError,
-      props.connectionFreshness,
       props.connectionState,
       props.environmentLabel,
-      props.hasThreadContent,
       props.threadSyncPhase,
     ],
   );
-  const retryDeadline =
-    props.connectionFreshness?.connection.stage === "waiting-to-retry"
-      ? props.connectionFreshness.connection.retryAt
-      : null;
-  useEffect(() => {
-    if (retryDeadline === null) return;
-    setNowMs(Date.now());
-    const interval = setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => clearInterval(interval);
-  }, [retryDeadline]);
-  useEffect(() => {
-    const delay = trainStatusVisibilityDelayMs(visibleConnectionStatus, connectionStatus);
-    if (delay === 0) {
-      setVisibleConnectionStatus(connectionStatus);
-      return;
-    }
-    const timeout = setTimeout(() => setVisibleConnectionStatus(connectionStatus), delay);
-    return () => clearTimeout(timeout);
-  }, [connectionStatus, visibleConnectionStatus]);
-  const remoteQueueStatus = presentRemoteQueue(props.remoteQueueCount);
+  const { connectionStatus: visibleConnectionStatus, remoteQueueStatus } =
+    useTrainNetworkPresentation({
+      projection: props.connectionFreshness,
+      fallbackStatus: fallbackConnectionStatus,
+      environmentLabel: props.environmentLabel,
+      hasThreadContent: props.hasThreadContent,
+      remoteQueueCount: props.remoteQueueCount,
+    });
   const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
   const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
   const selectedProviderStatus = useMemo(() => {
@@ -1025,6 +1000,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             ))}
             {props.rejectedCount > 1 ? (
               <Pressable
+                hitSlop={10}
+                className="min-h-11 justify-center"
                 accessibilityRole="button"
                 accessibilityLabel="Discard permanently failed messages"
                 onPress={() => void props.onDiscardRejected()}
