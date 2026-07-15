@@ -1644,7 +1644,11 @@ describe("OrchestrationEngine", () => {
         ),
       ),
     );
-    expect(commandEvents).toHaveLength(2);
+    expect(commandEvents.map((event) => event.type)).toEqual([
+      "thread.meta-updated",
+      "thread.message-sent",
+      "thread.turn-start-requested",
+    ]);
     await system.dispose();
   });
 
