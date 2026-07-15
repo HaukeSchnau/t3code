@@ -49,4 +49,6 @@ accepted turn is visibly working while its concrete provider turn identity is st
 - Implementation: keyed FIFO scheduling is complete for provider command dispatch and runtime ingestion. The
   command reactor now durably publishes `starting` before provider session work can block. Thread reconnect
   replay now queries the indexed aggregate stream instead of decoding the global event range.
+- Final local verification: `vp check` and `vp run typecheck` pass. The full `vp test --maxWorkers=4` suite
+  passes with 630 test files / 5,035 tests passing and 2 files / 10 tests skipped.
 - Deployment verification: pending.
