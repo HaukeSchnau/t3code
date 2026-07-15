@@ -10,6 +10,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
@@ -18,7 +19,8 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribe } from "../rpc/client.ts";
+import { subscribeWithSession } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
 import { applyThreadDetailEvent } from "./threadReducer.ts";
@@ -69,9 +71,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   // Seed the resume cursor from the cached snapshot so a warm cache can catch up
   // via `afterSequence` instead of re-downloading the full thread body.
   const lastSequence = yield* SubscriptionRef.make(
-    Option.match(cached, { onNone: () => 0, onSome: (snapshot) => snapshot.snapshotSequence }),
+    Option.match(cached, {
+      onNone: () => 0,
+      onSome: (snapshot) => snapshot.snapshotSequence,
+    }),
   );
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
+  const subscriptionSynchronization = yield* Ref.make({
+    generation: -1,
+    session: null as RpcSession | null,
+    synchronized: false,
+  });
+  const latestConnectionGeneration = yield* Ref.make(-1);
 
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
@@ -100,19 +111,49 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     status: "synchronizing" as const,
     error: Option.none(),
   }));
-  const setReady = SubscriptionRef.update(state, (current) =>
-    current.status === "live" || current.status === "deleted"
-      ? current
-      : {
+  const markGenerationUnsynchronized = (generation: number) =>
+    Ref.update(subscriptionSynchronization, (current) =>
+      current.generation < generation
+        ? { generation, session: null, synchronized: false }
+        : current,
+    );
+  const setReady = (generation: number) =>
+    Effect.all([
+      Ref.get(subscriptionSynchronization),
+      SubscriptionRef.get(supervisor.session),
+    ]).pipe(
+      Effect.flatMap(([synchronization, currentSession]) =>
+        SubscriptionRef.update(state, (current) =>
+          current.status === "live" || current.status === "deleted"
+            ? current
+            : synchronization.generation === generation &&
+                synchronization.synchronized &&
+                Option.isSome(currentSession) &&
+                synchronization.session === currentSession.value &&
+                Option.isSome(current.data)
+              ? { ...current, status: "live" as const, error: Option.none() }
+              : {
+                  ...current,
+                  status: "synchronizing" as const,
+                  error: Option.none(),
+                },
+        ),
+      ),
+    );
+  const setDisconnected = (generation: number) =>
+    Ref.update(subscriptionSynchronization, (current) =>
+      current.generation <= generation
+        ? { generation, session: null, synchronized: false }
+        : current,
+    ).pipe(
+      Effect.andThen(
+        SubscriptionRef.update(state, (current) => ({
           ...current,
-          status: "synchronizing" as const,
-          error: Option.none(),
-        },
-  );
-  const setDisconnected = SubscriptionRef.update(state, (current) => ({
-    ...current,
-    status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
-  }));
+          status:
+            current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
+        })),
+      ),
+    );
   const setStreamError = (cause: Cause.Cause<unknown>) =>
     SubscriptionRef.update(state, (current) => ({
       ...current,
@@ -155,7 +196,39 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
     item: OrchestrationThreadStreamItem,
+    itemSession?: RpcSession,
+    itemGeneration?: number,
   ) {
+    if (item.kind === "synchronized") {
+      const [currentSession, connectionState] = yield* Effect.all([
+        SubscriptionRef.get(supervisor.session),
+        SubscriptionRef.get(supervisor.state),
+      ]);
+      if (
+        itemSession === undefined ||
+        itemGeneration === undefined ||
+        Option.isNone(currentSession) ||
+        currentSession.value !== itemSession ||
+        connectionState.generation !== itemGeneration
+      ) {
+        return;
+      }
+      const accepted = yield* Ref.modify(subscriptionSynchronization, (current) =>
+        current.generation > itemGeneration
+          ? [false, current]
+          : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
+      );
+      if (!accepted) return;
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        status:
+          current.status === "deleted" || Option.isNone(current.data)
+            ? current.status
+            : ("live" as const),
+        error: Option.none(),
+      }));
+      return;
+    }
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* setThread(item.snapshot.thread);
@@ -185,14 +258,24 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
 
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
-      switch (connectionProjectionPhase(connectionState)) {
-        case "synchronizing":
-          return setSynchronizing;
-        case "disconnected":
-          return setDisconnected;
-        case "ready":
-          return setReady;
-      }
+      const acceptGeneration = Ref.modify(latestConnectionGeneration, (latest) =>
+        connectionState.generation < latest ? [false, latest] : [true, connectionState.generation],
+      );
+      return acceptGeneration.pipe(
+        Effect.flatMap((accepted) => {
+          if (!accepted) return Effect.void;
+          switch (connectionProjectionPhase(connectionState)) {
+            case "synchronizing":
+              return markGenerationUnsynchronized(connectionState.generation).pipe(
+                Effect.andThen(setSynchronizing),
+              );
+            case "disconnected":
+              return setDisconnected(connectionState.generation);
+            case "ready":
+              return setReady(connectionState.generation);
+          }
+        }),
+      );
     }),
     Effect.forkScoped,
   );
@@ -230,14 +313,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       }
 
       const subscribeInput = Option.match(base, {
-        onNone: () => ({ threadId }),
-        onSome: (snapshot) => ({ threadId, afterSequence: snapshot.snapshotSequence }),
+        onNone: () => ({ threadId, includeSynchronizationItems: true }),
+        onSome: (snapshot) => ({
+          threadId,
+          afterSequence: snapshot.snapshotSequence,
+          includeSynchronizationItems: true,
+        }),
       });
 
-      yield* subscribe(ORCHESTRATION_WS_METHODS.subscribeThread, subscribeInput, {
+      yield* subscribeWithSession(ORCHESTRATION_WS_METHODS.subscribeThread, subscribeInput, {
         onExpectedFailure: setStreamError,
         retryExpectedFailureAfter: "250 millis",
-      }).pipe(Stream.runForEach(applyItem));
+      }).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
     }),
   );
 

@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Metric from "effect/Metric";
+import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
@@ -275,6 +276,50 @@ describe("ReplayObservability", () => {
         dedupedOverlapEvents: 2,
         liveBufferHighWaterMark: 2,
       });
+    }),
+  );
+
+  it.effect("orders the synchronization marker between catch-up and buffered live items", () =>
+    Effect.gen(function* () {
+      const releaseCatchUp = yield* Deferred.make<void>();
+      const live = yield* Queue.unbounded<number>();
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserverWithRecorder("thread", 0, () => Effect.void),
+        live: Stream.fromQueue(live),
+        sequence: (sequence) => sequence,
+        bufferCapacity: 2,
+        synchronized: () => "synchronized" as const,
+        catchUp: () =>
+          Stream.fromEffect(Deferred.await(releaseCatchUp).pipe(Effect.as(1 as number))),
+      });
+      const outputFiber = yield* stream.pipe(
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.scoped,
+        Effect.forkChild,
+      );
+
+      yield* Queue.offer(live, 2);
+      yield* Deferred.succeed(releaseCatchUp, undefined);
+
+      assert.deepStrictEqual(Array.from(yield* Fiber.join(outputFiber)), [1, "synchronized", 2]);
+    }),
+  );
+
+  it.effect("does not emit a synchronization marker unless the caller opts in", () =>
+    Effect.gen(function* () {
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserverWithRecorder("thread", 0, () => Effect.void),
+        live: Stream.make(2),
+        sequence: (sequence) => sequence,
+        bufferCapacity: 1,
+        catchUp: () => Stream.make(1),
+      });
+
+      assert.deepStrictEqual(
+        Array.from(yield* stream.pipe(Stream.take(2), Stream.runCollect, Effect.scoped)),
+        [1, 2],
+      );
     }),
   );
 

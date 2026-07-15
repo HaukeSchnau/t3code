@@ -63,7 +63,10 @@ const recordReplayReport =
   (replayLogPublisher: ReplayLogPublisher["Service"]): ReplayReportRecorder =>
   (report) =>
     Effect.gen(function* () {
-      const attributes = metricAttributes({ flow: report.flow, outcome: report.outcome });
+      const attributes = metricAttributes({
+        flow: report.flow,
+        outcome: report.outcome,
+      });
       const flowAttributes = metricAttributes({ flow: report.flow });
 
       yield* Metric.update(Metric.withAttributes(replayOperationsTotal, attributes), 1);
@@ -236,6 +239,7 @@ export const replayEventBatch = <
 
 export interface ReplayCatchUpOptions<
   A,
+  Synchronized,
   CatchUpError,
   CatchUpContext,
   LiveError,
@@ -247,6 +251,8 @@ export interface ReplayCatchUpOptions<
   readonly live: Stream.Stream<A, LiveError, LiveContext>;
   readonly sequence: (item: A) => number;
   readonly bufferCapacity: number;
+  /** Emitted exactly once after persisted catch-up and before buffered live items. */
+  readonly synchronized?: () => Synchronized;
 }
 
 /**
@@ -256,6 +262,7 @@ export interface ReplayCatchUpOptions<
  */
 export const replayCatchUpWithLive = <
   A,
+  Synchronized,
   CatchUpError,
   CatchUpContext,
   LiveError,
@@ -264,13 +271,18 @@ export const replayCatchUpWithLive = <
 >(
   options: ReplayCatchUpOptions<
     A,
+    Synchronized,
     CatchUpError,
     CatchUpContext,
     LiveError,
     LiveContext,
     ObserverContext
   >,
-): Stream.Stream<A, CatchUpError, CatchUpContext | LiveContext | ObserverContext | Scope.Scope> =>
+): Stream.Stream<
+  A | Synchronized,
+  CatchUpError,
+  CatchUpContext | LiveContext | ObserverContext | Scope.Scope
+> =>
   Stream.unwrap(
     Effect.gen(function* () {
       const observer = yield* options.observer;
@@ -294,6 +306,10 @@ export const replayCatchUpWithLive = <
       const bufferedLiveStream = Stream.fromQueue(liveBuffer).pipe(
         Stream.tap(() => Effect.sync(observer.recordLiveDequeued)),
       );
-      return Stream.concat(catchUpStream, bufferedLiveStream);
+      const synchronizedStream =
+        options.synchronized === undefined
+          ? Stream.empty
+          : Stream.fromEffect(Effect.sync(options.synchronized));
+      return Stream.concat(Stream.concat(catchUpStream, synchronizedStream), bufferedLiveStream);
     }),
   );

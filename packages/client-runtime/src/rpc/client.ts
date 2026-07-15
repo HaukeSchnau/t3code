@@ -11,6 +11,7 @@ import { RpcClientError } from "effect/unstable/rpc";
 
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
+import type { RpcSession } from "../rpc/session.ts";
 
 export class EnvironmentRpcUnavailableError extends Schema.TaggedErrorClass<EnvironmentRpcUnavailableError>()(
   "EnvironmentRpcUnavailableError",
@@ -148,20 +149,19 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
   );
 }
 
-export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
+export interface EnvironmentSubscribeOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  readonly onExpectedFailure?: (
+    cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+  ) => Effect.Effect<void, never, never>;
+  readonly retryExpectedFailureAfter?: Duration.Input;
+}
+
+function subscribeMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
   input: EnvironmentRpcInput<TTag>,
-  options?: {
-    readonly onExpectedFailure?: (
-      cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
-    ) => Effect.Effect<void, never, never>;
-    readonly retryExpectedFailureAfter?: Duration.Input;
-  },
-): Stream.Stream<
-  EnvironmentRpcStreamValue<TTag>,
-  EnvironmentRpcStreamFailure<TTag>,
-  EnvironmentSupervisor
-> {
+  mapValue: (session: RpcSession, generation: number, value: EnvironmentRpcStreamValue<TTag>) => A,
+  options?: EnvironmentSubscribeOptions<TTag>,
+): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>, EnvironmentSupervisor> {
   return Stream.unwrap(
     EnvironmentSupervisor.pipe(
       Effect.map((supervisor) =>
@@ -176,12 +176,12 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
                   EnvironmentRpcStreamValue<TTag>,
                   EnvironmentRpcStreamFailure<TTag>
                 >;
-                const subscribeToSession = (): Stream.Stream<
-                  EnvironmentRpcStreamValue<TTag>,
-                  EnvironmentRpcStreamFailure<TTag>
-                > =>
+                const subscribeToSession = (
+                  generation: number,
+                ): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                   Stream.suspend(() =>
                     method(input).pipe(
+                      Stream.map((value) => mapValue(session, generation, value)),
                       Stream.catchCause((cause) => {
                         const hasOnlyExpectedFailures =
                           cause.reasons.length > 0 &&
@@ -216,14 +216,18 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
                                 Effect.sleep(options.retryExpectedFailureAfter),
                               ).pipe(Stream.drain),
                             ),
-                            Stream.concat(subscribeToSession()),
+                            Stream.concat(subscribeToSession(generation)),
                           );
                         }
                         return Stream.failCause(cause);
                       }),
                     ),
                   );
-                return subscribeToSession();
+                return Stream.unwrap(
+                  SubscriptionRef.get(supervisor.state).pipe(
+                    Effect.map((state) => subscribeToSession(state.generation)),
+                  ),
+                );
               },
             }),
           ),
@@ -234,6 +238,33 @@ export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
     Stream.withSpan("EnvironmentRpc.subscribe", {
       attributes: { "rpc.method": tag },
     }),
+  );
+}
+
+export function subscribe<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+  options?: EnvironmentSubscribeOptions<TTag>,
+) {
+  return subscribeMapped(tag, input, (_session, _generation, value) => value, options);
+}
+
+export interface EnvironmentSubscriptionItem<A> {
+  readonly session: RpcSession;
+  readonly generation: number;
+  readonly value: A;
+}
+
+export function subscribeWithSession<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  input: EnvironmentRpcInput<TTag>,
+  options?: EnvironmentSubscribeOptions<TTag>,
+) {
+  return subscribeMapped(
+    tag,
+    input,
+    (session, generation, value) => ({ session, generation, value }),
+    options,
   );
 }
 

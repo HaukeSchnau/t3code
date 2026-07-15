@@ -9,6 +9,7 @@ import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
@@ -18,7 +19,8 @@ import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribe } from "../rpc/client.ts";
+import { subscribeWithSession } from "../rpc/client.ts";
+import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
 import type { EnvironmentCatalogState } from "./connections.ts";
@@ -74,6 +76,12 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }),
   );
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
+  const subscriptionSynchronization = yield* Ref.make({
+    generation: -1,
+    session: null as RpcSession | null,
+    synchronized: false,
+  });
+  const latestConnectionGeneration = yield* Ref.make(-1);
 
   const persist = Effect.fn("EnvironmentShellState.persist")(function* (
     snapshot: OrchestrationShellSnapshot,
@@ -96,24 +104,52 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     Effect.forkScoped,
   );
 
-  const setDisconnected = SubscriptionRef.update(state, (current) => ({
-    ...current,
-    status: shellStatusForSnapshot(current.snapshot),
-  }));
+  const markGenerationUnsynchronized = (generation: number) =>
+    Ref.update(subscriptionSynchronization, (current) =>
+      current.generation < generation
+        ? { generation, session: null, synchronized: false }
+        : current,
+    );
+  const setDisconnected = (generation: number) =>
+    Ref.update(subscriptionSynchronization, (current) =>
+      current.generation <= generation
+        ? { generation, session: null, synchronized: false }
+        : current,
+    ).pipe(
+      Effect.andThen(
+        SubscriptionRef.update(state, (current) => ({
+          ...current,
+          status: shellStatusForSnapshot(current.snapshot),
+        })),
+      ),
+    );
   const setSynchronizing = SubscriptionRef.update(state, (current) => ({
     ...current,
     status: "synchronizing" as const,
     error: Option.none(),
   }));
-  const setReady = SubscriptionRef.update(state, (current) =>
-    current.status === "live"
-      ? current
-      : {
-          ...current,
-          status: "synchronizing" as const,
-          error: Option.none(),
-        },
-  );
+  const setReady = (generation: number) =>
+    Effect.all([
+      Ref.get(subscriptionSynchronization),
+      SubscriptionRef.get(supervisor.session),
+    ]).pipe(
+      Effect.flatMap(([synchronization, currentSession]) =>
+        SubscriptionRef.update(state, (current) =>
+          current.status === "live" ||
+          (synchronization.generation === generation &&
+            synchronization.synchronized &&
+            Option.isSome(currentSession) &&
+            synchronization.session === currentSession.value &&
+            Option.isSome(current.snapshot))
+            ? { ...current, status: "live" as const, error: Option.none() }
+            : {
+                ...current,
+                status: "synchronizing" as const,
+                error: Option.none(),
+              },
+        ),
+      ),
+    );
   const setStreamError = (error: unknown) =>
     Effect.logWarning("Could not synchronize the environment shell.").pipe(
       Effect.annotateLogs({
@@ -131,7 +167,36 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   const applyItem = Effect.fn("EnvironmentShellState.applyItem")(function* (
     item: OrchestrationShellStreamItem,
+    itemSession?: RpcSession,
+    itemGeneration?: number,
   ) {
+    if (item.kind === "synchronized") {
+      const [currentSession, connectionState] = yield* Effect.all([
+        SubscriptionRef.get(supervisor.session),
+        SubscriptionRef.get(supervisor.state),
+      ]);
+      if (
+        itemSession === undefined ||
+        itemGeneration === undefined ||
+        Option.isNone(currentSession) ||
+        currentSession.value !== itemSession ||
+        connectionState.generation !== itemGeneration
+      ) {
+        return;
+      }
+      const accepted = yield* Ref.modify(subscriptionSynchronization, (current) =>
+        current.generation > itemGeneration
+          ? [false, current]
+          : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
+      );
+      if (!accepted) return;
+      yield* SubscriptionRef.update(state, (current) => ({
+        ...current,
+        status: Option.isSome(current.snapshot) ? ("live" as const) : current.status,
+        error: Option.none(),
+      }));
+      return;
+    }
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* SubscriptionRef.set(state, {
@@ -214,28 +279,42 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       }
 
       const subscribeInput = Option.match(base, {
-        onNone: () => ({ includeCursorItems: true }),
+        onNone: () => ({
+          includeCursorItems: true,
+          includeSynchronizationItems: true,
+        }),
         onSome: (snapshot) => ({
           afterSequence: snapshot.snapshotSequence,
           includeCursorItems: true,
+          includeSynchronizationItems: true,
         }),
       });
 
-      yield* subscribe(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {
+      yield* subscribeWithSession(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
-      }).pipe(Stream.runForEach(applyItem));
+      }).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
     }),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {
-      switch (connectionProjectionPhase(connectionState)) {
-        case "synchronizing":
-          return setSynchronizing;
-        case "disconnected":
-          return setDisconnected;
-        case "ready":
-          return setReady;
-      }
+      const acceptGeneration = Ref.modify(latestConnectionGeneration, (latest) =>
+        connectionState.generation < latest ? [false, latest] : [true, connectionState.generation],
+      );
+      return acceptGeneration.pipe(
+        Effect.flatMap((accepted) => {
+          if (!accepted) return Effect.void;
+          switch (connectionProjectionPhase(connectionState)) {
+            case "synchronizing":
+              return markGenerationUnsynchronized(connectionState.generation).pipe(
+                Effect.andThen(setSynchronizing),
+              );
+            case "disconnected":
+              return setDisconnected(connectionState.generation);
+            case "ready":
+              return setReady(connectionState.generation);
+          }
+        }),
+      );
     }),
     Effect.forkScoped,
   );

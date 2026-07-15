@@ -69,6 +69,7 @@ import {
   durableCommandOutbox,
   selectDurableOutboxMessages,
   shouldClearComposerAfterDurableEnqueue,
+  useAcceptedCommandProjectionEntries,
   useDurableCommandOutboxEntries,
 } from "../durableCommandOutbox";
 import { readLocalApi } from "../localApi";
@@ -99,6 +100,7 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
+import { collectAuthoritativeProjectedMessageIds } from "./ChatView.logic";
 import { type UiTag, useUiStateStore } from "../uiStateStore";
 import {
   buildPlanImplementationThreadTitle,
@@ -278,7 +280,9 @@ function readComposerHandle(
   return composerRef.current;
 }
 const PreviewPanel = lazy(() =>
-  import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
+  import("./preview/PreviewPanel").then((module) => ({
+    default: module.PreviewPanel,
+  })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
@@ -1014,15 +1018,21 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
-  const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
+  const updateProject = useAtomCommand(projectEnvironment.update, {
+    reportFailure: false,
+  });
   const upsertKeybinding = useAtomCommand(serverEnvironment.upsertKeybinding, {
     reportFailure: false,
   });
   const openTerminal = useAtomCommand(terminalEnvironment.open, "terminal open");
   const writeTerminal = useAtomCommand(terminalEnvironment.write, "terminal write");
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
-  const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
-  const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const createThread = useAtomCommand(threadEnvironment.create, {
+    reportFailure: false,
+  });
+  const deleteThread = useAtomCommand(threadEnvironment.delete, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -1032,7 +1042,9 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
-  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
+  const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, {
+    reportFailure: false,
+  });
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
@@ -1045,11 +1057,15 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
-  const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
+  const openPreview = useAtomCommand(previewEnvironment.open, {
+    reportFailure: false,
+  });
   const closePreview = useAtomCommand(previewEnvironment.close, "preview close");
   const { environments } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
-  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, { reportFailure: false });
+  const retryEnvironment = useAtomCommand(environmentCatalog.retryNow, {
+    reportFailure: false,
+  });
   const environmentById = useMemo(
     () => new Map(environments.map((environment) => [environment.environmentId, environment])),
     [environments],
@@ -1122,6 +1138,7 @@ function ChatViewContent(props: ChatViewProps) {
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const durableOutboxEntries = useDurableCommandOutboxEntries();
+  const acceptedCommandProjectionEntries = useAcceptedCommandProjectionEntries();
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -2034,13 +2051,14 @@ function ChatViewContent(props: ChatViewProps) {
   }, [serverAttachmentUrlById, serverMessages]);
   const durableOptimisticUserMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!activeThread) return [];
+    const locallyOwnedEntries = [...durableOutboxEntries, ...acceptedCommandProjectionEntries];
     return selectDurableOutboxMessages(
-      durableOutboxEntries,
+      locallyOwnedEntries,
       activeThread.environmentId,
       activeThread.id,
       new Set((activeThread.queuedMessages ?? []).map((message) => message.messageId)),
     ).map((message) => {
-      const entry = durableOutboxEntries.find(
+      const entry = locallyOwnedEntries.find(
         (candidate) => candidate.plan.command.message.messageId === message.messageId,
       );
       const createdAt = entry?.plan.command.createdAt ?? new Date(0).toISOString();
@@ -2054,7 +2072,14 @@ function ChatViewContent(props: ChatViewProps) {
         streaming: false,
       };
     });
-  }, [activeThread, durableOutboxEntries]);
+  }, [acceptedCommandProjectionEntries, activeThread, durableOutboxEntries]);
+  useEffect(() => {
+    if (!activeThread || acceptedCommandProjectionEntries.length === 0) return;
+    const projectedMessageIds = collectAuthoritativeProjectedMessageIds(activeThread);
+    if (projectedMessageIds.size > 0) {
+      void durableCommandOutbox().confirmProjected(projectedMessageIds);
+    }
+  }, [acceptedCommandProjectionEntries.length, activeThread]);
   useEffect(() => {
     if (typeof Image === "undefined" || displayServerMessages.length === 0) {
       return;
@@ -2662,7 +2687,10 @@ function ChatViewContent(props: ChatViewProps) {
         storeSetActiveTerminal(activeThreadRef, targetTerminalId);
       }
 
-      const openResult = await openTerminal({ environmentId, input: openTerminalInput });
+      const openResult = await openTerminal({
+        environmentId,
+        input: openTerminalInput,
+      });
       if (openResult._tag === "Failure") {
         if (!isAtomCommandInterrupted(openResult)) {
           const error = squashAtomCommandFailure(openResult);
@@ -3063,7 +3091,11 @@ function ChatViewContent(props: ChatViewProps) {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
       void closeTerminalMutation({
         environmentId: activeThreadRef.environmentId,
-        input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
+        input: {
+          threadId: activeThreadRef.threadId,
+          terminalId,
+          deleteHistory: true,
+        },
       });
       storeCloseTerminal(activeThreadRef, terminalId);
       useRightPanelStore
@@ -3133,7 +3165,11 @@ function ChatViewContent(props: ChatViewProps) {
             storeCloseTerminal(activeThreadRef, terminalId);
             void closeTerminalMutation({
               environmentId: activeThreadRef.environmentId,
-              input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
+              input: {
+                threadId: activeThreadRef.threadId,
+                terminalId,
+                deleteHistory: true,
+              },
             });
           }
         }
@@ -3504,7 +3540,9 @@ function ChatViewContent(props: ChatViewProps) {
           settledTimelineAnchorRef.current = messageId;
         };
         const fallbackTimer = window.setTimeout(finishAnimatedPositioning, 750);
-        scrollNode.addEventListener("scrollend", finishAnimatedPositioning, { once: true });
+        scrollNode.addEventListener("scrollend", finishAnimatedPositioning, {
+          once: true,
+        });
         void list.scrollToIndex({
           index: anchorIndex,
           animated: true,
@@ -3551,7 +3589,10 @@ function ChatViewContent(props: ChatViewProps) {
           typeof currentScrollOffset === "number" &&
           Math.abs(currentScrollOffset - pending.offset) <= 2
         ) {
-          void list?.scrollToOffset({ offset: pending.offset, animated: false });
+          void list?.scrollToOffset({
+            offset: pending.offset,
+            animated: false,
+          });
         }
       }
     });

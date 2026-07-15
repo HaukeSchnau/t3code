@@ -1,4 +1,11 @@
-import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId, TurnId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  MessageId,
+  ProjectId,
+  ProviderInstanceId,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import type { Thread } from "../types";
@@ -7,6 +14,7 @@ import {
   MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   buildExpiredTerminalContextToastCopy,
   buildThreadTurnInterruptInput,
+  collectAuthoritativeProjectedMessageIds,
   createLocalDispatchSnapshot,
   deriveComposerSendState,
   getStartedThreadModelChangeBlockReason,
@@ -91,6 +99,40 @@ describe("buildThreadTurnInterruptInput", () => {
     expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
       threadId,
     });
+  });
+});
+
+describe("collectAuthoritativeProjectedMessageIds", () => {
+  it("tracks only transcript messages, not transient queued state", () => {
+    expect(
+      collectAuthoritativeProjectedMessageIds(
+        makeThread({
+          messages: [
+            {
+              id: MessageId.make("message-in-transcript"),
+              role: "user",
+              text: "Saved on the train",
+              turnId: null,
+              createdAt: now,
+              updatedAt: now,
+              streaming: false,
+            },
+          ],
+          queuedMessages: [
+            {
+              messageId: MessageId.make("message-still-queued"),
+              threadId,
+              text: "Still remote queued",
+              attachments: [],
+              runtimeMode: "full-access",
+              interactionMode: "default",
+              createdAt: now,
+              updatedAt: now,
+            },
+          ],
+        }),
+      ),
+    ).toEqual(new Set(["message-in-transcript"]));
   });
 });
 

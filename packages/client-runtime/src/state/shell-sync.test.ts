@@ -59,6 +59,166 @@ function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
 }
 
 describe("environment shell synchronization", () => {
+  it.effect("returns a cached shell to live when reconnect catch-up is empty", () =>
+    Effect.gen(function* () {
+      const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+      const replacementEvents = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+      const client = {
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: () => Stream.fromQueue(events),
+      } as unknown as WsRpcProtocolClient;
+      const replacementClient = {
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: () => Stream.fromQueue(replacementEvents),
+      } as unknown as WsRpcProtocolClient;
+      const supervisorState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+      const activeSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+        Option.some(session(client)),
+      );
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: supervisorState,
+        session: activeSession,
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.some(LIVE_SHELL_SNAPSHOT)),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(
+          ShellSnapshotLoader,
+          ShellSnapshotLoader.of({ load: () => Effect.never }),
+        ),
+      );
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 2,
+        generation: 2,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* SubscriptionRef.set(activeSession, Option.none());
+      for (let index = 0; index < 10; index += 1) yield* Effect.yieldNow;
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+      yield* Queue.offer(events, { kind: "synchronized" });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("live");
+
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* SubscriptionRef.set(activeSession, Option.some(session(replacementClient)));
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+      yield* Queue.offer(events, { kind: "synchronized" });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      yield* Queue.offer(replacementEvents, { kind: "synchronized" });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* Queue.offer(replacementEvents, { kind: "synchronized" });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("live");
+
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 1,
+        generation: 1,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("live");
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 2,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+
+      const recovered = yield* SubscriptionRef.get(shellState);
+      expect(recovered.status).toBe("live");
+      expect(Option.getOrThrow(recovered.snapshot)).toEqual(LIVE_SHELL_SNAPSHOT);
+
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "offline",
+        phase: "offline",
+        stage: null,
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      yield* SubscriptionRef.set(supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connected",
+        stage: null,
+        attempt: 3,
+        generation: 3,
+        lastFailure: null,
+        retryAt: null,
+      });
+      for (let index = 0; index < 20; index += 1) yield* Effect.yieldNow;
+      expect((yield* SubscriptionRef.get(shellState)).status).toBe("synchronizing");
+    }),
+  );
+
   it.effect("publishes live state before persistence and preserves it when ready", () =>
     Effect.gen(function* () {
       const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
@@ -209,6 +369,7 @@ describe("environment shell synchronization", () => {
       expect(yield* SubscriptionRef.get(capturedSubscription)).toEqual({
         afterSequence: 5,
         includeCursorItems: true,
+        includeSynchronizationItems: true,
       });
       expect(yield* SubscriptionRef.get(loaderCalls)).toBe(0);
 

@@ -34,6 +34,17 @@ connection while the shell still reports `live`, it retains the snapshot but dow
 The existing coarse `EnvironmentConnectionPresentation` remains unchanged. Platform adoption and UI
 copy belong to later web and mobile UX packets; this patch only provides the shared pure projection.
 
+Warm shell and thread subscriptions opt in to a terminal `synchronized` stream item. The server emits it after
+persisted catch-up and before buffered live events; older clients receive no marker unless they request it. The
+client binds the proof to the immutable RPC session and supervisor generation captured when that subscription is
+created. A marker from a replaced session, a lower generation, or a generation that has since disconnected
+cannot promote cached data to live.
+
+Replay diagnostics execute inside the returned long-lived WebSocket stream. `websocketRpcRouteLayer` therefore
+captures its server-owned `ReplayLogPublisher` while constructing the route and explicitly provides that service
+to deferred shell/thread replay observers. Do not move this lookup back inside stream execution: the route-build
+context is gone by then, which makes every warm catch-up fail while the full-snapshot path continues to work.
+
 ## Source Invariants
 
 The existing supervisor and shell source interfaces use nullable fields rather than discriminated
@@ -47,4 +58,6 @@ that contradicts desired/network state, or cached freshness without a snapshot.
 Focused tests cover every connection phase, active setup stages, exact retry-time observation,
 snapshot identity coupling, retained cached data, transport/freshness independence, and rejection of
 impossible nullable source combinations. They also cover the immediate disconnect/backoff/blocked
-cross-source race and cursor-only content-sequence semantics.
+cross-source race and cursor-only content-sequence semantics. RPC/state tests cover replaced-session and stale
+generation marker races, genuine same-generation loss, deleted/no-data states, and a real WebSocket catch-up
+through both the shell and thread synchronization markers.

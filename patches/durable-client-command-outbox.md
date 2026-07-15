@@ -85,6 +85,11 @@ storage and decide when to drain ready thread heads.
 - Chat rendering projects persisted outbox messages alongside the existing in-memory optimistic messages and
   server snapshot, deduplicated by message id. This makes reload recovery visible without rendering two copies
   while the server projection catches up.
+- A separate IndexedDB record keeps accepted commands visible after the active outbox entry is removed but before
+  the authoritative thread projection owns the message. The adapter persists this accepted projection before
+  completing the outbox transition, hydrates it after reload, and clears it only when the thread transcript or
+  remote queued-message collection contains the same message id. Accepted ids also suppress redispatch if a
+  crash occurs between those two durable writes.
 - Connection loss no longer disables the ordinary Send or Queue action. Non-replayable actions, approval
   responses, and prior-message editing retain their existing online requirements.
 
@@ -105,6 +110,7 @@ command schema, replace the local refinement rather than duplicating command pay
   FIFO/thread-head behavior,
   storage failure, and interruption during asynchronous saves.
 - `apps/web/src/durableCommandOutbox.test.ts` covers offline persistence, reconnect draining,
-  acknowledgement-loss replay with a stable identity, hydration after a new runtime, and exactly-one
-  optimistic projection.
+  acknowledgement-loss replay with a stable identity, hydration after a new runtime, cross-tab leadership,
+  accepted-before-cleanup crash recovery, no redispatch after accepted hydration, and exactly-one optimistic
+  projection.
 - Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.
