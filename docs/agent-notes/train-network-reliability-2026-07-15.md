@@ -94,6 +94,19 @@ again. Implementers do not approve their own packets.
 - `vp check`, `vp run typecheck`, `vp run lint:mobile`, focused packet tests, and the integrated test
   suite pass in the Node 24 Nix development shell.
 
+### NL2 browser comparator status
+
+- Implemented a versioned browser measurement/comparator, direct six-scenario matrix, and executable
+  baseline/candidate/repeat production-browser runner contract. The runner fails the command on
+  identity, reproducibility, correctness, latency, traffic, fault-proof, or cleanup regressions.
+- Implemented a pinned Playwright-core Chromium driver with real client-path CDP controls,
+  HTTP/WebSocket traffic accounting, production composer/outbox/timeline/status interactions, and
+  process/profile cleanup proof. Real Chromium smoke passes when
+  `T3_NETWORK_LAB_CHROMIUM=/run/current-system/sw/bin/chromium` is supplied.
+- Remaining integration blocker: NL1 exposes Effect RPC but not a browser-ready authenticated T3
+  app with an active deterministic thread. The full production six-profile run needs a fixture that
+  composes the standard HTTP/web/auth routes with NL1's provider/oracle and suppression control.
+
 ## Current State
 
 - 2026-07-15: fetched origin/upstream, merged `main@upstream` at `ecb35f758399` without conflicts.
