@@ -64,7 +64,8 @@ atomically claims the execution identity before invoking the user command and wh
 is atomically published after exit. An exact retry with no execution claim safely resubmits the same
 wrapper; competing writes still execute the user command once. A completed execution is reused. A
 claimed execution without a completion record fails closed because the prior process may have run
-part of an arbitrary command. Only `setup-completed` permits preprocessing to skip reconciliation and
+part of an arbitrary command. The initial request waits for the wrapper's terminal-exit record before
+advancing `setup-completed`; only that checkpoint permits preprocessing to skip reconciliation and
 dispatch the original turn. Terminal launch/reconciliation errors are recorded as setup activity and
 then returned; they no longer fall through to final turn dispatch.
 

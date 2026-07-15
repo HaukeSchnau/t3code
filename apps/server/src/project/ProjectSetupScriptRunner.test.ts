@@ -88,10 +88,7 @@ const claimWrapperExecution = (data: string) =>
     const wrapperPath = decodeJsonString(wrapperLiteral);
     const executionDirectory = NodePath.dirname(wrapperPath);
     NodeFS.mkdirSync(NodePath.join(executionDirectory, "claimed"));
-    NodeFS.writeFileSync(
-      NodePath.join(executionDirectory, "completed.json"),
-      '{"exitCode":0}\n',
-    );
+    NodeFS.writeFileSync(NodePath.join(executionDirectory, "completed.json"), '{"exitCode":0}\n');
   });
 
 describe("ProjectSetupScriptRunner", () => {
@@ -202,7 +199,12 @@ describe("ProjectSetupScriptRunner", () => {
           const wrapperLiteral = input.data.trim().match(/("(?:[^"\\]|\\.)*")$/)?.[1];
           if (!wrapperLiteral) throw new Error("missing wrapper path");
           wrapperPath = decodeJsonString(wrapperLiteral);
-          NodeFS.mkdirSync(NodePath.join(NodePath.dirname(wrapperPath), "claimed"));
+          const executionDirectory = NodePath.dirname(wrapperPath);
+          NodeFS.mkdirSync(NodePath.join(executionDirectory, "claimed"));
+          NodeFS.writeFileSync(
+            NodePath.join(executionDirectory, "completed.json"),
+            '{"exitCode":0}\n',
+          );
         }),
     );
     const project = makeProject([
@@ -224,6 +226,7 @@ describe("ProjectSetupScriptRunner", () => {
         preferredTerminalId: "setup-setup",
       };
       yield* runner.runForThread(input);
+      NodeFS.rmSync(NodePath.join(NodePath.dirname(wrapperPath), "completed.json"));
 
       const incomplete = yield* runner
         .runForThread({ ...input, reconcileClaimedLaunch: true })
