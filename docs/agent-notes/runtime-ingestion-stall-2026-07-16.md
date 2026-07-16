@@ -68,4 +68,13 @@ accepted turn is visibly working while its concrete provider turn identity is st
   adds a 16 ms collection window for accepted live deltas, and suppresses redundant volatile fallback work.
 - Regression coverage proves 500 token entries become one projection batch. Focused ingestion tests, server
   typechecking, and the hard-kill transcript recovery integration test pass.
-- Remaining: full repository gates, commit/push, infra pin update, deploy, then compare live CPU and event rate.
+- Final verification: `vp check`, `vp run typecheck`, 60 focused tests, and the hard-kill recovery integration
+  test passed. T3 Code `102dd6334d18` and infra pin `6aa874a555d4` were pushed and deployed to `srv-2`.
+- Forced cutover replaced PID `308386` with PID `634515`. After startup replay settled, a five-second sample
+  used 21 CPU ticks (about 4% of one core), versus roughly 74% sustained before the fix. Resident memory settled
+  near 270 MB and local HTTP completed in 7 ms. The durable journal was empty.
+- One existing client replayed 1,013 pre-fix events in 46 seconds after restart. That one-time backlog completed;
+  future assistant token bursts use the bounded batching path and therefore create far fewer replay events.
+- `just verify-host srv-2` passed all service-health checks but its final Codex version assertion raced a
+  concurrent Codex 0.144.5 deployment while the isolated verification workspace still expected 0.144.4. Direct
+  T3 service, HTTP, process, journal, deferred-restart, and live CPU checks passed.
