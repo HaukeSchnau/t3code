@@ -9,6 +9,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { toUploadChatImageAttachments } from "../lib/composerImages";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
@@ -164,7 +165,13 @@ export function useThreadOutboxDrain(): void {
       const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
-        input,
+        input: {
+          ...input,
+          message: {
+            ...input.message,
+            attachments: toUploadChatImageAttachments(queuedMessage.attachments),
+          },
+        },
       });
       return completeDelivery(deliveryResult);
     },
