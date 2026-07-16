@@ -4,12 +4,14 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
+  isBundledProviderInstance,
   type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
+  withBundledProviderInstances,
 } from "@t3tools/contracts";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
@@ -1107,7 +1109,8 @@ export function ProviderSettingsPanel() {
     ProviderDriverKind,
     Array<[ProviderInstanceId, ProviderInstanceConfig]>
   >();
-  for (const [rawId, instance] of Object.entries(settings.providerInstances ?? {})) {
+  const effectiveProviderInstances = withBundledProviderInstances(settings.providerInstances);
+  for (const [rawId, instance] of Object.entries(effectiveProviderInstances)) {
     const driver = instance.driver;
     const list = instancesByDriver.get(driver) ?? [];
     list.push([rawId as ProviderInstanceId, instance]);
@@ -1134,7 +1137,7 @@ export function ProviderSettingsPanel() {
     >;
     const driver = providerSettings.provider;
     const defaultInstanceId = defaultInstanceIdForDriver(driver);
-    const explicitInstance = settings.providerInstances?.[defaultInstanceId];
+    const explicitInstance = effectiveProviderInstances[defaultInstanceId];
     const legacyConfig = legacyProviders[providerSettings.provider]!;
     const defaultLegacyConfig = defaultLegacyProviders[providerSettings.provider]!;
     const effectiveInstance: ProviderInstanceConfig =
@@ -1377,7 +1380,11 @@ export function ProviderSettingsPanel() {
                   updateProviderInstance(row, next);
                 }
               }}
-              onDelete={row.isDefault ? undefined : () => deleteProviderInstance(row.instanceId)}
+              onDelete={
+                row.isDefault || isBundledProviderInstance(row.instanceId)
+                  ? undefined
+                  : () => deleteProviderInstance(row.instanceId)
+              }
               headerAction={headerAction}
               hiddenModels={modelPreferences.hiddenModels}
               favoriteModels={favoriteModels}

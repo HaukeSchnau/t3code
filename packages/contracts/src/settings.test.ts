@@ -87,6 +87,25 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   });
 });
 
+describe("Claude provider settings", () => {
+  it("includes built-in models by default", () => {
+    expect(decodeServerSettings({}).providers.claudeAgent.includeBuiltInModels).toBe(true);
+  });
+
+  it("accepts disabling built-in models in full settings and patches", () => {
+    expect(
+      decodeServerSettings({
+        providers: { claudeAgent: { includeBuiltInModels: false } },
+      }).providers.claudeAgent.includeBuiltInModels,
+    ).toBe(false);
+    expect(
+      decodeServerSettingsPatch({
+        providers: { claudeAgent: { includeBuiltInModels: false } },
+      }).providers?.claudeAgent?.includeBuiltInModels,
+    ).toBe(false);
+  });
+});
+
 describe("ServerSettings worktree defaults", () => {
   it("defaults start-from-origin off for legacy configs", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(false);

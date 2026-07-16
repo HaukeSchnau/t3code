@@ -54,7 +54,8 @@ const decodeServerSettings = Schema.decodeSync(ServerSettings);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
 
-const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({});
+const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+const defaultClaudeSettings: ClaudeSettings = decodeClaudeSettings({});
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
   enabled: false,
@@ -1202,6 +1203,13 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   grok: { enabled: false },
                   opencode: { enabled: false },
                 },
+                providerInstances: {
+                  claudex: {
+                    driver: "claudeAgent",
+                    enabled: false,
+                    config: { binaryPath: "claudex" },
+                  },
+                } as unknown as ContractServerSettings["providerInstances"],
               }),
             ),
           );
@@ -1447,6 +1455,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
               assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
                 "claudeAgent",
+                "claudex",
                 "codex",
                 "cursor",
                 "grok",
@@ -1488,6 +1497,37 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.status, "ready");
           assert.strictEqual(status.installed, true);
           assert.strictEqual(status.auth.status, "authenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("can expose only custom models for a routed Claude instance", () =>
+        Effect.gen(function* () {
+          const settings = decodeClaudeSettings({
+            binaryPath: "claudex",
+            includeBuiltInModels: false,
+            customModels: ["gpt-5.6-sol"],
+          });
+          const status = yield* checkClaudeProviderStatus(settings, claudeCapabilities());
+
+          assert.deepStrictEqual(
+            status.models.map((model) => ({ slug: model.slug, isCustom: model.isCustom })),
+            [{ slug: "gpt-5.6-sol", isCustom: true }],
+          );
+          assert.strictEqual(status.versionAdvisory, undefined);
         }).pipe(
           Effect.provide(
             mockSpawnerLayer((args) => {
