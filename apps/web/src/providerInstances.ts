@@ -21,8 +21,8 @@ import {
   type ServerProviderModel,
   type ServerSettings,
   type ServerProviderState,
-  withBundledProviderInstances,
 } from "@t3tools/contracts";
+import { withBundledProviderInstances } from "@t3tools/shared/bundledProviderInstances";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
 

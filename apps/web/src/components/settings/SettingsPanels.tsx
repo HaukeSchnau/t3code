@@ -4,15 +4,17 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import {
   defaultInstanceIdForDriver,
-  isBundledProviderInstance,
   type DesktopUpdateChannel,
   PROVIDER_DISPLAY_NAMES,
   ProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceId,
   type ScopedThreadRef,
-  withBundledProviderInstances,
 } from "@t3tools/contracts";
+import {
+  isBundledProviderInstance,
+  withBundledProviderInstances,
+} from "@t3tools/shared/bundledProviderInstances";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
