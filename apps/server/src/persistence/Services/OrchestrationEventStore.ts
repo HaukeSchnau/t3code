@@ -22,6 +22,15 @@ import type * as Stream from "effect/Stream";
 
 import type { OrchestrationEventStoreError } from "../Errors.ts";
 
+export interface OrchestrationReplayProbe {
+  /** Number of lightweight rows inspected, capped at `maxEvents + 1`. */
+  readonly eventCount: number;
+  /** Encoded payload and metadata bytes represented by the inspected rows. */
+  readonly payloadBytes: number;
+  /** Whether at least one event exists beyond the requested event bound. */
+  readonly truncated: boolean;
+}
+
 /**
  * OrchestrationEventStoreShape - Service API for orchestration event persistence.
  */
@@ -59,6 +68,23 @@ export interface OrchestrationEventStoreShape {
     sequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
+
+  /**
+   * Inspect a bounded global replay range without loading or decoding event
+   * payloads. The extra sentinel row makes large-backlog detection bounded.
+   */
+  readonly probeFromSequence?: (
+    sequenceExclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
+
+  /** Inspect one aggregate replay range using its indexed sequence path. */
+  readonly probeAggregateFromSequence?: (
+    aggregateKind: OrchestrationAggregateKind,
+    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+    sequenceExclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
 
   /**
    * Read all events from the beginning of the stream.

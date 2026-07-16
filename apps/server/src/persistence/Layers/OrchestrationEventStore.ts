@@ -26,6 +26,7 @@ import {
 } from "../Errors.ts";
 import {
   OrchestrationEventStore,
+  type OrchestrationReplayProbe,
   type OrchestrationEventStoreShape,
 } from "../Services/OrchestrationEventStore.ts";
 
@@ -70,6 +71,19 @@ const ReadAggregateFromSequenceRequestSchema = Schema.Struct({
   aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
   sequenceExclusive: NonNegativeInt,
   limit: Schema.Number,
+});
+const ProbeFromSequenceRequestSchema = Schema.Struct({
+  sequenceExclusive: NonNegativeInt,
+  limit: Schema.Number,
+});
+const ProbeAggregateFromSequenceRequestSchema = Schema.Struct({
+  aggregateKind: OrchestrationAggregateKind,
+  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  sequenceExclusive: NonNegativeInt,
+  limit: Schema.Number,
+});
+const ReplayProbeRowSchema = Schema.Struct({
+  payloadBytes: NonNegativeInt,
 });
 const DEFAULT_READ_FROM_SEQUENCE_LIMIT = 1_000;
 const READ_PAGE_SIZE = 500;
@@ -214,6 +228,51 @@ const makeEventStore = Effect.gen(function* () {
       `,
   });
 
+  const probeEventRowsFromSequence = SqlSchema.findAll({
+    Request: ProbeFromSequenceRequestSchema,
+    Result: ReplayProbeRowSchema,
+    execute: (request) =>
+      sql`
+        SELECT
+          LENGTH(CAST(payload_json AS BLOB)) + LENGTH(CAST(metadata_json AS BLOB)) AS "payloadBytes"
+        FROM orchestration_events
+        WHERE sequence > ${request.sequenceExclusive}
+        ORDER BY sequence ASC
+        LIMIT ${request.limit}
+      `,
+  });
+
+  const probeAggregateEventRowsFromSequence = SqlSchema.findAll({
+    Request: ProbeAggregateFromSequenceRequestSchema,
+    Result: ReplayProbeRowSchema,
+    execute: (request) =>
+      sql`
+        SELECT
+          LENGTH(CAST(payload_json AS BLOB)) + LENGTH(CAST(metadata_json AS BLOB)) AS "payloadBytes"
+        FROM orchestration_events
+        WHERE aggregate_kind = ${request.aggregateKind}
+          AND stream_id = ${request.aggregateId}
+          AND sequence > ${request.sequenceExclusive}
+        ORDER BY sequence ASC
+        LIMIT ${request.limit}
+      `,
+  });
+
+  const summarizeProbe = (
+    rows: ReadonlyArray<Schema.Schema.Type<typeof ReplayProbeRowSchema>>,
+    maxEvents: number,
+  ): OrchestrationReplayProbe => ({
+    eventCount: rows.length,
+    payloadBytes: rows.reduce((total, row) => total + row.payloadBytes, 0),
+    truncated: rows.length > maxEvents,
+  });
+
+  const normalizeProbeLimit = (maxEvents: number) =>
+    Math.min(
+      Number.MAX_SAFE_INTEGER - 1,
+      Number.isFinite(maxEvents) ? Math.max(0, Math.floor(maxEvents)) : 0,
+    ) + 1;
+
   const append: OrchestrationEventStoreShape["append"] = (event) =>
     appendEventRow({
       eventId: event.eventId,
@@ -351,10 +410,48 @@ const makeEventStore = Effect.gen(function* () {
     return readPage(sequenceExclusive, normalizedLimit);
   };
 
+  const probeFromSequence: NonNullable<OrchestrationEventStoreShape["probeFromSequence"]> = (
+    sequenceExclusive,
+    maxEvents,
+  ) => {
+    const limit = normalizeProbeLimit(maxEvents);
+    return probeEventRowsFromSequence({ sequenceExclusive, limit }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.probeFromSequence:query",
+          "OrchestrationEventStore.probeFromSequence:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => summarizeProbe(rows, limit - 1)),
+    );
+  };
+
+  const probeAggregateFromSequence: NonNullable<
+    OrchestrationEventStoreShape["probeAggregateFromSequence"]
+  > = (aggregateKind, aggregateId, sequenceExclusive, maxEvents) => {
+    const limit = normalizeProbeLimit(maxEvents);
+    return probeAggregateEventRowsFromSequence({
+      aggregateKind,
+      aggregateId,
+      sequenceExclusive,
+      limit,
+    }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.probeAggregateFromSequence:query",
+          "OrchestrationEventStore.probeAggregateFromSequence:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => summarizeProbe(rows, limit - 1)),
+    );
+  };
+
   return {
     append,
     readFromSequence,
     readAggregateFromSequence,
+    probeFromSequence,
+    probeAggregateFromSequence,
     readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
   } satisfies OrchestrationEventStoreShape;
 });

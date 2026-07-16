@@ -6,6 +6,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Metric from "effect/Metric";
+import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
@@ -17,6 +18,7 @@ import {
 import { makeReplayLogPublisherLayer } from "./ReplayLogPublisher.ts";
 
 import {
+  makeReplayObserver,
   makeReplayObserverWithRecorder,
   readReplayObservationReportsForTesting,
   replayCatchUpWithLive,
@@ -44,6 +46,52 @@ const counterValue = (
   );
 
 describe("ReplayObservability", () => {
+  it.effect("records total and flow-specific replay duration in workload diagnostics", () =>
+    Effect.gen(function* () {
+      resetWorkloadDiagnosticsForTesting();
+      const publisherLayer = makeReplayLogPublisherLayer({ write: () => Effect.void });
+
+      yield* Effect.gen(function* () {
+        const observer = yield* makeReplayObserver("thread", 0);
+        observer.recordStrategy({
+          strategy: "snapshot",
+          reason: "event-count",
+          probeEventCount: 257,
+          probePayloadBytes: 32_896,
+          snapshotSequence: 1_013,
+        });
+        yield* TestClock.adjust(Duration.millis(2_500));
+        yield* observer.finish(Exit.succeed(undefined));
+      }).pipe(Effect.provide(publisherLayer));
+
+      const workload = readWorkloadDiagnosticsSnapshot();
+      assert.equal(workload.counters["replay.duration_ms"], 2_500);
+      assert.equal(workload.gauges["replay.thread.last_duration_ms"], 2_500);
+      assert.equal(workload.gauges["replay.rpc.last_duration_ms"], 0);
+      assert.equal(workload.counters["replay.strategy.snapshot"], 1);
+      assert.equal(workload.counters["replay.strategy.events"], 0);
+      assert.equal(workload.counters["replay.probe_events"], 257);
+      assert.equal(workload.counters["replay.probe_bytes"], 32_896);
+      assert.deepStrictEqual(readReplayObservationReportsForTesting().thread?.strategy, {
+        strategy: "snapshot",
+        reason: "event-count",
+        probeEventCount: 257,
+        probePayloadBytes: 32_896,
+        snapshotSequence: 1_013,
+      });
+      const metrics = yield* Metric.snapshot;
+      const attributes = {
+        flow: "thread",
+        strategy: "snapshot",
+        reason: "event-count",
+        outcome: "success",
+      };
+      assert.equal(counterValue(metrics, "t3_replay_strategies_total", attributes), 1);
+      assert.equal(counterValue(metrics, "t3_replay_probe_events_total", attributes), 257);
+      assert.equal(counterValue(metrics, "t3_replay_probe_bytes_total", attributes), 32_896);
+    }).pipe(Effect.provide(TestClock.layer())),
+  );
+
   it.effect("reports deterministic replay work, overlap, and live-buffer high-water", () =>
     Effect.gen(function* () {
       const reports: Array<ReplayObservationReport> = [];
@@ -193,6 +241,8 @@ describe("ReplayObservability", () => {
       assert.equal(workload.counters["replay.events_scanned"], 3);
       assert.equal(workload.counters["replay.events_emitted"], 2);
       assert.equal(workload.counters["replay.logs_dropped"], 0);
+      assert.equal(workload.counters["replay.duration_ms"], 0);
+      assert.equal(workload.gauges["replay.rpc.last_duration_ms"], 0);
       assert.equal(readReplayObservationReportsForTesting().rpc?.outcome, "failure");
 
       const metricsAfter = yield* Metric.snapshot;
@@ -319,6 +369,59 @@ describe("ReplayObservability", () => {
       assert.deepStrictEqual(
         Array.from(yield* stream.pipe(Stream.take(2), Stream.runCollect, Effect.scoped)),
         [1, 2],
+      );
+    }),
+  );
+
+  it.effect("does not lose an event from an already-acquired PubSub subscription", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const live = yield* PubSub.unbounded<number>();
+        const subscription = yield* PubSub.subscribe(live);
+        const stream = replayCatchUpWithLive({
+          observer: makeReplayObserverWithRecorder("thread", 0, () => Effect.void),
+          live: Stream.fromSubscription(subscription),
+          sequence: (sequence) => sequence,
+          bufferCapacity: 1,
+          catchUp: () => Stream.fromEffect(PubSub.publish(live, 2).pipe(Effect.as(1 as number))),
+        });
+
+        assert.deepStrictEqual(
+          Array.from(yield* stream.pipe(Stream.take(2), Stream.runCollect)),
+          [1, 2],
+        );
+      }),
+    ),
+  );
+
+  it.effect("propagates live failure after persisted catch-up", () =>
+    Effect.gen(function* () {
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserverWithRecorder("thread", 0, () => Effect.void),
+        live: Stream.fail("live failed"),
+        sequence: (sequence: number) => sequence,
+        bufferCapacity: 1,
+        catchUp: () => Stream.make(1),
+      });
+
+      const exit = yield* stream.pipe(Stream.runCollect, Effect.scoped, Effect.exit);
+      assert.equal(Exit.isFailure(exit), true);
+    }),
+  );
+
+  it.effect("completes after a finite live source drains", () =>
+    Effect.gen(function* () {
+      const stream = replayCatchUpWithLive({
+        observer: makeReplayObserverWithRecorder("thread", 0, () => Effect.void),
+        live: Stream.make(2, 3),
+        sequence: (sequence) => sequence,
+        bufferCapacity: 2,
+        catchUp: () => Stream.make(1),
+      });
+
+      assert.deepStrictEqual(
+        Array.from(yield* stream.pipe(Stream.runCollect, Effect.scoped)),
+        [1, 2, 3],
       );
     }),
   );
