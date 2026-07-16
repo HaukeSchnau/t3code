@@ -60,6 +60,12 @@ import { isPersistenceError } from "../../persistence/Errors.ts";
 import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
 import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
 import {
+  makeTranscriptJournalTracker,
+  observeTranscriptJournalBatch,
+  TranscriptJournalTracker,
+  type TranscriptJournalIngestionPhase,
+} from "../../observability/TranscriptJournalObservability.ts";
+import {
   batchProviderTranscriptJournalEntries,
   isBatchableParentAssistantDelta,
   type ProviderTranscriptJournalBatch,
@@ -1281,6 +1287,10 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const transcriptJournal = yield* ProviderTranscriptJournal;
+  const transcriptJournalTrackerOption = yield* Effect.serviceOption(TranscriptJournalTracker);
+  const transcriptJournalTracker = Option.isSome(transcriptJournalTrackerOption)
+    ? transcriptJournalTrackerOption.value
+    : yield* makeTranscriptJournalTracker;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
   const serverConfig = yield* ServerConfig;
@@ -3122,7 +3132,10 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const processJournaledRuntimeEvent = (batch: ProviderTranscriptJournalBatch) => {
+  const processJournaledRuntimeEvent = (
+    batch: ProviderTranscriptJournalBatch,
+    phase: TranscriptJournalIngestionPhase,
+  ) => {
     const { event, sourceEvents } = batch;
     return Effect.gen(function* () {
       if (sourceEvents.length > 1) {
@@ -3157,6 +3170,13 @@ const make = Effect.gen(function* () {
       Effect.ensuring(
         Effect.sync(() => journalBatchSourcesByEventId.delete(String(event.eventId))),
       ),
+      (effect) =>
+        observeTranscriptJournalBatch({
+          tracker: transcriptJournalTracker,
+          phase,
+          batch,
+          effect,
+        }),
     );
   };
 
@@ -3173,6 +3193,9 @@ const make = Effect.gen(function* () {
         yield* Effect.sleep("16 millis");
         pending = yield* retryPersistence(transcriptJournal.listUndelivered);
       }
+      // Merge rows observed from SQLite rather than replacing tracker state:
+      // an accepted append can race this read and must remain authoritative.
+      yield* transcriptJournalTracker.registerEntries(pending);
       let fallbackWasJournaled = false;
       const relevantPending =
         fallbackEvent === undefined
@@ -3188,7 +3211,7 @@ const make = Effect.gen(function* () {
                   defaultInstanceIdForDriver(fallbackEvent.provider)),
           );
         }
-        yield* processJournaledRuntimeEvent(batch);
+        yield* processJournaledRuntimeEvent(batch, "live");
       }
       // Unit/mocked provider services may bypass the adapter acceptance seam.
       // Production semantic events are always found in the journal.
@@ -3197,10 +3220,13 @@ const make = Effect.gen(function* () {
         !fallbackWasJournaled &&
         !hasProcessedRuntimeEvent(fallbackEvent)
       ) {
-        yield* processJournaledRuntimeEvent({
-          event: fallbackEvent,
-          sourceEvents: [fallbackEvent],
-        });
+        yield* processJournaledRuntimeEvent(
+          {
+            event: fallbackEvent,
+            sourceEvents: [fallbackEvent],
+          },
+          "live",
+        );
       }
     });
 
@@ -3265,6 +3291,7 @@ const make = Effect.gen(function* () {
         bufferedAssistantJournalEventsByMessageId.clear();
       }),
     ),
+    Effect.ensuring(transcriptJournalTracker.reset),
   );
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
@@ -3277,6 +3304,10 @@ const make = Effect.gen(function* () {
       const pendingTranscriptEvents = yield* retryPersistence(transcriptJournal.list).pipe(
         Effect.orDie,
       );
+      const initialUndeliveredTranscriptEvents = yield* retryPersistence(
+        transcriptJournal.listUndelivered,
+      ).pipe(Effect.orDie);
+      yield* transcriptJournalTracker.hydrateOnce(initialUndeliveredTranscriptEvents);
       for (const { event } of pendingTranscriptEvents) {
         const scopeKey = transcriptItemScopeKey(event);
         if (scopeKey === null) continue;
@@ -3287,10 +3318,15 @@ const make = Effect.gen(function* () {
           );
         }
       }
+      const recoveryBatches = batchProviderTranscriptJournalEntries(pendingTranscriptEvents);
+      yield* transcriptJournalTracker.beginRecovery({
+        batchCount: recoveryBatches.length,
+        sourceEventCount: pendingTranscriptEvents.length,
+      });
       yield* Effect.forEach(
-        batchProviderTranscriptJournalEntries(pendingTranscriptEvents),
+        recoveryBatches,
         (batch) =>
-          processJournaledRuntimeEvent(batch).pipe(
+          processJournaledRuntimeEvent(batch, "recovery").pipe(
             Effect.tap(() =>
               Effect.sync(() => {
                 const { event, sourceEvents } = batch;
@@ -3308,16 +3344,12 @@ const make = Effect.gen(function* () {
                 recoveringTranscriptJournalCountByScope.delete(scopeKey);
               }),
             ),
-            Effect.catchCause((cause) =>
-              Effect.logError("failed to recover durable provider transcript event", {
-                eventId: batch.event.eventId,
-                eventType: batch.event.type,
-                cause: Cause.pretty(cause),
-              }),
-            ),
+            // Batch outcomes (including a bounded sample of failed identities)
+            // are aggregated into the single recovery summary log.
+            Effect.catchCause(() => Effect.void),
           ),
         { concurrency: 1, discard: true },
-      );
+      ).pipe(Effect.ensuring(transcriptJournalTracker.finishRecovery));
       yield* Effect.forkScoped(
         Stream.runForEach(
           liveSubscription === null

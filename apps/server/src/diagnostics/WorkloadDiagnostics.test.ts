@@ -16,6 +16,8 @@ describe("WorkloadDiagnostics", () => {
     registry.adjustGauge("subscriptions.detail.active", 2);
     registry.adjustGauge("subscriptions.detail.active", -1);
     registry.adjustGauge("subscriptions.shell.active", -10);
+    registry.setGauge("ingestion.journal.undelivered", 12.9);
+    registry.setGauge("ingestion.journal.undelivered", 4);
 
     const snapshot = registry.snapshot();
     assert.equal(snapshot.counters["provider.events.received"], 3);
@@ -24,6 +26,7 @@ describe("WorkloadDiagnostics", () => {
     assert.equal(snapshot.counters["replay.overlap_deduped"], 2);
     assert.equal(snapshot.gauges["subscriptions.detail.active"], 1);
     assert.equal(snapshot.gauges["subscriptions.shell.active"], 0);
+    assert.equal(snapshot.gauges["ingestion.journal.undelivered"], 4);
     assert.equal(isWorkloadDiagnosticsSnapshot(snapshot), true);
   });
 

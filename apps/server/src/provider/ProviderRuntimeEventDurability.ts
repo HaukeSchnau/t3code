@@ -5,6 +5,7 @@ import * as Schedule from "effect/Schedule";
 import { isPersistenceError } from "../persistence/Errors.ts";
 import type { ProviderTranscriptJournalShape } from "../persistence/Services/ProviderTranscriptJournal.ts";
 import { incrementWorkloadCounter } from "../diagnostics/WorkloadDiagnostics.ts";
+import type { TranscriptJournalTrackerShape } from "../observability/TranscriptJournalObservability.ts";
 import type { ProviderRuntimeEventAcceptance } from "./Services/ProviderAdapter.ts";
 
 /** Events needed to reconstruct or durably finalize assistant transcript text. */
@@ -36,6 +37,7 @@ export function isTranscriptDurabilityEvent(event: ProviderRuntimeEvent): boolea
  */
 export function makeDurableRuntimeEventAcceptance(
   journal: ProviderTranscriptJournalShape,
+  tracker?: TranscriptJournalTrackerShape,
 ): ProviderRuntimeEventAcceptance {
   return (event) => {
     if (!isTranscriptDurabilityEvent(event)) return Effect.succeed(true);
@@ -55,6 +57,9 @@ export function makeDurableRuntimeEventAcceptance(
           return true;
         },
       }),
+      Effect.tap((accepted) =>
+        accepted && tracker !== undefined ? tracker.registerAccepted(journalEvent) : Effect.void,
+      ),
       Effect.orDie,
     );
   };

@@ -35,6 +35,7 @@ import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
+import { TranscriptJournalTrackerLive } from "../../observability/TranscriptJournalObservability.ts";
 import {
   haveProvidersChanged,
   mergeProviderSnapshot,
@@ -84,7 +85,11 @@ const TestProviderTranscriptJournalLive = Layer.succeed(ProviderTranscriptJourna
   isItemCompleted: () => Effect.succeed(false),
   markItemCompleted: () => Effect.void,
 });
-const TestLayers = Layer.merge(TestHttpClientLive, TestProviderTranscriptJournalLive);
+const TestLayers = Layer.mergeAll(
+  TestHttpClientLive,
+  TestProviderTranscriptJournalLive,
+  TranscriptJournalTrackerLive,
+);
 
 function selectDescriptor(
   id: string,
