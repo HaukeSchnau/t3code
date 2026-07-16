@@ -288,11 +288,18 @@ const runStartupPhase = <A, E, R>(phase: string, effect: Effect.Effect<A, E, R>)
     Effect.withSpan(`server.startup.${phase}`),
   );
 
+/** Starts all scoped orchestration workers in production startup order. */
+export const startRuntimeReactors = Effect.gen(function* () {
+  const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
+  const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
+
+  yield* orchestrationReactor.start();
+  yield* providerSessionReaper.start();
+});
+
 export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const keybindings = yield* Keybindings.Keybindings;
-  const orchestrationReactor = yield* OrchestrationReactor.OrchestrationReactor;
-  const providerSessionReaper = yield* ProviderSessionReaper.ProviderSessionReaper;
   const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
@@ -340,10 +347,7 @@ export const make = Effect.gen(function* () {
     yield* Effect.logDebug("startup phase: starting orchestration reactors");
     yield* runStartupPhase(
       "reactors.start",
-      Effect.gen(function* () {
-        yield* orchestrationReactor.start().pipe(Scope.provide(reactorScope));
-        yield* providerSessionReaper.start().pipe(Scope.provide(reactorScope));
-      }),
+      startRuntimeReactors.pipe(Scope.provide(reactorScope)),
     );
 
     const welcomeBase = yield* resolveWelcomeBase;

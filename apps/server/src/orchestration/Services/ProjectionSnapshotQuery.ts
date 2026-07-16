@@ -17,9 +17,11 @@ import type {
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadShell,
+  OrchestrationSession,
   ProjectId,
   ThreadId,
   ThreadWorkspaceId,
+  TurnId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
@@ -34,6 +36,26 @@ export interface ProjectionSnapshotCounts {
 
 export interface ProjectionSnapshotSequence {
   readonly snapshotSequence: number;
+}
+
+/**
+ * Narrow durable state needed to decide whether restarting can interrupt work.
+ * This intentionally excludes transcript, activity, and checkpoint bodies.
+ */
+export interface ProjectionRestartSafetyThread {
+  readonly threadId: ThreadId;
+  readonly session: OrchestrationSession | null;
+  readonly latestTurnId: TurnId | null;
+  readonly latestTurnState: string | null;
+  readonly latestTurnUpdatedAt: string | null;
+  readonly queuedMessageCount: number;
+  readonly pendingApprovalCount: number;
+  readonly pendingUserInputCount: number;
+  readonly undeliveredTranscriptEventCount: number;
+}
+
+export interface ProjectionRestartSafetyState {
+  readonly threads: ReadonlyArray<ProjectionRestartSafetyThread>;
 }
 
 export interface ProjectionThreadCheckpointContext {
@@ -120,6 +142,12 @@ export interface ProjectionSnapshotQueryShape {
    * Read aggregate projection counts without hydrating the full read model.
    */
   readonly getCounts: () => Effect.Effect<ProjectionSnapshotCounts, ProjectionRepositoryError>;
+
+  /** Read only projected lifecycle and durable actionable state relevant to restart safety. */
+  readonly getRestartSafetyState?: () => Effect.Effect<
+    ProjectionRestartSafetyState,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read the active project for an exact workspace root match.

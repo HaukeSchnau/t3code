@@ -1,54 +1,45 @@
 import { assert, it } from "@effect/vitest";
-import type {
-  OrchestrationReadModel,
-  OrchestrationThread,
-  ProviderSession,
-} from "@t3tools/contracts";
+import { ProviderInstanceId, ThreadId, TurnId, type ProviderSession } from "@t3tools/contracts";
 
+import type { ProjectionRestartSafetyThread } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { summarizeServerIdleStatus } from "./IdleStatus.ts";
 
-const now = "2026-07-07T12:00:00.000Z";
+const runtimeStartedAt = "2026-07-16T08:29:00.000Z";
+const now = "2026-07-16T12:00:00.000Z";
 
-const makeThread = (overrides: Record<string, unknown>): OrchestrationThread =>
-  ({
-    id: "thread-1",
-    projectId: "project-1",
-    title: "Thread",
-    modelSelection: { instanceId: "codex", model: "gpt-5" },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    branch: null,
-    worktreePath: null,
-    workspaceId: null,
-    latestTurn: null,
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    deletedAt: null,
-    messages: [],
-    proposedPlans: [],
-    queuedMessages: [],
-    activities: [],
-    checkpoints: [],
+function projected(
+  overrides: Partial<ProjectionRestartSafetyThread> = {},
+): ProjectionRestartSafetyThread {
+  return {
+    threadId: "thread-1",
     session: null,
+    latestTurnId: null,
+    latestTurnState: null,
+    latestTurnUpdatedAt: null,
+    queuedMessageCount: 0,
+    pendingApprovalCount: 0,
+    pendingUserInputCount: 0,
+    undeliveredTranscriptEventCount: 0,
     ...overrides,
-  }) as unknown as OrchestrationThread;
+  } as ProjectionRestartSafetyThread;
+}
 
-const makeSnapshot = (threads: ReadonlyArray<OrchestrationThread>): OrchestrationReadModel =>
-  ({
-    snapshotSequence: 1,
-    projects: [],
-    threads,
-    usageLimits: [],
-  }) as unknown as OrchestrationReadModel;
+function summarize(input: {
+  liveSessions?: ReadonlyArray<ProviderSession>;
+  threads?: ReadonlyArray<ProjectionRestartSafetyThread>;
+  liveStateKnown?: boolean;
+}) {
+  return summarizeServerIdleStatus({
+    liveSessions: input.liveSessions ?? [],
+    projectedState: { threads: input.threads ?? [] },
+    checkedAt: now,
+    runtimeStartedAt,
+    liveStateKnown: input.liveStateKnown ?? true,
+  });
+}
 
 it("reports idle when live and projected state have no pending work", () => {
-  const status = summarizeServerIdleStatus({
-    liveSessions: [],
-    snapshot: makeSnapshot([makeThread({})]),
-    checkedAt: now,
-  });
-
+  const status = summarize({});
   assert.isTrue(status.idle);
   assert.equal(status.busyThreadCount, 0);
 });
@@ -64,69 +55,93 @@ it("treats live provider active turns as busy", () => {
     createdAt: now,
     updatedAt: now,
   } as ProviderSession;
-
-  const status = summarizeServerIdleStatus({
-    liveSessions: [liveSession],
-    snapshot: makeSnapshot([]),
-    checkedAt: now,
-  });
-
+  const status = summarize({ liveSessions: [liveSession] });
   assert.isFalse(status.idle);
   assert.equal(status.liveActiveTurnCount, 1);
   assert.equal(status.busyThreads[0]?.reason, "live-provider-active-turn");
 });
 
-it("treats projected turn gaps, queues, approvals, and user input as busy", () => {
-  const status = summarizeServerIdleStatus({
-    liveSessions: [],
-    snapshot: makeSnapshot([
-      makeThread({
-        latestTurn: {
-          turnId: "turn-1",
-          state: "running",
-          requestedAt: now,
-          startedAt: null,
-          completedAt: null,
-          assistantMessageId: null,
-        },
-        queuedMessages: [
-          {
-            messageId: "message-queued",
-            threadId: "thread-1",
-            text: "next",
-            attachments: [],
-            createdAt: now,
-            updatedAt: now,
-          },
-        ],
-        activities: [
-          {
-            id: "approval-1",
-            tone: "approval",
-            kind: "approval.requested",
-            summary: "Approval requested",
-            payload: { requestId: "approval-request-1" },
-            turnId: "turn-1",
-            createdAt: now,
-          },
-          {
-            id: "user-input-1",
-            tone: "info",
-            kind: "user-input.requested",
-            summary: "User input requested",
-            payload: { requestId: "user-input-request-1" },
-            turnId: "turn-1",
-            createdAt: now,
-          },
-        ],
-      }),
-    ]),
-    checkedAt: now,
-  });
+for (const status of ["running", "connecting"] as const) {
+  it(`treats live ${status} provider sessions without a turn id as busy`, () => {
+    const liveSession = {
+      provider: "codex",
+      providerInstanceId: "codex",
+      status,
+      runtimeMode: "full-access",
+      threadId: `thread-live-${status}`,
+      createdAt: now,
+      updatedAt: now,
+    } as ProviderSession;
 
-  assert.isFalse(status.idle);
+    const result = summarize({ liveSessions: [liveSession] });
+    assert.isFalse(result.idle);
+    assert.equal(result.liveActiveTurnCount, 1);
+    assert.equal(result.busyThreads[0]?.reason, "live-provider-session-busy");
+    assert.equal(result.busyThreads[0]?.turnId, null);
+  });
+}
+
+it("does not let old orphaned projections block a live restart probe", () => {
+  const status = summarize({
+    threads: [
+      projected({
+        session: {
+          threadId: ThreadId.make("thread-1"),
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-old"),
+          lastError: null,
+          updatedAt: "2026-07-15T12:00:00.000Z",
+        },
+        latestTurnId: TurnId.make("turn-old"),
+        latestTurnState: "running",
+      }),
+    ],
+  });
+  assert.isTrue(status.idle);
+  assert.equal(status.projectedActiveTurnCount, 1);
   assert.equal(status.projectedRunningTurnCount, 1);
-  assert.equal(status.queuedMessageCount, 1);
+});
+
+it("fails closed for current-epoch projected work and offline probes", () => {
+  const thread = projected({
+    session: {
+      threadId: ThreadId.make("thread-1"),
+      status: "starting",
+      providerName: "codex",
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-07-16T08:30:00.000Z",
+    },
+  });
+  assert.isFalse(summarize({ threads: [thread] }).idle);
+  assert.isFalse(summarize({ threads: [thread], liveStateKnown: false }).idle);
+});
+
+it("counts durable actionable state without treating it as unsafe to restart", () => {
+  const status = summarize({
+    threads: [
+      projected({
+        queuedMessageCount: 2,
+        pendingApprovalCount: 1,
+        pendingUserInputCount: 3,
+      }),
+    ],
+  });
+  assert.isTrue(status.idle);
+  assert.equal(status.queuedMessageCount, 2);
   assert.equal(status.pendingApprovalCount, 1);
-  assert.equal(status.pendingUserInputCount, 1);
+  assert.equal(status.pendingUserInputCount, 3);
+});
+
+it("blocks restart while durable transcript events await ingestion", () => {
+  const status = summarize({
+    threads: [projected({ undeliveredTranscriptEventCount: 4 })],
+  });
+  assert.isFalse(status.idle);
+  assert.equal(status.busyThreads[0]?.reason, "undelivered-transcript-events");
 });

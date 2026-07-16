@@ -35,6 +35,99 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("reads restart safety from narrow normalized projection state", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM provider_transcript_journal`;
+      yield* sql`DELETE FROM projection_thread_queued_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json, scripts_json,
+          created_at, updated_at, deleted_at
+        ) VALUES ('project-restart', 'Restart', '/tmp/restart', NULL, '[]',
+          '2026-07-15T00:00:00.000Z', '2026-07-15T00:00:00.000Z', NULL)
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          branch, worktree_path, latest_turn_id, latest_user_message_at,
+          pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-restart', 'project-restart', 'Restart thread',
+          '{"instanceId":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, 'turn-restart', NULL, 2, 3, 0,
+          '2026-07-15T00:00:00.000Z', '2026-07-15T14:28:38.073Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, active_turn_id, last_error, updated_at,
+          runtime_mode, provider_instance_id
+        ) VALUES (
+          'thread-restart', 'running', 'codex', 'turn-restart', NULL,
+          '2026-07-15T14:28:38.073Z', 'full-access', 'codex'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, started_at, completed_at, checkpoint_files_json
+        ) VALUES (
+          'thread-restart', 'turn-restart', 'running', '2026-07-15T14:28:38.073Z',
+          '2026-07-15T14:28:38.073Z', NULL, '[]'
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_thread_queued_messages (
+          message_id, thread_id, text, attachments_json, runtime_mode, interaction_mode,
+          created_at, updated_at
+        ) VALUES (
+          'queued-restart', 'thread-restart', 'next', '[]', 'full-access', 'default',
+          '2026-07-15T15:00:00.000Z', '2026-07-15T15:00:00.000Z'
+        )
+      `;
+      yield* sql`
+        INSERT INTO provider_transcript_journal (
+          provider_instance_id, event_id, thread_id, turn_id, completes_item, delivered, event_json
+        ) VALUES ('codex', 'event-restart', 'thread-restart', 'turn-restart', 0, 0, '{}')
+      `;
+
+      const state = yield* snapshotQuery.getRestartSafetyState!();
+      assert.equal(state.threads.length, 1);
+      assert.deepStrictEqual(state.threads[0], {
+        threadId: ThreadId.make("thread-restart"),
+        session: {
+          threadId: ThreadId.make("thread-restart"),
+          status: "running",
+          providerName: "codex",
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "full-access",
+          activeTurnId: TurnId.make("turn-restart"),
+          lastError: null,
+          updatedAt: "2026-07-15T14:28:38.073Z",
+        },
+        latestTurnId: TurnId.make("turn-restart"),
+        latestTurnState: "running",
+        latestTurnUpdatedAt: "2026-07-15T14:28:38.073Z",
+        queuedMessageCount: 1,
+        pendingApprovalCount: 2,
+        pendingUserInputCount: 3,
+        undeliveredTranscriptEventCount: 1,
+      });
+      yield* sql`DELETE FROM provider_transcript_journal`;
+      yield* sql`DELETE FROM projection_thread_queued_messages`;
+      yield* sql`DELETE FROM projection_turns`;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+    }),
+  );
+
   it.effect("hydrates read model from projection tables and computes snapshot sequence", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
