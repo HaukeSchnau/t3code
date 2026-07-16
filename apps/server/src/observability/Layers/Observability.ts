@@ -12,7 +12,8 @@ import * as ServerConfig from "../../config.ts";
 import { ServerLoggerLive } from "../../serverLogger.ts";
 import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
 
-const otlpSerializationLayer = OtlpSerialization.layerJson;
+export const otlpTraceSerializationLayer = OtlpSerialization.layerJson;
+export const otlpMetricsSerializationLayer = OtlpSerialization.layerProtobuf;
 
 export const ObservabilityLive = Layer.unwrap(
   Effect.gen(function* () {
@@ -61,7 +62,7 @@ export const ObservabilityLive = Layer.unwrap(
           BrowserTraceCollector.layer(sink),
         );
       }),
-    ).pipe(Layer.provideMerge(otlpSerializationLayer));
+    ).pipe(Layer.provideMerge(otlpTraceSerializationLayer));
 
     const metricsLayer =
       config.otlpMetricsUrl === undefined
@@ -76,7 +77,7 @@ export const ObservabilityLive = Layer.unwrap(
                 "service.mode": config.mode,
               },
             },
-          }).pipe(Layer.provideMerge(otlpSerializationLayer));
+          }).pipe(Layer.provideMerge(otlpMetricsSerializationLayer));
 
     return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
   }),
