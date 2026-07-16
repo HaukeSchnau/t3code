@@ -78,3 +78,63 @@ accepted turn is visibly working while its concrete provider turn identity is st
 - `just verify-host srv-2` passed all service-health checks but its final Codex version assertion raced a
   concurrent Codex 0.144.5 deployment while the isolated verification workspace still expected 0.144.4. Direct
   T3 service, HTTP, process, journal, deferred-restart, and live CPU checks passed.
+
+## Second production follow-up: replay, reconciliation, and telemetry
+
+### Baseline
+
+- Large reconnects remain event-amplified even after the indexed thread query: production replays include
+  5,427 thread events in about 65 minutes and 42,170 shell candidates in about 90 minutes. The cost includes
+  WebSocket framing, client reduction, cache persistence, and render invalidation for every historical item.
+- At `2026-07-16T14:49:48Z`, the running server had no live active provider turns but retained two projected
+  running turns from the prior process epoch. `ProviderSessionReaper` skips projected active turns, while
+  `getServerIdleStatus` hardcodes an empty live-session list, creating a permanent stale-state loop.
+- The idle probe takes about five seconds because it hydrates the full orchestration read model. It also counts
+  one 25-hour-old queued message and activity-derived pending requests as restart blockers, although those are
+  durable actionable state that safely survives a restart.
+- Existing replay counters are available in process diagnostics, but `srv-2` does not export OTLP metrics.
+  VictoriaMetrics currently has zero `t3_*` series even though the local vmagent OTLP endpoint accepts writes.
+
+### Active plan and acceptance targets
+
+1. Use bounded replay probing: preserve exact event replay for small gaps; replace large gaps with a consistent
+   projection snapshot followed by persisted tail replay and the already-buffered live stream.
+2. Reconcile only pre-process-epoch projected turns that have no matching live provider turn. Dispatch a durable
+   session event so normal projectors settle the turn; preserve provider runtime rows and resume cursors.
+3. Replace full-model idle hydration with a narrow status query and real provider sessions. Only live work and
+   conservative current-epoch startup state block restart; queues and pending requests remain counted/visible.
+4. Export journal depth/age, batching factor/duration, replay strategy/duration, and reconciliation outcomes via
+   process diagnostics and OTLP; wire `srv-2` to its local vmagent.
+5. Independently review each packet, run focused and full gates, push/deploy, verify live before/after metrics,
+   then build/install and smoke-test the macOS desktop bundle from the same commit.
+
+Targets: at least 99% fewer catch-up frames and 95% lower synchronization time for the stale-thread fixture;
+stale running projection rows `2 -> 0` without losing resume state; idle probe below 250 ms; and nonempty live
+`t3_*` VictoriaMetrics series after deployment.
+
+### Local implementation and verification
+
+- Replay now uses payload-free bounded probes (thread: 256 events / 2 MiB; shell: 1,024 events / 4 MiB), then
+  chooses exact events or a transactionally consistent snapshot plus persisted tail. Production uses an
+  explicitly acquired scoped PubSub subscription before catch-up; buffered live completion and errors propagate.
+- The 1,013-event regression emits one snapshot, 13 tail events, and one synchronization marker: 15 frames
+  instead of 1,013 historical frames (72.36x fewer data frames). The 1,037-event shell fixture emits three
+  frames and advances exactly to sequence 1,037.
+- Startup reconciliation is now explicitly started by the production runtime. It retries after transcript
+  backlog drains, preserves live `running`/`connecting` sessions, repairs sessionless legacy turns with a
+  durable interrupt, and uses receipt-identical retry envelopes. Runtime bindings and resume cursors are not
+  mutated.
+- Journal telemetry uses one runtime-scoped incremental tracker with a bounded-compaction min-heap. A 4,000
+  event recovery test emits one summary, retains zero heap entries, and performs bounded work in about 30 ms;
+  the reviewed prototype emitted 4,000 logs and took about 260 ms even with output discarded.
+- Three independent cross-reviews found and drove fixes for the replay acquisition race/mock regression,
+  inactive reconciliation runner/false-positive repair edges, and stale concurrent telemetry snapshots plus
+  quadratic recovery work.
+- A final post-fix audit additionally caught two Layer/status integration gaps: adapter acceptance could not
+  see the sibling tracker layer, and live `running`/`connecting` sessions without a turn id could appear idle.
+  One memoized registry+tracker layer and explicit live-session blockers now cover both cases with regression
+  tests.
+- Final local gates: `vp check` passes with no errors; `vp run typecheck` passes; `vp run lint:mobile` passes
+  (optional native linters unavailable); full `vp test --maxWorkers=4` passes 641 files / 5,132 tests, with
+  2 files / 10 tests skipped. The upstream mobile outbox tests were also decoupled from the React Native runtime
+  and now pass 29/29.
