@@ -92,6 +92,7 @@ import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as WorkloadDiagnostics from "./diagnostics/WorkloadDiagnostics.ts";
 import * as ReplayLogPublisher from "./observability/ReplayLogPublisher.ts";
+import { withTranscriptJournalTracker } from "./observability/TranscriptJournalObservability.ts";
 import { OrchestrationLayerLive } from "./orchestration/runtimeLayer.ts";
 import * as CommandPreprocessingCoordinator from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import {
@@ -199,6 +200,13 @@ const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationLive.
   Layer.provideMerge(ServerSettingsLayerLive),
 );
 
+// Adapter acceptance and runtime ingestion must observe the same tracker.
+// Expose it with the registry from one memoized layer instead of relying on
+// sibling Layer providers, which are not visible during registry hydration.
+const ProviderInstanceRegistryRuntimeLayerLive = withTranscriptJournalTracker(
+  ProviderInstanceRegistryLayerLive,
+);
+
 // `ProviderAdapterRegistryLive` is now a facade that resolves kind → adapter
 // by looking up the default `ProviderInstance` per driver in the instance
 // registry. Adapter construction itself moved inside each driver's
@@ -206,7 +214,7 @@ const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationLive.
 // NDJSON writers and is provided at the outer runtime layer so both
 // `ProviderService` and the per-instance drivers read the same logger pair.
 const ProviderAdapterRegistryLayerLive = ProviderAdapterRegistryLive.pipe(
-  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
+  Layer.provideMerge(ProviderInstanceRegistryRuntimeLayerLive),
 );
 
 const ProviderLayerLive = ProviderServiceLive.pipe(
@@ -215,7 +223,7 @@ const ProviderLayerLive = ProviderServiceLive.pipe(
 );
 
 const TextGenerationLayerLive = TextGeneration.layer.pipe(
-  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
+  Layer.provideMerge(ProviderInstanceRegistryRuntimeLayerLive),
 );
 
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
@@ -358,7 +366,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   // through this layer. Built-in drivers come from `BUILT_IN_DRIVERS`;
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
-  Layer.provideMerge(ProviderInstanceRegistryLayerLive),
+  Layer.provideMerge(ProviderInstanceRegistryRuntimeLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // drivers (native stream, written from inside each `<X>Adapter`) and
   // `ProviderService` (canonical stream, written after event normalization).

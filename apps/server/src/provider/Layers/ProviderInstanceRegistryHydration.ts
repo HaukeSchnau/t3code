@@ -50,10 +50,12 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
+import { TranscriptJournalTracker } from "../../observability/TranscriptJournalObservability.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
@@ -162,6 +164,7 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
     const transcriptJournal = yield* ProviderTranscriptJournal;
+    const transcriptJournalTracker = yield* Effect.serviceOption(TranscriptJournalTracker);
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -173,7 +176,10 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
       configMap: initialConfigMap,
-      acceptRuntimeEvent: makeDurableRuntimeEventAcceptance(transcriptJournal),
+      acceptRuntimeEvent: makeDurableRuntimeEventAcceptance(
+        transcriptJournal,
+        Option.getOrUndefined(transcriptJournalTracker),
+      ),
     });
 
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));

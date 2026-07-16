@@ -15,6 +15,11 @@ export const WORKLOAD_COUNTER_NAMES = [
   "ingestion.activity.published",
   "ingestion.activity.flushes",
   "ingestion.activity.persistence_retries",
+  "ingestion.journal.batches",
+  "ingestion.journal.source_events",
+  "ingestion.journal.batch_characters",
+  "ingestion.journal.failures",
+  "ingestion.journal.lag_ms_total",
   "orchestration.events.durable",
   "projection.candidates",
   "projection.applied",
@@ -31,6 +36,11 @@ export const WORKLOAD_COUNTER_NAMES = [
   "replay.events_emitted",
   "replay.overlap_deduped",
   "replay.logs_dropped",
+  "replay.duration_ms",
+  "replay.strategy.snapshot",
+  "replay.strategy.events",
+  "replay.probe_events",
+  "replay.probe_bytes",
   "provider_log.candidates",
   "provider_log.records",
   "provider_log.sampled_suppressed",
@@ -42,6 +52,12 @@ export const WORKLOAD_GAUGE_NAMES = [
   "subscriptions.detail.active",
   "ingestion.subagent_coalescers.active",
   "ingestion.dedupe.events.active",
+  "ingestion.journal.undelivered",
+  "ingestion.journal.oldest_event_lag_ms",
+  "ingestion.journal.last_batch_events",
+  "replay.rpc.last_duration_ms",
+  "replay.shell.last_duration_ms",
+  "replay.thread.last_duration_ms",
 ] as const;
 
 export type WorkloadCounterName = (typeof WORKLOAD_COUNTER_NAMES)[number];
@@ -50,6 +66,7 @@ export type WorkloadGaugeName = (typeof WORKLOAD_GAUGE_NAMES)[number];
 export interface WorkloadDiagnosticsRegistry {
   readonly increment: (name: WorkloadCounterName, amount?: number) => void;
   readonly adjustGauge: (name: WorkloadGaugeName, amount: number) => void;
+  readonly setGauge: (name: WorkloadGaugeName, value: number) => void;
   readonly snapshot: () => WorkloadDiagnosticsSnapshot;
   readonly reset: () => void;
 }
@@ -78,6 +95,9 @@ export function makeWorkloadDiagnosticsRegistry(
       const next = gauges[name] + Math.trunc(Number.isFinite(amount) ? amount : 0);
       gauges[name] = Math.max(0, next);
     },
+    setGauge(name, value) {
+      gauges[name] = nonNegativeInt(value);
+    },
     snapshot() {
       return {
         schemaVersion: 1,
@@ -102,6 +122,10 @@ export function incrementWorkloadCounter(name: WorkloadCounterName, amount = 1):
 
 export function adjustWorkloadGauge(name: WorkloadGaugeName, amount: number): void {
   liveRegistry.adjustGauge(name, amount);
+}
+
+export function setWorkloadGauge(name: WorkloadGaugeName, value: number): void {
+  liveRegistry.setGauge(name, value);
 }
 
 export function readWorkloadDiagnosticsSnapshot(): WorkloadDiagnosticsSnapshot {

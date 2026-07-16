@@ -9,6 +9,20 @@ export interface ProviderTranscriptJournalBatch {
   readonly sourceEvents: ReadonlyArray<ProviderRuntimeEvent>;
 }
 
+export type ProviderTranscriptJournalBatchKind = "assistant_delta" | "single";
+
+export function providerTranscriptJournalBatchKind(
+  batch: ProviderTranscriptJournalBatch,
+): ProviderTranscriptJournalBatchKind {
+  return isBatchableParentAssistantDelta(batch.event) ? "assistant_delta" : "single";
+}
+
+export function providerTranscriptJournalBatchCharacterCount(
+  batch: ProviderTranscriptJournalBatch,
+): number {
+  return isBatchableParentAssistantDelta(batch.event) ? batch.event.payload.delta.length : 0;
+}
+
 type AssistantDeltaEvent = Extract<ProviderRuntimeEvent, { readonly type: "content.delta" }>;
 
 export function isBatchableParentAssistantDelta(

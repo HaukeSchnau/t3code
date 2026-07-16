@@ -55,6 +55,10 @@ import {
 } from "../src/provider/Layers/ProviderEventLoggers.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
 import { makeDurableRuntimeEventAcceptance } from "../src/provider/ProviderRuntimeEventDurability.ts";
+import {
+  TranscriptJournalTracker,
+  TranscriptJournalTrackerLive,
+} from "../src/observability/TranscriptJournalObservability.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
@@ -298,6 +302,7 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(TranscriptJournalTrackerLive),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
     const providerEventLoggersLayer = Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers);
@@ -413,6 +418,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(TranscriptJournalTrackerLive),
     );
 
     const runtime = ManagedRuntime.make(layer);
@@ -455,10 +461,14 @@ export const makeOrchestrationIntegrationHarness = (
         "load ProviderTranscriptJournal service",
         () => runtime.runPromise(Effect.service(ProviderTranscriptJournal)),
       ).pipe(Effect.orDie);
+      const transcriptJournalTracker = yield* tryRuntimePromise(
+        "load TranscriptJournalTracker service",
+        () => runtime.runPromise(Effect.service(TranscriptJournalTracker)),
+      ).pipe(Effect.orDie);
       adapterHarness.setRuntimeEventAcceptance(
         bindProviderInstanceRuntimeEventAcceptance(
           defaultInstanceIdForDriver(adapterHarness.provider),
-          makeDurableRuntimeEventAcceptance(transcriptJournal),
+          makeDurableRuntimeEventAcceptance(transcriptJournal, transcriptJournalTracker),
         ),
       );
     }
