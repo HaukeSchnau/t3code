@@ -39,6 +39,7 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
+import { isBundledProviderInstance } from "@t3tools/shared/bundledProviderInstances";
 
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
@@ -109,7 +110,9 @@ export const mergeProviderSnapshot = (
     ? nextProvider
     : {
         ...nextProvider,
-        models: mergeProviderModels(previousProvider.models, nextProvider.models),
+        models: isBundledProviderInstance(nextProvider.instanceId)
+          ? nextProvider.models
+          : mergeProviderModels(previousProvider.models, nextProvider.models),
       };
 
 export const mergeProviderSnapshots = (
