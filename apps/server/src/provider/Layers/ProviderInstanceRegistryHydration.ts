@@ -46,8 +46,8 @@ import {
   type ProviderInstanceConfig,
   type ProviderInstanceConfigMap,
   ServerSettings,
-  withBundledProviderInstances,
 } from "@t3tools/contracts";
+import { withBundledProviderInstances } from "@t3tools/shared/bundledProviderInstances";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";

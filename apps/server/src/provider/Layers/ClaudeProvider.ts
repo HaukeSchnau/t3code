@@ -726,8 +726,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "error",
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
-          ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
-          : "Failed to execute Claude Agent CLI health check.",
+          ? `Configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) is not installed or not on PATH.`
+          : `Failed to execute configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) health check.`,
       },
     });
   }
@@ -743,8 +743,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: null,
         status: "error",
         auth: { status: "unknown" },
-        message:
-          "Claude Agent CLI is installed but failed to run. Timed out while running command.",
+        message: `Configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) is installed but timed out while running its health check.`,
       },
     });
   }
@@ -767,7 +766,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         version: parsedVersion,
         status: "error",
         auth: { status: "unknown" },
-        message: "Claude Agent CLI is installed but failed to run.",
+        message: `Configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) is installed but failed to run.`,
       },
     });
   }
@@ -835,12 +834,7 @@ export const makePendingClaudeProvider = (
 ): Effect.Effect<ServerProviderDraft> =>
   Effect.gen(function* () {
     const checkedAt = yield* nowIso;
-    const models = providerModelsFromSettings(
-      BUILT_IN_MODELS,
-      PROVIDER,
-      claudeSettings.customModels,
-      DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-    );
+    const models = configuredClaudeModels(claudeSettings, BUILT_IN_MODELS);
 
     if (!claudeSettings.enabled) {
       return buildServerProvider({

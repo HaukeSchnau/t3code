@@ -36,6 +36,19 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
+  it("renders Claude built-in model discovery as a switch", () => {
+    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
+    expect(claude).toBeDefined();
+
+    expect(
+      deriveProviderSettingsFields(claude!).find((field) => field.key === "includeBuiltInModels"),
+    ).toMatchObject({
+      label: "Include built-in models",
+      control: "switch",
+      defaultBooleanValue: true,
+    });
+  });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();

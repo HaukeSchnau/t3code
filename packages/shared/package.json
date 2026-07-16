@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./bundledProviderInstances": {
+      "types": "./src/bundledProviderInstances.ts",
+      "import": "./src/bundledProviderInstances.ts"
+    },
     "./projectFavicon": {
       "types": "./src/projectFavicon.ts",
       "import": "./src/projectFavicon.ts"

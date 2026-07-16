@@ -139,44 +139,6 @@ export const ProviderInstanceConfigMap = Schema.Record(ProviderInstanceId, Provi
 export type ProviderInstanceConfigMap = typeof ProviderInstanceConfigMap.Type;
 
 /**
- * Fork-provided profiles that should exist on every installation. Keeping
- * these as provider instances (rather than new drivers) lets them reuse the
- * complete protocol implementation of an existing driver.
- *
- * Persisted settings are deliberately overlaid last by
- * `withBundledProviderInstances`, so users can edit or disable a bundled
- * profile. Removing one only restores its defaults on the next projection.
- */
-export const BUNDLED_PROVIDER_INSTANCES: ProviderInstanceConfigMap = {
-  [ProviderInstanceId.make("claudex")]: {
-    driver: ProviderDriverKind.make("claudeAgent"),
-    displayName: "Claudex",
-    accentColor: "#f97316",
-    enabled: true,
-    config: {
-      binaryPath: "claudex",
-      homePath: "",
-      includeBuiltInModels: false,
-      customModels: ["gpt-5.6-sol"],
-      launchArgs: "",
-    },
-  },
-};
-
-export function isBundledProviderInstance(instanceId: ProviderInstanceId): boolean {
-  return instanceId in BUNDLED_PROVIDER_INSTANCES;
-}
-
-export function withBundledProviderInstances(
-  providerInstances: ProviderInstanceConfigMap,
-): ProviderInstanceConfigMap {
-  return {
-    ...BUNDLED_PROVIDER_INSTANCES,
-    ...providerInstances,
-  };
-}
-
-/**
  * Construct the canonical `ProviderInstanceId` used as a back-compat default
  * for a built-in driver. The legacy single-instance-per-driver world used
  * the driver kind itself as the instance id; preserving that mapping keeps

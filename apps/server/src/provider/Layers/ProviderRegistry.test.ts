@@ -31,7 +31,7 @@ import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
 import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
-import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
+import { checkClaudeProviderStatus, makePendingClaudeProvider } from "./ClaudeProvider.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
@@ -1550,6 +1550,23 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ),
       );
 
+      it.effect("keeps built-in models out of a routed Claude pending snapshot", () =>
+        Effect.gen(function* () {
+          const pending = yield* makePendingClaudeProvider(
+            decodeClaudeSettings({
+              binaryPath: "claudex",
+              includeBuiltInModels: false,
+              customModels: ["gpt-5.6-sol"],
+            }),
+          );
+
+          assert.deepStrictEqual(
+            pending.models.map((model) => model.slug),
+            ["gpt-5.6-sol"],
+          );
+        }),
+      );
+
       it.effect("includes Claude Fable 5 on supported Claude Code versions", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -1928,7 +1945,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           assert.strictEqual(status.auth.status, "unknown");
           assert.strictEqual(
             status.message,
-            "Claude Agent CLI (`claude`) is not installed or not on PATH.",
+            "Configured Claude Agent CLI (`claude`) is not installed or not on PATH.",
           );
         }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
       );
@@ -1942,7 +1959,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(status.status, "error");
           assert.strictEqual(status.installed, true);
-          assert.strictEqual(status.message, "Claude Agent CLI is installed but failed to run.");
+          assert.strictEqual(
+            status.message,
+            "Configured Claude Agent CLI (`claude`) is installed but failed to run.",
+          );
           assert.ok(!(status.message ?? "").includes(secretStderr));
         }).pipe(
           Effect.provide(

@@ -229,6 +229,7 @@ export const ClaudeSettings = makeProviderSettingsSchema(
       Schema.annotateKey({
         title: "Include built-in models",
         description: "Show the Claude models bundled with T3 Code for this instance.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
       }),
     ),
     customModels: Schema.Array(Schema.String).pipe(

@@ -13,10 +13,14 @@ installation while reusing the existing Claude Code driver.
 - Deleting the persisted entry restores the bundled defaults during runtime/UI projection.
 - Claude profiles can independently exclude T3 Code's built-in Claude model catalog via
   `includeBuiltInModels`.
+- Pending and checked snapshots both preserve the custom-only catalog, so stale built-in models
+  never appear while provider probing is in flight.
+- The managed Claudex profile suppresses Claude's self-update advisory and labels authenticated
+  sessions as CLIProxyAPI; the host wrapper owns backend readiness and update policy.
 
 ## Upstream Touch Points
 
-- `packages/contracts/src/providerInstance.ts`
+- `packages/shared/src/bundledProviderInstances.ts`
 - `packages/contracts/src/settings.ts`
 - `apps/server/src/provider/Layers/ProviderInstanceRegistryHydration.ts`
 - `apps/server/src/provider/Layers/ClaudeProvider.ts`
@@ -32,6 +36,7 @@ Claude Code, CLIProxyAPI, skills, and authentication state on macOS and srv-2.
 
 ## Verification
 
-- Contract tests cover bundled default restoration, override precedence, and Claude settings.
-- Provider tests prove that routed Claude profiles can publish only their custom model catalog.
+- Shared/runtime tests cover bundled default restoration, override precedence, and Claude settings.
+- Provider tests prove that routed Claude profiles publish only their custom model catalog in both
+  pending and checked snapshots.
 - Required fork gates: `vp check` and `vp run typecheck`.
