@@ -86,6 +86,7 @@ import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import { normalizeDispatchCommand, prepareDispatchCommand } from "./orchestration/Normalizer.ts";
+import { planReplay, type ReplayThresholds } from "./orchestration/ReplayPlanner.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import {
   CommandPreprocessingCoordinator,
@@ -340,7 +341,60 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
 const SHELL_CURSOR_COMPACTION_INTERVAL = 128;
 const REPLAY_PAGE_SIZE = 256;
 const LIVE_REPLAY_BUFFER_SIZE = 1_024;
+const THREAD_REPLAY_THRESHOLDS: ReplayThresholds = {
+  maxEvents: 256,
+  maxPayloadBytes: 2 * 1024 * 1024,
+};
+const SHELL_REPLAY_THRESHOLDS: ReplayThresholds = {
+  maxEvents: 1_024,
+  maxPayloadBytes: 4 * 1024 * 1024,
+};
 type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
+type ShellLiveItem = Exclude<ShellDeltaItem, { readonly kind: "synchronized" }>;
+type ShellCatchUpItem =
+  | ShellLiveItem
+  | Extract<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
+type ThreadCatchUpItem = Exclude<OrchestrationThreadStreamItem, { readonly kind: "synchronized" }>;
+
+function getReplayProbeCapability(
+  engine: OrchestrationEngine.OrchestrationEngineShape,
+): NonNullable<OrchestrationEngine.OrchestrationEngineShape["replayProbeCapability"]> | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(engine, "replayProbeCapability");
+  if (descriptor === undefined || !("value" in descriptor)) return undefined;
+  const capability = descriptor.value as unknown;
+  if (
+    typeof capability !== "object" ||
+    capability === null ||
+    !("kind" in capability) ||
+    capability.kind !== "payload-free-v1"
+  ) {
+    return undefined;
+  }
+  return capability as NonNullable<
+    OrchestrationEngine.OrchestrationEngineShape["replayProbeCapability"]
+  >;
+}
+
+function getLiveSubscriptionCapability(
+  engine: OrchestrationEngine.OrchestrationEngineShape,
+):
+  | NonNullable<OrchestrationEngine.OrchestrationEngineShape["liveSubscriptionCapability"]>
+  | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(engine, "liveSubscriptionCapability");
+  if (descriptor === undefined || !("value" in descriptor)) return undefined;
+  const capability = descriptor.value as unknown;
+  if (
+    typeof capability !== "object" ||
+    capability === null ||
+    !("kind" in capability) ||
+    capability.kind !== "scoped-v1"
+  ) {
+    return undefined;
+  }
+  return capability as NonNullable<
+    OrchestrationEngine.OrchestrationEngineShape["liveSubscriptionCapability"]
+  >;
+}
 
 export function shouldIncludeShellStreamItem(
   item: OrchestrationShellStreamItem,
@@ -1956,7 +2010,7 @@ const makeWsRpcLayer = (
               const includeCursorItems = input.includeCursorItems === true;
               const toShellStream = <E, R>(
                 events: Stream.Stream<OrchestrationEvent, E, R>,
-              ): Stream.Stream<ShellDeltaItem, E, R> =>
+              ): Stream.Stream<ShellLiveItem, E, R> =>
                 events.pipe(
                   Stream.tap(() => Effect.sync(() => incrementWorkloadCounter("shell.candidates"))),
                   Stream.mapEffect(toShellStreamEvent),
@@ -1975,8 +2029,12 @@ const makeWsRpcLayer = (
                     return include;
                   }),
                   compactShellCursorItems,
+                  Stream.filter((item) => item.kind !== "synchronized"),
+                  Stream.map((item) => item as ShellLiveItem),
                 );
-              const liveStream = toShellStream(orchestrationEngine.streamDomainEvents);
+              const liveStream: Stream.Stream<ShellCatchUpItem> = toShellStream(
+                orchestrationEngine.streamDomainEvents,
+              );
 
               // When the client already holds a shell snapshot (cached, or loaded
               // over HTTP) it passes that snapshot's sequence, and we resume by
@@ -1989,6 +2047,13 @@ const makeWsRpcLayer = (
               // page limit) since the shell filter runs after reading.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
+                const liveSubscription = getLiveSubscriptionCapability(orchestrationEngine);
+                const acquiredLiveEvents = yield* (
+                  liveSubscription?.subscribe ??
+                    Effect.succeed(orchestrationEngine.streamDomainEvents)
+                );
+                const acquiredLiveStream: Stream.Stream<ShellCatchUpItem> =
+                  toShellStream(acquiredLiveEvents);
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("shell", afterSequence).pipe(
                     Effect.provideService(
@@ -1996,24 +2061,107 @@ const makeWsRpcLayer = (
                       replayLogPublisher,
                     ),
                   ),
-                  live: liveStream,
+                  live: acquiredLiveStream,
                   sequence: (item) =>
-                    item.kind === "synchronized" ? afterSequence : item.sequence,
+                    item.kind === "snapshot" ? item.snapshot.snapshotSequence : item.sequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
                   ...(input.includeSynchronizationItems
                     ? { synchronized: () => ({ kind: "synchronized" as const }) }
                     : {}),
-                  catchUp: (observer) =>
-                    readEventsPaginated(afterSequence, observer).pipe(
-                      toShellStream,
-                      Stream.mapError(
-                        (cause) =>
-                          new OrchestrationGetSnapshotError({
-                            message: "Failed to replay orchestration shell events",
-                            cause,
-                          }),
-                      ),
-                    ),
+                  catchUp: (observer) => {
+                    const replayFrom = (sequence: number) =>
+                      readEventsPaginated(sequence, observer).pipe(
+                        toShellStream,
+                        Stream.mapError(
+                          (cause) =>
+                            new OrchestrationGetSnapshotError({
+                              message: "Failed to replay orchestration shell events",
+                              cause,
+                            }),
+                        ),
+                      );
+                    const probeCapability = getReplayProbeCapability(orchestrationEngine);
+                    if (probeCapability === undefined) {
+                      observer.recordStrategy({
+                        strategy: "events",
+                        reason: "capability-unavailable",
+                        probeEventCount: 0,
+                        probePayloadBytes: 0,
+                      });
+                      return replayFrom(afterSequence);
+                    }
+                    return Stream.unwrap(
+                      Effect.gen(function* () {
+                        const probeResult = yield* Effect.result(
+                          probeCapability.probeReplay(
+                            afterSequence,
+                            SHELL_REPLAY_THRESHOLDS.maxEvents,
+                          ),
+                        );
+                        if (probeResult._tag === "Failure") {
+                          yield* Effect.logWarning(
+                            "orchestration shell replay probe failed; using exact event replay",
+                            { cause: probeResult.failure, afterSequence },
+                          );
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "probe-failed",
+                            probeEventCount: 0,
+                            probePayloadBytes: 0,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const probe = probeResult.success;
+                        const plan = planReplay(probe, SHELL_REPLAY_THRESHOLDS);
+                        if (plan.strategy === "events") {
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: plan.reason,
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const snapshotResult = yield* Effect.result(
+                          projectionSnapshotQuery.getShellSnapshot(),
+                        );
+                        if (snapshotResult._tag === "Failure") {
+                          yield* Effect.logWarning(
+                            "orchestration shell replay snapshot failed; using exact event replay",
+                            { cause: snapshotResult.failure, afterSequence },
+                          );
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "snapshot-failed",
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const snapshot = snapshotResult.success;
+                        if (snapshot.snapshotSequence <= afterSequence) {
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "snapshot-stale",
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        observer.recordStrategy({
+                          strategy: "snapshot",
+                          reason: plan.reason,
+                          probeEventCount: probe.eventCount,
+                          probePayloadBytes: probe.payloadBytes,
+                          snapshotSequence: snapshot.snapshotSequence,
+                        });
+                        return Stream.concat(
+                          Stream.make({ kind: "snapshot" as const, snapshot }),
+                          replayFrom(snapshot.snapshotSequence),
+                        );
+                      }),
+                    );
+                  },
                 });
               }
 
@@ -2070,7 +2218,7 @@ const makeWsRpcLayer = (
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
 
-              const liveStream: Stream.Stream<OrchestrationThreadStreamItem> =
+              const liveStream: Stream.Stream<ThreadCatchUpItem> =
                 orchestrationEngine.streamDomainEvents.pipe(
                   Stream.filter(isThisThreadDetailEvent),
                   Stream.tap(() =>
@@ -2100,6 +2248,19 @@ const makeWsRpcLayer = (
               // than the size and payload volume of the global event range.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
+                const liveSubscription = getLiveSubscriptionCapability(orchestrationEngine);
+                const acquiredLiveEvents = yield* (
+                  liveSubscription?.subscribe ??
+                    Effect.succeed(orchestrationEngine.streamDomainEvents)
+                );
+                const acquiredLiveStream: Stream.Stream<ThreadCatchUpItem> =
+                  acquiredLiveEvents.pipe(
+                    Stream.filter(isThisThreadDetailEvent),
+                    Stream.tap(() =>
+                      Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
+                    ),
+                    Stream.map((event) => ({ kind: "event" as const, event })),
+                  );
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("thread", afterSequence).pipe(
                     Effect.provideService(
@@ -2107,32 +2268,131 @@ const makeWsRpcLayer = (
                       replayLogPublisher,
                     ),
                   ),
-                  live: liveStream,
-                  sequence: (item) => (item.kind === "event" ? item.event.sequence : afterSequence),
+                  live: acquiredLiveStream,
+                  sequence: (item) =>
+                    item.kind === "event" ? item.event.sequence : item.snapshot.snapshotSequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
                   ...(input.includeSynchronizationItems
                     ? { synchronized: () => ({ kind: "synchronized" as const }) }
                     : {}),
-                  catchUp: (observer) =>
-                    readThreadEventsPaginated(input.threadId, afterSequence, observer).pipe(
-                      Stream.filter(isThisThreadDetailEvent),
-                      Stream.tap(() =>
-                        Effect.sync(() =>
-                          incrementWorkloadCounter("thread_detail.events_published"),
+                  catchUp: (observer) => {
+                    const replayFrom = (sequence: number) =>
+                      readThreadEventsPaginated(input.threadId, sequence, observer).pipe(
+                        Stream.filter(isThisThreadDetailEvent),
+                        Stream.tap(() =>
+                          Effect.sync(() =>
+                            incrementWorkloadCounter("thread_detail.events_published"),
+                          ),
                         ),
-                      ),
-                      Stream.map((event) => ({
-                        kind: "event" as const,
-                        event,
-                      })),
-                      Stream.mapError(
-                        (cause) =>
-                          new OrchestrationGetSnapshotError({
-                            message: `Failed to replay thread ${input.threadId} events`,
-                            cause,
-                          }),
-                      ),
-                    ),
+                        Stream.map((event) => ({
+                          kind: "event" as const,
+                          event,
+                        })),
+                        Stream.mapError(
+                          (cause) =>
+                            new OrchestrationGetSnapshotError({
+                              message: `Failed to replay thread ${input.threadId} events`,
+                              cause,
+                            }),
+                        ),
+                      );
+                    const probeCapability = getReplayProbeCapability(orchestrationEngine);
+                    if (probeCapability === undefined) {
+                      observer.recordStrategy({
+                        strategy: "events",
+                        reason: "capability-unavailable",
+                        probeEventCount: 0,
+                        probePayloadBytes: 0,
+                      });
+                      return replayFrom(afterSequence);
+                    }
+                    return Stream.unwrap(
+                      Effect.gen(function* () {
+                        const probeResult = yield* Effect.result(
+                          probeCapability.probeAggregateReplay(
+                            "thread",
+                            input.threadId,
+                            afterSequence,
+                            THREAD_REPLAY_THRESHOLDS.maxEvents,
+                          ),
+                        );
+                        if (probeResult._tag === "Failure") {
+                          yield* Effect.logWarning(
+                            "thread replay probe failed; using exact event replay",
+                            { cause: probeResult.failure, threadId: input.threadId, afterSequence },
+                          );
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "probe-failed",
+                            probeEventCount: 0,
+                            probePayloadBytes: 0,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const probe = probeResult.success;
+                        const plan = planReplay(probe, THREAD_REPLAY_THRESHOLDS);
+                        if (plan.strategy === "events") {
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: plan.reason,
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const snapshotResult = yield* Effect.result(
+                          projectionSnapshotQuery.getThreadDetailSnapshot(input.threadId),
+                        );
+                        if (snapshotResult._tag === "Failure") {
+                          yield* Effect.logWarning(
+                            "thread replay snapshot failed; using exact event replay",
+                            {
+                              cause: snapshotResult.failure,
+                              threadId: input.threadId,
+                              afterSequence,
+                            },
+                          );
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "snapshot-failed",
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        const snapshot = snapshotResult.success;
+                        if (Option.isNone(snapshot)) {
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "snapshot-unavailable",
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        if (snapshot.value.snapshotSequence <= afterSequence) {
+                          observer.recordStrategy({
+                            strategy: "events",
+                            reason: "snapshot-stale",
+                            probeEventCount: probe.eventCount,
+                            probePayloadBytes: probe.payloadBytes,
+                          });
+                          return replayFrom(afterSequence);
+                        }
+                        observer.recordStrategy({
+                          strategy: "snapshot",
+                          reason: plan.reason,
+                          probeEventCount: probe.eventCount,
+                          probePayloadBytes: probe.payloadBytes,
+                          snapshotSequence: snapshot.value.snapshotSequence,
+                        });
+                        return Stream.concat(
+                          Stream.make({ kind: "snapshot" as const, snapshot: snapshot.value }),
+                          replayFrom(snapshot.value.snapshotSequence),
+                        );
+                      }),
+                    );
+                  },
                 });
               }
 

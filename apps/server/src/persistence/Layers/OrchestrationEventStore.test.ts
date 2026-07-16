@@ -95,6 +95,27 @@ layer("OrchestrationEventStore", (it) => {
         aggregateReplay.map((event) => event.eventId),
         [EventId.make("evt-store-roundtrip")],
       );
+
+      assert.ok(eventStore.probeFromSequence !== undefined);
+      assert.ok(eventStore.probeAggregateFromSequence !== undefined);
+      const globalProbe = yield* eventStore.probeFromSequence(0, 1);
+      assert.equal(globalProbe.eventCount, 2);
+      assert.equal(globalProbe.truncated, true);
+      assert.equal(globalProbe.payloadBytes > 0, true);
+
+      const safelyBoundedProbe = yield* eventStore.probeFromSequence(0, Number.MAX_SAFE_INTEGER);
+      assert.equal(safelyBoundedProbe.eventCount, 2);
+      assert.equal(safelyBoundedProbe.truncated, false);
+
+      const aggregateProbe = yield* eventStore.probeAggregateFromSequence(
+        "project",
+        ProjectId.make("project-roundtrip"),
+        0,
+        1,
+      );
+      assert.equal(aggregateProbe.eventCount, 1);
+      assert.equal(aggregateProbe.truncated, false);
+      assert.equal(aggregateProbe.payloadBytes > 0, true);
     }),
   );
 

@@ -6,7 +6,7 @@ import * as Fiber from "effect/Fiber";
 import * as Metric from "effect/Metric";
 import * as TestClock from "effect/testing/TestClock";
 
-import { withMetrics } from "./Metrics.ts";
+import { recordRuntimeReconciliationMetric, withMetrics } from "./Metrics.ts";
 
 const hasMetricSnapshot = (
   snapshots: ReadonlyArray<Metric.Metric.Snapshot>,
@@ -32,6 +32,26 @@ const findHistogramSnapshot = (
   );
 
 describe("withMetrics", () => {
+  it.effect("records reconciliation using only bounded dimensions", () =>
+    Effect.gen(function* () {
+      yield* recordRuntimeReconciliationMetric({
+        action: "repaired",
+        reason: "stale_projected_turn",
+        outcome: "success",
+      });
+
+      const snapshots = yield* Metric.snapshot;
+      assert.equal(
+        hasMetricSnapshot(snapshots, "t3_runtime_reconciliation_threads_total", {
+          action: "repaired",
+          reason: "stale_projected_turn",
+          outcome: "success",
+        }),
+        true,
+      );
+    }),
+  );
+
   it.effect("supports pipe-style usage", () =>
     Effect.gen(function* () {
       const counter = Metric.counter("with_metrics_pipe_total");

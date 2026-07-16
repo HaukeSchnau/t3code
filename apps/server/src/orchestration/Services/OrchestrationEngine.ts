@@ -21,10 +21,12 @@ import type {
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Option from "effect/Option";
+import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
+import type { OrchestrationReplayProbe } from "../../persistence/Services/OrchestrationEventStore.ts";
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -51,6 +53,16 @@ export interface OrchestrationEngineShape {
     fromSequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
+
+  /**
+   * Explicit capability for payload-free replay planning. Consumers must test
+   * for this own property rather than probing optional service methods: Effect
+   * test mocks intentionally synthesize failures for unimplemented methods.
+   */
+  readonly replayProbeCapability?: OrchestrationReplayProbeCapability;
+
+  /** Explicit scoped live subscription acquisition for lossless catch-up. */
+  readonly liveSubscriptionCapability?: OrchestrationLiveSubscriptionCapability;
 
   /**
    * Dispatch a validated orchestration command.
@@ -83,6 +95,25 @@ export interface OrchestrationEngineShape {
    * This is a hot runtime stream (new events only), not a historical replay.
    */
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
+}
+
+export interface OrchestrationReplayProbeCapability {
+  readonly kind: "payload-free-v1";
+  readonly probeReplay: (
+    fromSequenceExclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
+  readonly probeAggregateReplay: (
+    aggregateKind: OrchestrationAggregateKind,
+    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+    fromSequenceExclusive: number,
+    maxEvents: number,
+  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
+}
+
+export interface OrchestrationLiveSubscriptionCapability {
+  readonly kind: "scoped-v1";
+  readonly subscribe: Effect.Effect<Stream.Stream<OrchestrationEvent>, never, Scope.Scope>;
 }
 
 /**

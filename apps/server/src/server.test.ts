@@ -59,6 +59,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
+import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -6155,6 +6156,449 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         emittedEvents: 1,
         dedupedOverlapEvents: 0,
         liveBufferHighWaterMark: 0,
+        strategy: {
+          strategy: "events",
+          reason: "capability-unavailable",
+          probeEventCount: 0,
+          probePayloadBytes: 0,
+        },
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("collapses a 1,013-event thread catch-up to a snapshot and exact persisted tail", () =>
+    Effect.gen(function* () {
+      resetReplayObservationReportsForTesting();
+      const threadId = ThreadId.make("thread-replay-large");
+      const now = "2026-04-05T00:00:00.000Z";
+      const persistedEvents = Array.from({ length: 1_013 }, (_, index): OrchestrationEvent => {
+        const sequence = index + 1;
+        return {
+          sequence,
+          eventId: EventId.make(`event-large-replay-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId,
+            messageId: MessageId.make(`message-large-replay-${sequence}`),
+            role: "user",
+            text: `message ${sequence}`,
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        };
+      });
+      const probeLimits: number[] = [];
+      const replayCursors: number[] = [];
+      const snapshotThread = {
+        ...makeDefaultOrchestrationReadModel().threads[0]!,
+        id: threadId,
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            replayProbeCapability: {
+              kind: "payload-free-v1",
+              probeReplay: () => Effect.die("unexpected global replay probe"),
+              probeAggregateReplay: (_kind, aggregateId, _afterSequence, maxEvents) =>
+                Effect.sync(() => {
+                  assert.equal(aggregateId, threadId);
+                  probeLimits.push(maxEvents);
+                  return {
+                    eventCount: maxEvents + 1,
+                    payloadBytes: 64 * 1024,
+                    truncated: true,
+                  };
+                }),
+            },
+            readAggregateEvents: (_kind, aggregateId, afterSequence, limit = 1_000) => {
+              assert.equal(aggregateId, threadId);
+              replayCursors.push(afterSequence);
+              return Stream.fromIterable(
+                persistedEvents.filter((event) => event.sequence > afterSequence).slice(0, limit),
+              );
+            },
+            streamDomainEvents: Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.succeed(
+                Option.some({
+                  snapshotSequence: 1_000,
+                  thread: snapshotThread,
+                }),
+              ),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const output = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId,
+            afterSequence: 0,
+            includeSynchronizationItems: true,
+          }).pipe(
+            Stream.takeUntil((item) => item.kind === "synchronized"),
+            Stream.runCollect,
+          ),
+        ),
+      );
+      const items = Array.from(output);
+
+      assert.deepEqual(probeLimits, [256]);
+      assert.deepEqual(replayCursors, [1_000]);
+      assert.equal(items.length, 15);
+      assert.equal(1_013 / (items.length - 1) > 72, true);
+      assert.equal(items[0]?.kind, "snapshot");
+      assert.deepEqual(
+        items.filter((item) => item.kind === "event").map((item) => item.event.sequence),
+        Array.from({ length: 13 }, (_, index) => 1_001 + index),
+      );
+      assert.equal(items.at(-1)?.kind, "synchronized");
+      yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
+      assert.deepInclude(readReplayObservationReportsForTesting().thread?.strategy, {
+        strategy: "snapshot",
+        reason: "event-count",
+        probeEventCount: 257,
+        snapshotSequence: 1_000,
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("acquires the live thread subscription before replay and preserves overlap", () =>
+    Effect.gen(function* () {
+      const threadId = ThreadId.make("thread-replay-acquisition");
+      const now = "2026-04-05T00:00:00.000Z";
+      const makeEvent = (sequence: number): OrchestrationEvent => ({
+        sequence,
+        eventId: EventId.make(`event-replay-acquisition-${sequence}`),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId,
+          messageId: MessageId.make(`message-replay-acquisition-${sequence}`),
+          role: "assistant",
+          text: `message ${sequence}`,
+          turnId: null,
+          streaming: false,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+      const persisted = makeEvent(1);
+      const live = makeEvent(2);
+      const liveQueue = yield* Queue.unbounded<OrchestrationEvent>();
+      let acquired = false;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            liveSubscriptionCapability: {
+              kind: "scoped-v1",
+              subscribe: Effect.sync(() => {
+                acquired = true;
+                return Stream.fromQueue(liveQueue);
+              }),
+            },
+            readAggregateEvents: () =>
+              Stream.unwrap(
+                Effect.gen(function* () {
+                  assert.equal(acquired, true);
+                  yield* Queue.offer(liveQueue, live);
+                  return Stream.make(persisted);
+                }),
+              ),
+            streamDomainEvents: Stream.empty,
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const output = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+            threadId,
+            afterSequence: 0,
+            includeSynchronizationItems: true,
+          }).pipe(Stream.take(3), Stream.runCollect),
+        ),
+      );
+      const items = Array.from(output);
+      assert.deepEqual(
+        items.map((item) => item.kind),
+        ["event", "synchronized", "event"],
+      );
+      assert.deepEqual(
+        items.flatMap((item) => (item.kind === "event" ? [item.event.sequence] : [])),
+        [1, 2],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("falls back to exact thread replay when replay planning cannot use a snapshot", () =>
+    Effect.gen(function* () {
+      const now = "2026-04-05T00:00:00.000Z";
+      const payloadThreadId = ThreadId.make("thread-replay-payload-bytes");
+      const missingThreadId = ThreadId.make("thread-replay-snapshot-missing");
+      const staleThreadId = ThreadId.make("thread-replay-snapshot-stale");
+      const probeFailureThreadId = ThreadId.make("thread-replay-probe-failure");
+      const snapshotFailureThreadId = ThreadId.make("thread-replay-snapshot-failure");
+      const sequenceByThread = new Map<ThreadId, number>([
+        [payloadThreadId, 6],
+        [missingThreadId, 1],
+        [staleThreadId, 11],
+        [probeFailureThreadId, 1],
+        [snapshotFailureThreadId, 1],
+      ]);
+      const events = Array.from(
+        sequenceByThread,
+        ([threadId, sequence]): OrchestrationEvent => ({
+          sequence,
+          eventId: EventId.make(`event-${threadId}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId,
+            messageId: MessageId.make(`message-${threadId}`),
+            role: "user",
+            text: `message ${sequence}`,
+            turnId: null,
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      );
+      const persistenceError = new PersistenceSqlError({
+        operation: "replay-planning-test",
+        detail: "injected failure",
+      });
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            replayProbeCapability: {
+              kind: "payload-free-v1",
+              probeReplay: () => Effect.die("unexpected global replay probe"),
+              probeAggregateReplay: (_kind, aggregateId) =>
+                aggregateId === probeFailureThreadId
+                  ? Effect.fail(persistenceError)
+                  : Effect.succeed(
+                      aggregateId === payloadThreadId
+                        ? {
+                            eventCount: 1,
+                            payloadBytes: 2 * 1024 * 1024 + 1,
+                            truncated: false,
+                          }
+                        : { eventCount: 257, payloadBytes: 1024, truncated: true },
+                    ),
+            },
+            readAggregateEvents: (_kind, aggregateId, afterSequence) =>
+              Stream.fromIterable(
+                events.filter(
+                  (event) => event.aggregateId === aggregateId && event.sequence > afterSequence,
+                ),
+              ),
+            streamDomainEvents: Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: (threadId) => {
+              if (threadId === snapshotFailureThreadId) return Effect.fail(persistenceError);
+              if (threadId === missingThreadId) return Effect.succeed(Option.none());
+              const snapshotSequence = threadId === staleThreadId ? 10 : 5;
+              return Effect.succeed(
+                Option.some({
+                  snapshotSequence,
+                  thread: {
+                    ...makeDefaultOrchestrationReadModel().threads[0]!,
+                    id: threadId,
+                  },
+                }),
+              );
+            },
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const assertReplay = (input: {
+        readonly threadId: ThreadId;
+        readonly afterSequence: number;
+        readonly kinds: ReadonlyArray<string>;
+        readonly reason: string;
+      }) =>
+        Effect.gen(function* () {
+          resetReplayObservationReportsForTesting();
+          const output = yield* Effect.scoped(
+            withWsRpcClient(wsUrl, (client) =>
+              client[ORCHESTRATION_WS_METHODS.subscribeThread]({
+                threadId: input.threadId,
+                afterSequence: input.afterSequence,
+                includeSynchronizationItems: true,
+              }).pipe(
+                Stream.takeUntil((item) => item.kind === "synchronized"),
+                Stream.runCollect,
+              ),
+            ),
+          );
+          assert.deepEqual(
+            Array.from(output).map((item) => item.kind),
+            input.kinds,
+          );
+          yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, {
+            discard: true,
+          });
+          assert.equal(
+            readReplayObservationReportsForTesting().thread?.strategy?.reason,
+            input.reason,
+          );
+        });
+
+      yield* assertReplay({
+        threadId: payloadThreadId,
+        afterSequence: 0,
+        kinds: ["snapshot", "event", "synchronized"],
+        reason: "payload-bytes",
+      });
+      yield* assertReplay({
+        threadId: missingThreadId,
+        afterSequence: 0,
+        kinds: ["event", "synchronized"],
+        reason: "snapshot-unavailable",
+      });
+      yield* assertReplay({
+        threadId: staleThreadId,
+        afterSequence: 10,
+        kinds: ["event", "synchronized"],
+        reason: "snapshot-stale",
+      });
+      yield* assertReplay({
+        threadId: probeFailureThreadId,
+        afterSequence: 0,
+        kinds: ["event", "synchronized"],
+        reason: "probe-failed",
+      });
+      yield* assertReplay({
+        threadId: snapshotFailureThreadId,
+        afterSequence: 0,
+        kinds: ["event", "synchronized"],
+        reason: "snapshot-failed",
+      });
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("uses a shell snapshot without dropping its persisted replay tail", () =>
+    Effect.gen(function* () {
+      resetReplayObservationReportsForTesting();
+      const threadId = ThreadId.make("thread-shell-replay-large");
+      const now = "2026-04-05T00:00:00.000Z";
+      const persistedEvents = Array.from({ length: 1_037 }, (_, index): OrchestrationEvent => {
+        const sequence = index + 1;
+        return {
+          sequence,
+          eventId: EventId.make(`event-shell-replay-${sequence}`),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: now,
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          type: "thread.message-sent",
+          payload: {
+            threadId,
+            messageId: MessageId.make("message-shell-replay"),
+            role: "assistant",
+            text: `delta ${sequence}`,
+            turnId: null,
+            streaming: true,
+            createdAt: now,
+            updatedAt: now,
+          },
+        };
+      });
+      const replayCursors: number[] = [];
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            replayProbeCapability: {
+              kind: "payload-free-v1",
+              probeReplay: (_afterSequence, maxEvents) =>
+                Effect.succeed({
+                  eventCount: maxEvents + 1,
+                  payloadBytes: 128 * 1024,
+                  truncated: true,
+                }),
+              probeAggregateReplay: () => Effect.die("unexpected aggregate replay probe"),
+            },
+            readEvents: (afterSequence, limit = 1_000) => {
+              replayCursors.push(afterSequence);
+              return Stream.fromIterable(
+                persistedEvents.filter((event) => event.sequence > afterSequence).slice(0, limit),
+              );
+            },
+            streamDomainEvents: Stream.empty,
+          },
+          projectionSnapshotQuery: {
+            getShellSnapshot: () =>
+              Effect.succeed({
+                snapshotSequence: 1_024,
+                projects: [],
+                threads: [],
+                usageLimits: [],
+                updatedAt: now,
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const output = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({
+            afterSequence: 0,
+            includeCursorItems: true,
+            includeSynchronizationItems: true,
+          }).pipe(
+            Stream.takeUntil((item) => item.kind === "synchronized"),
+            Stream.runCollect,
+          ),
+        ),
+      );
+      const items = Array.from(output);
+
+      assert.deepEqual(replayCursors, [1_024]);
+      assert.deepEqual(
+        items.map((item) => item.kind),
+        ["snapshot", "cursor", "synchronized"],
+      );
+      assert.equal(items[1]?.kind === "cursor" ? items[1].sequence : null, 1_037);
+      yield* Effect.forEach(Array.from({ length: 16 }), () => Effect.yieldNow, { discard: true });
+      assert.deepInclude(readReplayObservationReportsForTesting().shell?.strategy, {
+        strategy: "snapshot",
+        reason: "event-count",
+        probeEventCount: 1_025,
+        snapshotSequence: 1_024,
       });
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

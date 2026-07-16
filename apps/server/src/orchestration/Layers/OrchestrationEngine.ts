@@ -1,4 +1,5 @@
 import type {
+  OrchestrationAggregateKind,
   OrchestrationEvent,
   OrchestrationReadModel,
   ProviderInstanceId,
@@ -475,6 +476,28 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       Stream.take(limit ?? 1_000),
     );
   };
+  const probeFromSequence = eventStore.probeFromSequence;
+  const probeAggregateFromSequence = eventStore.probeAggregateFromSequence;
+  const replayProbeCapability =
+    probeFromSequence === undefined || probeAggregateFromSequence === undefined
+      ? undefined
+      : {
+          kind: "payload-free-v1" as const,
+          probeReplay: (fromSequenceExclusive: number, maxEvents: number) =>
+            probeFromSequence(fromSequenceExclusive, maxEvents),
+          probeAggregateReplay: (
+            aggregateKind: OrchestrationAggregateKind,
+            aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+            fromSequenceExclusive: number,
+            maxEvents: number,
+          ) =>
+            probeAggregateFromSequence(
+              aggregateKind,
+              aggregateId,
+              fromSequenceExclusive,
+              maxEvents,
+            ),
+        };
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command) =>
     Effect.gen(function* () {
@@ -490,6 +513,13 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   return {
     readEvents,
     readAggregateEvents,
+    ...(replayProbeCapability === undefined ? {} : { replayProbeCapability }),
+    liveSubscriptionCapability: {
+      kind: "scoped-v1",
+      subscribe: PubSub.subscribe(eventPubSub).pipe(
+        Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+      ),
+    },
     dispatch,
     resolveReceipt,
     // Each access creates a fresh PubSub subscription so that multiple
