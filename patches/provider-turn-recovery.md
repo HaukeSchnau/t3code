@@ -18,18 +18,22 @@ placeholder must not leave the thread looking permanently busy.
   stopped settle them as interrupted, and error settles them as error.
 - Tool activity payloads projected from provider runtime events must preserve useful structured metadata while
   bounding large strings, arrays, and objects so command output cannot create unbounded projection writes.
+- Adjacent durable parent assistant-text deltas for the same provider item are projected as a bounded batch.
+  Every original journal row remains associated with that batch so streaming, buffered delivery, and crash
+  recovery retain the exact transcript while avoiding one full projection write per provider token.
 
 ## Files
 
 - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/orchestration/ProviderTranscriptJournalBatch.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
 - `apps/server/src/persistence/Services/ProjectionTurns.ts`
 - `apps/server/src/persistence/Layers/ProjectionTurns.ts`
 
 ## Verification
 
-- `vp test apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts`
+- `vp test apps/server/src/orchestration/ProviderTranscriptJournalBatch.test.ts apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts apps/server/integration/coalescingHardKill.integration.test.ts`
 - `vp check`
 - `vp run typecheck`
 

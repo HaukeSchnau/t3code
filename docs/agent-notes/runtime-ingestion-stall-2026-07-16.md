@@ -51,4 +51,21 @@ accepted turn is visibly working while its concrete provider turn identity is st
   replay now queries the indexed aggregate stream instead of decoding the global event range.
 - Final local verification: `vp check` and `vp run typecheck` pass. The full `vp test --maxWorkers=4` suite
   passes with 630 test files / 5,035 tests passing and 2 files / 10 tests skipped.
-- Deployment verification: pending.
+- First deployment verification: complete; the cross-thread/replay fixes are live, and the follow-up below
+  records the remaining same-thread amplification discovered after cutover.
+
+## Production follow-up after first cutover
+
+- The first cutover activated `49433d0080d2`; indexed reconnect replay fell to roughly 2 ms when caught up,
+  but the new server still used about 72% CPU and reached 1.6 GB resident memory within seven minutes.
+- The latest 500 production orchestration events contained 439 `thread.message-sent` events for one active
+  Codex thread. They were token-sized assistant deltas, confirming same-thread write amplification rather than
+  the original cross-thread head-of-line block.
+- The durable journal was fully drained, but processing a burst of roughly 435 token deltas took minutes
+  because each delta independently resolved projections and dispatched a durable message update.
+- The follow-up fix batches adjacent journaled parent assistant deltas by provider/thread/turn/item, bounded at
+  24,000 characters. It retains every source event for delivered/removal bookkeeping and buffered recovery,
+  adds a 16 ms collection window for accepted live deltas, and suppresses redundant volatile fallback work.
+- Regression coverage proves 500 token entries become one projection batch. Focused ingestion tests, server
+  typechecking, and the hard-kill transcript recovery integration test pass.
+- Remaining: full repository gates, commit/push, infra pin update, deploy, then compare live CPU and event rate.
