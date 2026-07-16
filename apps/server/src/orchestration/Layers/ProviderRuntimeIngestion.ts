@@ -59,6 +59,11 @@ import {
 import { isPersistenceError } from "../../persistence/Errors.ts";
 import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
 import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
+import {
+  batchProviderTranscriptJournalEntries,
+  isBatchableParentAssistantDelta,
+  type ProviderTranscriptJournalBatch,
+} from "../ProviderTranscriptJournalBatch.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 
@@ -1292,6 +1297,10 @@ const make = Effect.gen(function* () {
   const processedRuntimeEventsBySession = new Map<string, RuntimeSessionDedupeState>();
   const recoveringTranscriptJournalCountByScope = new Map<string, number>();
   const durableParentDeltaPromotions = new Map<string, Array<ProviderRuntimeEvent>>();
+  const journalBatchSourcesByEventId = new Map<string, ReadonlyArray<ProviderRuntimeEvent>>();
+
+  const journalSourceEvents = (event: ProviderRuntimeEvent) =>
+    journalBatchSourcesByEventId.get(String(event.eventId)) ?? [event];
 
   const hasProcessedRuntimeEvent = (event: ProviderRuntimeEvent): boolean => {
     const state = processedRuntimeEventsBySession.get(runtimeSessionKey(event));
@@ -2725,7 +2734,9 @@ const make = Effect.gen(function* () {
             )
           : "streaming";
         if (assistantDeliveryMode === "buffered") {
-          rememberBufferedAssistantJournalEvent(assistantMessageId, event);
+          for (const sourceEvent of journalSourceEvents(event)) {
+            rememberBufferedAssistantJournalEvent(assistantMessageId, sourceEvent);
+          }
           const spillChunk = yield* appendBufferedAssistantText(assistantMessageId, assistantDelta);
           if (spillChunk.length > 0) {
             yield* orchestrationEngine.dispatch({
@@ -2752,7 +2763,7 @@ const make = Effect.gen(function* () {
             ...(turnId ? { turnId } : {}),
             createdAt: now,
           });
-          markParentJournalEventsDurable(event, [event]);
+          markParentJournalEventsDurable(event, journalSourceEvents(event));
         }
       }
 
@@ -3111,8 +3122,12 @@ const make = Effect.gen(function* () {
     );
   };
 
-  const processJournaledRuntimeEvent = (event: ProviderRuntimeEvent) =>
-    Effect.gen(function* () {
+  const processJournaledRuntimeEvent = (batch: ProviderTranscriptJournalBatch) => {
+    const { event, sourceEvents } = batch;
+    return Effect.gen(function* () {
+      if (sourceEvents.length > 1) {
+        journalBatchSourcesByEventId.set(String(event.eventId), sourceEvents);
+      }
       if (
         event.itemId !== undefined &&
         (event.type === "content.delta" ||
@@ -3120,36 +3135,72 @@ const make = Effect.gen(function* () {
         (yield* retryPersistence(transcriptJournal.isItemCompleted(event)))
       ) {
         incrementWorkloadCounter("provider.events.duplicates_suppressed");
-        yield* retryPersistence(transcriptJournal.remove(event));
+        yield* Effect.forEach(
+          sourceEvents,
+          (sourceEvent) => retryPersistence(transcriptJournal.remove(sourceEvent)),
+          { concurrency: 1, discard: true },
+        );
         return;
       }
       yield* retryPersistence(processInput({ source: "runtime", event }));
-      yield* retryPersistence(transcriptJournal.markDelivered(event));
+      yield* Effect.forEach(sourceEvents.slice(1), rememberProcessedRuntimeEvent, {
+        concurrency: 1,
+        discard: true,
+      });
+      yield* Effect.forEach(
+        sourceEvents,
+        (sourceEvent) => retryPersistence(transcriptJournal.markDelivered(sourceEvent)),
+        { concurrency: 1, discard: true },
+      );
       yield* removePromotedJournalEvent(event);
-    });
+    }).pipe(
+      Effect.ensuring(
+        Effect.sync(() => journalBatchSourcesByEventId.delete(String(event.eventId))),
+      ),
+    );
+  };
 
   const drainPendingTranscriptJournal = (fallbackEvent?: ProviderRuntimeEvent) =>
     Effect.gen(function* () {
-      const pending = yield* retryPersistence(transcriptJournal.listUndelivered);
+      let pending = yield* retryPersistence(transcriptJournal.listUndelivered);
+      if (
+        fallbackEvent !== undefined &&
+        isBatchableParentAssistantDelta(fallbackEvent) &&
+        pending.some(({ event }) => event.eventId === fallbackEvent.eventId)
+      ) {
+        // One frame is short enough to remain visually live while allowing the
+        // adapter's token burst to reach the durable journal before projection.
+        yield* Effect.sleep("16 millis");
+        pending = yield* retryPersistence(transcriptJournal.listUndelivered);
+      }
       let fallbackWasJournaled = false;
-      for (const { event } of pending) {
-        if (fallbackEvent !== undefined && event.threadId !== fallbackEvent.threadId) {
-          continue;
+      const relevantPending =
+        fallbackEvent === undefined
+          ? pending
+          : pending.filter(({ event }) => event.threadId === fallbackEvent.threadId);
+      for (const batch of batchProviderTranscriptJournalEntries(relevantPending)) {
+        if (fallbackEvent !== undefined) {
+          fallbackWasJournaled ||= batch.sourceEvents.some(
+            (event) =>
+              event.eventId === fallbackEvent.eventId &&
+              (event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)) ===
+                (fallbackEvent.providerInstanceId ??
+                  defaultInstanceIdForDriver(fallbackEvent.provider)),
+          );
         }
-        if (
-          fallbackEvent !== undefined &&
-          event.eventId === fallbackEvent.eventId &&
-          (event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)) ===
-            (fallbackEvent.providerInstanceId ?? defaultInstanceIdForDriver(fallbackEvent.provider))
-        ) {
-          fallbackWasJournaled = true;
-        }
-        yield* processJournaledRuntimeEvent(event);
+        yield* processJournaledRuntimeEvent(batch);
       }
       // Unit/mocked provider services may bypass the adapter acceptance seam.
       // Production semantic events are always found in the journal.
-      if (fallbackEvent !== undefined && !fallbackWasJournaled) {
-        yield* processJournaledRuntimeEvent(fallbackEvent);
+      if (
+        fallbackEvent !== undefined &&
+        !fallbackWasJournaled &&
+        !hasProcessedRuntimeEvent(fallbackEvent)
+      ) {
+        yield* processJournaledRuntimeEvent({
+          event: fallbackEvent,
+          sourceEvents: [fallbackEvent],
+        });
       }
     });
 
@@ -3210,6 +3261,7 @@ const make = Effect.gen(function* () {
         processedRuntimeEventsBySession.clear();
         recoveringTranscriptJournalCountByScope.clear();
         durableParentDeltaPromotions.clear();
+        journalBatchSourcesByEventId.clear();
         bufferedAssistantJournalEventsByMessageId.clear();
       }),
     ),
@@ -3236,17 +3288,21 @@ const make = Effect.gen(function* () {
         }
       }
       yield* Effect.forEach(
-        pendingTranscriptEvents,
-        ({ event }) =>
-          processJournaledRuntimeEvent(event).pipe(
+        batchProviderTranscriptJournalEntries(pendingTranscriptEvents),
+        (batch) =>
+          processJournaledRuntimeEvent(batch).pipe(
             Effect.tap(() =>
               Effect.sync(() => {
+                const { event, sourceEvents } = batch;
                 const scopeKey = transcriptItemScopeKey(event);
                 if (scopeKey === null) return;
                 const remaining = recoveringTranscriptJournalCountByScope.get(scopeKey);
                 if (remaining === undefined) return;
-                if (remaining > 1) {
-                  recoveringTranscriptJournalCountByScope.set(scopeKey, remaining - 1);
+                if (remaining > sourceEvents.length) {
+                  recoveringTranscriptJournalCountByScope.set(
+                    scopeKey,
+                    remaining - sourceEvents.length,
+                  );
                   return;
                 }
                 recoveringTranscriptJournalCountByScope.delete(scopeKey);
@@ -3254,8 +3310,8 @@ const make = Effect.gen(function* () {
             ),
             Effect.catchCause((cause) =>
               Effect.logError("failed to recover durable provider transcript event", {
-                eventId: event.eventId,
-                eventType: event.type,
+                eventId: batch.event.eventId,
+                eventType: batch.event.type,
                 cause: Cause.pretty(cause),
               }),
             ),
