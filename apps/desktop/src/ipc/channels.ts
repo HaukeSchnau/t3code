@@ -7,6 +7,8 @@ export const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
   "desktop:consume-pending-open-workspace-requests";
 export const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
+export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
+export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";
 export const UPDATE_STATE_CHANNEL = "desktop:update-state";
 export const UPDATE_GET_STATE_CHANNEL = "desktop:update-get-state";
 export const UPDATE_SET_CHANNEL_CHANNEL = "desktop:update-set-channel";
