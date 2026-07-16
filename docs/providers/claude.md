@@ -9,6 +9,18 @@ Common reasons:
 - run Claude through a router such as Claude Code Router
 - use external providers exposed through a Claude-compatible workflow
 
+## Claudex In This Fork
+
+This fork includes an always-visible `Claudex` provider profile. It runs the host-provided
+`claudex` executable through the normal Claude driver and offers only `gpt-5.6-sol` by default.
+
+Claudex shares the normal Claude home, so you can switch between Claude and Claudex in an existing
+thread. It can be disabled or customized in Settings, but it cannot be deleted. The machine running
+the T3 Code server must provide the executable and its local proxy service.
+
+For other routed Claude profiles, turn off **Include built-in models** when only the custom model
+IDs configured on that instance should appear in model pickers.
+
 ## I Only Use One Claude Account
 
 Use the default provider.

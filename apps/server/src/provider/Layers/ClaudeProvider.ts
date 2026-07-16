@@ -311,6 +311,16 @@ function formatClaudeOpus47UpgradeMessage(version: string | null): string {
   return `Claude Code ${versionLabel} is too old for Claude Opus 4.7. Upgrade to v${MINIMUM_CLAUDE_OPUS_4_7_VERSION} or newer to access it.`;
 }
 
+function getClaudeVersionUpgradeMessage(
+  version: string | null,
+  includeBuiltInModels: boolean,
+): string | undefined {
+  if (!includeBuiltInModels || supportsClaudeFable5(version)) return undefined;
+  if (supportsClaudeOpus48(version)) return formatClaudeFable5UpgradeMessage(version);
+  if (supportsClaudeOpus47(version)) return formatClaudeOpus48UpgradeMessage(version);
+  return formatClaudeOpus47UpgradeMessage(version);
+}
+
 export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
   const slug = model?.trim();
   return (
@@ -651,6 +661,18 @@ const runClaudeCommand = Effect.fn("runClaudeCommand")(function* (
   return yield* spawnAndCollect(claudeSettings.binaryPath, command);
 });
 
+function configuredClaudeModels(
+  claudeSettings: ClaudeSettings,
+  builtInModels: ReadonlyArray<ServerProviderModel>,
+): ReadonlyArray<ServerProviderModel> {
+  return providerModelsFromSettings(
+    claudeSettings.includeBuiltInModels ? builtInModels : [],
+    PROVIDER,
+    claudeSettings.customModels,
+    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+  );
+}
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -664,12 +686,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const allModels = providerModelsFromSettings(
-    BUILT_IN_MODELS,
-    PROVIDER,
-    claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
+  const allModels = configuredClaudeModels(claudeSettings, BUILT_IN_MODELS);
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({
@@ -755,19 +772,14 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const models = providerModelsFromSettings(
+  const models = configuredClaudeModels(
+    claudeSettings,
     getBuiltInClaudeModelsForVersion(parsedVersion),
-    PROVIDER,
-    claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
-  const versionUpgradeMessage = supportsClaudeFable5(parsedVersion)
-    ? undefined
-    : supportsClaudeOpus48(parsedVersion)
-      ? formatClaudeFable5UpgradeMessage(parsedVersion)
-      : supportsClaudeOpus47(parsedVersion)
-        ? formatClaudeOpus48UpgradeMessage(parsedVersion)
-        : formatClaudeOpus47UpgradeMessage(parsedVersion);
+  const versionUpgradeMessage = getClaudeVersionUpgradeMessage(
+    parsedVersion,
+    claudeSettings.includeBuiltInModels,
+  );
 
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))

@@ -21,6 +21,7 @@ import {
   type ServerProviderModel,
   type ServerSettings,
   type ServerProviderState,
+  withBundledProviderInstances,
 } from "@t3tools/contracts";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
@@ -187,9 +188,10 @@ export function applyProviderInstanceSettings(
   const legacyProviders = settings.providers as Readonly<
     Record<string, { readonly enabled?: boolean } | undefined>
   >;
+  const effectiveProviderInstances = withBundledProviderInstances(settings.providerInstances);
 
   return entries.map((entry) => {
-    const explicitInstance = settings.providerInstances?.[entry.instanceId];
+    const explicitInstance = effectiveProviderInstances[entry.instanceId];
     const enabled = explicitInstance
       ? (explicitInstance.enabled ?? true)
       : entry.isDefault

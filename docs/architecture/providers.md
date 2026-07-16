@@ -13,7 +13,11 @@ Methods mirror the `NativeApi` interface defined in `@t3tools/contracts`:
 - `providers.respondToRequest`, `providers.stopSession`
 - `shell.openInEditor`, `server.getConfig`
 
-Codex is the only implemented provider. `claudeCode` is reserved in contracts/UI.
+Built-in drivers currently include Codex, Claude Code, Cursor, Grok, and OpenCode. Provider
+instances are independent routing identities backed by one of those drivers, so multiple accounts
+or routed profiles can reuse a driver with distinct configuration. Fork-bundled instances are
+projected into the runtime and settings UI without requiring them to be serialized into every
+settings file.
 
 ## Client transport
 
