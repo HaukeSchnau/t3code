@@ -55,7 +55,9 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
 
     return Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-invalid-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-provider-cache-invalid-",
+      });
       const cachePath = `${tempDir}/provider.json`;
       const secretCacheValue = "secret-cache-value";
       yield* fs.writeFileString(cachePath, `{ "token": "${secretCacheValue}" }`);
@@ -79,7 +81,9 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
   it.effect("writes and reads provider status snapshots", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
-      const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-provider-cache-" });
+      const tempDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "t3-provider-cache-",
+      });
       const codexProvider = makeProvider(CODEX_DRIVER);
       const claudeProvider = makeProvider(CLAUDE_AGENT_DRIVER, {
         status: "warning",
@@ -202,6 +206,40 @@ it.layer(NodeServices.layer)("providerStatusCache", (it) => {
         fallbackProvider: disabledFallback,
       }),
       disabledFallback,
+    );
+  });
+
+  it("does not resurrect cached models for a bundled provider instance", () => {
+    const fallbackClaudex = makeProvider(CLAUDE_AGENT_DRIVER, {
+      instanceId: ProviderInstanceId.make("claudex"),
+      models: [
+        {
+          slug: "gpt-5.6-sol",
+          name: "gpt-5.6-sol",
+          isCustom: true,
+          capabilities: emptyCapabilities,
+        },
+      ],
+    });
+    const cachedClaudex = makeProvider(CLAUDE_AGENT_DRIVER, {
+      instanceId: ProviderInstanceId.make("claudex"),
+      models: [
+        ...fallbackClaudex.models,
+        {
+          slug: "stale-built-in-model",
+          name: "Stale built-in model",
+          isCustom: false,
+          capabilities: emptyCapabilities,
+        },
+      ],
+    });
+
+    assert.deepStrictEqual(
+      hydrateCachedProvider({
+        cachedProvider: cachedClaudex,
+        fallbackProvider: fallbackClaudex,
+      }).models,
+      fallbackClaudex.models,
     );
   });
 

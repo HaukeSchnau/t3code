@@ -613,6 +613,46 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
+      it("uses the exact model catalog for bundled provider instances", () => {
+        const previousProvider = {
+          instanceId: ProviderInstanceId.make("claudex"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-04-14T00:00:00.000Z",
+          version: "1.0.0",
+          models: [
+            {
+              slug: "stale-built-in-model",
+              name: "Stale built-in model",
+              isCustom: false,
+              capabilities: createModelCapabilities({ optionDescriptors: [] }),
+            },
+          ],
+          slashCommands: [],
+          skills: [],
+        } as const satisfies ServerProvider;
+        const refreshedProvider = {
+          ...previousProvider,
+          checkedAt: "2026-04-14T00:01:00.000Z",
+          models: [
+            {
+              slug: "gpt-5.6-sol",
+              name: "gpt-5.6-sol",
+              isCustom: true,
+              capabilities: createModelCapabilities({ optionDescriptors: [] }),
+            },
+          ],
+        } satisfies ServerProvider;
+
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(previousProvider, refreshedProvider).models,
+          refreshedProvider.models,
+        );
+      });
+
       it.effect("does not run provider probes during layer construction", () =>
         Effect.gen(function* () {
           const codexDriver = ProviderDriverKind.make("codex");
@@ -1529,7 +1569,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           const status = yield* checkClaudeProviderStatus(settings, claudeCapabilities());
 
           assert.deepStrictEqual(
-            status.models.map((model) => ({ slug: model.slug, isCustom: model.isCustom })),
+            status.models.map((model) => ({
+              slug: model.slug,
+              isCustom: model.isCustom,
+            })),
             [{ slug: "gpt-5.6-sol", isCustom: true }],
           );
           assert.strictEqual(status.versionAdvisory, undefined);
