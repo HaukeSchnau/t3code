@@ -64,6 +64,10 @@ storage and decide when to drain ready thread heads.
   changes.
 - Storage implementations must preserve document order. They may use a transaction, atomic file replacement,
   or an equivalent platform primitive, but must never expose a partially replaced snapshot.
+- Mobile draft image attachments cross the command boundary through the pure
+  `apps/mobile/src/lib/composerImageAttachments.ts` sanitizer. Keep that module independent from the native
+  image-picker implementation: outbox planning and recovery must not load Expo or React Native merely to strip
+  draft-only `id` and `previewUri` fields.
 
 ### Web adapter
 
