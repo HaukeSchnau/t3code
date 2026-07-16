@@ -2023,7 +2023,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         );
       });
 
-      it.effect("returns warning when the Claude initialization result is unavailable", () =>
+      it.effect("returns actionable unauthenticated status when Claude reports logged out", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
             defaultClaudeSettings,
@@ -2031,10 +2031,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
           assert.strictEqual(status.status, "warning");
           assert.strictEqual(status.installed, true);
-          assert.strictEqual(status.auth.status, "unknown");
+          assert.strictEqual(status.auth.status, "unauthenticated");
           assert.strictEqual(
             status.message,
-            "Could not verify Claude authentication status from initialization result.",
+            "Claude is not authenticated. Run `claude auth login` to authenticate.",
           );
         }).pipe(
           Effect.provide(

@@ -106,6 +106,12 @@ const withInstanceIdentity =
     ...(isBundledProviderInstance(input.instanceId) && snapshot.auth.status === "authenticated"
       ? { auth: { ...snapshot.auth, type: "proxy", label: "CLIProxyAPI" } }
       : {}),
+    ...(isBundledProviderInstance(input.instanceId) && snapshot.auth.status === "unauthenticated"
+      ? {
+          message:
+            "CLIProxyAPI has no Codex account for gpt-5.6-sol. Run `cliproxyapi-auth codex-device` on this host.",
+        }
+      : {}),
     ...(input.displayName ? { displayName: input.displayName } : {}),
     ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     continuation: { groupKey: input.continuationGroupKey },

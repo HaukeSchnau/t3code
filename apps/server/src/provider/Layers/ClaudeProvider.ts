@@ -31,6 +31,7 @@ import {
   buildSelectOptionDescriptor,
   buildServerProvider,
   DEFAULT_TIMEOUT_MS,
+  extractAuthBoolean,
   isCommandMissingCause,
   parseGenericCliVersion,
   providerModelsFromSettings,
@@ -673,6 +674,14 @@ function configuredClaudeModels(
   );
 }
 
+function parseClaudeAuthStatus(output: string): boolean | undefined {
+  try {
+    return extractAuthBoolean(JSON.parse(output));
+  } catch {
+    return undefined;
+  }
+}
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
@@ -787,6 +796,18 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
   if (!capabilities) {
+    const authStatusProbe = yield* runClaudeCommand(
+      claudeSettings,
+      ["auth", "status"],
+      resolvedEnvironment,
+    ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
+    const authenticated = Result.isSuccess(authStatusProbe)
+      ? Option.match(authStatusProbe.success, {
+          onNone: () => undefined,
+          onSome: (result) => parseClaudeAuthStatus(result.stdout),
+        })
+      : undefined;
+
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -797,8 +818,11 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         installed: true,
         version: parsedVersion,
         status: "warning",
-        auth: { status: "unknown" },
-        message: "Could not verify Claude authentication status from initialization result.",
+        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+        message:
+          authenticated === false
+            ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
+            : "Could not verify Claude authentication status from initialization result.",
       },
     });
   }
