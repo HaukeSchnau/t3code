@@ -8,6 +8,9 @@ that can delay visible work: orchestration replay and provider transcript journa
 
 ## Behavior
 
+- Server metrics use OTLP/HTTP protobuf (`application/x-protobuf`) because the production vmagent endpoint
+  rejects OTLP/HTTP JSON. Trace serialization remains JSON for the existing trace collectors and local
+  decoding path.
 - Replay metrics and structured completion logs report duration, pages, scanned and emitted events,
   overlap deduplication, and live-buffer high-water marks. Process-local workload diagnostics additionally
   retain total replay milliseconds and the last duration for each bounded replay flow. A replay planner can
