@@ -8,7 +8,8 @@ import {
   type RuntimeMode,
 } from "@t3tools/contracts";
 
-import { toUploadChatImageAttachments, type DraftComposerImageAttachment } from "./composerImages";
+import { toUploadChatImageAttachments } from "./composerImageAttachments";
+import type { DraftComposerImageAttachment } from "./composerImages";
 
 export function deriveThreadTitleFromPrompt(value: string): string {
   const trimmed = value.trim();

@@ -9,7 +9,7 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { toUploadChatImageAttachments } from "../lib/composerImages";
+import { toUploadChatImageAttachments } from "../lib/composerImageAttachments";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
