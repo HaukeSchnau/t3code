@@ -603,12 +603,14 @@ export type ServerLifecycleStreamEvent = typeof ServerLifecycleStreamEvent.Type;
 
 export const ServerIdleBusyReason = Schema.Literals([
   "live-provider-active-turn",
+  "live-provider-session-busy",
   "projected-active-turn",
   "projected-session-starting",
   "projected-latest-turn-running",
   "queued-message",
   "pending-approval",
   "pending-user-input",
+  "undelivered-transcript-events",
 ]);
 export type ServerIdleBusyReason = typeof ServerIdleBusyReason.Type;
 

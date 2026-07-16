@@ -5,6 +5,7 @@ import * as Crypto from "effect/Crypto";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
+import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
@@ -12,8 +13,10 @@ import * as Stream from "effect/Stream";
 
 import * as ServerConfig from "./config.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import * as OrchestrationReactor from "./orchestration/Services/OrchestrationReactor.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
+import * as ProviderSessionReaper from "./provider/Services/ProviderSessionReaper.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 
 it("uses the canonical Codex default for auto-bootstrapped model selection", () => {
@@ -106,6 +109,30 @@ it.effect("launchStartupHeartbeat does not block the caller while counts are loa
       );
     }),
   ),
+);
+
+it.effect(
+  "assembled scoped runtime startup starts reconciliation without a manual service call",
+  () =>
+    Effect.gen(function* () {
+      const starts = yield* Ref.make<ReadonlyArray<string>>([]);
+      const assembledStartup = Layer.effectDiscard(ServerRuntimeStartup.startRuntimeReactors).pipe(
+        Layer.provideMerge(
+          Layer.succeed(OrchestrationReactor.OrchestrationReactor, {
+            start: () => Ref.update(starts, (values) => [...values, "reactor"]),
+          }),
+        ),
+        Layer.provideMerge(
+          Layer.succeed(ProviderSessionReaper.ProviderSessionReaper, {
+            start: () => Ref.update(starts, (values) => [...values, "reaper"]),
+          }),
+        ),
+      );
+
+      yield* Layer.build(assembledStartup);
+
+      assert.deepStrictEqual(yield* Ref.get(starts), ["reactor", "reaper"]);
+    }).pipe(Effect.scoped),
 );
 
 it.effect("resolveWelcomeBase derives cwd and project name from server config", () =>

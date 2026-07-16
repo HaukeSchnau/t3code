@@ -1,10 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
+  CommandId,
   ProjectId,
   ThreadId,
   TurnId,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderSession,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as DateTime from "effect/DateTime";
@@ -18,6 +20,8 @@ import * as Stream from "effect/Stream";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import type { ProjectionRestartSafetyState } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
+import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
@@ -135,6 +139,13 @@ describe("ProviderSessionReaper", () => {
 
   async function createHarness(input: {
     readonly readModel: ReturnType<typeof makeReadModel>;
+    readonly runtimeStartedAt?: string;
+    readonly sweepIntervalMs?: number;
+    readonly liveSessions?: ReadonlyArray<ProviderSession>;
+    readonly restartSafetyStateImplementation?: () => Effect.Effect<ProjectionRestartSafetyState>;
+    readonly dispatchImplementation?: (
+      command: unknown,
+    ) => Effect.Effect<{ sequence: number }, ProviderValidationError>;
     readonly stopSessionImplementation?: (input: {
       readonly threadId: ThreadId;
     }) => ReturnType<ProviderServiceShape["stopSession"]>;
@@ -156,7 +167,7 @@ describe("ProviderSessionReaper", () => {
       respondToRequest: () => unsupported(),
       respondToUserInput: () => unsupported(),
       stopSession,
-      listSessions: () => Effect.succeed([]),
+      listSessions: () => Effect.succeed(input.liveSessions ?? []),
       getCapabilities: () =>
         Effect.succeed({
           sessionModelSwitch: "in-session",
@@ -178,6 +189,11 @@ describe("ProviderSessionReaper", () => {
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.empty,
     };
+    const dispatch = vi.fn((command: unknown) =>
+      input.dispatchImplementation === undefined
+        ? Effect.succeed({ sequence: 1 })
+        : input.dispatchImplementation(command),
+    );
 
     const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
       Layer.provide(SqlitePersistenceMemory),
@@ -187,7 +203,8 @@ describe("ProviderSessionReaper", () => {
     );
     const layer = makeProviderSessionReaperLive({
       inactivityThresholdMs: 1_000,
-      sweepIntervalMs: 60_000,
+      sweepIntervalMs: input.sweepIntervalMs ?? 60_000,
+      runtimeStartedAt: input.runtimeStartedAt ?? "2025-01-01T00:00:00.000Z",
     }).pipe(
       Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(runtimeRepositoryLayer),
@@ -201,6 +218,21 @@ describe("ProviderSessionReaper", () => {
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
           getCounts: () => Effect.die("unused"),
+          getRestartSafetyState: () =>
+            input.restartSafetyStateImplementation?.() ??
+            Effect.succeed({
+              threads: input.readModel.threads.map((thread) => ({
+                threadId: thread.id,
+                session: thread.session,
+                latestTurnId: null,
+                latestTurnState: null,
+                latestTurnUpdatedAt: null,
+                queuedMessageCount: 0,
+                pendingApprovalCount: thread.hasPendingApprovals ? 1 : 0,
+                pendingUserInputCount: thread.hasPendingUserInput ? 1 : 0,
+                undeliveredTranscriptEventCount: 0,
+              })),
+            }),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
@@ -217,11 +249,20 @@ describe("ProviderSessionReaper", () => {
           getThreadDetailSnapshot: () => Effect.die("unused"),
         }),
       ),
+      Layer.provideMerge(
+        Layer.succeed(OrchestrationEngineService, {
+          readEvents: () => Stream.empty,
+          readAggregateEvents: () => Stream.empty,
+          dispatch: dispatch as never,
+          resolveReceipt: () => Effect.die("unused"),
+          streamDomainEvents: Stream.empty,
+        }),
+      ),
       Layer.provideMerge(NodeServices.layer),
     );
 
     runtime = ManagedRuntime.make(layer);
-    return { stopSession, stoppedThreadIds };
+    return { stopSession, stoppedThreadIds, dispatch };
   }
 
   it("reaps stale persisted sessions without active turns", async () => {
@@ -264,8 +305,8 @@ describe("ProviderSessionReaper", () => {
     );
 
     const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
-    scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
 
     await waitFor(() => harness.stopSession.mock.calls.length === 1);
 
@@ -590,5 +631,271 @@ describe("ProviderSessionReaper", () => {
       defectThreadId,
       reapedThreadId,
     ]);
+  });
+
+  it("durably interrupts an orphaned turn from an older runtime without deleting resume state", async () => {
+    const threadId = ThreadId.make("thread-reconcile-orphan");
+    const turnId = TurnId.make("turn-reconcile-orphan");
+    const projectedAt = "2026-07-15T14:28:38.073Z";
+    const harness = await createHarness({
+      runtimeStartedAt: "2026-07-16T08:29:00.000Z",
+      readModel: makeReadModel([
+        {
+          id: threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: projectedAt,
+          },
+        },
+      ]),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    const resumeCursor = { threadId: "provider-thread-1" };
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: projectedAt,
+        resumeCursor,
+        runtimePayload: { cwd: "/tmp/project" },
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch.mock.calls[0]?.[0]).toMatchObject({
+      type: "thread.session.set",
+      threadId,
+      session: {
+        status: "interrupted",
+        activeTurnId: null,
+        providerName: "codex",
+      },
+    });
+    const persisted = Option.getOrThrow(
+      await runtime!.runPromise(repository.getByThreadId({ threadId })),
+    );
+    expect(persisted.resumeCursor).toEqual(resumeCursor);
+    expect(persisted.runtimePayload).toEqual({ cwd: "/tmp/project" });
+  });
+
+  it("does not repair a running live session that omits activeTurnId", async () => {
+    const threadId = ThreadId.make("thread-reconcile-live-running");
+    const turnId = TurnId.make("turn-reconcile-live-running");
+    const readModel = makeReadModel([
+      {
+        id: threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-07-15T14:28:38.073Z",
+        },
+      },
+    ]);
+    const harness = await createHarness({
+      runtimeStartedAt: "2026-07-16T08:29:00.000Z",
+      readModel,
+      liveSessions: [
+        {
+          provider: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          threadId,
+          status: "running",
+          runtimeMode: "full-access",
+          createdAt: "2026-07-16T08:29:00.000Z",
+          updatedAt: "2026-07-16T08:29:00.000Z",
+        },
+      ],
+    });
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    expect(harness.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("retries reconciliation after the transcript backlog drains", async () => {
+    const threadId = ThreadId.make("thread-reconcile-backlog");
+    const turnId = TurnId.make("turn-reconcile-backlog");
+    const readModel = makeReadModel([
+      {
+        id: threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-07-15T14:28:38.073Z",
+        },
+      },
+    ]);
+    let restartStateReads = 0;
+    const harness = await createHarness({
+      runtimeStartedAt: "2026-07-16T08:29:00.000Z",
+      sweepIntervalMs: 10,
+      readModel,
+      restartSafetyStateImplementation: () => {
+        restartStateReads += 1;
+        return Effect.succeed({
+          threads: [
+            {
+              threadId,
+              session: readModel.threads[0]!.session,
+              latestTurnId: turnId,
+              latestTurnState: "running",
+              latestTurnUpdatedAt: "2026-07-15T14:28:38.073Z",
+              queuedMessageCount: 0,
+              pendingApprovalCount: 0,
+              pendingUserInputCount: 0,
+              undeliveredTranscriptEventCount: restartStateReads === 1 ? 1 : 0,
+            },
+          ],
+        });
+      },
+    });
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    expect(harness.dispatch).not.toHaveBeenCalled();
+    await waitFor(() => harness.dispatch.mock.calls.length === 1);
+    expect(restartStateReads).toBeGreaterThanOrEqual(2);
+  });
+
+  it("uses one deterministic command envelope when retrying a lost acknowledgement", async () => {
+    const threadId = ThreadId.make("thread-reconcile-lost-ack");
+    const turnId = TurnId.make("turn-reconcile-lost-ack");
+    const readModel = makeReadModel([
+      {
+        id: threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: "codex",
+          runtimeMode: "full-access",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: "2026-07-15T14:28:38.073Z",
+        },
+      },
+    ]);
+    let attempts = 0;
+    const harness = await createHarness({
+      runtimeStartedAt: "2026-07-16T08:29:00.000Z",
+      sweepIntervalMs: 10,
+      readModel,
+      dispatchImplementation: () => {
+        attempts += 1;
+        return attempts === 1
+          ? Effect.fail(
+              new ProviderValidationError({
+                operation: "ProviderSessionReaper.test",
+                issue: "durable write succeeded but acknowledgement was lost",
+              }),
+            )
+          : Effect.succeed({ sequence: 1 });
+      },
+    });
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+    await waitFor(() => harness.dispatch.mock.calls.length >= 2);
+
+    expect(harness.dispatch.mock.calls[0]?.[0]).toEqual(harness.dispatch.mock.calls[1]?.[0]);
+    expect(harness.dispatch.mock.calls[0]?.[0]).toMatchObject({
+      type: "thread.session.set",
+      commandId: CommandId.make(
+        `provider:startup-reconcile:2026-07-16T08:29:00.000Z:${threadId}:${turnId}:set-session-interrupted`,
+      ),
+      createdAt: "2026-07-16T08:29:00.000Z",
+      session: { updatedAt: "2026-07-16T08:29:00.000Z" },
+    });
+  });
+
+  it("settles a legacy running turn without creating a provider session", async () => {
+    const threadId = ThreadId.make("thread-reconcile-legacy-turn");
+    const turnId = TurnId.make("turn-reconcile-legacy-turn");
+    const readModel = makeReadModel([{ id: threadId, session: null }]);
+    const harness = await createHarness({
+      runtimeStartedAt: "2026-07-16T08:29:00.000Z",
+      readModel,
+      restartSafetyStateImplementation: () =>
+        Effect.succeed({
+          threads: [
+            {
+              threadId,
+              session: null,
+              latestTurnId: turnId,
+              latestTurnState: "running",
+              latestTurnUpdatedAt: "2026-07-15T14:28:38.073Z",
+              queuedMessageCount: 0,
+              pendingApprovalCount: 0,
+              pendingUserInputCount: 0,
+              undeliveredTranscriptEventCount: 0,
+            },
+          ],
+        }),
+    });
+    const repository = await runtime!.runPromise(
+      Effect.service(ProviderSessionRuntime.ProviderSessionRuntimeRepository),
+    );
+    const resumeCursor = { threadId: "legacy-provider-thread" };
+    await runtime!.runPromise(
+      repository.upsert({
+        threadId,
+        providerName: "codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        adapterKey: "codex",
+        runtimeMode: "full-access",
+        status: "running",
+        lastSeenAt: "2026-07-15T14:28:38.073Z",
+        resumeCursor,
+        runtimePayload: { cwd: "/tmp/legacy" },
+      }),
+    );
+
+    const reaper = await runtime!.runPromise(Effect.service(ProviderSessionReaper));
+    scope = await runtime!.runPromise(Scope.make("sequential"));
+    await runtime!.runPromise(reaper.start().pipe(Scope.provide(scope)));
+
+    expect(harness.dispatch).toHaveBeenCalledTimes(1);
+    expect(harness.dispatch.mock.calls[0]?.[0]).toEqual({
+      type: "thread.turn.interrupt",
+      commandId: CommandId.make(
+        `provider:startup-reconcile:2026-07-16T08:29:00.000Z:${threadId}:${turnId}:interrupt-turn`,
+      ),
+      threadId,
+      turnId,
+      createdAt: "2026-07-16T08:29:00.000Z",
+    });
+    expect(readModel.threads[0]!.session).toBeNull();
+    const persisted = Option.getOrThrow(
+      await runtime!.runPromise(repository.getByThreadId({ threadId })),
+    );
+    expect(persisted.resumeCursor).toEqual(resumeCursor);
+    expect(persisted.runtimePayload).toEqual({ cwd: "/tmp/legacy" });
   });
 });
