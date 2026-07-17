@@ -7,26 +7,48 @@ The flake exposes:
 
 - `packages.default`: a packaged `t3` server with the bundled web client and production dependencies.
 - `apps.default`: a runnable `t3` app entrypoint.
-- `devShells.default`: Node 24, pnpm 10, JJ, Git, SSH, and native build tooling.
+- `devShells.default`: Node 24, pnpm 11.10, JJ, Git, SSH, and native build tooling.
 - `nixosModules.default`: a `services.t3code` systemd service module for NixOS hosts.
 
 ## Packaging behavior
 
-The package follows the existing server publish flow:
+The package follows the existing server publish flow, but models the web bundle, server bundle, and
+production dependencies as independent derivations:
 
-1. Build `@t3tools/web`.
-2. Run the server package `build` script, which bundles `apps/server/dist/bin.mjs` and copies the web
-   bundle into `apps/server/dist/client`.
-3. Create a minimal runtime workspace containing only `apps/server`, the lockfile, workspace settings, patch
-   files, and the built `dist`.
-4. Run `pnpm install --prod --frozen-lockfile --filter t3 --ignore-scripts` offline in that runtime workspace.
-5. Rebuild only `node-pty` from source so the runtime closure contains the native `pty.node` module.
-6. Wrap the resulting CLI with Node and common runtime tools on `PATH`.
+1. Install and build only the `@t3tools/web...` workspace dependency closure.
+2. Install and build only the `t3...` workspace dependency closure for `apps/server/dist/bin.mjs`.
+3. Use `pnpm deploy --prod --filter t3` to create an isolated production dependency tree.
+4. Rebuild only `node-pty` from source, then remove packaged prebuild directories for other platforms.
+5. Assemble the three immutable outputs in a tiny wrapper derivation and add Node plus common runtime tools
+   to `PATH`.
 
-The minimal runtime workspace avoids pulling unrelated packages such as `infra/relay` into the deployable
-server closure. The `--ignore-scripts` install flag avoids rerunning the root `prepare` patch script during
-the install phase. `node-pty` is rebuilt explicitly because it needs a platform-specific native module and its
-generic install script cannot run during the broad script-free production install.
+The dependency fetches use pnpm's matching workspace filters instead of installing all workspaces. The runtime
+uses pnpm's current injected-workspace deploy algorithm with the dedicated `pnpm-deploy-lock.yaml`; the normal
+`pnpm-lock.yaml` and workspace configuration retain linked-workspace semantics for development installs.
+`supportedArchitectures` is limited to the build platform, preventing foreign
+Claude and native prebuilds from entering the result. `node-pty` is rebuilt explicitly because it needs a
+platform-specific native module and its generic install script cannot run during the broad script-free
+production install.
+
+`pnpm-deploy-lock.yaml` is generated, not hand-edited. After changing a workspace manifest or the canonical
+lockfile, run `nix develop -c node scripts/sync-pnpm-deploy-lock.mjs`, review both lockfiles, and commit them
+together. CI or a local gate can append `--check`; it regenerates the deploy lock in memory and fails when the
+committed copy has drifted. The script requires the flake's pinned pnpm 11.10 and restores the canonical
+lockfile and workspace file even when pnpm fails.
+
+The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
+bundle or runtime dependencies; server-only edits do not invalidate the web bundle; documentation changes do
+not invalidate dependency fetches. Lockfile and manifest changes remain shared inputs because they can change
+any dependency graph.
+
+Production Nix builds disable web and server source maps. Local and development builds retain source maps by
+default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
+Production configs use Vite without importing the test configuration. Vitest has dedicated config files, so
+the test resolver plugin is not loaded during production bundling.
+
+The flake pins pnpm 11.10 and uses fetcher version 4 with `trustLockfile`. This avoids re-resolving and
+re-verifying an already frozen lockfile while retaining Nix's fixed-output dependency hash as the integrity
+boundary.
 
 The build environment sets `SSL_CERT_FILE` and `NODE_EXTRA_CA_CERTS` to nixpkgs' `cacert` bundle. Vite+'s
 Rust-side build tooling initializes an HTTP client during `vp build`; without an explicit CA bundle, sandboxed
@@ -34,7 +56,8 @@ Nix builds can inherit `/no-cert-file.crt` and abort before the web bundle is pr
 
 ## Hash refresh workflow
 
-When `pnpm-lock.yaml` changes, the fixed-output `pnpmDeps` hash in `flake.nix` can drift. Use:
+When either lockfile changes, the fixed-output `pnpmDeps` hashes in `flake.nix` can drift. First synchronize
+the deploy lock as described above, then use:
 
 - `just prefetch-pnpm-deps`
 

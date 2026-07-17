@@ -27,11 +27,229 @@
           inherit system;
         };
 
+      mkPnpm =
+        pkgs: nodejs:
+        (pkgs.pnpm_11.override { inherit nodejs; }).overrideAttrs {
+          version = "11.10.0";
+          src = pkgs.fetchurl {
+            url = "https://registry.npmjs.org/pnpm/-/pnpm-11.10.0.tgz";
+            hash = "sha256-YgtmBepPYvxWptCphzP0eQcdAyHgPkhrUix+mnRhdDE=";
+          };
+        };
+
       mkT3CodePackage =
         pkgs:
         let
           nodejs = pkgs.nodejs_24;
-          pnpm = pkgs.pnpm_10.override { inherit nodejs; };
+          pnpm = mkPnpm pkgs nodejs;
+          installFlags = [ "--ignore-scripts" ];
+
+          manifestFiles = lib.fileset.unions [
+            ./package.json
+            ./pnpm-deploy-lock.yaml
+            ./pnpm-lock.yaml
+            ./pnpm-workspace.yaml
+            (lib.fileset.fileFilter (file: lib.hasSuffix ".patch" file.name) ./patches)
+            ./apps/server/package.json
+            ./apps/web/package.json
+            (lib.fileset.fileFilter (file: file.name == "package.json") ./packages)
+          ];
+          productionFiles =
+            path:
+            lib.fileset.fileFilter (
+              file:
+              file.type == "directory"
+              || (
+                file.name != "vitest.config.ts"
+                && !lib.hasSuffix ".test.ts" file.name
+                && !lib.hasSuffix ".test.tsx" file.name
+              )
+            ) path;
+          manifestSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = manifestFiles;
+          };
+          webSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              manifestFiles
+              ./tsconfig.base.json
+              (productionFiles ./apps/web)
+              (productionFiles ./packages/client-runtime)
+              (productionFiles ./packages/contracts)
+              (productionFiles ./packages/shared)
+              ./scripts/lib/public-config.ts
+            ];
+          };
+          serverSource = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              manifestFiles
+              ./tsconfig.base.json
+              (productionFiles ./apps/server)
+              (productionFiles ./packages/client-runtime)
+              (productionFiles ./packages/contracts)
+              (productionFiles ./packages/effect-acp)
+              (productionFiles ./packages/effect-codex-app-server)
+              (productionFiles ./packages/shared)
+              (productionFiles ./packages/tailscale)
+              ./scripts/lib/public-config.ts
+            ];
+          };
+
+          mkPnpmDeps =
+            {
+              pname,
+              src,
+              workspaces,
+              hash,
+              prePnpmInstall ? "",
+            }:
+            pkgs.fetchPnpmDeps {
+              inherit
+                pname
+                src
+                pnpm
+                hash
+                prePnpmInstall
+                ;
+              version = packageJson.version;
+              fetcherVersion = 4;
+              pnpmWorkspaces = workspaces;
+              pnpmInstallFlags = installFlags;
+            };
+
+          webPnpmDeps = mkPnpmDeps {
+            pname = "t3code-web-deps";
+            src = manifestSource;
+            workspaces = [ "@t3tools/web..." ];
+            hash = "sha256-FQfu6jHYRchPz/Bo1XzBtYuhpDkGdA5eAVy4pX1jKY0=";
+          };
+          serverPnpmDeps = mkPnpmDeps {
+            pname = "t3code-server-deps";
+            src = manifestSource;
+            workspaces = [ "t3..." ];
+            hash = "sha256-0yRFbqyyyCwD7JCu4C/Ds2upirtsNH7BCWVv45l/VcU=";
+          };
+          runtimePnpmDeps = mkPnpmDeps {
+            pname = "t3code-runtime-deps";
+            src = manifestSource;
+            workspaces = [ "t3" ];
+            prePnpmInstall = ''
+              cp pnpm-deploy-lock.yaml pnpm-lock.yaml
+              printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
+            '';
+            hash = "sha256-TwhHUYGKdykSolMGC3GXmlwAXa5ePdzO3+PN9bmt9hw=";
+          };
+
+          commonNativeBuildInputs = [
+            nodejs
+            pkgs.pnpmConfigHook
+            pnpm
+          ];
+          commonEnv = {
+            NODE_EXTRA_CA_CERTS = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
+            pnpm_config_trust_lockfile = "true";
+          };
+
+          web = pkgs.stdenv.mkDerivation {
+            pname = "t3code-web";
+            version = packageJson.version;
+            src = webSource;
+            pnpmDeps = webPnpmDeps;
+            pnpmWorkspaces = [ "@t3tools/web..." ];
+            pnpmInstallFlags = installFlags;
+            nativeBuildInputs = commonNativeBuildInputs;
+            env = commonEnv // {
+              T3CODE_WEB_SOURCEMAP = "false";
+            };
+            buildPhase = ''
+              runHook preBuild
+              pnpm --filter @t3tools/web build
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              cp -R apps/web/dist "$out"
+              runHook postInstall
+            '';
+          };
+
+          server = pkgs.stdenv.mkDerivation {
+            pname = "t3code-server";
+            version = packageJson.version;
+            src = serverSource;
+            pnpmDeps = serverPnpmDeps;
+            pnpmWorkspaces = [ "t3..." ];
+            pnpmInstallFlags = installFlags;
+            nativeBuildInputs = commonNativeBuildInputs;
+            env = commonEnv // {
+              T3CODE_SERVER_SOURCEMAP = "false";
+            };
+            buildPhase = ''
+              runHook preBuild
+              pnpm --filter t3 build:bundle
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out"
+              cp apps/server/package.json "$out/package.json"
+              cp -R apps/server/dist "$out/dist"
+              runHook postInstall
+            '';
+          };
+
+          runtimeDependencies = pkgs.stdenv.mkDerivation {
+            pname = "t3code-runtime-dependencies";
+            version = packageJson.version;
+            src = manifestSource;
+            pnpmDeps = runtimePnpmDeps;
+            pnpmWorkspaces = [ "t3" ];
+            pnpmInstallFlags = installFlags;
+            nativeBuildInputs = [
+              nodejs
+              pnpm
+              pkgs.pkg-config
+              pkgs.python3
+              pkgs.sqlite
+              pkgs.zstd
+            ];
+            buildInputs = [ nodejs ];
+            env = commonEnv // {
+              npm_config_nodedir = nodejs;
+            };
+            dontConfigure = true;
+            dontBuild = true;
+            installPhase = ''
+              runHook preInstall
+              export STORE_PATH="$(mktemp -d)"
+              tar --zstd -xf "${runtimePnpmDeps}/pnpm-store.tar.zst" -C "$STORE_PATH"
+              chmod -R +w "$STORE_PATH"
+              if [ -f "$STORE_PATH/v11/index.db.sql" ]; then
+                sqlite3 "$STORE_PATH/v11/index.db" < "$STORE_PATH/v11/index.db.sql"
+                rm "$STORE_PATH/v11/index.db.sql"
+              fi
+              export pnpm_config_store_dir="$STORE_PATH"
+              cp pnpm-deploy-lock.yaml pnpm-lock.yaml
+              printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
+              mkdir -p apps/server/dist
+              pnpm_config_ignore_scripts=true pnpm --offline --frozen-lockfile --filter t3 --prod deploy "$out"
+              npm_config_build_from_source=true pnpm --dir "$out" rebuild node-pty
+              find "$out/node_modules" -type d -path "*/node-pty@*/node_modules/node-pty/prebuilds" -prune -exec rm -rf {} +
+              find "$out/node_modules/.pnpm" -type f \
+                -path "*/node-pty@*/node_modules/node-pty/build/*" \
+                \( -name "*Makefile" -o -name "*.mk" -o -name config.gypi \) \
+                -delete
+              find "$out/node_modules/.pnpm" -type d \
+                -path "*/node-pty@*/node_modules/node-pty/build/*" \
+                -empty -delete
+              rm -rf "$out/dist"
+              runHook postInstall
+            '';
+          };
+
           runtimePath = lib.makeBinPath (
             [
               pkgs.bash
@@ -50,101 +268,35 @@
             ]
           );
         in
-        pkgs.stdenv.mkDerivation (finalAttrs: {
-          pname = "t3code";
-          version = packageJson.version;
-
-          src = self;
-
-          pnpmDeps = pkgs.fetchPnpmDeps {
-            inherit (finalAttrs) pname version src;
-            inherit pnpm;
-            fetcherVersion = 3;
-            hash = "sha256-vA9tHr/f6baLHzLBhOB5ydamjBC+1PrC6zGqiFzzq5g=";
-          };
-
-          nativeBuildInputs = [
-            nodejs
-            pkgs.makeWrapper
-            pkgs.pkg-config
-            pkgs.python3
-            pkgs.pnpmConfigHook
-            pnpm
-          ];
-
-          buildInputs = [
-            nodejs
-          ];
-
-          env = {
-            NODE_EXTRA_CA_CERTS = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-            SSL_CERT_FILE = "${pkgs.cacert}/etc/ssl/certs/ca-bundle.crt";
-            npm_config_nodedir = nodejs;
-          };
-
-          buildPhase = ''
-            runHook preBuild
-
-            pnpm --filter @t3tools/web build
-            node apps/server/scripts/cli.ts build
-
-            runHook postBuild
-          '';
-
-          installPhase = ''
-            runHook preInstall
-
-            export runtimeRoot="$(mktemp -d)"
-            mkdir -p "$runtimeRoot/apps/server"
-
-            cp package.json pnpm-lock.yaml "$runtimeRoot/"
-            cp -R patches "$runtimeRoot/patches"
-            cp apps/server/package.json "$runtimeRoot/apps/server/package.json"
-            cp -R apps/server/dist "$runtimeRoot/apps/server/dist"
-
-            awk '
-              BEGIN {
-                print "packages:"
-                print "  - apps/server"
-              }
-              /^catalog:/ {
-                keep = 1
-              }
-              keep {
-                print
-              }
-            ' pnpm-workspace.yaml > "$runtimeRoot/pnpm-workspace.yaml"
-
-            (
-              cd "$runtimeRoot"
-              pnpm --offline install --prod --frozen-lockfile --filter t3 --ignore-scripts
-              npm_config_build_from_source=true pnpm --filter t3 rebuild node-pty
-            )
-
-            mkdir -p "$out/lib"
-            cp -R "$runtimeRoot/apps/server" "$out/lib/t3code"
-            cp -R "$runtimeRoot/node_modules" "$out/node_modules"
-            rm -f "$out/node_modules/.pnpm/node_modules/t3"
-
-            mkdir -p "$out/bin"
+        pkgs.runCommand "t3code-${packageJson.version}"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            passthru = {
+              inherit web server runtimeDependencies;
+            };
+            meta = {
+              description = "Minimal web GUI for using coding agents like Codex and Claude";
+              homepage = "https://github.com/pingdotgg/t3code";
+              license = lib.licenses.mit;
+              mainProgram = "t3";
+              platforms = lib.platforms.unix;
+            };
+          }
+          ''
+            mkdir -p "$out/lib/t3code/dist" "$out/bin"
+            cp ${server}/package.json "$out/lib/t3code/package.json"
+            cp -R ${server}/dist/. "$out/lib/t3code/dist/"
+            ln -s ${web} "$out/lib/t3code/dist/client"
+            ln -s ${runtimeDependencies}/node_modules "$out/lib/t3code/node_modules"
             makeWrapper "${nodejs}/bin/node" "$out/bin/t3" \
               --add-flags "$out/lib/t3code/dist/bin.mjs" \
               --suffix PATH : "${runtimePath}" \
               --set-default NODE_ENV production
-
-            runHook postInstall
           '';
-
-          meta = {
-            description = "Minimal web GUI for using coding agents like Codex and Claude";
-            homepage = "https://github.com/pingdotgg/t3code";
-            license = lib.licenses.mit;
-            mainProgram = "t3";
-            platforms = lib.platforms.unix;
-          };
-        });
     in
     {
+      lib.mkT3CodePackage = mkT3CodePackage;
+
       packages = forAllSystems (
         system:
         let
@@ -170,7 +322,7 @@
         let
           pkgs = mkPkgs system;
           nodejs = pkgs.nodejs_24;
-          pnpm = pkgs.pnpm_10.override { inherit nodejs; };
+          pnpm = mkPnpm pkgs nodejs;
         in
         {
           default = pkgs.mkShell {
