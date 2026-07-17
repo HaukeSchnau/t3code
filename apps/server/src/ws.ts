@@ -2218,17 +2218,29 @@ const makeWsRpcLayer = (
                 event.aggregateId === input.threadId &&
                 isThreadDetailEvent(event);
 
-              const liveStream: Stream.Stream<ThreadCatchUpItem> =
-                orchestrationEngine.streamDomainEvents.pipe(
-                  Stream.filter(isThisThreadDetailEvent),
-                  Stream.tap(() =>
-                    Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
-                  ),
-                  Stream.map((event) => ({
-                    kind: "event" as const,
-                    event,
-                  })),
-                );
+              const liveSubscription = getLiveSubscriptionCapability(orchestrationEngine);
+              const acquiredLiveEvents = yield* (
+                liveSubscription?.subscribe ??
+                  Effect.succeed(orchestrationEngine.streamDomainEvents)
+              );
+              const liveStream = acquiredLiveEvents.pipe(
+                Stream.filter(isThisThreadDetailEvent),
+                Stream.tap(() =>
+                  Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
+                ),
+                Stream.map((event) => ({
+                  kind: "event" as const,
+                  event,
+                })),
+              );
+
+              // Attach live delivery before reading either replay or snapshot state.
+              // Otherwise an event published while the snapshot is loading is lost.
+              const liveBuffer = yield* Queue.unbounded<ThreadCatchUpItem>();
+              yield* Effect.forkScoped(
+                liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+              );
+              const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
               // When the client already loaded the snapshot over HTTP it passes
               // that snapshot's sequence, and we resume the live subscription by
@@ -2248,19 +2260,6 @@ const makeWsRpcLayer = (
               // than the size and payload volume of the global event range.
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                const liveSubscription = getLiveSubscriptionCapability(orchestrationEngine);
-                const acquiredLiveEvents = yield* (
-                  liveSubscription?.subscribe ??
-                    Effect.succeed(orchestrationEngine.streamDomainEvents)
-                );
-                const acquiredLiveStream: Stream.Stream<ThreadCatchUpItem> =
-                  acquiredLiveEvents.pipe(
-                    Stream.filter(isThisThreadDetailEvent),
-                    Stream.tap(() =>
-                      Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
-                    ),
-                    Stream.map((event) => ({ kind: "event" as const, event })),
-                  );
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("thread", afterSequence).pipe(
                     Effect.provideService(
@@ -2268,7 +2267,7 @@ const makeWsRpcLayer = (
                       replayLogPublisher,
                     ),
                   ),
-                  live: acquiredLiveStream,
+                  live: bufferedLiveStream,
                   sequence: (item) =>
                     item.kind === "event" ? item.event.sequence : item.snapshot.snapshotSequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
@@ -2420,7 +2419,7 @@ const makeWsRpcLayer = (
                   kind: "snapshot" as const,
                   snapshot: snapshot.value,
                 }),
-                liveStream,
+                bufferedLiveStream,
               );
             }),
             { "rpc.aggregate": "orchestration" },

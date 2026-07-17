@@ -254,6 +254,13 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
 
   const enqueue = (message: QueuedThreadMessage): Promise<void> =>
     serialize(async () => {
+      const service = await outbox();
+      const existing = (await Effect.runPromise(service.entries)).find(
+        (entry) => entry.plan.command.commandId === message.commandId,
+      );
+      if (existing !== undefined && existing.state._tag !== "Pending") {
+        await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
+      }
       try {
         await options.storage.write(message);
       } catch (cause) {
@@ -265,10 +272,18 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
-      const service = await outbox();
+      // A repeated native share delivery may reuse its stable message and
+      // command identity. Replace a still-pending lifecycle entry so its
+      // durable payload matches the authoritative presentation record.
+      if (existing?.state._tag === "Pending") {
+        await Effect.runPromise(service.cancelPending(message.commandId));
+      }
       await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
       await refreshDeliveryStates(service);
-      setMessages([...currentMessages(), message]);
+      setMessages([
+        ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+        message,
+      ]);
     });
 
   // Rewrites an already-queued message. A no-op when the message has been
