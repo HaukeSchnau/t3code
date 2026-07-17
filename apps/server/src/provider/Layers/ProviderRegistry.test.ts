@@ -1575,6 +1575,21 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             })),
             [{ slug: "gpt-5.6-sol", isCustom: true }],
           );
+          assert.deepStrictEqual(status.models[0]?.capabilities?.optionDescriptors, [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [
+                { id: "low", label: "Low" },
+                { id: "medium", label: "Medium" },
+                { id: "high", label: "High", isDefault: true },
+                { id: "xhigh", label: "Extra High" },
+                { id: "max", label: "Max" },
+              ],
+              currentValue: "high",
+            },
+          ]);
           assert.strictEqual(status.versionAdvisory, undefined);
         }).pipe(
           Effect.provide(
