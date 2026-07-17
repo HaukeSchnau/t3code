@@ -108,8 +108,13 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   const latest = yield* Ref.make<EnvironmentThreadState>(EMPTY_ENVIRONMENT_THREAD_STATE);
   const retryCount = yield* Ref.make(0);
   const subscriptionCount = yield* Ref.make(0);
+  const subscriptionAttempts = yield* Queue.unbounded<{
+    readonly clientId: string;
+    readonly afterSequence: number | undefined;
+  }>();
+  const cancelledClients = yield* Queue.unbounded<string>();
   const loaderCalls = yield* Ref.make(0);
-  const lastSubscribeAfterSequence = yield* Ref.make<number | undefined>(undefined);
+  const subscribeAfterSequences = yield* Ref.make<ReadonlyArray<number | undefined>>([]);
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
   const supervisorState = yield* SubscriptionRef.make<SupervisorConnectionState>(
@@ -121,17 +126,30 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         input instanceof Error ? Effect.fail(input) : Effect.succeed(input),
       ),
     );
-  const clientFor = (queue: Queue.Queue<TestThreadInput>) =>
+  const clientFor = (queue: Queue.Queue<TestThreadInput>, clientId: string) =>
     ({
       [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly afterSequence?: number }) =>
         Stream.unwrap(
           Ref.updateAndGet(subscriptionCount, (count) => count + 1).pipe(
-            Effect.andThen(Ref.set(lastSubscribeAfterSequence, input.afterSequence)),
-            Effect.as(streamFrom(queue)),
+            Effect.andThen(
+              Ref.update(subscribeAfterSequences, (sequences) => [
+                ...sequences,
+                input.afterSequence,
+              ]),
+            ),
+            Effect.andThen(
+              Queue.offer(subscriptionAttempts, {
+                clientId,
+                afterSequence: input.afterSequence,
+              }),
+            ),
+            Effect.as(
+              streamFrom(queue).pipe(Stream.ensuring(Queue.offer(cancelledClients, clientId))),
+            ),
           ),
         ),
     }) as unknown as WsRpcProtocolClient;
-  const client = clientFor(inputs);
+  const client = clientFor(inputs, "initial");
   const supervisorSession = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
     Option.some(testSession(client)),
   );
@@ -197,19 +215,96 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     latest,
     retryCount,
     subscriptionCount,
+    subscriptionAttempts,
+    cancelledClients,
     loaderCalls,
-    lastSubscribeAfterSequence,
+    subscribeAfterSequences,
     supervisorState,
     supervisorSession,
     savedThreads,
     removedThreads,
     replaceSession: SubscriptionRef.set(supervisorSession, Option.some(testSession(client))),
-    replaceSessionUsing: (queue: Queue.Queue<TestThreadInput>) =>
-      SubscriptionRef.set(supervisorSession, Option.some(testSession(clientFor(queue)))),
+    replaceSessionUsing: (queue: Queue.Queue<TestThreadInput>, clientId = "replacement") =>
+      SubscriptionRef.set(supervisorSession, Option.some(testSession(clientFor(queue, clientId)))),
   };
 });
 
 describe("thread reconnect freshness", () => {
+  it.effect("resumes a replacement session from the latest applied sequence", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      expect(yield* Queue.take(harness.subscriptionAttempts)).toEqual({
+        clientId: "initial",
+        afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+      });
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Current title", CACHED_SNAPSHOT_SEQUENCE + 1),
+      );
+      yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.title === "Current title",
+      );
+
+      const replacementInputs = yield* Queue.unbounded<TestThreadInput>();
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        desired: true,
+        network: "online",
+        phase: "connecting",
+        stage: "synchronizing",
+        attempt: 2,
+        generation: 2,
+        lastFailure: null,
+        retryAt: null,
+      });
+      yield* harness.replaceSessionUsing(replacementInputs, "replacement");
+
+      expect(yield* Queue.take(harness.cancelledClients)).toBe("initial");
+      expect(yield* Queue.take(harness.subscriptionAttempts)).toEqual({
+        clientId: "replacement",
+        afterSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+      });
+      expect((yield* SubscriptionRef.get(harness.supervisorState)).generation).toBe(2);
+      expect(yield* Ref.get(harness.subscribeAfterSequences)).toEqual([
+        CACHED_SNAPSHOT_SEQUENCE,
+        CACHED_SNAPSHOT_SEQUENCE + 1,
+      ]);
+      yield* awaitThreadState(harness.observed, (value) => value.status === "synchronizing");
+      yield* Queue.offer(replacementInputs, { kind: "synchronized" });
+      const replacementLive = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "live",
+      );
+      expect(Option.getOrThrow(replacementLive.data).title).toBe("Current title");
+    }),
+  );
+
+  it.effect("resumes an expected-failure retry from the latest applied sequence", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Current title", CACHED_SNAPSHOT_SEQUENCE + 1),
+      );
+      yield* Queue.offer(harness.inputs, new Error("retry subscription"));
+      yield* awaitThreadState(harness.observed, (value) => Option.isSome(value.error));
+
+      yield* TestClock.adjust("250 millis");
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.subscriptionCount)) >= 2) break;
+        yield* Effect.yieldNow;
+      }
+
+      expect(yield* Ref.get(harness.subscribeAfterSequences)).toEqual([
+        CACHED_SNAPSHOT_SEQUENCE,
+        CACHED_SNAPSHOT_SEQUENCE + 1,
+      ]);
+    }),
+  );
+
   it.effect("returns a cached thread to live when catch-up has no new thread events", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({
@@ -468,7 +563,9 @@ describe("EnvironmentThreads", () => {
 
       // The subscription resumed from the cached sequence and never fetched the
       // full snapshot over HTTP.
-      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect((yield* Ref.get(harness.subscribeAfterSequences)).at(-1)).toBe(
+        CACHED_SNAPSHOT_SEQUENCE,
+      );
       expect(yield* Ref.get(harness.loaderCalls)).toBe(0);
     }),
   );
@@ -523,7 +620,7 @@ describe("EnvironmentThreads", () => {
       // Cold cache: the full snapshot was loaded over HTTP and the socket
       // resumed from that snapshot's sequence.
       expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
-      expect(yield* Ref.get(harness.lastSubscribeAfterSequence)).toBe(1);
+      expect((yield* Ref.get(harness.subscribeAfterSequences)).at(-1)).toBe(1);
     }),
   );
 
