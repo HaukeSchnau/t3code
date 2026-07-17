@@ -1,4 +1,7 @@
 import * as Crypto from "effect/Crypto";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
 
 import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
@@ -33,6 +36,10 @@ import {
   updateThreadMetadata,
 } from "../operations/commands.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { ConnectionTransientError } from "../connection/model.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
+import type { ThreadId, TurnId } from "@t3tools/contracts";
 
 export type {
   ArchiveThreadInput,
@@ -51,16 +58,44 @@ export type {
   UpdateThreadMetadataInput,
 } from "../operations/commands.ts";
 
+export interface LoadThreadTurnActivitiesInput {
+  readonly threadId: ThreadId;
+  readonly turnId: TurnId;
+}
+
 export function createThreadEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | Crypto.Crypto | ThreadSnapshotLoader | R, E>,
 ) {
   const scheduler = createAtomCommandScheduler();
+  const hydrationScheduler = createAtomCommandScheduler();
   const concurrency = {
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
       JSON.stringify([environmentId, input.threadId]),
   };
   return {
+    loadTurnActivities: createEnvironmentCommand(runtime, {
+      label: "environment-data:thread:load-turn-activities",
+      execute: (input: LoadThreadTurnActivitiesInput) =>
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor;
+          const loader = yield* ThreadSnapshotLoader;
+          const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+          if (Option.isNone(prepared)) {
+            return yield* new ConnectionTransientError({
+              reason: "transport",
+              detail: "The environment is not connected.",
+            });
+          }
+          return yield* loader.loadTurnActivities(prepared.value, input.threadId, input.turnId);
+        }),
+      scheduler: hydrationScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.turnId]),
+      },
+    }),
     create: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:create",
       execute: (input: CreateThreadInput) => createThread(input),

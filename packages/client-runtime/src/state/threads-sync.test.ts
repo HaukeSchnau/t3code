@@ -6,11 +6,14 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  TurnId,
   type OrchestrationThread,
+  type OrchestrationThreadActivityDetailMode,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
@@ -29,8 +32,12 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as Persistence from "../platform/persistence.ts";
 import * as RpcSession from "../rpc/session.ts";
+import type { ThreadSnapshotLoadOutcome } from "./threadSnapshotHttp.ts";
 import {
+  AUTHORITATIVE_REFRESH_MAX_ATTEMPTS,
+  AUTHORITATIVE_REFRESH_RETRY_CAP_MS,
   EMPTY_ENVIRONMENT_THREAD_STATE,
+  authoritativeRefreshRetryDelayMs,
   makeEnvironmentThreadState,
   ThreadSnapshotLoader,
   type EnvironmentThreadState,
@@ -44,6 +51,14 @@ const TARGET = new PrimaryConnectionTarget({
 });
 const THREAD_ID = ThreadId.make("thread-1");
 const CACHED_SNAPSHOT_SEQUENCE = 7;
+const authoritativeRefreshTestDelay = (attempt: number, clientSeed = 17) =>
+  authoritativeRefreshRetryDelayMs({
+    attempt,
+    eventSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+    clientSeed,
+    environmentId: TARGET.environmentId,
+    threadId: THREAD_ID,
+  });
 const PREPARED: PreparedConnection = {
   environmentId: TARGET.environmentId,
   label: TARGET.label,
@@ -101,7 +116,12 @@ function awaitThreadState(
 
 const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (options?: {
   readonly cached?: OrchestrationThread;
+  readonly cachedActivityDetailMode?: OrchestrationThreadActivityDetailMode;
   readonly httpSnapshot?: Option.Option<OrchestrationThreadDetailSnapshot>;
+  readonly httpOutcomes?: ReadonlyArray<ThreadSnapshotLoadOutcome>;
+  readonly httpOutcomeEffects?: ReadonlyArray<Effect.Effect<ThreadSnapshotLoadOutcome>>;
+  readonly authoritativeRefreshJitterSeed?: number;
+  readonly requestedActivityDetailMode?: OrchestrationThreadActivityDetailMode;
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -114,6 +134,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   }>();
   const cancelledClients = yield* Queue.unbounded<string>();
   const loaderCalls = yield* Ref.make(0);
+  const loaderModes = yield* Ref.make<ReadonlyArray<OrchestrationThreadActivityDetailMode>>([]);
   const subscribeAfterSequences = yield* Ref.make<ReadonlyArray<number | undefined>>([]);
   const savedThreads = yield* Ref.make<ReadonlyArray<OrchestrationThreadDetailSnapshot>>([]);
   const removedThreads = yield* Ref.make<ReadonlyArray<ThreadId>>([]);
@@ -157,14 +178,28 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     Option.some(PREPARED),
   );
   const snapshotLoader = ThreadSnapshotLoader.of({
-    load: (_prepared, threadId) =>
-      Ref.update(loaderCalls, (count) => count + 1).pipe(
-        Effect.as(
-          threadId === THREAD_ID
-            ? (options?.httpSnapshot ?? Option.none<OrchestrationThreadDetailSnapshot>())
-            : Option.none<OrchestrationThreadDetailSnapshot>(),
-        ),
-      ),
+    loadTurnActivities: () => Effect.die("unused"),
+    load: (_prepared, threadId, activityDetailMode) =>
+      Effect.gen(function* () {
+        const call = yield* Ref.updateAndGet(loaderCalls, (count) => count + 1);
+        yield* Ref.update(loaderModes, (modes) => [...modes, activityDetailMode]);
+        if (threadId !== THREAD_ID) return { _tag: "NotFound" as const };
+        const outcomeEffects = options?.httpOutcomeEffects;
+        if (outcomeEffects && outcomeEffects.length > 0) {
+          return yield* outcomeEffects[Math.min(call - 1, outcomeEffects.length - 1)]!;
+        }
+        const outcomes = options?.httpOutcomes;
+        if (outcomes && outcomes.length > 0) {
+          return outcomes[Math.min(call - 1, outcomes.length - 1)]!;
+        }
+        return Option.match(
+          options?.httpSnapshot ?? Option.none<OrchestrationThreadDetailSnapshot>(),
+          {
+            onNone: () => ({ _tag: "NotFound" as const }),
+            onSome: (snapshot) => ({ _tag: "Found" as const, snapshot }),
+          },
+        );
+      }),
   });
   const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
     target: TARGET,
@@ -183,6 +218,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
         threadId === THREAD_ID && options?.cached !== undefined
           ? Option.some({
               snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+              activityDetailMode: options.cachedActivityDetailMode ?? "full",
               thread: options.cached,
             })
           : Option.none(),
@@ -197,7 +233,11 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     saveVcsRefs: () => Effect.void,
     clear: () => Effect.void,
   });
-  const threadState = yield* makeEnvironmentThreadState(THREAD_ID).pipe(
+  const threadState = yield* makeEnvironmentThreadState(
+    THREAD_ID,
+    options?.requestedActivityDetailMode ?? "full",
+    { authoritativeRefreshJitterSeed: options?.authoritativeRefreshJitterSeed ?? 17 },
+  ).pipe(
     Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
     Effect.provideService(Persistence.EnvironmentCacheStore, cache),
     Effect.provideService(ThreadSnapshotLoader, snapshotLoader),
@@ -218,6 +258,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     subscriptionAttempts,
     cancelledClients,
     loaderCalls,
+    loaderModes,
     subscribeAfterSequences,
     supervisorState,
     supervisorSession,
@@ -461,6 +502,7 @@ const snapshot = (thread: OrchestrationThread): OrchestrationThreadStreamItem =>
   kind: "snapshot",
   snapshot: {
     snapshotSequence: 1,
+    activityDetailMode: "full",
     thread,
   },
 });
@@ -515,11 +557,11 @@ const queuedMessage = (sequence = 2): OrchestrationThreadStreamItem => ({
   },
 });
 
-const deleted = (): OrchestrationThreadStreamItem => ({
+const deleted = (sequence = 3): OrchestrationThreadStreamItem => ({
   kind: "event",
   event: {
     eventId: EventId.make("event-deleted"),
-    sequence: 3,
+    sequence,
     occurredAt: "2026-04-01T02:00:00.000Z",
     commandId: null,
     causationEventId: null,
@@ -535,7 +577,74 @@ const deleted = (): OrchestrationThreadStreamItem => ({
   },
 });
 
+const compactThreadWithHistory = (): OrchestrationThread => ({
+  ...BASE_THREAD,
+  latestTurn: {
+    turnId: TurnId.make("turn-current"),
+    state: "running",
+    requestedAt: "2026-04-01T01:00:00.000Z",
+    startedAt: "2026-04-01T01:00:00.000Z",
+    completedAt: null,
+    assistantMessageId: null,
+  },
+  historicalActivityGroups: [
+    {
+      turnId: TurnId.make("turn-history"),
+      revision: CACHED_SNAPSHOT_SEQUENCE,
+      activityCount: 2,
+      payloadBytes: 100,
+      displayActivityCount: 1,
+      firstActivityAt: "2026-04-01T00:00:00.000Z",
+      lastActivityAt: "2026-04-01T00:30:00.000Z",
+    },
+  ],
+});
+
+const historicalActivityAppended = (
+  sequence = CACHED_SNAPSHOT_SEQUENCE + 1,
+): OrchestrationThreadStreamItem => ({
+  kind: "event",
+  event: {
+    eventId: EventId.make(`event-historical-activity-${sequence}`),
+    sequence,
+    occurredAt: "2026-04-01T01:01:00.000Z",
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    aggregateKind: "thread",
+    aggregateId: THREAD_ID,
+    type: "thread.activity-appended",
+    payload: {
+      threadId: THREAD_ID,
+      activity: {
+        id: EventId.make("historical-activity-new"),
+        tone: "tool",
+        kind: "tool.completed",
+        summary: "Historical command",
+        payload: { output: "large" },
+        turnId: TurnId.make("turn-history"),
+        sequence,
+        createdAt: "2026-04-01T00:45:00.000Z",
+      },
+    },
+  },
+});
+
 describe("EnvironmentThreads", () => {
+  it("uses capped exponential authoritative-refresh delays with deterministic jitter", () => {
+    const delays = Array.from({ length: 12 }, (_, attempt) =>
+      authoritativeRefreshTestDelay(attempt),
+    );
+
+    expect(delays).toEqual(
+      Array.from({ length: 12 }, (_, attempt) => authoritativeRefreshTestDelay(attempt)),
+    );
+    expect(delays.every((delay) => delay <= AUTHORITATIVE_REFRESH_RETRY_CAP_MS)).toBe(true);
+    expect(delays[0]).toBeLessThan(delays[1]!);
+    expect(delays.at(-1)).toBeLessThanOrEqual(AUTHORITATIVE_REFRESH_RETRY_CAP_MS);
+    expect(authoritativeRefreshTestDelay(1, 17)).not.toBe(authoritativeRefreshTestDelay(1, 29));
+  });
   it.effect("publishes cached data immediately from a warm cache", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
@@ -570,6 +679,341 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
+  it.effect("rejects a warm cache with the wrong activity detail mode", () =>
+    Effect.gen(function* () {
+      const compactThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        title: "Compact HTTP title",
+      };
+      const harness = yield* makeHarness({
+        cached: BASE_THREAD,
+        cachedActivityDetailMode: "full",
+        requestedActivityDetailMode: "compact",
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          activityDetailMode: "compact",
+          thread: compactThread,
+        }),
+      });
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Compact live title", CACHED_SNAPSHOT_SEQUENCE + 2),
+      );
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.title === "Compact live title",
+      );
+
+      expect(Option.getOrThrow(state.data).title).toBe("Compact live title");
+      expect(yield* Ref.get(harness.loaderCalls)).toBeGreaterThanOrEqual(1);
+      expect((yield* Ref.get(harness.loaderModes)).at(-1)).toBe("compact");
+      expect((yield* Ref.get(harness.subscribeAfterSequences)).at(-1)).toBe(
+        CACHED_SNAPSHOT_SEQUENCE + 1,
+      );
+    }),
+  );
+
+  it.effect("reloads compact history authoritatively without losing the event cursor", () =>
+    Effect.gen(function* () {
+      const historicalTurnId = TurnId.make("turn-history");
+      const compactThread: OrchestrationThread = {
+        ...BASE_THREAD,
+        latestTurn: {
+          turnId: TurnId.make("turn-current"),
+          state: "running",
+          requestedAt: "2026-04-01T01:00:00.000Z",
+          startedAt: "2026-04-01T01:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        historicalActivityGroups: [
+          {
+            turnId: historicalTurnId,
+            revision: CACHED_SNAPSHOT_SEQUENCE,
+            activityCount: 2,
+            payloadBytes: 100,
+            displayActivityCount: 1,
+            firstActivityAt: "2026-04-01T00:00:00.000Z",
+            lastActivityAt: "2026-04-01T00:30:00.000Z",
+          },
+        ],
+      };
+      const refreshedThread: OrchestrationThread = {
+        ...compactThread,
+        title: "Authoritative snapshot",
+        historicalActivityGroups: [
+          {
+            ...compactThread.historicalActivityGroups![0]!,
+            revision: CACHED_SNAPSHOT_SEQUENCE + 1,
+            activityCount: 3,
+            payloadBytes: 120,
+            displayActivityCount: 2,
+          },
+        ],
+      };
+      const harness = yield* makeHarness({
+        cached: compactThread,
+        cachedActivityDetailMode: "compact",
+        requestedActivityDetailMode: "compact",
+        httpOutcomes: [
+          {
+            _tag: "Found",
+            snapshot: {
+              snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+              activityDetailMode: "compact",
+              thread: compactThread,
+            },
+          },
+          {
+            _tag: "Found",
+            snapshot: {
+              // Includes this event plus a later committed event, so queued
+              // socket sequence 9 must be ignored after replacement.
+              snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 3,
+              activityDetailMode: "compact",
+              thread: refreshedThread,
+            },
+          },
+        ],
+      });
+      yield* Queue.offer(harness.inputs, {
+        kind: "event",
+        event: {
+          eventId: EventId.make("event-historical-activity"),
+          sequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+          occurredAt: "2026-04-01T01:01:00.000Z",
+          commandId: null,
+          causationEventId: null,
+          correlationId: null,
+          metadata: {},
+          aggregateKind: "thread",
+          aggregateId: THREAD_ID,
+          type: "thread.activity-appended",
+          payload: {
+            threadId: THREAD_ID,
+            activity: {
+              id: EventId.make("historical-activity-new"),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Historical command",
+              payload: { output: "large" },
+              turnId: historicalTurnId,
+              sequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+              createdAt: "2026-04-01T00:45:00.000Z",
+            },
+          },
+        },
+      });
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Stale queued title", CACHED_SNAPSHOT_SEQUENCE + 2),
+      );
+      yield* Queue.offer(
+        harness.inputs,
+        titleUpdated("Fresh socket title", CACHED_SNAPSHOT_SEQUENCE + 4),
+      );
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if ((yield* Ref.get(harness.loaderCalls)) >= 1) break;
+        yield* Effect.yieldNow;
+      }
+      yield* TestClock.adjust(authoritativeRefreshTestDelay(0) + 1);
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.title === "Fresh socket title",
+      );
+
+      expect(Option.getOrThrow(state.data).historicalActivityGroups?.[0]).toMatchObject({
+        revision: CACHED_SNAPSHOT_SEQUENCE + 1,
+        activityCount: 3,
+        payloadBytes: 120,
+        displayActivityCount: 2,
+      });
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
+      expect(yield* Ref.get(harness.loaderModes)).toEqual(["compact", "compact"]);
+      expect(yield* Ref.get(harness.subscribeAfterSequences)).toEqual([CACHED_SNAPSHOT_SEQUENCE]);
+    }),
+  );
+
+  it.effect("caps transient refresh attempts before restarting from the pinned cursor", () =>
+    Effect.gen(function* () {
+      const compactThread = compactThreadWithHistory();
+      const harness = yield* makeHarness({
+        cached: compactThread,
+        cachedActivityDetailMode: "compact",
+        requestedActivityDetailMode: "compact",
+        httpOutcomes: Array.from({ length: AUTHORITATIVE_REFRESH_MAX_ATTEMPTS }, () => ({
+          _tag: "TransientFailure" as const,
+          message: "temporary snapshot failure",
+        })),
+      });
+      expect(yield* Queue.take(harness.subscriptionAttempts)).toMatchObject({
+        afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+      });
+      yield* Queue.offer(harness.inputs, historicalActivityAppended());
+
+      for (let attempt = 0; attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+        for (let spin = 0; spin < 100; spin += 1) {
+          if ((yield* Ref.get(harness.loaderCalls)) >= attempt + 1) break;
+          yield* Effect.yieldNow;
+        }
+        if (attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS - 1) {
+          yield* TestClock.adjust(authoritativeRefreshTestDelay(attempt) + 1);
+        }
+      }
+      yield* TestClock.adjust("51 millis");
+      const restarted = yield* Queue.take(harness.subscriptionAttempts);
+
+      expect(restarted.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(AUTHORITATIVE_REFRESH_MAX_ATTEMPTS);
+      expect(Option.isSome((yield* Ref.get(harness.latest)).error)).toBe(true);
+    }),
+  );
+
+  it.effect("interrupts refresh backoff when the connection generation changes", () =>
+    Effect.gen(function* () {
+      const compactThread = compactThreadWithHistory();
+      const refreshedThread = { ...compactThread, title: "Replacement snapshot" };
+      const harness = yield* makeHarness({
+        cached: compactThread,
+        cachedActivityDetailMode: "compact",
+        requestedActivityDetailMode: "compact",
+        httpOutcomes: [
+          { _tag: "TransientFailure", message: "old generation failed" },
+          {
+            _tag: "Found",
+            snapshot: {
+              snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+              activityDetailMode: "compact",
+              thread: refreshedThread,
+            },
+          },
+        ],
+      });
+      expect(yield* Queue.take(harness.subscriptionAttempts)).toMatchObject({
+        clientId: "initial",
+        afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+      });
+      yield* Queue.offer(harness.inputs, historicalActivityAppended());
+      for (let spin = 0; spin < 100; spin += 1) {
+        if ((yield* Ref.get(harness.loaderCalls)) >= 1) break;
+        yield* Effect.yieldNow;
+      }
+
+      const replacementInputs = yield* Queue.unbounded<TestThreadInput>();
+      const currentConnection = yield* SubscriptionRef.get(harness.supervisorState);
+      yield* SubscriptionRef.set(harness.supervisorState, {
+        ...currentConnection,
+        phase: "connecting",
+        stage: "synchronizing",
+        generation: currentConnection.generation + 1,
+      });
+      yield* harness.replaceSessionUsing(replacementInputs, "replacement-refresh");
+      yield* TestClock.adjust("51 millis");
+      expect(yield* Queue.take(harness.subscriptionAttempts)).toEqual({
+        clientId: "replacement-refresh",
+        afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+      });
+      yield* Queue.offer(replacementInputs, historicalActivityAppended());
+
+      const recovered = yield* awaitThreadState(
+        harness.observed,
+        (value) =>
+          value.status === "live" &&
+          Option.isSome(value.data) &&
+          value.data.value.title === "Replacement snapshot",
+      );
+      expect(Option.isNone(recovered.error)).toBe(true);
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(2);
+    }),
+  );
+
+  it.effect("ignores deferred Found and NotFound outcomes from an obsolete generation", () =>
+    Effect.gen(function* () {
+      for (const outcomeTag of ["Found", "NotFound"] as const) {
+        const compactThread = compactThreadWithHistory();
+        const deferred = yield* Deferred.make<ThreadSnapshotLoadOutcome>();
+        const outcome: ThreadSnapshotLoadOutcome =
+          outcomeTag === "Found"
+            ? {
+                _tag: "Found",
+                snapshot: {
+                  snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+                  activityDetailMode: "compact",
+                  thread: { ...compactThread, title: "Obsolete generation snapshot" },
+                },
+              }
+            : { _tag: "NotFound" };
+        const harness = yield* makeHarness({
+          cached: compactThread,
+          cachedActivityDetailMode: "compact",
+          requestedActivityDetailMode: "compact",
+          httpOutcomeEffects: [Deferred.await(deferred)],
+        });
+        expect(yield* Queue.take(harness.subscriptionAttempts)).toMatchObject({
+          clientId: "initial",
+          afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+        });
+        yield* Queue.offer(harness.inputs, historicalActivityAppended());
+        for (let spin = 0; spin < 100; spin += 1) {
+          if ((yield* Ref.get(harness.loaderCalls)) >= 1) break;
+          yield* Effect.yieldNow;
+        }
+
+        const replacementInputs = yield* Queue.unbounded<TestThreadInput>();
+        const currentConnection = yield* SubscriptionRef.get(harness.supervisorState);
+        yield* SubscriptionRef.set(harness.supervisorState, {
+          ...currentConnection,
+          phase: "connecting",
+          stage: "synchronizing",
+          generation: currentConnection.generation + 1,
+        });
+        yield* harness.replaceSessionUsing(replacementInputs, `replacement-deferred-${outcomeTag}`);
+        yield* Deferred.succeed(deferred, outcome);
+        yield* TestClock.adjust("51 millis");
+        expect(yield* Queue.take(harness.subscriptionAttempts)).toEqual({
+          clientId: `replacement-deferred-${outcomeTag}`,
+          afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+        });
+
+        const latest = yield* Ref.get(harness.latest);
+        expect(latest.status).not.toBe("deleted");
+        expect(Option.getOrThrow(latest.data).title).toBe(BASE_THREAD.title);
+        expect(yield* Ref.get(harness.removedThreads)).toEqual([]);
+      }
+    }),
+  );
+
+  it.effect("treats refresh not-found as deletion without blocking a queued delete", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({
+        cached: compactThreadWithHistory(),
+        cachedActivityDetailMode: "compact",
+        requestedActivityDetailMode: "compact",
+        httpOutcomes: [{ _tag: "NotFound" }],
+      });
+      yield* Queue.offer(harness.inputs, historicalActivityAppended());
+      yield* Queue.offer(harness.inputs, deleted(CACHED_SNAPSHOT_SEQUENCE + 2));
+
+      const state = yield* awaitThreadState(
+        harness.observed,
+        (value) => value.status === "deleted" && Option.isNone(value.data),
+      );
+      for (let spin = 0; spin < 20; spin += 1) yield* Effect.yieldNow;
+
+      expect(state.status).toBe("deleted");
+      expect(yield* Ref.get(harness.loaderCalls)).toBe(1);
+      expect(yield* Ref.get(harness.removedThreads)).toEqual([THREAD_ID]);
+    }),
+  );
+
   it.effect("reduces live events and persists the latest thread", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ cached: BASE_THREAD });
@@ -601,6 +1045,7 @@ describe("EnvironmentThreads", () => {
       const harness = yield* makeHarness({
         httpSnapshot: Option.some({
           snapshotSequence: 1,
+          activityDetailMode: "full",
           thread: httpThread,
         }),
       });

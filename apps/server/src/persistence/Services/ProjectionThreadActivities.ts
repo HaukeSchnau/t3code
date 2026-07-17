@@ -28,6 +28,7 @@ export const ProjectionThreadActivity = Schema.Struct({
   kind: Schema.String,
   summary: Schema.String,
   payload: Schema.Unknown,
+  activityRevision: NonNegativeInt,
   sequence: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });

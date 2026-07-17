@@ -24,7 +24,7 @@ import {
   AuthWebSocketTicketResult,
   ServerAuthSessionMethod,
 } from "./auth.ts";
-import { AuthSessionId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { AuthSessionId, ThreadId, TrimmedNonEmptyString, TurnId } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   EnergyDiagnosticsCaptureRequestInput,
@@ -36,7 +36,9 @@ import {
   DispatchResult,
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
+  OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationTurnActivitiesSnapshot,
 } from "./orchestration.ts";
 import {
   ThreadOrchestrationAwaitThreadResult,
@@ -499,6 +501,15 @@ const EnvironmentOrchestrationThreadSnapshotParams = Schema.Struct({
   threadId: ThreadId,
 });
 
+const EnvironmentOrchestrationThreadSnapshotUrlParams = Schema.Struct({
+  activityDetailMode: Schema.optionalKey(OrchestrationThreadActivityDetailMode),
+});
+
+const EnvironmentOrchestrationTurnActivitiesParams = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
+});
+
 export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestration")
   .add(
     HttpApiEndpoint.get("snapshot", "/api/orchestration/snapshot", {
@@ -518,9 +529,22 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
     HttpApiEndpoint.get("threadSnapshot", "/api/orchestration/threads/:threadId", {
       headers: OptionalBearerHeaders,
       params: EnvironmentOrchestrationThreadSnapshotParams,
+      query: EnvironmentOrchestrationThreadSnapshotUrlParams,
       success: OrchestrationThreadDetailSnapshot,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get(
+      "turnActivities",
+      "/api/orchestration/threads/:threadId/turns/:turnId/activities",
+      {
+        headers: OptionalBearerHeaders,
+        params: EnvironmentOrchestrationTurnActivitiesParams,
+        success: OrchestrationTurnActivitiesSnapshot,
+        error: EnvironmentOrchestrationThreadSnapshotErrors,
+      },
+    ).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
     HttpApiEndpoint.post("dispatch", "/api/orchestration/dispatch", {

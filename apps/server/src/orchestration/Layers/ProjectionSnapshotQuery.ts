@@ -12,6 +12,7 @@ import {
   OrchestrationUsageLimitsSnapshot,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationTurnActivitiesSnapshot,
   OrchestrationThreadDetailSnapshot,
   ProjectScript,
   ProviderInstanceId,
@@ -24,6 +25,8 @@ import {
   type OrchestrationProposedPlan,
   type OrchestrationProject,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadActivityDetailMode,
+  type OrchestrationThreadHistoricalActivityGroup,
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
@@ -71,6 +74,9 @@ import {
 const decodeReadModel = Schema.decodeUnknownEffect(OrchestrationReadModel);
 const decodeShellSnapshot = Schema.decodeUnknownEffect(OrchestrationShellSnapshot);
 const decodeThread = Schema.decodeUnknownEffect(OrchestrationThread);
+const decodeTurnActivitiesSnapshot = Schema.decodeUnknownEffect(
+  OrchestrationTurnActivitiesSnapshot,
+);
 const decodeRestartSafetySession = Schema.decodeUnknownEffect(OrchestrationSession);
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
@@ -107,6 +113,20 @@ const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
     sequence: Schema.NullOr(NonNegativeInt),
   }),
 );
+const ProjectionThreadHistoricalActivityGroupDbRowSchema = Schema.Struct({
+  threadId: ProjectionThreadActivity.fields.threadId,
+  turnId: TurnId,
+  revision: NonNegativeInt,
+  activityCount: NonNegativeInt,
+  payloadBytes: NonNegativeInt,
+  displayActivityCount: NonNegativeInt,
+  firstActivityAt: IsoDateTime,
+  lastActivityAt: IsoDateTime,
+});
+const ProjectionThreadActivityRevisionDbRowSchema = Schema.Struct({
+  revision: NonNegativeInt,
+  payloadBytes: NonNegativeInt,
+});
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
@@ -157,6 +177,10 @@ const ProjectIdLookupInput = Schema.Struct({
 });
 const ThreadIdLookupInput = Schema.Struct({
   threadId: ThreadId,
+});
+const ThreadTurnIdLookupInput = Schema.Struct({
+  threadId: ThreadId,
+  turnId: TurnId,
 });
 const ProjectionProjectLookupRowSchema = ProjectionProjectDbRowSchema;
 const ProjectionThreadIdLookupRowSchema = Schema.Struct({
@@ -284,6 +308,38 @@ function mapMessageRow(
     return Object.assign(message, { attachments: row.attachments });
   }
   return message;
+}
+
+function mapActivityRow(
+  row: Schema.Schema.Type<typeof ProjectionThreadActivityDbRowSchema>,
+): OrchestrationThreadActivity {
+  return {
+    id: row.activityId,
+    tone: row.tone,
+    kind: row.kind,
+    summary: row.summary,
+    payload: row.payload,
+    turnId: row.turnId,
+    ...(row.activityRevision > 0 ? { revision: row.activityRevision } : {}),
+    ...(row.sequence !== null ? { sequence: row.sequence } : {}),
+    createdAt: row.createdAt,
+  };
+}
+
+function groupHistoricalActivityRows(
+  rows: ReadonlyArray<
+    Schema.Schema.Type<typeof ProjectionThreadHistoricalActivityGroupDbRowSchema>
+  >,
+): OrchestrationThreadHistoricalActivityGroup[] {
+  return rows.map((row) => ({
+    turnId: row.turnId,
+    revision: row.revision,
+    activityCount: row.activityCount,
+    payloadBytes: row.payloadBytes,
+    displayActivityCount: row.displayActivityCount,
+    firstActivityAt: row.firstActivityAt,
+    lastActivityAt: row.lastActivityAt,
+  }));
 }
 
 function mapProjectShellRow(
@@ -621,11 +677,13 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           kind,
           summary,
           payload_json AS "payload",
+          activity_revision AS "activityRevision",
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
         ORDER BY
           thread_id ASC,
+          (sequence IS NULL) ASC,
           sequence ASC,
           created_at ASC,
           activity_id ASC
@@ -1083,14 +1141,217 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           kind,
           summary,
           payload_json AS "payload",
+          activity_revision AS "activityRevision",
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE thread_id = ${threadId}
         ORDER BY
+          (sequence IS NULL) ASC,
           sequence ASC,
           created_at ASC,
           activity_id ASC
+      `,
+  });
+
+  const listHotThreadActivityRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        WITH latest_context AS (
+          SELECT activity_id
+          FROM projection_thread_activities
+          WHERE thread_id = ${threadId}
+            AND turn_id IS NULL
+            AND kind = 'context-window.updated'
+          ORDER BY
+            (sequence IS NULL) DESC,
+            sequence DESC,
+            created_at DESC,
+            activity_id DESC
+          LIMIT 1
+        )
+        SELECT
+          activity.activity_id AS "activityId",
+          activity.thread_id AS "threadId",
+          activity.turn_id AS "turnId",
+          activity.tone,
+          activity.kind,
+          activity.summary,
+          activity.payload_json AS "payload",
+          activity.activity_revision AS "activityRevision",
+          activity.sequence,
+          activity.created_at AS "createdAt"
+        FROM projection_thread_activities AS activity
+        INNER JOIN projection_threads AS thread
+          ON thread.thread_id = activity.thread_id
+        LEFT JOIN projection_thread_sessions AS session
+          ON session.thread_id = activity.thread_id
+        WHERE activity.thread_id = ${threadId}
+          AND (
+            (
+              activity.turn_id IS NULL
+              AND (
+                activity.kind <> 'context-window.updated'
+                OR activity.activity_id = (SELECT activity_id FROM latest_context)
+              )
+            )
+            OR activity.turn_id = thread.latest_turn_id
+            OR activity.turn_id = session.active_turn_id
+            OR activity.kind IN ('subagent.thread', 'turn.plan.updated')
+          )
+        ORDER BY
+          (activity.sequence IS NULL) ASC,
+          activity.sequence ASC,
+          activity.created_at ASC,
+          activity.activity_id ASC
+      `,
+  });
+
+  const listHistoricalThreadActivityGroupRowsByThread = SqlSchema.findAll({
+    Request: ThreadIdLookupInput,
+    Result: ProjectionThreadHistoricalActivityGroupDbRowSchema,
+    execute: ({ threadId }) =>
+      sql`
+        WITH historical AS (
+          SELECT
+            activity.thread_id,
+            activity.turn_id,
+            activity.activity_revision,
+            activity.payload_bytes,
+            activity.display_activity
+          FROM projection_thread_activities AS activity
+          INNER JOIN projection_threads AS thread
+            ON thread.thread_id = activity.thread_id
+          LEFT JOIN projection_thread_sessions AS session
+            ON session.thread_id = activity.thread_id
+          WHERE activity.thread_id = ${threadId}
+            AND activity.turn_id IS NOT NULL
+            AND activity.kind NOT IN ('subagent.thread', 'turn.plan.updated')
+            AND (thread.latest_turn_id IS NULL OR activity.turn_id <> thread.latest_turn_id)
+            AND (session.active_turn_id IS NULL OR activity.turn_id <> session.active_turn_id)
+        )
+        SELECT
+          historical.thread_id AS "threadId",
+          historical.turn_id AS "turnId",
+          MAX(historical.activity_revision) AS "revision",
+          COUNT(*) AS "activityCount",
+          SUM(historical.payload_bytes) AS "payloadBytes",
+          SUM(historical.display_activity) AS "displayActivityCount",
+          COALESCE((
+            SELECT first.created_at
+            FROM projection_thread_activities AS first
+            WHERE first.thread_id = historical.thread_id
+              AND first.turn_id = historical.turn_id
+              AND first.kind NOT IN ('subagent.thread', 'turn.plan.updated')
+              AND first.display_activity = 1
+            ORDER BY
+              (first.sequence IS NULL) ASC,
+              first.sequence ASC,
+              first.created_at ASC,
+              first.activity_id ASC
+            LIMIT 1
+          ), (
+            SELECT fallback_first.created_at
+            FROM projection_thread_activities AS fallback_first
+            WHERE fallback_first.thread_id = historical.thread_id
+              AND fallback_first.turn_id = historical.turn_id
+              AND fallback_first.kind NOT IN ('subagent.thread', 'turn.plan.updated')
+            ORDER BY
+              (fallback_first.sequence IS NULL) ASC,
+              fallback_first.sequence ASC,
+              fallback_first.created_at ASC,
+              fallback_first.activity_id ASC
+            LIMIT 1
+          )) AS "firstActivityAt",
+          COALESCE((
+            SELECT last.created_at
+            FROM projection_thread_activities AS last
+            WHERE last.thread_id = historical.thread_id
+              AND last.turn_id = historical.turn_id
+              AND last.kind NOT IN ('subagent.thread', 'turn.plan.updated')
+              AND last.display_activity = 1
+            ORDER BY
+              (last.sequence IS NULL) DESC,
+              last.sequence DESC,
+              last.created_at DESC,
+              last.activity_id DESC
+            LIMIT 1
+          ), (
+            SELECT fallback_last.created_at
+            FROM projection_thread_activities AS fallback_last
+            WHERE fallback_last.thread_id = historical.thread_id
+              AND fallback_last.turn_id = historical.turn_id
+              AND fallback_last.kind NOT IN ('subagent.thread', 'turn.plan.updated')
+            ORDER BY
+              (fallback_last.sequence IS NULL) DESC,
+              fallback_last.sequence DESC,
+              fallback_last.created_at DESC,
+              fallback_last.activity_id DESC
+            LIMIT 1
+          )) AS "lastActivityAt"
+        FROM historical
+        GROUP BY historical.thread_id, historical.turn_id
+        ORDER BY
+          "firstActivityAt" ASC,
+          historical.turn_id ASC
+      `,
+  });
+
+  const listThreadActivityRowsByTurn = SqlSchema.findAll({
+    Request: ThreadTurnIdLookupInput,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          activity_revision AS "activityRevision",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND kind NOT IN ('subagent.thread', 'turn.plan.updated')
+        ORDER BY
+          (sequence IS NULL) ASC,
+          sequence ASC,
+          created_at ASC,
+          activity_id ASC
+      `,
+  });
+
+  const getTurnByThread = SqlSchema.findOneOption({
+    Request: ThreadTurnIdLookupInput,
+    Result: ProjectionThreadIdLookupRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT thread_id AS "threadId"
+        FROM projection_turns
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+        LIMIT 1
+      `,
+  });
+
+  const getThreadActivityRevisionByTurn = SqlSchema.findOne({
+    Request: ThreadTurnIdLookupInput,
+    Result: ProjectionThreadActivityRevisionDbRowSchema,
+    execute: ({ threadId, turnId }) =>
+      sql`
+        SELECT
+          COALESCE(MAX(activity_revision), 0) AS "revision",
+          COALESCE(SUM(payload_bytes), 0) AS "payloadBytes"
+        FROM projection_thread_activities
+        WHERE thread_id = ${threadId}
+          AND turn_id = ${turnId}
+          AND kind NOT IN ('subagent.thread', 'turn.plan.updated')
       `,
   });
 
@@ -1257,6 +1518,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               ),
             ),
           ),
+          Effect.succeed(
+            [] as Array<
+              Schema.Schema.Type<typeof ProjectionThreadHistoricalActivityGroupDbRowSchema>
+            >,
+          ),
           listThreadSessionRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -1308,6 +1574,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             queuedMessageRows,
             proposedPlanRows,
             activityRows,
+            historicalActivityRows,
             sessionRows,
             checkpointRows,
             latestTurnRows,
@@ -1319,6 +1586,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               const queuedMessagesByThread = new Map<string, Array<OrchestrationQueuedMessage>>();
               const proposedPlansByThread = new Map<string, Array<OrchestrationProposedPlan>>();
               const activitiesByThread = new Map<string, Array<OrchestrationThreadActivity>>();
+              const historicalActivitiesByThread = new Map<
+                string,
+                Array<Schema.Schema.Type<typeof ProjectionThreadHistoricalActivityGroupDbRowSchema>>
+              >();
               const checkpointsByThread = new Map<string, Array<OrchestrationCheckpointSummary>>();
               const sessionsByThread = new Map<string, OrchestrationSession>();
               const latestTurnByThread = new Map<string, OrchestrationLatestTurn>();
@@ -1379,17 +1650,15 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
               for (const row of activityRows) {
                 updatedAt = maxIso(updatedAt, row.createdAt);
                 const threadActivities = activitiesByThread.get(row.threadId) ?? [];
-                threadActivities.push({
-                  id: row.activityId,
-                  tone: row.tone,
-                  kind: row.kind,
-                  summary: row.summary,
-                  payload: row.payload,
-                  turnId: row.turnId,
-                  ...(row.sequence !== null ? { sequence: row.sequence } : {}),
-                  createdAt: row.createdAt,
-                });
+                threadActivities.push(mapActivityRow(row));
                 activitiesByThread.set(row.threadId, threadActivities);
+              }
+
+              for (const row of historicalActivityRows) {
+                updatedAt = maxIso(updatedAt, row.lastActivityAt);
+                const threadActivities = historicalActivitiesByThread.get(row.threadId) ?? [];
+                threadActivities.push(row);
+                historicalActivitiesByThread.set(row.threadId, threadActivities);
               }
 
               for (const row of checkpointRows) {
@@ -1495,6 +1764,9 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 queuedMessages: queuedMessagesByThread.get(row.threadId) ?? [],
                 proposedPlans: proposedPlansByThread.get(row.threadId) ?? [],
                 activities: activitiesByThread.get(row.threadId) ?? [],
+                historicalActivityGroups: groupHistoricalActivityRows(
+                  historicalActivitiesByThread.get(row.threadId) ?? [],
+                ),
                 checkpoints: checkpointsByThread.get(row.threadId) ?? [],
                 session: sessionsByThread.get(row.threadId) ?? null,
               }));
@@ -2424,7 +2696,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       });
     });
 
-  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
+  const getThreadDetailByIdWithActivityMode = (
+    threadId: ThreadId,
+    activityDetailMode: OrchestrationThreadActivityDetailMode,
+  ) =>
     Effect.gen(function* () {
       const [
         threadRow,
@@ -2432,6 +2707,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         queuedMessageRows,
         proposedPlanRows,
         activityRows,
+        historicalActivityRows,
         checkpointRows,
         latestTurnRow,
         sessionRow,
@@ -2468,7 +2744,10 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
-        listThreadActivityRowsByThread({ threadId }).pipe(
+        (activityDetailMode === "compact"
+          ? listHotThreadActivityRowsByThread({ threadId })
+          : listThreadActivityRowsByThread({ threadId })
+        ).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
               "ProjectionSnapshotQuery.getThreadDetailById:listActivities:query",
@@ -2476,6 +2755,20 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             ),
           ),
         ),
+        activityDetailMode === "compact"
+          ? listHistoricalThreadActivityGroupRowsByThread({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getThreadDetailById:listHistoricalActivities:query",
+                  "ProjectionSnapshotQuery.getThreadDetailById:listHistoricalActivities:decodeRows",
+                ),
+              ),
+            )
+          : Effect.succeed(
+              [] as Array<
+                Schema.Schema.Type<typeof ProjectionThreadHistoricalActivityGroupDbRowSchema>
+              >,
+            ),
         listCheckpointRowsByThread({ threadId }).pipe(
           Effect.mapError(
             toPersistenceSqlOrDecodeError(
@@ -2524,21 +2817,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         messages: messageRows.map(mapMessageRow),
         queuedMessages: queuedMessageRows.map(mapQueuedMessageRow),
         proposedPlans: proposedPlanRows.map(mapProposedPlanRow),
-        activities: activityRows.map((row) => {
-          const activity = {
-            id: row.activityId,
-            tone: row.tone,
-            kind: row.kind,
-            summary: row.summary,
-            payload: row.payload,
-            turnId: row.turnId,
-            createdAt: row.createdAt,
-          };
-          if (row.sequence !== null) {
-            return Object.assign(activity, { sequence: row.sequence });
-          }
-          return activity;
-        }),
+        activities: activityRows.map(mapActivityRow),
+        historicalActivityGroups: groupHistoricalActivityRows(historicalActivityRows),
         checkpoints: checkpointRows.map((row) => ({
           turnId: row.turnId,
           checkpointTurnCount: row.checkpointTurnCount,
@@ -2560,8 +2840,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       );
     });
 
+  const getThreadDetailById: ProjectionSnapshotQueryShape["getThreadDetailById"] = (threadId) =>
+    getThreadDetailByIdWithActivityMode(threadId, "full");
+
   const getThreadDetailSnapshot: ProjectionSnapshotQueryShape["getThreadDetailSnapshot"] = (
     threadId,
+    activityDetailMode = "full",
   ) =>
     // Read the thread detail and the snapshot sequence within a single
     // transaction so the sequence is consistent with the returned state; a
@@ -2571,12 +2855,12 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql
       .withTransaction(
         Effect.gen(function* () {
-          const thread = yield* getThreadDetailById(threadId);
+          const thread = yield* getThreadDetailByIdWithActivityMode(threadId, activityDetailMode);
           if (Option.isNone(thread)) {
             return Option.none<OrchestrationThreadDetailSnapshot>();
           }
           const { snapshotSequence } = yield* getSnapshotSequence();
-          return Option.some({ snapshotSequence, thread: thread.value });
+          return Option.some({ snapshotSequence, activityDetailMode, thread: thread.value });
         }),
       )
       .pipe(
@@ -2586,6 +2870,78 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
             : toPersistenceSqlError("ProjectionSnapshotQuery.getThreadDetailSnapshot:transaction")(
                 error,
               ),
+        ),
+      );
+
+  const getTurnActivitiesSnapshot: ProjectionSnapshotQueryShape["getTurnActivitiesSnapshot"] = (
+    threadId,
+    turnId,
+  ) =>
+    sql
+      .withTransaction(
+        Effect.gen(function* () {
+          const [thread, turn, activityRows, activityRevision] = yield* Effect.all([
+            getActiveThreadRowById({ threadId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getThread:query",
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getThread:decodeRow",
+                ),
+              ),
+            ),
+            getTurnByThread({ threadId, turnId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getTurn:query",
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getTurn:decodeRow",
+                ),
+              ),
+            ),
+            listThreadActivityRowsByTurn({ threadId, turnId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:listActivities:query",
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:listActivities:decodeRows",
+                ),
+              ),
+            ),
+            getThreadActivityRevisionByTurn({ threadId, turnId }).pipe(
+              Effect.mapError(
+                toPersistenceSqlOrDecodeError(
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getRevision:query",
+                  "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:getRevision:decodeRow",
+                ),
+              ),
+            ),
+          ]);
+          if (Option.isNone(thread) || Option.isNone(turn)) {
+            return Option.none<OrchestrationTurnActivitiesSnapshot>();
+          }
+          const { snapshotSequence } = yield* getSnapshotSequence();
+          const snapshot = yield* decodeTurnActivitiesSnapshot({
+            snapshotSequence,
+            threadId,
+            turnId,
+            revision: activityRevision.revision,
+            payloadBytes: activityRevision.payloadBytes,
+            activities: activityRows.map(mapActivityRow),
+          }).pipe(
+            Effect.mapError(
+              toPersistenceDecodeError(
+                "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:decodeSnapshot",
+              ),
+            ),
+          );
+          return Option.some(snapshot);
+        }),
+      )
+      .pipe(
+        Effect.mapError((error) =>
+          isPersistenceError(error)
+            ? error
+            : toPersistenceSqlError(
+                "ProjectionSnapshotQuery.getTurnActivitiesSnapshot:transaction",
+              )(error),
         ),
       );
 
@@ -2606,6 +2962,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadResultContextById,
     getThreadDetailById,
     getThreadDetailSnapshot,
+    getTurnActivitiesSnapshot,
   } satisfies ProjectionSnapshotQueryShape;
 });
 

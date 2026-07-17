@@ -6,6 +6,7 @@ import {
   type OrchestrationLatestTurn,
   type OrchestrationActivityImageMedia,
   type OrchestrationThreadActivity,
+  type OrchestrationThreadHistoricalActivityGroup,
   type OrchestrationProposedPlanId,
   ProviderDriverKind,
   type ToolLifecycleItemType,
@@ -646,6 +647,37 @@ export function deriveWorkLogEntries(
   return collapseDerivedWorkLogEntries(entries).map((entry) => {
     const { activityKind, collapseKey: _collapseKey, ...rest } = entry;
     return Object.assign(rest, { sourceActivityKind: activityKind });
+  });
+}
+
+/**
+ * Build payload-free placeholders for completed turns. They are used only to
+ * derive the closed turn fold; a turn is hydrated before any placeholder can
+ * become visible.
+ */
+export function deriveHistoricalWorkLogEntries(
+  groups: ReadonlyArray<OrchestrationThreadHistoricalActivityGroup>,
+): WorkLogEntry[] {
+  return groups.flatMap((group) => {
+    if (group.displayActivityCount === 0) return [];
+    const first: WorkLogEntry = {
+      id: `historical-turn:${group.turnId}:first`,
+      createdAt: group.firstActivityAt,
+      turnId: group.turnId,
+      label: "Historical work",
+      tone: "info",
+      sourceActivityKind: "historical.turn",
+    };
+    return group.lastActivityAt === group.firstActivityAt
+      ? [first]
+      : [
+          first,
+          {
+            ...first,
+            id: `historical-turn:${group.turnId}:last`,
+            createdAt: group.lastActivityAt,
+          },
+        ];
   });
 }
 

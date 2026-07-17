@@ -497,6 +497,390 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.session-set", () => {
+    it("bulk-demotes many activities into one constant-size descriptor per turn", () => {
+      const previousTurnId = TurnId.make("turn-previous");
+      const activities = Array.from({ length: 100 }, (_, index) => ({
+        id: EventId.make(`bulk-${index}`),
+        tone: "tool" as const,
+        kind: "tool.completed",
+        summary: `Tool ${index}`,
+        payload: { output: "x".repeat(100) },
+        turnId: previousTurnId,
+        revision: index + 1,
+        sequence: index + 1,
+        createdAt: `2026-04-01T07:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      }));
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: previousTurnId,
+          state: "completed",
+          requestedAt: activities[0]!.createdAt,
+          startedAt: activities[0]!.createdAt,
+          completedAt: activities.at(-1)!.createdAt,
+          assistantMessageId: null,
+        },
+        activities,
+      };
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 101,
+          occurredAt: "2026-04-01T09:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("turn-current"),
+              lastError: null,
+              updatedAt: "2026-04-01T09:00:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities).toEqual([]);
+        expect(result.thread.historicalActivityGroups).toHaveLength(1);
+        expect(result.thread.historicalActivityGroups?.[0]).toMatchObject({
+          turnId: previousTurnId,
+          revision: 100,
+          activityCount: 100,
+          displayActivityCount: 100,
+        });
+        expect("activities" in (result.thread.historicalActivityGroups?.[0] ?? {})).toBe(false);
+      }
+    });
+
+    it("anchors descriptors to displayable work with an all-hidden canonical fallback", () => {
+      const visibleTurnId = TurnId.make("turn-visible-anchor");
+      const hiddenTurnId = TurnId.make("turn-hidden-anchor");
+      const activities = [
+        {
+          id: EventId.make("visible-hidden-first"),
+          tone: "tool" as const,
+          kind: "task.started",
+          summary: "Hidden start",
+          payload: {},
+          turnId: visibleTurnId,
+          sequence: 1,
+          createdAt: "2026-04-01T07:00:00.000Z",
+        },
+        {
+          id: EventId.make("visible-row"),
+          tone: "tool" as const,
+          kind: "tool.completed",
+          summary: "Visible work",
+          payload: {},
+          turnId: visibleTurnId,
+          sequence: 2,
+          createdAt: "2026-04-01T07:01:00.000Z",
+        },
+        {
+          id: EventId.make("visible-hidden-last"),
+          tone: "info" as const,
+          kind: "context-window.updated",
+          summary: "Hidden context",
+          payload: {},
+          turnId: visibleTurnId,
+          sequence: 3,
+          createdAt: "2026-04-01T07:02:00.000Z",
+        },
+        {
+          id: EventId.make("all-hidden-first"),
+          tone: "tool" as const,
+          kind: "task.started",
+          summary: "Hidden first",
+          payload: {},
+          turnId: hiddenTurnId,
+          sequence: 4,
+          createdAt: "2026-04-01T08:00:00.000Z",
+        },
+        {
+          id: EventId.make("all-hidden-last"),
+          tone: "tool" as const,
+          kind: "tool.started",
+          summary: "Hidden last",
+          payload: {},
+          turnId: hiddenTurnId,
+          sequence: 5,
+          createdAt: "2026-04-01T08:02:00.000Z",
+        },
+      ];
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities },
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T09:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("turn-current"),
+              lastError: null,
+              updatedAt: "2026-04-01T09:00:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(
+          result.thread.historicalActivityGroups?.find((group) => group.turnId === visibleTurnId),
+        ).toMatchObject({
+          displayActivityCount: 1,
+          firstActivityAt: "2026-04-01T07:01:00.000Z",
+          lastActivityAt: "2026-04-01T07:01:00.000Z",
+        });
+        expect(
+          result.thread.historicalActivityGroups?.find((group) => group.turnId === hiddenTurnId),
+        ).toMatchObject({
+          displayActivityCount: 0,
+          firstActivityAt: "2026-04-01T08:00:00.000Z",
+          lastActivityAt: "2026-04-01T08:02:00.000Z",
+        });
+      }
+    });
+
+    it("demotes the previous hot turn to payload-free history when a new turn starts", () => {
+      const previousTurnId = TurnId.make("turn-previous");
+      const globalActivity = {
+        id: EventId.make("activity-global"),
+        tone: "info" as const,
+        kind: "global",
+        summary: "Global state",
+        payload: { keep: true },
+        turnId: null,
+        sequence: 1,
+        createdAt: "2026-04-01T07:00:00.000Z",
+      };
+      const previousActivity = {
+        id: EventId.make("activity-previous"),
+        tone: "tool" as const,
+        kind: "tool.completed",
+        summary: "Large historical tool result",
+        payload: { transcript: "large" },
+        turnId: previousTurnId,
+        sequence: 2,
+        createdAt: "2026-04-01T07:01:00.000Z",
+      };
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: previousTurnId,
+          state: "completed",
+          requestedAt: previousActivity.createdAt,
+          startedAt: previousActivity.createdAt,
+          completedAt: previousActivity.createdAt,
+          assistantMessageId: null,
+        },
+        activities: [globalActivity, previousActivity],
+      };
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T08:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("turn-current"),
+              lastError: null,
+              updatedAt: "2026-04-01T08:00:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities).toEqual([globalActivity]);
+        expect(result.thread.historicalActivityGroups).toEqual([
+          {
+            turnId: previousTurnId,
+            revision: 0,
+            activityCount: 1,
+            payloadBytes: JSON.stringify(previousActivity.payload).length,
+            displayActivityCount: 1,
+            firstActivityAt: previousActivity.createdAt,
+            lastActivityAt: previousActivity.createdAt,
+          },
+        ]);
+        expect(JSON.stringify(result.thread.historicalActivityGroups)).not.toContain("large");
+      }
+    });
+
+    it("never compacts completed turns in full activity mode", () => {
+      const previousTurnId = TurnId.make("turn-previous-full");
+      const previousActivity = {
+        id: EventId.make("activity-previous-full"),
+        tone: "tool" as const,
+        kind: "tool.completed",
+        summary: "Full historical result",
+        payload: { transcript: "retain me" },
+        turnId: previousTurnId,
+        sequence: 2,
+        createdAt: "2026-04-01T07:01:00.000Z",
+      };
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: previousTurnId,
+          state: "completed",
+          requestedAt: previousActivity.createdAt,
+          startedAt: previousActivity.createdAt,
+          completedAt: previousActivity.createdAt,
+          assistantMessageId: null,
+        },
+        activities: [previousActivity],
+      };
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T08:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("turn-current"),
+              lastError: null,
+              updatedAt: "2026-04-01T08:00:00.000Z",
+            },
+          },
+        },
+        "full",
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities).toEqual([previousActivity]);
+        expect(result.thread.historicalActivityGroups).toBeUndefined();
+      }
+    });
+
+    it("keeps plan and subagent activities globally hot in compact mode", () => {
+      const previousTurnId = TurnId.make("turn-previous-promoted");
+      const activities = [
+        {
+          id: EventId.make("foldable-command"),
+          tone: "tool" as const,
+          kind: "tool.completed",
+          summary: "Historical command",
+          payload: {},
+          turnId: previousTurnId,
+          sequence: 1,
+          createdAt: "2026-04-01T07:00:00.000Z",
+        },
+        {
+          id: EventId.make("promoted-plan"),
+          tone: "info" as const,
+          kind: "turn.plan.updated",
+          summary: "Updated plan",
+          payload: {},
+          turnId: previousTurnId,
+          sequence: 2,
+          createdAt: "2026-04-01T07:01:00.000Z",
+        },
+        {
+          id: EventId.make("promoted-subagent"),
+          tone: "info" as const,
+          kind: "subagent.thread",
+          summary: "Subagent",
+          payload: {},
+          turnId: previousTurnId,
+          sequence: 3,
+          createdAt: "2026-04-01T07:02:00.000Z",
+        },
+      ];
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: previousTurnId,
+          state: "completed",
+          requestedAt: activities[0]!.createdAt,
+          startedAt: activities[0]!.createdAt,
+          completedAt: activities.at(-1)!.createdAt,
+          assistantMessageId: null,
+        },
+        activities,
+      };
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 9,
+          occurredAt: "2026-04-01T08:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.session-set",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            session: {
+              threadId: ThreadId.make("thread-1"),
+              status: "running",
+              providerName: "codex",
+              runtimeMode: "full-access",
+              activeTurnId: TurnId.make("turn-current"),
+              lastError: null,
+              updatedAt: "2026-04-01T08:00:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((activity) => activity.id)).toEqual([
+          "promoted-plan",
+          "promoted-subagent",
+        ]);
+        expect(result.thread.historicalActivityGroups?.[0]).toMatchObject({
+          activityCount: 1,
+          displayActivityCount: 1,
+        });
+      }
+    });
+
     it("settles a running latestTurn when the session leaves the running status", () => {
       const threadWithRunningTurn: OrchestrationThread = {
         ...baseThread,
@@ -653,6 +1037,381 @@ describe("applyThreadDetailEvent", () => {
   });
 
   describe("thread.activity-appended", () => {
+    it("keeps sequenced activities before NULL-sequence activities", () => {
+      const unsequenced = {
+        id: EventId.make("activity-unsequenced"),
+        tone: "tool" as const,
+        kind: "tool.completed",
+        summary: "Legacy activity",
+        payload: {},
+        turnId: TurnId.make("turn-1"),
+        createdAt: "2026-04-01T10:00:00.000Z",
+      };
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: [unsequenced] },
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              ...unsequenced,
+              id: EventId.make("activity-sequenced"),
+              sequence: 4,
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((activity) => activity.id)).toEqual([
+          "activity-sequenced",
+          "activity-unsequenced",
+        ]);
+      }
+    });
+
+    it("replaces the previous null-turn context snapshot without collapsing rate limits", () => {
+      const priorContext = {
+        id: EventId.make("context-old"),
+        tone: "info" as const,
+        kind: "context-window.updated",
+        summary: "Old context",
+        payload: { usedTokens: 1 },
+        turnId: null,
+        sequence: 1,
+        createdAt: "2026-04-01T10:00:00.000Z",
+      };
+      const rateLimit = {
+        id: EventId.make("rate-limit"),
+        tone: "info" as const,
+        kind: "account.rate-limits.updated",
+        summary: "Rate limits",
+        payload: { primary: { usedPercent: 20 } },
+        turnId: null,
+        sequence: 2,
+        createdAt: "2026-04-01T10:01:00.000Z",
+      };
+      const result = applyThreadDetailEvent(
+        { ...baseThread, activities: [priorContext, rateLimit] },
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              ...priorContext,
+              id: EventId.make("context-new"),
+              summary: "New context",
+              payload: { usedTokens: 2 },
+              sequence: 3,
+              createdAt: "2026-04-01T11:00:00.000Z",
+            },
+          },
+        },
+      );
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.activities.map((entry) => entry.id)).toEqual([
+          "rate-limit",
+          "context-new",
+        ]);
+      }
+    });
+
+    it("refreshes an unknown inactive compact destination instead of guessing membership", () => {
+      const historicalTurnId = TurnId.make("turn-history");
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          latestTurn: {
+            turnId: TurnId.make("turn-current"),
+            state: "running",
+            requestedAt: "2026-04-01T11:00:00.000Z",
+            startedAt: "2026-04-01T11:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("activity-history"),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Historical command",
+              payload: { output: "must not persist" },
+              turnId: historicalTurnId,
+              sequence: 11,
+              createdAt: "2026-04-01T10:00:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result).toEqual({
+        kind: "authoritative-refresh-required",
+        reason: "historical-activity-changed",
+        turnId: historicalTurnId,
+      });
+    });
+
+    it("requests an authoritative compact refresh for a new eligible historical activity", () => {
+      const historicalTurnId = TurnId.make("turn-history");
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: TurnId.make("turn-current"),
+          state: "running",
+          requestedAt: "2026-04-01T11:00:00.000Z",
+          startedAt: "2026-04-01T11:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        historicalActivityGroups: [
+          {
+            turnId: historicalTurnId,
+            revision: 10,
+            activityCount: 8,
+            payloadBytes: 4_096,
+            displayActivityCount: 3,
+            firstActivityAt: "2026-04-01T09:00:00.000Z",
+            lastActivityAt: "2026-04-01T10:00:00.000Z",
+          },
+        ],
+      };
+      const before = JSON.stringify(thread);
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("new-eligible-activity"),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Large historical command",
+              payload: { output: "x".repeat(100_000) },
+              turnId: historicalTurnId,
+              sequence: 11,
+              createdAt: "2026-04-01T10:30:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result).toEqual({
+        kind: "authoritative-refresh-required",
+        reason: "historical-activity-changed",
+        turnId: historicalTurnId,
+      });
+      expect(JSON.stringify(thread)).toBe(before);
+    });
+
+    it("requests the same refresh for a same-id ineligible historical update", () => {
+      const historicalTurnId = TurnId.make("turn-history");
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: TurnId.make("turn-current"),
+          state: "running",
+          requestedAt: "2026-04-01T11:00:00.000Z",
+          startedAt: "2026-04-01T11:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        historicalActivityGroups: [
+          {
+            turnId: historicalTurnId,
+            revision: 10,
+            activityCount: 8,
+            payloadBytes: 4_096,
+            displayActivityCount: 3,
+            firstActivityAt: "2026-04-01T09:00:00.000Z",
+            lastActivityAt: "2026-04-01T10:00:00.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(
+        thread,
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              // Compact metadata cannot reveal whether this ID already exists.
+              id: EventId.make("existing-hidden-activity"),
+              tone: "tool",
+              kind: "tool.started",
+              summary: "Historical command started",
+              payload: {},
+              turnId: historicalTurnId,
+              sequence: 11,
+              createdAt: "2026-04-01T09:30:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("authoritative-refresh-required");
+      expect(thread.historicalActivityGroups?.[0]).toMatchObject({
+        revision: 10,
+        activityCount: 8,
+        payloadBytes: 4_096,
+        displayActivityCount: 3,
+      });
+    });
+
+    it("upserts globally promoted historical activities without refreshing", () => {
+      const historicalTurnId = TurnId.make("turn-history");
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        latestTurn: {
+          turnId: TurnId.make("turn-current"),
+          state: "running",
+          requestedAt: "2026-04-01T11:00:00.000Z",
+          startedAt: "2026-04-01T11:00:00.000Z",
+          completedAt: null,
+          assistantMessageId: null,
+        },
+        historicalActivityGroups: [
+          {
+            turnId: historicalTurnId,
+            revision: 10,
+            activityCount: 8,
+            payloadBytes: 4_096,
+            displayActivityCount: 3,
+            firstActivityAt: "2026-04-01T09:00:00.000Z",
+            lastActivityAt: "2026-04-01T10:00:00.000Z",
+          },
+        ],
+      };
+
+      for (const kind of ["turn.plan.updated", "subagent.thread"] as const) {
+        const activityId = EventId.make(`promoted-${kind}`);
+        const threadWithPromotedActivity: OrchestrationThread = {
+          ...thread,
+          activities: [
+            {
+              id: activityId,
+              tone: "info",
+              kind,
+              summary: `Original ${kind}`,
+              payload: {},
+              turnId: historicalTurnId,
+              sequence: 10,
+              createdAt: "2026-04-01T09:00:00.000Z",
+            },
+          ],
+        };
+        const result = applyThreadDetailEvent(
+          threadWithPromotedActivity,
+          {
+            ...baseEventFields,
+            sequence: 12,
+            occurredAt: "2026-04-01T11:00:00.000Z",
+            aggregateKind: "thread",
+            aggregateId: ThreadId.make("thread-1"),
+            type: "thread.activity-appended",
+            payload: {
+              threadId: ThreadId.make("thread-1"),
+              activity: {
+                id: activityId,
+                tone: "info",
+                kind,
+                summary: `Promoted ${kind}`,
+                payload: {},
+                turnId: historicalTurnId,
+                sequence: 11,
+                createdAt: "2026-04-01T09:30:00.000Z",
+              },
+            },
+          },
+          "compact",
+        );
+
+        expect(result.kind).toBe("updated");
+        if (result.kind === "updated") {
+          expect(result.thread.activities.map((activity) => activity.kind)).toEqual([kind]);
+          expect(result.thread.historicalActivityGroups).toEqual(thread.historicalActivityGroups);
+        }
+      }
+    });
+
+    it("refreshes a newly promoted inactive activity whose id is not already hot", () => {
+      const historicalTurnId = TurnId.make("turn-history");
+      const result = applyThreadDetailEvent(
+        {
+          ...baseThread,
+          latestTurn: {
+            turnId: TurnId.make("turn-current"),
+            state: "running",
+            requestedAt: "2026-04-01T11:00:00.000Z",
+            startedAt: "2026-04-01T11:00:00.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+        },
+        {
+          ...baseEventFields,
+          sequence: 12,
+          occurredAt: "2026-04-01T11:00:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: {
+            threadId: ThreadId.make("thread-1"),
+            activity: {
+              id: EventId.make("newly-promoted-plan"),
+              tone: "info",
+              kind: "turn.plan.updated",
+              summary: "Newly promoted plan",
+              payload: {},
+              turnId: historicalTurnId,
+              sequence: 11,
+              createdAt: "2026-04-01T09:30:00.000Z",
+            },
+          },
+        },
+        "compact",
+      );
+
+      expect(result.kind).toBe("authoritative-refresh-required");
+    });
+
     it("adds an activity", () => {
       const result = applyThreadDetailEvent(baseThread, {
         ...baseEventFields,
@@ -874,6 +1633,7 @@ describe("applyThreadDetailEvent", () => {
         // msg-3 (turn-2) is filtered, msg-1 (no turn) and msg-2 (turn-1) remain
         expect(result.thread.messages).toHaveLength(2);
         expect(result.thread.latestTurn?.turnId).toBe("turn-1");
+        expect(result.thread.updatedAt).toBe("2026-04-01T04:00:00.000Z");
       }
     });
   });
@@ -971,6 +1731,90 @@ describe("applyThreadDetailEvent", () => {
         expect(result.thread.messages.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
         expect(result.thread.activities.map((activity) => activity.id)).toEqual(["activity-1"]);
         expect(result.thread.latestTurn).toBeNull();
+      }
+    });
+
+    it("applies explicit prune metadata when the target message is already missing", () => {
+      const keptTurnId = TurnId.make("turn-kept");
+      const prunedTurnId = TurnId.make("turn-pruned");
+      const keptMessage = {
+        id: MessageId.make("message-kept"),
+        role: "assistant" as const,
+        text: "Already projected",
+        turnId: keptTurnId,
+        streaming: false,
+        createdAt: "2026-04-01T01:00:00.000Z",
+        updatedAt: "2026-04-01T01:00:00.000Z",
+      };
+      const thread: OrchestrationThread = {
+        ...baseThread,
+        messages: [keptMessage],
+        latestTurn: {
+          turnId: prunedTurnId,
+          state: "completed",
+          requestedAt: "2026-04-01T02:00:00.000Z",
+          startedAt: "2026-04-01T02:00:00.000Z",
+          completedAt: "2026-04-01T02:01:00.000Z",
+          assistantMessageId: null,
+        },
+        activities: [
+          {
+            id: EventId.make("activity-kept"),
+            tone: "tool",
+            kind: "tool.completed",
+            summary: "Kept",
+            payload: {},
+            turnId: keptTurnId,
+            revision: 2,
+            createdAt: "2026-04-01T01:00:00.000Z",
+          },
+        ],
+        historicalActivityGroups: [
+          {
+            turnId: keptTurnId,
+            revision: 2,
+            activityCount: 1,
+            payloadBytes: 2,
+            displayActivityCount: 1,
+            firstActivityAt: "2026-04-01T01:00:00.000Z",
+            lastActivityAt: "2026-04-01T01:00:00.000Z",
+          },
+          {
+            turnId: prunedTurnId,
+            revision: 3,
+            activityCount: 1,
+            payloadBytes: 2,
+            displayActivityCount: 1,
+            firstActivityAt: "2026-04-01T02:00:00.000Z",
+            lastActivityAt: "2026-04-01T02:00:00.000Z",
+          },
+        ],
+      };
+
+      const result = applyThreadDetailEvent(thread, {
+        ...baseEventFields,
+        sequence: 15,
+        occurredAt: "2026-04-01T04:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.history-pruned",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make("already-missing-target"),
+          pruneFromCreatedAt: "2026-04-01T02:00:00.000Z",
+          prunedTurnIds: [prunedTurnId],
+        },
+      });
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages).toEqual([keptMessage]);
+        expect(result.thread.latestTurn).toBeNull();
+        expect(result.thread.activities).toHaveLength(1);
+        expect(result.thread.activities[0]?.revision).toBe(15);
+        expect(result.thread.historicalActivityGroups).toHaveLength(1);
+        expect(result.thread.historicalActivityGroups?.[0]?.revision).toBe(15);
+        expect(result.thread.updatedAt).toBe("2026-04-01T04:00:00.000Z");
       }
     });
   });

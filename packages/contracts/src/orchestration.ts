@@ -350,10 +350,28 @@ export const OrchestrationThreadActivity = Schema.Struct({
   summary: TrimmedNonEmptyString,
   payload: Schema.Unknown,
   turnId: Schema.NullOr(TurnId),
+  /** Outer orchestration event sequence used for cache-safe activity revisions. */
+  revision: Schema.optional(NonNegativeInt),
   sequence: Schema.optional(NonNegativeInt),
   createdAt: IsoDateTime,
 });
 export type OrchestrationThreadActivity = typeof OrchestrationThreadActivity.Type;
+
+/** Constant-size summary used to render a closed historical turn before hydration. */
+export const OrchestrationThreadHistoricalActivityGroup = Schema.Struct({
+  turnId: TurnId,
+  /** Monotonic per-turn activity revision. Changes on insert, same-membership update, or pruning. */
+  revision: NonNegativeInt,
+  activityCount: NonNegativeInt,
+  payloadBytes: NonNegativeInt,
+  /** Activities that produce a work-log row before lifecycle collapsing. */
+  displayActivityCount: NonNegativeInt,
+  /** Created-at anchors selected from the first/last canonical activity rows. */
+  firstActivityAt: IsoDateTime,
+  lastActivityAt: IsoDateTime,
+});
+export type OrchestrationThreadHistoricalActivityGroup =
+  typeof OrchestrationThreadHistoricalActivityGroup.Type;
 
 const OrchestrationLatestTurnState = Schema.Literals([
   "running",
@@ -397,6 +415,9 @@ export const OrchestrationThread = Schema.Struct({
   ),
   queuedMessages: Schema.optional(Schema.Array(OrchestrationQueuedMessage)),
   activities: Schema.Array(OrchestrationThreadActivity),
+  historicalActivityGroups: Schema.optionalKey(
+    Schema.Array(OrchestrationThreadHistoricalActivityGroup),
+  ),
   checkpoints: Schema.Array(OrchestrationCheckpointSummary),
   session: Schema.NullOr(OrchestrationSession),
 });
@@ -561,8 +582,14 @@ export const OrchestrationSubscribeShellInput = Schema.Struct({
 });
 export type OrchestrationSubscribeShellInput = typeof OrchestrationSubscribeShellInput.Type;
 
+export const OrchestrationThreadActivityDetailMode = Schema.Literals(["full", "compact"]);
+export type OrchestrationThreadActivityDetailMode =
+  typeof OrchestrationThreadActivityDetailMode.Type;
+
 export const OrchestrationSubscribeThreadInput = Schema.Struct({
   threadId: ThreadId,
+  /** Full is the backward-compatible default; web clients explicitly opt into compact history. */
+  activityDetailMode: Schema.optionalKey(OrchestrationThreadActivityDetailMode),
   /**
    * When provided, the server skips the initial snapshot frame and instead
    * replays events after this sequence before streaming live events. Clients
@@ -578,9 +605,22 @@ export type OrchestrationSubscribeThreadInput = typeof OrchestrationSubscribeThr
 
 export const OrchestrationThreadDetailSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
+  activityDetailMode: OrchestrationThreadActivityDetailMode.pipe(
+    Schema.withDecodingDefault(Effect.succeed("full" as const)),
+  ),
   thread: OrchestrationThread,
 });
 export type OrchestrationThreadDetailSnapshot = typeof OrchestrationThreadDetailSnapshot.Type;
+
+export const OrchestrationTurnActivitiesSnapshot = Schema.Struct({
+  snapshotSequence: NonNegativeInt,
+  threadId: ThreadId,
+  turnId: TurnId,
+  revision: NonNegativeInt,
+  payloadBytes: NonNegativeInt,
+  activities: Schema.Array(OrchestrationThreadActivity),
+});
+export type OrchestrationTurnActivitiesSnapshot = typeof OrchestrationTurnActivitiesSnapshot.Type;
 
 export const ProjectCreateCommand = Schema.Struct({
   type: Schema.Literal("project.create"),

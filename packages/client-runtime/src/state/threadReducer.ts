@@ -10,12 +10,19 @@ import type {
   OrchestrationSession,
   OrchestrationThread,
   OrchestrationThreadActivity,
+  OrchestrationThreadActivityDetailMode,
+  OrchestrationThreadHistoricalActivityGroup,
   TurnId,
 } from "@t3tools/contracts";
 
 export type ThreadDetailReducerResult =
   | { readonly kind: "updated"; readonly thread: OrchestrationThread }
   | { readonly kind: "deleted" }
+  | {
+      readonly kind: "authoritative-refresh-required";
+      readonly reason: "historical-activity-changed";
+      readonly turnId: TurnId;
+    }
   | { readonly kind: "unchanged" };
 
 const proposedPlanOrder = O.combine<OrchestrationThread["proposedPlans"][number]>(
@@ -34,15 +41,148 @@ const queuedMessageOrder = O.combine<NonNullable<OrchestrationThread["queuedMess
   O.mapInput(O.String, (message) => message.messageId),
 );
 
-function compareActivities(
-  left: OrchestrationThreadActivity,
-  right: OrchestrationThreadActivity,
-): number {
-  const sequence =
-    (left.sequence ?? Number.MAX_SAFE_INTEGER) - (right.sequence ?? Number.MAX_SAFE_INTEGER);
-  if (sequence !== 0) return sequence;
+type OrderedActivity = Pick<OrchestrationThreadActivity, "id" | "sequence" | "createdAt">;
+
+function compareActivities(left: OrderedActivity, right: OrderedActivity): number {
+  if (left.sequence === undefined && right.sequence !== undefined) return 1;
+  if (left.sequence !== undefined && right.sequence === undefined) return -1;
+  if (left.sequence !== undefined && right.sequence !== undefined) {
+    const sequence = left.sequence - right.sequence;
+    if (sequence !== 0) return sequence;
+  }
   const createdAt = left.createdAt.localeCompare(right.createdAt);
   return createdAt !== 0 ? createdAt : left.id.localeCompare(right.id);
+}
+
+function activityProducesWorkLogRow(activity: OrchestrationThreadActivity): boolean {
+  if (activity.kind === "tool.started" || activity.kind === "task.started") return false;
+  if (activity.kind === "context-window.updated") return false;
+  if (activity.kind === "account.rate-limits.updated") return false;
+  if (activity.kind === "subagent.thread") return false;
+  if (activity.summary === "Checkpoint captured") return false;
+  if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") return true;
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  return !(typeof payload?.detail === "string" && payload.detail.startsWith("ExitPlanMode:"));
+}
+
+function activityIsGloballyPromoted(activity: OrchestrationThreadActivity): boolean {
+  return activity.kind === "turn.plan.updated" || activity.kind === "subagent.thread";
+}
+
+function activityPayloadBytes(activity: OrchestrationThreadActivity): number {
+  try {
+    return JSON.stringify(activity.payload)?.length ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function descriptorFromActivities(
+  turnId: TurnId,
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): OrchestrationThreadHistoricalActivityGroup | null {
+  const firstActivity = activities[0];
+  if (!firstActivity) return null;
+  let revision = 0;
+  let payloadBytes = 0;
+  let displayActivityCount = 0;
+  let firstDisplayActivity: OrchestrationThreadActivity | undefined;
+  let lastDisplayActivity: OrchestrationThreadActivity | undefined;
+  for (const activity of activities) {
+    revision = Math.max(revision, activity.revision ?? 0);
+    payloadBytes += activityPayloadBytes(activity);
+    if (activityProducesWorkLogRow(activity)) {
+      displayActivityCount += 1;
+      firstDisplayActivity ??= activity;
+      lastDisplayActivity = activity;
+    }
+  }
+  // Match the server descriptor exactly: duration anchors describe visible
+  // fold work, with canonical all-activity anchors only when every row is
+  // hidden from the work log.
+  const first = firstDisplayActivity ?? firstActivity;
+  const last = lastDisplayActivity ?? activities.at(-1)!;
+  return {
+    turnId,
+    revision,
+    activityCount: activities.length,
+    payloadBytes,
+    displayActivityCount,
+    firstActivityAt: first.createdAt,
+    lastActivityAt: last.createdAt,
+  };
+}
+
+function upsertHistoricalGroup(
+  groups: ReadonlyArray<OrchestrationThreadHistoricalActivityGroup> | undefined,
+  nextGroup: OrchestrationThreadHistoricalActivityGroup,
+): OrchestrationThreadHistoricalActivityGroup[] {
+  const next = [...(groups ?? []).filter((group) => group.turnId !== nextGroup.turnId), nextGroup];
+  next.sort(
+    (left, right) =>
+      left.firstActivityAt.localeCompare(right.firstActivityAt) ||
+      left.turnId.localeCompare(right.turnId),
+  );
+  return next;
+}
+
+function compactInactiveTurnActivities(
+  thread: OrchestrationThread,
+  latestTurn: OrchestrationLatestTurn | null,
+  session: OrchestrationSession | null,
+): Pick<OrchestrationThread, "activities" | "historicalActivityGroups"> {
+  const hotTurnIds = new Set<TurnId>();
+  if (latestTurn) hotTurnIds.add(latestTurn.turnId);
+  if (session?.activeTurnId) hotTurnIds.add(session.activeTurnId);
+
+  let historicalActivityGroups = [...(thread.historicalActivityGroups ?? [])];
+  const activities: OrchestrationThreadActivity[] = [];
+  const demotedByTurnId = new Map<TurnId, OrchestrationThreadActivity[]>();
+  for (const activity of thread.activities) {
+    if (
+      activity.turnId === null ||
+      hotTurnIds.has(activity.turnId) ||
+      activityIsGloballyPromoted(activity)
+    ) {
+      activities.push(activity);
+      continue;
+    }
+    const turnActivities = demotedByTurnId.get(activity.turnId) ?? [];
+    turnActivities.push(activity);
+    demotedByTurnId.set(activity.turnId, turnActivities);
+  }
+  for (const [turnId, turnActivities] of demotedByTurnId) {
+    const descriptor = descriptorFromActivities(turnId, turnActivities);
+    if (descriptor) {
+      historicalActivityGroups = upsertHistoricalGroup(historicalActivityGroups, descriptor);
+    }
+  }
+  return { activities, historicalActivityGroups };
+}
+
+function projectActivitiesForMode(
+  thread: OrchestrationThread,
+  latestTurn: OrchestrationLatestTurn | null,
+  session: OrchestrationSession | null,
+  activityDetailMode: OrchestrationThreadActivityDetailMode,
+): Pick<OrchestrationThread, "activities" | "historicalActivityGroups"> {
+  if (activityDetailMode === "compact") {
+    return compactInactiveTurnActivities(thread, latestTurn, session);
+  }
+  return thread.historicalActivityGroups === undefined
+    ? { activities: thread.activities }
+    : {
+        activities: thread.activities,
+        historicalActivityGroups: thread.historicalActivityGroups,
+      };
+}
+
+function activityTurnIsHot(thread: OrchestrationThread, turnId: TurnId): boolean {
+  if (thread.latestTurn === null && thread.session?.activeTurnId == null) return true;
+  return thread.latestTurn?.turnId === turnId || thread.session?.activeTurnId === turnId;
 }
 
 function insertOrderedActivity(
@@ -110,6 +250,7 @@ function upsertOrderedActivity(
 export function applyThreadDetailEvent(
   thread: OrchestrationThread,
   event: OrchestrationEvent,
+  activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
 ): ThreadDetailReducerResult {
   switch (event.type) {
     // ── Project events (irrelevant to thread detail) ────────────────
@@ -365,6 +506,12 @@ export function applyThreadDetailEvent(
               event.payload.messageId,
             )
           : thread.checkpoints;
+      const compacted = projectActivitiesForMode(
+        thread,
+        latestTurn,
+        thread.session,
+        activityDetailMode,
+      );
 
       return {
         kind: "updated",
@@ -373,6 +520,7 @@ export function applyThreadDetailEvent(
           messages,
           checkpoints,
           latestTurn,
+          ...compacted,
           updatedAt: event.occurredAt,
         },
       };
@@ -414,6 +562,12 @@ export function applyThreadDetailEvent(
                 completedAt: event.payload.session.updatedAt,
               }
             : thread.latestTurn;
+      const compacted = projectActivitiesForMode(
+        thread,
+        latestTurn,
+        event.payload.session,
+        activityDetailMode,
+      );
 
       return {
         kind: "updated",
@@ -421,6 +575,7 @@ export function applyThreadDetailEvent(
           ...thread,
           session: event.payload.session,
           latestTurn,
+          ...compacted,
           updatedAt: event.occurredAt,
         },
       };
@@ -502,10 +657,22 @@ export function applyThreadDetailEvent(
               assistantMessageId: event.payload.assistantMessageId,
             }
           : thread.latestTurn;
+      const compacted = projectActivitiesForMode(
+        thread,
+        latestTurn,
+        thread.session,
+        activityDetailMode,
+      );
 
       return {
         kind: "updated",
-        thread: { ...thread, checkpoints, latestTurn, updatedAt: event.occurredAt },
+        thread: {
+          ...thread,
+          checkpoints,
+          latestTurn,
+          ...compacted,
+          updatedAt: event.occurredAt,
+        },
       };
     }
 
@@ -530,7 +697,11 @@ export function applyThreadDetailEvent(
       const activities = pipe(
         thread.activities,
         Arr.filter((activity) => activity.turnId === null || retainedTurnIds.has(activity.turnId)),
+        Arr.map((activity) => ({ ...activity, revision: event.sequence })),
       );
+      const historicalActivityGroups = (thread.historicalActivityGroups ?? [])
+        .filter((group) => retainedTurnIds.has(group.turnId))
+        .map((group) => ({ ...group, revision: event.sequence }));
       const latestCheckpoint = checkpoints.at(-1) ?? null;
 
       return {
@@ -541,6 +712,7 @@ export function applyThreadDetailEvent(
           messages,
           proposedPlans,
           activities,
+          historicalActivityGroups,
           latestTurn:
             latestCheckpoint === null
               ? null
@@ -561,9 +733,7 @@ export function applyThreadDetailEvent(
 
     case "thread.history-pruned": {
       const pruned = pruneMessagesFromHistoryTarget(thread.messages, event.payload.messageId);
-      if (!pruned) {
-        return { kind: "unchanged" };
-      }
+      const messages = pruned?.messages ?? thread.messages;
       const prunedTurnIds = new Set<string>(event.payload.prunedTurnIds);
       const pruneFromCreatedAt = event.payload.pruneFromCreatedAt;
       const checkpoints = pipe(
@@ -586,7 +756,11 @@ export function applyThreadDetailEvent(
             ? activity.createdAt < pruneFromCreatedAt
             : !prunedTurnIds.has(activity.turnId),
         ),
+        Arr.map((activity) => ({ ...activity, revision: event.sequence })),
       );
+      const historicalActivityGroups = (thread.historicalActivityGroups ?? [])
+        .filter((group) => !prunedTurnIds.has(group.turnId))
+        .map((group) => ({ ...group, revision: event.sequence }));
       const latestTurn =
         thread.latestTurn === null || !prunedTurnIds.has(thread.latestTurn.turnId)
           ? thread.latestTurn
@@ -597,9 +771,10 @@ export function applyThreadDetailEvent(
         thread: {
           ...thread,
           checkpoints,
-          messages: pruned.messages,
+          messages,
           proposedPlans,
           activities,
+          historicalActivityGroups,
           latestTurn,
           updatedAt: event.occurredAt,
         },
@@ -608,7 +783,33 @@ export function applyThreadDetailEvent(
 
     // ── Activities ──────────────────────────────────────────────────
     case "thread.activity-appended": {
-      const activities = upsertOrderedActivity(thread.activities, event.payload.activity);
+      const activity = { ...event.payload.activity, revision: event.sequence };
+      const inactiveCompactTurn =
+        activityDetailMode === "compact" &&
+        activity.turnId !== null &&
+        !activityTurnIsHot(thread, activity.turnId);
+      const promotedActivityAlreadyHot =
+        activityIsGloballyPromoted(activity) &&
+        thread.activities.some((entry) => entry.id === activity.id);
+      if (inactiveCompactTurn && !promotedActivityAlreadyHot) {
+        // An inactive compact turn does not expose complete ID membership.
+        // Persistence enforces immutable thread/turn membership, but the
+        // client may still be behind the projection that establishes a new ID,
+        // and a newly promoted ID may previously have been hidden. Only a
+        // stable promoted ID already present hot is safe to update incrementally.
+        return {
+          kind: "authoritative-refresh-required",
+          reason: "historical-activity-changed",
+          turnId: activity.turnId!,
+        };
+      }
+      const activityBase =
+        activity.turnId === null && activity.kind === "context-window.updated"
+          ? thread.activities.filter(
+              (entry) => entry.turnId !== null || entry.kind !== "context-window.updated",
+            )
+          : thread.activities;
+      const activities = upsertOrderedActivity(activityBase, activity);
 
       return {
         kind: "updated",

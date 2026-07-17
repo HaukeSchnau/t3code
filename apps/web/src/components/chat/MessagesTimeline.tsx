@@ -69,6 +69,7 @@ import { MessageCopyButton } from "./MessageCopyButton";
 import {
   computeStableMessagesTimelineRows,
   deriveMessagesTimelineRows,
+  invalidatedExpandedHistoricalTurnIds,
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   resolveTimelineIsAtEnd,
@@ -184,6 +185,10 @@ interface MessagesTimelineProps {
   timelineEntries: ReturnType<typeof deriveTimelineEntries>;
   latestTurn: TimelineLatestTurn | null;
   runningTurnId: TurnId | null;
+  historicalTurnIds?: ReadonlySet<TurnId>;
+  hydratedHistoricalTurnIds?: ReadonlySet<TurnId>;
+  onHydrateHistoricalTurn?: (turnId: TurnId) => Promise<boolean>;
+  onReleaseHistoricalTurn?: (turnId: TurnId) => void;
   turnDiffSummaryByAssistantMessageId: Map<MessageId, TurnDiffSummary>;
   routeThreadKey: string;
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
@@ -227,6 +232,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   timelineEntries,
   latestTurn,
   runningTurnId,
+  historicalTurnIds,
+  hydratedHistoricalTurnIds,
+  onHydrateHistoricalTurn,
+  onReleaseHistoricalTurn,
   turnDiffSummaryByAssistantMessageId,
   routeThreadKey,
   onOpenTurnDiff,
@@ -254,20 +263,65 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onManualNavigation,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
+  const [hydratingTurnIds, setHydratingTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
+  const [failedHydrationTurnIds, setFailedHydrationTurnIds] = useState<ReadonlySet<TurnId>>(
+    new Set(),
+  );
   const [expandedWorkGroupIds, setExpandedWorkGroupIds] = useState<ReadonlySet<string>>(new Set());
   const [minimapStripMap] = useState(() => new Map<string, HTMLSpanElement>());
 
-  const onToggleTurnFold = useCallback((turnId: TurnId) => {
-    setExpandedTurnIds((existing) => {
-      const next = new Set(existing);
-      if (next.has(turnId)) {
+  const onToggleTurnFold = useCallback(
+    async (turnId: TurnId) => {
+      if (expandedTurnIds.has(turnId)) {
+        setExpandedTurnIds((existing) => {
+          const next = new Set(existing);
+          next.delete(turnId);
+          return next;
+        });
+        onReleaseHistoricalTurn?.(turnId);
+        return;
+      }
+      if (!historicalTurnIds?.has(turnId) || !onHydrateHistoricalTurn) {
+        setExpandedTurnIds((existing) => new Set(existing).add(turnId));
+        return;
+      }
+
+      setFailedHydrationTurnIds((existing) => {
+        const next = new Set(existing);
         next.delete(turnId);
+        return next;
+      });
+      setHydratingTurnIds((existing) => new Set(existing).add(turnId));
+      const hydrated = await onHydrateHistoricalTurn(turnId);
+      setHydratingTurnIds((existing) => {
+        const next = new Set(existing);
+        next.delete(turnId);
+        return next;
+      });
+      if (hydrated) {
+        setExpandedTurnIds((existing) => new Set(existing).add(turnId));
       } else {
-        next.add(turnId);
+        setFailedHydrationTurnIds((existing) => new Set(existing).add(turnId));
+      }
+    },
+    [expandedTurnIds, historicalTurnIds, onHydrateHistoricalTurn, onReleaseHistoricalTurn],
+  );
+  useEffect(() => {
+    setExpandedTurnIds((existing) => {
+      const invalid = invalidatedExpandedHistoricalTurnIds({
+        expandedTurnIds: existing,
+        historicalTurnIds,
+        hydratedHistoricalTurnIds,
+      });
+      if (invalid.length === 0) return existing;
+      const next = new Set(existing);
+      for (const turnId of invalid) {
+        next.delete(turnId);
+        onReleaseHistoricalTurn?.(turnId);
       }
       return next;
     });
-  }, []);
+  }, [historicalTurnIds, hydratedHistoricalTurnIds, onReleaseHistoricalTurn]);
   const onToggleWorkGroup = useCallback(
     (groupId: string, anchorElement?: HTMLElement) => {
       const anchorBottomBeforeToggle = anchorElement?.getBoundingClientRect().bottom ?? null;
@@ -331,21 +385,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     });
   }, [latestTurn]);
 
-  const rawRows = useMemo(
-    () =>
-      deriveMessagesTimelineRows({
-        timelineEntries,
-        latestTurn,
-        runningTurnId,
-        expandedTurnIds,
-        expandedWorkGroupIds,
-        isWorking,
-        activeTurnStartedAt,
-        turnDiffSummaryByAssistantMessageId,
-        revertTurnCountByUserMessageId,
-        editableUserMessageIds,
-      }),
-    [
+  const rawRows = useMemo(() => {
+    const derived = deriveMessagesTimelineRows({
       timelineEntries,
       latestTurn,
       runningTurnId,
@@ -353,11 +394,36 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       expandedWorkGroupIds,
       isWorking,
       activeTurnStartedAt,
-      editableUserMessageIds,
       turnDiffSummaryByAssistantMessageId,
       revertTurnCountByUserMessageId,
-    ],
-  );
+      editableUserMessageIds,
+    });
+    return derived.map((row) =>
+      row.kind !== "turn-fold"
+        ? row
+        : {
+            ...row,
+            hydrationState: hydratingTurnIds.has(row.turnId)
+              ? ("loading" as const)
+              : failedHydrationTurnIds.has(row.turnId)
+                ? ("error" as const)
+                : ("idle" as const),
+          },
+    );
+  }, [
+    timelineEntries,
+    latestTurn,
+    runningTurnId,
+    expandedTurnIds,
+    expandedWorkGroupIds,
+    failedHydrationTurnIds,
+    hydratingTurnIds,
+    isWorking,
+    activeTurnStartedAt,
+    editableUserMessageIds,
+    turnDiffSummaryByAssistantMessageId,
+    revertTurnCountByUserMessageId,
+  ]);
   const rows = useStableRows(rawRows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
@@ -1060,18 +1126,28 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
 function TurnFoldTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "turn-fold" }> }) {
   const ctx = use(TimelineRowCtx);
   const Icon = row.expanded ? ChevronDownIcon : ChevronRightIcon;
+  const loading = row.hydrationState === "loading";
 
   return (
     <div className="border-b border-border/60 pb-2 pt-1">
       <button
         type="button"
         aria-expanded={row.expanded}
+        aria-busy={loading}
+        disabled={loading}
         data-scroll-anchor-ignore
         onClick={() => ctx.onToggleTurnFold(row.turnId)}
         className="flex cursor-pointer select-none items-center gap-1 rounded-md px-1 text-xs text-muted-foreground tabular-nums transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
       >
-        <span>{row.label}</span>
-        <Icon className="size-3.5" />
+        <span>
+          {row.label}
+          {row.hydrationState === "error" ? " · Could not load details — retry" : ""}
+        </span>
+        {loading ? (
+          <LoaderCircleIcon className="size-3.5 animate-spin" aria-label="Loading turn details" />
+        ) : (
+          <Icon className="size-3.5" />
+        )}
       </button>
     </div>
   );

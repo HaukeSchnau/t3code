@@ -489,6 +489,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               createdAt: "2026-02-24T00:00:06.000Z",
             },
           ],
+          historicalActivityGroups: [],
           checkpoints: [
             {
               turnId: asTurnId("turn-1"),
@@ -1395,15 +1396,6 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
 
       assert.deepEqual(snapshot.threads[0]?.activities ?? [], [
         {
-          id: asEventId("activity-unsequenced"),
-          tone: "info",
-          kind: "runtime.note",
-          summary: "unsequenced first",
-          payload: { source: "unsequenced" },
-          turnId: null,
-          createdAt: "2026-04-01T00:00:06.000Z",
-        },
-        {
           id: asEventId("activity-sequence-1"),
           tone: "info",
           kind: "runtime.note",
@@ -1423,8 +1415,267 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           sequence: 2,
           createdAt: "2026-04-01T00:00:04.000Z",
         },
+        {
+          id: asEventId("activity-unsequenced"),
+          tone: "info",
+          kind: "runtime.note",
+          summary: "unsequenced first",
+          payload: { source: "unsequenced" },
+          turnId: null,
+          createdAt: "2026-04-01T00:00:06.000Z",
+        },
       ]);
     }),
+  );
+
+  it.effect(
+    "keeps only hot activity payloads in base snapshots and reads historical turns losslessly",
+    () =>
+      Effect.gen(function* () {
+        const snapshotQuery = yield* ProjectionSnapshotQuery;
+        const sql = yield* SqlClient.SqlClient;
+
+        yield* sql`DELETE FROM projection_thread_activities`;
+        yield* sql`DELETE FROM projection_turns`;
+        yield* sql`DELETE FROM projection_thread_sessions`;
+        yield* sql`DELETE FROM projection_threads`;
+        yield* sql`DELETE FROM projection_projects`;
+        yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, default_model_selection_json, scripts_json,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-activity-hydration', 'Activity hydration', '/tmp/activity-hydration',
+          '{"provider":"codex","model":"gpt-5-codex"}', '[]',
+          '2026-07-17T00:00:00.000Z', '2026-07-17T00:00:00.000Z', NULL
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          branch, worktree_path, latest_turn_id, latest_user_message_at,
+          pending_approval_count, pending_user_input_count, has_actionable_proposed_plan,
+          created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-activity-hydration', 'project-activity-hydration', 'Activity hydration',
+          '{"provider":"codex","model":"gpt-5-codex"}', 'full-access', 'default',
+          NULL, NULL, 'turn-latest', NULL, 0, 0, 0,
+          '2026-07-17T00:00:00.000Z', '2026-07-17T00:00:04.000Z', NULL
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_turns (
+          thread_id, turn_id, state, requested_at, started_at, completed_at,
+          checkpoint_files_json
+        ) VALUES
+          ('thread-activity-hydration', 'turn-historical', 'completed',
+            '2026-07-17T00:00:01.000Z', '2026-07-17T00:00:01.000Z',
+            '2026-07-17T00:00:01.500Z', '[]'),
+          ('thread-activity-hydration', 'turn-active', 'running',
+            '2026-07-17T00:00:02.000Z', '2026-07-17T00:00:02.000Z', NULL, '[]'),
+          ('thread-activity-hydration', 'turn-latest', 'completed',
+            '2026-07-17T00:00:03.000Z', '2026-07-17T00:00:03.000Z',
+            '2026-07-17T00:00:03.500Z', '[]')
+      `;
+        yield* sql`
+        INSERT INTO projection_thread_sessions (
+          thread_id, status, provider_name, active_turn_id, last_error, updated_at,
+          runtime_mode, provider_instance_id
+        ) VALUES (
+          'thread-activity-hydration', 'running', 'codex', 'turn-active', NULL,
+          '2026-07-17T00:00:04.000Z', 'full-access', 'codex'
+        )
+      `;
+        yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, sequence, created_at
+        ) VALUES
+          ('activity-global', 'thread-activity-hydration', NULL, 'info', 'runtime.note',
+            'global', '{"detail":"global-full"}', 1, '2026-07-17T00:00:00.500Z'),
+          ('activity-historical-started', 'thread-activity-hydration', 'turn-historical', 'tool',
+            'tool.started', 'historical started', '{"detail":"starting"}', 1,
+            '2026-07-17T00:00:01.050Z'),
+          ('activity-historical-1', 'thread-activity-hydration', 'turn-historical', 'tool',
+            'tool.completed', 'historical one', '{"detail":"historical-full-1"}', 2,
+            '2026-07-17T00:00:01.100Z'),
+          ('activity-historical-2', 'thread-activity-hydration', 'turn-historical', 'tool',
+            'tool.completed', 'historical two', '{"detail":"historical-full-2"}', 3,
+            '2026-07-17T00:00:01.200Z'),
+          ('activity-historical-plan-boundary', 'thread-activity-hydration', 'turn-historical',
+            'tool', 'tool.completed', 'Exited plan mode', '{"detail":"ExitPlanMode: done"}', NULL,
+            '2026-07-17T00:00:01.250Z'),
+          ('activity-historical-plan', 'thread-activity-hydration', 'turn-historical', 'info',
+            'turn.plan.updated', 'Updated plan',
+            '{"plan":[{"step":"Verify production semantics","status":"completed"}]}', NULL,
+            '2026-07-17T00:00:01.300Z'),
+          ('activity-historical-subagent', 'thread-activity-hydration', 'turn-historical', 'tool',
+            'subagent.thread', 'Reviewer completed',
+            '{"providerThreadId":"provider-reviewer","task":"Review the fix","status":"completed"}',
+            NULL, '2026-07-17T00:00:01.400Z'),
+          ('activity-active', 'thread-activity-hydration', 'turn-active', 'tool',
+            'tool.completed', 'active', '{"detail":"active-full"}', 4,
+            '2026-07-17T00:00:02.100Z'),
+          ('activity-latest', 'thread-activity-hydration', 'turn-latest', 'tool',
+            'tool.completed', 'latest', '{"detail":"latest-full"}', 5,
+            '2026-07-17T00:00:03.100Z'),
+          ('activity-context-old', 'thread-activity-hydration', NULL, 'info',
+            'context-window.updated', 'context old', '{"usedTokens":100}', 6,
+            '2026-07-17T00:00:04.100Z'),
+          ('activity-context-latest', 'thread-activity-hydration', NULL, 'info',
+            'context-window.updated', 'context latest', '{"usedTokens":200}', 7,
+            '2026-07-17T00:00:04.200Z'),
+          ('activity-rate-old', 'thread-activity-hydration', NULL, 'info',
+            'account.rate-limits.updated', 'rate old', '{"usedPercent":10}', 8,
+            '2026-07-17T00:00:04.300Z'),
+          ('activity-rate-latest', 'thread-activity-hydration', NULL, 'info',
+            'account.rate-limits.updated', 'rate latest', '{"usedPercent":20}', 9,
+            '2026-07-17T00:00:04.400Z')
+      `;
+        yield* sql`
+          UPDATE projection_thread_activities
+          SET
+            activity_revision = CASE activity_id
+            WHEN 'activity-historical-started' THEN 9
+            WHEN 'activity-historical-1' THEN 10
+            WHEN 'activity-historical-2' THEN 11
+            WHEN 'activity-historical-plan' THEN 12
+            WHEN 'activity-historical-subagent' THEN 13
+            WHEN 'activity-historical-plan-boundary' THEN 14
+            ELSE sequence
+            END,
+            payload_bytes = length(CAST(payload_json AS BLOB)),
+            display_activity = CASE
+              WHEN kind IN (
+                'tool.started', 'task.started', 'context-window.updated',
+                'account.rate-limits.updated', 'subagent.thread', 'turn.plan.updated'
+              ) OR summary = 'Checkpoint captured' OR (
+                kind IN ('tool.updated', 'tool.completed')
+                AND json_extract(payload_json, '$.detail') LIKE 'ExitPlanMode:%'
+              ) THEN 0 ELSE 1
+            END
+          WHERE thread_id = 'thread-activity-hydration'
+        `;
+
+        const fullDetail = yield* snapshotQuery.getThreadDetailById(
+          ThreadId.make("thread-activity-hydration"),
+        );
+        assert.equal(fullDetail._tag, "Some");
+        if (Option.isSome(fullDetail)) {
+          assert.equal(fullDetail.value.activities.length, 13);
+          assert.deepStrictEqual(fullDetail.value.historicalActivityGroups, []);
+          assert.ok(
+            fullDetail.value.activities.some(
+              (activity) => activity.id === asEventId("activity-context-old"),
+            ),
+          );
+        }
+
+        const compactDetail = yield* snapshotQuery.getThreadDetailSnapshot(
+          ThreadId.make("thread-activity-hydration"),
+          "compact",
+        );
+        assert.equal(compactDetail._tag, "Some");
+        if (Option.isSome(compactDetail)) {
+          assert.equal(compactDetail.value.activityDetailMode, "compact");
+          const detail = compactDetail.value.thread;
+          assert.deepStrictEqual(
+            detail.activities.map((activity) => [activity.id, activity.payload]),
+            [
+              [asEventId("activity-global"), { detail: "global-full" }],
+              [asEventId("activity-active"), { detail: "active-full" }],
+              [asEventId("activity-latest"), { detail: "latest-full" }],
+              [asEventId("activity-context-latest"), { usedTokens: 200 }],
+              [asEventId("activity-rate-old"), { usedPercent: 10 }],
+              [asEventId("activity-rate-latest"), { usedPercent: 20 }],
+              [
+                asEventId("activity-historical-plan"),
+                { plan: [{ step: "Verify production semantics", status: "completed" }] },
+              ],
+              [
+                asEventId("activity-historical-subagent"),
+                {
+                  providerThreadId: "provider-reviewer",
+                  task: "Review the fix",
+                  status: "completed",
+                },
+              ],
+            ],
+          );
+          assert.deepStrictEqual(detail.historicalActivityGroups, [
+            {
+              turnId: asTurnId("turn-historical"),
+              revision: 14,
+              activityCount: 4,
+              payloadBytes: 112,
+              displayActivityCount: 2,
+              firstActivityAt: "2026-07-17T00:00:01.100Z",
+              lastActivityAt: "2026-07-17T00:00:01.200Z",
+            },
+          ]);
+        }
+
+        const historical = yield* snapshotQuery.getTurnActivitiesSnapshot(
+          ThreadId.make("thread-activity-hydration"),
+          TurnId.make("turn-historical"),
+        );
+        assert.equal(historical._tag, "Some");
+        if (Option.isSome(historical)) {
+          assert.equal(historical.value.revision, 14);
+          assert.equal(historical.value.payloadBytes, 112);
+          assert.deepStrictEqual(
+            historical.value.activities.map((activity) => [activity.id, activity.payload]),
+            [
+              [asEventId("activity-historical-started"), { detail: "starting" }],
+              [asEventId("activity-historical-1"), { detail: "historical-full-1" }],
+              [asEventId("activity-historical-2"), { detail: "historical-full-2" }],
+              [asEventId("activity-historical-plan-boundary"), { detail: "ExitPlanMode: done" }],
+            ],
+          );
+        }
+
+        // Same-id unsequenced updates must invalidate a hydrated turn even
+        // though provider ordering metadata and activity count are unchanged.
+        yield* sql`
+          UPDATE projection_thread_activities
+          SET payload_json = '{"detail":"ExitPlanMode: café 🚀"}',
+              payload_bytes = length(CAST('{"detail":"ExitPlanMode: café 🚀"}' AS BLOB)),
+              activity_revision = 42
+          WHERE activity_id = 'activity-historical-plan-boundary'
+        `;
+        const revisedCompact = yield* snapshotQuery.getThreadDetailSnapshot(
+          ThreadId.make("thread-activity-hydration"),
+          "compact",
+        );
+        assert.equal(revisedCompact._tag, "Some");
+        if (Option.isSome(revisedCompact)) {
+          assert.equal(revisedCompact.value.thread.historicalActivityGroups?.[0]?.revision, 42);
+        }
+        const revisedHistorical = yield* snapshotQuery.getTurnActivitiesSnapshot(
+          ThreadId.make("thread-activity-hydration"),
+          TurnId.make("turn-historical"),
+        );
+        assert.equal(revisedHistorical._tag, "Some");
+        if (Option.isSome(revisedHistorical)) {
+          assert.equal(revisedHistorical.value.revision, 42);
+          assert.deepStrictEqual(revisedHistorical.value.activities[3]?.payload, {
+            detail: "ExitPlanMode: café 🚀",
+          });
+          assert.equal(
+            revisedHistorical.value.payloadBytes,
+            revisedHistorical.value.activities.reduce(
+              (bytes, activity) =>
+                bytes + new TextEncoder().encode(JSON.stringify(activity.payload)).byteLength,
+              0,
+            ),
+          );
+        }
+
+        const missing = yield* snapshotQuery.getTurnActivitiesSnapshot(
+          ThreadId.make("thread-activity-hydration"),
+          TurnId.make("turn-missing"),
+        );
+        assert.equal(missing._tag, "None");
+      }),
   );
 
   it.effect("uses projection_threads.latest_turn_id for targeted thread latest turn queries", () =>

@@ -18,12 +18,14 @@ import {
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotMaterializer } from "./Services/ProjectionSnapshotMaterializer.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
     const projectionSnapshotMaterializer = yield* ProjectionSnapshotMaterializer;
+    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const commandPreprocessing = yield* CommandPreprocessingCoordinator;
 
@@ -62,7 +64,25 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           const snapshot = yield* projectionSnapshotMaterializer
-            .getThreadDetailSnapshot(args.params.threadId)
+            .getThreadDetailSnapshot(args.params.threadId, args.query.activityDetailMode ?? "full")
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+              ),
+            );
+          if (Option.isNone(snapshot)) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+          return snapshot.value;
+        }),
+      )
+      .handle(
+        "turnActivities",
+        Effect.fn("environment.orchestration.turnActivities")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const snapshot = yield* projectionSnapshotQuery
+            .getTurnActivitiesSnapshot(args.params.threadId, args.params.turnId)
             .pipe(
               Effect.catch((cause) =>
                 failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
