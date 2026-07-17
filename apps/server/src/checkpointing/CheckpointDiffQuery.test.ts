@@ -111,6 +111,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadResultContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -205,6 +206,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadResultContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -289,6 +291,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadResultContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -358,6 +361,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadResultContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
           }),
         ),
       );
@@ -412,6 +416,7 @@ describe("CheckpointDiffQuery.layer", () => {
             getThreadResultContextById: () => Effect.succeed(Option.none()),
             getThreadDetailById: () => Effect.succeed(Option.none()),
             getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+            getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
           }),
         ),
       );

@@ -16,7 +16,11 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
+// Mobile renders the complete historical work log and intentionally remains on
+// the backward-compatible full activity mode until it gains lazy turn hydration.
+export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime, {
+  activityDetailMode: "full",
+});
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );

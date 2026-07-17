@@ -2343,7 +2343,10 @@ const makeWsRpcLayer = (
                           return replayFrom(afterSequence);
                         }
                         const snapshotResult = yield* Effect.result(
-                          projectionSnapshotMaterializer.getThreadDetailSnapshot(input.threadId),
+                          projectionSnapshotMaterializer.getThreadDetailSnapshot(
+                            input.threadId,
+                            input.activityDetailMode ?? "full",
+                          ),
                         );
                         if (snapshotResult._tag === "Failure") {
                           yield* Effect.logWarning(
@@ -2399,7 +2402,7 @@ const makeWsRpcLayer = (
               }
 
               const snapshot = yield* projectionSnapshotMaterializer
-                .getThreadDetailSnapshot(input.threadId)
+                .getThreadDetailSnapshot(input.threadId, input.activityDetailMode ?? "full")
                 .pipe(
                   Effect.mapError(
                     (cause) =>

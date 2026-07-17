@@ -609,6 +609,7 @@ const buildAppUnderTest = (options?: {
       getThreadShellById: () => Effect.succeed(Option.none()),
       getThreadDetailById: () => Effect.succeed(Option.none()),
       getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
       getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
       getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
@@ -6105,7 +6106,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.gen(function* () {
                 yield* Effect.sleep("25 millis");
                 yield* PubSub.publish(liveEvents, messageEvent);
-                return Option.some({ snapshotSequence: 1, thread });
+                return Option.some({ snapshotSequence: 1, activityDetailMode: "full", thread });
               }),
           },
         },
@@ -6379,6 +6380,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               Effect.succeed(
                 Option.some({
                   snapshotSequence: 1_000,
+                  activityDetailMode: "full",
                   thread: snapshotThread,
                 }),
               ),
@@ -6575,6 +6577,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               return Effect.succeed(
                 Option.some({
                   snapshotSequence,
+                  activityDetailMode: "full",
                   thread: {
                     ...makeDefaultOrchestrationReadModel().threads[0]!,
                     id: threadId,

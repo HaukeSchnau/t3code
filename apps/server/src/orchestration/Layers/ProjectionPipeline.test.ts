@@ -11,6 +11,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -2902,6 +2903,185 @@ it.effect("settles orphaned pending turn starts when the session is no longer ru
       },
     ]);
   }).pipe(Effect.provide(BaseTestLayer)),
+);
+
+it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-noop-history-revision-")))(
+  "OrchestrationProjectionPipeline no-op history revisions",
+  (it) => {
+    it.effect("restamps retained activities for no-op revert and history prune events", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-noop-history-revision");
+
+        const appendAndProject = (event: Parameters<typeof eventStore.append>[0]) =>
+          eventStore
+            .append(event)
+            .pipe(Effect.tap((savedEvent) => projectionPipeline.projectEvent(savedEvent)));
+
+        yield* appendAndProject({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-noop-history-activity"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-17T01:00:00.000Z",
+          commandId: CommandId.make("cmd-noop-history-activity"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-noop-history-activity"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: EventId.make("activity-noop-history-revision"),
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Retained",
+              payload: { detail: "retained" },
+              turnId: null,
+              createdAt: "2026-07-17T01:00:00.000Z",
+            },
+          },
+        });
+
+        const reverted = yield* appendAndProject({
+          type: "thread.reverted",
+          eventId: EventId.make("evt-noop-history-reverted"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-17T01:00:01.000Z",
+          commandId: CommandId.make("cmd-noop-history-reverted"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-noop-history-reverted"),
+          metadata: {},
+          payload: { threadId, turnCount: 0 },
+        });
+
+        const afterRevert = yield* sql<{ readonly revision: number }>`
+          SELECT activity_revision AS revision
+          FROM projection_thread_activities
+          WHERE activity_id = 'activity-noop-history-revision'
+        `;
+        assert.equal(afterRevert[0]?.revision, reverted.sequence);
+
+        const pruned = yield* appendAndProject({
+          type: "thread.history-pruned",
+          eventId: EventId.make("evt-noop-history-pruned"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-17T01:00:02.000Z",
+          commandId: CommandId.make("cmd-noop-history-pruned"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-noop-history-pruned"),
+          metadata: {},
+          payload: {
+            threadId,
+            messageId: MessageId.make("missing-noop-history-target"),
+            pruneFromCreatedAt: "2026-07-17T02:00:00.000Z",
+            prunedTurnIds: [],
+          },
+        });
+
+        const afterPrune = yield* sql<{ readonly revision: number }>`
+          SELECT activity_revision AS revision
+          FROM projection_thread_activities
+          WHERE activity_id = 'activity-noop-history-revision'
+        `;
+        assert.equal(afterPrune[0]?.revision, pruned.sequence);
+      }),
+    );
+
+    it.effect("rolls back projection when an activity id attempts to move membership", () =>
+      Effect.gen(function* () {
+        const projectionPipeline = yield* OrchestrationProjectionPipeline;
+        const eventStore = yield* OrchestrationEventStore;
+        const sql = yield* SqlClient.SqlClient;
+        const threadId = ThreadId.make("thread-immutable-membership-pipeline");
+        const activityId = EventId.make("activity-immutable-membership-pipeline");
+
+        const original = yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-immutable-membership-original"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-17T03:00:00.000Z",
+          commandId: CommandId.make("cmd-immutable-membership-original"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-immutable-membership-original"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: activityId,
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Original membership",
+              payload: {},
+              turnId: TurnId.make("turn-immutable-membership-original"),
+              createdAt: "2026-07-17T03:00:00.000Z",
+            },
+          },
+        });
+        yield* projectionPipeline.projectEvent(original);
+
+        const moved = yield* eventStore.append({
+          type: "thread.activity-appended",
+          eventId: EventId.make("evt-immutable-membership-moved"),
+          aggregateKind: "thread",
+          aggregateId: threadId,
+          occurredAt: "2026-07-17T03:00:01.000Z",
+          commandId: CommandId.make("cmd-immutable-membership-moved"),
+          causationEventId: null,
+          correlationId: CorrelationId.make("cmd-immutable-membership-moved"),
+          metadata: {},
+          payload: {
+            threadId,
+            activity: {
+              id: activityId,
+              tone: "tool",
+              kind: "tool.completed",
+              summary: "Moved membership",
+              payload: {},
+              turnId: TurnId.make("turn-immutable-membership-moved"),
+              createdAt: "2026-07-17T03:00:01.000Z",
+            },
+          },
+        });
+        const moveExit = yield* Effect.exit(projectionPipeline.projectEvent(moved));
+        assert.equal(moveExit._tag, "Failure");
+        if (moveExit._tag === "Failure") {
+          assert.match(Cause.pretty(moveExit.cause), /membership is immutable/);
+        }
+
+        const rows = yield* sql<{
+          readonly turnId: string | null;
+          readonly revision: number;
+          readonly summary: string;
+        }>`
+          SELECT
+            turn_id AS "turnId",
+            activity_revision AS revision,
+            summary
+          FROM projection_thread_activities
+          WHERE activity_id = 'activity-immutable-membership-pipeline'
+        `;
+        assert.deepStrictEqual(rows, [
+          {
+            turnId: "turn-immutable-membership-original",
+            revision: original.sequence,
+            summary: "Original membership",
+          },
+        ]);
+
+        const cursors = yield* sql<{ readonly sequence: number }>`
+          SELECT last_applied_sequence AS sequence
+          FROM projection_state
+          WHERE projector = 'projection.thread-activities'
+        `;
+        assert.deepStrictEqual(cursors, [{ sequence: original.sequence }]);
+      }),
+    );
+  },
 );
 
 const engineLayer = it.layer(

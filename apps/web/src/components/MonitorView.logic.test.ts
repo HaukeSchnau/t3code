@@ -2,13 +2,14 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   DEFAULT_MODEL,
   EnvironmentId,
+  EventId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
 
-import { resolveMonitorThreadCandidate } from "./MonitorView";
+import { deriveMonitorTimelineEntries, resolveMonitorThreadCandidate } from "./MonitorView";
 import type { SidebarThreadSummary } from "../types";
 
 const environmentId = EnvironmentId.make("environment-local");
@@ -73,6 +74,40 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     ...overrides,
   };
 }
+
+describe("deriveMonitorTimelineEntries", () => {
+  it("renders only hot activity and never exposes compact historical placeholders", () => {
+    const entries = deriveMonitorTimelineEntries({
+      messages: [],
+      proposedPlans: [],
+      activities: [
+        {
+          id: EventId.make("hot-activity"),
+          tone: "tool",
+          kind: "tool.completed",
+          summary: "Current tool",
+          payload: { detail: "current" },
+          turnId,
+          sequence: 1,
+          createdAt: completedAt,
+        },
+      ],
+      historicalActivityGroups: [
+        {
+          turnId: TurnId.make("historical-turn"),
+          revision: 3,
+          activityCount: 20,
+          payloadBytes: 100_000,
+          displayActivityCount: 10,
+          firstActivityAt: "2026-06-16T18:00:00.000Z",
+          lastActivityAt: "2026-06-16T18:10:00.000Z",
+        },
+      ],
+    } as Parameters<typeof deriveMonitorTimelineEntries>[0]);
+
+    expect(entries.map((entry) => entry.id)).toEqual(["hot-activity"]);
+  });
+});
 
 describe("resolveMonitorThreadCandidate", () => {
   it("treats a completed default-mode thread with an old unimplemented plan as complete", () => {

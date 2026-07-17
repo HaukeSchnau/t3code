@@ -1402,6 +1402,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             kind: event.payload.activity.kind,
             summary: event.payload.activity.summary,
             payload: event.payload.activity.payload,
+            activityRevision: event.sequence,
             ...(event.payload.activity.sequence !== undefined
               ? { sequence: event.payload.activity.sequence }
               : {}),
@@ -1424,15 +1425,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             existingTurns,
             event.payload.turnCount,
           );
-          if (keptRows.length === existingRows.length) {
-            return;
+          if (keptRows.length !== existingRows.length) {
+            yield* projectionThreadActivityRepository.deleteByThreadId({
+              threadId: event.payload.threadId,
+            });
           }
-          yield* projectionThreadActivityRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert, {
-            concurrency: 1,
-          }).pipe(Effect.asVoid);
+          yield* Effect.forEach(
+            keptRows,
+            (row) =>
+              projectionThreadActivityRepository.upsert({
+                ...row,
+                activityRevision: event.sequence,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
           return;
         }
 
@@ -1448,15 +1454,20 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             new Set<string>(event.payload.prunedTurnIds),
             event.payload.pruneFromCreatedAt,
           );
-          if (keptRows.length === existingRows.length) {
-            return;
+          if (keptRows.length !== existingRows.length) {
+            yield* projectionThreadActivityRepository.deleteByThreadId({
+              threadId: event.payload.threadId,
+            });
           }
-          yield* projectionThreadActivityRepository.deleteByThreadId({
-            threadId: event.payload.threadId,
-          });
-          yield* Effect.forEach(keptRows, projectionThreadActivityRepository.upsert, {
-            concurrency: 1,
-          }).pipe(Effect.asVoid);
+          yield* Effect.forEach(
+            keptRows,
+            (row) =>
+              projectionThreadActivityRepository.upsert({
+                ...row,
+                activityRevision: event.sequence,
+              }),
+            { concurrency: 1 },
+          ).pipe(Effect.asVoid);
           return;
         }
 

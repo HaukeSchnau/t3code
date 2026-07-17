@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
+import { TurnId } from "@t3tools/contracts";
 import {
+  invalidatedExpandedHistoricalTurnIds,
   computeStableMessagesTimelineRows,
   computeMessageDurationStart,
   deriveMessagesTimelineRows,
@@ -7,6 +9,20 @@ import {
   resolveAssistantMessageCopyState,
   shouldShowInitialConversationLoader,
 } from "./MessagesTimeline.logic";
+
+describe("historical turn hydration", () => {
+  it("invalidates an expanded turn when its current revision is no longer hydrated", () => {
+    const stale = TurnId.make("turn-stale");
+    const current = TurnId.make("turn-current");
+    expect(
+      invalidatedExpandedHistoricalTurnIds({
+        expandedTurnIds: new Set([stale, current]),
+        historicalTurnIds: new Set([stale, current]),
+        hydratedHistoricalTurnIds: new Set([current]),
+      }),
+    ).toEqual([stale]);
+  });
+});
 
 describe("initial conversation loading", () => {
   it("never replaces cached or locally saved rows with the initial loader", () => {

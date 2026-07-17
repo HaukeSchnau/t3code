@@ -16,6 +16,7 @@ import {
   type TurnId,
   type KeybindingCommand,
   OrchestrationThreadActivity,
+  type OrchestrationThreadHistoricalActivityGroup,
   ProviderInteractionMode,
   ProviderDriverKind,
   RuntimeMode,
@@ -88,6 +89,7 @@ import {
   findSidebarProposedPlan,
   findLatestProposedPlan,
   deriveWorkLogEntries,
+  deriveHistoricalWorkLogEntries,
   hasActionableProposedPlan,
   isLatestTurnSettled,
 } from "../session-logic";
@@ -102,6 +104,12 @@ import {
 } from "../pendingUserInput";
 import { collectAuthoritativeProjectedMessageIds } from "./ChatView.logic";
 import { type UiTag, useUiStateStore } from "../uiStateStore";
+import {
+  acceptHydratedHistoricalTurn,
+  hydratedHistoricalTurnIsCurrent,
+  mergeUniqueThreadActivities,
+  type HydratedHistoricalTurn,
+} from "../historicalActivityHydration";
 import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
@@ -269,6 +277,7 @@ import { useAssetUrls } from "../assets/assetUrls";
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
+const EMPTY_HISTORICAL_ACTIVITY_GROUPS: OrchestrationThreadHistoricalActivityGroup[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
 const EMPTY_PROVIDER_SKILLS: ServerProvider["skills"] = [];
 const EMPTY_PENDING_USER_INPUT_ANSWERS: Record<string, PendingUserInputDraftAnswer> = {};
@@ -1056,6 +1065,9 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
+  const loadThreadTurnActivities = useAtomCommand(threadEnvironment.loadTurnActivities, {
+    reportFailure: false,
+  });
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
@@ -1328,6 +1340,106 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThread?.environmentId, activeThread?.id],
   );
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
+  const historicalActivityGroups =
+    activeThread?.historicalActivityGroups ?? EMPTY_HISTORICAL_ACTIVITY_GROUPS;
+  const historicalTurnIds = useMemo(
+    () => new Set(historicalActivityGroups.map((group) => group.turnId)),
+    [historicalActivityGroups],
+  );
+  const historicalActivityRouteRef = useRef({
+    threadKey: activeThreadKey,
+    threadId: activeThread?.id ?? null,
+    groups: historicalActivityGroups,
+  });
+  historicalActivityRouteRef.current = {
+    threadKey: activeThreadKey,
+    threadId: activeThread?.id ?? null,
+    groups: historicalActivityGroups,
+  };
+  const [hydratedHistoricalActivities, setHydratedHistoricalActivities] = useState<{
+    readonly threadKey: string | null;
+    readonly byTurnId: ReadonlyMap<TurnId, HydratedHistoricalTurn>;
+  }>({ threadKey: activeThreadKey, byTurnId: new Map() });
+  const currentHydratedHistoricalActivities =
+    hydratedHistoricalActivities.threadKey === activeThreadKey
+      ? hydratedHistoricalActivities.byTurnId
+      : new Map<TurnId, HydratedHistoricalTurn>();
+  const hydratedHistoricalTurnIds = useMemo(
+    () =>
+      new Set(
+        historicalActivityGroups.flatMap((group) =>
+          hydratedHistoricalTurnIsCurrent(
+            group,
+            currentHydratedHistoricalActivities.get(group.turnId),
+          )
+            ? [group.turnId]
+            : [],
+        ),
+      ),
+    [currentHydratedHistoricalActivities, historicalActivityGroups],
+  );
+  useEffect(() => {
+    setHydratedHistoricalActivities((current) =>
+      current.threadKey === activeThreadKey
+        ? current
+        : { threadKey: activeThreadKey, byTurnId: new Map() },
+    );
+  }, [activeThreadKey]);
+  const hydrateHistoricalTurn = useCallback(
+    async (turnId: TurnId): Promise<boolean> => {
+      if (!activeThread || activeThreadKey === null) return false;
+      const group = historicalActivityGroups.find((entry) => entry.turnId === turnId);
+      if (!group) return true;
+      const cached = currentHydratedHistoricalActivities.get(turnId);
+      if (hydratedHistoricalTurnIsCurrent(group, cached)) return true;
+
+      const requestedThreadKey = activeThreadKey;
+      const result = await loadThreadTurnActivities({
+        environmentId: activeThread.environmentId,
+        input: { threadId: activeThread.id, turnId },
+      });
+      if (result._tag !== "Success") return false;
+
+      const currentRoute = historicalActivityRouteRef.current;
+      if (
+        currentRoute.threadKey !== requestedThreadKey ||
+        currentRoute.threadId !== activeThread.id
+      ) {
+        return false;
+      }
+      const currentGroup = currentRoute.groups.find((entry) => entry.turnId === turnId);
+      if (!currentGroup) return false;
+      const accepted = acceptHydratedHistoricalTurn({
+        threadId: activeThread.id,
+        group: currentGroup,
+        snapshot: result.value,
+      });
+      if (!accepted) return false;
+
+      setHydratedHistoricalActivities((current) => {
+        if (current.threadKey !== requestedThreadKey) return current;
+        const next = new Map(current.byTurnId);
+        next.set(turnId, accepted);
+        return { threadKey: current.threadKey, byTurnId: next };
+      });
+      return true;
+    },
+    [
+      activeThread,
+      activeThreadKey,
+      currentHydratedHistoricalActivities,
+      historicalActivityGroups,
+      loadThreadTurnActivities,
+    ],
+  );
+  const releaseHistoricalTurn = useCallback((turnId: TurnId) => {
+    setHydratedHistoricalActivities((current) => {
+      if (!current.byTurnId.has(turnId)) return current;
+      const next = new Map(current.byTurnId);
+      next.delete(turnId);
+      return { threadKey: current.threadKey, byTurnId: next };
+    });
+  }, []);
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -1844,7 +1956,19 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [selectedSubagentProviderThreadId, subagentEntries],
   );
-  const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
+  const workLogEntries = useMemo(() => {
+    const hydratedActivities: OrchestrationThreadActivity[] = [];
+    const compactHistoricalEntries = historicalActivityGroups.flatMap((group) => {
+      const hydrated = currentHydratedHistoricalActivities.get(group.turnId);
+      if (!hydratedHistoricalTurnIsCurrent(group, hydrated)) {
+        return deriveHistoricalWorkLogEntries([group]);
+      }
+      hydratedActivities.push(...hydrated.activities);
+      return [];
+    });
+    const uniqueActivities = mergeUniqueThreadActivities(threadActivities, hydratedActivities);
+    return [...deriveWorkLogEntries(uniqueActivities), ...compactHistoricalEntries];
+  }, [currentHydratedHistoricalActivities, historicalActivityGroups, threadActivities]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -5525,6 +5649,10 @@ function ChatViewContent(props: ChatViewProps) {
                     ? activeThread.session.activeTurnId
                     : null
                 }
+                historicalTurnIds={historicalTurnIds}
+                hydratedHistoricalTurnIds={hydratedHistoricalTurnIds}
+                onHydrateHistoricalTurn={hydrateHistoricalTurn}
+                onReleaseHistoricalTurn={releaseHistoricalTurn}
                 turnDiffSummaryByAssistantMessageId={turnDiffSummaryByAssistantMessageId}
                 activeThreadEnvironmentId={activeThread.environmentId}
                 routeThreadKey={routeThreadKey}

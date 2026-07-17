@@ -15,7 +15,9 @@ import type {
   OrchestrationMessage,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationTurnActivitiesSnapshot,
   OrchestrationThreadShell,
   OrchestrationSession,
   ProjectId,
@@ -215,7 +217,18 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
+    activityDetailMode?: OrchestrationThreadActivityDetailMode,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
+
+  /**
+   * Read one turn's lossless activity payloads together with the projection
+   * sequence in one transaction. Returns none when the active thread or turn
+   * does not exist.
+   */
+  readonly getTurnActivitiesSnapshot: (
+    threadId: ThreadId,
+    turnId: TurnId,
+  ) => Effect.Effect<Option.Option<OrchestrationTurnActivitiesSnapshot>, ProjectionRepositoryError>;
 }
 
 /**

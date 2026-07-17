@@ -334,6 +334,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -415,6 +416,7 @@ it.effect("lists environments and projects without provider model metadata", () 
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -527,6 +529,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -611,6 +614,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         getThreadResultContextById: getThreadResultContextById(model),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -701,6 +705,7 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -824,6 +829,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -887,6 +893,7 @@ it.effect("creates threads before starting their initial turn", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1013,6 +1020,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1097,6 +1105,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1229,6 +1238,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1295,6 +1305,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1405,6 +1416,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1491,6 +1503,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1606,6 +1619,7 @@ it.effect("reads compact thread results without recording read relationships", (
         getThreadResultContextById: getThreadResultContextById(model),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1662,6 +1676,7 @@ it.effect("awaits idle threads without polling side effects", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(
@@ -1763,6 +1778,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
         getThreadResultContextById: getThreadResultContextById(),
         getThreadDetailById: () => Effect.succeed(Option.none()),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.provide(

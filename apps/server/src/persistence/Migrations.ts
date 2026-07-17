@@ -53,6 +53,9 @@ import Migration0037 from "./Migrations/037_ProviderTranscriptJournal.ts";
 import Migration0038 from "./Migrations/038_OrchestrationCommandReceiptEnvelopes.ts";
 import Migration0039 from "./Migrations/039_OrchestrationCommandPreprocessing.ts";
 import Migration0040 from "./Migrations/040_OrchestrationSetupExecutionIdentity.ts";
+import Migration0041 from "./Migrations/041_ProjectionThreadActivityTurnLookupIndex.ts";
+import Migration0042 from "./Migrations/042_ProjectionThreadActivityRevision.ts";
+import Migration0043 from "./Migrations/043_RepairProjectionThreadActivityMetadataAndIndexes.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -105,6 +108,9 @@ export const migrationEntries = [
   [38, "OrchestrationCommandReceiptEnvelopes", Migration0038],
   [39, "OrchestrationCommandPreprocessing", Migration0039],
   [40, "OrchestrationSetupExecutionIdentity", Migration0040],
+  [41, "ProjectionThreadActivityTurnLookupIndex", Migration0041],
+  [42, "ProjectionThreadActivityRevision", Migration0042],
+  [43, "RepairProjectionThreadActivityMetadataAndIndexes", Migration0043],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>

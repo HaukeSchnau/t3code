@@ -92,6 +92,17 @@ import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/
 type SidebarThreadSummary = EnvironmentThreadShell;
 type Thread = EnvironmentThread;
 
+/** Monitor is a live dashboard: it intentionally renders hot/latest activity only. */
+export function deriveMonitorTimelineEntries(
+  thread: Pick<Thread, "messages" | "proposedPlans" | "activities">,
+) {
+  return deriveTimelineEntries(
+    thread.messages,
+    thread.proposedPlans,
+    deriveWorkLogEntries(thread.activities),
+  );
+}
+
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
 const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
 const EMPTY_TURN_DIFFS = new Map();
@@ -641,14 +652,7 @@ function MonitorThreadBody({
   );
   const { resolvedTheme } = useTheme();
   const timelineEntries = useMemo(
-    () =>
-      thread
-        ? deriveTimelineEntries(
-            thread.messages,
-            thread.proposedPlans,
-            deriveWorkLogEntries(thread.activities),
-          )
-        : [],
+    () => (thread ? deriveMonitorTimelineEntries(thread) : []),
     [thread],
   );
   const turnDiffSummaryByAssistantMessageId = EMPTY_TURN_DIFFS;

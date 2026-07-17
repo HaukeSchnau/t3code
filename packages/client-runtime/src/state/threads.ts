@@ -2,14 +2,17 @@ import {
   ORCHESTRATION_WS_METHODS,
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationThread,
+  type OrchestrationThreadActivityDetailMode,
   type OrchestrationThreadDetailSnapshot,
   type OrchestrationThreadStreamItem,
   type ThreadId as ThreadIdType,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
+import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import * as Random from "effect/Random";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -32,6 +35,48 @@ import {
   type EnvironmentThreadStatus,
 } from "./threadState.ts";
 
+export const AUTHORITATIVE_REFRESH_MAX_ATTEMPTS = 5;
+export const AUTHORITATIVE_REFRESH_RETRY_BASE_MS = 200;
+export const AUTHORITATIVE_REFRESH_RETRY_CAP_MS = 2_000;
+
+function authoritativeRefreshJitterHash(input: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < input.length; index += 1) {
+    hash ^= input.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+/** Stable for one client seed, de-correlated across independently seeded states. */
+export function authoritativeRefreshRetryDelayMs(input: {
+  readonly attempt: number;
+  readonly eventSequence: number;
+  readonly clientSeed: number;
+  readonly environmentId: string;
+  readonly threadId: string;
+}): number {
+  const exponential = Math.min(
+    AUTHORITATIVE_REFRESH_RETRY_CAP_MS,
+    AUTHORITATIVE_REFRESH_RETRY_BASE_MS * 2 ** Math.max(0, input.attempt),
+  );
+  const jitterRadius = Math.floor(exponential * 0.2);
+  const jitterSpan = jitterRadius * 2 + 1;
+  const jitterKey = [
+    input.clientSeed,
+    input.environmentId,
+    input.threadId,
+    input.eventSequence,
+    input.attempt,
+  ].join(":");
+  const jitter = (authoritativeRefreshJitterHash(jitterKey) % jitterSpan) - jitterRadius;
+  return Math.max(0, Math.min(AUTHORITATIVE_REFRESH_RETRY_CAP_MS, exponential + jitter));
+}
+
+class AuthoritativeRefreshRestart extends Data.TaggedError("AuthoritativeRefreshRestart")<{
+  readonly reason: "generation-changed" | "retries-exhausted";
+}> {}
+
 function statusWithoutLiveData(data: Option.Option<OrchestrationThread>): EnvironmentThreadStatus {
   return Option.isSome(data) ? "cached" : "empty";
 }
@@ -45,12 +90,16 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
 
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
+  activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
+  options: { readonly authoritativeRefreshJitterSeed?: number } = {},
 ) {
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
   const environmentId = supervisor.target.environmentId;
-  const cached = yield* cache.loadThread(environmentId, threadId).pipe(
+  const authoritativeRefreshJitterSeed =
+    options.authoritativeRefreshJitterSeed ?? (yield* Random.nextInt) >>> 0;
+  const loadedCache = yield* cache.loadThread(environmentId, threadId).pipe(
     Effect.catch((error) =>
       Effect.logWarning("Could not load cached thread.").pipe(
         Effect.annotateLogs({
@@ -61,6 +110,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         Effect.as(Option.none<OrchestrationThreadDetailSnapshot>()),
       ),
     ),
+  );
+  const cached = Option.filter(
+    loadedCache,
+    (snapshot) => snapshot.activityDetailMode === activityDetailMode,
   );
   const cachedThread = Option.map(cached, (snapshot) => snapshot.thread);
   const state = yield* SubscriptionRef.make<EnvironmentThreadState>({
@@ -172,7 +225,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     // Persist the thread together with the sequence it reflects so the next warm
     // cache can resume from exactly here.
     const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
-    yield* Queue.offer(persistence, { snapshotSequence, thread });
+    yield* Queue.offer(persistence, { snapshotSequence, activityDetailMode, thread });
   });
 
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
@@ -192,6 +245,107 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ),
       ),
     );
+  });
+
+  const reloadAuthoritativeSnapshot = Effect.fn(
+    "EnvironmentThreadState.reloadAuthoritativeSnapshot",
+  )(function* (
+    minimumSequence: number,
+    itemSession: RpcSession | undefined,
+    itemGeneration: number | undefined,
+  ) {
+    // Keep the event cursor pinned before the ambiguous event until a compact
+    // snapshot that includes it is available. The socket stream is processed
+    // sequentially, so replacing state and advancing to the snapshot cursor is
+    // atomic with respect to later streamed events; queued duplicates are then
+    // ignored by the normal sequence check.
+    const ensureCurrentGeneration = Effect.fn(
+      "EnvironmentThreadState.ensureAuthoritativeRefreshGeneration",
+    )(function* () {
+      if (itemSession === undefined || itemGeneration === undefined) return;
+      const [currentSession, connectionState] = yield* Effect.all([
+        SubscriptionRef.get(supervisor.session),
+        SubscriptionRef.get(supervisor.state),
+      ]);
+      if (
+        Option.isNone(currentSession) ||
+        currentSession.value !== itemSession ||
+        connectionState.generation !== itemGeneration
+      ) {
+        return yield* new AuthoritativeRefreshRestart({ reason: "generation-changed" });
+      }
+    });
+
+    const waitForRefreshSourceChange =
+      itemSession === undefined || itemGeneration === undefined
+        ? Effect.never
+        : Effect.raceFirst(
+            SubscriptionRef.changes(supervisor.state).pipe(
+              Stream.filter((connectionState) => connectionState.generation !== itemGeneration),
+              Stream.runHead,
+            ),
+            SubscriptionRef.changes(supervisor.session).pipe(
+              Stream.filter(
+                (currentSession) =>
+                  Option.isNone(currentSession) || currentSession.value !== itemSession,
+              ),
+              Stream.runHead,
+            ),
+          ).pipe(
+            Effect.flatMap(() =>
+              Effect.fail(new AuthoritativeRefreshRestart({ reason: "generation-changed" })),
+            ),
+          );
+
+    for (let attempt = 0; attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+      yield* ensureCurrentGeneration();
+      const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+      if (Option.isSome(prepared)) {
+        const outcome = yield* Effect.raceFirst(
+          snapshotLoader.load(prepared.value, threadId, activityDetailMode),
+          waitForRefreshSourceChange,
+        );
+        // The request may have completed in the same scheduler turn as a
+        // reconnect. Recheck identity before interpreting Found, NotFound, or
+        // TransientFailure so no stale outcome can mutate or alarm new state.
+        yield* ensureCurrentGeneration();
+        if (outcome._tag === "NotFound") {
+          yield* setDeleted();
+          return;
+        }
+        if (outcome._tag === "Found") {
+          const snapshot = outcome.snapshot;
+          if (
+            snapshot.activityDetailMode === activityDetailMode &&
+            snapshot.snapshotSequence >= minimumSequence
+          ) {
+            yield* SubscriptionRef.set(lastSequence, snapshot.snapshotSequence);
+            yield* setThread(snapshot.thread);
+            return;
+          }
+          yield* setStreamError(
+            Cause.fail(
+              new Error(
+                `Authoritative thread snapshot is stale (sequence ${snapshot.snapshotSequence}, expected at least ${minimumSequence}).`,
+              ),
+            ),
+          );
+        } else {
+          yield* setStreamError(Cause.fail(new Error(outcome.message)));
+        }
+      }
+      if (attempt === AUTHORITATIVE_REFRESH_MAX_ATTEMPTS - 1) {
+        return yield* new AuthoritativeRefreshRestart({ reason: "retries-exhausted" });
+      }
+      const delay = authoritativeRefreshRetryDelayMs({
+        attempt,
+        eventSequence: minimumSequence,
+        clientSeed: authoritativeRefreshJitterSeed,
+        environmentId,
+        threadId,
+      });
+      yield* Effect.raceFirst(Effect.sleep(delay), waitForRefreshSourceChange);
+    }
   });
 
   const applyItem = Effect.fn("EnvironmentThreadState.applyItem")(function* (
@@ -239,20 +393,25 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     if (item.event.sequence <= sequence) {
       return;
     }
-    yield* SubscriptionRef.set(lastSequence, item.event.sequence);
-
     const current = yield* SubscriptionRef.get(state);
     if (Option.isNone(current.data)) {
-      if (item.event.type === "thread.deleted") {
+      yield* SubscriptionRef.set(lastSequence, item.event.sequence);
+      if (item.event.type === "thread.deleted" && current.status !== "deleted") {
         yield* setDeleted();
       }
       return;
     }
-    const result = applyThreadDetailEvent(current.data.value, item.event);
+    const result = applyThreadDetailEvent(current.data.value, item.event, activityDetailMode);
     if (result.kind === "updated") {
+      yield* SubscriptionRef.set(lastSequence, item.event.sequence);
       yield* setThread(result.thread);
     } else if (result.kind === "deleted") {
+      yield* SubscriptionRef.set(lastSequence, item.event.sequence);
       yield* setDeleted();
+    } else if (result.kind === "authoritative-refresh-required") {
+      yield* reloadAuthoritativeSnapshot(item.event.sequence, itemSession, itemGeneration);
+    } else {
+      yield* SubscriptionRef.set(lastSequence, item.event.sequence);
     }
   });
 
@@ -303,8 +462,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               Stream.map((current) => current.value),
               Stream.runHead,
             );
-            return Option.isSome(prepared)
-              ? yield* snapshotLoader.load(prepared.value, threadId)
+            if (Option.isNone(prepared)) {
+              return Option.none<OrchestrationThreadDetailSnapshot>();
+            }
+            const outcome = yield* snapshotLoader.load(
+              prepared.value,
+              threadId,
+              activityDetailMode,
+            );
+            return outcome._tag === "Found"
+              ? Option.some(outcome.snapshot)
               : Option.none<OrchestrationThreadDetailSnapshot>();
           });
 
@@ -312,26 +479,41 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* applyItem({ kind: "snapshot", snapshot: base.value });
       }
 
-      yield* subscribeWithSessionDynamic(
-        ORCHESTRATION_WS_METHODS.subscribeThread,
-        () =>
-          SubscriptionRef.get(lastSequence).pipe(
-            Effect.map((afterSequence) =>
-              afterSequence === 0
-                ? { threadId, includeSynchronizationItems: true }
-                : { threadId, afterSequence, includeSynchronizationItems: true },
+      while (true) {
+        yield* subscribeWithSessionDynamic(
+          ORCHESTRATION_WS_METHODS.subscribeThread,
+          () =>
+            SubscriptionRef.get(lastSequence).pipe(
+              Effect.map((afterSequence) =>
+                afterSequence === 0
+                  ? { threadId, activityDetailMode, includeSynchronizationItems: true }
+                  : {
+                      threadId,
+                      activityDetailMode,
+                      afterSequence,
+                      includeSynchronizationItems: true,
+                    },
+              ),
+            ),
+          {
+            admission: {
+              group: "thread-detail-catch-up",
+              maxConcurrent: 3,
+              releaseWhen: (item) => item.kind === "synchronized",
+            },
+            onExpectedFailure: setStreamError,
+            retryExpectedFailureAfter: "250 millis",
+          },
+        ).pipe(
+          Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)),
+          Effect.catchTag("AuthoritativeRefreshRestart", (error) =>
+            Effect.logDebug("Restarting thread subscription for authoritative refresh.").pipe(
+              Effect.annotateLogs({ threadId, reason: error.reason }),
+              Effect.andThen(Effect.sleep("50 millis")),
             ),
           ),
-        {
-          admission: {
-            group: "thread-detail-catch-up",
-            maxConcurrent: 3,
-            releaseWhen: (item) => item.kind === "synchronized",
-          },
-          onExpectedFailure: setStreamError,
-          retryExpectedFailureAfter: "250 millis",
-        },
-      ).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
+        );
+      }
     }),
   );
 
@@ -340,7 +522,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       Effect.flatMap(([current, snapshotSequence]) =>
         Option.match(current.data, {
           onNone: () => Effect.void,
-          onSome: (thread) => persist({ snapshotSequence, thread }),
+          onSome: (thread) => persist({ snapshotSequence, activityDetailMode, thread }),
         }),
       ),
     ),
@@ -349,10 +531,18 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   return state;
 });
 
-export function threadStateChanges(environmentId: EnvironmentIdType, threadId: ThreadIdType) {
+export function threadStateChanges(
+  environmentId: EnvironmentIdType,
+  threadId: ThreadIdType,
+  activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
+) {
   return followStreamInEnvironment(
     environmentId,
-    Stream.unwrap(makeEnvironmentThreadState(threadId).pipe(Effect.map(SubscriptionRef.changes))),
+    Stream.unwrap(
+      makeEnvironmentThreadState(threadId, activityDetailMode).pipe(
+        Effect.map(SubscriptionRef.changes),
+      ),
+    ),
   );
 }
 
@@ -361,11 +551,13 @@ export function createEnvironmentThreadStateAtoms<R, E>(
     EnvironmentRegistry | EnvironmentCacheStore | ThreadSnapshotLoader | R,
     E
   >,
+  options: { readonly activityDetailMode?: OrchestrationThreadActivityDetailMode } = {},
 ) {
+  const activityDetailMode = options.activityDetailMode ?? "full";
   const family = Atom.family((key: string) => {
     const { environmentId, threadId } = parseThreadKey(key);
     return runtime
-      .atom(threadStateChanges(environmentId, threadId), {
+      .atom(threadStateChanges(environmentId, threadId, activityDetailMode), {
         initialValue: EMPTY_ENVIRONMENT_THREAD_STATE,
       })
       .pipe(

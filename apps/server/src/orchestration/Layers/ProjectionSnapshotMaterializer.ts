@@ -2,6 +2,7 @@ import type {
   OrchestrationReadModel,
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadActivityDetailMode,
 } from "@t3tools/contracts";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -109,12 +110,12 @@ export const makeProjectionSnapshotMaterializer = Effect.fn("makeProjectionSnaps
         return yield* singleFlight(shellFlights, `shell:${sequence}`, query.getShellSnapshot());
       }),
       getThreadDetailSnapshot: Effect.fn("ProjectionSnapshotMaterializer.getThreadDetailSnapshot")(
-        function* (threadId) {
+        function* (threadId, activityDetailMode: OrchestrationThreadActivityDetailMode = "full") {
           const sequence = yield* snapshotSequence();
           return yield* singleFlight(
             threadFlights,
-            `thread:${threadId}:${sequence}`,
-            query.getThreadDetailSnapshot(threadId),
+            `thread:${threadId}:${activityDetailMode}:${sequence}`,
+            query.getThreadDetailSnapshot(threadId, activityDetailMode),
           );
         },
       ),

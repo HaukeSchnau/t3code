@@ -14,6 +14,7 @@ import {
   derivePendingApprovals,
   derivePendingUserInputs,
   deriveTimelineEntries,
+  deriveHistoricalWorkLogEntries,
   deriveWorkLogEntries,
   findLatestProposedPlan,
   findSidebarProposedPlan,
@@ -708,6 +709,40 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("deriveWorkLogEntries", () => {
+  it("derives only cheap fold placeholders from historical metadata", () => {
+    const turnId = TurnId.make("turn-history");
+    const entries = deriveHistoricalWorkLogEntries([
+      {
+        turnId,
+        revision: 5,
+        activityCount: 2,
+        payloadBytes: 1024,
+        displayActivityCount: 1,
+        firstActivityAt: "2026-07-17T10:00:00.000Z",
+        lastActivityAt: "2026-07-17T10:01:00.000Z",
+      },
+    ]);
+
+    expect(entries).toEqual([
+      {
+        id: `historical-turn:${turnId}:first`,
+        createdAt: "2026-07-17T10:00:00.000Z",
+        turnId,
+        label: "Historical work",
+        tone: "info",
+        sourceActivityKind: "historical.turn",
+      },
+      {
+        id: `historical-turn:${turnId}:last`,
+        createdAt: "2026-07-17T10:01:00.000Z",
+        turnId,
+        label: "Historical work",
+        tone: "info",
+        sourceActivityKind: "historical.turn",
+      },
+    ]);
+  });
+
   it("omits tool started entries and keeps completed entries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({

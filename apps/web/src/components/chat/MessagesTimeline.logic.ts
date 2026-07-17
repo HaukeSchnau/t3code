@@ -124,6 +124,7 @@ export type MessagesTimelineRow =
       turnId: TurnId;
       label: string;
       expanded: boolean;
+      hydrationState: "idle" | "loading" | "error";
     }
   | {
       kind: "message";
@@ -149,6 +150,17 @@ export type MessagesTimelineRow =
 export interface StableMessagesTimelineRowsState {
   byId: Map<string, MessagesTimelineRow>;
   result: MessagesTimelineRow[];
+}
+
+export function invalidatedExpandedHistoricalTurnIds(input: {
+  readonly expandedTurnIds: ReadonlySet<TurnId>;
+  readonly historicalTurnIds: ReadonlySet<TurnId> | undefined;
+  readonly hydratedHistoricalTurnIds: ReadonlySet<TurnId> | undefined;
+}): TurnId[] {
+  return [...input.expandedTurnIds].filter(
+    (turnId) =>
+      input.historicalTurnIds?.has(turnId) && !input.hydratedHistoricalTurnIds?.has(turnId),
+  );
 }
 
 export function computeMessageDurationStart(
@@ -422,6 +434,7 @@ export function deriveMessagesTimelineRows(input: {
         turnId: turnFold.turnId,
         label: turnFold.label,
         expanded: input.expandedTurnIds?.has(turnFold.turnId) ?? false,
+        hydrationState: "idle",
       });
     }
 
@@ -578,7 +591,12 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "turn-fold": {
       const bf = b as typeof a;
-      return a.createdAt === bf.createdAt && a.label === bf.label && a.expanded === bf.expanded;
+      return (
+        a.createdAt === bf.createdAt &&
+        a.label === bf.label &&
+        a.expanded === bf.expanded &&
+        a.hydrationState === bf.hydrationState
+      );
     }
 
     case "proposed-plan":
