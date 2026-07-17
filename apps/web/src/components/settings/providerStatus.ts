@@ -1,4 +1,9 @@
-import type { ServerProvider, ServerProviderVersionAdvisory } from "@t3tools/contracts";
+import type {
+  ProviderInstanceId,
+  ServerProvider,
+  ServerProviderVersionAdvisory,
+} from "@t3tools/contracts";
+import { isExternallyManagedProviderInstance } from "@t3tools/shared/bundledProviderInstances";
 
 /**
  * Visual treatment for each server-reported provider status. Centralized so
@@ -92,12 +97,18 @@ export function getProviderVersionLabel(version: string | null | undefined) {
 
 export function getProviderVersionAdvisoryPresentation(
   advisory: ServerProviderVersionAdvisory | undefined,
+  instanceId?: ProviderInstanceId,
 ): {
   readonly detail: string;
   readonly updateCommand: string | null;
   readonly emphasis: "normal" | "strong";
 } | null {
-  if (!advisory || advisory.status === "current" || advisory.status === "unknown") {
+  if (
+    !advisory ||
+    advisory.status === "current" ||
+    advisory.status === "unknown" ||
+    (instanceId !== undefined && isExternallyManagedProviderInstance(instanceId))
+  ) {
     return null;
   }
 

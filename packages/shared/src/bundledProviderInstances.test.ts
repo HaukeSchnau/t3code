@@ -4,6 +4,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import {
   BUNDLED_PROVIDER_INSTANCES,
   isBundledProviderInstance,
+  isExternallyManagedProviderInstance,
   withBundledProviderInstances,
 } from "./bundledProviderInstances.ts";
 
@@ -26,6 +27,11 @@ describe("bundled provider instances", () => {
     });
     expect(isBundledProviderInstance(claudexId)).toBe(true);
     expect(isBundledProviderInstance(ProviderInstanceId.make("claudeAgent"))).toBe(false);
+  });
+
+  it("marks the host-provided Claudex wrapper as externally managed", () => {
+    expect(isExternallyManagedProviderInstance(claudexId)).toBe(true);
+    expect(isExternallyManagedProviderInstance(ProviderInstanceId.make("claudeAgent"))).toBe(false);
   });
 
   it("restores a missing bundled profile without overwriting user settings", () => {
