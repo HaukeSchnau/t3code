@@ -125,6 +125,19 @@ describe("provider update launch notification logic", () => {
     ).toHaveLength(2);
   });
 
+  it("does not offer application-managed updates for the host-managed Claudex wrapper", () => {
+    const claudex = provider({
+      driver: driver("claudeAgent"),
+      instanceId: instanceId("claudex"),
+      latestVersion: "2.1.123",
+      canUpdate: true,
+      updateCommand: "npm install -g @anthropic-ai/claude-code@latest",
+    });
+
+    expect(isProviderUpdateCandidate(claudex)).toBe(false);
+    expect(collectProviderUpdateCandidates([claudex])).toEqual([]);
+  });
+
   it("disables one-click updates when provider instances disagree on the update command", () => {
     const candidate = updateCandidate({
       driver: driver("claudeAgent"),

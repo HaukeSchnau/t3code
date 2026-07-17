@@ -700,12 +700,28 @@ function parseClaudeAuthStatus(output: string): boolean | undefined {
   }
 }
 
+const probeClaudeAuthStatus = Effect.fn("probeClaudeAuthStatus")(function* (
+  claudeSettings: ClaudeSettings,
+  environment: NodeJS.ProcessEnv,
+) {
+  const probe = yield* runClaudeCommand(claudeSettings, ["auth", "status"], environment).pipe(
+    Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
+    Effect.result,
+  );
+  if (Result.isFailure(probe)) return undefined;
+  return Option.match(probe.success, {
+    onNone: () => undefined,
+    onSome: (result) => parseClaudeAuthStatus(result.stdout),
+  });
+});
+
 export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(function* (
   claudeSettings: ClaudeSettings,
   resolveCapabilities?: (
     claudeSettings: ClaudeSettings,
   ) => Effect.Effect<ClaudeCapabilitiesProbe | undefined>,
   environment?: NodeJS.ProcessEnv,
+  options?: { readonly requireAuthenticatedStatusProbe?: boolean },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -807,24 +823,37 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings.includeBuiltInModels,
   );
 
+  const authenticated = options?.requireAuthenticatedStatusProbe
+    ? yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment)
+    : undefined;
+
+  if (options?.requireAuthenticatedStatusProbe && authenticated !== true) {
+    return buildServerProvider({
+      presentation: CLAUDE_PRESENTATION,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "warning",
+        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+        message:
+          authenticated === false
+            ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
+            : `Could not verify authentication with \`${claudeSettings.binaryPath} auth status\`.`,
+      },
+    });
+  }
+
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const slashCommands = capabilities?.slashCommands ?? [];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
-  if (!capabilities) {
-    const authStatusProbe = yield* runClaudeCommand(
-      claudeSettings,
-      ["auth", "status"],
-      resolvedEnvironment,
-    ).pipe(Effect.timeoutOption(DEFAULT_TIMEOUT_MS), Effect.result);
-    const authenticated = Result.isSuccess(authStatusProbe)
-      ? Option.match(authStatusProbe.success, {
-          onNone: () => undefined,
-          onSome: (result) => parseClaudeAuthStatus(result.stdout),
-        })
-      : undefined;
+  if (!capabilities && authenticated !== true) {
+    const fallbackAuthenticated = yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment);
 
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
@@ -836,9 +865,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         installed: true,
         version: parsedVersion,
         status: "warning",
-        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+        auth: { status: fallbackAuthenticated === false ? "unauthenticated" : "unknown" },
         message:
-          authenticated === false
+          fallbackAuthenticated === false
             ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
             : "Could not verify Claude authentication status from initialization result.",
       },
@@ -846,8 +875,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   }
 
   const authMetadata = claudeAuthMetadata({
-    subscriptionType: capabilities.subscriptionType,
-    authMethod: capabilities.tokenSource,
+    subscriptionType: capabilities?.subscriptionType,
+    authMethod: capabilities?.tokenSource,
   });
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
@@ -861,7 +890,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       status: "ready",
       auth: {
         status: "authenticated",
-        ...(capabilities.email ? { email: capabilities.email } : {}),
+        ...(capabilities?.email ? { email: capabilities.email } : {}),
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),

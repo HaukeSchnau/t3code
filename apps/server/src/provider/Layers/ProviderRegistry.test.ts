@@ -1608,6 +1608,76 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ),
       );
 
+      it.effect("requires routed Claudex auth status even when SDK initialization succeeds", () =>
+        Effect.gen(function* () {
+          const settings = decodeClaudeSettings({
+            binaryPath: "claudex",
+            includeBuiltInModels: false,
+            customModels: ["gpt-5.6-sol"],
+          });
+          const status = yield* checkClaudeProviderStatus(
+            settings,
+            claudeCapabilities({ tokenSource: "ANTHROPIC_AUTH_TOKEN" }),
+            undefined,
+            { requireAuthenticatedStatusProbe: true },
+          );
+
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.auth.status, "unauthenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":false,"authMethod":"cliproxyapi"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("accepts routed Claudex auth status when capability metadata is unavailable", () =>
+        Effect.gen(function* () {
+          const settings = decodeClaudeSettings({
+            binaryPath: "claudex",
+            includeBuiltInModels: false,
+            customModels: ["gpt-5.6-sol"],
+          });
+          const status = yield* checkClaudeProviderStatus(
+            settings,
+            noClaudeCapabilities,
+            undefined,
+            { requireAuthenticatedStatusProbe: true },
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.status, "authenticated");
+          assert.deepStrictEqual(
+            status.models.map((model) => model.slug),
+            ["gpt-5.6-sol"],
+          );
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"cliproxyapi"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
       it.effect("keeps built-in models out of a routed Claude pending snapshot", () =>
         Effect.gen(function* () {
           const pending = yield* makePendingClaudeProvider(
@@ -2006,6 +2076,19 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             "Configured Claude Agent CLI (`claude`) is not installed or not on PATH.",
           );
         }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
+      );
+
+      it.effect("names the configured Claudex binary when it is missing", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, binaryPath: "claudex" },
+            claudeCapabilities(),
+          );
+          assert.strictEqual(
+            status.message,
+            "Configured Claude Agent CLI (`claudex`) is not installed or not on PATH.",
+          );
+        }).pipe(Effect.provide(failingSpawnerLayer("spawn claudex ENOENT"))),
       );
 
       it.effect("returns error when version check fails with non-zero exit code", () => {

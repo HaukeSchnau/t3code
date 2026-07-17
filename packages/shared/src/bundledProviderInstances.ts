@@ -21,8 +21,17 @@ export const BUNDLED_PROVIDER_INSTANCES: ProviderInstanceConfigMap = {
   },
 };
 
+const EXTERNALLY_MANAGED_PROVIDER_INSTANCES = new Set<ProviderInstanceId>([
+  ProviderInstanceId.make("claudex"),
+]);
+
 export function isBundledProviderInstance(instanceId: ProviderInstanceId): boolean {
   return instanceId in BUNDLED_PROVIDER_INSTANCES;
+}
+
+/** Profiles whose executable lifecycle belongs to the host package manager. */
+export function isExternallyManagedProviderInstance(instanceId: ProviderInstanceId): boolean {
+  return EXTERNALLY_MANAGED_PROVIDER_INSTANCES.has(instanceId);
 }
 
 /** Explicit persisted settings win over bundled defaults. */
