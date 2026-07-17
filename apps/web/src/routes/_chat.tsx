@@ -3,6 +3,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useEffect } from "react";
 
 import { isCommandPaletteOpen } from "../commandPaletteContext";
+import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import { dispatchPreviewAction } from "../components/preview/previewActionBus";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
@@ -148,11 +149,13 @@ function ChatRouteGlobalShortcuts() {
   return null;
 }
 
-function ChatRouteLayout() {
+export function ChatRouteLayout() {
   return (
     <>
       <ChatRouteGlobalShortcuts />
-      <Outlet />
+      <DiffWorkerPoolProvider>
+        <Outlet />
+      </DiffWorkerPoolProvider>
     </>
   );
 }
