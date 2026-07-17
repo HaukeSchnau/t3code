@@ -169,3 +169,19 @@ stale running projection rows `2 -> 0` without losing resume state; idle probe b
   measurement, then Desktop build/install.
 - After rebasing onto the concurrently advanced `main`, the focused gates passed again and the expanded full
   suite passed 644 files / 5,161 tests with 2 files / 10 tests skipped.
+
+### Rollout result
+
+- T3 commit `c3f57dcf0d31` and infra pin `2f9830fb1149` were pushed to `main` and deployed to `srv-2`.
+- The busy-service inhibitor deferred activation as designed. A forced cutover replaced the 3.2 GiB old
+  process; systemd exhausted its 90-second graceful-stop window before killing it. The deferred-restart worker
+  then completed the rollout, and `just verify-host srv-2` passed with the expected restart identity applied.
+- Post-cutover transcript-journal depth is zero. The new process used about 726 MiB at the focused check, down
+  from 3.2 GiB immediately before cutover, and local HTTP responded in 11 ms.
+- Three connected-browser reloads reached DOMContentLoaded in 976, 1,057, and 1,140 ms (1.06 seconds mean),
+  versus 1,798, 2,537, and 2,000 ms before deployment (2.11 seconds mean): about 50% lower. No reload showed a
+  reconnect banner, and a separate reload produced no browser console errors.
+- The Apple Silicon Desktop artifact was built from `c3f57dcf0d31`, installed as
+  `/Applications/T3 Code (Alpha).app`, and launched successfully. Bundle version 0.0.28 is native arm64; the
+  desktop smoke test passed. The locally signed DMG SHA-256 is
+  `771ffd2008006968db4f1106aa269fd8bf0af9c0f9d114637d4361b88a04c1c2`.
