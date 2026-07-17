@@ -2,8 +2,11 @@
 
 ## Current status
 
-- The final reconnect/lazy-history WIP on srv-2 is approved and ready to commit, push, build, and
-  deploy. No commit, push, deployment, or service restart has been performed for this WIP yet.
+- The reconnect/lazy-history implementation is committed and pushed on T3 `main` at
+  `914e6f0892de`. srv-2 is running that revision from
+  `/nix/store/lq6s1chari6qjjiwc7g3q9zay9z8jxrl-t3code-0.0.28`.
+- Infra `main` pins the deployment in `2f8fbc42bdca`. `just verify-host srv-2` passed and the
+  deferred restart identity is applied with no pending cutover.
 - Independent review is approved with no remaining blocking findings.
 - The T3 Code Desktop build/install remains a separate Mac task after the verified revision is
   committed. It is intentionally deferred because the platform-specific desktop build cannot be
@@ -58,11 +61,30 @@
   plan regressions all pass, including production/WIP upgrade paths and no-op prune/revert parity.
 - Independent reviewer disposition: **approved**.
 
+## Live deployment verification
+
+- The deferred idle gate selected the cutover without manually signalling provider processes. The
+  process changed from PID `1679086` to `2263029`; the new service is active with zero automatic
+  restarts and local HTTP returns 200.
+- Production migrations 41, 42, and 43 completed successfully in **13.9 seconds**. The service began
+  listening 0.85 seconds later with provider transcript recovery complete and no failed batches.
+- The pre-deploy browser tab retained the old JavaScript bundle and continued issuing legacy
+  full-history reconnects. A single post-deploy reload moved it to the compact client and removed
+  the reconnect banner; do not diagnose this stale-bundle behavior as a server regression.
+- Fresh worst-thread browser measurement (`e9295b7e-137c-4508-b2ae-d295951e59b2`): interactive
+  composer in **1.847 seconds**, 2.09 MB total cold resource transfer including all application
+  assets, historical 70-minute turn expansion in **227 ms**, collapse in **106 ms**, and re-open in
+  **107 ms**. The existing master thread became interactive in **3.191 seconds** after its bundle
+  refresh. No browser console exceptions occurred; one unrelated missing-resource 404 remains.
+- The old server passed the application idle check but did not exit within systemd's 90-second stop
+  timeout and required SIGKILL. The database and new process recovered cleanly, but bounded,
+  observable provider/session shutdown is a follow-up reliability issue.
+
 ## Next actions
 
-1. Commit the reviewed WIP as an atomic change and push `main`.
-2. Build and deploy the committed srv-2 closure. Expect the one-time 8–10 second startup migration
-   window, then smoke-test connect/reconnect, compact snapshots, historical hydration, and provider
-   liveness using live counters and visible latency.
+1. Investigate why the idle old process could not complete SIGTERM shutdown within 90 seconds;
+   instrument the remaining handles and enforce a bounded provider/session close sequence.
+2. Resolve the unrelated missing-resource 404 observed by Chrome if it is reproducible and identify
+   whether it is a favicon/manifest request or an application asset.
 3. From the committed revision on the Mac, build/install T3 Code Desktop and run its desktop smoke
    test. This remains deferred until the srv-2 commit/deploy handoff is complete.
