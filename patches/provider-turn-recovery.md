@@ -18,9 +18,14 @@ placeholder must not leave the thread looking permanently busy.
   stopped settle them as interrupted, and error settles them as error.
 - Tool activity payloads projected from provider runtime events must preserve useful structured metadata while
   bounding large strings, arrays, and objects so command output cannot create unbounded projection writes.
-- Adjacent durable parent assistant-text deltas for the same provider item are projected as a bounded batch.
-  Every original journal row remains associated with that batch so streaming, buffered delivery, and crash
-  recovery retain the exact transcript while avoiding one full projection write per provider token.
+- Durable parent assistant-text deltas are projected in bounded batches, including independent turns whose
+  provider tokens arrive interleaved. Ordering remains exact within a turn, and subagent/lifecycle events are
+  hard barriers.
+- Batch membership must be stable across crashes: fixed-size/full batches and hard-boundary batches are
+  immutable, while a partial open tail remains per-event until it is sealed. Every original journal row stays
+  associated with its batch.
+- Delivered/removal acknowledgment for every source row in a batch is atomic and chunked, avoiding thousands
+  of SQLite connection acquisitions without permitting a partially acknowledged replay batch.
 
 ## Files
 
@@ -28,12 +33,14 @@ placeholder must not leave the thread looking permanently busy.
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
 - `apps/server/src/orchestration/ProviderTranscriptJournalBatch.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
+- `apps/server/src/persistence/Services/ProviderTranscriptJournal.ts`
+- `apps/server/src/persistence/Layers/ProviderTranscriptJournal.ts`
 - `apps/server/src/persistence/Services/ProjectionTurns.ts`
 - `apps/server/src/persistence/Layers/ProjectionTurns.ts`
 
 ## Verification
 
-- `vp test apps/server/src/orchestration/ProviderTranscriptJournalBatch.test.ts apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts apps/server/integration/coalescingHardKill.integration.test.ts`
+- `vp test apps/server/src/orchestration/ProviderTranscriptJournalBatch.test.ts apps/server/src/persistence/Layers/ProviderTranscriptJournal.test.ts apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts apps/server/integration/coalescingHardKill.integration.test.ts`
 - `vp check`
 - `vp run typecheck`
 

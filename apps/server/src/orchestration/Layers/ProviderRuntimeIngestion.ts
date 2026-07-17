@@ -3104,11 +3104,7 @@ const make = Effect.gen(function* () {
     }
     const promotedEvents = durableParentDeltaPromotions.get(String(event.eventId)) ?? [];
     durableParentDeltaPromotions.delete(String(event.eventId));
-    const removePromotedEvents = Effect.forEach(
-      promotedEvents,
-      (promotedEvent) => retryPersistence(transcriptJournal.remove(promotedEvent)),
-      { concurrency: 1, discard: true },
-    );
+    const removePromotedEvents = retryPersistence(transcriptJournal.removeMany(promotedEvents));
     if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
       return removePromotedEvents.pipe(
         Effect.andThen(retryPersistence(transcriptJournal.markItemCompleted(event))),
@@ -3148,11 +3144,7 @@ const make = Effect.gen(function* () {
         (yield* retryPersistence(transcriptJournal.isItemCompleted(event)))
       ) {
         incrementWorkloadCounter("provider.events.duplicates_suppressed");
-        yield* Effect.forEach(
-          sourceEvents,
-          (sourceEvent) => retryPersistence(transcriptJournal.remove(sourceEvent)),
-          { concurrency: 1, discard: true },
-        );
+        yield* retryPersistence(transcriptJournal.removeMany(sourceEvents));
         return;
       }
       yield* retryPersistence(processInput({ source: "runtime", event }));
@@ -3160,11 +3152,7 @@ const make = Effect.gen(function* () {
         concurrency: 1,
         discard: true,
       });
-      yield* Effect.forEach(
-        sourceEvents,
-        (sourceEvent) => retryPersistence(transcriptJournal.markDelivered(sourceEvent)),
-        { concurrency: 1, discard: true },
-      );
+      yield* retryPersistence(transcriptJournal.markDeliveredMany(sourceEvents));
       yield* removePromotedJournalEvent(event);
     }).pipe(
       Effect.ensuring(
