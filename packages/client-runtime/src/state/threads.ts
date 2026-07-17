@@ -19,7 +19,7 @@ import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribeWithSession } from "../rpc/client.ts";
+import { subscribeWithSessionDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ThreadSnapshotLoader } from "./threadSnapshotHttp.ts";
 import { parseThreadKey, threadKey } from "./entities.ts";
@@ -312,19 +312,26 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         yield* applyItem({ kind: "snapshot", snapshot: base.value });
       }
 
-      const subscribeInput = Option.match(base, {
-        onNone: () => ({ threadId, includeSynchronizationItems: true }),
-        onSome: (snapshot) => ({
-          threadId,
-          afterSequence: snapshot.snapshotSequence,
-          includeSynchronizationItems: true,
-        }),
-      });
-
-      yield* subscribeWithSession(ORCHESTRATION_WS_METHODS.subscribeThread, subscribeInput, {
-        onExpectedFailure: setStreamError,
-        retryExpectedFailureAfter: "250 millis",
-      }).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
+      yield* subscribeWithSessionDynamic(
+        ORCHESTRATION_WS_METHODS.subscribeThread,
+        () =>
+          SubscriptionRef.get(lastSequence).pipe(
+            Effect.map((afterSequence) =>
+              afterSequence === 0
+                ? { threadId, includeSynchronizationItems: true }
+                : { threadId, afterSequence, includeSynchronizationItems: true },
+            ),
+          ),
+        {
+          admission: {
+            group: "thread-detail-catch-up",
+            maxConcurrent: 3,
+            releaseWhen: (item) => item.kind === "synchronized",
+          },
+          onExpectedFailure: setStreamError,
+          retryExpectedFailureAfter: "250 millis",
+        },
+      ).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
     }),
   );
 
