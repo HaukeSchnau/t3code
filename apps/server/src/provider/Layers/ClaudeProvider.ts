@@ -40,8 +40,24 @@ import {
 } from "../providerSnapshot.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 
-const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+const EMPTY_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
+});
+
+const CUSTOM_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+  optionDescriptors: [
+    buildSelectOptionDescriptor({
+      id: "effort",
+      label: "Reasoning",
+      options: [
+        { value: "low", label: "Low" },
+        { value: "medium", label: "Medium" },
+        { value: "high", label: "High", isDefault: true },
+        { value: "xhigh", label: "Extra High" },
+        { value: "max", label: "Max" },
+      ],
+    }),
+  ],
 });
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
@@ -324,9 +340,10 @@ function getClaudeVersionUpgradeMessage(
 
 export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
   const slug = model?.trim();
+  if (!slug) return EMPTY_CLAUDE_MODEL_CAPABILITIES;
   return (
     BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES
+    CUSTOM_CLAUDE_MODEL_CAPABILITIES
   );
 }
 
@@ -365,6 +382,7 @@ export function normalizeClaudeCliEffort(
   }
   if (
     effort === "xhigh" &&
+    model?.startsWith("claude-") &&
     model !== "claude-fable-5" &&
     model !== "claude-opus-4-8" &&
     model !== "claude-sonnet-5"
@@ -670,7 +688,7 @@ function configuredClaudeModels(
     claudeSettings.includeBuiltInModels ? builtInModels : [],
     PROVIDER,
     claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
+    CUSTOM_CLAUDE_MODEL_CAPABILITIES,
   );
 }
 
