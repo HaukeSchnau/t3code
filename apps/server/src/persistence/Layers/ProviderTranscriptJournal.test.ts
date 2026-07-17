@@ -8,6 +8,7 @@ import {
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
@@ -75,6 +76,69 @@ layer("ProviderTranscriptJournal", (it) => {
           : undefined,
         completion.payload.detail,
       );
+    }),
+  );
+
+  it.effect("acknowledges in bulk and rolls back a multi-chunk removal atomically", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const journal = yield* ProviderTranscriptJournal;
+      yield* sql`PRAGMA foreign_keys = OFF`;
+      const initialEntries = yield* journal.list;
+
+      const events = Array.from(
+        { length: 501 },
+        (_, index) =>
+          ({
+            ...base,
+            turnId: TurnId.make("journal-bulk-turn"),
+            itemId: RuntimeItemId.make("journal-bulk-item"),
+            type: "content.delta",
+            eventId: EventId.make(`journal-bulk-${index}`),
+            createdAt: `2026-07-14T00:00:01.${String(index).padStart(3, "0")}Z`,
+            payload: { streamKind: "assistant_text", delta: "x" },
+          }) as const satisfies ProviderRuntimeEvent,
+      );
+      yield* Effect.forEach(events, journal.append, { concurrency: 1, discard: true });
+
+      yield* sql`
+        CREATE TRIGGER reject_last_bulk_delivery
+        BEFORE UPDATE OF delivered ON provider_transcript_journal
+        WHEN OLD.event_id = 'journal-bulk-500'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected bulk delivery failure');
+        END
+      `;
+      const delivery = yield* Effect.exit(journal.markDeliveredMany(events));
+      assert.isTrue(Exit.isFailure(delivery));
+      const bulkEventIds = new Set(events.map((event) => event.eventId));
+      assert.lengthOf(
+        (yield* journal.listUndelivered).filter(({ event }) => bulkEventIds.has(event.eventId)),
+        events.length,
+      );
+      yield* sql`DROP TRIGGER reject_last_bulk_delivery`;
+
+      yield* journal.markDeliveredMany(events);
+      assert.lengthOf(
+        (yield* journal.listUndelivered).filter(({ event }) => bulkEventIds.has(event.eventId)),
+        0,
+      );
+
+      yield* sql`
+        CREATE TRIGGER reject_last_bulk_removal
+        BEFORE DELETE ON provider_transcript_journal
+        WHEN OLD.event_id = 'journal-bulk-500'
+        BEGIN
+          SELECT RAISE(ABORT, 'injected bulk removal failure');
+        END
+      `;
+      const removal = yield* Effect.exit(journal.removeMany(events));
+      assert.isTrue(Exit.isFailure(removal));
+      assert.lengthOf(yield* journal.list, initialEntries.length + events.length);
+      yield* sql`DROP TRIGGER reject_last_bulk_removal`;
+
+      yield* journal.removeMany(events);
+      assert.lengthOf(yield* journal.list, initialEntries.length);
     }),
   );
 });

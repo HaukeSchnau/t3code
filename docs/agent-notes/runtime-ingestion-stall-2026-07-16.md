@@ -138,3 +138,34 @@ stale running projection rows `2 -> 0` without losing resume state; idle probe b
   (optional native linters unavailable); full `vp test --maxWorkers=4` passes 641 files / 5,132 tests, with
   2 files / 10 tests skipped. The upstream mobile outbox tests were also decoupled from the React Native runtime
   and now pass 29/29.
+
+## Third production follow-up: interleaved recovery streams
+
+### Live evidence
+
+- On 2026-07-17, one Codex thread accumulated 8,061 undelivered transcript rows across concurrent turns.
+- Adjacent-only batching produced 979 recovery batches for roughly 1,626 rows (1.66 source rows per batch),
+  with each tiny projection write taking about 0.7–1.4 seconds. The oldest-event lag reached 29 minutes,
+  T3 used about 95% of one CPU and 2.2 GiB RSS, and connection setup exceeded the client deadline.
+- Stopping the active generation bounded the backlog. It eventually drained from 8,061 to zero; RSS then
+  fell to roughly 713 MiB and the browser reloaded without a reconnect banner.
+
+### Fix and verification status
+
+- Coalesce interleaved parent-assistant deltas across independent turns while retaining exact item order
+  within each turn. Subagent and lifecycle events remain hard barriers, and batches remain bounded at 24,000
+  characters.
+- A deterministic 4,000-row alternating-turn fixture now produces 32 projection batches instead of 4,000
+  (125x fewer). Fixed-size/full and hard-boundary batches have crash-stable membership; partial open tails
+  remain per-event until sealed.
+- Bulk delivered/removal operations use 500-identity statements inside one SQLite transaction, avoiding
+  thousands of connection acquisitions and ensuring a multi-chunk acknowledgment is all-or-none.
+- An injected failure in the second removal chunk proves the first chunk rolls back; a subsequent retry
+  removes all 501 rows.
+- The independent final review found no remaining correctness, ordering, durability, SQLite/Effect, or
+  performance blocker after the stable-membership and first-timestamp corrections.
+- Final gates pass: `vp check`, `vp run typecheck`, 19 focused tests, and the full suite with 643 files /
+  5,154 tests passing plus 2 files / 10 tests skipped. Remaining: commit/push, srv-2 deployment and live
+  measurement, then Desktop build/install.
+- After rebasing onto the concurrently advanced `main`, the focused gates passed again and the expanded full
+  suite passed 644 files / 5,161 tests with 2 files / 10 tests skipped.

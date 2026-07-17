@@ -92,7 +92,7 @@ describe("TranscriptJournalObservability", () => {
   it.effect("measures a durable token burst as one bounded batch", () =>
     Effect.gen(function* () {
       resetWorkloadDiagnosticsForTesting();
-      const entries = Array.from({ length: 500 }, (_, index) => delta(index + 1));
+      const entries = Array.from({ length: 128 }, (_, index) => delta(index + 1));
       const batch = batchProviderTranscriptJournalEntries(entries)[0]!;
       const tracker = yield* makeTranscriptJournalTracker;
       const before = yield* Metric.snapshot;
@@ -136,14 +136,14 @@ describe("TranscriptJournalObservability", () => {
       );
 
       assert.equal((afterEvents?.state.count ?? 0) - (beforeEvents?.state.count ?? 0), 1);
-      assert.equal((afterEvents?.state.sum ?? 0) - (beforeEvents?.state.sum ?? 0), 500);
+      assert.equal((afterEvents?.state.sum ?? 0) - (beforeEvents?.state.sum ?? 0), 128);
       assert.equal((afterDuration?.state.sum ?? 0) - (beforeDuration?.state.sum ?? 0), 25);
       const workload = readWorkloadDiagnosticsSnapshot();
       assert.equal(workload.counters["ingestion.journal.batches"], 1);
-      assert.equal(workload.counters["ingestion.journal.source_events"], 500);
-      assert.equal(workload.counters["ingestion.journal.batch_characters"], 500);
+      assert.equal(workload.counters["ingestion.journal.source_events"], 128);
+      assert.equal(workload.counters["ingestion.journal.batch_characters"], 128);
       assert.equal(workload.counters["ingestion.journal.lag_ms_total"], 1_000);
-      assert.equal(workload.gauges["ingestion.journal.last_batch_events"], 500);
+      assert.equal(workload.gauges["ingestion.journal.last_batch_events"], 128);
       assert.equal(workload.gauges["ingestion.journal.undelivered"], 0);
       assert.equal(workload.gauges["ingestion.journal.oldest_event_lag_ms"], 0);
     }).pipe(Effect.provide(TestClock.layer())),

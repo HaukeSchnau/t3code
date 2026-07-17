@@ -30,7 +30,13 @@ export interface ProviderTranscriptJournalShape {
   readonly markDelivered: (
     event: ProviderRuntimeEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly markDeliveredMany: (
+    events: ReadonlyArray<ProviderRuntimeEvent>,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly remove: (event: ProviderRuntimeEvent) => Effect.Effect<void, ProjectionRepositoryError>;
+  readonly removeMany: (
+    events: ReadonlyArray<ProviderRuntimeEvent>,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly removeItem: (
     event: ProviderRuntimeEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

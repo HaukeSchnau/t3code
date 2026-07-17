@@ -41,6 +41,8 @@ const JournalRow = Schema.Struct({
   eventJson: Schema.String,
 });
 
+const BULK_IDENTITY_CHUNK_SIZE = 500;
+
 const decodeJournalRow = (row: typeof JournalRow.Type) => ({
   sequence: row.sequence,
   // This is an internal write-ahead record produced only after adapters have
@@ -53,6 +55,27 @@ const identity = (event: ProviderRuntimeEvent) => ({
   providerInstanceId: event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider),
   eventId: event.eventId,
 });
+
+function groupEventIdsByProviderInstance(
+  events: ReadonlyArray<ProviderRuntimeEvent>,
+): Map<ProviderInstanceId, Array<EventId>> {
+  const groups = new Map<ProviderInstanceId, Array<EventId>>();
+  for (const event of events) {
+    const eventIdentity = identity(event);
+    const eventIds = groups.get(eventIdentity.providerInstanceId) ?? [];
+    eventIds.push(eventIdentity.eventId);
+    groups.set(eventIdentity.providerInstanceId, eventIds);
+  }
+  return groups;
+}
+
+function chunksOf<A>(values: ReadonlyArray<A>): ReadonlyArray<ReadonlyArray<A>> {
+  const chunks: Array<ReadonlyArray<A>> = [];
+  for (let index = 0; index < values.length; index += BULK_IDENTITY_CHUNK_SIZE) {
+    chunks.push(values.slice(index, index + BULK_IDENTITY_CHUNK_SIZE));
+  }
+  return chunks;
+}
 
 const scope = (event: ProviderRuntimeEvent) => ({
   ...identity(event),
@@ -239,10 +262,53 @@ const make = Effect.gen(function* () {
     markDeliveredRow(identity(event)).pipe(
       Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.markDelivered")),
     );
+  const markDeliveredMany: ProviderTranscriptJournalShape["markDeliveredMany"] = (events) => {
+    if (events.length === 0) return Effect.void;
+    return sql
+      .withTransaction(
+        Effect.forEach(
+          groupEventIdsByProviderInstance(events),
+          ([providerInstanceId, eventIds]) =>
+            Effect.forEach(
+              chunksOf(eventIds),
+              (chunk) => sql`
+                UPDATE provider_transcript_journal
+                SET delivered = 1
+                WHERE provider_instance_id = ${providerInstanceId}
+                  AND event_id IN ${sql.in(chunk)}
+              `,
+              { concurrency: 1, discard: true },
+            ),
+          { concurrency: 1, discard: true },
+        ),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.markDeliveredMany")));
+  };
   const remove: ProviderTranscriptJournalShape["remove"] = (event) =>
     removeRow(identity(event)).pipe(
       Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.remove")),
     );
+  const removeMany: ProviderTranscriptJournalShape["removeMany"] = (events) => {
+    if (events.length === 0) return Effect.void;
+    return sql
+      .withTransaction(
+        Effect.forEach(
+          groupEventIdsByProviderInstance(events),
+          ([providerInstanceId, eventIds]) =>
+            Effect.forEach(
+              chunksOf(eventIds),
+              (chunk) => sql`
+                DELETE FROM provider_transcript_journal
+                WHERE provider_instance_id = ${providerInstanceId}
+                  AND event_id IN ${sql.in(chunk)}
+              `,
+              { concurrency: 1, discard: true },
+            ),
+          { concurrency: 1, discard: true },
+        ),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.removeMany")));
+  };
   const removeItem: ProviderTranscriptJournalShape["removeItem"] = (event) => {
     const eventScope = scope(event);
     return eventScope.itemId === null
@@ -282,7 +348,9 @@ const make = Effect.gen(function* () {
     list,
     listUndelivered,
     markDelivered,
+    markDeliveredMany,
     remove,
+    removeMany,
     removeItem,
     isItemCompleted,
     markItemCompleted,
