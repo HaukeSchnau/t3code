@@ -60,6 +60,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PubSub from "effect/PubSub";
 import * as Queue from "effect/Queue";
+import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -95,6 +96,12 @@ import {
   OrchestrationListenerCallbackError,
 } from "./orchestration/Errors.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import { ProjectionSnapshotMaterializer } from "./orchestration/Services/ProjectionSnapshotMaterializer.ts";
+import {
+  OrchestrationProjectionSnapshotMaterializerLive,
+  makeProjectionSnapshotMaterializer,
+  type ProjectionSnapshotFlightObservation,
+} from "./orchestration/Layers/ProjectionSnapshotMaterializer.ts";
 import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistence/Layers/Sqlite.ts";
 import { PersistenceSqlError } from "./persistence/Errors.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -366,6 +373,9 @@ const buildAppUnderTest = (options?: {
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
     commandPreprocessingCoordinator?: CommandPreprocessingCoordinator.CommandPreprocessingCoordinator["Service"];
     projectionSnapshotQuery?: Partial<ProjectionSnapshotQuery.ProjectionSnapshotQuery["Service"]>;
+    projectionSnapshotFlightObserver?: (
+      observation: ProjectionSnapshotFlightObservation,
+    ) => Effect.Effect<void>;
     checkpointDiffQuery?: Partial<CheckpointDiffQuery.CheckpointDiffQuery["Service"]>;
     browserTraceCollector?: Partial<BrowserTraceCollector.BrowserTraceCollector["Service"]>;
     serverLifecycleEvents?: Partial<ServerLifecycleEvents.ServerLifecycleEvents["Service"]>;
@@ -572,6 +582,47 @@ const buildAppUnderTest = (options?: {
           options.layers.commandPreprocessingCoordinator,
         )
       : CommandPreprocessingCoordinator.layer.pipe(Layer.provide(SqlitePersistenceMemory));
+
+    const projectionSnapshotQueryLayer = Layer.mock(
+      ProjectionSnapshotQuery.ProjectionSnapshotQuery,
+    )({
+      getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
+      getShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          usageLimits: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getArchivedShellSnapshot: () =>
+        Effect.succeed({
+          snapshotSequence: 0,
+          projects: [],
+          threads: [],
+          usageLimits: [],
+          updatedAt: "1970-01-01T00:00:00.000Z",
+        }),
+      getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+      getProjectShellById: () => Effect.succeed(Option.none()),
+      getThreadShellById: () => Effect.succeed(Option.none()),
+      getThreadDetailById: () => Effect.succeed(Option.none()),
+      getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+      getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
+      getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+      getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+      getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+      ...options?.layers?.projectionSnapshotQuery,
+    });
+    const projectionSnapshotMaterializerLayer = (
+      options?.layers?.projectionSnapshotFlightObserver
+        ? Layer.effect(
+            ProjectionSnapshotMaterializer,
+            makeProjectionSnapshotMaterializer(options.layers.projectionSnapshotFlightObserver),
+          )
+        : OrchestrationProjectionSnapshotMaterializerLive
+    ).pipe(Layer.provide(projectionSnapshotQueryLayer));
 
     const servedRoutesCoreLayer = HttpRouter.serve(makeRoutesLayer, {
       disableListenLog: true,
@@ -810,38 +861,8 @@ const buildAppUnderTest = (options?: {
           ...options?.layers?.orchestrationEngine,
         }),
       ),
-      Layer.provide(
-        Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
-          getCommandReadModel: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getSnapshot: () => Effect.succeed(makeDefaultOrchestrationReadModel()),
-          getShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              usageLimits: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getArchivedShellSnapshot: () =>
-            Effect.succeed({
-              snapshotSequence: 0,
-              projects: [],
-              threads: [],
-              usageLimits: [],
-              updatedAt: "1970-01-01T00:00:00.000Z",
-            }),
-          getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
-          getProjectShellById: () => Effect.succeed(Option.none()),
-          getThreadShellById: () => Effect.succeed(Option.none()),
-          getThreadDetailById: () => Effect.succeed(Option.none()),
-          getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-          getCounts: () => Effect.succeed({ projectCount: 0, threadCount: 0 }),
-          getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-          getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-          getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-          ...options?.layers?.projectionSnapshotQuery,
-        }),
-      ),
+      Layer.provide(projectionSnapshotQueryLayer),
+      Layer.provide(projectionSnapshotMaterializerLayer),
       Layer.provide(
         Layer.mock(CheckpointDiffQuery.CheckpointDiffQuery)({
           getTurnDiff: () =>
@@ -5978,6 +5999,72 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(result.failure._tag === "OrchestrationGetSnapshotError");
       assertTrue(result.failure.cause instanceof Error);
       assert.include(result.failure.cause.message, projectionError.message);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("coalesces orchestration shell snapshots across HTTP and websocket transports", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const followerAttached = yield* Deferred.make<void>();
+      const snapshotLoads = yield* Ref.make(0);
+      const snapshot = {
+        snapshotSequence: 7,
+        projects: [],
+        threads: [],
+        usageLimits: [],
+        updatedAt: "2026-07-17T13:00:00.000Z",
+      };
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotFlightObserver: (observation) =>
+            !observation.leader && observation.key === "shell:7"
+              ? Deferred.succeed(followerAttached, undefined)
+              : Effect.void,
+          projectionSnapshotQuery: {
+            getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 7 }),
+            getShellSnapshot: () =>
+              Effect.gen(function* () {
+                yield* Ref.update(snapshotLoads, (count) => count + 1);
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                return snapshot;
+              }),
+          },
+        },
+      });
+
+      const accessToken = yield* getAuthenticatedBearerSessionToken();
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const httpUrl = yield* getHttpServerUrl("/api/orchestration/shell");
+      const wsRequest = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.subscribeShell]({}).pipe(
+            Stream.take(1),
+            Stream.runCollect,
+          ),
+        ),
+      ).pipe(Effect.forkChild);
+      const httpRequest = yield* fetchEffect(httpUrl, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      }).pipe(Effect.forkChild);
+
+      yield* Deferred.await(entered);
+      yield* Deferred.await(followerAttached);
+      assert.strictEqual(yield* Ref.get(snapshotLoads), 1);
+      yield* Deferred.succeed(release, undefined);
+
+      const wsItems = Array.from(yield* Fiber.join(wsRequest));
+      const httpResponse = yield* Fiber.join(httpRequest);
+      assert.strictEqual(httpResponse.status, 200);
+      assert.deepStrictEqual(yield* responseJsonEffect(httpResponse), snapshot);
+      assert.strictEqual(wsItems[0]?.kind, "snapshot");
+      assert.deepStrictEqual(
+        wsItems[0]?.kind === "snapshot" ? wsItems[0].snapshot : null,
+        snapshot,
+      );
+      assert.strictEqual(yield* Ref.get(snapshotLoads), 1);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

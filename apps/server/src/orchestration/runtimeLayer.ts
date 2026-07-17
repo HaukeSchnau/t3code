@@ -5,6 +5,7 @@ import { OrchestrationEventStoreLive } from "../persistence/Layers/Orchestration
 import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
+import { OrchestrationProjectionSnapshotMaterializerLive } from "./Layers/ProjectionSnapshotMaterializer.ts";
 
 export const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
   OrchestrationEventStoreLive,
@@ -17,6 +18,9 @@ export const OrchestrationProjectionPipelineLayerLive = OrchestrationProjectionP
 
 export const OrchestrationInfrastructureLayerLive = Layer.mergeAll(
   OrchestrationProjectionSnapshotQueryLive,
+  OrchestrationProjectionSnapshotMaterializerLive.pipe(
+    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
+  ),
   OrchestrationEventInfrastructureLayerLive,
   OrchestrationProjectionPipelineLayerLive,
 );

@@ -94,6 +94,7 @@ import {
   preprocessingCommandId,
 } from "./orchestration/Services/CommandPreprocessingCoordinator.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as ProjectionSnapshotMaterializer from "./orchestration/Services/ProjectionSnapshotMaterializer.ts";
 import { isShellVisibleThreadEvent } from "./orchestration/shellVisibility.ts";
 import {
   adjustWorkloadGauge,
@@ -705,6 +706,8 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const projectionSnapshotMaterializer =
+        yield* ProjectionSnapshotMaterializer.ProjectionSnapshotMaterializer;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
@@ -2123,7 +2126,7 @@ const makeWsRpcLayer = (
                           return replayFrom(afterSequence);
                         }
                         const snapshotResult = yield* Effect.result(
-                          projectionSnapshotQuery.getShellSnapshot(),
+                          projectionSnapshotMaterializer.getShellSnapshot(),
                         );
                         if (snapshotResult._tag === "Failure") {
                           yield* Effect.logWarning(
@@ -2165,7 +2168,7 @@ const makeWsRpcLayer = (
                 });
               }
 
-              const snapshot = yield* projectionSnapshotQuery.getShellSnapshot().pipe(
+              const snapshot = yield* projectionSnapshotMaterializer.getShellSnapshot().pipe(
                 Effect.tapError((cause) =>
                   Effect.logError("orchestration shell snapshot load failed", { cause }),
                 ),
@@ -2340,7 +2343,7 @@ const makeWsRpcLayer = (
                           return replayFrom(afterSequence);
                         }
                         const snapshotResult = yield* Effect.result(
-                          projectionSnapshotQuery.getThreadDetailSnapshot(input.threadId),
+                          projectionSnapshotMaterializer.getThreadDetailSnapshot(input.threadId),
                         );
                         if (snapshotResult._tag === "Failure") {
                           yield* Effect.logWarning(
@@ -2395,7 +2398,7 @@ const makeWsRpcLayer = (
                 });
               }
 
-              const snapshot = yield* projectionSnapshotQuery
+              const snapshot = yield* projectionSnapshotMaterializer
                 .getThreadDetailSnapshot(input.threadId)
                 .pipe(
                   Effect.mapError(

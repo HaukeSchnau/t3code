@@ -17,13 +17,13 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ProjectionSnapshotMaterializer } from "./Services/ProjectionSnapshotMaterializer.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
   "orchestration",
   Effect.fnUntraced(function* (handlers) {
-    const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+    const projectionSnapshotMaterializer = yield* ProjectionSnapshotMaterializer;
     const orchestrationEngine = yield* OrchestrationEngineService;
     const commandPreprocessing = yield* CommandPreprocessingCoordinator;
 
@@ -33,7 +33,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.snapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* projectionSnapshotQuery
+          return yield* projectionSnapshotMaterializer
             .getSnapshot()
             .pipe(
               Effect.catch((cause) =>
@@ -47,7 +47,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.shellSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* projectionSnapshotQuery
+          return yield* projectionSnapshotMaterializer
             .getShellSnapshot()
             .pipe(
               Effect.catch((cause) =>
@@ -61,7 +61,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadSnapshot")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          const snapshot = yield* projectionSnapshotQuery
+          const snapshot = yield* projectionSnapshotMaterializer
             .getThreadDetailSnapshot(args.params.threadId)
             .pipe(
               Effect.catch((cause) =>
