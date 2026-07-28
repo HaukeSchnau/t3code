@@ -21,6 +21,7 @@ import { Atom } from "effect/unstable/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
 import { subscribeWithSessionDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
@@ -88,6 +89,11 @@ function formatThreadError(cause: Cause.Cause<unknown>): string {
     : "Could not synchronize the thread.";
 }
 
+function shouldPersistThread(thread: OrchestrationThread): boolean {
+  const status = thread.session?.status;
+  return status !== "starting" && status !== "running";
+}
+
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
   activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
@@ -96,6 +102,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ThreadSnapshotLoader;
+  const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
   const authoritativeRefreshJitterSeed =
     options.authoritativeRefreshJitterSeed ?? (yield* Random.nextInt) >>> 0;
@@ -129,6 +136,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       onSome: (snapshot) => snapshot.snapshotSequence,
     }),
   );
+  const awaitingCompletion = yield* Ref.make(false);
   const persistence = yield* Queue.sliding<OrchestrationThreadDetailSnapshot>(1);
   const subscriptionSynchronization = yield* Ref.make({
     generation: -1,
@@ -159,11 +167,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
-  const setSynchronizing = SubscriptionRef.update(state, (current) => ({
-    ...current,
-    status: "synchronizing" as const,
-    error: Option.none(),
-  }));
+  const setSynchronizing = SubscriptionRef.update(state, (current) =>
+    current.status === "deleted"
+      ? current
+      : {
+          ...current,
+          status: "synchronizing" as const,
+          error: Option.none(),
+        },
+  );
   const markGenerationUnsynchronized = (generation: number) =>
     Ref.update(subscriptionSynchronization, (current) =>
       current.generation < generation
@@ -177,19 +189,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     ]).pipe(
       Effect.flatMap(([synchronization, currentSession]) =>
         SubscriptionRef.update(state, (current) =>
-          current.status === "live" || current.status === "deleted"
+          current.status === "live" ||
+          current.status === "deleted" ||
+          (synchronization.generation === generation &&
+            synchronization.synchronized &&
+            Option.isSome(currentSession) &&
+            synchronization.session === currentSession.value &&
+            Option.isSome(current.data))
             ? current
-            : synchronization.generation === generation &&
-                synchronization.synchronized &&
-                Option.isSome(currentSession) &&
-                synchronization.session === currentSession.value &&
-                Option.isSome(current.data)
-              ? { ...current, status: "live" as const, error: Option.none() }
-              : {
-                  ...current,
-                  status: "synchronizing" as const,
-                  error: Option.none(),
-                },
+            : { ...current, status: "synchronizing" as const, error: Option.none() },
         ),
       ),
     );
@@ -199,6 +207,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ? { generation, session: null, synchronized: false }
         : current,
     ).pipe(
+      Effect.andThen(Ref.set(awaitingCompletion, false)),
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
@@ -208,27 +217,37 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       ),
     );
   const setStreamError = (cause: Cause.Cause<unknown>) =>
-    SubscriptionRef.update(state, (current) => ({
-      ...current,
-      status: current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
-      error: Option.some(formatThreadError(cause)),
-    }));
+    Ref.set(awaitingCompletion, false).pipe(
+      Effect.andThen(
+        SubscriptionRef.update(state, (current) => ({
+          ...current,
+          status:
+            current.status === "deleted" ? current.status : statusWithoutLiveData(current.data),
+          error: Option.some(formatThreadError(cause)),
+        })),
+      ),
+    );
 
   const setThread = Effect.fn("EnvironmentThreadState.setThread")(function* (
     thread: OrchestrationThread,
   ) {
+    const waiting = yield* Ref.get(awaitingCompletion);
     yield* SubscriptionRef.set(state, {
       data: Option.some(thread),
-      status: "live",
+      status: waiting ? "synchronizing" : "live",
       error: Option.none(),
     });
-    // Persist the thread together with the sequence it reflects so the next warm
-    // cache can resume from exactly here.
-    const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
-    yield* Queue.offer(persistence, { snapshotSequence, activityDetailMode, thread });
+    // Active threads can update many times per second and retain large tool
+    // payloads. The server remains the source of truth while a turn is active;
+    // persist once it settles so cache encoding stays off the streaming path.
+    if (shouldPersistThread(thread)) {
+      const snapshotSequence = yield* SubscriptionRef.get(lastSequence);
+      yield* Queue.offer(persistence, { snapshotSequence, activityDetailMode, thread });
+    }
   });
 
   const setDeleted = Effect.fn("EnvironmentThreadState.setDeleted")(function* () {
+    yield* Ref.set(awaitingCompletion, false);
     yield* SubscriptionRef.set(state, {
       data: Option.none(),
       status: "deleted",
@@ -373,16 +392,15 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
       );
       if (!accepted) return;
-      yield* SubscriptionRef.update(state, (current) => ({
-        ...current,
-        status:
-          current.status === "deleted" || Option.isNone(current.data)
-            ? current.status
-            : ("live" as const),
-        error: Option.none(),
-      }));
+      yield* Ref.set(awaitingCompletion, false);
+      yield* SubscriptionRef.update(state, (current) =>
+        Option.isSome(current.data) && current.status !== "deleted"
+          ? { ...current, status: "live" as const, error: Option.none() }
+          : current,
+      );
       return;
     }
+
     if (item.kind === "snapshot") {
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* setThread(item.snapshot.thread);
@@ -439,62 +457,70 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
+  const foregroundResubscriptions = Option.match(wakeups, {
+    onNone: () => Stream.never,
+    onSome: (service) =>
+      service.changes.pipe(Stream.filter((reason) => reason === "application-active")),
+  });
+
   yield* setSynchronizing;
   yield* Effect.forkScoped(
     Effect.gen(function* () {
-      // Establish the base snapshot to resume from, minimizing bytes over the
-      // wire:
-      // - Warm cache: reuse the cached snapshot (zero network) and resume via
-      //   `afterSequence` so we only receive events since the cached sequence.
-      // - Cold cache: load the full snapshot over HTTP (gzip-compressible, and
-      //   off the socket), then resume via `afterSequence`.
-      // If no base can be established we fall back to the socket-embedded
-      // snapshot so the thread still synchronizes. Overlapping/replayed events
-      // are deduped by sequence in applyItem.
-      const base = Option.isSome(cached)
-        ? cached
-        : yield* Effect.gen(function* () {
-            // Cold cache only: wait for a prepared connection so we can
-            // authenticate the HTTP request; this mirrors the socket path, which
-            // likewise waits for a live session.
-            const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
-              Stream.filter(Option.isSome),
-              Stream.map((current) => current.value),
-              Stream.runHead,
-            );
-            if (Option.isNone(prepared)) {
-              return Option.none<OrchestrationThreadDetailSnapshot>();
-            }
-            const outcome = yield* snapshotLoader.load(
-              prepared.value,
-              threadId,
-              activityDetailMode,
-            );
-            return outcome._tag === "Found"
-              ? Option.some(outcome.snapshot)
-              : Option.none<OrchestrationThreadDetailSnapshot>();
-          });
-
-      if (Option.isSome(base)) {
-        yield* applyItem({ kind: "snapshot", snapshot: base.value });
-      }
-
       while (true) {
         yield* subscribeWithSessionDynamic(
           ORCHESTRATION_WS_METHODS.subscribeThread,
-          () =>
-            SubscriptionRef.get(lastSequence).pipe(
-              Effect.map((afterSequence) =>
-                afterSequence === 0
-                  ? { threadId, activityDetailMode, includeSynchronizationItems: true }
-                  : {
-                      threadId,
-                      activityDetailMode,
-                      afterSequence,
-                      includeSynchronizationItems: true,
-                    },
-              ),
-            ),
+          Effect.fn("EnvironmentThreadState.makeSubscribeInput")(function* (session) {
+            const supportsCompletionMarker = yield* session.initialConfig.pipe(
+              Effect.map((config) => config.threadResumeCompletionMarker === true),
+              Effect.orElseSucceed(() => false),
+            );
+            yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
+            yield* SubscriptionRef.update(state, (current) =>
+              current.status === "deleted"
+                ? current
+                : { ...current, status: "synchronizing" as const },
+            );
+
+            let current = yield* SubscriptionRef.get(state);
+            if (Option.isNone(current.data) && current.status !== "deleted") {
+              const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
+                Effect.flatMap(
+                  Option.match({
+                    onSome: Effect.succeed,
+                    onNone: () =>
+                      SubscriptionRef.changes(supervisor.prepared).pipe(
+                        Stream.filter(Option.isSome),
+                        Stream.map((value) => value.value),
+                        Stream.runHead,
+                        Effect.map(Option.getOrThrow),
+                      ),
+                  }),
+                ),
+              );
+              const outcome = yield* snapshotLoader.load(prepared, threadId, activityDetailMode);
+              if (outcome._tag === "Found") {
+                yield* SubscriptionRef.set(lastSequence, outcome.snapshot.snapshotSequence);
+                yield* setThread(outcome.snapshot.thread);
+                current = yield* SubscriptionRef.get(state);
+              }
+            }
+
+            const sequence = yield* SubscriptionRef.get(lastSequence);
+            const canResume = Option.isSome(current.data);
+            if (!supportsCompletionMarker && canResume) {
+              yield* SubscriptionRef.update(state, (value) => ({
+                ...value,
+                status: value.status === "deleted" ? value.status : ("live" as const),
+              }));
+            }
+
+            return {
+              threadId,
+              activityDetailMode,
+              ...(canResume ? { afterSequence: sequence } : {}),
+              ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+            };
+          }),
           {
             admission: {
               group: "thread-detail-catch-up",
@@ -503,6 +529,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             },
             onExpectedFailure: setStreamError,
             retryExpectedFailureAfter: "250 millis",
+            resubscribe: foregroundResubscriptions,
           },
         ).pipe(
           Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)),
@@ -522,7 +549,10 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       Effect.flatMap(([current, snapshotSequence]) =>
         Option.match(current.data, {
           onNone: () => Effect.void,
-          onSome: (thread) => persist({ snapshotSequence, activityDetailMode, thread }),
+          onSome: (thread) =>
+            shouldPersistThread(thread)
+              ? persist({ snapshotSequence, activityDetailMode, thread })
+              : Effect.void,
         }),
       ),
     ),

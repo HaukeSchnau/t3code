@@ -42,6 +42,7 @@ export class RpcSessionFactory extends Context.Service<
 type InitialConfigError = Effect.Error<
   ReturnType<WsRpcProtocolClient[typeof WS_METHODS.serverGetConfig]>
 >;
+type ProbeError = Effect.Error<ReturnType<WsRpcProtocolClient[typeof WS_METHODS.serverProbe]>>;
 
 interface WebSocketCloseDiagnostics {
   readonly code: number;
@@ -79,7 +80,7 @@ function formatDisconnectDetail(
   return `${base} WebSocket close code ${closeDiagnostics.code}${reason}.`;
 }
 
-function mapInitialConfigError(error: InitialConfigError): ConnectionAttemptError {
+function mapSessionRpcError(error: InitialConfigError | ProbeError): ConnectionAttemptError {
   switch (error._tag) {
     case "EnvironmentAuthorizationError":
       return new ConnectionBlockedError({
@@ -172,12 +173,17 @@ export const make = Effect.gen(function* () {
     const client = yield* makeWsRpcProtocolClient.pipe(Effect.provide(protocolContext));
     const initialConfig = yield* Effect.cached(
       client[WS_METHODS.serverGetConfig]({}).pipe(
-        Effect.mapError(mapInitialConfigError),
+        Effect.mapError(mapSessionRpcError),
         Effect.withSpan("environment.initialSync"),
       ),
     );
-    const probe = client[WS_METHODS.serverGetConfig]({}).pipe(
-      Effect.mapError(mapInitialConfigError),
+    const probe = initialConfig.pipe(
+      Effect.flatMap((config) =>
+        (config.environment.capabilities.connectionProbe === true
+          ? client[WS_METHODS.serverProbe]({})
+          : client[WS_METHODS.serverGetConfig]({})
+        ).pipe(Effect.mapError(mapSessionRpcError)),
+      ),
       Effect.asVoid,
       Effect.withSpan("clientRuntime.connection.rpcSession.probe"),
     );

@@ -735,6 +735,8 @@ export function usePreviousMessageEditing({
         activeThreadEnvironmentId={activeThread?.environmentId}
         activeThread={activeThread}
         isServerThread={isServerThread}
+        forceExpandedOnMobile
+        projectSelectionRequired={false}
         phase={phase}
         isConnecting={isConnecting}
         isSendBusy={isSendBusy}

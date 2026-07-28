@@ -4,19 +4,18 @@ import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { describe } from "vite-plus/test";
-import { ThreadId, TurnId } from "@t3tools/contracts";
+import { DEFAULT_MODEL, ThreadId } from "@t3tools/contracts";
 import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 
 import {
+  buildCodexDeveloperInstructions,
   CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
   CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
 } from "../CodexDeveloperInstructions.ts";
+import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
-  type CodexTurnStartupState,
-  formatCodexTurnStartupTimeoutMessage,
-  getCodexTurnStartupTimeout,
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
@@ -105,6 +104,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "never",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "dangerFullAccess",
       },
@@ -121,7 +121,10 @@ describe("buildTurnStartParams", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
+          developer_instructions: buildCodexDeveloperInstructions("plan", {
+            model: "gpt-5.3-codex",
+            reasoningEffort: "medium",
+          }),
         },
       },
     });
@@ -147,6 +150,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "on-request",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "workspaceWrite",
       },
@@ -166,11 +170,55 @@ describe("buildTurnStartParams", () => {
         settings: {
           model: "gpt-5.3-codex",
           reasoning_effort: "medium",
-          developer_instructions: CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+          developer_instructions: buildCodexDeveloperInstructions("default", {
+            model: "gpt-5.3-codex",
+            reasoningEffort: "medium",
+          }),
         },
       },
     });
   });
+
+  it("reports the same fallback model and effort in settings and instructions", () => {
+    const params = Effect.runSync(
+      buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "full-access",
+        prompt: "Go",
+        interactionMode: "default",
+      }),
+    );
+
+    const settings = params.collaborationMode?.settings;
+    NodeAssert.equal(settings?.model, DEFAULT_MODEL);
+    NodeAssert.equal(settings?.reasoning_effort, "medium");
+    NodeAssert.ok(settings?.developer_instructions?.includes(`as ${DEFAULT_MODEL} with medium`));
+  });
+
+  it.effect("routes approvals to the auto reviewer in auto mode", () =>
+    Effect.gen(function* () {
+      const params = yield* buildTurnStartParams({
+        threadId: "provider-thread-1",
+        runtimeMode: "auto",
+        prompt: "Ship it",
+      });
+
+      NodeAssert.deepStrictEqual(params, {
+        threadId: "provider-thread-1",
+        approvalPolicy: "on-request",
+        approvalsReviewer: "auto_review",
+        sandboxPolicy: {
+          type: "workspaceWrite",
+        },
+        input: [
+          {
+            type: "text",
+            text: "Ship it",
+          },
+        ],
+      });
+    }),
+  );
 
   it("omits collaboration mode when interaction mode is absent", () => {
     const params = Effect.runSync(
@@ -184,6 +232,7 @@ describe("buildTurnStartParams", () => {
     NodeAssert.deepStrictEqual(params, {
       threadId: "provider-thread-1",
       approvalPolicy: "untrusted",
+      approvalsReviewer: "user",
       sandboxPolicy: {
         type: "readOnly",
       },
@@ -194,6 +243,53 @@ describe("buildTurnStartParams", () => {
         },
       ],
     });
+  });
+});
+
+describe("buildCodexDeveloperInstructions", () => {
+  it("appends runtime info after the mode instructions", () => {
+    const instructions = buildCodexDeveloperInstructions("default", {
+      model: "gpt-5.3-codex",
+      reasoningEffort: "high",
+    });
+
+    NodeAssert.ok(instructions.startsWith(CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS));
+    NodeAssert.match(instructions, /T3 Code/);
+    NodeAssert.match(instructions, /Codex harness/);
+    NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
+  });
+
+  it("includes runtime info alongside plan mode instructions", () => {
+    const instructions = buildCodexDeveloperInstructions("plan", {
+      model: "gpt-5.3-codex",
+      reasoningEffort: "medium",
+    });
+
+    NodeAssert.ok(instructions.startsWith(CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS));
+    NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
+  });
+
+  it("varies with the model and effort of each turn", () => {
+    const first = buildCodexDeveloperInstructions("default", {
+      model: "gpt-5.3-codex",
+      reasoningEffort: "medium",
+    });
+    const second = buildCodexDeveloperInstructions("default", {
+      model: "gpt-5.4",
+      reasoningEffort: "high",
+    });
+
+    NodeAssert.notEqual(first, second);
+  });
+
+  it("flattens multiline metadata into single-line runtime info", () => {
+    const instructions = buildCodexDeveloperInstructions("default", {
+      model: "gpt\n5.3\ncodex",
+      reasoningEffort: " high\neffort ",
+    });
+
+    NodeAssert.match(instructions, /as gpt 5\.3 codex with high effort reasoning effort/);
+    NodeAssert.doesNotMatch(instructions, /<runtime_info>[^<]*\n/);
   });
 });
 
@@ -222,55 +318,29 @@ describe("hasConfiguredMcpServer", () => {
   });
 });
 
-describe("Codex turn startup watchdog", () => {
-  const baseState = {
-    providerThreadId: "provider-thread-1",
-    turnId: TurnId.make("turn-1"),
-    startedAtEpochSeconds: 1_797_420_000,
-    observedTurnActivity: false,
-    timedOut: false,
-    mcpServers: {},
-  } satisfies CodexTurnStartupState;
-
-  it("times out startup with pending MCP servers", () => {
-    const timeout = getCodexTurnStartupTimeout({
-      ...baseState,
-      mcpServers: {
-        "t3-code": "ready",
-        creative_production_mcp: "starting",
-        node_repl: "ready",
-      },
-    });
-
-    NodeAssert.deepStrictEqual(timeout, {
-      pendingMcpServerNames: ["creative_production_mcp"],
-    });
+describe("codexSessionAppServerArgs", () => {
+  it("keeps the app-server subcommand when explicit args are provided", () => {
+    NodeAssert.deepStrictEqual(codexSessionAppServerArgs(["-c", "model=gpt-5"], undefined), [
+      "app-server",
+      "-c",
+      "model=gpt-5",
+    ]);
   });
 
-  it("keeps active turns alive after real turn activity", () => {
-    NodeAssert.equal(
-      getCodexTurnStartupTimeout({
-        ...baseState,
-        observedTurnActivity: true,
-        mcpServers: {
-          creative_production_mcp: "starting",
-        },
-      }),
-      null,
-    );
-  });
-
-  it("does not time out before pending MCP startup is observed", () => {
-    NodeAssert.equal(getCodexTurnStartupTimeout(baseState), null);
-  });
-
-  it("formats a legible pending-MCP timeout message", () => {
-    NodeAssert.equal(
-      formatCodexTurnStartupTimeoutMessage({
-        timeoutLabel: "90 seconds",
-        pendingMcpServerNames: ["creative_production_mcp"],
-      }),
-      "Codex turn produced no activity within 90 seconds; MCP startup is still pending for creative_production_mcp. The turn was interrupted to avoid leaving the thread stuck.",
+  it("keeps launch args when explicit app-server args are provided", () => {
+    NodeAssert.deepStrictEqual(
+      codexSessionAppServerArgs(
+        ["-c", "mcp_servers.t3-code.url=http://127.0.0.1/mcp"],
+        "--strict-config --enable foo",
+      ),
+      [
+        "app-server",
+        "--strict-config",
+        "--enable",
+        "foo",
+        "-c",
+        "mcp_servers.t3-code.url=http://127.0.0.1/mcp",
+      ],
     );
   });
 });

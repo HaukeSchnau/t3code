@@ -56,6 +56,8 @@ import Migration0040 from "./Migrations/040_OrchestrationSetupExecutionIdentity.
 import Migration0041 from "./Migrations/041_ProjectionThreadActivityTurnLookupIndex.ts";
 import Migration0042 from "./Migrations/042_ProjectionThreadActivityRevision.ts";
 import Migration0043 from "./Migrations/043_RepairProjectionThreadActivityMetadataAndIndexes.ts";
+import Migration0044 from "./Migrations/044_ProjectionThreadsSettled.ts";
+import Migration0045 from "./Migrations/045_ProjectionThreadsSnoozed.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -111,6 +113,8 @@ export const migrationEntries = [
   [41, "ProjectionThreadActivityTurnLookupIndex", Migration0041],
   [42, "ProjectionThreadActivityRevision", Migration0042],
   [43, "RepairProjectionThreadActivityMetadataAndIndexes", Migration0043],
+  [44, "ProjectionThreadsSettled", Migration0044],
+  [45, "ProjectionThreadsSnoozed", Migration0045],
 ] as const;
 
 export const makeMigrationLoader = (throughId?: number) =>
@@ -145,15 +149,11 @@ export interface RunMigrationsOptions {
 export const runMigrations = Effect.fn("runMigrations")(function* ({
   toMigrationInclusive,
 }: RunMigrationsOptions = {}) {
-  yield* Effect.log(
-    toMigrationInclusive === undefined
-      ? "Running all migrations..."
-      : `Running migrations 1 through ${toMigrationInclusive}...`,
-  );
   const executedMigrations = yield* run({ loader: makeMigrationLoader(toMigrationInclusive) });
-  yield* Effect.log("Migrations ran successfully").pipe(
-    Effect.annotateLogs({ migrations: executedMigrations.map(([id, name]) => `${id}_${name}`) }),
-  );
+  const migrations = executedMigrations.map(([id, name]) => `${id}_${name}`);
+  yield* migrations.length === 0
+    ? Effect.logDebug("Database schema is current")
+    : Effect.log("Migrations ran successfully").pipe(Effect.annotateLogs({ migrations }));
   return executedMigrations;
 });
 

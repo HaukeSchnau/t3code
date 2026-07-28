@@ -4,6 +4,7 @@ import {
   ProjectDeletedPayload as ContractsProjectDeletedPayloadSchema,
   ThreadCreatedPayload as ContractsThreadCreatedPayloadSchema,
   ThreadArchivedPayload as ContractsThreadArchivedPayloadSchema,
+  ThreadSettledPayload as ContractsThreadSettledPayloadSchema,
   ThreadMetaUpdatedPayload as ContractsThreadMetaUpdatedPayloadSchema,
   ThreadRuntimeModeSetPayload as ContractsThreadRuntimeModeSetPayloadSchema,
   ThreadInteractionModeSetPayload as ContractsThreadInteractionModeSetPayloadSchema,
@@ -12,6 +13,9 @@ import {
   ThreadMessageQueuedPayload as ContractsThreadMessageQueuedPayloadSchema,
   ThreadQueuedMessageDeletedPayload as ContractsThreadQueuedMessageDeletedPayloadSchema,
   ThreadQueuedMessageDispatchedPayload as ContractsThreadQueuedMessageDispatchedPayloadSchema,
+  ThreadUnsettledPayload as ContractsThreadUnsettledPayloadSchema,
+  ThreadSnoozedPayload as ContractsThreadSnoozedPayloadSchema,
+  ThreadUnsnoozedPayload as ContractsThreadUnsnoozedPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
@@ -34,11 +38,15 @@ export const ProjectDeletedPayload = ContractsProjectDeletedPayloadSchema;
 
 export const ThreadCreatedPayload = ContractsThreadCreatedPayloadSchema;
 export const ThreadArchivedPayload = ContractsThreadArchivedPayloadSchema;
+export const ThreadSettledPayload = ContractsThreadSettledPayloadSchema;
 export const ThreadMetaUpdatedPayload = ContractsThreadMetaUpdatedPayloadSchema;
 export const ThreadRuntimeModeSetPayload = ContractsThreadRuntimeModeSetPayloadSchema;
 export const ThreadInteractionModeSetPayload = ContractsThreadInteractionModeSetPayloadSchema;
 export const ThreadDeletedPayload = ContractsThreadDeletedPayloadSchema;
 export const ThreadUnarchivedPayload = ContractsThreadUnarchivedPayloadSchema;
+export const ThreadUnsettledPayload = ContractsThreadUnsettledPayloadSchema;
+export const ThreadSnoozedPayload = ContractsThreadSnoozedPayloadSchema;
+export const ThreadUnsnoozedPayload = ContractsThreadUnsnoozedPayloadSchema;
 
 export const ThreadMessageQueuedPayload = ContractsThreadMessageQueuedPayloadSchema;
 export const ThreadQueuedMessageDeletedPayload = ContractsThreadQueuedMessageDeletedPayloadSchema;

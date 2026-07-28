@@ -4,6 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as References from "effect/References";
 import * as Tracer from "effect/Tracer";
+import * as OtlpExporter from "effect/unstable/observability/OtlpExporter";
 import * as OtlpMetrics from "effect/unstable/observability/OtlpMetrics";
 import * as OtlpSerialization from "effect/unstable/observability/OtlpSerialization";
 import * as OtlpTracer from "effect/unstable/observability/OtlpTracer";
@@ -62,7 +63,10 @@ export const ObservabilityLive = Layer.unwrap(
           BrowserTraceCollector.layer(sink),
         );
       }),
-    ).pipe(Layer.provideMerge(otlpTraceSerializationLayer));
+    ).pipe(
+      Layer.provide(OtlpExporter.layerFlusher),
+      Layer.provideMerge(otlpTraceSerializationLayer),
+    );
 
     const metricsLayer =
       config.otlpMetricsUrl === undefined

@@ -63,6 +63,8 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     session: null,
     createdAt: "2026-06-16T19:30:00.000Z",
     archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
     updatedAt: completedAt,
     latestTurn: makeLatestTurn(),
     branch: null,

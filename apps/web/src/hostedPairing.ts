@@ -1,6 +1,7 @@
+import { DEFAULT_HOSTED_APP_URL } from "@t3tools/shared/connectAuth";
+
 import { getPairingTokenFromUrl, setPairingTokenOnUrl } from "./pairingUrl";
 
-const DEFAULT_HOSTED_APP_URL = "https://app.t3.codes";
 const LOCAL_NETWORK_DENIAL_PATTERNS = [
   "LocalNetworkAccessPermissionDenied",
   "local address space",

@@ -55,7 +55,6 @@ const scope: McpInvocationContext.McpInvocationScope = {
   providerInstanceId: ProviderInstanceId.make("codex"),
   capabilities: new Set(["threads"]),
   issuedAt: 1,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 };
 
 const project: OrchestrationProject = {
@@ -83,6 +82,8 @@ const makeThread = (id: typeof targetThreadId): OrchestrationThread => ({
   createdAt: "2026-01-01T00:00:00.000Z",
   updatedAt: "2026-01-01T00:00:00.000Z",
   archivedAt: null,
+  settledOverride: null,
+  settledAt: null,
   deletedAt: null,
   messages: [],
   queuedMessages: [],
@@ -116,6 +117,8 @@ const makeThreadShell = (
   createdAt: thread.createdAt,
   updatedAt: thread.updatedAt,
   archivedAt: thread.archivedAt,
+  settledOverride: thread.settledOverride,
+  settledAt: thread.settledAt,
   session: thread.session,
   latestUserMessageAt: null,
   hasPendingApprovals: false,
@@ -314,6 +317,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -396,6 +400,7 @@ it.effect("lists environments and projects without provider model metadata", () 
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -509,6 +514,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -594,6 +600,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -685,6 +692,7 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -809,6 +817,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -873,6 +882,7 @@ it.effect("creates threads before starting their initial turn", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1000,6 +1010,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1085,6 +1096,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1218,6 +1230,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("dispatch should not be called for a running source thread"),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1285,6 +1298,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
               detail: "Dispatch failed.",
             }),
           ),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1396,6 +1410,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1483,6 +1498,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1599,6 +1615,7 @@ it.effect("reads compact thread results without recording read relationships", (
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1656,6 +1673,7 @@ it.effect("awaits idle threads without polling side effects", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),
@@ -1758,6 +1776,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
             dispatched.push(command);
             return { sequence: dispatched.length };
           }),
+        latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
     ),

@@ -14,7 +14,7 @@ import {
   type CommandDeliveryFailureInput,
   type CommandOutboxService,
 } from "@t3tools/client-runtime/state/command-outbox";
-import { CommandId, EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, MessageId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { Atom, type AtomRegistry } from "effect/unstable/reactivity";

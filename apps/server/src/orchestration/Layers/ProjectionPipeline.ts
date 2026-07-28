@@ -207,6 +207,10 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
         case "thread.deleted":
         case "thread.archived":
         case "thread.unarchived":
+        case "thread.settled":
+        case "thread.unsettled":
+        case "thread.snoozed":
+        case "thread.unsnoozed":
         case "thread.meta-updated":
         case "thread.runtime-mode-set":
         case "thread.interaction-mode-set":
@@ -843,6 +847,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             archivedAt: null,
+            settledOverride: null,
+            settledAt: null,
+            snoozedUntil: null,
+            snoozedAt: null,
             latestUserMessageAt: null,
             pendingApprovalCount: 0,
             pendingUserInputCount: 0,
@@ -876,6 +884,70 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             archivedAt: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.settled": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            settledOverride: "settled",
+            settledAt: event.payload.settledAt,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.unsettled": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            settledOverride: event.payload.reason === "user" ? "active" : null,
+            settledAt: null,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.snoozed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            snoozedUntil: event.payload.snoozedUntil,
+            snoozedAt: event.payload.snoozedAt,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.unsnoozed": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            snoozedUntil: null,
+            snoozedAt: null,
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1512,6 +1584,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         case "thread.session-set": {
           const turnId = event.payload.session.activeTurnId;
           if (turnId === null || event.payload.session.status !== "running") {
+            if (
+              event.payload.session.status === "error" ||
+              event.payload.session.status === "stopped" ||
+              event.payload.session.status === "interrupted"
+            ) {
+              yield* projectionTurnRepository.deletePendingTurnStartByThreadId({
+                threadId: event.payload.threadId,
+              });
+            }
             // Leaving the "running" session status is the turn-end signal:
             // settle still-running turns so their duration reflects the whole
             // turn rather than the last assistant message.

@@ -20,7 +20,6 @@ const scopeFromActor = (
   providerInstanceId: scope.providerInstanceId,
   capabilities: new Set(["threads"]),
   issuedAt: 0,
-  expiresAt: Number.MAX_SAFE_INTEGER,
 });
 
 export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(

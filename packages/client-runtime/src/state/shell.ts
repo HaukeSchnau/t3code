@@ -17,9 +17,10 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { EnvironmentRegistry } from "../connection/registry.ts";
 import { connectionProjectionPhase } from "../connection/model.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribeWithSession } from "../rpc/client.ts";
+import { subscribeWithSessionDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -52,6 +53,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
   const supervisor = yield* EnvironmentSupervisor;
   const cache = yield* EnvironmentCacheStore;
   const snapshotLoader = yield* ShellSnapshotLoader;
+  const wakeups = yield* Effect.serviceOption(ConnectionWakeups.ConnectionWakeups);
   const environmentId = supervisor.target.environmentId;
   const cachedSnapshot = yield* cache.loadShell(environmentId).pipe(
     Effect.catch((error) =>
@@ -75,6 +77,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       onSome: (snapshot) => snapshot.snapshotSequence,
     }),
   );
+  const awaitingCompletion = yield* Ref.make(false);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
   const subscriptionSynchronization = yield* Ref.make({
     generation: -1,
@@ -116,6 +119,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         ? { generation, session: null, synchronized: false }
         : current,
     ).pipe(
+      Effect.andThen(Ref.set(awaitingCompletion, false)),
       Effect.andThen(
         SubscriptionRef.update(state, (current) => ({
           ...current,
@@ -151,7 +155,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     );
   const setStreamError = (error: unknown) =>
-    Effect.logWarning("Could not synchronize the environment shell.").pipe(
+    Ref.set(awaitingCompletion, false).pipe(
+      Effect.andThen(Effect.logWarning("Could not synchronize the environment shell.")),
       Effect.annotateLogs({
         environmentId,
         ...safeErrorLogAttributes(error),
@@ -190,18 +195,21 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
       );
       if (!accepted) return;
-      yield* SubscriptionRef.update(state, (current) => ({
-        ...current,
-        status: Option.isSome(current.snapshot) ? ("live" as const) : current.status,
-        error: Option.none(),
-      }));
+      yield* Ref.set(awaitingCompletion, false);
+      yield* SubscriptionRef.update(state, (current) =>
+        Option.isSome(current.snapshot)
+          ? { ...current, status: "live" as const, error: Option.none() }
+          : current,
+      );
       return;
     }
+
     if (item.kind === "snapshot") {
+      const waiting = yield* Ref.get(awaitingCompletion);
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* SubscriptionRef.set(state, {
         snapshot: Option.some(item.snapshot),
-        status: "live",
+        status: waiting ? "synchronizing" : "live",
         error: Option.none(),
       });
       yield* Queue.offer(persistence, item.snapshot);
@@ -209,25 +217,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }
 
     const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.sequence <= sequence) {
-      return;
-    }
+    if (item.sequence <= sequence) return;
     yield* SubscriptionRef.set(lastSequence, item.sequence);
-
-    // Cursor items prove replay progress but carry no shell-visible change.
-    // Keeping the cursor separate avoids invalidating every shell consumer or
-    // serializing the complete snapshot for every provider-detail event. The
-    // server bounds cursor frames, and this queue debounces a cursor-only run
-    // to one cache write so a recreated subscription can resume from its tail.
     if (item.kind === "cursor") {
       const current = yield* SubscriptionRef.get(state);
       yield* Option.match(current.snapshot, {
         onNone: () => Effect.void,
         onSome: (snapshot) =>
-          Queue.offer(persistence, {
-            ...snapshot,
-            snapshotSequence: item.sequence,
-          }),
+          Queue.offer(persistence, { ...snapshot, snapshotSequence: item.sequence }),
       });
       return;
     }
@@ -241,59 +238,68 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       return;
     }
 
+    const waiting = yield* Ref.get(awaitingCompletion);
     yield* SubscriptionRef.set(state, {
       snapshot: Option.some(nextSnapshot),
-      status: "live",
+      status: waiting ? "synchronizing" : "live",
       error: Option.none(),
     });
     yield* Queue.offer(persistence, nextSnapshot);
   });
 
+  const foregroundResubscriptions = Option.match(wakeups, {
+    onNone: () => Stream.never,
+    onSome: (service) =>
+      service.changes.pipe(Stream.filter((reason) => reason === "application-active")),
+  });
+
+  yield* setSynchronizing;
   yield* Effect.forkScoped(
-    Effect.gen(function* () {
-      // Establish the base shell snapshot to resume from, minimizing bytes over
-      // the wire:
-      // - Warm cache: reuse the cached snapshot (zero network) and resume via
-      //   `afterSequence` so we only receive shell events since the cached
-      //   sequence.
-      // - Cold cache: load the full shell snapshot over HTTP (gzip-compressible,
-      //   and off the socket), then resume via `afterSequence`.
-      // If no base can be established we fall back to the socket-embedded
-      // snapshot so the shell still synchronizes. Overlapping/replayed events are
-      // deduped by sequence in applyItem.
-      const base = Option.isSome(cachedSnapshot)
-        ? cachedSnapshot
-        : yield* Effect.gen(function* () {
-            const prepared = yield* SubscriptionRef.changes(supervisor.prepared).pipe(
-              Stream.filter(Option.isSome),
-              Stream.map((current) => current.value),
-              Stream.runHead,
-            );
-            return Option.isSome(prepared)
-              ? yield* snapshotLoader.load(prepared.value)
-              : Option.none<OrchestrationShellSnapshot>();
-          });
+    subscribeWithSessionDynamic(
+      ORCHESTRATION_WS_METHODS.subscribeShell,
+      Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
+        const supportsCompletionMarker = yield* session.initialConfig.pipe(
+          Effect.map((config) => config.shellResumeCompletionMarker === true),
+          Effect.orElseSucceed(() => false),
+        );
+        yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
+        yield* setSynchronizing;
 
-      if (Option.isSome(base)) {
-        yield* applyItem({ kind: "snapshot", snapshot: base.value });
-      }
+        const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
+          Effect.flatMap(
+            Option.match({
+              onSome: Effect.succeed,
+              onNone: () =>
+                SubscriptionRef.changes(supervisor.prepared).pipe(
+                  Stream.filter(Option.isSome),
+                  Stream.map((value) => value.value),
+                  Stream.runHead,
+                  Effect.map(Option.getOrThrow),
+                ),
+            }),
+          ),
+        );
+        const httpSnapshot = yield* snapshotLoader.load(prepared);
+        if (Option.isSome(httpSnapshot)) {
+          yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+          return {
+            afterSequence: httpSnapshot.value.snapshotSequence,
+            includeCursorItems: true as const,
+            ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+          };
+        }
 
-      const subscribeInput = Option.match(base, {
-        onNone: () => ({
-          includeCursorItems: true,
-          includeSynchronizationItems: true,
-        }),
-        onSome: (snapshot) => ({
-          afterSequence: snapshot.snapshotSequence,
-          includeCursorItems: true,
-          includeSynchronizationItems: true,
-        }),
-      });
-
-      yield* subscribeWithSession(ORCHESTRATION_WS_METHODS.subscribeShell, subscribeInput, {
+        return {
+          includeCursorItems: true as const,
+          ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
+        };
+      }),
+      {
         onExpectedFailure: (cause) => setStreamError(Cause.squash(cause)),
-      }).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation)));
-    }),
+        retryExpectedFailureAfter: "250 millis",
+        resubscribe: foregroundResubscriptions,
+      },
+    ).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation))),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {

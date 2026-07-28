@@ -59,6 +59,7 @@ import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
+import * as T3ProjectFileLoader from "./project/T3ProjectFileLoader.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
@@ -81,11 +82,16 @@ import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { authHttpApiLayer, environmentAuthenticatedAuthLayer } from "./auth/http.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
-import { connectHttpApiLayer, reconcileDesiredCloudLink } from "./cloud/http.ts";
+import {
+  connectHttpApiLayer,
+  reconcileDesiredCloudLink,
+  releaseManagedTunnelOnShutdown,
+} from "./cloud/http.ts";
 import { serverRelayBrokerTracingLayer } from "./cloud/relayTracing.ts";
 import * as CloudManagedEndpointRuntime from "./cloud/ManagedEndpointRuntime.ts";
 import * as CloudCliTokenManager from "./cloud/CliTokenManager.ts";
 import * as CloudCliState from "./cloud/CliState.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as EnergyCaptureRequests from "./diagnostics/EnergyCaptureRequests.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -326,6 +332,7 @@ const ThreadWorkspaceLayerLive = ThreadWorkspaceService.layer.pipe(
 
 const ProjectFaviconResolverLayerLive = ProjectFaviconResolver.layer.pipe(
   Layer.provide(WorkspacePaths.layer),
+  Layer.provide(T3ProjectFileLoader.layer),
 );
 
 const AuthLayerLive = EnvironmentAuth.layer.pipe(
@@ -390,7 +397,10 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   Layer.provideMerge(ServerSecretStore.layer),
   Layer.provideMerge(
     Layer.mergeAll(
-      CloudCliTokenManager.layer.pipe(Layer.provide(ServerSecretStore.layer)),
+      CloudCliTokenManager.layer.pipe(
+        Layer.provide(ServerSecretStore.layer),
+        Layer.provide(ExternalLauncher.layer),
+      ),
       CloudManagedEndpointRuntimeLive,
     ),
   ),
@@ -448,6 +458,7 @@ export const makeRoutesLayer = Layer.mergeAll(
   Layer.provide(EnergyCaptureRequests.layer),
   Layer.provide(WorkloadDiagnostics.layer),
   Layer.provide(ReplayLogPublisher.layer),
+  Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(browserApiCorsLayer),
 );
 
@@ -539,6 +550,26 @@ export const makeServerLayer = Layer.unwrap(
     const cloudDesiredLinkReconcileLayer = Layer.effectDiscard(
       Effect.gen(function* () {
         if (!hasCloudPublicConfig) return;
+        // Idle Cloudflare tunnels are billed, so a stopping server releases its
+        // tunnel; the persisted desired link brings one back — same hostname,
+        // fresh tunnel — when the environment starts again. Registered even
+        // when no link is desired yet: a client can link a running server, and
+        // that tunnel needs the same disposal on shutdown.
+        yield* Effect.addFinalizer(() =>
+          releaseManagedTunnelOnShutdown().pipe(
+            Effect.timeout("10 seconds"),
+            Effect.tap((released) =>
+              released ? Effect.logInfo("Released the managed tunnel on shutdown") : Effect.void,
+            ),
+            Effect.catchCause((cause) =>
+              Effect.logWarning(
+                "Failed to release the managed tunnel on shutdown; the next link reuses it",
+                { cause },
+              ),
+            ),
+            Effect.asVoid,
+          ),
+        );
         if (!(yield* CloudCliState.readCliDesiredCloudLink)) return;
         const server = yield* HttpServer.HttpServer;
         const address = server.address;

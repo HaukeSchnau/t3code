@@ -92,14 +92,14 @@ const frozenCommand = Object.freeze({
 
 interface CapturedRequest {
   readonly session: number;
-  readonly requestId: string;
+  readonly requestId: string | number;
   readonly commandId: string;
   readonly envelope: ClientOrchestrationCommand;
   readonly envelopeHash: string;
 }
 
 interface SuppressedExit {
-  readonly requestId: string;
+  readonly requestId: string | number;
   readonly sequence: number;
   readonly receipt: OrchestrationCommandReceipt;
 }
@@ -351,7 +351,7 @@ function makeDecoratedSocket(input: {
         !isRecord(decoded) ||
         decoded._tag !== "Request" ||
         decoded.tag !== ORCHESTRATION_WS_METHODS.dispatchCommand ||
-        typeof decoded.id !== "string" ||
+        (typeof decoded.id !== "string" && typeof decoded.id !== "number") ||
         !isRecord(decoded.payload)
       ) {
         return;
@@ -374,7 +374,7 @@ function makeDecoratedSocket(input: {
         input.state.suppressedCount >= input.state.suppressionTargetCount ||
         !isRecord(decoded) ||
         decoded._tag !== "Exit" ||
-        typeof decoded.requestId !== "string" ||
+        (typeof decoded.requestId !== "string" && typeof decoded.requestId !== "number") ||
         !isRecord(decoded.exit) ||
         decoded.exit._tag !== "Success" ||
         !isRecord(decoded.exit.value) ||
