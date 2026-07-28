@@ -181,8 +181,8 @@ export function useThreadOutboxDrain(): void {
   const sendQueuedCreation = useCallback(
     async (
       queuedMessage: QueuedThreadMessage,
-      creation: QueuedThreadCreation,
-      projectCwd: string,
+      _creation: QueuedThreadCreation,
+      _projectCwd: string,
     ) => {
       const modelSelection = queuedMessage.modelSelection;
       if (modelSelection === undefined) {

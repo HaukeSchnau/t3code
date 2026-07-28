@@ -38,11 +38,9 @@ import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { buildCodexInitializeParams } from "./CodexProvider.ts";
+import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
-import {
-  CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
-  CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS,
-} from "../CodexDeveloperInstructions.ts";
+import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
 const decodeV2TurnStartResponse = Schema.decodeUnknownEffect(EffectCodexSchema.V2TurnStartResponse);
 
 const PROVIDER = ProviderDriverKind.make("codex");
@@ -119,6 +117,7 @@ export interface CodexSessionRuntimeOptions {
   readonly providerInstanceId?: ProviderInstanceId;
   readonly binaryPath: string;
   readonly homePath?: string;
+  readonly launchArgs?: string;
   readonly environment?: NodeJS.ProcessEnv;
   readonly cwd: string;
   readonly runtimeMode: RuntimeMode;
@@ -285,23 +284,35 @@ function readResumeCursorThreadId(
 function runtimeModeToThreadConfig(input: RuntimeMode): {
   readonly approvalPolicy: EffectCodexSchema.V2ThreadStartParams__AskForApproval;
   readonly sandbox: EffectCodexSchema.V2ThreadStartParams__SandboxMode;
+  // Always explicit: omitting the field on resume keeps the thread's previous
+  // reviewer, which would leave auto_review sticky after switching modes.
+  readonly approvalsReviewer: EffectCodexSchema.V2ThreadStartParams__ApprovalsReviewer;
 } {
   switch (input) {
     case "approval-required":
       return {
         approvalPolicy: "untrusted",
         sandbox: "read-only",
+        approvalsReviewer: "user",
       };
     case "auto-accept-edits":
       return {
         approvalPolicy: "on-request",
         sandbox: "workspace-write",
+        approvalsReviewer: "user",
+      };
+    case "auto":
+      return {
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        approvalsReviewer: "auto_review",
       };
     case "full-access":
     default:
       return {
         approvalPolicy: "never",
         sandbox: "danger-full-access",
+        approvalsReviewer: "user",
       };
   }
 }
@@ -317,6 +328,7 @@ function buildThreadStartParams(input: {
     cwd: input.cwd,
     approvalPolicy: config.approvalPolicy,
     sandbox: config.sandbox,
+    approvalsReviewer: config.approvalsReviewer,
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
   };
@@ -331,6 +343,7 @@ function runtimeModeToTurnSandboxPolicy(
         type: "readOnly",
       };
     case "auto-accept-edits":
+    case "auto":
       return {
         type: "workspaceWrite",
       };
@@ -351,15 +364,16 @@ function buildCodexCollaborationMode(input: {
     return undefined;
   }
   const model = normalizeCodexModelSlug(input.model) ?? DEFAULT_MODEL;
+  const reasoningEffort = input.effort ?? "medium";
   return {
     mode: input.interactionMode,
     settings: {
       model,
-      reasoning_effort: input.effort ?? "medium",
-      developer_instructions:
-        input.interactionMode === "plan"
-          ? CODEX_PLAN_MODE_DEVELOPER_INSTRUCTIONS
-          : CODEX_DEFAULT_MODE_DEVELOPER_INSTRUCTIONS,
+      reasoning_effort: reasoningEffort,
+      developer_instructions: buildCodexDeveloperInstructions(input.interactionMode, {
+        model,
+        reasoningEffort,
+      }),
     },
   };
 }
@@ -402,6 +416,7 @@ export function buildTurnStartParams(input: {
     threadId: input.threadId,
     input: turnInput,
     approvalPolicy: config.approvalPolicy,
+    approvalsReviewer: config.approvalsReviewer,
     sandboxPolicy: runtimeModeToTurnSandboxPolicy(input.runtimeMode),
     ...(input.model ? { model: input.model } : {}),
     ...(input.serviceTier ? { serviceTier: input.serviceTier } : {}),
@@ -792,11 +807,11 @@ export const makeCodexSessionRuntime = (
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
     const extendEnv = options.environment === undefined;
-    const spawnCommand = yield* resolveSpawnCommand(
-      options.binaryPath,
-      ["app-server", ...(options.appServerArgs ?? [])],
-      { env, extendEnv },
-    );
+    const appServerArgs = codexSessionAppServerArgs(options.appServerArgs, options.launchArgs);
+    const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, appServerArgs, {
+      env,
+      extendEnv,
+    });
     const child = yield* spawner
       .spawn(
         ChildProcess.make(spawnCommand.command, spawnCommand.args, {

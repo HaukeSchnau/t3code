@@ -151,11 +151,124 @@ export function runStream<TTag extends EnvironmentStreamCommandRpcTag>(
   );
 }
 
+interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
+  readonly onExpectedFailure?: (
+    cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+  ) => Effect.Effect<void, never, never>;
+  readonly retryExpectedFailureAfter?: Duration.Input;
+  readonly resubscribe?: Stream.Stream<unknown, never, never>;
+}
+
+export function subscribeDynamic<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  makeInput: (session: RpcSession) => Effect.Effect<EnvironmentRpcInput<TTag>>,
+  options?: SubscriptionOptions<TTag>,
+): Stream.Stream<
+  EnvironmentRpcStreamValue<TTag>,
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor
+> {
+  return Stream.unwrap(
+    EnvironmentSupervisor.pipe(
+      Effect.map((supervisor) => {
+        const sessionChanges = SubscriptionRef.changes(supervisor.session);
+        const sessions =
+          options?.resubscribe === undefined
+            ? sessionChanges
+            : Stream.merge(
+                sessionChanges,
+                options.resubscribe.pipe(
+                  Stream.mapEffect(() => SubscriptionRef.get(supervisor.session)),
+                ),
+              );
+        return sessions.pipe(
+          Stream.switchMap(
+            Option.match({
+              onNone: () => Stream.empty,
+              onSome: (session) => {
+                const method = session.client[tag] as (
+                  input: EnvironmentRpcInput<TTag>,
+                ) => Stream.Stream<
+                  EnvironmentRpcStreamValue<TTag>,
+                  EnvironmentRpcStreamFailure<TTag>
+                >;
+                const subscribeToSession = (): Stream.Stream<
+                  EnvironmentRpcStreamValue<TTag>,
+                  EnvironmentRpcStreamFailure<TTag>
+                > =>
+                  Stream.suspend(() =>
+                    Stream.unwrap(
+                      makeInput(session).pipe(
+                        Effect.map((input) =>
+                          method(input).pipe(
+                            Stream.catchCause((cause) => {
+                              const hasOnlyExpectedFailures =
+                                cause.reasons.length > 0 &&
+                                cause.reasons.every((reason) => reason._tag === "Fail");
+                              const isTransportFailure =
+                                hasOnlyExpectedFailures &&
+                                cause.reasons.every(
+                                  (reason) =>
+                                    reason._tag === "Fail" && isRpcClientError(reason.error),
+                                );
+                              if (isTransportFailure) {
+                                return Stream.fromEffect(
+                                  Effect.logWarning(
+                                    "Durable RPC subscription lost its transport; waiting for the next session.",
+                                    {
+                                      cause: Cause.pretty(cause),
+                                      method: tag,
+                                      environmentId: supervisor.target.environmentId,
+                                    },
+                                  ),
+                                ).pipe(Stream.drain);
+                              }
+                              if (
+                                hasOnlyExpectedFailures &&
+                                options?.onExpectedFailure !== undefined
+                              ) {
+                                const handled = Stream.fromEffect(
+                                  options.onExpectedFailure(cause),
+                                ).pipe(Stream.drain);
+                                if (options.retryExpectedFailureAfter === undefined) {
+                                  return handled;
+                                }
+                                return handled.pipe(
+                                  Stream.concat(
+                                    Stream.fromEffect(
+                                      Effect.sleep(options.retryExpectedFailureAfter),
+                                    ).pipe(Stream.drain),
+                                  ),
+                                  Stream.concat(subscribeToSession()),
+                                );
+                              }
+                              return Stream.failCause(cause);
+                            }),
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                return subscribeToSession();
+              },
+            }),
+          ),
+        );
+      }),
+    ),
+  ).pipe(
+    Stream.withSpan("EnvironmentRpc.subscribe", {
+      attributes: { "rpc.method": tag },
+    }),
+  );
+}
+
 export interface EnvironmentSubscribeOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
+  readonly resubscribe?: Stream.Stream<unknown, never, never>;
   readonly admission?: {
     readonly group: string;
     readonly maxConcurrent: number;
@@ -249,7 +362,17 @@ function subscribeMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
     Effect.gen(function* () {
       const admission = normalizeSubscriptionAdmission(options?.admission);
       const supervisor = yield* EnvironmentSupervisor;
-      return SubscriptionRef.changes(supervisor.session).pipe(
+      const sessionChanges = SubscriptionRef.changes(supervisor.session);
+      const sessions =
+        options?.resubscribe === undefined
+          ? sessionChanges
+          : Stream.merge(
+              sessionChanges,
+              options.resubscribe.pipe(
+                Stream.mapEffect(() => SubscriptionRef.get(supervisor.session)),
+              ),
+            );
+      return sessions.pipe(
         Stream.switchMap(
           Option.match({
             onNone: () => Stream.empty,

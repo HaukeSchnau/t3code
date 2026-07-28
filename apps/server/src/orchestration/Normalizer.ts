@@ -1,12 +1,13 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeCrypto from "node:crypto";
-
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   type ClientOrchestrationCommand,
+  type IsoDateTime,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
@@ -24,8 +25,38 @@ export interface PreparedDispatchCommand {
   readonly performDeferredPreprocessing: Effect.Effect<void, OrchestrationDispatchCommandError>;
 }
 
+export const canonicalizeClientCommandTimestamps = (
+  command: ClientOrchestrationCommand,
+  receivedAt: IsoDateTime,
+): ClientOrchestrationCommand => {
+  const canonicalCommand =
+    "createdAt" in command
+      ? {
+          ...command,
+          createdAt: receivedAt,
+        }
+      : command;
+
+  if (canonicalCommand.type !== "thread.turn.start" || !canonicalCommand.bootstrap?.createThread) {
+    return canonicalCommand;
+  }
+
+  return {
+    ...canonicalCommand,
+    bootstrap: {
+      ...canonicalCommand.bootstrap,
+      createThread: {
+        ...canonicalCommand.bootstrap.createThread,
+        createdAt: receivedAt,
+      },
+    },
+  };
+};
+
 export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
   Effect.gen(function* () {
+    const receivedAt = DateTime.formatIso(yield* DateTime.now);
+    const canonicalCommand = canonicalizeClientCommandTimestamps(command, receivedAt);
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const serverConfig = yield* ServerConfig;
@@ -58,26 +89,33 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
           ),
         );
 
-    if (command.type === "project.create") {
-      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(command.workspaceRoot);
+    if (canonicalCommand.type === "project.create") {
+      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(
+        canonicalCommand.workspaceRoot,
+      );
       return {
         command: {
-          ...command,
+          ...canonicalCommand,
           workspaceRoot,
-          createWorkspaceRootIfMissing: command.createWorkspaceRootIfMissing === true,
+          createWorkspaceRootIfMissing: canonicalCommand.createWorkspaceRootIfMissing === true,
         },
         performDeferredPreprocessing: normalizeProjectWorkspaceRootForCreate(
           workspaceRoot,
-          command.createWorkspaceRootIfMissing,
+          canonicalCommand.createWorkspaceRootIfMissing,
         ).pipe(Effect.asVoid),
       } satisfies PreparedDispatchCommand;
     }
 
-    if (command.type === "project.meta.update" && command.workspaceRoot !== undefined) {
-      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(command.workspaceRoot);
+    if (
+      canonicalCommand.type === "project.meta.update" &&
+      canonicalCommand.workspaceRoot !== undefined
+    ) {
+      const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(
+        canonicalCommand.workspaceRoot,
+      );
       return {
         command: {
-          ...command,
+          ...canonicalCommand,
           workspaceRoot,
         },
         performDeferredPreprocessing: normalizeProjectWorkspaceRoot(workspaceRoot).pipe(
@@ -86,15 +124,18 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies PreparedDispatchCommand;
     }
 
-    if (command.type !== "thread.turn.start" && command.type !== "thread.message.queue") {
+    if (
+      canonicalCommand.type !== "thread.turn.start" &&
+      canonicalCommand.type !== "thread.message.queue"
+    ) {
       return {
-        command: command as OrchestrationCommand,
+        command: canonicalCommand as OrchestrationCommand,
         performDeferredPreprocessing: Effect.void,
       } satisfies PreparedDispatchCommand;
     }
 
     const preparedAttachments = yield* Effect.forEach(
-      command.message.attachments,
+      canonicalCommand.message.attachments,
       (attachment, index) =>
         Effect.gen(function* () {
           const parsed = parseBase64DataUrl(attachment.dataUrl);
@@ -121,8 +162,8 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
 
           const contentDigest = NodeCrypto.createHash("sha256").update(bytes).digest("hex");
           const attachmentId = createDeterministicAttachmentId(
-            command.threadId,
-            `${command.commandId}\u0000${index}\u0000${attachment.name}\u0000${attachment.mimeType}\u0000${attachment.sizeBytes}\u0000${contentDigest}`,
+            canonicalCommand.threadId,
+            `${canonicalCommand.commandId}\u0000${index}\u0000${attachment.name}\u0000${attachment.mimeType}\u0000${attachment.sizeBytes}\u0000${contentDigest}`,
           );
           if (!attachmentId) {
             return yield* new OrchestrationDispatchCommandError({
@@ -137,7 +178,6 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
             mimeType: parsed.mimeType.toLowerCase(),
             sizeBytes: bytes.byteLength,
           };
-
           const attachmentPath = resolveAttachmentPath({
             attachmentsDir: serverConfig.attachmentsDir,
             attachment: persistedAttachment,
@@ -207,9 +247,9 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     return {
       command: {
-        ...command,
+        ...canonicalCommand,
         message: {
-          ...command.message,
+          ...canonicalCommand.message,
           attachments: preparedAttachments.map(({ attachment }) => attachment),
         },
       },

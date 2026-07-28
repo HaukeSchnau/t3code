@@ -280,6 +280,7 @@ export async function launchChromiumNetworkLabHarness(
     const cleanup = [...contextCleanup, ...directoryCleanup];
     const cleanupFailed = cleanup.some(({ status }) => status === "rejected");
     if (cleanupFailed || NodeFS.existsSync(userDataDir)) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError carries the original failure in both errors and cause.
       throw new AggregateError(
         [
           error,

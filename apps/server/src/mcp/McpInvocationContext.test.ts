@@ -12,7 +12,6 @@ it.effect("reports the scoped credential context when preview capability is unav
     providerInstanceId: ProviderInstanceId.make("codex"),
     capabilities: new Set(),
     issuedAt: 1,
-    expiresAt: 2,
   };
 
   return Effect.gen(function* () {

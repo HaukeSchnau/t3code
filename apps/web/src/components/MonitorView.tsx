@@ -54,10 +54,6 @@ import { cn, newCommandId, newMessageId } from "../lib/utils";
 import { appendElementContextsToPrompt, type ElementContextDraft } from "../lib/elementContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
 import { appendTerminalContextsToPrompt, type TerminalContextDraft } from "../lib/terminalContext";
-import {
-  deriveLogicalProjectKeyFromSettings,
-  selectProjectGroupingSettings,
-} from "../logicalProject";
 import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
@@ -732,7 +728,6 @@ function MonitorThreadActions({
     [thread],
   );
   const settings = useEnvironmentSettings(threadRef.environmentId);
-  const projectGroupingSettings = selectProjectGroupingSettings(settings);
   const { resolvedTheme } = useTheme();
   const serverConfig = useAtomValue(primaryServerConfigAtom);
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -751,9 +746,6 @@ function MonitorThreadActions({
         : undefined,
     [projects, thread],
   );
-  const composerProjectKey = activeProject
-    ? deriveLogicalProjectKeyFromSettings(activeProject, projectGroupingSettings)
-    : null;
   const providerUsageLimits = useProviderUsageLimits(threadRef.environmentId);
   const activeUsageLimits = useMemo(
     () =>
@@ -1155,7 +1147,6 @@ function MonitorThreadActions({
               <ChatComposer
                 composerRef={composerRef}
                 composerDraftTarget={threadRef}
-                composerProjectKey={composerProjectKey}
                 environmentId={threadRef.environmentId}
                 routeKind="server"
                 routeThreadRef={threadRef}
@@ -1165,6 +1156,8 @@ function MonitorThreadActions({
                 activeThread={thread}
                 isServerThread
                 isLocalDraftThread={false}
+                forceExpandedOnMobile
+                projectSelectionRequired={false}
                 phase={phase}
                 isConnecting={false}
                 isSendBusy={busy}

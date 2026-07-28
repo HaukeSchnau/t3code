@@ -16,6 +16,8 @@ import ProjectScriptsControl, {
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
+import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
+import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
 import { TagColorDot } from "../TagColorDot";
@@ -33,6 +35,7 @@ interface ChatHeaderProps {
     readonly color: UiTagColor;
   }>;
   isGitRepo: boolean;
+  activeProjectCwd: string | null;
   openInCwd: string | null;
   activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
   preferredScriptId: string | null;
@@ -40,6 +43,7 @@ interface ChatHeaderProps {
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
   gitCwd: string | null;
+  onNewThreadInProject: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
   onUpdateProjectScript: (
@@ -69,6 +73,7 @@ export const ChatHeader = memo(function ChatHeader({
   activeProjectName,
   activeTags,
   isGitRepo,
+  activeProjectCwd,
   openInCwd,
   activeProjectScripts,
   preferredScriptId,
@@ -76,6 +81,7 @@ export const ChatHeader = memo(function ChatHeader({
   availableEditors,
   rightPanelOpen,
   gitCwd,
+  onNewThreadInProject,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -84,6 +90,10 @@ export const ChatHeader = memo(function ChatHeader({
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const visibleTags = activeTags.slice(0, 2);
   const hiddenTags = activeTags.slice(2);
+  const fileScripts = useT3ProjectFileScripts(
+    activeThreadEnvironmentId,
+    activeProjectScripts ? activeProjectCwd : null,
+  );
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName,
     activeThreadEnvironmentId,
@@ -92,6 +102,36 @@ export const ChatHeader = memo(function ChatHeader({
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
+        {/* The project always leads the header: knowing which project a
+            thread lives in is priority zero, and the thread title alone
+            doesn't answer it. */}
+        {activeProjectName ? (
+          <span className="inline-flex shrink-0 items-center gap-2">
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    type="button"
+                    aria-label={`New thread in ${activeProjectName}`}
+                    onClick={onNewThreadInProject}
+                    className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                }
+              >
+                <ProjectFavicon
+                  environmentId={activeThreadEnvironmentId}
+                  cwd={activeProjectCwd ?? ""}
+                  className="size-3.5"
+                />
+                <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
+            </Tooltip>
+            <span aria-hidden className="text-muted-foreground/40">
+              /
+            </span>
+          </span>
+        ) : null}
         <Tooltip>
           <TooltipTrigger
             render={
@@ -161,6 +201,7 @@ export const ChatHeader = memo(function ChatHeader({
         {activeProjectScripts && (
           <ProjectScriptsControl
             scripts={activeProjectScripts}
+            fileScripts={fileScripts}
             keybindings={keybindings}
             preferredScriptId={preferredScriptId}
             onRunScript={onRunProjectScript}

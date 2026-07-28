@@ -200,6 +200,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets returns existing project and threa
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provide(NodeServices.layer),
     );
@@ -246,6 +247,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets creates a project and thread when 
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provide(NodeServices.layer),
     );
@@ -298,6 +300,7 @@ it.effect("resolveAutoBootstrapWelcomeTargets preserves typed UUID generation fa
             Effect.as({ sequence: 1 }),
           ),
         streamDomainEvents: Stream.empty,
+        latestSequence: Effect.succeed(0),
       } satisfies OrchestrationEngine.OrchestrationEngineService["Service"]),
       Effect.provideService(Crypto.Crypto, {
         ...crypto,

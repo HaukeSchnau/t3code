@@ -68,6 +68,7 @@ const makeCodexConfig = (overrides: Partial<CodexSettings>): CodexSettings => ({
   binaryPath: "codex",
   homePath: "",
   shadowHomePath: "",
+  launchArgs: "",
   customModels: [],
   ...overrides,
 });
@@ -84,7 +85,7 @@ const makeClaudeConfig = (overrides: Partial<ClaudeSettings>): ClaudeSettings =>
 
 const makeCursorConfig = (overrides: Partial<CursorSettings>): CursorSettings => ({
   enabled: false,
-  binaryPath: "agent",
+  binaryPath: "cursor-agent",
   apiEndpoint: "",
   customModels: [],
   ...overrides,

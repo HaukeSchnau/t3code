@@ -85,6 +85,10 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import {
+  projectActivityEvent,
+  projectThreadDetailSnapshot,
+} from "./orchestration/ActivityPayloadProjection.ts";
 import { normalizeDispatchCommand, prepareDispatchCommand } from "./orchestration/Normalizer.ts";
 import { planReplay, type ReplayThresholds } from "./orchestration/ReplayPlanner.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
@@ -127,6 +131,7 @@ import {
   readCodexProviderThread,
 } from "./provider/CodexThreadBridge.ts";
 import { mergeProviderInstanceEnvironment } from "./provider/ProviderInstanceEnvironment.ts";
+import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -173,6 +178,15 @@ import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const EDITOR_DISCOVERY_TIMEOUT = Duration.seconds(5);
+
+export const resolveAvailableEditorsForConfig = <A, E, R>(
+  discovery: Effect.Effect<ReadonlyArray<A>, E, R>,
+) =>
+  discovery.pipe(
+    Effect.timeoutOption(EDITOR_DISCOVERY_TIMEOUT),
+    Effect.map(Option.getOrElse(() => [])),
+  );
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -341,6 +355,8 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
 
 const SHELL_CURSOR_COMPACTION_INTERVAL = 128;
 const REPLAY_PAGE_SIZE = 256;
+const SHELL_REPLAY_PAGE_SIZE = 50;
+const SHELL_RESUME_MAX_GAP = 1_000;
 const LIVE_REPLAY_BUFFER_SIZE = 1_024;
 const THREAD_REPLAY_THRESHOLDS: ReplayThresholds = {
   maxEvents: 256,
@@ -355,6 +371,7 @@ type ShellLiveItem = Exclude<ShellDeltaItem, { readonly kind: "synchronized" }>;
 type ShellCatchUpItem =
   | ShellLiveItem
   | Extract<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
+type ThreadBufferedItem = Exclude<OrchestrationThreadStreamItem, { readonly kind: "snapshot" }>;
 type ThreadCatchUpItem = Exclude<OrchestrationThreadStreamItem, { readonly kind: "synchronized" }>;
 
 function getReplayProbeCapability(
@@ -576,6 +593,12 @@ function codexForkDeveloperInstructions(input: {
   ].join("\n");
 }
 
+// When a resuming client's cursor is more than this many events behind the
+// current head, skip the per-event catch-up replay and send a fresh shell
+// snapshot instead. Replaying each intervening event costs a shell refetch;
+// past this gap a single O(active-threads) snapshot is cheaper and bounded.
+// Matches the event store's default page size (DEFAULT_READ_FROM_SEQUENCE_LIMIT).
+
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
@@ -584,11 +607,11 @@ const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.subscribeShell, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.subscribeThread, AuthOrchestrationReadScope],
-  [WS_METHODS.codexResumeThread, AuthOrchestrationOperateScope],
-  [WS_METHODS.codexForkThread, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverProbe, AuthOrchestrationReadScope],
   [WS_METHODS.serverGetConfig, AuthOrchestrationReadScope],
   [WS_METHODS.serverRefreshProviders, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpdateProvider, AuthOrchestrationOperateScope],
+  [WS_METHODS.serverUpdateServer, AuthOrchestrationOperateScope],
   [WS_METHODS.serverUpsertKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverRemoveKeybinding, AuthOrchestrationOperateScope],
   [WS_METHODS.serverGetSettings, AuthOrchestrationReadScope],
@@ -723,6 +746,7 @@ const makeWsRpcLayer = (
       const providerSessionDirectory = yield* ProviderSessionDirectory;
       const codexThreadForkImporter = yield* CodexThreadForkImporter;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
+      const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
@@ -1007,14 +1031,14 @@ const makeWsRpcLayer = (
 
       const readEventsPaginated = (afterSequence: number, observer: ReplayObserver) =>
         Stream.paginate(afterSequence, (cursor) =>
-          Stream.runCollect(orchestrationEngine.readEvents(cursor, REPLAY_PAGE_SIZE)).pipe(
+          Stream.runCollect(orchestrationEngine.readEvents(cursor, SHELL_REPLAY_PAGE_SIZE)).pipe(
             Effect.map((chunk) => {
               const events = Array.from(chunk);
               observer.recordBatch(events);
               const lastEvent = events.at(-1);
               return [
                 events,
-                events.length === REPLAY_PAGE_SIZE && lastEvent !== undefined
+                events.length === SHELL_REPLAY_PAGE_SIZE && lastEvent !== undefined
                   ? Option.some(lastEvent.sequence)
                   : Option.none<number>(),
               ] as const;
@@ -1058,84 +1082,259 @@ const makeWsRpcLayer = (
       });
       const toShellStreamEvent = (
         event: OrchestrationEvent,
-      ): Effect.Effect<ShellDeltaItem, never, never> => {
+      ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> => {
         switch (event.type) {
           case "project.created":
           case "project.meta-updated":
-            return projectionSnapshotQuery.getProjectShellById(event.payload.projectId).pipe(
-              Effect.map(
-                (project): ShellDeltaItem =>
-                  Option.match(project, {
-                    onNone: () => shellCursor(event),
-                    onSome: (nextProject) => ({
-                      kind: "project-upserted",
-                      sequence: event.sequence,
-                      project: nextProject,
-                    }),
-                  }),
-              ),
-              Effect.orElseSucceed(() => shellCursor(event)),
-            );
+            return projectUpsertOrRemove(event.payload.projectId, event.sequence);
           case "project.deleted":
-            return Effect.succeed({
-              kind: "project-removed" as const,
-              sequence: event.sequence,
-              projectId: event.payload.projectId,
-            });
+            return Effect.succeed(
+              Option.some({
+                kind: "project-removed" as const,
+                sequence: event.sequence,
+                projectId: event.payload.projectId,
+              }),
+            );
           case "thread.deleted":
           case "thread.archived":
-            return Effect.succeed({
-              kind: "thread-removed" as const,
-              sequence: event.sequence,
-              threadId: event.payload.threadId,
-            });
-          case "thread.unarchived":
-            return projectionSnapshotQuery.getThreadShellById(event.payload.threadId).pipe(
-              Effect.map(
-                (thread): ShellDeltaItem =>
-                  Option.match(thread, {
-                    onNone: () => shellCursor(event),
-                    onSome: (nextThread) => ({
-                      kind: "thread-upserted",
-                      sequence: event.sequence,
-                      thread: nextThread,
-                    }),
-                  }),
-              ),
-              Effect.orElseSucceed(() => shellCursor(event)),
+            return Effect.succeed(
+              Option.some({
+                kind: "thread-removed" as const,
+                sequence: event.sequence,
+                threadId: event.payload.threadId,
+              }),
             );
+          case "thread.unarchived":
+            return threadUpsertOrRemove(event.payload.threadId, event.sequence);
           case "provider.usage-limits-updated":
-            return Effect.succeed({
-              kind: "usage-limits-updated" as const,
-              sequence: event.sequence,
-              usageLimits: {
-                provider: event.payload.provider,
-                providerInstanceId: event.payload.providerInstanceId,
-                usageLimits: event.payload.usageLimits,
-              },
-            });
+            return Effect.succeed(
+              Option.some({
+                kind: "usage-limits-updated" as const,
+                sequence: event.sequence,
+                usageLimits: {
+                  provider: event.payload.provider,
+                  providerInstanceId: event.payload.providerInstanceId,
+                  usageLimits: event.payload.usageLimits,
+                },
+              }),
+            );
           default:
             if (event.aggregateKind !== "thread" || !isShellVisibleThreadEvent(event)) {
-              return Effect.succeed(shellCursor(event));
+              return Effect.succeed(Option.some(shellCursor(event)));
             }
-            return projectionSnapshotQuery
-              .getThreadShellById(ThreadId.make(event.aggregateId))
-              .pipe(
-                Effect.map(
-                  (thread): ShellDeltaItem =>
-                    Option.match(thread, {
-                      onNone: () => shellCursor(event),
-                      onSome: (nextThread) => ({
-                        kind: "thread-upserted",
-                        sequence: event.sequence,
-                        thread: nextThread,
-                      }),
-                    }),
-                ),
-                Effect.orElseSucceed(() => shellCursor(event)),
-              );
+            return threadUpsertOrRemove(ThreadId.make(event.aggregateId), event.sequence);
         }
       };
+
+      // Coalescing makes each projection read represent every event for that
+      // aggregate in the current window. Retry a typed persistence failure once
+      // so a brief read failure cannot strand the shell at its previous state.
+      // If both attempts fail, log and drop the stream item; treating an error as
+      // a missing row would incorrectly remove a still-active aggregate.
+      const retryShellProjectionRead = <A, E>(
+        aggregateKind: "project" | "thread",
+        aggregateId: string,
+        read: Effect.Effect<A, E>,
+      ): Effect.Effect<Option.Option<A>, never, never> =>
+        read.pipe(
+          Effect.retry({ times: 1 }),
+          Effect.map(Option.some),
+          Effect.tapError((error) =>
+            Effect.logWarning("orchestration shell projection refetch failed", {
+              aggregateKind,
+              aggregateId,
+              error,
+            }),
+          ),
+          Effect.orElseSucceed(() => Option.none()),
+        );
+
+      const projectUpsertOrRemove = (
+        projectId: ProjectId,
+        sequence: number,
+      ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> =>
+        retryShellProjectionRead(
+          "project",
+          projectId,
+          projectionSnapshotQuery.getProjectShellById(projectId),
+        ).pipe(
+          Effect.map(
+            Option.flatMap((project) =>
+              Option.match(project, {
+                onNone: () =>
+                  Option.some<ShellLiveItem>({
+                    kind: "cursor" as const,
+                    sequence,
+                  }),
+                onSome: (nextProject) =>
+                  Option.some<ShellLiveItem>({
+                    kind: "project-upserted" as const,
+                    sequence,
+                    project: nextProject,
+                  }),
+              }),
+            ),
+          ),
+        );
+
+      // Refetch a thread's shell and emit an upsert if it is still active, or a
+      // `thread-removed` if the projection has no active row for it. Emitting a
+      // removal on a `none` (rather than dropping the event) is what keeps
+      // coalescing correct: when a burst collapses a `thread.deleted`/`archived`
+      // into a later refetchable event for the same thread, the refetch returns
+      // `none` for the now-inactive row and this still tells the sidebar to drop
+      // it. A `thread-removed` the client does not have is a harmless no-op. The
+      // projection commits in the same transaction before the event publishes,
+      // so a `none` reliably means the thread is deleted or archived, not
+      // not-yet-persisted.
+      const threadUpsertOrRemove = (
+        threadId: ThreadId,
+        sequence: number,
+      ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> =>
+        retryShellProjectionRead(
+          "thread",
+          threadId,
+          projectionSnapshotQuery.getThreadShellById(threadId),
+        ).pipe(
+          Effect.map(
+            Option.flatMap((thread) =>
+              Option.match(thread, {
+                onNone: () =>
+                  Option.some<ShellLiveItem>({
+                    kind: "cursor" as const,
+                    sequence,
+                  }),
+                onSome: (nextThread) =>
+                  Option.some<ShellLiveItem>({
+                    kind: "thread-upserted" as const,
+                    sequence,
+                    thread: nextThread,
+                  }),
+              }),
+            ),
+          ),
+        );
+
+      // Turn a batch of domain events into shell stream items, coalescing by
+      // aggregate first. `toShellStreamEvent` re-reads the *current* projected
+      // shell for an aggregate, so within a batch only the latest event per
+      // aggregate matters: a burst of streaming `thread.message-sent` deltas for
+      // one thread collapses into a single shell refetch, and an unrelated
+      // `thread.created` in the same batch is never stuck behind those DB reads.
+      //
+      // Input events arrive in ascending sequence; we keep the last (highest
+      // sequence) event per aggregate, then re-sort ascending before emitting so
+      // the client — which applies shell items strictly by increasing sequence
+      // and drops any `sequence <= snapshotSequence` — never skips a coalesced
+      // item. The refetch runs with bounded concurrency (order-preserving).
+      const SHELL_REFETCH_CONCURRENCY = 8;
+      const coalesceShellEvents = (
+        events: ReadonlyArray<OrchestrationEvent>,
+      ): Effect.Effect<ReadonlyArray<ShellLiveItem>, never, never> =>
+        Effect.gen(function* () {
+          if (events.length === 0) {
+            return [];
+          }
+          const latestByAggregate = new Map<string, OrchestrationEvent>();
+          const deletedAggregates = new Set<string>();
+          for (const event of events) {
+            const aggregateKey = `${event.aggregateKind}:${event.aggregateId}`;
+            latestByAggregate.set(aggregateKey, event);
+            if (
+              event.type === "thread.deleted" ||
+              event.type === "thread.archived" ||
+              event.type === "project.deleted"
+            ) {
+              deletedAggregates.add(aggregateKey);
+            }
+          }
+          const survivors = Array.from(latestByAggregate.values()).sort(
+            (left, right) => left.sequence - right.sequence,
+          );
+          const shellEvents = yield* Effect.forEach(survivors, toShellStreamEvent, {
+            concurrency: SHELL_REFETCH_CONCURRENCY,
+          });
+          return shellEvents.flatMap((option, index) => {
+            if (Option.isNone(option)) return [];
+            const item = option.value;
+            const survivor = survivors[index];
+            if (
+              item.kind !== "cursor" ||
+              survivor === undefined ||
+              !deletedAggregates.has(`${survivor.aggregateKind}:${survivor.aggregateId}`)
+            ) {
+              return [item];
+            }
+            return survivor.aggregateKind === "project"
+              ? [
+                  {
+                    kind: "project-removed" as const,
+                    sequence: survivor.sequence,
+                    projectId: ProjectId.make(survivor.aggregateId),
+                  },
+                ]
+              : [
+                  {
+                    kind: "thread-removed" as const,
+                    sequence: survivor.sequence,
+                    threadId: ThreadId.make(survivor.aggregateId),
+                  },
+                ];
+          });
+        });
+
+      // Small time/size window over which to coalesce shell events. The window
+      // bounds the worst-case added latency for a brand-new thread to appear in
+      // the sidebar (imperceptible), while collapsing high-frequency streaming
+      // traffic so it can't serialize the shell stream behind per-event DB reads.
+      const SHELL_COALESCE_WINDOW = Duration.millis(50);
+      const SHELL_COALESCE_MAX_CHUNK = 512;
+      const coalesceShellStream = <E, R>(
+        stream: Stream.Stream<OrchestrationEvent, E, R>,
+      ): Stream.Stream<ShellLiveItem, E, R> =>
+        stream.pipe(
+          Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
+          Stream.mapEffect(coalesceShellEvents),
+          Stream.flatMap((items) => Stream.fromIterable(items)),
+        );
+
+      type ShellLiveInput =
+        | { readonly kind: "event"; readonly event: OrchestrationEvent }
+        | { readonly kind: "synchronized" };
+
+      // A completion marker is queued alongside raw live events so it cannot
+      // overtake an event still waiting in the coalescing window. Split each
+      // batch at markers and coalesce only the event segments on either side.
+      const coalesceShellLiveInputs = (
+        inputs: ReadonlyArray<ShellLiveInput>,
+      ): Effect.Effect<ReadonlyArray<ShellDeltaItem>, never, never> =>
+        Effect.gen(function* () {
+          const output: Array<ShellDeltaItem> = [];
+          let pendingEvents: Array<OrchestrationEvent> = [];
+
+          for (const input of inputs) {
+            if (input.kind === "event") {
+              pendingEvents.push(input.event);
+              continue;
+            }
+
+            output.push(...(yield* coalesceShellEvents(pendingEvents)));
+            pendingEvents = [];
+            output.push({ kind: "synchronized" });
+          }
+
+          output.push(...(yield* coalesceShellEvents(pendingEvents)));
+          return output;
+        });
+
+      const coalesceShellLiveStream = <E, R>(
+        stream: Stream.Stream<ShellLiveInput, E, R>,
+      ): Stream.Stream<ShellDeltaItem, E, R> =>
+        stream.pipe(
+          Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
+          Stream.mapEffect(coalesceShellLiveInputs),
+          Stream.flatMap((items) => Stream.fromIterable(items)),
+        );
 
       const dispatchBootstrapTurnStart = (
         command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
@@ -1858,7 +2057,9 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
-          availableEditors: yield* externalLauncher.resolveAvailableEditors(),
+          availableEditors: yield* resolveAvailableEditorsForConfig(
+            externalLauncher.resolveAvailableEditors(),
+          ),
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1870,6 +2071,8 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          shellResumeCompletionMarker: true,
+          threadResumeCompletionMarker: true,
         };
       });
 
@@ -1990,7 +2193,10 @@ const makeWsRpcLayer = (
                   minimum: 0,
                 }),
               ),
-              transform: enrichOrchestrationEvents,
+              transform: (events) =>
+                enrichOrchestrationEvents(events).pipe(
+                  Effect.map((enrichedEvents) => enrichedEvents.map(projectActivityEvent)),
+                ),
             }).pipe(
               Effect.mapError(
                 (cause) =>
@@ -2006,57 +2212,67 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             ORCHESTRATION_WS_METHODS.subscribeShell,
             Effect.gen(function* () {
-              yield* Effect.acquireRelease(
-                Effect.sync(() => adjustWorkloadGauge("subscriptions.shell.active", 1)),
-                () => Effect.sync(() => adjustWorkloadGauge("subscriptions.shell.active", -1)),
-              );
-              const includeCursorItems = input.includeCursorItems === true;
-              const toShellStream = <E, R>(
-                events: Stream.Stream<OrchestrationEvent, E, R>,
-              ): Stream.Stream<ShellLiveItem, E, R> =>
-                events.pipe(
-                  Stream.tap(() => Effect.sync(() => incrementWorkloadCounter("shell.candidates"))),
-                  Stream.mapEffect(toShellStreamEvent),
-                  Stream.tap((item) =>
-                    Effect.sync(() =>
-                      incrementWorkloadCounter(
-                        item.kind === "cursor" ? "shell.cursor_only" : "shell.upserts",
-                      ),
-                    ),
+              // Coalesce the live shell stream per aggregate over a small window
+              // so bursts of high-frequency events (streaming message deltas,
+              // activity appends) collapse into a single shell refetch and never
+              // serialize a brand-new thread's `thread.created` behind hundreds
+              // of per-event DB reads. See coalesceShellStream.
+              // Attach live delivery into a scope-bound buffer BEFORE loading any
+              // snapshot or draining catch-up, otherwise an event published while
+              // the snapshot query is in flight is lost (it is past the snapshot's
+              // sequence but the live subscription is not attached yet). Every
+              // path below emits from this same buffered live tail. Overlapping
+              // events are deduped by sequence on the client.
+              const liveBuffer = yield* Queue.unbounded<ShellLiveInput>();
+              yield* Effect.forkScoped(
+                orchestrationEngine.streamDomainEvents.pipe(
+                  Stream.runForEach((event) =>
+                    Queue.offer(liveBuffer, { kind: "event" as const, event }),
                   ),
-                  Stream.filter((item) => {
-                    const include = shouldIncludeShellStreamItem(item, includeCursorItems);
-                    if (!include) {
-                      incrementWorkloadCounter("shell.suppressed");
-                    }
-                    return include;
-                  }),
-                  compactShellCursorItems,
-                  Stream.filter((item) => item.kind !== "synchronized"),
-                  Stream.map((item) => item as ShellLiveItem),
-                );
-              const liveStream: Stream.Stream<ShellCatchUpItem> = toShellStream(
-                orchestrationEngine.streamDomainEvents,
+                ),
+                { startImmediately: true },
               );
+              const bufferedLiveStream = compactShellCursorItems(
+                coalesceShellLiveStream(Stream.fromQueue(liveBuffer)),
+              );
+
+              const loadSnapshot = projectionSnapshotQuery.getShellSnapshot().pipe(
+                Effect.tapError((cause) =>
+                  Effect.logError("orchestration shell snapshot load failed", { cause }),
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new OrchestrationGetSnapshotError({
+                      message: "Failed to load orchestration shell snapshot",
+                      cause,
+                    }),
+                ),
+              );
+
+              // Offer the completion marker into the same queue as live events.
+              // Anything buffered while snapshot/replay work was in flight is
+              // therefore delivered before the client is told it is synchronized.
+              const synchronizedThenLive =
+                input.requestCompletionMarker === true
+                  ? Stream.concat(
+                      Stream.fromEffect(
+                        Queue.offer(liveBuffer, { kind: "synchronized" as const }).pipe(
+                          Effect.andThen(Queue.takeAll(liveBuffer)),
+                          Effect.flatMap(coalesceShellLiveInputs),
+                        ),
+                      ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
+                      bufferedLiveStream,
+                    )
+                  : bufferedLiveStream;
 
               // When the client already holds a shell snapshot (cached, or loaded
               // over HTTP) it passes that snapshot's sequence, and we resume by
               // replaying shell events after it instead of re-sending the whole
-              // projects/threads list over the socket. As in the thread path, the
-              // live subscription is attached (into a scope-bound buffer) before
-              // draining the catch-up replay so no event published during the
-              // replay window is lost; overlapping events are deduped by sequence
-              // on the client. The full range is read (not the store's default
-              // page limit) since the shell filter runs after reading.
+              // projects/threads list over the socket. If the client is too far
+              // behind, we fall back to a fresh snapshot instead of an unbounded
+              // replay (see below).
               if (input.afterSequence !== undefined) {
                 const afterSequence = input.afterSequence;
-                const liveSubscription = getLiveSubscriptionCapability(orchestrationEngine);
-                const acquiredLiveEvents = yield* (
-                  liveSubscription?.subscribe ??
-                    Effect.succeed(orchestrationEngine.streamDomainEvents)
-                );
-                const acquiredLiveStream: Stream.Stream<ShellCatchUpItem> =
-                  toShellStream(acquiredLiveEvents);
                 return replayCatchUpWithLive({
                   observer: makeReplayObserver("shell", afterSequence).pipe(
                     Effect.provideService(
@@ -2064,17 +2280,23 @@ const makeWsRpcLayer = (
                       replayLogPublisher,
                     ),
                   ),
-                  live: acquiredLiveStream,
-                  sequence: (item) =>
+                  live: bufferedLiveStream.pipe(
+                    Stream.filter((item): item is ShellLiveItem => item.kind !== "synchronized"),
+                  ),
+                  sequence: (item: ShellCatchUpItem) =>
                     item.kind === "snapshot" ? item.snapshot.snapshotSequence : item.sequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
-                  ...(input.includeSynchronizationItems
+                  ...(input.requestCompletionMarker === true
                     ? { synchronized: () => ({ kind: "synchronized" as const }) }
                     : {}),
                   catchUp: (observer) => {
                     const replayFrom = (sequence: number) =>
                       readEventsPaginated(sequence, observer).pipe(
-                        toShellStream,
+                        coalesceShellStream,
+                        compactShellCursorItems,
+                        Stream.filter(
+                          (item): item is ShellLiveItem => item.kind !== "synchronized",
+                        ),
                         Stream.mapError(
                           (cause) =>
                             new OrchestrationGetSnapshotError({
@@ -2085,13 +2307,47 @@ const makeWsRpcLayer = (
                       );
                     const probeCapability = getReplayProbeCapability(orchestrationEngine);
                     if (probeCapability === undefined) {
-                      observer.recordStrategy({
-                        strategy: "events",
-                        reason: "capability-unavailable",
-                        probeEventCount: 0,
-                        probePayloadBytes: 0,
-                      });
-                      return replayFrom(afterSequence);
+                      return Stream.unwrap(
+                        Effect.gen(function* () {
+                          const authoritativeHead = yield* orchestrationEngine.latestSequence.pipe(
+                            Effect.mapError(
+                              (cause) =>
+                                new OrchestrationGetSnapshotError({
+                                  message: "Failed to read orchestration sequence",
+                                  cause,
+                                }),
+                            ),
+                          );
+                          const mustReplaceCursor =
+                            afterSequence > authoritativeHead ||
+                            authoritativeHead - afterSequence > SHELL_RESUME_MAX_GAP;
+                          if (!mustReplaceCursor) {
+                            observer.recordStrategy({
+                              strategy: "events",
+                              reason: "capability-unavailable",
+                              probeEventCount: 0,
+                              probePayloadBytes: 0,
+                            });
+                            return replayFrom(afterSequence);
+                          }
+                          const snapshot = yield* loadSnapshot;
+                          observer.recordStrategy({
+                            strategy: "snapshot",
+                            reason: afterSequence > authoritativeHead ? "bounded" : "event-count",
+                            probeEventCount: Math.max(0, authoritativeHead - afterSequence),
+                            probePayloadBytes: 0,
+                            snapshotSequence: snapshot.snapshotSequence,
+                          });
+                          const snapshotItem: ShellCatchUpItem = {
+                            kind: "snapshot" as const,
+                            snapshot,
+                          };
+                          const snapshotStream = Stream.make(snapshotItem);
+                          return snapshot.snapshotSequence >= authoritativeHead
+                            ? snapshotStream
+                            : Stream.concat(snapshotStream, replayFrom(snapshot.snapshotSequence));
+                        }),
+                      );
                     }
                     return Stream.unwrap(
                       Effect.gen(function* () {
@@ -2125,9 +2381,7 @@ const makeWsRpcLayer = (
                           });
                           return replayFrom(afterSequence);
                         }
-                        const snapshotResult = yield* Effect.result(
-                          projectionSnapshotMaterializer.getShellSnapshot(),
-                        );
+                        const snapshotResult = yield* Effect.result(loadSnapshot);
                         if (snapshotResult._tag === "Failure") {
                           yield* Effect.logWarning(
                             "orchestration shell replay snapshot failed; using exact event replay",
@@ -2158,8 +2412,12 @@ const makeWsRpcLayer = (
                           probePayloadBytes: probe.payloadBytes,
                           snapshotSequence: snapshot.snapshotSequence,
                         });
+                        const snapshotItem: ShellCatchUpItem = {
+                          kind: "snapshot",
+                          snapshot,
+                        };
                         return Stream.concat(
-                          Stream.make({ kind: "snapshot" as const, snapshot }),
+                          Stream.make(snapshotItem),
                           replayFrom(snapshot.snapshotSequence),
                         );
                       }),
@@ -2168,25 +2426,13 @@ const makeWsRpcLayer = (
                 });
               }
 
-              const snapshot = yield* projectionSnapshotMaterializer.getShellSnapshot().pipe(
-                Effect.tapError((cause) =>
-                  Effect.logError("orchestration shell snapshot load failed", { cause }),
-                ),
-                Effect.mapError(
-                  (cause) =>
-                    new OrchestrationGetSnapshotError({
-                      message: "Failed to load orchestration shell snapshot",
-                      cause,
-                    }),
-                ),
-              );
-
+              const snapshot = yield* loadSnapshot;
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
                   snapshot,
                 }),
-                liveStream,
+                synchronizedThenLive,
               );
             }),
             { "rpc.aggregate": "orchestration" },
@@ -2233,13 +2479,13 @@ const makeWsRpcLayer = (
                 ),
                 Stream.map((event) => ({
                   kind: "event" as const,
-                  event,
+                  event: projectActivityEvent(event),
                 })),
               );
 
               // Attach live delivery before reading either replay or snapshot state.
               // Otherwise an event published while the snapshot is loading is lost.
-              const liveBuffer = yield* Queue.unbounded<ThreadCatchUpItem>();
+              const liveBuffer = yield* Queue.unbounded<ThreadBufferedItem>();
               yield* Effect.forkScoped(
                 liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
               );
@@ -2270,11 +2516,16 @@ const makeWsRpcLayer = (
                       replayLogPublisher,
                     ),
                   ),
-                  live: bufferedLiveStream,
-                  sequence: (item) =>
+                  live: bufferedLiveStream.pipe(
+                    Stream.filter(
+                      (item): item is Extract<ThreadBufferedItem, { readonly kind: "event" }> =>
+                        item.kind === "event",
+                    ),
+                  ),
+                  sequence: (item: ThreadCatchUpItem) =>
                     item.kind === "event" ? item.event.sequence : item.snapshot.snapshotSequence,
                   bufferCapacity: LIVE_REPLAY_BUFFER_SIZE,
-                  ...(input.includeSynchronizationItems
+                  ...(input.requestCompletionMarker === true
                     ? { synchronized: () => ({ kind: "synchronized" as const }) }
                     : {}),
                   catchUp: (observer) => {
@@ -2288,7 +2539,7 @@ const makeWsRpcLayer = (
                         ),
                         Stream.map((event) => ({
                           kind: "event" as const,
-                          event,
+                          event: projectActivityEvent(event),
                         })),
                         Stream.mapError(
                           (cause) =>
@@ -2392,7 +2643,10 @@ const makeWsRpcLayer = (
                           snapshotSequence: snapshot.value.snapshotSequence,
                         });
                         return Stream.concat(
-                          Stream.make({ kind: "snapshot" as const, snapshot: snapshot.value }),
+                          Stream.make({
+                            kind: "snapshot" as const,
+                            snapshot: projectThreadDetailSnapshot(snapshot.value),
+                          }),
                           replayFrom(snapshot.value.snapshotSequence),
                         );
                       }),
@@ -2420,16 +2674,29 @@ const makeWsRpcLayer = (
                 });
               }
 
+              const afterSnapshot =
+                input.requestCompletionMarker === true
+                  ? Stream.concat(
+                      Stream.fromEffect(
+                        Queue.offer(liveBuffer, { kind: "synchronized" as const }),
+                      ).pipe(Stream.drain),
+                      bufferedLiveStream,
+                    )
+                  : bufferedLiveStream;
               return Stream.concat(
                 Stream.make({
                   kind: "snapshot" as const,
-                  snapshot: snapshot.value,
+                  snapshot: projectThreadDetailSnapshot(snapshot.value),
                 }),
-                bufferedLiveStream,
+                afterSnapshot,
               );
             }),
             { "rpc.aggregate": "orchestration" },
           ),
+        [WS_METHODS.serverProbe]: (_input) =>
+          observeRpcEffect(WS_METHODS.serverProbe, Effect.succeed({}), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.codexResumeThread]: (input) =>
           observeRpcEffect(WS_METHODS.codexResumeThread, resumeCodexThread(input), {
             "rpc.aggregate": "codex",
@@ -2459,6 +2726,10 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
+        [WS_METHODS.serverUpdateServer]: (input) =>
+          observeRpcEffect(WS_METHODS.serverUpdateServer, serverSelfUpdate.update(input), {
+            "rpc.aggregate": "server",
+          }),
         [WS_METHODS.serverUpsertKeybinding]: (rule) =>
           observeRpcEffect(
             WS_METHODS.serverUpsertKeybinding,
@@ -3101,10 +3372,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
-    // RPC handlers return streams that execute after this route layer has built.
-    // Capture the publisher in the handler closure so replay diagnostics do not
-    // leak a runtime service requirement into a WebSocket subscription.
     const replayLogPublisher = yield* ReplayLogPublisher.ReplayLogPublisher;
+    const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -3133,6 +3402,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),
               Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

@@ -121,6 +121,7 @@ export async function runProductionT3BrowserScenario(
       .cleanupPreparationFailure(plan, variant, cause)
       .catch((cleanupCause) => ({ complete: false, details: String(cleanupCause) }));
     if (!cleanup.complete) {
+      // oxlint-disable-next-line preserve-caught-error -- AggregateError carries the original failure in both errors and cause.
       throw new AggregateError(
         [cause, new Error(`Preparation rollback was incomplete: ${cleanup.details}`)],
         "Browser fixture preparation failed and rollback was incomplete.",
