@@ -25,7 +25,7 @@ const isProjectSetupScriptOperationError = Schema.is(
 const isProjectSetupScriptReconciliationTimeoutError = Schema.is(
   ProjectSetupScriptRunner.ProjectSetupScriptReconciliationTimeoutError,
 );
-const encodeTestJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeTestJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 const decodePosixShellArgument = (literal: string): string => {
   if (!literal.startsWith("'") || !literal.endsWith("'")) {
     throw new Error(`Invalid POSIX shell argument: ${literal}`);
@@ -87,6 +87,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     getTurnActivitiesSnapshot: () => Effect.die("unused"),
+    searchThreads: () => Effect.succeed({ matches: [] }),
   });
 
 const makeTerminalManagerLayer = (

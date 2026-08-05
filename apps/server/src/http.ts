@@ -17,6 +17,7 @@ import {
   HttpBody,
   HttpClient,
   HttpClientResponse,
+  HttpMiddleware,
   HttpRouter,
   HttpServerResponse,
   HttpServerRequest,
@@ -56,6 +57,9 @@ const LOCAL_IMAGE_ROUTE_PATH = "/local-image";
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
+export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
+  global: true,
+});
 
 export const browserApiCorsLayer = Layer.unwrap(
   Effect.gen(function* () {

@@ -155,6 +155,7 @@ const hmrConfig = resolveDevServerHmrConfig();
 
 export default defineConfig(() => {
   return {
+    assetsInclude: ["**/*.wasm"],
     plugins: [
       tanstackRouter(),
       react(),

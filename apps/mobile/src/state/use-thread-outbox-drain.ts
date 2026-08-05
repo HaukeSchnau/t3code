@@ -14,6 +14,7 @@ import { scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import {
+  confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
   removeThreadOutboxMessage,
   threadOutboxManager,
@@ -27,7 +28,7 @@ import {
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
 } from "./thread-outbox-model";
-import { threadEnvironment } from "./threads";
+import { environmentThreadShells, threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
   editingQueuedMessageIdsAtom,
@@ -298,8 +299,32 @@ export function useThreadOutboxDrain(): void {
             return false;
           },
         );
-      const delivery =
-        deliveryAction === "remove"
+      // Enqueues publish optimistically before their durable write settles.
+      // Confirm the write landed (and the message wasn't rolled back) before
+      // sending, so a failed write can never chase an already-delivered turn.
+      const delivery = confirmThreadOutboxMessageQueued(nextQueuedMessage).then((queued) => {
+        if (!queued) {
+          // Rolled back by a failed write; nothing to deliver or retry.
+          return true;
+        }
+        // The guards evaluated before the confirmation await are stale by now:
+        // the thread may have gone busy, or the user may have opened this
+        // message in the editor. Re-read both and defer to the next drain pass
+        // (returning true skips the failure/backoff path) rather than sending
+        // a payload the user is editing or racing an active turn.
+        if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]) {
+          return true;
+        }
+        const freshThread = findThread(
+          appAtomRegistry.get(environmentThreadShells.threadShellsAtom),
+          nextQueuedMessage,
+        );
+        const freshThreadBusy =
+          freshThread?.session?.status === "running" || freshThread?.session?.status === "starting";
+        if (deliveryAction === "send" && creation === undefined && freshThreadBusy) {
+          return true;
+        }
+        return deliveryAction === "remove"
           ? removeQueuedMessage("[thread-outbox] failed to remove message for a missing thread")
           : creation !== undefined
             ? creationProjectCwd !== null
@@ -308,6 +333,7 @@ export function useThreadOutboxDrain(): void {
             : thread !== undefined
               ? sendQueuedMessage(nextQueuedMessage, thread)
               : Promise.resolve(false);
+      });
       void delivery
         .catch((error) => {
           console.warn("[thread-outbox] delivery lifecycle failed", {

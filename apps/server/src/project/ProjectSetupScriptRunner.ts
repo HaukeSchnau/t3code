@@ -16,7 +16,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 
-const encodeJson = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 export const SETUP_RECONCILIATION_TIMEOUT_MILLIS = 30_000;
 const SETUP_RECONCILIATION_INTERVAL_MILLIS = 100;
 

@@ -41,6 +41,11 @@ export function updateThreadOutboxMessage(
   return threadOutboxManager.update(previous, freezeDeliveryIdentity(replacement));
 }
 
+/** Waits for pending writes to settle; false if the message was rolled back. */
+export function confirmThreadOutboxMessageQueued(message: QueuedThreadMessage): Promise<boolean> {
+  return threadOutboxManager.confirmQueued(message);
+}
+
 export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
   return threadOutboxManager.remove(message);
 }

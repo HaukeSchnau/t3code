@@ -86,3 +86,6 @@ export const ProviderEventLoggersLive = Layer.effect(
     } satisfies ProviderEventLoggersShape;
   }),
 );
+
+/** Canonical layer export used by the assembled server runtime. */
+export const layer = ProviderEventLoggersLive;
