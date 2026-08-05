@@ -252,8 +252,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     return loadPromise;
   };
 
-  const enqueue = (message: QueuedThreadMessage): Promise<void> =>
-    serialize(async () => {
+  // The queued atom drives the composer's immediate "queued" feedback, so it
+  // is published synchronously; the durable write happens behind it and rolls
+  // the message back out if it fails (durability only matters for crash
+  // recovery, not for the in-session queue).
+  const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    setMessages([
+      ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
+      message,
+    ]);
+    return serialize(async () => {
       const service = await outbox();
       const existing = (await Effect.runPromise(service.entries)).find(
         (entry) => entry.plan.command.commandId === message.commandId,
@@ -264,6 +272,10 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       try {
         await options.storage.write(message);
       } catch (cause) {
+        // Roll back by reference, not messageId: a retry enqueue with the same
+        // id may have optimistically replaced this attempt while the write was
+        // in flight, and its entry must survive this attempt's failure.
+        setMessages(currentMessages().filter((candidate) => candidate !== message));
         throw new ThreadOutboxManagerError({
           operation: "enqueue",
           environmentId: message.environmentId,
@@ -280,11 +292,15 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       }
       await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
       await refreshDeliveryStates(service);
-      setMessages([
-        ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
-        message,
-      ]);
     });
+  };
+
+  // Resolves once all pending mutations (including any in-flight enqueue
+  // write) have settled, reporting whether the message is still queued. The
+  // drain awaits this before dispatching so a message whose durable write
+  // later fails can never have been delivered first.
+  const confirmQueued = (message: QueuedThreadMessage): Promise<boolean> =>
+    serialize(async () => currentMessages().some((candidate) => candidate === message));
 
   // Rewrites an already-queued message. A no-op when the message has been
   // removed in the meantime (e.g. deleted or delivered), so a trailing editor
@@ -475,6 +491,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     serialize,
     load,
     enqueue,
+    confirmQueued,
     update,
     remove,
     clearEnvironment,

@@ -22,6 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionRestartSafetyState } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationListenerCallbackError } from "../../orchestration/Errors.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
@@ -250,16 +251,22 @@ describe("ProviderSessionReaper", () => {
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
           getTurnActivitiesSnapshot: () => Effect.die("unused"),
+          searchThreads: () => Effect.succeed({ matches: [] }),
         }),
       ),
       Layer.provideMerge(
-        Layer.succeed(OrchestrationEngineService, {
-          readEvents: () => Stream.empty,
-          readAggregateEvents: () => Stream.empty,
-          dispatch: dispatch as never,
-          resolveReceipt: () => Effect.die("unused"),
-          latestSequence: Effect.succeed(0),
-          streamDomainEvents: Stream.empty,
+        Layer.mock(OrchestrationEngineService)({
+          dispatch: (command) =>
+            dispatch(command).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new OrchestrationListenerCallbackError({
+                    listener: "read-model",
+                    detail: cause.message,
+                    cause,
+                  }),
+              ),
+            ),
         }),
       ),
       Layer.provideMerge(NodeServices.layer),

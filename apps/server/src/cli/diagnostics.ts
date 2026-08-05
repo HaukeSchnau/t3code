@@ -51,7 +51,7 @@ const MIN_DURATION_MS = 1_000;
 const MAX_DURATION_MS = 300_000;
 const MIN_WAIT_TIMEOUT_MS = 1_000;
 const MAX_WAIT_TIMEOUT_MS = 600_000;
-const encodeJsonString = Schema.encodeSync(Schema.UnknownFromJsonString);
+const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 const jsonFlag = Flag.boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),

@@ -33,7 +33,7 @@ const HIGH_FREQUENCY_FIRST_RECORDS = 8;
 const HIGH_FREQUENCY_SAMPLE_INTERVAL = 256;
 const HIGH_FREQUENCY_SAMPLE_KEY_CAPACITY = 2_048;
 const LOG_SCOPE = "provider-observability";
-const encodeUnknownJsonString = Schema.encodeUnknownEffect(Schema.UnknownFromJsonString);
+const encodeUnknownJsonString = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
 
 export type EventNdjsonStream = "native" | "canonical" | "orchestration";
 

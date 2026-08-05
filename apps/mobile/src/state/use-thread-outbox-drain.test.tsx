@@ -29,6 +29,7 @@ declare global {
         deliveryStatesAtom: ReturnType<
           typeof Atom.make<Readonly<Record<string, { readonly _tag: "Pending" }>>>
         >;
+        threadShellsAtom: ReturnType<typeof Atom.make<ReadonlyArray<EnvironmentThreadShell>>>;
       }
     | undefined;
 }
@@ -89,9 +90,13 @@ vi.mock("./thread-outbox", async () => {
     deliveryStatesAtom: TestAtom.make<Readonly<Record<string, { readonly _tag: "Pending" }>>>(
       {},
     ).pipe(TestAtom.keepAlive),
+    threadShellsAtom: TestAtom.make<ReadonlyArray<EnvironmentThreadShell>>([]).pipe(
+      TestAtom.keepAlive,
+    ),
   };
   globalThis.__THREAD_OUTBOX_DRAIN_TEST_ATOMS__ = atoms;
   return {
+    confirmThreadOutboxMessageQueued: vi.fn(async () => true),
     ensureThreadOutboxLoaded: vi.fn(),
     removeThreadOutboxMessage: vi.fn(),
     threadOutboxManager: {
@@ -107,9 +112,14 @@ vi.mock("./use-atom-command", () => ({
   useAtomCommand: () => mocks.startTurn,
 }));
 
-vi.mock("./threads", () => ({
-  threadEnvironment: { startTurn: { label: "test:start-turn" } },
-}));
+vi.mock("./threads", () => {
+  return {
+    environmentThreadShells: {
+      threadShellsAtom: globalThis.__THREAD_OUTBOX_DRAIN_TEST_ATOMS__!.threadShellsAtom,
+    },
+    threadEnvironment: { startTurn: { label: "test:start-turn" } },
+  };
+});
 
 vi.mock("./shell", async () => {
   const { Atom: TestAtom } = await import("effect/unstable/reactivity");
@@ -166,6 +176,7 @@ afterEach(() => {
   appAtomRegistry.set(composerDraftsAtom, {});
   appAtomRegistry.set(testOutbox.queuedMessagesByThreadKeyAtom, {});
   appAtomRegistry.set(testOutbox.deliveryStatesAtom, {});
+  appAtomRegistry.set(testOutbox.threadShellsAtom, []);
   mocks.startTurn.mockReset();
   mocks.begin.mockReset();
   mocks.complete.mockReset();
@@ -202,6 +213,7 @@ describe("useThreadOutboxDrain composer hydration gate", () => {
     appAtomRegistry.set(testOutbox.deliveryStatesAtom, {
       [COMMAND_ID]: { _tag: "Pending" },
     });
+    appAtomRegistry.set(testOutbox.threadShellsAtom, [THREAD]);
 
     let renderer: ReactTestRenderer;
     await act(async () => {
