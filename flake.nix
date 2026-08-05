@@ -293,6 +293,204 @@
               --suffix PATH : "${runtimePath}" \
               --set-default NODE_ENV production
           '';
+
+      mkProjectApplications =
+        system:
+        let
+          pkgs = mkPkgs system;
+          nodejs = pkgs.nodejs_24;
+          pnpm = mkPnpm pkgs nodejs;
+
+          projectRuntime = pkgs.writeShellApplication {
+            name = "t3code-project-runtime";
+            runtimeInputs = [
+              nodejs
+              pkgs.coreutils
+              pkgs.findutils
+              pkgs.jq
+              pnpm
+            ];
+            text = ''
+              set -euo pipefail
+
+              action="''${1:-}"
+              if [[ "$#" != 1 ]] || [[ "$action" != "prepare" && "$action" != "metro" ]]; then
+                echo "usage: t3code-project-runtime <prepare|metro>" >&2
+                exit 64
+              fi
+
+              runtime_file="''${PROJECT_RUNTIME_FILE:-}"
+              if [[ -z "$runtime_file" ]]; then
+                runtime_root="''${XDG_RUNTIME_DIR:-''${TMPDIR:-/tmp}/t3code-$UID}/project"
+                state_root="''${XDG_STATE_HOME:-$HOME/.local/state}/t3code"
+                cache_root="''${XDG_CACHE_HOME:-$HOME/.cache}/t3code"
+                runtime_file="$runtime_root/runtime.json"
+                install -d -m 0700 "$runtime_root" "$state_root" "$cache_root"
+                jq -n \
+                  --arg checkout "$PWD" \
+                  --arg state "$state_root" \
+                  --arg cache "$cache_root" \
+                  --arg runtime "$runtime_root" \
+                  '{
+                    schemaVersion: 1,
+                    project: "t3code",
+                    realization: "development",
+                    paths: {
+                      checkout: $checkout,
+                      state: $state,
+                      cache: $cache,
+                      runtime: $runtime
+                    },
+                    endpoints: {
+                      metro: {
+                        url: "http://127.0.0.1:8081",
+                        visibility: "local",
+                        listen: {host: "127.0.0.1", port: 8081}
+                      }
+                    },
+                    settings: {},
+                    secrets: {}
+                  }' > "$runtime_file.next"
+                mv "$runtime_file.next" "$runtime_file"
+              fi
+
+              if ! jq -e '
+                .schemaVersion == 1 and
+                .project == "t3code" and
+                .realization == "development" and
+                (.paths.checkout | type == "string" and length > 0) and
+                (.paths.state | type == "string" and length > 0) and
+                (.paths.cache | type == "string" and length > 0) and
+                (.paths.runtime | type == "string" and length > 0) and
+                (.endpoints | type == "object") and
+                (.settings | type == "object") and
+                (.secrets | type == "object")
+              ' "$runtime_file" >/dev/null; then
+                echo "T3 Code Project Runtime manifest is invalid: $runtime_file" >&2
+                exit 65
+              fi
+
+              export PROJECT_RUNTIME_FILE="$runtime_file"
+              checkout=$(jq -er '.paths.checkout' "$runtime_file")
+              state_root=$(jq -er '.paths.state' "$runtime_file")
+              cache_root=$(jq -er '.paths.cache' "$runtime_file")
+              runtime_root=$(jq -er '.paths.runtime' "$runtime_file")
+              install -d -m 0700 "$state_root" "$cache_root" "$runtime_root"
+
+              case "$action" in
+                prepare)
+                  preparation_state="$state_root/preparation"
+                  stamp_file="$preparation_state/dependencies.sha256"
+                  cd "$checkout"
+
+                  dependency_key=$(
+                    {
+                      sha256sum flake.lock package.json pnpm-lock.yaml pnpm-workspace.yaml
+                      find apps packages -type f -name package.json -print0 \
+                        | sort -z \
+                        | xargs -0 -r sha256sum
+                      if [[ -d patches ]]; then
+                        find patches -type f -name '*.patch' -print0 \
+                          | sort -z \
+                          | xargs -0 -r sha256sum
+                      fi
+                    } | sha256sum | cut -d ' ' -f 1
+                  )
+
+                  if [[ -d node_modules && -f "$stamp_file" ]] \
+                    && [[ "$(<"$stamp_file")" == "$dependency_key" ]]; then
+                    echo "T3 Code dependencies are already prepared ($dependency_key)"
+                    exit 0
+                  fi
+
+                  export npm_config_nodedir="${nodejs}"
+                  pnpm install --frozen-lockfile
+                  install -d -m 0700 "$preparation_state"
+                  printf '%s\n' "$dependency_key" > "$stamp_file.next"
+                  mv "$stamp_file.next" "$stamp_file"
+                  ;;
+
+                metro)
+                  if ! jq -e '
+                    .endpoints.metro |
+                    (.url | type == "string" and length > 0) and
+                    (.listen.host == "127.0.0.1") and
+                    (.listen.port | type == "number" and . >= 1 and . <= 65535)
+                  ' "$runtime_file" >/dev/null; then
+                    echo "T3 Code Project Endpoint is missing or invalid: metro" >&2
+                    exit 65
+                  fi
+
+                  metro_url=$(jq -er '.endpoints.metro.url' "$runtime_file")
+                  metro_port=$(jq -er '.endpoints.metro.listen.port' "$runtime_file")
+                  metro_cache="$cache_root/metro"
+                  install -d -m 0700 "$metro_cache/tmp"
+
+                  export APP_VARIANT=development
+                  export EXPO_PACKAGER_PROXY_URL="$metro_url"
+                  export EXPO_UNSTABLE_HEADLESS=1
+                  export NODE_OPTIONS="--dns-result-order=ipv4first''${NODE_OPTIONS:+ $NODE_OPTIONS}"
+                  export TMPDIR="$metro_cache/tmp"
+                  export XDG_CACHE_HOME="$metro_cache"
+
+                  deep_link="t3code-dev://expo-development-client/?url=$(jq -rn --arg url "$metro_url" '$url | @uri')"
+                  echo "T3 Code Dev Client: $deep_link"
+
+                  cd "$checkout/apps/mobile"
+                  exec pnpm exec expo start \
+                    --dev-client \
+                    --scheme t3code-dev \
+                    --localhost \
+                    --port "$metro_port"
+                  ;;
+              esac
+            '';
+          };
+
+          preparation = pkgs.writeShellApplication {
+            name = "t3code-prepare";
+            text = ''
+              exec ${projectRuntime}/bin/t3code-project-runtime prepare
+            '';
+          };
+
+          development = pkgs.writeShellApplication {
+            name = "t3code-development";
+            text = ''
+              set -euo pipefail
+
+              if [[ "$#" == 2 && "$1" == "--only" && "$2" == "metro" ]]; then
+                shift 2
+              elif [[ "$#" != 0 ]]; then
+                echo "usage: nix run .#dev [-- --only metro]" >&2
+                exit 64
+              fi
+
+              exec ${projectRuntime}/bin/t3code-project-runtime metro
+            '';
+          };
+
+          developmentMetro = pkgs.writeShellApplication {
+            name = "t3code-development-metro";
+            text = ''
+              if [[ "$#" != 0 ]]; then
+                echo "usage: nix run .#dev-metro" >&2
+                exit 64
+              fi
+              exec ${development}/bin/t3code-development --only metro
+            '';
+          };
+        in
+        {
+          inherit
+            development
+            developmentMetro
+            preparation
+            projectRuntime
+            ;
+        };
+
+      projectApplications = forAllSystems mkProjectApplications;
     in
     {
       lib.mkT3CodePackage = mkT3CodePackage;
@@ -305,17 +503,36 @@
         rec {
           t3code = mkT3CodePackage pkgs;
           default = t3code;
+          projectRuntime = projectApplications.${system}.projectRuntime;
         }
       );
 
-      apps = forAllSystems (system: {
-        default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/t3";
-          meta.description = "Run the T3 Code server CLI";
-        };
-        t3 = self.apps.${system}.default;
-      });
+      apps = forAllSystems (
+        system:
+        let
+          project = projectApplications.${system};
+        in
+        {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.default}/bin/t3";
+            meta.description = "Run the T3 Code server CLI";
+          };
+          t3 = self.apps.${system}.default;
+          prepare = {
+            type = "app";
+            program = "${project.preparation}/bin/t3code-prepare";
+          };
+          dev = {
+            type = "app";
+            program = "${project.development}/bin/t3code-development";
+          };
+          dev-metro = {
+            type = "app";
+            program = "${project.developmentMetro}/bin/t3code-development-metro";
+          };
+        }
+      );
 
       devShells = forAllSystems (
         system:
