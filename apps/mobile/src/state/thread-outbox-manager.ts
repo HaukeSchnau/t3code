@@ -10,6 +10,7 @@ import {
 } from "@t3tools/client-runtime/platform/command-outbox";
 import {
   classifyCommandDeliveryFailure,
+  CommandOutboxStateError,
   makeCommandOutbox,
   type CommandDeliveryFailureInput,
   type CommandOutboxService,
@@ -257,6 +258,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   // the message back out if it fails (durability only matters for crash
   // recovery, not for the in-session queue).
   const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    const previousMessage = currentMessages().find(
+      (candidate) => candidate.messageId === message.messageId,
+    );
     setMessages([
       ...currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       message,
@@ -267,7 +271,25 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         (entry) => entry.plan.command.commandId === message.commandId,
       );
       if (existing !== undefined && existing.state._tag !== "Pending") {
-        await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
+        const current = currentMessages();
+        if (current.some((candidate) => candidate === message)) {
+          setMessages(
+            current.flatMap((candidate) =>
+              candidate === message ? (previousMessage ? [previousMessage] : []) : [candidate],
+            ),
+          );
+        }
+        throw new ThreadOutboxManagerError({
+          operation: "enqueue",
+          environmentId: message.environmentId,
+          threadId: message.threadId,
+          messageId: message.messageId,
+          cause: new CommandOutboxStateError({
+            reason: "duplicate-command",
+            commandId: message.commandId,
+            message: `Command ${message.commandId} has already crossed the delivery boundary`,
+          }),
+        });
       }
       try {
         await options.storage.write(message);
