@@ -14,13 +14,18 @@ export function resolveConnectionPairingAutomation(input: {
   readonly developmentAutoConnect?: string | undefined;
 }): ConnectionPairingAutomation | null {
   const routePairingUrl = input.routePairingUrl?.trim() ?? "";
-  const developmentPairingUrl = input.developmentPairingUrl?.trim() ?? "";
-  const pairingUrl = routePairingUrl || developmentPairingUrl;
+  if (routePairingUrl.length > 0) {
+    return {
+      pairingUrl: routePairingUrl,
+      autoConnect: isEnabled(input.routeAutoConnect),
+    };
+  }
+
+  const pairingUrl = input.developmentPairingUrl?.trim() ?? "";
   if (pairingUrl.length === 0) return null;
 
   return {
     pairingUrl,
-    autoConnect:
-      isEnabled(input.routeAutoConnect) || isEnabled(input.developmentAutoConnect),
+    autoConnect: isEnabled(input.developmentAutoConnect),
   };
 }

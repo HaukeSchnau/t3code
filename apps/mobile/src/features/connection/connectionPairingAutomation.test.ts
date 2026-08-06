@@ -28,6 +28,19 @@ describe("connection pairing automation", () => {
     });
   });
 
+  it("does not inherit development auto-connect for an explicit route URL", () => {
+    expect(
+      resolveConnectionPairingAutomation({
+        routePairingUrl: "https://route.example/pair#token=route",
+        developmentPairingUrl: "https://development.example/pair#token=development",
+        developmentAutoConnect: "1",
+      }),
+    ).toEqual({
+      pairingUrl: "https://route.example/pair#token=route",
+      autoConnect: false,
+    });
+  });
+
   it("does not activate without a pairing URL", () => {
     expect(
       resolveConnectionPairingAutomation({
