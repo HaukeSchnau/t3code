@@ -23,13 +23,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectOrder: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
-    threadPinnedAtById: {},
     defaultAdvertisedEndpointKey: null,
-    sidebarViewMode: "projects",
-    tagById: {},
-    threadTagIdsByThreadKey: {},
-    projectTagIdsByProjectKey: {},
-    tagExpandedById: {},
     ...overrides,
   };
 }
@@ -165,12 +159,6 @@ describe("parsePersistedState", () => {
         invalid: "not-a-date",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
-      sidebarViewMode: "projects",
-      threadPinnedAtById: {},
-      tagById: {},
-      threadTagIdsByThreadKey: {},
-      projectTagIdsByProjectKey: {},
-      tagExpandedById: {},
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -189,12 +177,6 @@ describe("parsePersistedState", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
-      sidebarViewMode: "projects",
-      threadPinnedAtById: {},
-      tagById: {},
-      threadTagIdsByThreadKey: {},
-      projectTagIdsByProjectKey: {},
-      tagExpandedById: {},
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
           "turn-1": false,
@@ -314,12 +296,6 @@ describe("uiStateStore persistence", () => {
         "environment:thread-1": "2026-02-25T12:35:00.000Z",
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
-      sidebarViewMode: "projects",
-      threadPinnedAtById: {},
-      tagById: {},
-      threadTagIdsByThreadKey: {},
-      projectTagIdsByProjectKey: {},
-      tagExpandedById: {},
       threadChangedFilesExpansionVersion: 1,
       threadChangedFilesExpandedById: {
         "environment:thread-1": {

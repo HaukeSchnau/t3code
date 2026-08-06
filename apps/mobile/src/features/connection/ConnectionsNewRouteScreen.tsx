@@ -45,9 +45,7 @@ export function ConnectionsNewRouteScreen({
   const pairingAutomation = resolveConnectionPairingAutomation({
     routePairingUrl: params.pairingUrl,
     routeAutoConnect: params.autoConnect,
-    developmentPairingUrl: __DEV__
-      ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL
-      : undefined,
+    developmentPairingUrl: __DEV__ ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL : undefined,
     developmentAutoConnect: __DEV__
       ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT
       : undefined,

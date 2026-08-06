@@ -20,8 +20,6 @@ import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
 import { Badge } from "../ui/badge";
-import { TagColorDot } from "../TagColorDot";
-import type { UiTagColor } from "../../tagColors";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -29,11 +27,6 @@ interface ChatHeaderProps {
   draftId?: DraftId;
   activeThreadTitle: string;
   activeProjectName: string | undefined;
-  activeTags: ReadonlyArray<{
-    readonly id: string;
-    readonly name: string;
-    readonly color: UiTagColor;
-  }>;
   isGitRepo: boolean;
   activeProjectCwd: string | null;
   openInCwd: string | null;
@@ -71,7 +64,6 @@ export const ChatHeader = memo(function ChatHeader({
   draftId,
   activeThreadTitle,
   activeProjectName,
-  activeTags,
   isGitRepo,
   activeProjectCwd,
   openInCwd,
@@ -88,8 +80,6 @@ export const ChatHeader = memo(function ChatHeader({
   onDeleteProjectScript,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
-  const visibleTags = activeTags.slice(0, 2);
-  const hiddenTags = activeTags.slice(2);
   const fileScripts = useT3ProjectFileScripts(
     activeThreadEnvironmentId,
     activeProjectScripts ? activeProjectCwd : null,
@@ -152,38 +142,6 @@ export const ChatHeader = memo(function ChatHeader({
           >
             <span className="min-w-0 truncate">{activeProjectName}</span>
           </Badge>
-        )}
-        {visibleTags.map((tag) => (
-          <Badge
-            key={tag.id}
-            variant="outline"
-            className="min-w-0 max-w-28 shrink overflow-hidden bg-muted/35 text-[10px] text-muted-foreground"
-            data-testid={`chat-header-tag-${tag.id}`}
-            aria-label={`Tag ${tag.name}`}
-            title={tag.name}
-          >
-            <TagColorDot color={tag.color} className="size-1.5" />
-            <span className="min-w-0 truncate">{tag.name}</span>
-          </Badge>
-        ))}
-        {hiddenTags.length > 0 && (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Badge
-                  variant="outline"
-                  className="shrink-0 bg-muted/35 text-[10px] text-muted-foreground"
-                  data-testid="chat-header-tag-overflow"
-                  aria-label={`${hiddenTags.length} more tags`}
-                >
-                  +{hiddenTags.length}
-                </Badge>
-              }
-            />
-            <TooltipPopup side="bottom">
-              {hiddenTags.map((tag) => tag.name).join(", ")}
-            </TooltipPopup>
-          </Tooltip>
         )}
         {activeProjectName && !isGitRepo && (
           <Badge variant="outline" className="shrink-0 text-[10px] text-amber-700">
