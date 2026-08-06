@@ -308,10 +308,14 @@
               pkgs.bash
               pkgs.coreutils
               pkgs.findutils
+              pkgs.gcc
               pkgs.git
+              pkgs.gnumake
               pkgs.gnugrep
               pkgs.gnused
               pkgs.jq
+              pkgs.pkg-config
+              pkgs.python3
               pnpm
             ];
             text = ''
@@ -564,9 +568,22 @@
         }
       );
 
-      checks = forAllSystems (system: {
-        package = self.packages.${system}.default;
-      });
+      checks = forAllSystems (
+        system:
+        let
+          pkgs = mkPkgs system;
+          runtime = projectApplications.${system}.projectRuntime;
+        in
+        {
+          package = self.packages.${system}.default;
+          projectRuntime = pkgs.runCommand "t3code-project-runtime-check" { } ''
+            ${pkgs.bash}/bin/bash -n ${runtime}/bin/t3code-project-runtime
+            grep -Fq '${pkgs.python3}/bin' ${runtime}/bin/t3code-project-runtime
+            grep -Fq '${pkgs.gcc}/bin' ${runtime}/bin/t3code-project-runtime
+            touch "$out"
+          '';
+        }
+      );
 
       nixosModules.default =
         {
