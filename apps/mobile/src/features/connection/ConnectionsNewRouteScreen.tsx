@@ -2,7 +2,7 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { AsyncResult } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
@@ -14,9 +14,12 @@ import { ConnectionSheetButton } from "./ConnectionSheetButton";
 import { extractPairingUrlFromQrPayload } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
 import { buildPairingUrl, parsePairingUrl } from "./pairing";
+import { resolveConnectionPairingAutomation } from "./connectionPairingAutomation";
 
 type ConnectionsNewRouteParams = {
+  readonly autoConnect?: string;
   readonly mode?: string;
+  readonly pairingUrl?: string;
 };
 
 export function ConnectionsNewRouteScreen({
@@ -37,6 +40,18 @@ export function ConnectionsNewRouteScreen({
   const [showScanner, setShowScanner] = useState(params.mode === "scan_qr");
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [scannerLocked, setScannerLocked] = useState(false);
+  const consumedPairingUrlRef = useRef<string | null>(null);
+
+  const pairingAutomation = resolveConnectionPairingAutomation({
+    routePairingUrl: params.pairingUrl,
+    routeAutoConnect: params.autoConnect,
+    developmentPairingUrl: __DEV__
+      ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL
+      : undefined,
+    developmentAutoConnect: __DEV__
+      ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT
+      : undefined,
+  });
 
   const headerIconColor = useThemeColor("--color-icon");
 
@@ -47,6 +62,46 @@ export function ConnectionsNewRouteScreen({
     setHostInput(host);
     setCodeInput(code);
   }, [connectionPairingUrl]);
+
+  useEffect(() => {
+    if (
+      pairingAutomation === null ||
+      consumedPairingUrlRef.current === pairingAutomation.pairingUrl
+    ) {
+      return;
+    }
+
+    const { pairingUrl, autoConnect } = pairingAutomation;
+    consumedPairingUrlRef.current = pairingUrl;
+    const { host, code } = parsePairingUrl(pairingUrl);
+    setHostInput(host);
+    setCodeInput(code);
+    onChangeConnectionPairingUrl(pairingUrl);
+
+    if (!autoConnect) return;
+
+    setIsSubmitting(true);
+    void onConnectPress(pairingUrl).then(
+      (result) => {
+        if (!AsyncResult.isSuccess(result)) {
+          setIsSubmitting(false);
+          return;
+        }
+        if (navigation.canGoBack()) {
+          navigation.goBack();
+        } else {
+          navigation.dispatch(StackActions.replace("Home"));
+        }
+      },
+      () => setIsSubmitting(false),
+    );
+  }, [
+    navigation,
+    onChangeConnectionPairingUrl,
+    onConnectPress,
+    pairingAutomation?.autoConnect,
+    pairingAutomation?.pairingUrl,
+  ]);
 
   useEffect(() => {
     if (pairingConnectionError) {
