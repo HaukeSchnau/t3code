@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "project": "t3code",
+  "development": {
+    "endpoints": {
+      "metro": {
+        "health": {
+          "paths": [
+            "/status"
+          ]
+        }
+      }
+    }
+  }
+}

@@ -41,6 +41,10 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   Persistent supervision and Tailnet ingress belong to the declarative host Project, not an imperative
   `agent-service` preview. Local invocation without a manifest may use the repository's loopback
   defaults.
+- Export the versioned repository-owned Project descriptor as both `project.json` and `lib.project`.
+  Infrastructure evaluates the descriptor and `packages.<system>.projectRuntime` from its pinned flake
+  input to infer Preparation, Workloads, Endpoints, and readiness. It must never evaluate the mutable
+  checkout or an ad-hoc worktree during reconciliation.
 - In dev builds, allow the Add Environment screen to prefill and optionally auto-connect from
   `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`.
 - Also support route params for pairing URL and auto-connect so external automation can deep-link

@@ -20,6 +20,7 @@
       forAllSystems = lib.genAttrs systems;
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
+      projectDescriptor = builtins.fromJSON (builtins.readFile ./project.json);
 
       mkPkgs =
         system:
@@ -501,7 +502,10 @@
       projectApplications = forAllSystems mkProjectApplications;
     in
     {
-      lib.mkT3CodePackage = mkT3CodePackage;
+      lib = {
+        inherit mkT3CodePackage;
+        project = projectDescriptor;
+      };
 
       packages = forAllSystems (
         system:
@@ -576,6 +580,24 @@
         in
         {
           package = self.packages.${system}.default;
+          projectDescriptor =
+            pkgs.runCommand "t3code-project-descriptor-check"
+              {
+                nativeBuildInputs = [ pkgs.jq ];
+                descriptor = pkgs.writeText "t3code-project.json" (builtins.toJSON projectDescriptor);
+              }
+              ''
+                set -euo pipefail
+
+                jq -e '
+                  .schemaVersion == 1 and
+                  .project == "t3code" and
+                  (.development.endpoints | keys) == ["metro"] and
+                  .development.endpoints.metro.health.paths == ["/status"]
+                ' "$descriptor" >/dev/null
+
+                touch "$out"
+              '';
           projectRuntime = pkgs.runCommand "t3code-project-runtime-check" { } ''
             ${pkgs.bash}/bin/bash -n ${runtime}/bin/t3code-project-runtime
             grep -Fq '${pkgs.python3}/bin' ${runtime}/bin/t3code-project-runtime
