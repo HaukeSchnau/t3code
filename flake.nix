@@ -305,9 +305,12 @@
             name = "t3code-project-runtime";
             runtimeInputs = [
               nodejs
+              pkgs.bash
               pkgs.coreutils
               pkgs.findutils
               pkgs.git
+              pkgs.gnugrep
+              pkgs.gnused
               pkgs.jq
               pnpm
             ];
