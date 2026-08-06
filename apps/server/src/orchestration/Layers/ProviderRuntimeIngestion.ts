@@ -3403,9 +3403,66 @@ const make = Effect.gen(function* () {
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
+      yield* Effect.addFinalizer(() => finalize.pipe(Effect.ignore));
+      const liveSubscription =
+        providerService.subscribeEvents === undefined
+          ? null
+          : yield* providerService.subscribeEvents;
+      const pendingTranscriptEvents = yield* retryPersistence(transcriptJournal.list).pipe(
+        Effect.orDie,
+      );
+      const initialUndeliveredTranscriptEvents = yield* retryPersistence(
+        transcriptJournal.listUndelivered,
+      ).pipe(Effect.orDie);
+      yield* transcriptJournalTracker.hydrateOnce(initialUndeliveredTranscriptEvents);
+      for (const { event } of pendingTranscriptEvents) {
+        const scopeKey = transcriptItemScopeKey(event);
+        if (scopeKey === null) continue;
+        if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
+          recoveringTranscriptJournalCountByScope.set(
+            scopeKey,
+            (recoveringTranscriptJournalCountByScope.get(scopeKey) ?? 0) + 1,
+          );
+        }
+      }
+      const recoveryBatches = batchProviderTranscriptJournalEntries(pendingTranscriptEvents);
+      yield* transcriptJournalTracker.beginRecovery({
+        batchCount: recoveryBatches.length,
+        sourceEventCount: pendingTranscriptEvents.length,
+      });
+      yield* Effect.forEach(
+        recoveryBatches,
+        (batch) =>
+          processJournaledRuntimeEvent(batch, "recovery").pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                const { event, sourceEvents } = batch;
+                const scopeKey = transcriptItemScopeKey(event);
+                if (scopeKey === null) return;
+                const remaining = recoveringTranscriptJournalCountByScope.get(scopeKey);
+                if (remaining === undefined) return;
+                if (remaining > sourceEvents.length) {
+                  recoveringTranscriptJournalCountByScope.set(
+                    scopeKey,
+                    remaining - sourceEvents.length,
+                  );
+                  return;
+                }
+                recoveringTranscriptJournalCountByScope.delete(scopeKey);
+              }),
+            ),
+            // Batch outcomes (including a bounded sample of failed identities)
+            // are aggregated into the single recovery summary log.
+            Effect.catchCause(() => Effect.void),
+          ),
+        { concurrency: 1, discard: true },
+      ).pipe(Effect.ensuring(transcriptJournalTracker.finishRecovery));
       yield* forkParked(
-        Stream.runForEach(providerService.streamEvents, (event) =>
-          worker.enqueue(event.threadId, { source: "runtime", event }),
+        Stream.runForEach(
+          liveSubscription === null
+            ? providerService.streamEvents
+            : Stream.fromSubscription(liveSubscription),
+          (event) => worker.enqueue(event.threadId, { source: "runtime", event }),
         ),
       );
       yield* forkParked(
