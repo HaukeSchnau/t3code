@@ -40,10 +40,12 @@ import {
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
 import { buildModelMenuActions, resolveSelectableModelSelection } from "../../lib/modelOptions";
+import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { enqueueThreadOutboxMessage, updateThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
+import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 
 function formatWorkspaceLabel(input: {
@@ -806,6 +808,14 @@ export function NewTaskDraftScreen(props: {
     const queued = flow.buildPendingTaskMessage(metadata);
     if (!queued) return;
     flow.setSubmitting(true);
+    if (environmentConnected) {
+      // Start while the app is still foregrounded so the native activity token
+      // can be registered even when the outbox drain continues in background.
+      armAgentAwarenessLiveActivityForLocalWork({
+        threadTitle: deriveThreadTitleFromPrompt(initialMessageText),
+        projectTitle: selectedProject.title,
+      });
+    }
     try {
       if (editingPendingTask) {
         await updateThreadOutboxMessage(editingPendingTask, queued);
