@@ -23,11 +23,12 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   - `just mobile-dev`
   - `just mobile-prod`
   - `just mobile-dev-server`
-  - `just mobile-dev-tailnet`
   - `just mobile-dev-open`
   - `just mobile-dev-reload`
   - `just mobile-dev-snapshot`
   - `just desktop-macos`
+- Provide repository-owned `.#dev`, `.#dev -- --only metro`, and `.#dev-metro` Nix entry points for
+  supervised or local Metro development.
 - Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
   executable so `just desktop-macos` works in non-interactive shells where `vp` is not installed
   globally or present on `PATH`.
@@ -36,9 +37,10 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
   `T3CODE_MOBILE_METRO_HOST`.
 - Keep pairing URLs out of committed state and logs. Treat them as credentials.
-- Keep the Tailnet Metro server under a stable `agent-service` name and fixed internal port. Re-running
-  its recipe must replace the current service, publish a Tailnet-only HTTPS route, advertise that route
-  to Expo Dev Clients, wait for Metro readiness, and leave the service running persistently.
+- Consume `PROJECT_RUNTIME_FILE` for the Metro endpoint, listener, state, cache, and checkout paths.
+  Persistent supervision and Tailnet ingress belong to the declarative host Project, not an imperative
+  `agent-service` preview. Local invocation without a manifest may use the repository's loopback
+  defaults.
 - In dev builds, allow the Add Environment screen to prefill and optionally auto-connect from
   `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`.
 - Also support route params for pairing URL and auto-connect so external automation can deep-link
@@ -62,6 +64,7 @@ dump` can be empty unless log capture has been explicitly started.
 ## Upstream Touch Points
 
 - `Justfile`
+- `flake.nix`
 - `scripts/build-desktop-artifact.ts`
 - `apps/mobile/README.md`
 - `apps/mobile/src/app/connections/new.tsx`
