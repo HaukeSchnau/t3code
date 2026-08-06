@@ -15,16 +15,13 @@ import type {
   ServerConfig as T3ServerConfig,
   ThreadId,
 } from "@t3tools/contracts";
-import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import * as Haptics from "expo-haptics";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Platform, View, type GestureResponderEvent } from "react-native";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { KeyboardController, KeyboardStickyView } from "react-native-keyboard-controller";
-import Animated, { FadeInDown, FadeOut, LinearTransition, runOnJS } from "react-native-reanimated";
+import Animated, { FadeInDown, FadeOut, LinearTransition } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
@@ -89,7 +86,6 @@ export interface ThreadDetailScreenProps {
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
-  readonly onNavigateBack: () => void;
   readonly onOpenConnectionEditor: () => void;
   readonly onChangeDraftMessage: (value: string) => void;
   readonly onPickDraftImages: () => Promise<void>;
@@ -189,53 +185,7 @@ function useStreamingHaptics(threadId: ThreadId, feed: ReadonlyArray<ThreadFeedE
   }, [threadId, feed]);
 }
 
-// Pre-measurement estimate for the working pill's slot (the real height is
-// measured via onComposerLayout since the pill lives inside the composer
-// overlay). Matches the rendered pill: pt-2 + pb-2 (16) wrapping a bordered
-// px-3/py-2 row (~36), so ~52 — keep it in sync with WorkingDurationPill.
-const WORKING_INDICATOR_HEIGHT = 52;
-const EDGE_BACK_GESTURE_WIDTH = 44;
-const BACK_SWIPE_DISTANCE = 56;
-const BACK_SWIPE_VELOCITY = 650;
-
-const WorkingDurationPill = memo(function WorkingDurationPill(props: {
-  readonly startedAt: string;
-}) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-    return () => clearInterval(intervalId);
-  }, [props.startedAt]);
-
-  const durationLabel = formatElapsed(props.startedAt, new Date(nowMs).toISOString()) ?? "0s";
-
-  return (
-    <Animated.View
-      className="shrink-0 px-4 pb-2 pt-2"
-      entering={FadeInDown.duration(200)}
-      exiting={FadeOut.duration(140)}
-    >
-      <View className="self-start rounded-full border border-neutral-200/80 bg-neutral-50/90 px-3 py-2 dark:border-white/[0.08] dark:bg-white/[0.04]">
-        <View className="flex-row items-center gap-2">
-          <View className="flex-row items-center gap-1">
-            <View className="h-1.5 w-1.5 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-            <View className="h-1.5 w-1.5 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
-            <View className="h-1.5 w-1.5 rounded-full bg-neutral-400/60 dark:bg-neutral-500/60" />
-          </View>
-          <Text className="font-t3-medium text-xs text-neutral-600 dark:text-neutral-400">
-            Working for {durationLabel}
-          </Text>
-        </View>
-      </View>
-    </Animated.View>
-  );
-});
-
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
-  const { onNavigateBack } = props;
   const insets = useSafeAreaInsets();
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
@@ -268,8 +218,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const selectedThreadFeed = props.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
-  const activeWorkIndicatorHeight = props.activeWorkStartedAt ? WORKING_INDICATOR_HEIGHT : 0;
-  const estimatedOverlayHeight = composerOverlapHeight + activeWorkIndicatorHeight;
   // The overlay's measured height includes the home-indicator inset (the
   // composer pads it), but contentInsetAdjustmentBehavior="automatic" makes
   // UIKit add the safe-area bottom to the content inset AGAIN — leaving a
@@ -282,7 +230,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const { contentInsetEndAdjustment, onComposerLayout } = useKeyboardChatComposerInset(
     listRef,
     composerOverlayRef,
-    Math.max(0, estimatedOverlayHeight - nativeInsetOvercount),
+    Math.max(0, composerOverlapHeight - nativeInsetOvercount),
     -nativeInsetOvercount,
   );
   const { freeze, scrollMessageToEnd } = useKeyboardScrollToEnd({ listRef });
@@ -297,27 +245,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       props.serverConfig?.providers.find((provider) => provider.instanceId === selectedInstanceId)
         ?.skills ?? [],
     [props.serverConfig, selectedInstanceId],
-  );
-
-  const completeBackGesture = useCallback(() => {
-    void Haptics.selectionAsync();
-    onNavigateBack();
-  }, [onNavigateBack]);
-
-  const edgeBackGesture = useMemo(
-    () =>
-      Gesture.Pan()
-        .enabled(!isSplitLayout)
-        .hitSlop({ left: 0, width: EDGE_BACK_GESTURE_WIDTH })
-        .activeOffsetX([-12, 12])
-        .failOffsetY([-24, 24])
-        .onEnd((event) => {
-          const translationX = Math.max(event.translationX, 0);
-          if (translationX > BACK_SWIPE_DISTANCE || event.velocityX > BACK_SWIPE_VELOCITY) {
-            runOnJS(completeBackGesture)();
-          }
-        }),
-    [completeBackGesture, isSplitLayout],
   );
 
   useLayoutEffect(() => {
@@ -429,135 +356,129 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, []);
 
   return (
-    <GestureDetector gesture={edgeBackGesture}>
-      <View className="flex-1">
-        {showContent ? (
-          <View
-            className="flex-1"
-            onTouchStart={handleFeedTouchStart}
-            onTouchMove={handleFeedTouchMove}
-            onTouchEnd={handleFeedTouchEnd}
-            onTouchCancel={handleFeedTouchCancel}
-          >
-            <ThreadFeed
-              key={props.selectedThread.id}
-              environmentId={props.environmentId}
-              threadId={props.selectedThread.id}
-              workspaceRoot={props.threadCwd}
-              feed={props.selectedThreadFeed}
-              contentPresentation={props.contentPresentation}
-              agentLabel={agentLabel}
-              latestTurn={props.selectedThread.latestTurn}
-              activeWorkStartedAt={props.activeWorkStartedAt}
-              listRef={listRef}
-              freeze={freeze}
-              anchorMessageId={anchorMessageId}
-              contentInsetEndAdjustment={contentInsetEndAdjustment}
-              contentTopInset={0}
-              contentBottomInset={estimatedOverlayHeight}
+    <View className="flex-1">
+      {showContent ? (
+        <View
+          className="flex-1"
+          onTouchStart={handleFeedTouchStart}
+          onTouchMove={handleFeedTouchMove}
+          onTouchEnd={handleFeedTouchEnd}
+          onTouchCancel={handleFeedTouchCancel}
+        >
+          <ThreadFeed
+            key={props.selectedThread.id}
+            environmentId={props.environmentId}
+            threadId={props.selectedThread.id}
+            workspaceRoot={props.threadCwd}
+            feed={props.selectedThreadFeed}
+            contentPresentation={props.contentPresentation}
+            agentLabel={agentLabel}
+            latestTurn={props.selectedThread.latestTurn}
+            activeWorkStartedAt={props.activeWorkStartedAt}
+            listRef={listRef}
+            freeze={freeze}
+            anchorMessageId={anchorMessageId}
+            contentInsetEndAdjustment={contentInsetEndAdjustment}
+            contentTopInset={0}
+            contentBottomInset={composerOverlapHeight}
+            contentMaxWidth={contentMaxWidth}
+            layoutVariant={layoutVariant}
+            usesAutomaticContentInsets={props.usesAutomaticContentInsets}
+            onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
+            skills={selectedProviderSkills}
+          />
+        </View>
+      ) : (
+        <View className="flex-1" />
+      )}
+
+      {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
+      {showContent ? (
+        <KeyboardStickyView
+          style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+          offset={{ closed: 0, opened: 0 }}
+        >
+          {/* No paddingTop here: the overlay's measured height becomes the
+              list's bottom inset, so any padding above the cards/composer
+              pushes the resting content floor up by the same amount. */}
+          <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
+            <Animated.View
+              className="w-full self-center"
+              layout={LinearTransition.duration(220)}
+              style={{ maxWidth: contentMaxWidth }}
+            >
+              {props.activePendingApproval || props.activePendingUserInput ? (
+                <Animated.View
+                  className="shrink-0 gap-3 px-4 pb-3"
+                  entering={FadeInDown.duration(220)}
+                  exiting={FadeOut.duration(140)}
+                >
+                  {props.activePendingApproval ? (
+                    <PendingApprovalCard
+                      approval={props.activePendingApproval}
+                      respondingApprovalId={props.respondingApprovalId}
+                      onRespond={props.onRespondToApproval}
+                    />
+                  ) : null}
+                  {props.activePendingUserInput ? (
+                    <PendingUserInputCard
+                      pendingUserInput={props.activePendingUserInput}
+                      drafts={props.activePendingUserInputDrafts}
+                      answers={props.activePendingUserInputAnswers}
+                      respondingUserInputId={props.respondingUserInputId}
+                      onSelectOption={props.onSelectUserInputOption}
+                      onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
+                      onSubmit={props.onSubmitUserInput}
+                    />
+                  ) : null}
+                </Animated.View>
+              ) : null}
+            </Animated.View>
+
+            <ThreadComposer
+              editorRef={composerEditorRef}
+              draftMessage={props.draftMessage}
+              draftAttachments={props.draftAttachments}
+              placeholder="Ask the repo agent, or run a command…"
               contentMaxWidth={contentMaxWidth}
-              layoutVariant={layoutVariant}
-              usesAutomaticContentInsets={props.usesAutomaticContentInsets}
-              onHeaderMaterialVisibilityChange={props.onHeaderMaterialVisibilityChange}
-              skills={selectedProviderSkills}
+              connectionState={props.connectionStateLabel}
+              connectionFreshness={props.connectionFreshness}
+              hasThreadContent={contentPresentationKind === "ready"}
+              connectionError={props.connectionError}
+              environmentLabel={props.environmentLabel}
+              threadSyncPhase={threadSyncPhase}
+              selectedThread={props.selectedThread}
+              serverConfig={props.serverConfig}
+              queueCount={props.selectedThreadQueueCount}
+              queueStatus={props.selectedThreadQueueStatus}
+              rejectedCount={props.selectedThreadRejectedCount}
+              queuedIntents={props.selectedThreadQueuedIntents}
+              editingQueuedMessageId={props.editingQueuedMessageId}
+              remoteQueueCount={props.remoteQueueCount}
+              onDiscardRejected={props.onDiscardRejectedMessages}
+              onEditPendingMessage={props.onEditPendingMessage}
+              onCancelPendingMessage={props.onCancelPendingMessage}
+              onDiscardRejectedMessage={props.onDiscardRejectedMessage}
+              onCancelQueuedMessageEdit={props.onCancelQueuedMessageEdit}
+              activeThreadBusy={props.activeThreadBusy}
+              environmentId={props.environmentId}
+              projectCwd={props.projectWorkspaceRoot}
+              bottomInset={composerBottomInset}
+              onChangeDraftMessage={props.onChangeDraftMessage}
+              onPickDraftImages={props.onPickDraftImages}
+              onNativePasteImages={props.onNativePasteImages}
+              onRemoveDraftImage={props.onRemoveDraftImage}
+              onStopThread={props.onStopThread}
+              onSendMessage={handleSendMessage}
+              onReconnectEnvironment={props.onReconnectEnvironment}
+              onUpdateModelSelection={props.onUpdateThreadModelSelection}
+              onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
+              onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
+              onExpandedChange={setComposerExpanded}
             />
           </View>
-        ) : (
-          <View className="flex-1" />
-        )}
-
-        {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
-        {showContent ? (
-          <KeyboardStickyView
-            style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
-            offset={{ closed: 0, opened: 0 }}
-          >
-            {/* No paddingTop here: the overlay's measured height becomes the
-              list's bottom inset, so any padding above the pill/composer
-              pushes the resting content floor up by the same amount. */}
-            <View ref={composerOverlayRef} onLayout={onComposerLayout} className="w-full">
-              <Animated.View
-                className="w-full self-center"
-                layout={LinearTransition.duration(220)}
-                style={{ maxWidth: contentMaxWidth }}
-              >
-                {props.activeWorkStartedAt ? (
-                  <WorkingDurationPill startedAt={props.activeWorkStartedAt} />
-                ) : null}
-
-                {props.activePendingApproval || props.activePendingUserInput ? (
-                  <Animated.View
-                    className="shrink-0 gap-3 px-4 pb-3"
-                    entering={FadeInDown.duration(220)}
-                    exiting={FadeOut.duration(140)}
-                  >
-                    {props.activePendingApproval ? (
-                      <PendingApprovalCard
-                        approval={props.activePendingApproval}
-                        respondingApprovalId={props.respondingApprovalId}
-                        onRespond={props.onRespondToApproval}
-                      />
-                    ) : null}
-                    {props.activePendingUserInput ? (
-                      <PendingUserInputCard
-                        pendingUserInput={props.activePendingUserInput}
-                        drafts={props.activePendingUserInputDrafts}
-                        answers={props.activePendingUserInputAnswers}
-                        respondingUserInputId={props.respondingUserInputId}
-                        onSelectOption={props.onSelectUserInputOption}
-                        onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
-                        onSubmit={props.onSubmitUserInput}
-                      />
-                    ) : null}
-                  </Animated.View>
-                ) : null}
-              </Animated.View>
-
-              <ThreadComposer
-                editorRef={composerEditorRef}
-                draftMessage={props.draftMessage}
-                draftAttachments={props.draftAttachments}
-                placeholder="Ask the repo agent, or run a command…"
-                contentMaxWidth={contentMaxWidth}
-                connectionState={props.connectionStateLabel}
-                connectionFreshness={props.connectionFreshness}
-                hasThreadContent={contentPresentationKind === "ready"}
-                connectionError={props.connectionError}
-                environmentLabel={props.environmentLabel}
-                threadSyncPhase={threadSyncPhase}
-                selectedThread={props.selectedThread}
-                serverConfig={props.serverConfig}
-                queueCount={props.selectedThreadQueueCount}
-                queueStatus={props.selectedThreadQueueStatus}
-                rejectedCount={props.selectedThreadRejectedCount}
-                queuedIntents={props.selectedThreadQueuedIntents}
-                editingQueuedMessageId={props.editingQueuedMessageId}
-                remoteQueueCount={props.remoteQueueCount}
-                onDiscardRejected={props.onDiscardRejectedMessages}
-                onEditPendingMessage={props.onEditPendingMessage}
-                onCancelPendingMessage={props.onCancelPendingMessage}
-                onDiscardRejectedMessage={props.onDiscardRejectedMessage}
-                onCancelQueuedMessageEdit={props.onCancelQueuedMessageEdit}
-                activeThreadBusy={props.activeThreadBusy}
-                environmentId={props.environmentId}
-                projectCwd={props.projectWorkspaceRoot}
-                bottomInset={composerBottomInset}
-                onChangeDraftMessage={props.onChangeDraftMessage}
-                onPickDraftImages={props.onPickDraftImages}
-                onNativePasteImages={props.onNativePasteImages}
-                onRemoveDraftImage={props.onRemoveDraftImage}
-                onStopThread={props.onStopThread}
-                onSendMessage={handleSendMessage}
-                onReconnectEnvironment={props.onReconnectEnvironment}
-                onUpdateModelSelection={props.onUpdateThreadModelSelection}
-                onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
-                onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
-                onExpandedChange={setComposerExpanded}
-              />
-            </View>
-          </KeyboardStickyView>
-        ) : null}
-      </View>
-    </GestureDetector>
+        </KeyboardStickyView>
+      ) : null}
+    </View>
   );
 });

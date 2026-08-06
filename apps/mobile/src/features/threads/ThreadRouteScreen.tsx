@@ -9,7 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { Platform, ScrollView, View } from "react-native";
+import { ActivityIndicator, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentQuery } from "../../state/query";
@@ -17,6 +17,7 @@ import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vc
 import { vcsEnvironment } from "../../state/vcs";
 
 import { EmptyState } from "../../components/EmptyState";
+import { AppText as Text } from "../../components/AppText";
 import {
   AndroidScreenHeader,
   type AndroidHeaderAction,
@@ -72,6 +73,11 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
+import {
+  forgetPendingThreadCreation,
+  resolveThreadRoutePresentation,
+  usePendingThreadCreation,
+} from "./pendingThreadNavigation";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;
@@ -127,6 +133,48 @@ function ThreadUnavailableScreen() {
   );
 }
 
+function PendingThreadCreationScreen(props: {
+  readonly environmentId: string;
+  readonly threadId: string;
+  readonly title: string;
+}) {
+  const navigation = useNavigation();
+  const handleBack = useCallback(() => {
+    if (navigation.canGoBack()) {
+      navigation.goBack();
+      return;
+    }
+    navigation.dispatch(StackActions.replace("Home"));
+  }, [navigation]);
+  useEffect(
+    () => () => forgetPendingThreadCreation(props.environmentId, props.threadId),
+    [props.environmentId, props.threadId],
+  );
+
+  return (
+    <View className="flex-1 bg-screen">
+      <NativeStackScreenOptions
+        options={{
+          headerShown: Platform.OS !== "android",
+          headerTitle: props.title,
+          title: props.title,
+        }}
+      />
+      {Platform.OS === "android" ? (
+        <AndroidScreenHeader title={props.title} onBack={handleBack} />
+      ) : null}
+      <View className="flex-1 items-center justify-center gap-4 px-8">
+        <ActivityIndicator size="large" />
+        <Text className="text-center text-lg font-t3-bold text-foreground">Creating thread…</Text>
+        <Text className="max-w-sm text-center text-sm leading-relaxed text-foreground-muted">
+          Your task is saved on this device. It will open here when the environment confirms it. You
+          can go back to edit or remove the pending task.
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
@@ -147,29 +195,48 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
       ? null
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
+  const pendingCreation = usePendingThreadCreation(environmentIdRaw, threadIdRaw);
+  const hasMatchingThread = selectedThread !== null && selectedThreadKey === routeThreadKey;
+  useEffect(() => {
+    if (hasMatchingThread && environmentIdRaw !== null && threadIdRaw !== null) {
+      forgetPendingThreadCreation(environmentIdRaw, threadIdRaw);
+    }
+  }, [environmentIdRaw, hasMatchingThread, threadIdRaw]);
 
   if (environmentId === null || threadIdRaw === null) {
     return <OpeningThreadLoadingScreen />;
-  }
-
-  // Render the full thread chrome (header, feed, composer) as soon as the
-  // thread SHELL is known — no blocking on message detail. The feed shows a
-  // loading placeholder while messages fetch, and the composer's connection
-  // pill reports connecting/reconnecting/syncing status.
-  if (selectedThread !== null && selectedThreadKey === routeThreadKey) {
-    return <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />;
   }
 
   const stillHydrating =
     workspaceState.isLoadingConnections ||
     routeConnectionState === "connecting" ||
     routeConnectionState === "reconnecting";
+  const presentation = resolveThreadRoutePresentation({
+    hasMatchingThread,
+    pendingCreation: pendingCreation !== null,
+    stillHydrating,
+  });
 
-  if (stillHydrating) {
-    return <OpeningThreadLoadingScreen />;
+  switch (presentation) {
+    case "thread":
+      // Render the full thread chrome as soon as the shell is known. The feed
+      // owns its loading state while detail catches up.
+      return (
+        <ThreadRouteContent {...props} selectedThreadDetailState={selectedThreadDetailState} />
+      );
+    case "pending-creation":
+      return (
+        <PendingThreadCreationScreen
+          environmentId={String(environmentId)}
+          threadId={threadIdRaw}
+          title={pendingCreation?.title ?? "Creating thread"}
+        />
+      );
+    case "loading":
+      return <OpeningThreadLoadingScreen />;
+    case "unavailable":
+      return <ThreadUnavailableScreen />;
   }
-
-  return <ThreadUnavailableScreen />;
 }
 
 function ThreadRouteContent(
@@ -457,15 +524,6 @@ function ThreadRouteContent(
   // outside this screen's native header — the terminal/git/files toolbar
   // stays anchored to the chat pane instead of floating above the inspector.
   useRegisterWorkspaceInspector(activeInspectorRenderer);
-
-  const handleNavigateBack = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-
-    navigation.dispatch(StackActions.replace("Home"));
-  }, [navigation]);
 
   const handleOpenConnectionEditor = useCallback(() => {
     void navigation.navigate("Connections");
@@ -794,7 +852,6 @@ function ThreadRouteContent(
           onCancelQueuedMessageEdit={composer.cancelQueuedMessageEdit}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
-          onNavigateBack={handleNavigateBack}
           onOpenConnectionEditor={handleOpenConnectionEditor}
           onChangeDraftMessage={composer.onChangeDraftMessage}
           onPickDraftImages={composer.onPickDraftImages}

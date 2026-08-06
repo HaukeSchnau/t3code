@@ -1,9 +1,12 @@
-import { SettingsIcon } from "lucide-react";
+import { LayoutDashboardIcon, SettingsIcon } from "lucide-react";
+import { useAtomValue } from "@effect/atom-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
+import { shortcutLabelForCommand } from "../../keybindings";
 import { cn } from "../../lib/utils";
+import { primaryServerKeybindingsAtom } from "../../state/server";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -111,6 +114,15 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const monitorShortcutLabel = shortcutLabelForCommand(keybindings, "monitor.toggle");
+  const monitorLabel = monitorShortcutLabel ? `Monitor (${monitorShortcutLabel})` : "Monitor";
+  const handleMonitorClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    void navigate({ to: "/monitor" });
+  }, [isMobile, navigate, setOpenMobile]);
   const handleSettingsClick = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -123,6 +135,16 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            aria-label={monitorLabel}
+            title={monitorLabel}
+            onClick={handleMonitorClick}
+          >
+            <LayoutDashboardIcon />
+            <span>Monitor</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleSettingsClick}>
             <SettingsIcon />

@@ -33,7 +33,6 @@ From the repo root, the `Justfile` has wrappers for the physical iOS dev loop:
 ```bash
 just mobile-dev
 just mobile-dev-server
-just mobile-dev-tailnet
 just mobile-dev-open
 just mobile-dev-reload
 just mobile-dev-snapshot
@@ -55,17 +54,18 @@ T3CODE_MOBILE_METRO_HOST="192.168.1.10"
 just mobile-dev-open http://192.168.1.10:8081
 ```
 
-On a persistent Tailnet-connected development host, start or replace the named Metro service with:
+The repository-owned Nix entry point runs only Metro and prints the Expo Dev Client link:
 
 ```bash
-just mobile-dev-tailnet
+nix run .#dev-metro
 ```
 
-The recipe publishes Metro at the stable, Tailnet-only URL
-`https://t3code-mobile-dev.schnau.dev`, prints the `t3code-dev://` link for the Expo Dev Client, and keeps
-running through `agent-service` after the shell exits. Running it again stops and replaces the existing
-service so it always serves the current checkout. Override the stable service name or internal port with
-`T3CODE_MOBILE_TAILNET_SERVICE` and `T3CODE_MOBILE_TAILNET_PORT`; the default URL follows the service name.
+Without an external runtime manifest this binds to `http://127.0.0.1:8081`. On a persistent managed
+development host, infrastructure supervises `.#dev -- --only metro` and supplies a
+`PROJECT_RUNTIME_FILE` containing the stable endpoint, listener, state, and cache paths. Tailnet ingress
+and restart policy belong to that declarative service; do not start a second `agent-service` Metro
+preview alongside it. The current managed endpoint remains
+`https://t3code-mobile-dev.schnau.dev`.
 
 For remote-pairing debugging, start Metro with a fresh one-time pairing URL and the dev client will fill and submit the Add Environment screen automatically:
 

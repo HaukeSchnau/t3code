@@ -47,7 +47,7 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 
 - Route: `apps/web/src/routes/_chat.monitor.tsx`
 - Main UI: `apps/web/src/components/MonitorView.tsx`
-- Sidebar entry: `apps/web/src/components/Sidebar.tsx`
+- Sidebar entry: `apps/web/src/components/sidebar/SidebarChrome.tsx`
 - Shortcut handling: `apps/web/src/components/AppSidebarLayout.tsx`
 - Navigation memory: `apps/web/src/monitorNavigation.ts`
 - Generated TanStack route tree must include `/monitor`.

@@ -1,7 +1,6 @@
 import { Debouncer } from "@tanstack/react-pacer";
 import { create } from "zustand";
 import { normalizeProjectPathForComparison } from "./lib/projectPaths";
-import { sanitizeTagColor, tagColorFromId, type UiTagColor } from "./tagColors";
 
 export const PERSISTED_STATE_KEY = "t3code:ui-state:v1";
 const THREAD_CHANGED_FILES_EXPANSION_VERSION = 1;
@@ -28,12 +27,6 @@ export interface PersistedUiState {
   defaultAdvertisedEndpointKey?: string | null;
   threadChangedFilesExpansionVersion?: typeof THREAD_CHANGED_FILES_EXPANSION_VERSION;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
-  sidebarViewMode?: SidebarViewMode;
-  threadPinnedAtById?: Record<string, string>;
-  tagById?: Record<string, UiTag>;
-  threadTagIdsByThreadKey?: Record<string, string[]>;
-  projectTagIdsByProjectKey?: Record<string, string[]>;
-  tagExpandedById?: Record<string, boolean>;
 }
 
 export interface UiProjectState {
@@ -44,48 +37,20 @@ export interface UiProjectState {
 export interface UiThreadState {
   threadLastVisitedAtById: Record<string, string>;
   threadChangedFilesExpandedById: Record<string, Record<string, boolean>>;
-  threadPinnedAtById: Record<string, string>;
 }
 
 export interface UiEndpointState {
   defaultAdvertisedEndpointKey: string | null;
 }
 
-export type SidebarViewMode = "projects" | "all-threads" | "tags";
-
-export interface UiSidebarState {
-  sidebarViewMode: SidebarViewMode;
-}
-
-export interface UiTag {
-  id: string;
-  name: string;
-  color: UiTagColor;
-  createdAt: string;
-}
-
-export interface UiTagState {
-  tagById: Record<string, UiTag>;
-  threadTagIdsByThreadKey: Record<string, string[]>;
-  projectTagIdsByProjectKey: Record<string, string[]>;
-  tagExpandedById: Record<string, boolean>;
-}
-
-export interface UiState
-  extends UiProjectState, UiThreadState, UiEndpointState, UiSidebarState, UiTagState {}
+export interface UiState extends UiProjectState, UiThreadState, UiEndpointState {}
 
 const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
-  threadPinnedAtById: {},
   defaultAdvertisedEndpointKey: null,
-  sidebarViewMode: "projects",
-  tagById: {},
-  threadTagIdsByThreadKey: {},
-  projectTagIdsByProjectKey: {},
-  tagExpandedById: {},
 };
 
 const LEGACY_PROJECT_CWD_PREFERENCE_PREFIX = "legacy-project-cwd:";
@@ -133,81 +98,6 @@ function sanitizeTimestampRecord(value: unknown): Record<string, string> {
   );
 }
 
-function sanitizeSidebarViewMode(value: PersistedUiState["sidebarViewMode"]): SidebarViewMode {
-  return value === "all-threads" || value === "tags" ? value : "projects";
-}
-
-export function normalizeTagName(value: string): string | null {
-  const normalized = value.replace(/\s+/g, " ").trim();
-  return normalized.length > 0 ? normalized : null;
-}
-
-export function tagIdFromName(name: string): string {
-  return name.toLocaleLowerCase();
-}
-
-function sanitizeTagId(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function sanitizePersistedTagCatalog(value: unknown): Record<string, UiTag> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  const nextTags: Record<string, UiTag> = {};
-  for (const [key, tag] of Object.entries(value)) {
-    if (!tag || typeof tag !== "object") {
-      continue;
-    }
-    const persistedTag = tag as Partial<UiTag>;
-    const id = sanitizeTagId(persistedTag.id) ?? sanitizeTagId(key);
-    const name = normalizeTagName(typeof persistedTag.name === "string" ? persistedTag.name : "");
-    const createdAt =
-      typeof persistedTag.createdAt === "string" &&
-      Number.isFinite(Date.parse(persistedTag.createdAt))
-        ? persistedTag.createdAt
-        : new Date(0).toISOString();
-    if (!id || !name) {
-      continue;
-    }
-    nextTags[id] = {
-      id,
-      name,
-      color: sanitizeTagColor(persistedTag.color) ?? tagColorFromId(id),
-      createdAt,
-    };
-  }
-  return nextTags;
-}
-
-function sanitizePersistedTagReferenceRecord(value: unknown): Record<string, string[]> {
-  if (!value || typeof value !== "object") {
-    return {};
-  }
-
-  const nextRecord: Record<string, string[]> = {};
-  for (const [key, tagIds] of Object.entries(value)) {
-    if (!key || !Array.isArray(tagIds)) {
-      continue;
-    }
-    const seen = new Set<string>();
-    const nextTagIds: string[] = [];
-    for (const rawTagId of tagIds) {
-      const tagId = sanitizeTagId(rawTagId);
-      if (!tagId || seen.has(tagId)) {
-        continue;
-      }
-      seen.add(tagId);
-      nextTagIds.push(tagId);
-    }
-    if (nextTagIds.length > 0) {
-      nextRecord[key] = nextTagIds;
-    }
-  }
-  return nextRecord;
-}
-
 export function parsePersistedState(parsed: PersistedUiState): UiState {
   const projectExpandedById =
     parsed.projectExpandedById === undefined
@@ -245,14 +135,6 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       parsed.defaultAdvertisedEndpointKey.length > 0
         ? parsed.defaultAdvertisedEndpointKey
         : null,
-    sidebarViewMode: sanitizeSidebarViewMode(parsed.sidebarViewMode),
-    threadPinnedAtById: sanitizeTimestampRecord(parsed.threadPinnedAtById),
-    tagById: sanitizePersistedTagCatalog(parsed.tagById),
-    threadTagIdsByThreadKey: sanitizePersistedTagReferenceRecord(parsed.threadTagIdsByThreadKey),
-    projectTagIdsByProjectKey: sanitizePersistedTagReferenceRecord(
-      parsed.projectTagIdsByProjectKey,
-    ),
-    tagExpandedById: sanitizeBooleanRecord(parsed.tagExpandedById),
   };
 }
 
@@ -322,15 +204,9 @@ export function persistState(state: UiState): void {
         projectExpandedById,
         projectOrder: state.projectOrder,
         threadLastVisitedAtById: state.threadLastVisitedAtById,
-        threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         defaultAdvertisedEndpointKey: state.defaultAdvertisedEndpointKey,
-        sidebarViewMode: state.sidebarViewMode,
-        threadPinnedAtById: state.threadPinnedAtById,
-        tagById: state.tagById,
-        threadTagIdsByThreadKey: state.threadTagIdsByThreadKey,
-        projectTagIdsByProjectKey: state.projectTagIdsByProjectKey,
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
-        tagExpandedById: state.tagExpandedById,
+        threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -413,267 +289,6 @@ export function setThreadChangedFilesExpanded(
         ...currentThreadState,
         [turnId]: expanded,
       },
-    },
-  };
-}
-
-export function setSidebarViewMode(state: UiState, mode: SidebarViewMode): UiState {
-  if (state.sidebarViewMode === mode) {
-    return state;
-  }
-  return {
-    ...state,
-    sidebarViewMode: mode,
-  };
-}
-
-export function setThreadPinned(
-  state: UiState,
-  threadId: string,
-  pinned: boolean,
-  pinnedAt?: string,
-): UiState {
-  const isCurrentlyPinned = threadId in state.threadPinnedAtById;
-  if (pinned === isCurrentlyPinned) {
-    return state;
-  }
-
-  if (!pinned) {
-    const nextThreadPinnedAtById = { ...state.threadPinnedAtById };
-    delete nextThreadPinnedAtById[threadId];
-    return {
-      ...state,
-      threadPinnedAtById: nextThreadPinnedAtById,
-    };
-  }
-
-  return {
-    ...state,
-    threadPinnedAtById: {
-      ...state.threadPinnedAtById,
-      [threadId]: pinnedAt ?? new Date().toISOString(),
-    },
-  };
-}
-
-function addTagReference(
-  state: UiState,
-  recordKey: string,
-  tagName: string,
-  recordName: "threadTagIdsByThreadKey" | "projectTagIdsByProjectKey",
-  createdAt?: string,
-): UiState {
-  const normalizedName = normalizeTagName(tagName);
-  if (!normalizedName) {
-    return state;
-  }
-
-  const tagId = tagIdFromName(normalizedName);
-  const currentTagIds = state[recordName][recordKey] ?? [];
-  const existingTag = state.tagById[tagId];
-  if (existingTag && currentTagIds.includes(tagId)) {
-    return state;
-  }
-
-  return {
-    ...state,
-    tagById: existingTag
-      ? state.tagById
-      : {
-          ...state.tagById,
-          [tagId]: {
-            id: tagId,
-            name: normalizedName,
-            color: tagColorFromId(tagId),
-            createdAt: createdAt ?? new Date().toISOString(),
-          },
-        },
-    tagExpandedById:
-      tagId in state.tagExpandedById
-        ? state.tagExpandedById
-        : {
-            ...state.tagExpandedById,
-            [tagId]: true,
-          },
-    [recordName]: {
-      ...state[recordName],
-      [recordKey]: currentTagIds.includes(tagId) ? currentTagIds : [...currentTagIds, tagId],
-    },
-  };
-}
-
-function removeTagReference(
-  state: UiState,
-  recordKey: string,
-  tagId: string,
-  recordName: "threadTagIdsByThreadKey" | "projectTagIdsByProjectKey",
-): UiState {
-  const currentTagIds = state[recordName][recordKey] ?? [];
-  if (!currentTagIds.includes(tagId)) {
-    return state;
-  }
-
-  const nextTagIds = currentTagIds.filter((currentTagId) => currentTagId !== tagId);
-  const nextRecord = { ...state[recordName] };
-  if (nextTagIds.length > 0) {
-    nextRecord[recordKey] = nextTagIds;
-  } else {
-    delete nextRecord[recordKey];
-  }
-
-  return {
-    ...state,
-    [recordName]: nextRecord,
-  };
-}
-
-export function addTagToThread(
-  state: UiState,
-  threadKey: string,
-  tagName: string,
-  createdAt?: string,
-): UiState {
-  return addTagReference(state, threadKey, tagName, "threadTagIdsByThreadKey", createdAt);
-}
-
-export function removeTagFromThread(state: UiState, threadKey: string, tagId: string): UiState {
-  return removeTagReference(state, threadKey, tagId, "threadTagIdsByThreadKey");
-}
-
-export function addTagToProject(
-  state: UiState,
-  projectKey: string,
-  tagName: string,
-  createdAt?: string,
-): UiState {
-  return addTagReference(state, projectKey, tagName, "projectTagIdsByProjectKey", createdAt);
-}
-
-export function removeTagFromProject(state: UiState, projectKey: string, tagId: string): UiState {
-  return removeTagReference(state, projectKey, tagId, "projectTagIdsByProjectKey");
-}
-
-function replaceTagIdReferences(record: Record<string, string[]>, fromId: string, toId: string) {
-  const nextRecord: Record<string, string[]> = {};
-  let changed = false;
-  for (const [recordKey, tagIds] of Object.entries(record)) {
-    const seen = new Set<string>();
-    const nextTagIds: string[] = [];
-    for (const tagId of tagIds) {
-      const nextTagId = tagId === fromId ? toId : tagId;
-      if (nextTagId !== tagId) {
-        changed = true;
-      }
-      if (seen.has(nextTagId)) {
-        changed = true;
-        continue;
-      }
-      seen.add(nextTagId);
-      nextTagIds.push(nextTagId);
-    }
-    nextRecord[recordKey] = nextTagIds;
-  }
-  return changed ? nextRecord : record;
-}
-
-export function renameTag(state: UiState, tagId: string, nextName: string): UiState {
-  const tag = state.tagById[tagId];
-  const normalizedName = normalizeTagName(nextName);
-  if (!tag || !normalizedName) {
-    return state;
-  }
-
-  const nextTagId = tagIdFromName(normalizedName);
-  if (nextTagId !== tagId && state.tagById[nextTagId]) {
-    return state;
-  }
-  if (nextTagId === tagId && tag.name === normalizedName) {
-    return state;
-  }
-
-  const nextTagById = { ...state.tagById };
-  delete nextTagById[tagId];
-  nextTagById[nextTagId] = {
-    ...tag,
-    id: nextTagId,
-    name: normalizedName,
-  };
-
-  const nextTagExpandedById = { ...state.tagExpandedById };
-  if (nextTagId !== tagId) {
-    const expanded = nextTagExpandedById[tagId];
-    delete nextTagExpandedById[tagId];
-    if (expanded !== undefined) {
-      nextTagExpandedById[nextTagId] = expanded;
-    }
-  }
-
-  return {
-    ...state,
-    tagById: nextTagById,
-    threadTagIdsByThreadKey:
-      nextTagId === tagId
-        ? state.threadTagIdsByThreadKey
-        : replaceTagIdReferences(state.threadTagIdsByThreadKey, tagId, nextTagId),
-    projectTagIdsByProjectKey:
-      nextTagId === tagId
-        ? state.projectTagIdsByProjectKey
-        : replaceTagIdReferences(state.projectTagIdsByProjectKey, tagId, nextTagId),
-    tagExpandedById: nextTagExpandedById,
-  };
-}
-
-export function setTagColor(state: UiState, tagId: string, color: UiTagColor): UiState {
-  const tag = state.tagById[tagId];
-  if (!tag || tag.color === color) {
-    return state;
-  }
-  return {
-    ...state,
-    tagById: {
-      ...state.tagById,
-      [tagId]: {
-        ...tag,
-        color,
-      },
-    },
-  };
-}
-
-export function deleteTag(state: UiState, tagId: string): UiState {
-  if (!state.tagById[tagId]) {
-    return state;
-  }
-  const nextTagById = { ...state.tagById };
-  const nextTagExpandedById = { ...state.tagExpandedById };
-  delete nextTagById[tagId];
-  delete nextTagExpandedById[tagId];
-  const pruneRecord = (record: Record<string, string[]>) =>
-    Object.fromEntries(
-      Object.entries(record).flatMap(([recordKey, tagIds]) => {
-        const nextTagIds = tagIds.filter((currentTagId) => currentTagId !== tagId);
-        return nextTagIds.length > 0 ? [[recordKey, nextTagIds]] : [];
-      }),
-    );
-
-  return {
-    ...state,
-    tagById: nextTagById,
-    tagExpandedById: nextTagExpandedById,
-    threadTagIdsByThreadKey: pruneRecord(state.threadTagIdsByThreadKey),
-    projectTagIdsByProjectKey: pruneRecord(state.projectTagIdsByProjectKey),
-  };
-}
-
-export function setTagExpanded(state: UiState, tagId: string, expanded: boolean): UiState {
-  if ((state.tagExpandedById[tagId] ?? true) === expanded) {
-    return state;
-  }
-  return {
-    ...state,
-    tagExpandedById: {
-      ...state.tagExpandedById,
-      [tagId]: expanded,
     },
   };
 }
@@ -767,19 +382,9 @@ export function reorderProjects(
 }
 
 interface UiStateStore extends UiState {
-  setSidebarViewMode: (mode: SidebarViewMode) => void;
   markThreadVisited: (threadId: string, visitedAt: string) => void;
   markThreadUnread: (threadId: string, latestTurnCompletedAt: string | null | undefined) => void;
   setThreadChangedFilesExpanded: (threadId: string, turnId: string, expanded: boolean) => void;
-  setThreadPinned: (threadId: string, pinned: boolean, pinnedAt?: string) => void;
-  addTagToThread: (threadKey: string, tagName: string, createdAt?: string) => void;
-  removeTagFromThread: (threadKey: string, tagId: string) => void;
-  addTagToProject: (projectKey: string, tagName: string, createdAt?: string) => void;
-  removeTagFromProject: (projectKey: string, tagId: string) => void;
-  renameTag: (tagId: string, nextName: string) => void;
-  setTagColor: (tagId: string, color: UiTagColor) => void;
-  deleteTag: (tagId: string) => void;
-  setTagExpanded: (tagId: string, expanded: boolean) => void;
   setDefaultAdvertisedEndpointKey: (key: string | null) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   reorderProjects: (
@@ -791,27 +396,12 @@ interface UiStateStore extends UiState {
 
 export const useUiStateStore = create<UiStateStore>((set) => ({
   ...readPersistedState(),
-  setSidebarViewMode: (mode) => set((state) => setSidebarViewMode(state, mode)),
   markThreadVisited: (threadId, visitedAt) =>
     set((state) => markThreadVisited(state, threadId, visitedAt)),
   markThreadUnread: (threadId, latestTurnCompletedAt) =>
     set((state) => markThreadUnread(state, threadId, latestTurnCompletedAt)),
   setThreadChangedFilesExpanded: (threadId, turnId, expanded) =>
     set((state) => setThreadChangedFilesExpanded(state, threadId, turnId, expanded)),
-  setThreadPinned: (threadId, pinned, pinnedAt) =>
-    set((state) => setThreadPinned(state, threadId, pinned, pinnedAt)),
-  addTagToThread: (threadKey, tagName, createdAt) =>
-    set((state) => addTagToThread(state, threadKey, tagName, createdAt)),
-  removeTagFromThread: (threadKey, tagId) =>
-    set((state) => removeTagFromThread(state, threadKey, tagId)),
-  addTagToProject: (projectKey, tagName, createdAt) =>
-    set((state) => addTagToProject(state, projectKey, tagName, createdAt)),
-  removeTagFromProject: (projectKey, tagId) =>
-    set((state) => removeTagFromProject(state, projectKey, tagId)),
-  renameTag: (tagId, nextName) => set((state) => renameTag(state, tagId, nextName)),
-  setTagColor: (tagId, color) => set((state) => setTagColor(state, tagId, color)),
-  deleteTag: (tagId) => set((state) => deleteTag(state, tagId)),
-  setTagExpanded: (tagId, expanded) => set((state) => setTagExpanded(state, tagId, expanded)),
   setDefaultAdvertisedEndpointKey: (key) =>
     set((state) => setDefaultAdvertisedEndpointKey(state, key)),
   setProjectExpanded: (projectIds, expanded) =>

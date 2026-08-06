@@ -1,4 +1,5 @@
 import { loadRepoEnv } from "../../scripts/lib/public-config.ts";
+import packageJson from "./package.json" with { type: "json" };
 
 const bundledPackagePrefixes = [
   "@pierre/diffs",
@@ -14,6 +15,7 @@ export function shouldBundleCliDependency(id: string): boolean {
 const repoEnv = loadRepoEnv();
 const sourcemapEnv = process.env.T3CODE_SERVER_SOURCEMAP?.trim().toLowerCase();
 const buildSourcemap = sourcemapEnv !== "0" && sourcemapEnv !== "false";
+const cliBuildChannel = packageJson.version.includes("-nightly.") ? "nightly" : "latest";
 
 export default {
   run: {
@@ -38,6 +40,7 @@ export default {
       js: "#!/usr/bin/env node\n",
     },
     define: {
+      __T3CODE_BUILD_CHANNEL__: JSON.stringify(cliBuildChannel),
       __T3CODE_BUILD_RELAY_URL__: JSON.stringify(repoEnv.T3CODE_RELAY_URL?.trim() ?? ""),
       __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
         repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
