@@ -307,6 +307,7 @@
               nodejs
               pkgs.coreutils
               pkgs.findutils
+              pkgs.git
               pkgs.jq
               pnpm
             ];
