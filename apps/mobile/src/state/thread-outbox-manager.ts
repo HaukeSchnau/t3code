@@ -273,11 +273,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       if (existing !== undefined && existing.state._tag !== "Pending") {
         const current = currentMessages();
         if (current.some((candidate) => candidate === message)) {
-          setMessages(
-            current.flatMap((candidate) =>
-              candidate === message ? (previousMessage ? [previousMessage] : []) : [candidate],
-            ),
-          );
+          const restoredMessages = current.flatMap((candidate) => {
+            if (candidate !== message) return [candidate];
+            if (previousMessage === undefined) return [];
+            return [previousMessage];
+          });
+          setMessages(restoredMessages);
         }
         throw new ThreadOutboxManagerError({
           operation: "enqueue",
