@@ -950,7 +950,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
    zinc-50 navigation, zinc-25 hover, and white selected/raised surfaces.
    The version attribute remains useful for layout-specific styling without
    changing the color system when the beta is toggled. */
-[data-sidebar-version="v1"],
 [data-sidebar-version="v2"] {
   --background: var(--color-zinc-25);
   --foreground: var(--color-zinc-800);
@@ -974,7 +973,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   background-color: var(--sidebar);
 }
 
-.dark [data-sidebar-version="v1"],
 .dark [data-sidebar-version="v2"] {
   --background: #000;
   --foreground: #f1f3f7;

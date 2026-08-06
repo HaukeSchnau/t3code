@@ -18,6 +18,7 @@ import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { ORCHESTRATION_PROJECTOR_NAMES } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -592,6 +593,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           hasPendingApprovals: true,
           hasPendingUserInput: false,
           hasActionableProposedPlan: false,
+          backgroundLiveness: null,
         },
       ]);
 
@@ -629,10 +631,12 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
   it.effect("keeps archived threads out of the main shell snapshot", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const backgroundLiveness = yield* ThreadBackgroundLiveness.ThreadBackgroundLivenessService;
       const sql = yield* SqlClient.SqlClient;
 
       yield* sql`DELETE FROM projection_projects`;
       yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_provider_usage_limits`;
       yield* sql`DELETE FROM projection_state`;
 
       yield* sql`
@@ -668,6 +672,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           interaction_mode,
           branch,
           worktree_path,
+          workspace_id,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
@@ -688,6 +693,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'default',
             NULL,
             NULL,
+            'workspace-active',
             NULL,
             NULL,
             0,
@@ -707,6 +713,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             'default',
             NULL,
             NULL,
+            'workspace-archived',
             NULL,
             NULL,
             0,
@@ -718,6 +725,46 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             NULL
           )
       `;
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off - fixed persisted test fixture.
+      const usageLimitsJson = JSON.stringify({
+        limitId: "codex",
+        limitName: "Codex",
+        planType: "pro",
+        rateLimitReachedType: null,
+        credits: null,
+        primary: null,
+        secondary: null,
+        updatedAt: "2026-04-06T00:00:08.000Z",
+      });
+      yield* sql`
+        INSERT INTO projection_provider_usage_limits (
+          provider_instance_id,
+          provider,
+          usage_limits_json,
+          updated_at
+        ) VALUES (
+          'codex',
+          'codex',
+          ${usageLimitsJson},
+          '2026-04-06T00:00:08.000Z'
+        )
+      `;
+
+      backgroundLiveness.recordTaskLiveness({
+        threadId: "thread-active",
+        taskId: "agent-active",
+        taskType: "agent",
+        status: "running",
+        kind: "started",
+      });
+      backgroundLiveness.recordTaskLiveness({
+        threadId: "thread-archived",
+        taskId: "agent-archived",
+        taskType: "agent",
+        status: "running",
+        kind: "started",
+      });
 
       yield* sql`
         INSERT INTO projection_state (projector, last_applied_sequence, updated_at)
@@ -737,6 +784,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         shellSnapshot.threads.map((thread) => thread.id),
         [ThreadId.make("thread-active")],
       );
+      assert.equal(shellSnapshot.threads[0]?.workspaceId, "workspace-active");
+      assert.equal(shellSnapshot.threads[0]?.backgroundLiveness, "working");
+      assert.equal(shellSnapshot.usageLimits[0]?.providerInstanceId, "codex");
+
+      const activeThreadShell = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-active"),
+      );
+      assert.equal(Option.getOrUndefined(activeThreadShell)?.workspaceId, "workspace-active");
+      assert.equal(Option.getOrUndefined(activeThreadShell)?.backgroundLiveness, "working");
 
       const archivedShellSnapshot = yield* snapshotQuery.getArchivedShellSnapshot();
       assert.deepEqual(
@@ -744,6 +800,9 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         [ThreadId.make("thread-archived")],
       );
       assert.equal(archivedShellSnapshot.threads[0]?.archivedAt, "2026-04-06T00:00:06.000Z");
+      assert.equal(archivedShellSnapshot.threads[0]?.workspaceId, "workspace-archived");
+      assert.equal(archivedShellSnapshot.threads[0]?.backgroundLiveness, "working");
+      assert.equal(archivedShellSnapshot.usageLimits[0]?.providerInstanceId, "codex");
     }),
   );
 
@@ -2494,6 +2553,7 @@ it.effect(
   () => {
     const resolveCalls: string[] = [];
     const layer = OrchestrationProjectionSnapshotQueryLive.pipe(
+      Layer.provide(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(
         Layer.succeed(RepositoryIdentityResolver.RepositoryIdentityResolver, {
           resolve: (cwd: string) =>

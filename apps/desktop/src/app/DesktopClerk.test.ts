@@ -28,6 +28,13 @@ import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import * as DesktopOpenWorkspace from "./DesktopOpenWorkspace.ts";
+
+const openWorkspace = DesktopOpenWorkspace.DesktopOpenWorkspace.of({
+  dispatch: () => Effect.void,
+  dispatchUrl: () => Effect.succeed(false),
+  consumePending: Effect.succeed([]),
+});
 
 const makeDesktopClerkLayer = (isDevelopment = true, events: string[] = []) => {
   const environment = DesktopEnvironment.DesktopEnvironment.of({
@@ -160,6 +167,7 @@ describe("DesktopClerk", () => {
     const registeredEvents: string[] = [];
     const electronApp = {
       quit: Effect.sync(quit),
+      setAsDefaultProtocolClient: () => Effect.succeed(true),
       on: (eventName: string) =>
         Effect.sync(() => {
           registeredEvents.push(eventName);
@@ -173,11 +181,12 @@ describe("DesktopClerk", () => {
 
       assert.isTrue(Exit.isSuccess(exit));
       assert.equal(quit.mock.calls.length, 0);
-      assert.deepEqual(registeredEvents, ["second-instance"]);
+      assert.deepEqual(registeredEvents, ["open-url", "second-instance"]);
     }).pipe(
       Effect.provide(makeDesktopClerkLayer()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopOpenWorkspace.DesktopOpenWorkspace, openWorkspace),
     );
   });
 
@@ -188,6 +197,7 @@ describe("DesktopClerk", () => {
     const registeredEvents: string[] = [];
     const electronApp = {
       quit: Effect.sync(quit),
+      setAsDefaultProtocolClient: () => Effect.succeed(true),
       on: (eventName: string) =>
         Effect.sync(() => {
           registeredEvents.push(eventName);
@@ -206,6 +216,7 @@ describe("DesktopClerk", () => {
       Effect.provide(makeDesktopClerkLayer()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+      Effect.provideService(DesktopOpenWorkspace.DesktopOpenWorkspace, openWorkspace),
     );
   });
 

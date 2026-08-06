@@ -1,6 +1,8 @@
-# Codex Subagent Support
+# Codex Child Transcript Isolation
 
-T3 Code carries a fork patch for Codex app-server subagents.
+T3 Code carries a narrow fork patch for Codex app-server child transcripts. Upstream's native
+task activities and Agents surface are authoritative for subagent identity, lifecycle, workflow
+grouping, status, and usage.
 
 ## Why
 
@@ -15,13 +17,13 @@ tool activity, which makes the main transcript noisy and misleading.
 - Runtime ingestion treats events with `agentContext` as subagent events. It upserts one
   `subagent.thread` activity per child provider thread and does not project child assistant text into
   parent assistant messages.
-- Collab agent tool-call items remain in the parent work log and are enriched client-side into clickable
-  subagent rows.
-- The web UI opens a right-panel subagent inspector showing prompt, status metadata, and the latest child
-  transcript projection.
+- The web client omits `subagent.thread` transcript projections from the parent timeline. It does not
+  parse them into a second roster or status model.
+- Upstream's native `task.*` activities feed the shared subagent runtime fold and Agents panel for both
+  Codex and other providers.
 
 ## Maintenance Notes
 
-Revisit this patch when upstream exposes first-class subagent thread projections or a stable app-server API
-for reading child transcripts directly. Until then, keep the payload parser small and tolerate missing
-optional fields from app-server notification variants.
+Remove the remaining fork patch when upstream guarantees that child assistant text cannot leak into the
+parent transcript and provides any child transcript durability still required by provider recovery. Do
+not reintroduce a Codex-only web parser or status projection alongside the native Agents model.

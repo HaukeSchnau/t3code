@@ -47,6 +47,10 @@ import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
+import {
+  makePendingThreadRouteParams,
+  rememberPendingThreadCreation,
+} from "./pendingThreadNavigation";
 
 function formatWorkspaceLabel(input: {
   readonly workspaceMode: string;
@@ -836,7 +840,19 @@ export function NewTaskDraftScreen(props: {
     } finally {
       flow.setSubmitting(false);
     }
-    navigation.getParent()?.goBack();
+    if (!environmentConnected) {
+      navigation.getParent()?.goBack();
+      return;
+    }
+
+    rememberPendingThreadCreation(queued);
+    const openThread = StackActions.replace("Thread", makePendingThreadRouteParams(queued));
+    const rootNavigation = navigation.getParent();
+    if (rootNavigation) {
+      rootNavigation.dispatch(openThread);
+      return;
+    }
+    navigation.dispatch(openThread);
   }
 
   if (!selectedProject) {

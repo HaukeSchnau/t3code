@@ -27,10 +27,10 @@ export interface Preferences {
   readonly projectGroupingEnabled?: boolean;
   readonly projectGroupingMode?: SidebarProjectGroupingMode;
   /**
-   * Device-local mirror of the web beta's `sidebarV2Enabled`. Mobile has no
-   * client-settings sync, so the flat v2 thread list is opted out of per
-   * device. Undefined means the user has never chosen, which resolves to on —
-   * see `resolveThreadListV2Enabled`.
+   * Device-local control for mobile's flat thread list. Mobile has no
+   * client-settings sync, so it can be opted out of per device. Undefined
+   * means the user has never chosen, which resolves to on — see
+   * `resolveThreadListV2Enabled`.
    */
   readonly threadListV2Enabled?: boolean;
 }
