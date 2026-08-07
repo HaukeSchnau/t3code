@@ -136,7 +136,7 @@
             pname = "t3code-web-deps";
             src = manifestSource;
             workspaces = [ "@t3tools/web..." ];
-            hash = "sha256-+gmEAMECn6/GNiHiUCpDUQjaRusUerDXDxZ50J5GuWM=";
+            hash = "sha256-Ydt/Unj9X0vnstjIuvjBeCpj9bcguG9RmJtHFx33ymE=";
           };
           serverPnpmDeps = mkPnpmDeps {
             pname = "t3code-server-deps";
