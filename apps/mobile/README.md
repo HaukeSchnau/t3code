@@ -57,11 +57,11 @@ just mobile-dev-open http://192.168.1.10:8081
 The repository-owned Nix entry point runs only Metro and prints the Expo Dev Client link:
 
 ```bash
-nix run .#dev-metro
+nix run .#dev-mobile
 ```
 
 Without an external runtime manifest this binds to `http://127.0.0.1:8081`. On a persistent managed
-development host, infrastructure supervises `.#dev -- --only metro` and supplies a
+development host, infrastructure supervises `.#dev -- --only mobile` and supplies a
 `PROJECT_RUNTIME_FILE` containing the stable endpoint, listener, state, and cache paths. Tailnet ingress
 and restart policy belong to that declarative service; do not start a second `agent-service` Metro
 preview alongside it. The current managed endpoint remains

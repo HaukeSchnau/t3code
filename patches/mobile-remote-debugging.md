@@ -27,7 +27,7 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   - `just mobile-dev-reload`
   - `just mobile-dev-snapshot`
   - `just desktop-macos`
-- Provide repository-owned `.#dev`, `.#dev -- --only metro`, and `.#dev-metro` Nix entry points for
+- Provide repository-owned `.#dev`, `.#dev -- --only mobile`, and `.#dev-mobile` Nix entry points for
   supervised or local Metro development.
 - Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
   executable so `just desktop-macos` works in non-interactive shells where `vp` is not installed
