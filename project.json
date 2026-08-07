@@ -11,5 +11,15 @@
         }
       }
     }
+  },
+  "release": {
+    "package": "t3code",
+    "executable": "t3",
+    "action": "web",
+    "health": {
+      "paths": [
+        "/"
+      ]
+    }
   }
 }

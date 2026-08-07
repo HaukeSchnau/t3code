@@ -6,7 +6,9 @@ This fork ships a root `flake.nix` so the server can be built and deployed with 
 The flake exposes:
 
 - `packages.default`: a packaged `t3` server with the bundled web client and production dependencies.
-- `apps.default`: a runnable `t3` app entrypoint.
+- `apps.t3`: a runnable `t3` app entrypoint. The flake intentionally has no default app.
+- `packages.projectRuntime` and the `prepare`, `dev`, and `dev-mobile` apps: the repository-owned mobile
+  Development adapter, with lifecycle and allocation supplied by the pinned public Project Runtime.
 - `devShells.default`: Node 24, pnpm 11.10, JJ, Git, SSH, and native build tooling.
 - `nixosModules.default`: a `services.t3code` systemd service module for NixOS hosts.
 
