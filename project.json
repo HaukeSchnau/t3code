@@ -3,7 +3,7 @@
   "project": "t3code",
   "development": {
     "endpoints": {
-      "metro": {
+      "mobile": {
         "health": {
           "paths": [
             "/status"

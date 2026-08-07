@@ -323,8 +323,8 @@
               set -euo pipefail
 
               action="''${1:-}"
-              if [[ "$#" != 1 ]] || [[ "$action" != "prepare" && "$action" != "metro" ]]; then
-                echo "usage: t3code-project-runtime <prepare|metro>" >&2
+              if [[ "$#" != 1 ]] || [[ "$action" != "prepare" && "$action" != "mobile" ]]; then
+                echo "usage: t3code-project-runtime <prepare|mobile>" >&2
                 exit 64
               fi
 
@@ -351,7 +351,7 @@
                       runtime: $runtime
                     },
                     endpoints: {
-                      metro: {
+                      mobile: {
                         url: "http://127.0.0.1:8081",
                         visibility: "local",
                         listen: {host: "127.0.0.1", port: 8081}
@@ -419,30 +419,30 @@
                   mv "$stamp_file.next" "$stamp_file"
                   ;;
 
-                metro)
+                mobile)
                   if ! jq -e '
-                    .endpoints.metro |
+                    .endpoints.mobile |
                     (.url | type == "string" and length > 0) and
                     (.listen.host == "127.0.0.1") and
                     (.listen.port | type == "number" and . >= 1 and . <= 65535)
                   ' "$runtime_file" >/dev/null; then
-                    echo "T3 Code Project Endpoint is missing or invalid: metro" >&2
+                    echo "T3 Code Project Endpoint is missing or invalid: mobile" >&2
                     exit 65
                   fi
 
-                  metro_url=$(jq -er '.endpoints.metro.url' "$runtime_file")
-                  metro_port=$(jq -er '.endpoints.metro.listen.port' "$runtime_file")
-                  metro_cache="$cache_root/metro"
-                  install -d -m 0700 "$metro_cache/tmp"
+                  mobile_url=$(jq -er '.endpoints.mobile.url' "$runtime_file")
+                  mobile_port=$(jq -er '.endpoints.mobile.listen.port' "$runtime_file")
+                  mobile_cache="$cache_root/mobile"
+                  install -d -m 0700 "$mobile_cache/tmp"
 
                   export APP_VARIANT=development
-                  export EXPO_PACKAGER_PROXY_URL="$metro_url"
+                  export EXPO_PACKAGER_PROXY_URL="$mobile_url"
                   export EXPO_UNSTABLE_HEADLESS=1
                   export NODE_OPTIONS="--dns-result-order=ipv4first''${NODE_OPTIONS:+ $NODE_OPTIONS}"
-                  export TMPDIR="$metro_cache/tmp"
-                  export XDG_CACHE_HOME="$metro_cache"
+                  export TMPDIR="$mobile_cache/tmp"
+                  export XDG_CACHE_HOME="$mobile_cache"
 
-                  deep_link="t3code-dev://expo-development-client/?url=$(jq -rn --arg url "$metro_url" '$url | @uri')"
+                  deep_link="t3code-dev://expo-development-client/?url=$(jq -rn --arg url "$mobile_url" '$url | @uri')"
                   echo "T3 Code Dev Client: $deep_link"
 
                   cd "$checkout/apps/mobile"
@@ -450,7 +450,7 @@
                     --dev-client \
                     --scheme t3code-dev \
                     --localhost \
-                    --port "$metro_port"
+                    --port "$mobile_port"
                   ;;
               esac
             '';
@@ -468,32 +468,32 @@
             text = ''
               set -euo pipefail
 
-              if [[ "$#" == 2 && "$1" == "--only" && "$2" == "metro" ]]; then
+              if [[ "$#" == 2 && "$1" == "--only" && "$2" == "mobile" ]]; then
                 shift 2
               elif [[ "$#" != 0 ]]; then
-                echo "usage: nix run .#dev [-- --only metro]" >&2
+                echo "usage: nix run .#dev [-- --only mobile]" >&2
                 exit 64
               fi
 
-              exec ${projectRuntime}/bin/t3code-project-runtime metro
+              exec ${projectRuntime}/bin/t3code-project-runtime mobile
             '';
           };
 
-          developmentMetro = pkgs.writeShellApplication {
-            name = "t3code-development-metro";
+          developmentMobile = pkgs.writeShellApplication {
+            name = "t3code-development-mobile";
             text = ''
               if [[ "$#" != 0 ]]; then
-                echo "usage: nix run .#dev-metro" >&2
+                echo "usage: nix run .#dev-mobile" >&2
                 exit 64
               fi
-              exec ${development}/bin/t3code-development --only metro
+              exec ${development}/bin/t3code-development --only mobile
             '';
           };
         in
         {
           inherit
             development
-            developmentMetro
+            developmentMobile
             preparation
             projectRuntime
             ;
@@ -539,9 +539,9 @@
             type = "app";
             program = "${project.development}/bin/t3code-development";
           };
-          dev-metro = {
+          dev-mobile = {
             type = "app";
-            program = "${project.developmentMetro}/bin/t3code-development-metro";
+            program = "${project.developmentMobile}/bin/t3code-development-mobile";
           };
         }
       );
@@ -592,8 +592,8 @@
                 jq -e '
                   .schemaVersion == 1 and
                   .project == "t3code" and
-                  (.development.endpoints | keys) == ["metro"] and
-                  .development.endpoints.metro.health.paths == ["/status"]
+                  (.development.endpoints | keys) == ["mobile"] and
+                  .development.endpoints.mobile.health.paths == ["/status"]
                 ' "$descriptor" >/dev/null
 
                 touch "$out"
