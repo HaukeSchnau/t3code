@@ -330,9 +330,37 @@
               pnpm
             ];
             text = ''
-              cd "$PROJECT_CHECKOUT"
+              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
+              state_root="$("$PROJECT_RUNTIME_QUERY" path state)"
+              preparation_state="$state_root/preparation"
+              stamp_file="$preparation_state/dependencies.sha256"
+              cd "$checkout"
+
+              dependency_key=$(
+                {
+                  sha256sum flake.lock package.json pnpm-lock.yaml pnpm-workspace.yaml
+                  find apps packages -type f -name package.json -print0 \
+                    | sort -z \
+                    | xargs -0 -r sha256sum
+                  if [[ -d patches ]]; then
+                    find patches -type f -name '*.patch' -print0 \
+                      | sort -z \
+                      | xargs -0 -r sha256sum
+                  fi
+                } | sha256sum | cut -d ' ' -f 1
+              )
+
+              if [[ -d node_modules && -f "$stamp_file" ]] \
+                && [[ "$(<"$stamp_file")" == "$dependency_key" ]]; then
+                echo "T3 Code dependencies are already prepared ($dependency_key)"
+                exit 0
+              fi
+
               export npm_config_nodedir="${nodejs}"
-              exec pnpm install --frozen-lockfile
+              pnpm install --frozen-lockfile
+              install -d -m 0700 "$preparation_state"
+              printf '%s\n' "$dependency_key" > "$stamp_file.next"
+              mv "$stamp_file.next" "$stamp_file"
             '';
           };
 
@@ -346,7 +374,9 @@
             text = ''
               mobile_url="$("$PROJECT_RUNTIME_QUERY" endpoint mobile url)"
               mobile_port="$("$PROJECT_RUNTIME_QUERY" endpoint mobile listen-port)"
-              mobile_cache="$PROJECT_CACHE_DIR/mobile"
+              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
+              cache_root="$("$PROJECT_RUNTIME_QUERY" path cache)"
+              mobile_cache="$cache_root/mobile"
               install -d -m 0700 "$mobile_cache/tmp"
 
               export APP_VARIANT=development
@@ -359,7 +389,7 @@
               encoded_url="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$mobile_url")"
               echo "T3 Code Dev Client: t3code-dev://expo-development-client/?url=$encoded_url"
 
-              cd "$PROJECT_CHECKOUT/apps/mobile"
+              cd "$checkout/apps/mobile"
               exec pnpm exec expo start \
                 --dev-client \
                 --scheme t3code-dev \
