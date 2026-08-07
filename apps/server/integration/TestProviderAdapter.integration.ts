@@ -238,6 +238,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
     const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
     let acceptRuntimeEvent: ProviderRuntimeEventAcceptance = () => Effect.succeed(true);
     let sessionCount = 0;
+    let eventCount = 0;
     const sessions = new Map<ThreadId, SessionState>();
     const queuedResponsesForNextSession: TestTurnResponse[] = [];
     const interruptCallsBySession = new Map<ThreadId, Array<TurnId | undefined>>();
@@ -257,6 +258,11 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
           accepted ? Queue.offer(runtimeEvents, event).pipe(Effect.asVoid) : Effect.void,
         ),
       );
+    const nextEventId = (threadId: ThreadId) => {
+      eventCount += 1;
+      return EventId.make(`test-provider:${provider}:${threadId}:${eventCount}`);
+    };
+
     const randomUUIDv4 = (threadId: ThreadId) =>
       crypto.randomUUIDv4.pipe(
         Effect.mapError(
@@ -344,7 +350,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         for (const fixtureEvent of response.events) {
           const rawEvent: Record<string, unknown> = {
             ...(fixtureEvent as Record<string, unknown>),
-            eventId: yield* randomUUIDv4(input.threadId),
+            eventId: nextEventId(input.threadId),
             provider,
             sessionId: RuntimeSessionId.make(String(input.threadId)),
           };
@@ -403,7 +409,7 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         if (deferredTurnCompletedEvents.length === 0) {
           yield* emit({
             type: "turn.completed",
-            eventId: EventId.make(yield* randomUUIDv4(input.threadId)),
+            eventId: nextEventId(input.threadId),
             provider,
             createdAt: nowIso(),
             threadId: state.snapshot.threadId,

@@ -18,6 +18,7 @@ import {
   ThreadUnsnoozedPayload as ContractsThreadUnsnoozedPayloadSchema,
   ThreadPinnedPayload as ContractsThreadPinnedPayloadSchema,
   ThreadUnpinnedPayload as ContractsThreadUnpinnedPayloadSchema,
+  ThreadPinReorderedPayload as ContractsThreadPinReorderedPayloadSchema,
   ThreadMessageSentPayload as ContractsThreadMessageSentPayloadSchema,
   ThreadProposedPlanUpsertedPayload as ContractsThreadProposedPlanUpsertedPayloadSchema,
   ThreadSessionSetPayload as ContractsThreadSessionSetPayloadSchema,
@@ -51,6 +52,7 @@ export const ThreadSnoozedPayload = ContractsThreadSnoozedPayloadSchema;
 export const ThreadUnsnoozedPayload = ContractsThreadUnsnoozedPayloadSchema;
 export const ThreadPinnedPayload = ContractsThreadPinnedPayloadSchema;
 export const ThreadUnpinnedPayload = ContractsThreadUnpinnedPayloadSchema;
+export const ThreadPinReorderedPayload = ContractsThreadPinReorderedPayloadSchema;
 
 export const ThreadMessageQueuedPayload = ContractsThreadMessageQueuedPayloadSchema;
 export const ThreadQueuedMessageDeletedPayload = ContractsThreadQueuedMessageDeletedPayloadSchema;

@@ -701,8 +701,8 @@ function MonitorThreadBody({
         skills={EMPTY_PROVIDER_SKILLS}
         anchorMessageId={null}
         onAnchorReady={() => undefined}
-        onAnchorSizeChanged={() => undefined}
         contentInsetEndAdjustment={0}
+        liveFollowEnabled={false}
         onIsAtEndChange={() => undefined}
         onManualNavigation={() => undefined}
       />
@@ -1174,10 +1174,6 @@ function MonitorThreadActions({
                 respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
                 showPlanFollowUpPrompt={false}
                 activeProposedPlan={null}
-                activePlan={null}
-                sidebarProposedPlan={null}
-                planSidebarLabel="Plan"
-                planSidebarOpen={false}
                 runtimeMode={runtimeMode}
                 interactionMode={interactionMode}
                 lockedProvider={null}
@@ -1208,7 +1204,6 @@ function MonitorThreadActions({
                 toggleInteractionMode={toggleInteractionMode}
                 handleRuntimeModeChange={handleRuntimeModeChange}
                 handleInteractionModeChange={handleInteractionModeChange}
-                togglePlanSidebar={() => undefined}
                 focusComposer={focusComposer}
                 scheduleComposerFocus={focusComposer}
                 setThreadError={(_threadId, message) => setError(message)}
