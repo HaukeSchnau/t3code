@@ -3,10 +3,18 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    nix-infra-modules = {
+      url = "github:HaukeSchnau/nix-infra-modules/da801cb0dce7a240b9ead61b71e19e5189402f5a";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
-    { self, nixpkgs }:
+    {
+      self,
+      nixpkgs,
+      nix-infra-modules,
+    }:
     let
       inherit (nixpkgs) lib;
 
@@ -21,6 +29,10 @@
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
       projectDescriptor = builtins.fromJSON (builtins.readFile ./project.json);
+      normalizedProjectDescriptor = nix-infra-modules.lib.projectDescriptor.normalize {
+        descriptor = projectDescriptor;
+        expectedProject = "t3code";
+      };
 
       mkPkgs =
         system:
@@ -295,18 +307,17 @@
               --set-default NODE_ENV production
           '';
 
-      mkProjectApplications =
+      mkProjectRuntime =
         system:
         let
           pkgs = mkPkgs system;
           nodejs = pkgs.nodejs_24;
           pnpm = mkPnpm pkgs nodejs;
 
-          projectRuntime = pkgs.writeShellApplication {
-            name = "t3code-project-runtime";
+          prepareAction = pkgs.writeShellApplication {
+            name = "t3code-project-prepare";
             runtimeInputs = [
               nodejs
-              pkgs.bash
               pkgs.coreutils
               pkgs.findutils
               pkgs.gcc
@@ -314,192 +325,59 @@
               pkgs.gnumake
               pkgs.gnugrep
               pkgs.gnused
-              pkgs.jq
               pkgs.pkg-config
               pkgs.python3
               pnpm
             ];
             text = ''
-              set -euo pipefail
-
-              action="''${1:-}"
-              if [[ "$#" != 1 ]] || [[ "$action" != "prepare" && "$action" != "mobile" ]]; then
-                echo "usage: t3code-project-runtime <prepare|mobile>" >&2
-                exit 64
-              fi
-
-              runtime_file="''${PROJECT_RUNTIME_FILE:-}"
-              if [[ -z "$runtime_file" ]]; then
-                runtime_root="''${XDG_RUNTIME_DIR:-''${TMPDIR:-/tmp}/t3code-$UID}/project"
-                state_root="''${XDG_STATE_HOME:-$HOME/.local/state}/t3code"
-                cache_root="''${XDG_CACHE_HOME:-$HOME/.cache}/t3code"
-                runtime_file="$runtime_root/runtime.json"
-                install -d -m 0700 "$runtime_root" "$state_root" "$cache_root"
-                jq -n \
-                  --arg checkout "$PWD" \
-                  --arg state "$state_root" \
-                  --arg cache "$cache_root" \
-                  --arg runtime "$runtime_root" \
-                  '{
-                    schemaVersion: 1,
-                    project: "t3code",
-                    realization: "development",
-                    paths: {
-                      checkout: $checkout,
-                      state: $state,
-                      cache: $cache,
-                      runtime: $runtime
-                    },
-                    endpoints: {
-                      mobile: {
-                        url: "http://127.0.0.1:8081",
-                        visibility: "local",
-                        listen: {host: "127.0.0.1", port: 8081}
-                      }
-                    },
-                    settings: {},
-                    secrets: {}
-                  }' > "$runtime_file.next"
-                mv "$runtime_file.next" "$runtime_file"
-              fi
-
-              if ! jq -e '
-                .schemaVersion == 1 and
-                .project == "t3code" and
-                .realization == "development" and
-                (.paths.checkout | type == "string" and length > 0) and
-                (.paths.state | type == "string" and length > 0) and
-                (.paths.cache | type == "string" and length > 0) and
-                (.paths.runtime | type == "string" and length > 0) and
-                (.endpoints | type == "object") and
-                (.settings | type == "object") and
-                (.secrets | type == "object")
-              ' "$runtime_file" >/dev/null; then
-                echo "T3 Code Project Runtime manifest is invalid: $runtime_file" >&2
-                exit 65
-              fi
-
-              export PROJECT_RUNTIME_FILE="$runtime_file"
-              checkout=$(jq -er '.paths.checkout' "$runtime_file")
-              state_root=$(jq -er '.paths.state' "$runtime_file")
-              cache_root=$(jq -er '.paths.cache' "$runtime_file")
-              runtime_root=$(jq -er '.paths.runtime' "$runtime_file")
-              install -d -m 0700 "$state_root" "$cache_root" "$runtime_root"
-
-              case "$action" in
-                prepare)
-                  preparation_state="$state_root/preparation"
-                  stamp_file="$preparation_state/dependencies.sha256"
-                  cd "$checkout"
-
-                  dependency_key=$(
-                    {
-                      sha256sum flake.lock package.json pnpm-lock.yaml pnpm-workspace.yaml
-                      find apps packages -type f -name package.json -print0 \
-                        | sort -z \
-                        | xargs -0 -r sha256sum
-                      if [[ -d patches ]]; then
-                        find patches -type f -name '*.patch' -print0 \
-                          | sort -z \
-                          | xargs -0 -r sha256sum
-                      fi
-                    } | sha256sum | cut -d ' ' -f 1
-                  )
-
-                  if [[ -d node_modules && -f "$stamp_file" ]] \
-                    && [[ "$(<"$stamp_file")" == "$dependency_key" ]]; then
-                    echo "T3 Code dependencies are already prepared ($dependency_key)"
-                    exit 0
-                  fi
-
-                  export npm_config_nodedir="${nodejs}"
-                  pnpm install --frozen-lockfile
-                  install -d -m 0700 "$preparation_state"
-                  printf '%s\n' "$dependency_key" > "$stamp_file.next"
-                  mv "$stamp_file.next" "$stamp_file"
-                  ;;
-
-                mobile)
-                  if ! jq -e '
-                    .endpoints.mobile |
-                    (.url | type == "string" and length > 0) and
-                    (.listen.host == "127.0.0.1") and
-                    (.listen.port | type == "number" and . >= 1 and . <= 65535)
-                  ' "$runtime_file" >/dev/null; then
-                    echo "T3 Code Project Endpoint is missing or invalid: mobile" >&2
-                    exit 65
-                  fi
-
-                  mobile_url=$(jq -er '.endpoints.mobile.url' "$runtime_file")
-                  mobile_port=$(jq -er '.endpoints.mobile.listen.port' "$runtime_file")
-                  mobile_cache="$cache_root/mobile"
-                  install -d -m 0700 "$mobile_cache/tmp"
-
-                  export APP_VARIANT=development
-                  export EXPO_PACKAGER_PROXY_URL="$mobile_url"
-                  export EXPO_UNSTABLE_HEADLESS=1
-                  export NODE_OPTIONS="--dns-result-order=ipv4first''${NODE_OPTIONS:+ $NODE_OPTIONS}"
-                  export TMPDIR="$mobile_cache/tmp"
-                  export XDG_CACHE_HOME="$mobile_cache"
-
-                  deep_link="t3code-dev://expo-development-client/?url=$(jq -rn --arg url "$mobile_url" '$url | @uri')"
-                  echo "T3 Code Dev Client: $deep_link"
-
-                  cd "$checkout/apps/mobile"
-                  exec pnpm exec expo start \
-                    --dev-client \
-                    --scheme t3code-dev \
-                    --localhost \
-                    --port "$mobile_port"
-                  ;;
-              esac
+              cd "$PROJECT_CHECKOUT"
+              export npm_config_nodedir="${nodejs}"
+              exec pnpm install --frozen-lockfile
             '';
           };
 
-          preparation = pkgs.writeShellApplication {
-            name = "t3code-prepare";
+          mobileAction = pkgs.writeShellApplication {
+            name = "t3code-project-mobile";
+            runtimeInputs = [
+              nodejs
+              pkgs.coreutils
+              pnpm
+            ];
             text = ''
-              exec ${projectRuntime}/bin/t3code-project-runtime prepare
-            '';
-          };
+              mobile_url="$("$PROJECT_RUNTIME_QUERY" endpoint mobile url)"
+              mobile_port="$("$PROJECT_RUNTIME_QUERY" endpoint mobile listen-port)"
+              mobile_cache="$PROJECT_CACHE_DIR/mobile"
+              install -d -m 0700 "$mobile_cache/tmp"
 
-          development = pkgs.writeShellApplication {
-            name = "t3code-development";
-            text = ''
-              set -euo pipefail
+              export APP_VARIANT=development
+              export EXPO_PACKAGER_PROXY_URL="$mobile_url"
+              export EXPO_UNSTABLE_HEADLESS=1
+              export NODE_OPTIONS="--dns-result-order=ipv4first''${NODE_OPTIONS:+ $NODE_OPTIONS}"
+              export TMPDIR="$mobile_cache/tmp"
+              export XDG_CACHE_HOME="$mobile_cache"
 
-              if [[ "$#" == 2 && "$1" == "--only" && "$2" == "mobile" ]]; then
-                shift 2
-              elif [[ "$#" != 0 ]]; then
-                echo "usage: nix run .#dev [-- --only mobile]" >&2
-                exit 64
-              fi
+              encoded_url="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$mobile_url")"
+              echo "T3 Code Dev Client: t3code-dev://expo-development-client/?url=$encoded_url"
 
-              exec ${projectRuntime}/bin/t3code-project-runtime mobile
-            '';
-          };
-
-          developmentMobile = pkgs.writeShellApplication {
-            name = "t3code-development-mobile";
-            text = ''
-              if [[ "$#" != 0 ]]; then
-                echo "usage: nix run .#dev-mobile" >&2
-                exit 64
-              fi
-              exec ${development}/bin/t3code-development --only mobile
+              cd "$PROJECT_CHECKOUT/apps/mobile"
+              exec pnpm exec expo start \
+                --dev-client \
+                --scheme t3code-dev \
+                --localhost \
+                --port "$mobile_port"
             '';
           };
         in
-        {
-          inherit
-            development
-            developmentMobile
-            preparation
-            projectRuntime
-            ;
+        nix-infra-modules.lib.projectRuntime.mkDevelopment {
+          inherit pkgs;
+          descriptorPath = ./project.json;
+          actions = {
+            prepare = lib.getExe prepareAction;
+            mobile = lib.getExe mobileAction;
+          };
         };
 
-      projectApplications = forAllSystems mkProjectApplications;
+      projectRuntimes = forAllSystems mkProjectRuntime;
     in
     {
       lib = {
@@ -515,35 +393,23 @@
         rec {
           t3code = mkT3CodePackage pkgs;
           default = t3code;
-          projectRuntime = projectApplications.${system}.projectRuntime;
+          projectRuntime = projectRuntimes.${system}.package;
         }
       );
 
       apps = forAllSystems (
         system:
         let
-          project = projectApplications.${system};
+          projectRuntime = projectRuntimes.${system};
         in
         {
-          default = {
+          t3 = {
             type = "app";
-            program = "${self.packages.${system}.default}/bin/t3";
+            program = "${self.packages.${system}.t3code}/bin/t3";
             meta.description = "Run the T3 Code server CLI";
           };
-          t3 = self.apps.${system}.default;
-          prepare = {
-            type = "app";
-            program = "${project.preparation}/bin/t3code-prepare";
-          };
-          dev = {
-            type = "app";
-            program = "${project.development}/bin/t3code-development";
-          };
-          dev-mobile = {
-            type = "app";
-            program = "${project.developmentMobile}/bin/t3code-development-mobile";
-          };
         }
+        // projectRuntime.apps
       );
 
       devShells = forAllSystems (
@@ -576,34 +442,23 @@
         system:
         let
           pkgs = mkPkgs system;
-          runtime = projectApplications.${system}.projectRuntime;
+          runtime = projectRuntimes.${system};
         in
         {
           package = self.packages.${system}.default;
           projectDescriptor =
-            pkgs.runCommand "t3code-project-descriptor-check"
-              {
-                nativeBuildInputs = [ pkgs.jq ];
-                descriptor = pkgs.writeText "t3code-project.json" (builtins.toJSON projectDescriptor);
-              }
-              ''
-                set -euo pipefail
-
-                jq -e '
-                  .schemaVersion == 1 and
-                  .project == "t3code" and
-                  (.development.endpoints | keys) == ["mobile"] and
-                  .development.endpoints.mobile.health.paths == ["/status"]
-                ' "$descriptor" >/dev/null
-
-                touch "$out"
-              '';
-          projectRuntime = pkgs.runCommand "t3code-project-runtime-check" { } ''
-            ${pkgs.bash}/bin/bash -n ${runtime}/bin/t3code-project-runtime
-            grep -Fq '${pkgs.python3}/bin' ${runtime}/bin/t3code-project-runtime
-            grep -Fq '${pkgs.gcc}/bin' ${runtime}/bin/t3code-project-runtime
-            touch "$out"
-          '';
+            assert builtins.attrNames normalizedProjectDescriptor.development.workloads == [ "mobile" ];
+            assert normalizedProjectDescriptor.development.workloads.mobile.action == "mobile";
+            assert builtins.attrNames normalizedProjectDescriptor.development.endpoints == [ "mobile" ];
+            assert normalizedProjectDescriptor.development.endpoints.mobile.health.paths == [ "/status" ];
+            assert normalizedProjectDescriptor.release.package == "t3code";
+            assert normalizedProjectDescriptor.release.executable == "t3";
+            assert normalizedProjectDescriptor.release.action == "web";
+            assert normalizedProjectDescriptor.release.health.paths == [ "/" ];
+            pkgs.runCommand "t3code-project-descriptor-check" { } ''
+              touch "$out"
+            '';
+          projectRuntimeInterface = runtime.checks.interface;
         }
       );
 

@@ -60,11 +60,12 @@ The repository-owned Nix entry point runs only Metro and prints the Expo Dev Cli
 nix run .#dev-mobile
 ```
 
-Without an external runtime manifest this binds to `http://127.0.0.1:8081`. On a persistent managed
-development host, infrastructure supervises `.#dev -- --only mobile` and supplies a
-`PROJECT_RUNTIME_FILE` containing the stable endpoint, listener, state, and cache paths. Tailnet ingress
-and restart policy belong to that declarative service; do not start a second `agent-service` Metro
-preview alongside it. The current managed endpoint remains
+Without managed runtime context, the shared Project Runtime allocates a stable loopback endpoint for the
+physical checkout. On a persistent managed development host, infrastructure runs the prebuilt
+`packages.projectRuntime` adapter against the mutable checkout and supplies generic runtime context. The
+repository translates that context into Expo configuration through `PROJECT_RUNTIME_QUERY`; infrastructure
+continues to own listener allocation, Tailnet ingress, and restart policy. Do not start a second
+`agent-service` mobile server alongside it. The current managed compatibility endpoint remains
 `https://t3code-mobile-dev.schnau.dev`.
 
 For remote-pairing debugging, start Metro with a fresh one-time pairing URL and the dev client will fill and submit the Add Environment screen automatically:

@@ -37,14 +37,15 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
   `T3CODE_MOBILE_METRO_HOST`.
 - Keep pairing URLs out of committed state and logs. Treat them as credentials.
-- Consume `PROJECT_RUNTIME_FILE` for the Metro endpoint, listener, state, cache, and checkout paths.
-  Persistent supervision and Tailnet ingress belong to the declarative host Project, not an imperative
-  `agent-service` preview. Local invocation without a manifest may use the repository's loopback
-  defaults.
-- Export the versioned repository-owned Project descriptor as both `project.json` and `lib.project`.
-  Infrastructure evaluates the descriptor and `packages.<system>.projectRuntime` from its pinned flake
-  input to infer Preparation, Workloads, Endpoints, and readiness. It must never evaluate the mutable
-  checkout or an ad-hoc worktree during reconciliation.
+- Use the shared Project Runtime's `PROJECT_RUNTIME_QUERY` interface for the mobile endpoint and listener,
+  and its exported checkout/cache paths for mutable source and framework caches. Persistent supervision,
+  local listener allocation, manifest validation, Preparation locking, and Tailnet ingress do not belong
+  to the repository adapter. Local invocation receives a stable runtime allocation automatically.
+- Export the versioned repository-owned Project descriptor as both `project.json` and `lib.project`, and
+  construct `packages.<system>.projectRuntime` plus its flake apps through the pinned public
+  `lib.projectRuntime.mkDevelopment` interface. Infrastructure evaluates the descriptor and prebuilt
+  runtime from its pinned flake input to infer Preparation, Workloads, Endpoints, and readiness. It must
+  never evaluate the mutable checkout or an ad-hoc worktree during reconciliation.
 - In dev builds, allow the Add Environment screen to prefill and optionally auto-connect from
   `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`.
 - Also support route params for pairing URL and auto-connect so external automation can deep-link
