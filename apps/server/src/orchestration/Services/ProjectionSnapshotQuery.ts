@@ -19,6 +19,7 @@ import type {
   OrchestrationThread,
   OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
+  OrchestrationThreadDetailWindow,
   OrchestrationTurnActivitiesSnapshot,
   OrchestrationThreadShell,
   OrchestrationSession,
@@ -224,10 +225,19 @@ export interface ProjectionSnapshotQueryShape {
    * sequence in one consistent transaction, so the returned `snapshotSequence`
    * exactly matches the state reflected in `thread` (no interleaving projector
    * update between the two reads).
+   *
+   * When `window` is provided, the thread's messages, activities, proposed
+   * plans, and checkpoints are bounded to a page of recent turns and the
+   * response carries `page` metadata (see `OrchestrationThreadDetailWindow`).
+   * Without a window the full thread is returned with no `page` field —
+   * pagination is strictly opt-in.
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
-    activityDetailMode?: OrchestrationThreadActivityDetailMode,
+    activityDetailModeOrWindow?:
+      | OrchestrationThreadActivityDetailMode
+      | OrchestrationThreadDetailWindow,
+    window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 
   /**

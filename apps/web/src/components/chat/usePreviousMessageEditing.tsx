@@ -86,8 +86,6 @@ interface UsePreviousMessageEditingInput {
   terminalOpen: boolean;
   gitCwd: string | null;
   environmentUnavailableState: ChatComposerProps["environmentUnavailable"];
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
   composerDraftTarget: ScopedThreadRef | DraftId;
   composerRef: RefObject<ChatComposerHandle | null>;
   promptRef: RefObject<string>;
@@ -122,7 +120,6 @@ interface UsePreviousMessageEditingInput {
     cursorAdjacentToMention: boolean,
   ) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
-  togglePlanSidebar: () => void;
   setThreadErrorFromEditor: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
   formatOutgoingPrompt: (params: {
@@ -167,8 +164,6 @@ export function usePreviousMessageEditing({
   terminalOpen,
   gitCwd,
   environmentUnavailableState,
-  planSidebarLabel,
-  planSidebarOpen,
   composerDraftTarget,
   composerRef,
   promptRef,
@@ -191,7 +186,6 @@ export function usePreviousMessageEditing({
   onPreviousActivePendingUserInputQuestion,
   onChangeActivePendingUserInputCustomAnswer,
   getModelDisabledReason,
-  togglePlanSidebar,
   setThreadErrorFromEditor,
   onExpandImage,
   formatOutgoingPrompt,
@@ -744,8 +738,6 @@ export function usePreviousMessageEditing({
         isPreparing={isPreparingEdit}
         isRevertingCheckpoint={isEditPruningHistory}
         environmentUnavailable={environmentUnavailableState}
-        planSidebarLabel={planSidebarLabel}
-        planSidebarOpen={planSidebarOpen}
         runtimeMode={runtimeMode}
         interactionMode={interactionMode}
         lockedProvider={lockedProvider}
@@ -781,7 +773,6 @@ export function usePreviousMessageEditing({
         }}
         handleRuntimeModeChange={handleEditRuntimeModeChange}
         handleInteractionModeChange={handleEditInteractionModeChange}
-        togglePlanSidebar={togglePlanSidebar}
         focusComposer={() => editComposerRef.current?.focusAtEnd()}
         scheduleComposerFocus={scheduleEditComposerFocus}
         setThreadError={setThreadErrorFromEditor}
@@ -823,8 +814,6 @@ export function usePreviousMessageEditing({
     onSelectActivePendingUserInputOption,
     onSendEditedMessage,
     phase,
-    planSidebarLabel,
-    planSidebarOpen,
     providerStatuses,
     resolvedTheme,
     routeKind,
@@ -834,7 +823,6 @@ export function usePreviousMessageEditing({
     setThreadErrorFromEditor,
     settings,
     terminalOpen,
-    togglePlanSidebar,
   ]);
 
   const timelineController = useMemo<UserMessageEditingController>(

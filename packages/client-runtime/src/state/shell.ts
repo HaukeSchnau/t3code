@@ -265,6 +265,9 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
         yield* setSynchronizing;
 
+        // Refresh on every admitted subscription, including foreground
+        // wakeups. The HTTP snapshot is cheap and prevents an otherwise valid
+        // cursor from preserving incomplete cached shell content.
         const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
           Effect.flatMap(
             Option.match({
@@ -280,16 +283,24 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
           ),
         );
         const httpSnapshot = yield* snapshotLoader.load(prepared);
-        if (Option.isSome(httpSnapshot)) {
-          yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+        if (Option.isNone(httpSnapshot)) {
           return {
-            afterSequence: httpSnapshot.value.snapshotSequence,
             includeCursorItems: true as const,
             ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           };
         }
-
+        yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+        if (!supportsCompletionMarker) {
+          // Without a completion marker there is no synchronized signal for a
+          // resumed subscription, so report live immediately, like threads.
+          yield* SubscriptionRef.update(state, (value) => ({
+            ...value,
+            status: "live" as const,
+            error: Option.none(),
+          }));
+        }
         return {
+          afterSequence: httpSnapshot.value.snapshotSequence,
           includeCursorItems: true as const,
           ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
         };

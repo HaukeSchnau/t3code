@@ -68,6 +68,7 @@ export function isShellVisibleThreadEvent(event: OrchestrationEvent): boolean {
     case "thread.unsnoozed":
     case "thread.pinned":
     case "thread.unpinned":
+    case "thread.pin-reordered":
     case "thread.meta-updated":
     case "thread.runtime-mode-set":
     case "thread.interaction-mode-set":

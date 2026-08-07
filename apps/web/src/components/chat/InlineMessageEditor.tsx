@@ -61,8 +61,6 @@ export function InlineMessageEditor({
       respondingRequestIds={EMPTY_APPROVAL_REQUEST_IDS}
       showPlanFollowUpPrompt={false}
       activeProposedPlan={null}
-      activePlan={null}
-      sidebarProposedPlan={null}
       variant="inline"
       inlineEdit={{
         onCancel,
