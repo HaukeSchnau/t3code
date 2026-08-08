@@ -17,9 +17,10 @@ import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform } from "../lib/utils";
 import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../monitorNavigation";
 import { primaryServerKeybindingsAtom } from "../state/server";
+import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
-import { useEnvironmentIdentificationMode } from "../hooks/useSettings";
-import ThreadSidebarV2 from "./SidebarV2";
+import LegacyThreadSidebar from "./LegacySidebar";
+import ThreadSidebar from "./Sidebar";
 import { SettingsSidebarNav } from "./settings/SettingsSidebarNav";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { useSidebarStageBackdropVariant } from "./SidebarStageBackdrop";
@@ -145,6 +146,9 @@ function SidebarControl() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const legacySidebarEnabled = useLegacySidebarEnabled();
+  // Settings routes show the settings nav in place of whichever thread
+  // sidebar is active.
   const pathname = useLocation({ select: (location) => location.pathname });
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);
@@ -211,7 +215,6 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
         side="left"
         collapsible="offcanvas"
         data-app-sidebar=""
-        data-sidebar-version="v2"
         className="border-r border-sidebar-border bg-sidebar text-sidebar-foreground"
         resizable={{
           maxWidth: sidebarMaximumWidth,
@@ -228,8 +231,10 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
             <SidebarChromeHeader isElectron={isElectron} />
             <SettingsSidebarNav pathname={pathname} />
           </>
+        ) : legacySidebarEnabled ? (
+          <LegacyThreadSidebar />
         ) : (
-          <ThreadSidebarV2 />
+          <ThreadSidebar />
         )}
         <SidebarRail />
       </Sidebar>

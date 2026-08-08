@@ -135,14 +135,14 @@ import {
   planPinnedReorder,
   resolveAdjacentThreadId,
   resolveSettledTimestamp,
-  resolveSidebarV2Status,
+  resolveSidebarThreadStatus,
   searchSidebarThreadsByTitle,
   resolveWorkingStartedAt,
   shouldNavigateAfterProjectRemoval,
   sortLogicalProjectsForSidebar,
-  sortPinnedThreadsForSidebarV2,
-  sortSettledThreadsForSidebarV2,
-  sortThreadsForSidebarV2,
+  sortPinnedThreadsForSidebar,
+  sortSettledThreadsForSidebar,
+  sortThreadsForSidebar,
 } from "./Sidebar.logic";
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
@@ -250,7 +250,7 @@ function terminalProcessLabel(count: number): string {
   return `${count} terminal ${count === 1 ? "process" : "processes"} running`;
 }
 
-function SidebarV2ThreadTooltip({
+function SidebarThreadTooltip({
   thread,
   projectTitle,
   projectCwd,
@@ -428,7 +428,7 @@ function SortablePinnedThreadRow(props: {
   return props.children({ listeners, setNodeRef, transform, transition, isDragging });
 }
 
-const SidebarV2Row = memo(function SidebarV2Row(props: {
+const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   thread: SidebarThreadSummary;
   variant: "card" | "slim";
   // Slim rows are either settled (action: un-settle) or merely quiet
@@ -534,10 +534,10 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
   });
   const prState = pr?.state ?? null;
 
-  // Same semantics as v1 (never-visited counts as read): flipping the beta
-  // flag must not light up every historical thread as unread.
+  // Same semantics as the legacy sidebar (never-visited counts as read):
+  // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
-  const status = resolveSidebarV2Status(thread);
+  const status = resolveSidebarThreadStatus(thread);
   // A woken thread reappears at its original position (the sort is
   // deliberately static), so the pill has to carry the weight. Snoozing is
   // an explicit act, so the pill clears only when the user re-engages:
@@ -648,7 +648,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     props.currentEnvironmentId !== null && thread.environmentId !== props.currentEnvironmentId;
 
   const detailsTooltip = (
-    <SidebarV2ThreadTooltip
+    <SidebarThreadTooltip
       thread={thread}
       projectTitle={props.projectTitle}
       projectCwd={props.projectCwd}
@@ -789,12 +789,12 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     [openPrLink, pr],
   );
 
-  // All Sidebar V2 rows share one surface model. Live threads used to look
+  // All sidebar rows share one surface model. Live threads used to look
   // like elevated cards while settled threads were plain rows, leaving neither
   // a useful hierarchy nor a reliable hover cue. Status now lives in the row
   // content; surface is reserved for interaction (hover, multi-select, route).
   const rowSurfaceClassName = cn(
-    "group/v2-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
+    "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
     props.isActive
       ? "bg-sidebar-row-active text-sidebar-foreground"
       : isSelected
@@ -838,7 +838,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     : "text-foreground/90",
             )
           : cn(
-              "truncate group-hover/v2-row:text-foreground",
+              "truncate group-hover/sidebar-row:text-foreground",
               props.isActive || isWoke
                 ? "text-foreground"
                 : isUnread
@@ -876,7 +876,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
     <span
       role="img"
       aria-label={terminalProcessLabel(terminalProcessCount)}
-      data-testid={`sidebar-v2-terminal-status-${thread.id}`}
+      data-testid={`sidebar-terminal-status-${thread.id}`}
       className={cn("inline-flex shrink-0 items-center justify-center", terminalStatus.colorClass)}
     >
       <TerminalIcon className={cn("size-3.5", terminalStatus.pulse && "animate-status-pulse")} />
@@ -895,7 +895,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               <div
                 role="button"
                 tabIndex={0}
-                data-testid="sidebar-v2-row-slim"
+                data-testid="sidebar-row-slim"
                 aria-busy={isRegeneratingTitle || undefined}
                 className={cn(rowSurfaceClassName, "flex h-9 items-center gap-2.5 px-2.5")}
                 onClick={handleClick}
@@ -911,7 +911,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               className={cn(
                 "shrink-0 transition-opacity",
                 !props.isActive &&
-                  "opacity-40 grayscale group-hover/v2-row:opacity-100 group-hover/v2-row:grayscale-0",
+                  "opacity-40 grayscale group-hover/sidebar-row:opacity-100 group-hover/sidebar-row:grayscale-0",
               )}
             >
               <ProjectFavicon
@@ -936,7 +936,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               <span
                 className={cn(
                   "inline-flex justify-end tabular-nums text-secondary-label transition-opacity",
-                  !isWoke && "group-hover/v2-row:opacity-0",
+                  !isWoke && "group-hover/sidebar-row:opacity-0",
                 )}
               >
                 {variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
@@ -973,8 +973,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                     aria-label="Wake thread now"
                     onClick={handleUnsnoozeClick}
                     className={cn(
-                      "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/v2-row:pointer-events-auto group-hover/v2-row:opacity-100",
-                      isWoke && "group-hover/v2-row:static",
+                      "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                      isWoke && "group-hover/sidebar-row:static",
                     )}
                   >
                     <AlarmClockOffIcon className="size-3" />
@@ -986,8 +986,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   aria-label="Un-settle thread"
                   onClick={handleUnsettleClick}
                   className={cn(
-                    "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/v2-row:pointer-events-auto group-hover/v2-row:opacity-100",
-                    isWoke && "group-hover/v2-row:static",
+                    "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                    isWoke && "group-hover/sidebar-row:static",
                   )}
                 >
                   <Undo2Icon className="mb-px size-3.5" />
@@ -998,8 +998,8 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   aria-label="Settle thread"
                   onClick={handleSettleClick}
                   className={cn(
-                    "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/v2-row:pointer-events-auto group-hover/v2-row:opacity-100",
-                    isWoke && "group-hover/v2-row:static",
+                    "pointer-events-none absolute inset-y-0 right-0 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:opacity-100",
+                    isWoke && "group-hover/sidebar-row:static",
                   )}
                 >
                   <CheckIcon className="size-3" />
@@ -1041,7 +1041,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             <div
               role="button"
               tabIndex={0}
-              data-testid="sidebar-v2-row-card"
+              data-testid="sidebar-row-card"
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
               onClick={handleClick}
@@ -1093,7 +1093,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   actions on hover/keyboard focus or while the popover is open. Keeping
                   the hidden state out of flow lets the project label reclaim
                   space without either state overlapping it. */}
-              <span className="group/v2-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
+              <span className="group/sidebar-status-slot relative ml-auto flex h-5 min-w-8 shrink-0 items-stretch justify-end text-xs">
                 {/* Read-only status labels yield to the hover actions. Woke is
                     itself an action, so it stays pointer-enabled and visible
                     while the other controls appear beside it. */}
@@ -1101,7 +1101,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                   className={cn(
                     isWokeStatus
                       ? "pointer-events-auto"
-                      : "pointer-events-none group-has-[:focus-visible]/v2-status-slot:absolute group-has-[:focus-visible]/v2-status-slot:right-0 group-has-[:focus-visible]/v2-status-slot:opacity-0 group-hover/v2-row:absolute group-hover/v2-row:right-0 group-hover/v2-row:opacity-0",
+                      : "pointer-events-none group-has-[:focus-visible]/sidebar-status-slot:absolute group-has-[:focus-visible]/sidebar-status-slot:right-0 group-has-[:focus-visible]/sidebar-status-slot:opacity-0 group-hover/sidebar-row:absolute group-hover/sidebar-row:right-0 group-hover/sidebar-row:opacity-0",
                     "self-center justify-self-end tabular-nums text-secondary-label transition-opacity",
                     snoozeMenuOpen && "pointer-events-none absolute right-0 opacity-0",
                   )}
@@ -1156,7 +1156,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                       // would keep the controls pinned over the status label
                       // once the pointer moves away (e.g. after a failed
                       // settle) instead of cross-fading back.
-                      "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/v2-row:pointer-events-auto group-hover/v2-row:static group-hover/v2-row:opacity-100",
+                      "pointer-events-none absolute inset-y-0 right-0 flex items-stretch opacity-0 transition-opacity has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:static has-[:focus-visible]:opacity-100 group-hover/sidebar-row:pointer-events-auto group-hover/sidebar-row:static group-hover/sidebar-row:opacity-100",
                       snoozeMenuOpen && "pointer-events-auto static opacity-100",
                     )}
                   >
@@ -1254,7 +1254,7 @@ function latestTurnDiff(
   return null;
 }
 
-const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
+const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
   thread: SidebarThreadSummary;
   projectCwd: string | null;
   projectTitle: string | null;
@@ -1337,7 +1337,7 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
             {threadTimeLabel(thread)}
           </span>
         </TooltipTrigger>
-        <SidebarV2ThreadTooltip
+        <SidebarThreadTooltip
           thread={thread}
           projectTitle={props.projectTitle}
           projectCwd={props.projectCwd}
@@ -1354,7 +1354,7 @@ const SidebarV2SearchResultRow = memo(function SidebarV2SearchResultRow(props: {
   );
 });
 
-export default function SidebarV2() {
+export default function Sidebar() {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
@@ -1824,7 +1824,7 @@ export default function SidebarV2() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     return {
-      pinnedThreads: sortPinnedThreadsForSidebarV2(pinned),
+      pinnedThreads: sortPinnedThreadsForSidebar(pinned),
       reorderablePinnedKeys: new Set(
         pinned
           .filter(
@@ -1834,14 +1834,14 @@ export default function SidebarV2() {
           )
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
-      activeThreads: sortThreadsForSidebarV2(active),
+      activeThreads: sortThreadsForSidebar(active),
       // Soonest wake first: "what comes back next" is the shelf's question.
       snoozedThreads: snoozed.toSorted(
         (left, right) =>
           firstValidTimestampMs(left.snoozedUntil ?? null) -
           firstValidTimestampMs(right.snoozedUntil ?? null),
       ),
-      settledThreads: sortSettledThreadsForSidebarV2(settled),
+      settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
   }, [
@@ -3217,7 +3217,7 @@ export default function SidebarV2() {
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
                     return (
-                      <SidebarV2SearchResultRow
+                      <SidebarSearchResultRow
                         key={threadKey}
                         thread={thread}
                         projectCwd={
@@ -3273,7 +3273,7 @@ export default function SidebarV2() {
                     const isCard = section === "active" || section === "pinned";
                     const rowVariant = isCard ? "card" : "slim";
                     return (
-                      <SidebarV2Row
+                      <SidebarThreadRow
                         // Keyed per variant on purpose: when a thread settles,
                         // the card fades out in place and the slim row fades
                         // in at its settled position instead of one element
@@ -3395,7 +3395,7 @@ export default function SidebarV2() {
                       <li
                         key="pinned-divider"
                         aria-hidden
-                        data-testid="sidebar-v2-pinned-divider"
+                        data-testid="sidebar-pinned-divider"
                         className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
                       />,
                     );
@@ -3419,7 +3419,7 @@ export default function SidebarV2() {
                           type="button"
                           onClick={toggleSnoozedShelf}
                           aria-expanded={snoozedShelfExpanded}
-                          data-testid="sidebar-v2-snoozed-shelf-toggle"
+                          data-testid="sidebar-snoozed-shelf-toggle"
                           className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                         >
                           <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
@@ -3453,7 +3453,7 @@ export default function SidebarV2() {
                           type="button"
                           onClick={toggleSettledShelf}
                           aria-expanded={settledShelfExpanded}
-                          data-testid="sidebar-v2-settled-shelf-toggle"
+                          data-testid="sidebar-settled-shelf-toggle"
                           className="mb-1 mt-3 flex w-full cursor-pointer items-center gap-2 px-2.5 text-left"
                         >
                           <span className="text-xs font-medium text-muted-foreground/50">
