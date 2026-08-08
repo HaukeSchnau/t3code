@@ -242,9 +242,9 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-export const McpToolkitRegistrationLive = Layer.mergeAll(
-  PreviewToolkitRegistrationLive,
-  ThreadOrchestrationToolkitRegistrationLive,
-);
+// Keep the preview toolkit implementation available for focused tests and a
+// future capability-gated rollout, but do not advertise unavailable browser
+// tools to agents in this fork.
+export const McpToolkitRegistrationLive = ThreadOrchestrationToolkitRegistrationLive;
 
 export const layer = McpToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
