@@ -1,6 +1,7 @@
 import { HStack, Image, Spacer, Text, VStack, ZStack } from "@expo/ui/swift-ui";
-import type { ComponentProps } from "react";
+import type { ComponentProps, JSX } from "react";
 import {
+  containerBackground,
   font,
   foregroundStyle,
   frame,
@@ -12,11 +13,11 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import {
   createLiveActivity,
-  type LiveActivityComponent,
+  createWidget,
+  type LiveActivityEnvironment,
   type LiveActivityLayout,
+  type WidgetEnvironment,
 } from "expo-widgets";
-
-type LiveActivityEnvironment = Parameters<LiveActivityComponent<AgentActivityProps>>[1];
 
 export type AgentActivityPhase =
   | "starting"
@@ -53,7 +54,15 @@ export interface AgentActivityProps {
 export function AgentActivity(
   props: AgentActivityProps,
   environment: LiveActivityEnvironment,
-): LiveActivityLayout {
+): LiveActivityLayout;
+export function AgentActivity(
+  props: AgentActivityProps,
+  environment: WidgetEnvironment,
+): JSX.Element;
+export function AgentActivity(
+  props: AgentActivityProps,
+  environment: LiveActivityEnvironment | WidgetEnvironment,
+): LiveActivityLayout | JSX.Element {
   "widget";
 
   // Use SwiftUI's semantic label colors rather than fixed hex keyed off the
@@ -130,7 +139,9 @@ export function AgentActivity(
   // terminal row): every presentation — header text, tint, count slots,
   // minimal glyph — must agree, and a failure anywhere should dominate a
   // newer success.
-  const allDone = props.activeCount === 0;
+  const hasRows = props.activities.length > 0;
+  const isIdle = props.activeCount === 0 && !hasRows;
+  const allDone = props.activeCount === 0 && hasRows;
   const doneLabel = failedRow ? "Failed" : "Done";
   const outcomeLabel = failedRow ? "Agent work failed" : "Agent work completed";
 
@@ -138,12 +149,22 @@ export function AgentActivity(
   // the two parts in-line so the attention half can carry the accent color;
   // `summary` is the short form for tight spots (expanded center, watch card).
   const agentWord = props.activeCount === 1 ? "agent" : "agents";
-  const agentsLabel = allDone ? outcomeLabel : `${props.activeCount} active ${agentWord}`;
+  let agentsLabel = `${props.activeCount} active ${agentWord}`;
+  if (isIdle) {
+    agentsLabel = "No active agents";
+  } else if (allDone) {
+    agentsLabel = outcomeLabel;
+  }
   const attentionSuffix =
     attentionRows.length > 0
       ? `${attentionRows.length} need${attentionRows.length === 1 ? "s" : ""} attention`
       : "";
-  const activeLabel = allDone ? doneLabel : `${props.activeCount} active`;
+  let activeLabel = `${props.activeCount} active`;
+  if (isIdle) {
+    activeLabel = "Idle";
+  } else if (allDone) {
+    activeLabel = doneLabel;
+  }
   const summary = attentionSuffix || activeLabel;
 
   // Any registered scheme variant routes back to this app; taps are delivered
@@ -234,6 +255,134 @@ export function AgentActivity(
       <Image assetName="T3Mark" modifiers={[resizable()]} />
     </HStack>
   );
+
+  if ("widgetFamily" in environment) {
+    const background = isLightScheme ? "#ffffff" : "#111827";
+    const backgroundModifier = containerBackground(
+      environment.widgetFamily === "accessoryRectangular" ? "clear" : background,
+      "widget",
+    );
+    const rootModifiers = deepLink
+      ? [backgroundModifier, padding({ all: 14 }), widgetURL(deepLink)]
+      : [backgroundModifier, padding({ all: 14 })];
+
+    if (environment.widgetFamily === "accessoryRectangular") {
+      return (
+        <VStack alignment="leading" spacing={3} modifiers={rootModifiers}>
+          <HStack spacing={5} alignment="center">
+            {heroRow ? renderGlyph(phaseSymbol(heroRow.phase), 12, tint) : renderLogo(10, tint)}
+            <Text
+              modifiers={[
+                font({ weight: "semibold", size: 12 }),
+                foregroundStyle(primaryForeground),
+                lineLimit(1),
+              ]}
+            >
+              {agentsLabel}
+            </Text>
+          </HStack>
+          <Text
+            modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+          >
+            {heroRow ? `${heroRow.threadTitle} · ${heroRow.status}` : props.subtitle}
+          </Text>
+        </VStack>
+      );
+    }
+
+    if (environment.widgetFamily === "systemSmall") {
+      return (
+        <VStack alignment="leading" spacing={8} modifiers={rootModifiers}>
+          <HStack spacing={7} alignment="center">
+            {renderLogo(14, primaryForeground)}
+            <Spacer minLength={4} />
+            <Text
+              modifiers={[
+                font({ weight: "bold", size: 12 }),
+                foregroundStyle(headerTint),
+                lineLimit(1),
+              ]}
+            >
+              {activeLabel}
+            </Text>
+          </HStack>
+          <Spacer minLength={0} />
+          {heroRow ? (
+            <VStack alignment="leading" spacing={4}>
+              <Text
+                modifiers={[
+                  font({ weight: "semibold", size: 14 }),
+                  foregroundStyle(primaryForeground),
+                  lineLimit(2),
+                ]}
+              >
+                {heroRow.threadTitle}
+              </Text>
+              <Text
+                modifiers={[font({ size: 11 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+              >
+                {heroRow.projectTitle}
+              </Text>
+              <Text
+                modifiers={[
+                  font({ weight: "semibold", size: 12 }),
+                  foregroundStyle(phaseTint(heroRow.phase)),
+                  lineLimit(1),
+                ]}
+              >
+                {heroRow.status}
+              </Text>
+            </VStack>
+          ) : (
+            <Text
+              modifiers={[font({ size: 13 }), foregroundStyle(secondaryForeground), lineLimit(2)]}
+            >
+              {props.subtitle}
+            </Text>
+          )}
+        </VStack>
+      );
+    }
+
+    return (
+      <VStack alignment="leading" spacing={7} modifiers={rootModifiers}>
+        <HStack spacing={7} alignment="center">
+          {renderLogo(14, primaryForeground)}
+          <Text
+            modifiers={[
+              font({ weight: "semibold", size: 13 }),
+              foregroundStyle(allDone ? headerTint : primaryForeground),
+              lineLimit(1),
+            ]}
+          >
+            {agentsLabel}
+          </Text>
+          <Spacer minLength={4} />
+          {attentionSuffix ? (
+            <Text
+              modifiers={[
+                font({ weight: "semibold", size: 11 }),
+                foregroundStyle(headerTint),
+                lineLimit(1),
+              ]}
+            >
+              {attentionSuffix}
+            </Text>
+          ) : null}
+        </HStack>
+        {row0 ? renderCompactRow(row0) : null}
+        {row1 ? renderCompactRow(row1) : null}
+        {row2 ? renderCompactRow(row2) : null}
+        {!row0 ? (
+          <Text
+            modifiers={[font({ size: 12 }), foregroundStyle(secondaryForeground), lineLimit(1)]}
+          >
+            {props.subtitle}
+          </Text>
+        ) : null}
+      </VStack>
+    );
+  }
 
   return {
     banner: (
@@ -378,4 +527,5 @@ export function AgentActivity(
   };
 }
 
+export const AgentActivityWidget = createWidget<AgentActivityProps>("AgentActivity", AgentActivity);
 export default createLiveActivity<AgentActivityProps>("AgentActivity", AgentActivity);

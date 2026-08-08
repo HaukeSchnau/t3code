@@ -43,6 +43,7 @@ import * as Notifications from "expo-notifications";
 const secureStore = vi.hoisted(() => new Map<string, string>());
 const widgetMocks = vi.hoisted(() => ({
   getInstances: vi.fn(() => []),
+  updateSnapshot: vi.fn(),
 }));
 const backgroundRuntime = vi.hoisted(() => ({
   pending: [] as Array<{
@@ -77,6 +78,9 @@ vi.mock("expo-widgets", () => ({
 vi.mock("../../widgets/AgentActivity", () => ({
   default: {
     getInstances: widgetMocks.getInstances,
+  },
+  AgentActivityWidget: {
+    updateSnapshot: widgetMocks.updateSnapshot,
   },
 }));
 
@@ -227,6 +231,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     vi.mocked(loadOrCreateAgentAwarenessDeviceId).mockResolvedValue("device-1");
     widgetMocks.getInstances.mockReset();
     widgetMocks.getInstances.mockReturnValue([]);
+    widgetMocks.updateSnapshot.mockReset();
   });
 
   it("preserves disabled Live Activity preferences in relay registrations", () => {
@@ -432,6 +437,56 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     },
   );
 
+  it.effect("reconciles the home-screen widget from the relay snapshot", () => {
+    const aggregate = {
+      title: "T3 Code",
+      subtitle: "Agent work in progress",
+      activeCount: 1,
+      updatedAt: "2026-08-07T14:00:00.000Z",
+      activities: [
+        {
+          environmentId: "env-1",
+          threadId: "thread-1",
+          projectTitle: "T3 Code",
+          threadTitle: "Fix the widget",
+          modelTitle: "gpt-5.6",
+          phase: "running",
+          status: "Working",
+          updatedAt: "2026-08-07T14:00:00.000Z",
+          deepLink: "/threads/env-1/thread-1",
+        },
+      ],
+    } as const;
+    const client = ManagedRelay.ManagedRelayClient.of({
+      relayUrl: "https://relay.example.test",
+      listEnvironments: () => Effect.die("unused"),
+      listDevices: () => Effect.die("unused"),
+      createEnvironmentLinkChallenge: () => Effect.die("unused"),
+      linkEnvironment: () => Effect.die("unused"),
+      unlinkEnvironment: () => Effect.die("unused"),
+      getEnvironmentStatus: () => Effect.die("unused"),
+      connectEnvironment: () => Effect.die("unused"),
+      registerDevice: () => Effect.succeed({ ok: true as const }),
+      unregisterDevice: () => Effect.die("unused"),
+      registerLiveActivity: () => Effect.die("unused"),
+      getAgentActivitySnapshot: () => Effect.succeed({ aggregate } as never),
+      resetTokenCache: Effect.void,
+    });
+    const widgetRelayTestLayer = Layer.succeed(ManagedRelay.ManagedRelayClient, client);
+    Constants.expoConfig!.extra = {
+      relay: {
+        url: "https://relay.example.test/",
+      },
+    };
+    setAgentAwarenessRelayTokenProvider(() => Promise.resolve("clerk-token-user-a"));
+
+    return Effect.gen(function* () {
+      yield* runBackgroundOperations();
+
+      expect(widgetMocks.updateSnapshot).toHaveBeenCalledWith(aggregate);
+    }).pipe(Effect.provide(widgetRelayTestLayer));
+  });
+
   it.effect(
     "re-registers active Live Activity tokens when the app returns to the foreground",
     () => {
@@ -520,8 +575,15 @@ describe("makeRelayDeviceRegistrationRequest", () => {
     return Effect.gen(function* () {
       yield* runBackgroundOperations();
 
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-      const [request, init] = fetchMock.mock.calls[1] as unknown as [
+      const requestUrls = fetchMock.mock.calls.map(([request]) =>
+        request instanceof Request ? request.url : String(request),
+      );
+      expect(requestUrls).toContain("https://relay.example.test/v1/mobile/devices");
+      const deviceRegistrationCall = fetchMock.mock.calls.find(([request]) =>
+        (request instanceof Request ? request.url : String(request)).endsWith("/v1/mobile/devices"),
+      );
+      expect(deviceRegistrationCall).toBeDefined();
+      const [request, init] = deviceRegistrationCall as unknown as [
         unknown,
         RequestInit | undefined,
       ];
@@ -770,7 +832,9 @@ describe("makeRelayDeviceRegistrationRequest", () => {
       yield* runBackgroundOperations();
 
       expect(backgroundRuntime.pending).toHaveLength(0);
-      expect(tokenProvider).toHaveBeenCalledTimes(2);
+      // The failed sign-in reconciliation consumes one token lookup before the
+      // queued APNs registration retries with the recovered provider.
+      expect(tokenProvider).toHaveBeenCalledTimes(3);
     }).pipe(Effect.provide(relayTestLayer));
   });
 
