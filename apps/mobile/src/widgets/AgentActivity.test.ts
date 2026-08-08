@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
+const widgetFactories = vi.hoisted(() => ({
+  createWidget: vi.fn((name: string, layout: unknown) => ({ layout, name })),
+}));
+
 vi.mock("@expo/ui/swift-ui", () => ({
   HStack: "HStack",
   Image: "Image",
@@ -10,6 +14,9 @@ vi.mock("@expo/ui/swift-ui", () => ({
 }));
 
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
+  containerBackground: (color: unknown, container: unknown) => ({
+    containerBackground: { color, container },
+  }),
   font: (value: unknown) => value,
   foregroundStyle: (value: unknown) => value,
   frame: (value: unknown) => value,
@@ -22,6 +29,7 @@ vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 
 vi.mock("expo-widgets", () => ({
   createLiveActivity: vi.fn((name: string, layout: unknown) => ({ layout, name })),
+  createWidget: widgetFactories.createWidget,
 }));
 
 import {
@@ -63,7 +71,30 @@ const lightEnvironment = {
   isLuminanceReduced: false,
 } as const;
 
+const mediumWidgetEnvironment = {
+  date: new Date("2026-05-25T13:07:00.000Z"),
+  widgetFamily: "systemMedium",
+  colorScheme: "dark",
+  isLuminanceReduced: false,
+  configuration: undefined,
+} as const;
+
 describe("AgentActivity widget layout", () => {
+  it("registers a home-screen widget layout", () => {
+    expect(widgetFactories.createWidget).toHaveBeenCalledWith("AgentActivity", AgentActivity);
+  });
+
+  it("adopts WidgetKit's required container background", () => {
+    const layout = AgentActivity(
+      { ...props, activities: [makeRow({})] },
+      mediumWidgetEnvironment as never,
+    );
+
+    expect(JSON.stringify(layout)).toContain(
+      '"containerBackground":{"color":"#111827","container":"widget"}',
+    );
+  });
+
   it("tints each row by its own phase using the web sidebar's dark palette", () => {
     const layout = AgentActivity(
       {

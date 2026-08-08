@@ -29,7 +29,10 @@ import {
   loadPreferences,
   saveAgentAwarenessRegistrationRecord,
 } from "../../persistence/imperative";
-import AgentActivity, { type AgentActivityProps } from "../../widgets/AgentActivity";
+import AgentActivity, {
+  AgentActivityWidget,
+  type AgentActivityProps,
+} from "../../widgets/AgentActivity";
 import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
 import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
@@ -195,6 +198,9 @@ export function setAgentAwarenessRelayTokenProvider(
     // Without a signed-in user the relay can no longer update or end these
     // activities, so they would sit orphaned on the lock screen.
     endLocalLiveActivities("live activity cleanup after cloud sign-out failed");
+    if (canRegisterRemoteLiveActivities()) {
+      updateAgentActivityWidgetSnapshot(idleAgentActivityWidgetProps());
+    }
     setRegistrationStatus("unknown");
     // Sign-out is the only thing that invalidates a stored registration, so the
     // next sign-in re-registers.
@@ -479,7 +485,7 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
       return;
     }
     const nowIso = new Date(Date.now()).toISOString();
-    const activity = AgentActivity.start({
+    const props = {
       title: "T3 Code",
       subtitle: "Agent work in progress",
       activeCount: 1,
@@ -497,7 +503,9 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
           deepLink: "/",
         },
       ],
-    });
+    } satisfies AgentActivityProps;
+    updateAgentActivityWidgetSnapshot(props);
+    const activity = AgentActivity.start(props);
     logRegistrationDebug("live activity card armed for local work", {
       threadTitle: input.threadTitle,
     });
@@ -507,6 +515,27 @@ function armAgentAwarenessLiveActivityForLocalWorkNow(input: {
     );
   } catch (error) {
     logRegistrationError("live activity arming failed", error);
+  }
+}
+
+function idleAgentActivityWidgetProps(): AgentActivityProps {
+  return {
+    title: "T3 Code",
+    subtitle: "No active agents",
+    activeCount: 0,
+    updatedAt: new Date(Date.now()).toISOString(),
+    activities: [],
+  };
+}
+
+function updateAgentActivityWidgetSnapshot(props: AgentActivityProps): void {
+  try {
+    AgentActivityWidget.updateSnapshot(props);
+    logRegistrationDebug("agent activity widget snapshot updated", {
+      activeCount: props.activeCount,
+    });
+  } catch (error) {
+    logRegistrationError("agent activity widget snapshot update failed", error);
   }
 }
 
@@ -1037,6 +1066,16 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
       activities = activities.slice(0, 1);
     }
 
+    // Unlike a Live Activity, the home-screen widget does not receive the
+    // relay's ActivityKit pushes. Reconcile its snapshot whenever the app
+    // signs in, reconnects, or returns to the foreground. A null aggregate is
+    // authoritative idle state; a null response means the read failed and
+    // must not erase the last useful snapshot.
+    const snapshot = yield* readAgentActivitySnapshot();
+    if (snapshot) {
+      updateAgentActivityWidgetSnapshot(snapshot.aggregate ?? idleAgentActivityWidgetProps());
+    }
+
     // Activities are only ever created here, in the foreground, where the
     // update token can be observed and registered immediately — the relay
     // never remote-starts one (background push-to-start wakes proved too
@@ -1056,7 +1095,6 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
       // The toggle defaults to on: an unset preference (fresh install) must
       // prime, so only an explicit false blocks it.
       if (preferences?.liveActivitiesEnabled !== false) {
-        const snapshot = yield* readAgentActivitySnapshot();
         // The snapshot request yields; an arm-on-send may have created the
         // card in the meantime. Re-check so two cards are never started.
         const armedMeanwhile = yield* Effect.try({
