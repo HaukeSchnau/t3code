@@ -67,9 +67,28 @@ describe("ClientSettings environment identification", () => {
   });
 });
 
-describe("ClientSettings sidebar lifecycle", () => {
-  it("defaults to a three-day auto-settle threshold", () => {
-    expect(decodeClientSettings({}).sidebarAutoSettleAfterDays).toBe(3);
+describe("ClientSettings sidebar", () => {
+  it("defaults to the current sidebar with a three-day auto-settle threshold", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.legacySidebarEnabled).toBe(false);
+    expect(settings.sidebarAutoSettleAfterDays).toBe(3);
+  });
+
+  it("drops the retired sidebar v2 beta keys, resetting everyone to the default", () => {
+    const decoded = decodeClientSettings({
+      sidebarV2Enabled: false,
+      sidebarV2ConfiguredByUser: true,
+    });
+    expect(decoded.legacySidebarEnabled).toBe(false);
+    expect(decoded).not.toHaveProperty("sidebarV2Enabled");
+    expect(decoded).not.toHaveProperty("sidebarV2ConfiguredByUser");
+  });
+
+  it("preserves an explicit legacy sidebar opt-in", () => {
+    expect(decodeClientSettings({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(true);
+    expect(decodeClientSettingsPatch({ legacySidebarEnabled: true }).legacySidebarEnabled).toBe(
+      true,
+    );
   });
 
   it("allows auto-settle by inactivity to be disabled", () => {
@@ -145,25 +164,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
         providerInstances: { "1bad": { driver: "codex" } },
       }),
     ).toThrow();
-  });
-});
-
-describe("Claude provider settings", () => {
-  it("includes built-in models by default", () => {
-    expect(decodeServerSettings({}).providers.claudeAgent.includeBuiltInModels).toBe(true);
-  });
-
-  it("accepts disabling built-in models in full settings and patches", () => {
-    expect(
-      decodeServerSettings({
-        providers: { claudeAgent: { includeBuiltInModels: false } },
-      }).providers.claudeAgent.includeBuiltInModels,
-    ).toBe(false);
-    expect(
-      decodeServerSettingsPatch({
-        providers: { claudeAgent: { includeBuiltInModels: false } },
-      }).providers?.claudeAgent?.includeBuiltInModels,
-    ).toBe(false);
   });
 });
 

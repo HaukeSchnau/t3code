@@ -3011,7 +3011,7 @@ const make = Effect.gen(function* () {
           yield* readAuthoritativeTranscriptRecoveryCapability(event);
         const assistantDeliveryMode: AssistantDeliveryMode = authoritativeTranscriptRecovery
           ? yield* Effect.map(serverSettingsService.getSettings, (settings) =>
-              settings.enableAssistantStreaming ? "streaming" : "buffered",
+              settings.enableLegacyTokenStreaming ? "streaming" : "buffered",
             )
           : "streaming";
         if (assistantDeliveryMode === "buffered") {
@@ -3056,7 +3056,7 @@ const make = Effect.gen(function* () {
         const detailedThread = yield* getLoadedThreadDetail();
         const assistantDeliveryMode: AssistantDeliveryMode = yield* Effect.map(
           serverSettingsService.getSettings,
-          (settings) => (settings.enableAssistantStreaming ? "streaming" : "buffered"),
+          (settings) => (settings.enableLegacyTokenStreaming ? "streaming" : "buffered"),
         );
         const flushedMessageIds =
           assistantDeliveryMode === "buffered"
