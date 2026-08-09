@@ -20,16 +20,16 @@ can each take seconds or minutes; globally serial execution makes an unrelated a
 - `packages/shared/src/KeyedDrainableWorker.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/orchestration/Layers/ProviderTranscriptJournalIngestion.ts`
 - `apps/server/src/persistence/Layers/OrchestrationEventStore.ts`
-- `apps/server/src/ws.ts`
+- `apps/server/src/orchestration/transport/OrchestrationSubscriptionWorkflow.ts`
 
 ## Verification
 
 - `vp test packages/shared/src/KeyedDrainableWorker.test.ts`
 - `vp test apps/server/src/orchestration/Layers/ProviderCommandReactor.test.ts`
 - `vp test apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts`
-- `vp check`
-- `vp run typecheck`
+- `vp run --filter t3 typecheck`
 
 ## Upstream notes
 

@@ -42,12 +42,16 @@ restart, but same-process provider startup and ingestion races must remain fail-
 - `apps/server/src/status/http.ts`
 - `apps/server/src/orchestration/Services/ProjectionSnapshotQuery.ts`
 - `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts`
+- `apps/server/src/orchestration/Layers/ProjectionOperationalReads.ts`
 
 ## Verification
 
 - `vp test apps/server/src/provider/ProviderSessionReconciliation.test.ts apps/server/src/provider/Layers/ProviderSessionReaper.test.ts apps/server/src/status/IdleStatus.test.ts apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts apps/server/src/serverRuntimeStartup.test.ts`
-- `vp check`
-- `vp run typecheck`
+- `vp run --filter t3 typecheck`
+
+Restart-safety reads belong in `ProjectionOperationalReads.ts`. Keep
+`ProjectionSnapshotQuery.ts` as the stable public service facade so operational changes do not overlap
+snapshot, search, or activity-history implementation.
 
 Production verification should compare idle-probe latency, projected active/running counts, undelivered journal
 depth, and provider runtime cursor rows before and after restart. Repaired projections must become interrupted
