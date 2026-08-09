@@ -57,6 +57,7 @@ with reset timing and a simple forecast of whether current usage will last until
 
 - `apps/server/src/provider/Layers/CodexSessionRuntime.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/orchestration/Layers/ProviderUsageLimitsProjection.ts`
 - `apps/web/src/lib/usageLimits.ts`
 - `apps/web/src/components/chat/UsageLimitsMeter.tsx`
 - `apps/web/src/components/chat/ChatComposer.tsx`
@@ -76,4 +77,4 @@ with reset timing and a simple forecast of whether current usage will last until
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts`
 - `apps/web/src/lib/usageLimits.test.ts`
 - `apps/web/src/components/chat/ChatComposerUsageLimitsMeterSlot.test.tsx`
-- Required repo gates: `vp check` and `vp run typecheck`.
+- Required focused gates: server/web package typechecks and the listed tests.

@@ -35,6 +35,7 @@ placeholder must not leave the thread looking permanently busy.
 
 - `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
+- `apps/server/src/orchestration/Layers/ProviderTranscriptJournalIngestion.ts`
 - `apps/server/src/orchestration/ProviderTranscriptJournalBatch.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
 - `apps/server/src/provider/ProviderRuntimeEventDurability.ts`
@@ -46,8 +47,11 @@ placeholder must not leave the thread looking permanently busy.
 ## Verification
 
 - `vp test apps/server/src/orchestration/ProviderTranscriptJournalBatch.test.ts apps/server/src/persistence/Layers/ProviderTranscriptJournal.test.ts apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts apps/server/integration/coalescingHardKill.integration.test.ts`
-- `vp check`
-- `vp run typecheck`
+- `vp run --filter t3 typecheck`
+
+Keep recovery, batching, persistence retry, delivery/removal acknowledgement, tombstones, and buffered
+assistant promotion in `ProviderTranscriptJournalIngestion.ts`. The runtime ingestion layer should only
+compose that workflow with provider event policy.
 
 ## Upstream Notes
 

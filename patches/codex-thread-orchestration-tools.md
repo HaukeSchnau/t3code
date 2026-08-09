@@ -90,3 +90,7 @@ On successful workspace forks, the destination T3 thread stores the prepared `wo
 authoritative and explain that the conversation was forked from another T3 thread. T3 also records
 `thread.forked-to` and `thread.forked-from` activities so the relationship is visible to humans even
 before another model turn runs.
+
+The WebSocket entrypoint only delegates Codex resume/fork RPCs. Keep provider selection, settings and
+environment resolution, shadow-home materialization, import deduplication, busy/fork-point validation,
+workspace cleanup, and relationship activities in `apps/server/src/provider/CodexThreadRpcWorkflow.ts`.
