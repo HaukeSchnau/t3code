@@ -16,29 +16,23 @@ import {
   type OrchestrationCheckpointSummary,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
-  type OrchestrationActivityImageMedia,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
   defaultInstanceIdForDriver,
 } from "@t3tools/contracts";
-import Mime from "@effect/platform-node/Mime";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
-import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import * as Path from "effect/Path";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
-import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { ProviderTranscriptJournalLive } from "../../persistence/Layers/ProviderTranscriptJournal.ts";
@@ -53,13 +47,7 @@ import {
 } from "../Services/ProviderRuntimeIngestion.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { ServerConfig } from "../../config.ts";
-import { inferImageExtension } from "../../imageMime.ts";
-import { createObservedMediaId, resolveObservedMediaPath } from "../../observedMediaStore.ts";
-import {
-  adjustWorkloadGauge,
-  incrementWorkloadCounter,
-} from "../../diagnostics/WorkloadDiagnostics.ts";
+import { incrementWorkloadCounter } from "../../diagnostics/WorkloadDiagnostics.ts";
 import { isPersistenceError } from "../../persistence/Errors.ts";
 import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
 import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
@@ -74,6 +62,16 @@ import {
   isBatchableParentAssistantDelta,
   type ProviderTranscriptJournalBatch,
 } from "../ProviderTranscriptJournalBatch.ts";
+import { makeObservedActivityMedia } from "../ObservedActivityMedia.ts";
+import { makeProviderRuntimeEventLedger } from "../ProviderRuntimeEventLedger.ts";
+import {
+  isSubagentRuntimeEvent,
+  makeProviderSubagentActivityProjection,
+  shouldPersistStandaloneSubagentActivity,
+} from "../ProviderSubagentActivityProjection.ts";
+import { usageLimitsFromRuntimeEvent } from "../ProviderUsageLimitsProjection.ts";
+
+export { subagentActivityIdForRuntime } from "../ProviderSubagentActivityProjection.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
@@ -119,35 +117,6 @@ interface AssistantSegmentState {
   activeMessageId: MessageId | null;
 }
 
-interface SubagentProjectionState {
-  activityId: EventId;
-  threadId: ThreadId;
-  provider: ProviderRuntimeEvent["provider"];
-  providerInstanceId: string;
-  providerThreadId: string;
-  parentTurnId: TurnId | null;
-  turnId: TurnId | null;
-  transcript: string;
-  transcriptSegmentsByItemId: Map<string, Array<string>>;
-  transcriptItemOrder: ReadonlyArray<string>;
-  completedTranscriptItemIds: Set<string>;
-  lastTranscriptItemId: string | null;
-  status: "running" | "waiting" | "completed" | "failed";
-  lastActivity: string | null;
-  updatedAt: string;
-  latestEventType: ProviderRuntimeEvent["type"];
-  lastEventId: EventId;
-  lastPublishedAtMs: number | null;
-  authoritativeTranscriptRecovery: boolean;
-  dirty: boolean;
-}
-
-interface SubagentTranscriptItemMetadata {
-  readonly itemId: string;
-  readonly length: number;
-  readonly completed: boolean;
-}
-
 const TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY = 10_000;
 const TURN_MESSAGE_IDS_BY_TURN_TTL = Duration.minutes(120);
 const BUFFERED_MESSAGE_TEXT_BY_MESSAGE_ID_CACHE_CAPACITY = 20_000;
@@ -156,7 +125,6 @@ const BUFFERED_PROPOSED_PLAN_BY_ID_CACHE_CAPACITY = 10_000;
 const BUFFERED_PROPOSED_PLAN_BY_ID_TTL = Duration.minutes(120);
 const TASK_DESCRIPTION_BY_TASK_CACHE_CAPACITY = 10_000;
 const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
-const SUBAGENT_PUBLICATION_INTERVAL_MS = 500;
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
@@ -188,6 +156,11 @@ function sameId(left: string | null | undefined, right: string | null | undefine
     return false;
   }
   return left === right;
+}
+
+function transcriptItemScopeKey(event: ProviderRuntimeEvent): string | null {
+  if (event.itemId === undefined) return null;
+  return `${event.provider}\0${event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)}\0${event.threadId}\0${event.turnId ?? ""}\0${event.itemId}`;
 }
 
 function hasAssistantMessageForTurn(
@@ -273,16 +246,6 @@ function truncateDetail(value: string, limit = 180): string {
 const MAX_ACTIVITY_DATA_STRING_CHARS = 12_000;
 const MAX_ACTIVITY_DATA_ARRAY_ITEMS = 200;
 const MAX_ACTIVITY_DATA_OBJECT_KEYS = 100;
-const SUBAGENT_STANDALONE_ACTIVITY_KINDS = new Set([
-  "approval.requested",
-  "approval.resolved",
-  "user-input.requested",
-  "user-input.resolved",
-  "runtime.error",
-  "runtime.warning",
-  "tool.denied",
-]);
-
 function compactActivityData(value: unknown, depth = 0): unknown {
   if (typeof value === "string") {
     if (value.length <= MAX_ACTIVITY_DATA_STRING_CHARS) {
@@ -320,252 +283,6 @@ function compactActivityData(value: unknown, depth = 0): unknown {
     compacted.__truncatedKeys = entries.length - MAX_ACTIVITY_DATA_OBJECT_KEYS;
   }
   return compacted;
-}
-
-export function subagentActivityIdForRuntime(
-  threadId: ThreadId,
-  event: ProviderRuntimeEvent,
-  providerThreadId: string,
-): EventId {
-  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-  return EventId.make(
-    `subagent:${encodeURIComponent(threadId)}:${encodeURIComponent(event.provider)}:${encodeURIComponent(
-      providerInstanceId,
-    )}:${encodeURIComponent(providerThreadId)}`,
-  );
-}
-
-function subagentProjectionKey(
-  threadId: ThreadId,
-  event: ProviderRuntimeEvent & {
-    readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
-  },
-): string {
-  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-  return `${threadId}\0${event.provider}\0${providerInstanceId}\0${event.agentContext.providerThreadId}`;
-}
-
-function runtimeSessionKey(event: ProviderRuntimeEvent): string {
-  const providerInstanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-  return `${event.provider}\0${providerInstanceId}\0${event.threadId}`;
-}
-
-function runtimeEventScopeKey(event: ProviderRuntimeEvent): string {
-  const turnScope = `turn:${event.turnId ?? "session"}`;
-  if (event.itemId !== undefined) {
-    return `${turnScope}\0item:${event.itemId}`;
-  }
-  if (
-    event.type === "content.delta" ||
-    event.type === "item.started" ||
-    event.type === "item.updated" ||
-    event.type === "item.completed"
-  ) {
-    return `${turnScope}\0item:anonymous`;
-  }
-  return `${turnScope}\0lifecycle:${event.type}`;
-}
-
-function transcriptItemScopeKey(event: ProviderRuntimeEvent): string | null {
-  if (event.itemId === undefined) return null;
-  return `${event.provider}\0${event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider)}\0${event.threadId}\0${event.turnId ?? ""}\0${event.itemId}`;
-}
-
-function runtimeTurnScopePrefix(turnId: TurnId | string): string {
-  return `turn:${turnId}\0`;
-}
-
-interface RuntimeSessionDedupeState {
-  readonly activeEventIdsByScope: Map<string, Set<string>>;
-  readonly completedItemScopes: Set<string>;
-  readonly completedTurnIds: Set<string>;
-}
-
-function eventTimeMillis(createdAt: string): number {
-  const parsed = Date.parse(createdAt);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isSubagentRuntimeEvent(event: ProviderRuntimeEvent): event is ProviderRuntimeEvent & {
-  readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
-} {
-  return event.agentContext !== undefined;
-}
-
-function subagentStatusFromRuntimeEvent(
-  event: ProviderRuntimeEvent,
-): SubagentProjectionState["status"] | undefined {
-  if (event.type === "runtime.error") {
-    return "failed";
-  }
-  if (event.type === "request.opened" || event.type === "user-input.requested") {
-    return "waiting";
-  }
-  if (event.type === "request.resolved" || event.type === "user-input.resolved") {
-    return "running";
-  }
-  if (event.type === "turn.completed") {
-    return event.payload.state === "completed" ? "completed" : "failed";
-  }
-  if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
-    return "completed";
-  }
-  return undefined;
-}
-
-function subagentLastActivityFromRuntimeEvent(event: ProviderRuntimeEvent): string | null {
-  switch (event.type) {
-    case "thread.started":
-      return "Started";
-    case "thread.state.changed":
-      return `Thread ${event.payload.state}`;
-    case "turn.completed":
-      return event.payload.state === "failed" ? "Turn failed" : "Turn completed";
-    case "item.started":
-      return `${event.payload.title ?? "Tool"} started`;
-    case "item.updated":
-      return event.payload.title ?? event.payload.detail ?? "Tool updated";
-    case "item.completed":
-      return `${event.payload.title ?? "Tool"} completed`;
-    case "tool.progress":
-      return event.payload.summary ?? "Tool progress";
-    case "request.opened":
-      return "Waiting for approval";
-    case "request.resolved":
-      return "Approval resolved";
-    case "user-input.requested":
-      return "Waiting for input";
-    case "user-input.resolved":
-      return "Input submitted";
-    case "runtime.error":
-      return event.payload.message;
-    default:
-      return null;
-  }
-}
-
-function subagentTranscriptDeltaFromRuntimeEvent(event: ProviderRuntimeEvent): string {
-  if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
-    return event.payload.delta;
-  }
-  if (
-    event.type === "item.completed" &&
-    event.payload.itemType === "assistant_message" &&
-    event.payload.detail
-  ) {
-    return event.payload.detail;
-  }
-  return "";
-}
-
-function materializeSubagentTranscript(
-  state: Pick<SubagentProjectionState, "transcriptSegmentsByItemId" | "transcriptItemOrder">,
-): string {
-  return state.transcriptItemOrder
-    .flatMap((key) => state.transcriptSegmentsByItemId.get(key) ?? [])
-    .join("");
-}
-
-function subagentTranscriptItemMetadata(
-  state: Pick<
-    SubagentProjectionState,
-    "transcriptSegmentsByItemId" | "transcriptItemOrder" | "completedTranscriptItemIds"
-  >,
-): ReadonlyArray<SubagentTranscriptItemMetadata> {
-  return state.transcriptItemOrder.map((itemId) => ({
-    itemId,
-    length: (state.transcriptSegmentsByItemId.get(itemId) ?? []).reduce(
-      (total, segment) => total + segment.length,
-      0,
-    ),
-    completed: state.completedTranscriptItemIds.has(itemId),
-  }));
-}
-
-function subagentActivityCommandId(
-  state: Pick<
-    SubagentProjectionState,
-    "provider" | "providerInstanceId" | "lastEventId" | "activityId"
-  >,
-  commandTag: string,
-): CommandId {
-  return CommandId.make(
-    `provider:${state.provider}:${state.providerInstanceId}:${state.lastEventId}:${commandTag}:${state.activityId}`,
-  );
-}
-
-function updateSubagentTranscript(
-  state: Pick<
-    SubagentProjectionState,
-    | "transcriptSegmentsByItemId"
-    | "transcriptItemOrder"
-    | "lastTranscriptItemId"
-    | "completedTranscriptItemIds"
-  >,
-  event: ProviderRuntimeEvent,
-): {
-  readonly changed: boolean;
-  readonly transcriptItemOrder: ReadonlyArray<string>;
-  readonly lastTranscriptItemId: string | null;
-} {
-  const itemId = String(
-    event.itemId ??
-      (event.type === "item.completed" ? state.lastTranscriptItemId : undefined) ??
-      event.turnId ??
-      event.eventId,
-  );
-  const previousSegments = state.transcriptSegmentsByItemId.get(itemId);
-  const itemWasCompleted = state.completedTranscriptItemIds.has(itemId);
-  const transcriptItemOrder =
-    previousSegments === undefined
-      ? [...state.transcriptItemOrder, itemId]
-      : state.transcriptItemOrder;
-
-  if (event.type === "content.delta" && event.payload.streamKind === "assistant_text") {
-    if (event.payload.delta.length === 0 || itemWasCompleted) {
-      return {
-        changed: false,
-        transcriptItemOrder: state.transcriptItemOrder,
-        lastTranscriptItemId: state.lastTranscriptItemId,
-      };
-    }
-    if (previousSegments === undefined) {
-      state.transcriptSegmentsByItemId.set(itemId, [event.payload.delta]);
-    } else {
-      previousSegments.push(event.payload.delta);
-    }
-  } else if (event.type === "item.completed" && event.payload.itemType === "assistant_message") {
-    if (itemWasCompleted) {
-      return {
-        changed: false,
-        transcriptItemOrder: state.transcriptItemOrder,
-        lastTranscriptItemId: itemId,
-      };
-    }
-    state.completedTranscriptItemIds.add(itemId);
-    const authoritativeText = event.payload.detail ?? "";
-    if (authoritativeText.length === 0 || previousSegments?.join("") === authoritativeText) {
-      return {
-        changed: true,
-        transcriptItemOrder,
-        lastTranscriptItemId: itemId,
-      };
-    }
-    // Authoritative completion replaces this item's streamed segments in O(1).
-    // Full transcript materialization is reserved for durable publication.
-    state.transcriptSegmentsByItemId.set(itemId, [authoritativeText]);
-  } else {
-    return {
-      changed: false,
-      transcriptItemOrder: state.transcriptItemOrder,
-      lastTranscriptItemId: state.lastTranscriptItemId,
-    };
-  }
-  return {
-    transcriptItemOrder,
-    lastTranscriptItemId: itemId,
-    changed: true,
-  };
 }
 
 function runtimeAgentContextPayload(event: ProviderRuntimeEvent):
@@ -628,271 +345,6 @@ function buildContextWindowActivityPayload(
     return undefined;
   }
   return event.payload.usage;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function asString(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value : null;
-}
-
-function asBoolean(value: unknown): boolean | null {
-  return typeof value === "boolean" ? value : null;
-}
-
-function observedImageSourcePathFromActivity(activity: OrchestrationThreadActivity): string | null {
-  const payload = asRecord(activity.payload);
-  if (payload?.itemType !== "image_view") {
-    return null;
-  }
-
-  const data = asRecord(payload.data);
-  const item = asRecord(data?.item);
-  return (
-    asString(item?.path) ??
-    asString(item?.savedPath) ??
-    asString(data?.path) ??
-    asString(data?.savedPath) ??
-    asString(payload.detail)
-  );
-}
-
-function isLocalObservedImagePath(sourcePath: string): boolean {
-  const normalizedPath = sourcePath.trim().toLowerCase();
-  return (
-    normalizedPath.length > 0 &&
-    !normalizedPath.startsWith("data:") &&
-    !normalizedPath.startsWith("http://") &&
-    !normalizedPath.startsWith("https://")
-  );
-}
-
-function existingObservedActivityMedia(
-  payload: Record<string, unknown>,
-): ReadonlyArray<OrchestrationActivityImageMedia> {
-  const rawMedia = payload.media;
-  if (!Array.isArray(rawMedia)) {
-    return [];
-  }
-
-  return rawMedia.flatMap((item): ReadonlyArray<OrchestrationActivityImageMedia> => {
-    const record = asRecord(item);
-    const type = record?.type;
-    const id = asString(record?.id);
-    const name = asString(record?.name);
-    const mimeType = asString(record?.mimeType);
-    const storageId = asString(record?.storageId);
-    if (type !== "image" || !id || !name || !mimeType || !storageId) {
-      return [];
-    }
-    return [
-      {
-        type: "image",
-        id,
-        name,
-        mimeType,
-        storageId,
-        ...(asFiniteNumber(record?.sizeBytes) !== null
-          ? { sizeBytes: asFiniteNumber(record?.sizeBytes)! }
-          : {}),
-        ...(asString(record?.originalPath)
-          ? { originalPath: asString(record?.originalPath)! }
-          : {}),
-      },
-    ];
-  });
-}
-
-function normalizeRateLimitResetTimestamp(value: unknown): string | null {
-  const text = asString(value);
-  if (text) {
-    return Option.match(DateTime.make(text), {
-      onNone: () => null,
-      onSome: DateTime.formatIso,
-    });
-  }
-
-  const raw = asFiniteNumber(value);
-  if (raw === null || raw <= 0) {
-    return null;
-  }
-  const epochMs = raw >= 1_000_000_000_000 ? raw : raw * 1000;
-  return Option.match(DateTime.make(epochMs), {
-    onNone: () => null,
-    onSome: DateTime.formatIso,
-  });
-}
-
-function normalizeRateLimitWindow(value: unknown): {
-  readonly usedPercent: number;
-  readonly resetsAt: string | null;
-  readonly windowDurationMins: number | null;
-} | null {
-  const record = asRecord(value);
-  const usedPercent = asFiniteNumber(record?.usedPercent);
-  if (usedPercent === null) {
-    return null;
-  }
-
-  return {
-    usedPercent,
-    resetsAt: normalizeRateLimitResetTimestamp(record?.resetsAt),
-    windowDurationMins: asFiniteNumber(record?.windowDurationMins),
-  };
-}
-
-function normalizeSpendControlLimitWindow(value: unknown): {
-  readonly usedPercent: number;
-  readonly resetsAt: string | null;
-  readonly windowDurationMins: number | null;
-} | null {
-  const record = asRecord(value);
-  const remainingPercent = asFiniteNumber(record?.remainingPercent);
-  if (remainingPercent === null) {
-    return null;
-  }
-
-  return {
-    usedPercent: Math.max(0, Math.min(100, 100 - remainingPercent)),
-    resetsAt: normalizeRateLimitResetTimestamp(record?.resetsAt),
-    windowDurationMins: null,
-  };
-}
-
-function selectSecondaryRateLimitWindow(
-  secondary: {
-    readonly usedPercent: number;
-    readonly resetsAt: string | null;
-    readonly windowDurationMins: number | null;
-  } | null,
-  individualLimit: {
-    readonly usedPercent: number;
-    readonly resetsAt: string | null;
-    readonly windowDurationMins: number | null;
-  } | null,
-): {
-  readonly usedPercent: number;
-  readonly resetsAt: string | null;
-  readonly windowDurationMins: number | null;
-} | null {
-  if (!secondary) {
-    return individualLimit;
-  }
-  if (secondary.usedPercent === 0 && individualLimit && individualLimit.usedPercent > 0) {
-    return individualLimit;
-  }
-  return secondary;
-}
-
-function hasRateLimitSnapshotFields(value: Record<string, unknown>): boolean {
-  return (
-    value.primary !== undefined ||
-    value.secondary !== undefined ||
-    value.individualLimit !== undefined ||
-    value.limitId !== undefined ||
-    value.limitName !== undefined ||
-    value.planType !== undefined ||
-    value.rateLimitReachedType !== undefined ||
-    value.credits !== undefined
-  );
-}
-
-function unwrapRateLimitSnapshot(value: unknown): Record<string, unknown> | null {
-  let current = asRecord(value);
-  for (let depth = 0; depth < 3; depth += 1) {
-    if (!current) {
-      return null;
-    }
-    if (hasRateLimitSnapshotFields(current)) {
-      return current;
-    }
-    const nested = asRecord(current.rateLimits);
-    if (!nested) {
-      return current;
-    }
-    current = nested;
-  }
-  return current;
-}
-
-function buildUsageLimitsSnapshot(event: ProviderRuntimeEvent):
-  | {
-      readonly limitId: string | null;
-      readonly limitName: string | null;
-      readonly planType: string | null;
-      readonly rateLimitReachedType: string | null;
-      readonly credits: {
-        readonly balance: string | null;
-        readonly hasCredits: boolean;
-        readonly unlimited: boolean;
-      } | null;
-      readonly primary: {
-        readonly usedPercent: number;
-        readonly resetsAt: string | null;
-        readonly windowDurationMins: number | null;
-      } | null;
-      readonly secondary: {
-        readonly usedPercent: number;
-        readonly resetsAt: string | null;
-        readonly windowDurationMins: number | null;
-      } | null;
-      readonly updatedAt: string;
-    }
-  | undefined {
-  if (event.type !== "account.rate-limits.updated") {
-    return undefined;
-  }
-
-  const rateLimits = unwrapRateLimitSnapshot(event.payload.rateLimits);
-  if (!rateLimits) {
-    return undefined;
-  }
-
-  const creditsRecord = asRecord(rateLimits.credits);
-  const hasCredits = asBoolean(creditsRecord?.hasCredits);
-  const unlimited = asBoolean(creditsRecord?.unlimited);
-  const credits =
-    hasCredits !== null && unlimited !== null
-      ? {
-          balance: asString(creditsRecord?.balance),
-          hasCredits,
-          unlimited,
-        }
-      : null;
-
-  const primary = normalizeRateLimitWindow(rateLimits.primary);
-  const secondary = selectSecondaryRateLimitWindow(
-    normalizeRateLimitWindow(rateLimits.secondary),
-    normalizeSpendControlLimitWindow(rateLimits.individualLimit),
-  );
-  if (
-    primary === null &&
-    secondary === null &&
-    asString(rateLimits.limitId) === null &&
-    asString(rateLimits.limitName) === null &&
-    asString(rateLimits.planType) === null &&
-    asString(rateLimits.rateLimitReachedType) === null &&
-    credits === null
-  ) {
-    return undefined;
-  }
-
-  return {
-    limitId: asString(rateLimits.limitId),
-    limitName: asString(rateLimits.limitName),
-    planType: asString(rateLimits.planType),
-    rateLimitReachedType: asString(rateLimits.rateLimitReachedType),
-    credits,
-    primary,
-    secondary,
-    updatedAt: event.createdAt,
-  };
 }
 
 function normalizeRuntimeTurnState(
@@ -1525,7 +977,6 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
-  const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const transcriptJournal = yield* ProviderTranscriptJournal;
   const transcriptJournalTrackerOption = yield* Effect.serviceOption(TranscriptJournalTracker);
   const transcriptJournalTracker = Option.isSome(transcriptJournalTrackerOption)
@@ -1533,9 +984,6 @@ const make = Effect.gen(function* () {
     : yield* makeTranscriptJournalTracker;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
-  const serverConfig = yield* ServerConfig;
-  const fileSystem = yield* FileSystem.FileSystem;
-  const path = yield* Path.Path;
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     Effect.succeed(
       CommandId.make(
@@ -1544,75 +992,15 @@ const make = Effect.gen(function* () {
         }:${encodeURIComponent(event.threadId)}:${event.eventId}:${tag}`,
       ),
     );
-  const processedRuntimeEventsBySession = new Map<string, RuntimeSessionDedupeState>();
+  const runtimeEventLedger = makeProviderRuntimeEventLedger();
+  const observedActivityMedia = yield* makeObservedActivityMedia;
+  const subagentActivityProjection = yield* makeProviderSubagentActivityProjection;
   const recoveringTranscriptJournalCountByScope = new Map<string, number>();
   const durableParentDeltaPromotions = new Map<string, Array<ProviderRuntimeEvent>>();
   const journalBatchSourcesByEventId = new Map<string, ReadonlyArray<ProviderRuntimeEvent>>();
 
   const journalSourceEvents = (event: ProviderRuntimeEvent) =>
     journalBatchSourcesByEventId.get(String(event.eventId)) ?? [event];
-
-  const hasProcessedRuntimeEvent = (event: ProviderRuntimeEvent): boolean => {
-    const state = processedRuntimeEventsBySession.get(runtimeSessionKey(event));
-    if (state === undefined) return false;
-    if (event.turnId !== undefined && state.completedTurnIds.has(String(event.turnId))) return true;
-    const scopeKey = runtimeEventScopeKey(event);
-    return (
-      state.completedItemScopes.has(scopeKey) ||
-      (state.activeEventIdsByScope.get(scopeKey)?.has(String(event.eventId)) ?? false)
-    );
-  };
-
-  const rememberProcessedRuntimeEvent = (event: ProviderRuntimeEvent) =>
-    Effect.sync(() => {
-      const sessionKey = runtimeSessionKey(event);
-      if (event.type === "session.exited") {
-        const existing = processedRuntimeEventsBySession.get(sessionKey);
-        if (existing !== undefined) {
-          const retainedEventCount = Array.from(existing.activeEventIdsByScope.values()).reduce(
-            (total, eventIds) => total + eventIds.size,
-            0,
-          );
-          adjustWorkloadGauge("ingestion.dedupe.events.active", -retainedEventCount);
-        }
-        processedRuntimeEventsBySession.delete(sessionKey);
-        return;
-      }
-      const state = processedRuntimeEventsBySession.get(sessionKey) ?? {
-        activeEventIdsByScope: new Map<string, Set<string>>(),
-        completedItemScopes: new Set<string>(),
-        completedTurnIds: new Set<string>(),
-      };
-      const scopeKey = runtimeEventScopeKey(event);
-      const eventIds = state.activeEventIdsByScope.get(scopeKey) ?? new Set<string>();
-      if (!eventIds.has(String(event.eventId))) {
-        eventIds.add(String(event.eventId));
-        adjustWorkloadGauge("ingestion.dedupe.events.active", 1);
-      }
-      state.activeEventIdsByScope.set(scopeKey, eventIds);
-
-      if (event.type === "item.completed" && event.itemId !== undefined) {
-        state.activeEventIdsByScope.delete(scopeKey);
-        adjustWorkloadGauge("ingestion.dedupe.events.active", -eventIds.size);
-        state.completedItemScopes.add(scopeKey);
-      }
-      if (event.type === "turn.completed" || event.type === "turn.aborted") {
-        const turnId = event.turnId;
-        if (turnId !== undefined) {
-          const prefix = runtimeTurnScopePrefix(turnId);
-          for (const [candidateScope, candidateEventIds] of state.activeEventIdsByScope) {
-            if (!candidateScope.startsWith(prefix)) continue;
-            state.activeEventIdsByScope.delete(candidateScope);
-            adjustWorkloadGauge("ingestion.dedupe.events.active", -candidateEventIds.size);
-          }
-          for (const candidateScope of state.completedItemScopes) {
-            if (candidateScope.startsWith(prefix)) state.completedItemScopes.delete(candidateScope);
-          }
-          state.completedTurnIds.add(String(turnId));
-        }
-      }
-      processedRuntimeEventsBySession.set(sessionKey, state);
-    });
 
   const turnMessageIdsByTurnKey = yield* Cache.make<string, Set<MessageId>>({
     capacity: TURN_MESSAGE_IDS_BY_TURN_CACHE_CAPACITY,
@@ -1662,10 +1050,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  // This state is lossless until an explicit lifecycle flush. A TTL/capacity
-  // cache can evict a dirty coalescer without an effectful finalizer, losing
-  // transcript bytes and leaking its active gauge.
-  const subagentStates = new Map<string, SubagentProjectionState>();
   const bufferedAssistantJournalEventsByMessageId = new Map<
     MessageId,
     Array<ProviderRuntimeEvent>
@@ -1695,106 +1079,6 @@ const make = Effect.gen(function* () {
       );
     },
   );
-
-  const hydrateSubagentState = Effect.fn("hydrateSubagentState")(function* (input: {
-    readonly event: ProviderRuntimeEvent & {
-      readonly agentContext: NonNullable<ProviderRuntimeEvent["agentContext"]>;
-    };
-    readonly threadId: ThreadId;
-    readonly activityId: EventId;
-    readonly authoritativeTranscriptRecovery: boolean;
-  }) {
-    const thread = yield* resolveThreadDetail(input.threadId);
-    const activity = thread?.activities.find((candidate) => candidate.id === input.activityId);
-    const payload = activity ? asRecord(activity.payload) : null;
-    const transcript = typeof payload?.transcript === "string" ? payload.transcript : null;
-    if (!activity || !payload || transcript === null) {
-      return undefined;
-    }
-
-    const transcriptSegmentsByItemId = new Map<string, Array<string>>();
-    const transcriptItemOrder: string[] = [];
-    const completedTranscriptItemIds = new Set<string>();
-    const rawItems = payload.transcriptItems;
-    let offset = 0;
-    let metadataIsValid = Array.isArray(rawItems);
-    if (Array.isArray(rawItems)) {
-      for (const rawItem of rawItems) {
-        const item = asRecord(rawItem);
-        const itemId = typeof item?.itemId === "string" ? item.itemId : null;
-        const length =
-          typeof item?.length === "number" && Number.isSafeInteger(item.length) && item.length >= 0
-            ? item.length
-            : null;
-        if (itemId === null || length === null || offset + length > transcript.length) {
-          metadataIsValid = false;
-          break;
-        }
-        transcriptItemOrder.push(itemId);
-        transcriptSegmentsByItemId.set(itemId, [transcript.slice(offset, offset + length)]);
-        if (item?.completed === true) completedTranscriptItemIds.add(itemId);
-        offset += length;
-      }
-    }
-    if (!metadataIsValid || offset !== transcript.length) {
-      transcriptSegmentsByItemId.clear();
-      transcriptItemOrder.length = 0;
-      completedTranscriptItemIds.clear();
-      if (transcript.length > 0) {
-        // Never bind a legacy cumulative transcript to the incoming item. A
-        // later authoritative completion for that item must not replace and
-        // erase pre-metadata bytes recovered during an upgrade.
-        const fallbackItemId = `legacy:${input.activityId}`;
-        transcriptItemOrder.push(fallbackItemId);
-        transcriptSegmentsByItemId.set(fallbackItemId, [transcript]);
-        completedTranscriptItemIds.add(fallbackItemId);
-      }
-    }
-
-    const status: SubagentProjectionState["status"] =
-      payload.status === "running" ||
-      payload.status === "waiting" ||
-      payload.status === "completed" ||
-      payload.status === "failed"
-        ? payload.status
-        : "running";
-    const updatedAt =
-      typeof payload.updatedAt === "string" ? payload.updatedAt : activity.createdAt;
-    const latestEventType =
-      typeof payload.latestEventType === "string"
-        ? (payload.latestEventType as ProviderRuntimeEvent["type"])
-        : input.event.type;
-    const lastEventId =
-      typeof payload.latestEventId === "string"
-        ? EventId.make(payload.latestEventId)
-        : input.event.eventId;
-
-    return {
-      activityId: input.activityId,
-      threadId: input.threadId,
-      provider: input.event.provider,
-      providerInstanceId:
-        input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
-      providerThreadId: input.event.agentContext.providerThreadId,
-      parentTurnId:
-        input.event.agentContext.parentTurnId ??
-        (typeof payload.parentTurnId === "string" ? TurnId.make(payload.parentTurnId) : null),
-      turnId: toTurnId(input.event.turnId) ?? activity.turnId,
-      transcript,
-      transcriptSegmentsByItemId,
-      transcriptItemOrder,
-      completedTranscriptItemIds,
-      lastTranscriptItemId: transcriptItemOrder.at(-1) ?? null,
-      status,
-      lastActivity: typeof payload.lastActivity === "string" ? payload.lastActivity : null,
-      updatedAt,
-      latestEventType,
-      lastEventId,
-      lastPublishedAtMs: eventTimeMillis(updatedAt),
-      authoritativeTranscriptRecovery: input.authoritativeTranscriptRecovery,
-      dirty: false,
-    };
-  });
 
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
     Cache.getOption(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId)).pipe(
@@ -1973,75 +1257,13 @@ const make = Effect.gen(function* () {
   const clearBufferedProposedPlan = (planId: string) =>
     Cache.invalidate(bufferedProposedPlanById, planId);
 
-  const enrichObservedImageActivity = (input: {
-    readonly activity: OrchestrationThreadActivity;
-    readonly threadId: ThreadId;
-  }): Effect.Effect<OrchestrationThreadActivity> =>
-    Effect.gen(function* () {
-      const payload = asRecord(input.activity.payload);
-      const sourcePath = observedImageSourcePathFromActivity(input.activity);
-      if (!payload || !sourcePath || !isLocalObservedImagePath(sourcePath)) {
-        return input.activity;
-      }
-
-      const mimeType = Mime.getType(sourcePath);
-      if (!mimeType?.toLowerCase().startsWith("image/")) {
-        return input.activity;
-      }
-
-      const mediaId = createObservedMediaId(input.threadId);
-      if (!mediaId) {
-        return input.activity;
-      }
-
-      const bytes = yield* fileSystem.readFile(sourcePath);
-      const extension = inferImageExtension({ mimeType, fileName: sourcePath });
-      const targetPath = resolveObservedMediaPath({
-        observedMediaDir: serverConfig.observedMediaDir,
-        mediaId,
-        extension,
-      });
-      if (!targetPath) {
-        return input.activity;
-      }
-
-      yield* fileSystem.makeDirectory(path.dirname(targetPath), { recursive: true });
-      yield* fileSystem.writeFile(targetPath, bytes);
-
-      const observedMedia: OrchestrationActivityImageMedia = {
-        type: "image",
-        id: mediaId,
-        name: path.basename(sourcePath) || "image",
-        mimeType,
-        storageId: mediaId,
-        sizeBytes: bytes.byteLength,
-        originalPath: sourcePath,
-      };
-
-      return {
-        ...input.activity,
-        payload: {
-          ...payload,
-          media: [...existingObservedActivityMedia(payload), observedMedia],
-        },
-      };
-    }).pipe(
-      Effect.tapError((cause) =>
-        Effect.logWarning("Failed to persist observed image for work-log preview", {
-          cause,
-          activityId: input.activity.id,
-        }),
-      ),
-      Effect.orElseSucceed(() => input.activity),
-    );
-
   const appendActivities = (
     event: ProviderRuntimeEvent,
     threadId: ThreadId,
     activities: ReadonlyArray<OrchestrationThreadActivity>,
   ) =>
     Effect.forEach(activities, (activity) =>
-      enrichObservedImageActivity({ activity, threadId }).pipe(
+      observedActivityMedia.enrich({ activity, threadId }).pipe(
         Effect.flatMap((enrichedActivity) =>
           providerCommandId(event, `thread-activity-append:${enrichedActivity.id}`).pipe(
             Effect.flatMap((commandId) =>
@@ -2057,276 +1279,6 @@ const make = Effect.gen(function* () {
         ),
       ),
     ).pipe(Effect.asVoid);
-
-  const publishSubagentActivity = (
-    key: string,
-    state: SubagentProjectionState,
-    commandTag: string,
-  ) =>
-    Effect.gen(function* () {
-      const transcript = materializeSubagentTranscript(state);
-      yield* orchestrationEngine
-        .dispatch({
-          type: "thread.activity.append",
-          commandId: subagentActivityCommandId(state, commandTag),
-          threadId: state.threadId,
-          activity: {
-            id: state.activityId,
-            createdAt: state.updatedAt,
-            tone: state.status === "failed" ? "error" : "info",
-            kind: "subagent.thread",
-            summary: `Subagent ${state.status}`,
-            payload: {
-              providerThreadId: state.providerThreadId,
-              parentTurnId: state.parentTurnId,
-              status: state.status,
-              transcript,
-              transcriptItems: subagentTranscriptItemMetadata(state),
-              lastActivity: state.lastActivity,
-              updatedAt: state.updatedAt,
-              latestEventType: state.latestEventType,
-              latestEventId: state.lastEventId,
-            },
-            turnId: state.parentTurnId ?? state.turnId,
-          },
-          createdAt: state.updatedAt,
-        })
-        .pipe(
-          Effect.retry({
-            schedule: Schedule.spaced("50 millis"),
-            while: (error) => {
-              if (!isPersistenceError(error)) return false;
-              incrementWorkloadCounter("ingestion.activity.persistence_retries");
-              return true;
-            },
-          }),
-        );
-      subagentStates.set(key, {
-        ...state,
-        transcript,
-        lastPublishedAtMs: eventTimeMillis(state.updatedAt),
-        dirty: false,
-      });
-      incrementWorkloadCounter("ingestion.activity.published");
-      if (commandTag === "subagent-thread-activity-flush") {
-        incrementWorkloadCounter("ingestion.activity.flushes");
-      }
-    });
-
-  const updateSubagentActivity = (input: {
-    event: ProviderRuntimeEvent;
-    threadId: ThreadId;
-    journalBacked: boolean;
-  }) =>
-    Effect.gen(function* () {
-      if (!isSubagentRuntimeEvent(input.event)) {
-        return;
-      }
-
-      const agentContext = input.event.agentContext;
-      const providerThreadId = agentContext.providerThreadId;
-      const key = subagentProjectionKey(input.threadId, input.event);
-      incrementWorkloadCounter("ingestion.activity.candidates");
-      const rawTranscriptDelta = subagentTranscriptDeltaFromRuntimeEvent(input.event);
-      const statusUpdate = subagentStatusFromRuntimeEvent(input.event);
-      const lastActivityUpdate = subagentLastActivityFromRuntimeEvent(input.event);
-      if (
-        rawTranscriptDelta.length === 0 &&
-        statusUpdate === undefined &&
-        lastActivityUpdate === null
-      ) {
-        incrementWorkloadCounter("ingestion.activity.unchanged_suppressed");
-        return;
-      }
-
-      const activityId = subagentActivityIdForRuntime(
-        input.threadId,
-        input.event,
-        providerThreadId,
-      );
-      const publicationCommandId = subagentActivityCommandId(
-        {
-          provider: input.event.provider,
-          providerInstanceId:
-            input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
-          lastEventId: input.event.eventId,
-          activityId,
-        },
-        "subagent-thread-activity-upsert",
-      );
-      const existingReceipt = yield* commandReceiptRepository
-        .getByCommandId({ commandId: publicationCommandId })
-        .pipe(
-          Effect.retry({
-            schedule: Schedule.spaced("50 millis"),
-            while: (error) => {
-              if (!isPersistenceError(error)) return false;
-              incrementWorkloadCounter("ingestion.activity.persistence_retries");
-              return true;
-            },
-          }),
-        );
-      if (Option.isSome(existingReceipt) && existingReceipt.value.status === "accepted") {
-        incrementWorkloadCounter("provider.events.duplicates_suppressed");
-        return;
-      }
-
-      const existingState = subagentStates.get(key);
-      const authoritativeTranscriptRecovery =
-        existingState?.authoritativeTranscriptRecovery === true ||
-        (yield* hasAuthoritativeTranscriptRecovery(input.event, input.journalBacked));
-      const hydratedState =
-        existingState ??
-        (yield* hydrateSubagentState({
-          event: input.event,
-          threadId: input.threadId,
-          activityId,
-          authoritativeTranscriptRecovery,
-        }));
-      const existing = hydratedState ?? {
-        activityId,
-        threadId: input.threadId,
-        provider: input.event.provider,
-        providerInstanceId:
-          input.event.providerInstanceId ?? defaultInstanceIdForDriver(input.event.provider),
-        providerThreadId,
-        parentTurnId: agentContext.parentTurnId ?? null,
-        turnId: toTurnId(input.event.turnId) ?? null,
-        transcript: "",
-        transcriptSegmentsByItemId: new Map<string, Array<string>>(),
-        transcriptItemOrder: [],
-        completedTranscriptItemIds: new Set<string>(),
-        lastTranscriptItemId: null,
-        status: "running" as const,
-        lastActivity: null,
-        updatedAt: "",
-        latestEventType: input.event.type,
-        lastEventId: input.event.eventId,
-        lastPublishedAtMs: null,
-        authoritativeTranscriptRecovery,
-        dirty: false,
-      };
-      const status = statusUpdate ?? existing.status;
-      const lastActivity = lastActivityUpdate ?? existing.lastActivity;
-      const transcriptUpdate = updateSubagentTranscript(existing, input.event);
-      const parentTurnId = agentContext.parentTurnId ?? existing.parentTurnId;
-      const turnId = toTurnId(input.event.turnId) ?? existing.turnId;
-      const semanticallyChanged =
-        transcriptUpdate.changed ||
-        status !== existing.status ||
-        lastActivity !== existing.lastActivity ||
-        parentTurnId !== existing.parentTurnId ||
-        turnId !== existing.turnId;
-      if (!semanticallyChanged) {
-        incrementWorkloadCounter("ingestion.activity.unchanged_suppressed");
-        return;
-      }
-      if (existingState === undefined) {
-        adjustWorkloadGauge("ingestion.subagent_coalescers.active", 1);
-      }
-
-      const nextState: SubagentProjectionState = {
-        ...existing,
-        transcriptItemOrder: transcriptUpdate.transcriptItemOrder,
-        lastTranscriptItemId: transcriptUpdate.lastTranscriptItemId,
-        status,
-        lastActivity,
-        parentTurnId,
-        turnId,
-        updatedAt: input.event.createdAt,
-        latestEventType: input.event.type,
-        lastEventId: input.event.eventId,
-        dirty: true,
-      };
-      const elapsedSincePublication =
-        existing.lastPublishedAtMs === null
-          ? Number.POSITIVE_INFINITY
-          : eventTimeMillis(input.event.createdAt) - existing.lastPublishedAtMs;
-      const shouldPublish =
-        existing.lastPublishedAtMs === null ||
-        status !== existing.status ||
-        (transcriptUpdate.changed && !existing.authoritativeTranscriptRecovery) ||
-        elapsedSincePublication >= SUBAGENT_PUBLICATION_INTERVAL_MS;
-
-      if (!shouldPublish) {
-        subagentStates.set(key, nextState);
-        incrementWorkloadCounter("ingestion.activity.coalesced");
-        return;
-      }
-
-      subagentStates.set(key, nextState);
-      yield* publishSubagentActivity(key, nextState, "subagent-thread-activity-upsert").pipe(
-        Effect.tapError(() =>
-          Effect.sync(() => {
-            // Retain the dirty state for a later terminal/drain retry. Rolling
-            // back would discard transcript segments already accepted in O(1).
-            subagentStates.set(key, nextState);
-          }),
-        ),
-      );
-    });
-
-  const flushSubagentActivities = (input?: {
-    readonly threadId?: ThreadId;
-    readonly turnId?: TurnId;
-    readonly terminalStatus?: SubagentProjectionState["status"];
-    readonly event?: ProviderRuntimeEvent;
-    readonly clear?: boolean;
-  }) =>
-    Effect.gen(function* () {
-      const keys = Array.from(subagentStates.keys());
-      yield* Effect.forEach(
-        keys,
-        (key) =>
-          Effect.gen(function* () {
-            const state = subagentStates.get(key);
-            if (state === undefined) {
-              return;
-            }
-            if (input?.threadId !== undefined && state.threadId !== input.threadId) {
-              return;
-            }
-            if (
-              input?.turnId !== undefined &&
-              state.parentTurnId !== input.turnId &&
-              state.turnId !== input.turnId
-            ) {
-              return;
-            }
-            const terminalStatus = input?.terminalStatus ?? state.status;
-            const event = input?.event;
-            const nextState: SubagentProjectionState = {
-              ...state,
-              status: terminalStatus,
-              ...(event
-                ? {
-                    updatedAt: event.createdAt,
-                    latestEventType: event.type,
-                    lastEventId: event.eventId,
-                  }
-                : {}),
-              dirty:
-                state.dirty ||
-                terminalStatus !== state.status ||
-                (event !== undefined &&
-                  (event.type !== state.latestEventType || event.eventId !== state.lastEventId)),
-            };
-            if (!nextState.dirty) {
-              if (input?.clear === true) {
-                subagentStates.delete(key);
-                adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
-              }
-              return;
-            }
-            yield* publishSubagentActivity(key, nextState, "subagent-thread-activity-flush");
-            if (input?.clear === true) {
-              subagentStates.delete(key);
-              adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
-            }
-          }),
-        { concurrency: 1 },
-      ).pipe(Effect.asVoid);
-    });
 
   const rememberBufferedAssistantJournalEvent = (
     messageId: MessageId,
@@ -2733,7 +1685,7 @@ const make = Effect.gen(function* () {
       const now = event.createdAt;
 
       if (event.type === "account.rate-limits.updated") {
-        const usageLimits = buildUsageLimitsSnapshot(event);
+        const usageLimits = usageLimitsFromRuntimeEvent(event);
         if (!usageLimits) return;
         yield* orchestrationEngine.dispatch({
           type: "provider.usage-limits.update",
@@ -2749,12 +1701,12 @@ const make = Effect.gen(function* () {
 
       if (isSubagentRuntimeEvent(event)) {
         const threadId = ThreadId.make(event.threadId);
-        yield* updateSubagentActivity({ event, threadId, journalBacked });
+        yield* subagentActivityProjection.update(event, journalBacked);
         yield* appendActivities(
           event,
           threadId,
           runtimeEventToActivities(event).filter((activity) =>
-            SUBAGENT_STANDALONE_ACTIVITY_KINDS.has(activity.kind),
+            shouldPersistStandaloneSubagentActivity(activity.kind),
           ),
         );
         return;
@@ -2782,7 +1734,7 @@ const make = Effect.gen(function* () {
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
 
       if (event.type === "turn.completed") {
-        yield* flushSubagentActivities({
+        yield* subagentActivityProjection.flush({
           threadId: thread.id,
           ...(eventTurnId ? { turnId: eventTurnId } : {}),
           terminalStatus:
@@ -2791,7 +1743,7 @@ const make = Effect.gen(function* () {
           clear: true,
         });
       } else if (event.type === "turn.aborted" || event.type === "runtime.error") {
-        yield* flushSubagentActivities({
+        yield* subagentActivityProjection.flush({
           threadId: thread.id,
           ...(eventTurnId ? { turnId: eventTurnId } : {}),
           terminalStatus: "failed",
@@ -2799,7 +1751,7 @@ const make = Effect.gen(function* () {
           clear: true,
         });
       } else if (event.type === "session.exited") {
-        yield* flushSubagentActivities({
+        yield* subagentActivityProjection.flush({
           threadId: thread.id,
           terminalStatus: "failed",
           event,
@@ -3423,7 +2375,7 @@ const make = Effect.gen(function* () {
         typeof input.event.payload.delta === "string" ? input.event.payload.delta.length : 0,
       );
     }
-    if (hasProcessedRuntimeEvent(input.event)) {
+    if (runtimeEventLedger.hasProcessed(input.event)) {
       incrementWorkloadCounter("provider.events.duplicates_suppressed");
       return Effect.void;
     }
@@ -3440,7 +2392,7 @@ const make = Effect.gen(function* () {
       return Effect.void;
     }
     return processRuntimeEvent(input.event, journalBacked).pipe(
-      Effect.andThen(rememberProcessedRuntimeEvent(input.event)),
+      Effect.andThen(runtimeEventLedger.rememberProcessed(input.event)),
     );
   };
 
@@ -3512,7 +2464,7 @@ const make = Effect.gen(function* () {
         return;
       }
       yield* retryPersistence(processInput({ source: "runtime", event }, true));
-      yield* Effect.forEach(sourceEvents.slice(1), rememberProcessedRuntimeEvent, {
+      yield* Effect.forEach(sourceEvents.slice(1), runtimeEventLedger.rememberProcessed, {
         concurrency: 1,
         discard: true,
       });
@@ -3570,7 +2522,7 @@ const make = Effect.gen(function* () {
       if (
         fallbackEvent !== undefined &&
         !fallbackWasJournaled &&
-        !hasProcessedRuntimeEvent(fallbackEvent)
+        !runtimeEventLedger.hasProcessed(fallbackEvent)
       ) {
         yield* processInput({ source: "runtime", event: fallbackEvent });
       }
@@ -3600,7 +2552,7 @@ const make = Effect.gen(function* () {
   });
   const drain = worker.drain.pipe(
     Effect.andThen(
-      flushSubagentActivities().pipe(
+      subagentActivityProjection.flush().pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider runtime ingestion failed to flush subagent activities", {
             cause: Cause.pretty(cause),
@@ -3611,7 +2563,7 @@ const make = Effect.gen(function* () {
   );
   const finalize = worker.drain.pipe(
     Effect.andThen(
-      flushSubagentActivities({ clear: true }).pipe(
+      subagentActivityProjection.finalize.pipe(
         Effect.catchCause((cause) =>
           Effect.logWarning("provider runtime ingestion failed to finalize subagent activities", {
             cause: Cause.pretty(cause),
@@ -3621,22 +2573,13 @@ const make = Effect.gen(function* () {
     ),
     Effect.ensuring(
       Effect.sync(() => {
-        adjustWorkloadGauge("ingestion.subagent_coalescers.active", -subagentStates.size);
-        subagentStates.clear();
-        let retainedEventCount = 0;
-        for (const state of processedRuntimeEventsBySession.values()) {
-          for (const eventIds of state.activeEventIdsByScope.values()) {
-            retainedEventCount += eventIds.size;
-          }
-        }
-        adjustWorkloadGauge("ingestion.dedupe.events.active", -retainedEventCount);
-        processedRuntimeEventsBySession.clear();
         recoveringTranscriptJournalCountByScope.clear();
         durableParentDeltaPromotions.clear();
         journalBatchSourcesByEventId.clear();
         bufferedAssistantJournalEventsByMessageId.clear();
       }),
     ),
+    Effect.ensuring(runtimeEventLedger.reset),
     Effect.ensuring(transcriptJournalTracker.reset),
   );
 
