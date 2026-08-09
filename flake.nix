@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-infra-modules = {
-      url = "github:HaukeSchnau/nix-infra-modules/da801cb0dce7a240b9ead61b71e19e5189402f5a";
+      url = "github:HaukeSchnau/nix-infra-modules/a98ffae74550ae7a77933e3f61e500323826dcb7";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -364,6 +364,45 @@
             '';
           };
 
+          webAction = pkgs.writeShellApplication {
+            name = "t3code-project-web";
+            runtimeInputs = [
+              nodejs
+              pkgs.coreutils
+              pkgs.git
+            ];
+            text = ''
+              web_url="$("$PROJECT_RUNTIME_QUERY" endpoint web url)"
+              web_host="$("$PROJECT_RUNTIME_QUERY" endpoint web listen-host)"
+              web_port="$("$PROJECT_RUNTIME_QUERY" endpoint web listen-port)"
+              web_host_names="$("$PROJECT_RUNTIME_QUERY" endpoint web host-names --json)"
+              allowed_hosts="$(
+                node -e 'process.stdout.write(JSON.parse(process.argv[1]).join(","))' "$web_host_names"
+              )"
+              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
+              state_root="$("$PROJECT_RUNTIME_QUERY" path state)"
+              cache_root="$("$PROJECT_RUNTIME_QUERY" path cache)"
+              t3_home="$state_root/t3-home"
+              web_cache="$cache_root/web"
+              install -d -m 0700 "$t3_home" "$web_cache"
+
+              export XDG_CACHE_HOME="$web_cache"
+              export PATH="$checkout/node_modules/.bin:$PATH"
+              export T3CODE_BUNDLED_DEV=1
+              export T3CODE_DEV_ALLOWED_HOSTS="$allowed_hosts"
+              unset AGENT_SERVICE_PORT AGENT_SERVICE_URL T3CODE_HOST T3CODE_PORT
+
+              cd "$checkout"
+              exec node scripts/dev-runner.ts dev \
+                --no-browser \
+                --host 127.0.0.1 \
+                --home-dir "$t3_home" \
+                --web-host "$web_host" \
+                --web-port "$web_port" \
+                --dev-url "$web_url"
+            '';
+          };
+
           mobileAction = pkgs.writeShellApplication {
             name = "t3code-project-mobile";
             runtimeInputs = [
@@ -403,6 +442,7 @@
           descriptorPath = ./project.json;
           actions = {
             prepare = lib.getExe prepareAction;
+            web = lib.getExe webAction;
             mobile = lib.getExe mobileAction;
           };
         };
@@ -477,10 +517,20 @@
         {
           package = self.packages.${system}.default;
           projectDescriptor =
-            assert builtins.attrNames normalizedProjectDescriptor.development.workloads == [ "mobile" ];
+            assert
+              builtins.attrNames normalizedProjectDescriptor.development.workloads == [
+                "mobile"
+                "web"
+              ];
             assert normalizedProjectDescriptor.development.workloads.mobile.action == "mobile";
-            assert builtins.attrNames normalizedProjectDescriptor.development.endpoints == [ "mobile" ];
+            assert normalizedProjectDescriptor.development.workloads.web.action == "web";
+            assert
+              builtins.attrNames normalizedProjectDescriptor.development.endpoints == [
+                "mobile"
+                "web"
+              ];
             assert normalizedProjectDescriptor.development.endpoints.mobile.health.paths == [ "/status" ];
+            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/favicon.ico" ];
             assert normalizedProjectDescriptor.release.package == "t3code";
             assert normalizedProjectDescriptor.release.executable == "t3";
             assert normalizedProjectDescriptor.release.action == "web";

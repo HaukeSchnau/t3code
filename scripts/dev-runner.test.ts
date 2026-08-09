@@ -410,6 +410,44 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       );
     }
 
+    it.effect(
+      "accepts an infrastructure-owned web listener and origin without baking backend URLs",
+      () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const env = yield* createDevRunnerEnv({
+            mode: "dev",
+            baseEnv: {
+              AGENT_SERVICE_PORT: "4857",
+              VITE_HTTP_URL: "http://localhost:1234",
+              VITE_WS_URL: "ws://localhost:1234",
+            },
+            serverOffset: 0,
+            webOffset: 0,
+            t3Home: "/var/lib/projects/t3code/instances/canonical/state/t3-home",
+            browser: false,
+            autoBootstrapProjectFromCwd: undefined,
+            logWebSocketEvents: undefined,
+            host: undefined,
+            port: undefined,
+            webHost: "127.0.0.1",
+            webPort: 21_400,
+            devUrl: new URL("https://t3code.dev.schnau.dev"),
+          });
+
+          assert.equal(env.PORT, "21400");
+          assert.equal(env.HOST, "127.0.0.1");
+          assert.equal(env.VITE_DEV_SERVER_URL, "https://t3code.dev.schnau.dev/");
+          assert.equal(
+            env.T3CODE_HOME,
+            path.resolve("/var/lib/projects/t3code/instances/canonical/state/t3-home"),
+          );
+          assert.equal(env.VITE_HTTP_URL, undefined);
+          assert.equal(env.VITE_WS_URL, undefined);
+          assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, "1");
+        }),
+    );
+
     // Desktop pins the renderer at loopback deliberately; an ambient marker
     // must not make Vite discard those URLs.
     it.effect("clears the single-origin marker in dev:desktop mode", () =>
