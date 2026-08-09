@@ -1,5 +1,5 @@
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { useSyncExternalStore } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 
@@ -94,4 +94,31 @@ export function resolveThreadRoutePresentation(input: {
     return "pending-creation";
   }
   return input.stillHydrating ? "loading" : "unavailable";
+}
+
+export function useThreadRoutePresentation(input: {
+  readonly environmentId: string | null;
+  readonly threadId: string | null;
+  readonly hasMatchingThread: boolean;
+  readonly stillHydrating: boolean;
+}): {
+  readonly pendingCreation: PendingThreadCreation | null;
+  readonly presentation: ThreadRoutePresentation;
+} {
+  const pendingCreation = usePendingThreadCreation(input.environmentId, input.threadId);
+
+  useEffect(() => {
+    if (input.hasMatchingThread && input.environmentId !== null && input.threadId !== null) {
+      forgetPendingThreadCreation(input.environmentId, input.threadId);
+    }
+  }, [input.environmentId, input.hasMatchingThread, input.threadId]);
+
+  return {
+    pendingCreation,
+    presentation: resolveThreadRoutePresentation({
+      hasMatchingThread: input.hasMatchingThread,
+      pendingCreation: pendingCreation !== null,
+      stillHydrating: input.stillHydrating,
+    }),
+  };
 }

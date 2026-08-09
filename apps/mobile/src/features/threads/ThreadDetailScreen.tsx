@@ -4,14 +4,9 @@ import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/thre
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import type {
-  ApprovalRequestId,
   EnvironmentId,
   MessageId,
-  ModelSelection,
   OrchestrationThreadShell,
-  ProviderApprovalDecision,
-  ProviderInteractionMode,
-  RuntimeMode,
   ServerConfig as T3ServerConfig,
   ThreadId,
 } from "@t3tools/contracts";
@@ -23,16 +18,11 @@ import Animated, { FadeInDown, FadeOut, LinearTransition } from "react-native-re
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
-import type { StatusTone } from "../../components/StatusPill";
-import type { DraftComposerImageAttachment } from "../../lib/composerImages";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { scopedThreadKey } from "../../lib/scopedEntities";
-import type {
-  PendingApproval,
-  PendingUserInput,
-  PendingUserInputDraftAnswer,
-  ThreadFeedEntry,
-} from "../../lib/threadActivity";
+import type { ThreadFeedEntry } from "../../lib/threadActivity";
+import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
+import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { PendingApprovalCard } from "./PendingApprovalCard";
 import { PendingUserInputCard } from "./PendingUserInputCard";
 import {
@@ -42,78 +32,28 @@ import {
 } from "./ThreadComposer";
 import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
-import type { LocalIntentPresentation } from "./trainNetworkPresentation";
 
 export interface ThreadDetailScreenProps {
   readonly selectedThread: OrchestrationThreadShell;
   readonly contentPresentation: ThreadContentPresentation;
-  readonly screenTone: StatusTone;
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
-  readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
-  readonly activeWorkStartedAt: string | null;
-  readonly activePendingApproval: PendingApproval | null;
-  readonly respondingApprovalId: ApprovalRequestId | null;
-  readonly activePendingUserInput: PendingUserInput | null;
-  readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
-  readonly activePendingUserInputAnswers: Record<string, string> | null;
-  readonly respondingUserInputId: ApprovalRequestId | null;
-  readonly draftMessage: string;
-  readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   readonly connectionFreshness: EnvironmentConnectionFreshnessProjection | null;
   /** Message sync status for the selected thread (drives the composer status pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
-  readonly activeThreadBusy: boolean;
   readonly environmentId: EnvironmentId;
   readonly projectWorkspaceRoot: string | null;
   readonly threadCwd: string | null;
-  readonly selectedThreadQueueCount: number;
-  readonly selectedThreadQueueStatus: string;
-  readonly selectedThreadRejectedCount: number;
-  readonly selectedThreadQueuedIntents: ReadonlyArray<{
-    readonly message: { readonly messageId: MessageId; readonly text: string };
-    readonly presentation: LocalIntentPresentation;
-  }>;
-  readonly editingQueuedMessageId: MessageId | null;
   readonly remoteQueueCount: number;
-  readonly onDiscardRejectedMessages: () => Promise<void>;
-  readonly onEditPendingMessage: (messageId: MessageId) => void;
-  readonly onCancelPendingMessage: (messageId: MessageId) => Promise<void>;
-  readonly onDiscardRejectedMessage: (messageId: MessageId) => Promise<void>;
-  readonly onCancelQueuedMessageEdit: () => void;
   readonly serverConfig: T3ServerConfig | null;
   readonly layoutVariant?: LayoutVariant;
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
-  readonly onOpenConnectionEditor: () => void;
-  readonly onChangeDraftMessage: (value: string) => void;
-  readonly onPickDraftImages: () => Promise<void>;
-  readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
-  readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
-  readonly onUpdateThreadModelSelection: (modelSelection: ModelSelection) => void;
-  readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
-  readonly onUpdateThreadInteractionMode: (interactionMode: ProviderInteractionMode) => void;
-  readonly onRespondToApproval: (
-    requestId: ApprovalRequestId,
-    decision: ProviderApprovalDecision,
-  ) => Promise<unknown>;
-  readonly onSelectUserInputOption: (
-    requestId: ApprovalRequestId,
-    questionId: string,
-    label: string,
-  ) => void;
-  readonly onChangeUserInputCustomAnswer: (
-    requestId: ApprovalRequestId,
-    questionId: string,
-    customAnswer: string,
-  ) => void;
-  readonly onSubmitUserInput: () => Promise<unknown>;
   readonly showContent?: boolean;
 }
 
@@ -189,8 +129,24 @@ function useStreamingHaptics(threadId: ThreadId, feed: ReadonlyArray<ThreadFeedE
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const insets = useSafeAreaInsets();
-  const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
-  const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const composer = useThreadComposerState();
+  const requests = useSelectedThreadRequests();
+  const selectedThread = useMemo(
+    () => ({
+      ...props.selectedThread,
+      modelSelection: composer.modelSelection ?? props.selectedThread.modelSelection,
+      runtimeMode: composer.runtimeMode ?? props.selectedThread.runtimeMode,
+      interactionMode: composer.interactionMode ?? props.selectedThread.interactionMode,
+    }),
+    [
+      composer.interactionMode,
+      composer.modelSelection,
+      composer.runtimeMode,
+      props.selectedThread,
+    ],
+  );
+  const agentLabel = `${selectedThread.modelSelection.instanceId} agent`;
+  const selectedThreadKey = scopedThreadKey(props.environmentId, selectedThread.id);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const composerOverlayRef = useRef<View>(null);
   const listRef = useRef<LegendListRef>(null);
@@ -217,7 +173,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         return null;
     }
   })();
-  const selectedThreadFeed = props.selectedThreadFeed;
+  const selectedThreadFeed = composer.selectedThreadFeed;
   const composerChrome = composerExpanded ? COMPOSER_EXPANDED_CHROME : COMPOSER_COLLAPSED_CHROME;
   const composerOverlapHeight = composerChrome + composerBottomInset;
   // The overlay's measured height includes the home-indicator inset (the
@@ -240,8 +196,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   const layoutVariant = props.layoutVariant ?? "compact";
   const isSplitLayout = layoutVariant === "split";
   const contentMaxWidth = isSplitLayout ? CHAT_CONTENT_MAX_WIDTH : undefined;
-  const selectedInstanceId = props.selectedThread.modelSelection.instanceId;
-  useStreamingHaptics(props.selectedThread.id, props.selectedThreadFeed);
+  const selectedInstanceId = selectedThread.modelSelection.instanceId;
+  useStreamingHaptics(selectedThread.id, selectedThreadFeed);
   const selectedProviderSkills = useMemo(
     () =>
       props.serverConfig?.providers.find((provider) => provider.instanceId === selectedInstanceId)
@@ -313,7 +269,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
   const handleSendMessage = useCallback(async () => {
     const targetThreadKey = selectedThreadKey;
-    const messageId = await props.onSendMessage();
+    const messageId = await composer.onSendMessage();
     if (messageId === null || selectedThreadKeyRef.current !== targetThreadKey) {
       return messageId;
     }
@@ -321,7 +277,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     setAnchorMessageId(messageId);
     composerEditorRef.current?.blur();
     return messageId;
-  }, [props.onSendMessage, selectedThreadKey]);
+  }, [composer.onSendMessage, selectedThreadKey]);
 
   const collapseComposer = useCallback(() => {
     composerEditorRef.current?.blur();
@@ -368,15 +324,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           onTouchCancel={handleFeedTouchCancel}
         >
           <ThreadFeed
-            key={props.selectedThread.id}
+            key={selectedThread.id}
             environmentId={props.environmentId}
-            threadId={props.selectedThread.id}
+            threadId={selectedThread.id}
             workspaceRoot={props.threadCwd}
-            feed={props.selectedThreadFeed}
+            feed={selectedThreadFeed}
             contentPresentation={props.contentPresentation}
             agentLabel={agentLabel}
-            latestTurn={props.selectedThread.latestTurn}
-            activeWorkStartedAt={props.activeWorkStartedAt}
+            latestTurn={selectedThread.latestTurn}
+            activeWorkStartedAt={composer.activeWorkStartedAt}
             listRef={listRef}
             freeze={freeze}
             anchorMessageId={anchorMessageId}
@@ -410,28 +366,28 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               layout={LinearTransition.duration(220)}
               style={{ maxWidth: contentMaxWidth }}
             >
-              {props.activePendingApproval || props.activePendingUserInput ? (
+              {requests.activePendingApproval || requests.activePendingUserInput ? (
                 <Animated.View
                   className="shrink-0 gap-3 px-4 pb-3"
                   entering={FadeInDown.duration(220)}
                   exiting={FadeOut.duration(140)}
                 >
-                  {props.activePendingApproval ? (
+                  {requests.activePendingApproval ? (
                     <PendingApprovalCard
-                      approval={props.activePendingApproval}
-                      respondingApprovalId={props.respondingApprovalId}
-                      onRespond={props.onRespondToApproval}
+                      approval={requests.activePendingApproval}
+                      respondingApprovalId={requests.respondingApprovalId}
+                      onRespond={requests.onRespondToApproval}
                     />
                   ) : null}
-                  {props.activePendingUserInput ? (
+                  {requests.activePendingUserInput ? (
                     <PendingUserInputCard
-                      pendingUserInput={props.activePendingUserInput}
-                      drafts={props.activePendingUserInputDrafts}
-                      answers={props.activePendingUserInputAnswers}
-                      respondingUserInputId={props.respondingUserInputId}
-                      onSelectOption={props.onSelectUserInputOption}
-                      onChangeCustomAnswer={props.onChangeUserInputCustomAnswer}
-                      onSubmit={props.onSubmitUserInput}
+                      pendingUserInput={requests.activePendingUserInput}
+                      drafts={requests.activePendingUserInputDrafts}
+                      answers={requests.activePendingUserInputAnswers}
+                      respondingUserInputId={requests.respondingUserInputId}
+                      onSelectOption={requests.onSelectUserInputOption}
+                      onChangeCustomAnswer={requests.onChangeUserInputCustomAnswer}
+                      onSubmit={requests.onSubmitUserInput}
                     />
                   ) : null}
                 </Animated.View>
@@ -440,8 +396,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
             <ThreadComposer
               editorRef={composerEditorRef}
-              draftMessage={props.draftMessage}
-              draftAttachments={props.draftAttachments}
+              draftMessage={composer.draftMessage}
+              draftAttachments={composer.draftAttachments}
               placeholder="Ask the repo agent, or run a command…"
               contentMaxWidth={contentMaxWidth}
               connectionState={props.connectionStateLabel}
@@ -450,33 +406,33 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               connectionError={props.connectionError}
               environmentLabel={props.environmentLabel}
               threadSyncPhase={threadSyncPhase}
-              selectedThread={props.selectedThread}
+              selectedThread={selectedThread}
               serverConfig={props.serverConfig}
-              queueCount={props.selectedThreadQueueCount}
-              queueStatus={props.selectedThreadQueueStatus}
-              rejectedCount={props.selectedThreadRejectedCount}
-              queuedIntents={props.selectedThreadQueuedIntents}
-              editingQueuedMessageId={props.editingQueuedMessageId}
+              queueCount={composer.selectedThreadQueueCount}
+              queueStatus={composer.selectedThreadQueueStatus}
+              rejectedCount={composer.selectedThreadRejectedCount}
+              queuedIntents={composer.selectedThreadQueuedIntents}
+              editingQueuedMessageId={composer.editingQueuedMessageId}
               remoteQueueCount={props.remoteQueueCount}
-              onDiscardRejected={props.onDiscardRejectedMessages}
-              onEditPendingMessage={props.onEditPendingMessage}
-              onCancelPendingMessage={props.onCancelPendingMessage}
-              onDiscardRejectedMessage={props.onDiscardRejectedMessage}
-              onCancelQueuedMessageEdit={props.onCancelQueuedMessageEdit}
-              activeThreadBusy={props.activeThreadBusy}
+              onDiscardRejected={composer.discardRejectedMessages}
+              onEditPendingMessage={composer.editPendingMessage}
+              onCancelPendingMessage={composer.cancelPendingMessage}
+              onDiscardRejectedMessage={composer.discardRejectedMessage}
+              onCancelQueuedMessageEdit={composer.cancelQueuedMessageEdit}
+              activeThreadBusy={composer.activeThreadBusy}
               environmentId={props.environmentId}
               projectCwd={props.projectWorkspaceRoot}
               bottomInset={composerBottomInset}
-              onChangeDraftMessage={props.onChangeDraftMessage}
-              onPickDraftImages={props.onPickDraftImages}
-              onNativePasteImages={props.onNativePasteImages}
-              onRemoveDraftImage={props.onRemoveDraftImage}
+              onChangeDraftMessage={composer.onChangeDraftMessage}
+              onPickDraftImages={composer.onPickDraftImages}
+              onNativePasteImages={composer.onNativePasteImages}
+              onRemoveDraftImage={composer.onRemoveDraftImage}
               onStopThread={props.onStopThread}
               onSendMessage={handleSendMessage}
               onReconnectEnvironment={props.onReconnectEnvironment}
-              onUpdateModelSelection={props.onUpdateThreadModelSelection}
-              onUpdateRuntimeMode={props.onUpdateThreadRuntimeMode}
-              onUpdateInteractionMode={props.onUpdateThreadInteractionMode}
+              onUpdateModelSelection={composer.onUpdateModelSelection}
+              onUpdateRuntimeMode={composer.onUpdateRuntimeMode}
+              onUpdateInteractionMode={composer.onUpdateInteractionMode}
               onExpandedChange={setComposerExpanded}
             />
           </View>
