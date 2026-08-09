@@ -14,7 +14,9 @@
       },
       "web": {
         "health": {
-          "paths": ["/favicon.ico"]
+          "paths": ["/"],
+          "startupTimeoutSec": 300,
+          "requestTimeoutSec": 300
         }
       }
     }

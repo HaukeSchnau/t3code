@@ -530,7 +530,9 @@
                 "web"
               ];
             assert normalizedProjectDescriptor.development.endpoints.mobile.health.paths == [ "/status" ];
-            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/favicon.ico" ];
+            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/" ];
+            assert normalizedProjectDescriptor.development.endpoints.web.health.startupTimeoutSec == 300;
+            assert normalizedProjectDescriptor.development.endpoints.web.health.requestTimeoutSec == 300;
             assert normalizedProjectDescriptor.release.package == "t3code";
             assert normalizedProjectDescriptor.release.executable == "t3";
             assert normalizedProjectDescriptor.release.action == "web";
