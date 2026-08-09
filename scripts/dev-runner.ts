@@ -358,6 +358,8 @@ interface CreateDevRunnerEnvInput {
   readonly logWebSocketEvents: boolean | undefined;
   readonly host: string | undefined;
   readonly port: number | undefined;
+  readonly webHost?: string | undefined;
+  readonly webPort?: number | undefined;
   readonly devUrl: URL | undefined;
 }
 
@@ -372,6 +374,8 @@ export function createDevRunnerEnv({
   logWebSocketEvents,
   host,
   port,
+  webHost,
+  webPort: explicitWebPort,
   devUrl,
 }: CreateDevRunnerEnvInput): Effect.Effect<NodeJS.ProcessEnv, never, Path.Path> {
   return Effect.gen(function* () {
@@ -383,7 +387,10 @@ export function createDevRunnerEnv({
     const isDesktopMode = mode === "dev:desktop";
     const agentServiceWebPort = isDesktopMode ? undefined : readAgentServiceWebPort(baseEnv);
     const agentServiceDevUrl = isDesktopMode ? undefined : readAgentServiceDevUrl(baseEnv);
-    const webPort = agentServiceWebPort ?? BASE_WEB_PORT + webOffset;
+    const webPort =
+      (isDesktopMode ? undefined : explicitWebPort) ??
+      agentServiceWebPort ??
+      BASE_WEB_PORT + webOffset;
     const resolvedDevUrl = devUrl ?? agentServiceDevUrl;
 
     const output: NodeJS.ProcessEnv = {
@@ -410,13 +417,16 @@ export function createDevRunnerEnv({
 
     if (!isDesktopMode) {
       output.T3CODE_PORT = String(serverPort);
-      // HOST is Vite's own bind address, and the desktop branch below is the
-      // only place we set it. An inherited one (an exported HOST, a container,
-      // a `HOST=0.0.0.0 npm start` habit) would otherwise reach Vite and pin
-      // its HMR socket to that address — see the `explicitHost` gate in
+      // HOST is Vite's own bind address. Only an explicit web listener or the
+      // desktop branch below may set it. An inherited one (an exported HOST, a
+      // container, a `HOST=0.0.0.0 npm start` habit) would otherwise reach Vite
+      // and pin its HMR socket to that address — see the `explicitHost` gate in
       // apps/web/vite.config.ts. Over a shared origin that is invisible: the
       // page loads and only HMR quietly dials the wrong machine.
       delete output.HOST;
+      if (webHost !== undefined) {
+        output.HOST = webHost;
+      }
       if (mode === "dev" || mode === "dev:web") {
         // Browser dev is single-origin: everything (including /ws) is proxied
         // through Vite, so the client must resolve its backend from
@@ -687,6 +697,8 @@ interface DevRunnerCliInput {
   readonly logWebSocketEvents: boolean | undefined;
   readonly host: string | undefined;
   readonly port: number | undefined;
+  readonly webHost?: string | undefined;
+  readonly webPort?: number | undefined;
   readonly devUrl: URL | undefined;
   readonly dryRun: boolean;
   readonly share: boolean;
@@ -737,7 +749,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       mode: input.mode,
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
-      hasExplicitWebPort: hasAgentServiceWebPort,
+      hasExplicitWebPort: input.webPort !== undefined || hasAgentServiceWebPort,
       hasExplicitDevUrl: input.devUrl !== undefined || hasAgentServiceDevUrl,
       // A non-loopback bind host decides whether the backend can actually take
       // the port, so it has to be probed alongside loopback.
@@ -766,6 +778,8 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       logWebSocketEvents: input.logWebSocketEvents,
       host: input.host,
       port: input.port,
+      webHost: input.webHost,
+      webPort: input.webPort,
       devUrl: input.devUrl,
     });
 
@@ -786,7 +800,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       return;
     }
 
-    const sharedWebPort = BASE_WEB_PORT + webOffset;
+    const sharedWebPort = Number(env.PORT);
     if (input.share) {
       if (input.mode === "dev:server") {
         yield* Effect.logInfo("[dev-runner] --share has no effect for dev:server (no web server).");
@@ -962,6 +976,17 @@ const devRunnerCli = Command.make("dev-runner", {
     Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
     Flag.withDescription("Server port override (forwards to T3CODE_PORT)."),
     Flag.withFallbackConfig(optionalPortConfig("T3CODE_PORT")),
+  ),
+  webPort: Flag.integer("web-port").pipe(
+    Flag.withSchema(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 65535 }))),
+    Flag.withDescription("Web/Vite listener port override (forwards to PORT)."),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
+  ),
+  webHost: Flag.string("web-host").pipe(
+    Flag.withDescription("Web/Vite listener host override (forwards to HOST)."),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
   ),
   devUrl: Flag.string("dev-url").pipe(
     Flag.withSchema(Schema.URLFromString),
