@@ -27,8 +27,9 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   - `just mobile-dev-reload`
   - `just mobile-dev-snapshot`
   - `just desktop-macos`
-- Provide repository-owned `.#dev`, `.#dev -- --only mobile`, and `.#dev-mobile` Nix entry points for
-  supervised or local Metro development.
+- Provide a paired schema-v2 Project with repository-owned `.#dev`, `.#dev-web`, and `.#dev-mobile`
+  Nix entry points. Web and Metro are independent Workloads with their own Endpoints; both converge
+  through the shared Preparation action.
 - Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
   executable so `just desktop-macos` works in non-interactive shells where `vp` is not installed
   globally or present on `PATH`.
@@ -37,10 +38,13 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
   `T3CODE_MOBILE_METRO_HOST`.
 - Keep pairing URLs out of committed state and logs. Treat them as credentials.
-- Use the shared Project Runtime's `PROJECT_RUNTIME_QUERY` interface for the mobile endpoint and listener,
-  and its exported checkout/cache paths for mutable source and framework caches. Persistent supervision,
-  local listener allocation, manifest validation, Preparation locking, and Tailnet ingress do not belong
-  to the repository adapter. Local invocation receives a stable runtime allocation automatically.
+- Use the shared Project Runtime's `PROJECT_RUNTIME_QUERY` interface for the `web` and `mobile` Endpoint
+  listeners and URLs, and its exported checkout/State/Cache paths. The web adapter must run the existing
+  single-origin `scripts/dev-runner.ts dev` graph with a runtime-selected Vite port and origin, keep
+  `VITE_HTTP_URL` and `VITE_WS_URL` unset, and place T3 Code data below per-Instance State. The mobile
+  adapter remains repository-owned Expo/Metro. Persistent supervision, local listener allocation,
+  manifest validation, Preparation locking, and hostname publication do not belong to either adapter.
+  Local invocation receives stable runtime allocations automatically.
 - Export the versioned repository-owned Project descriptor as both `project.json` and `lib.project`, and
   construct `packages.<system>.projectRuntime` plus its flake apps through the pinned public
   `lib.projectRuntime.mkDevelopment` interface. Infrastructure evaluates the descriptor and prebuilt
