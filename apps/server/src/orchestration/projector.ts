@@ -829,6 +829,12 @@ export function projectEvent(
         // checkpoint, but don't settle a turn its session is still running.
         const turnStillRunning =
           thread.session?.status === "running" && thread.session.activeTurnId === payload.turnId;
+        const existingLatestTurn =
+          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
+        const settledState =
+          existingLatestTurn?.state === "interrupted" || existingLatestTurn?.state === "error"
+            ? existingLatestTurn.state
+            : checkpointStatusToLatestTurnState(payload.status);
 
         return {
           ...nextBase,
@@ -838,15 +844,12 @@ export function projectEvent(
               ? thread.latestTurn
               : {
                   turnId: payload.turnId,
-                  state: checkpointStatusToLatestTurnState(payload.status),
-                  requestedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? thread.latestTurn.requestedAt
-                      : payload.completedAt,
-                  startedAt:
-                    thread.latestTurn?.turnId === payload.turnId
-                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
-                      : payload.completedAt,
+                  // Checkpoint capture is bookkeeping after the provider turn
+                  // settles. It must not turn an interrupted/error turn into a
+                  // completed one when the ready checkpoint arrives afterward.
+                  state: settledState,
+                  requestedAt: existingLatestTurn?.requestedAt ?? payload.completedAt,
+                  startedAt: existingLatestTurn?.startedAt ?? payload.completedAt,
                   completedAt: payload.completedAt,
                   assistantMessageId: payload.assistantMessageId,
                 },

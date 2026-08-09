@@ -343,6 +343,60 @@ describe("orchestration projector", () => {
     expect(settledThread?.latestTurn?.turnId).toBe("turn-1");
     expect(settledThread?.latestTurn?.state).toBe("completed");
     expect(settledThread?.latestTurn?.completedAt).toBe(settledAt);
+
+    const interruptedAt = "2026-02-23T08:00:30.000Z";
+    const afterInterrupted = await Effect.runPromise(
+      projectEvent(
+        afterRunning,
+        makeEvent({
+          sequence: 3,
+          type: "thread.session-set",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: interruptedAt,
+          commandId: "cmd-interrupted",
+          payload: {
+            threadId: "thread-1",
+            session: {
+              threadId: "thread-1",
+              status: "interrupted",
+              providerName: "codex",
+              providerSessionId: "session-1",
+              providerThreadId: "provider-thread-1",
+              runtimeMode: "approval-required",
+              activeTurnId: null,
+              lastError: null,
+              updatedAt: interruptedAt,
+            },
+          },
+        }),
+      ),
+    );
+    const afterInterruptedCheckpoint = await Effect.runPromise(
+      projectEvent(
+        afterInterrupted,
+        makeEvent({
+          sequence: 4,
+          type: "thread.turn-diff-completed",
+          aggregateKind: "thread",
+          aggregateId: "thread-1",
+          occurredAt: interruptedAt,
+          commandId: "cmd-interrupted-checkpoint",
+          payload: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            checkpointTurnCount: 1,
+            checkpointRef: "refs/t3/checkpoints/thread-1/turn/1",
+            status: "ready",
+            files: [],
+            assistantMessageId: "assistant-1",
+            completedAt: interruptedAt,
+          },
+        }),
+      ),
+    );
+
+    expect(afterInterruptedCheckpoint.threads[0]?.latestTurn?.state).toBe("interrupted");
   });
 
   it("updates canonical thread runtime mode from thread.runtime-mode-set", async () => {
