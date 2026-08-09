@@ -61,7 +61,6 @@ import {
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
-import type { QueuedMessage } from "../types";
 import { getStartedThreadModelChangeBlockReason } from "./ChatView.logic";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
@@ -85,6 +84,7 @@ import {
   threadComposerRevision,
   threadTurnDraftFromComposer,
 } from "./chat/ThreadTurnSubmission";
+import { useThreadQueuedMessageControls } from "./chat/useThreadDurableOutbox";
 import { useProjects, useProviderUsageLimits, useThread, useThreadShells } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 
@@ -1079,47 +1079,11 @@ function MonitorThreadActions({
     }
   }, [threadRef.environmentId, threadRef.threadId]);
 
-  const dispatchQueuedMessage = useCallback(
-    async (message: QueuedMessage) => {
-      if (!thread) return;
-      const api = readEnvironmentApi(threadRef.environmentId);
-      if (!api) return;
-      setError(null);
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.queued-message.dispatch",
-          commandId: newCommandId(),
-          threadId: thread.id,
-          messageId: message.messageId,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to send queued message.");
-      }
-    },
-    [thread, threadRef.environmentId],
-  );
-
-  const deleteQueuedMessage = useCallback(
-    async (message: QueuedMessage) => {
-      if (!thread) return;
-      const api = readEnvironmentApi(threadRef.environmentId);
-      if (!api) return;
-      setError(null);
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.queued-message.delete",
-          commandId: newCommandId(),
-          threadId: thread.id,
-          messageId: message.messageId,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to remove queued message.");
-      }
-    },
-    [thread, threadRef.environmentId],
-  );
+  const { dispatchQueuedMessage, deleteQueuedMessage } = useThreadQueuedMessageControls({
+    threadRef,
+    clearErrorBeforeAction: true,
+    onError: setError,
+  });
 
   return (
     <div className="shrink-0 border-t border-border/60 bg-background/80 p-2">

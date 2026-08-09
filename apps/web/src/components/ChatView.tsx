@@ -69,13 +69,6 @@ import {
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
-import { readEnvironmentApi } from "../environmentApi";
-import {
-  durableCommandOutbox,
-  selectDurableOutboxMessages,
-  useAcceptedCommandProjectionEntries,
-  useDurableCommandOutboxEntries,
-} from "../durableCommandOutbox";
 import { readLocalApi } from "../localApi";
 import { useDiffPanelStore } from "../diffPanelStore";
 import {
@@ -104,7 +97,6 @@ import {
   togglePendingUserInputOptionSelection,
   type PendingUserInputDraftAnswer,
 } from "../pendingUserInput";
-import { collectAuthoritativeProjectedMessageIds } from "./ChatView.logic";
 import { useUiStateStore } from "../uiStateStore";
 import {
   buildPlanImplementationThreadTitle,
@@ -117,7 +109,6 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
-  type QueuedMessage,
   type SessionPhase,
   type Thread,
   type TurnDiffSummary,
@@ -259,7 +250,10 @@ import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
 import { resolveThreadPr } from "./ThreadStatusIndicators";
 import { ComposerBannerStack, type ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { DurableOutboxStrip } from "./chat/DurableOutboxStrip";
-import { selectThreadDurableOutboxEntries } from "./chat/durableOutboxPresentation";
+import {
+  useThreadDurableOutbox,
+  useThreadQueuedMessageControls,
+} from "./chat/useThreadDurableOutbox";
 import { TrainNetworkStatus } from "./chat/TrainNetworkStatus";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { usePreviousMessageEditing } from "./chat/usePreviousMessageEditing";
@@ -343,8 +337,6 @@ import {
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
 
-const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_HISTORICAL_ACTIVITY_GROUPS: OrchestrationThreadHistoricalActivityGroup[] = [];
 const EMPTY_PROVIDERS: ServerProvider[] = [];
@@ -1338,8 +1330,6 @@ function ChatViewContent(props: ChatViewProps) {
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
-  const durableOutboxEntries = useDurableCommandOutboxEntries();
-  const acceptedCommandProjectionEntries = useAcceptedCommandProjectionEntries();
   const optimisticUserMessagesRef = useRef(optimisticUserMessages);
   optimisticUserMessagesRef.current = optimisticUserMessages;
   const [localDraftErrorsByDraftId, setLocalDraftErrorsByDraftId] = useState<
@@ -1508,6 +1498,14 @@ function ChatViewContent(props: ChatViewProps) {
   // depend on which route is mounted.
   const isServerThread = activeServerThread !== null;
   const activeThread = activeServerThread ?? localDraftThread;
+  const {
+    entries: activeDurableOutboxEntries,
+    optimisticMessages: durableOptimisticUserMessages,
+    enqueue: enqueueDurableCommand,
+    cancel: cancelDurableOutboxEntry,
+    replace: replaceDurableOutboxEntry,
+    discard: discardDurableOutboxEntry,
+  } = useThreadDurableOutbox(activeThread);
   const threadError = isServerThread
     ? (localServerError ?? activeServerThread?.session?.lastError ?? null)
     : localDraftError;
@@ -1704,43 +1702,6 @@ function ChatViewContent(props: ChatViewProps) {
         : null,
     [activeEnvironmentConnection.data, activeEnvironmentShell.data],
   );
-  const activeDurableOutboxEntries = useMemo(
-    () =>
-      activeThread
-        ? selectThreadDurableOutboxEntries(
-            durableOutboxEntries,
-            activeThread.environmentId,
-            activeThread.id,
-            new Set((activeThread.queuedMessages ?? []).map((message) => message.messageId)),
-          )
-        : [],
-    [activeThread, durableOutboxEntries],
-  );
-  const cancelDurableOutboxEntry = useCallback(
-    (commandId: Parameters<ReturnType<typeof durableCommandOutbox>["cancelPending"]>[0]) =>
-      durableCommandOutbox().cancelPending(commandId),
-    [],
-  );
-  const replaceDurableOutboxEntry = useCallback(
-    (
-      commandId: Parameters<ReturnType<typeof durableCommandOutbox>["replacePending"]>[0],
-      replacement: Parameters<ReturnType<typeof durableCommandOutbox>["replacePending"]>[1],
-      state: "Pending" | "Rejected",
-    ) =>
-      state === "Pending"
-        ? durableCommandOutbox()
-            .replacePending(commandId, replacement)
-            .then(() => undefined)
-        : durableCommandOutbox()
-            .replaceRejected(commandId, replacement)
-            .then(() => undefined),
-    [],
-  );
-  const discardDurableOutboxEntry = useCallback(
-    (commandId: Parameters<ReturnType<typeof durableCommandOutbox>["discardRejected"]>[0]) =>
-      durableCommandOutbox().discardRejected(commandId),
-    [],
-  );
   const activeEnvironmentBootstrapComplete = activeEnvironmentShell.data?.snapshot._tag === "Some";
   const activeProjectKey = activeProject
     ? `${activeProject.environmentId}:${activeProject.workspaceRoot}`
@@ -1815,11 +1776,6 @@ function ChatViewContent(props: ChatViewProps) {
   const activeEnvironmentConnectionPhase = activeEnvironment?.connection.phase ?? "available";
   const activeEnvironmentUnavailable =
     activeEnvironment !== null && activeEnvironmentConnectionPhase !== "connected";
-  useEffect(() => {
-    if (activeEnvironmentConnectionPhase === "connected") {
-      durableCommandOutbox().wake();
-    }
-  }, [activeEnvironmentConnectionPhase]);
   const activeReconnectingEnvironmentId =
     activeEnvironmentConnectionPhase === "connecting" ||
     activeEnvironmentConnectionPhase === "reconnecting"
@@ -2447,37 +2403,6 @@ function ChatViewContent(props: ChatViewProps) {
       };
     });
   }, [serverAttachmentUrlById, serverMessages]);
-  const durableOptimisticUserMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
-    if (!activeThread) return [];
-    const locallyOwnedEntries = [...durableOutboxEntries, ...acceptedCommandProjectionEntries];
-    return selectDurableOutboxMessages(
-      locallyOwnedEntries,
-      activeThread.environmentId,
-      activeThread.id,
-      new Set((activeThread.queuedMessages ?? []).map((message) => message.messageId)),
-    ).map((message) => {
-      const entry = locallyOwnedEntries.find(
-        (candidate) => candidate.plan.command.message.messageId === message.messageId,
-      );
-      const createdAt = entry?.plan.command.createdAt ?? new Date(0).toISOString();
-      return {
-        id: message.messageId,
-        role: "user" as const,
-        text: message.text,
-        turnId: null,
-        createdAt,
-        updatedAt: createdAt,
-        streaming: false,
-      };
-    });
-  }, [acceptedCommandProjectionEntries, activeThread, durableOutboxEntries]);
-  useEffect(() => {
-    if (!activeThread || acceptedCommandProjectionEntries.length === 0) return;
-    const projectedMessageIds = collectAuthoritativeProjectedMessageIds(activeThread);
-    if (projectedMessageIds.size > 0) {
-      void durableCommandOutbox().confirmProjected(projectedMessageIds);
-    }
-  }, [acceptedCommandProjectionEntries.length, activeThread]);
   useEffect(() => {
     if (typeof Image === "undefined" || displayServerMessages.length === 0) {
       return;
@@ -5164,8 +5089,7 @@ function ChatViewContent(props: ChatViewProps) {
       },
       title,
       delivery: createDurableThreadTurnDeliveryAdapter({
-        enqueue: (nextEnvironmentId, command) =>
-          durableCommandOutbox().enqueue(nextEnvironmentId, command),
+        enqueue: enqueueDurableCommand,
       }),
       composer: {
         clearOnSuccess: "if-current",
@@ -5307,49 +5231,17 @@ function ChatViewContent(props: ChatViewProps) {
     }
   };
 
-  const onDispatchQueuedMessage = useCallback(
-    async (message: QueuedMessage) => {
-      const api = readEnvironmentApi(environmentId);
-      if (!api || !activeThread) return;
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.queued-message.dispatch",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          messageId: message.messageId,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        setThreadError(
-          activeThread.id,
-          err instanceof Error ? err.message : "Failed to send queued message.",
-        );
-      }
-    },
-    [activeThread, environmentId, setThreadError],
+  const setActiveThreadOutboxError = useCallback(
+    (error: string | null) => setThreadError(activeThread?.id ?? null, error),
+    [activeThread?.id, setThreadError],
   );
-
-  const onDeleteQueuedMessage = useCallback(
-    async (message: QueuedMessage) => {
-      const api = readEnvironmentApi(environmentId);
-      if (!api || !activeThread) return;
-      try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.queued-message.delete",
-          commandId: newCommandId(),
-          threadId: activeThread.id,
-          messageId: message.messageId,
-          createdAt: new Date().toISOString(),
-        });
-      } catch (err) {
-        setThreadError(
-          activeThread.id,
-          err instanceof Error ? err.message : "Failed to remove queued message.",
-        );
-      }
-    },
-    [activeThread, environmentId, setThreadError],
-  );
+  const {
+    dispatchQueuedMessage: onDispatchQueuedMessage,
+    deleteQueuedMessage: onDeleteQueuedMessage,
+  } = useThreadQueuedMessageControls({
+    threadRef: routeThreadRef,
+    onError: setActiveThreadOutboxError,
+  });
 
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
@@ -6008,59 +5900,65 @@ function ChatViewContent(props: ChatViewProps) {
     setShowScrollToBottom(false);
     await legendListRef.current?.scrollToEnd?.({ animated: false });
   }, []);
+  const prepareEditedOptimisticMessage = useCallback(
+    async (message: ChatMessage) => {
+      await prepareTimelineForOptimisticMessage();
+      setOptimisticUserMessages((existing) => [...existing, message]);
+    },
+    [prepareTimelineForOptimisticMessage],
+  );
+  const removeEditedOptimisticMessage = useCallback((messageId: MessageId) => {
+    setOptimisticUserMessages((existing) => {
+      const removed = existing.filter((message) => message.id === messageId);
+      for (const message of removed) revokeUserMessagePreviewUrls(message);
+      const next = existing.filter((message) => message.id !== messageId);
+      return next.length === existing.length ? existing : next;
+    });
+  }, []);
+  const restorePrimaryComposerAfterEdit = useCallback(
+    (draft: {
+      readonly prompt: string;
+      readonly images: ReadonlyArray<ComposerImageAttachment>;
+      readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
+    }) => {
+      promptRef.current = draft.prompt;
+      composerImagesRef.current = [...draft.images];
+      composerTerminalContextsRef.current = [...draft.terminalContexts];
+      clearComposerDraftContent(composerDraftTarget);
+      setComposerDraftPrompt(composerDraftTarget, draft.prompt);
+      addComposerDraftImages(composerDraftTarget, [...draft.images]);
+      setComposerDraftTerminalContexts(composerDraftTarget, [...draft.terminalContexts]);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(draft.prompt, draft.prompt.length),
+        prompt: draft.prompt,
+        detectTrigger: true,
+      });
+      scheduleComposerFocus();
+    },
+    [
+      addComposerDraftImages,
+      clearComposerDraftContent,
+      composerDraftTarget,
+      composerRef,
+      scheduleComposerFocus,
+      setComposerDraftPrompt,
+      setComposerDraftTerminalContexts,
+    ],
+  );
 
   const previousMessageEditing = usePreviousMessageEditing({
-    activeThread,
-    activeProject: activeProject ?? undefined,
-    isServerThread,
-    isWorking,
-    isSendBusy,
-    isConnecting,
-    isRevertingCheckpoint,
-    activeEnvironmentUnavailable,
-    environmentId,
-    routeKind,
     routeThreadRef,
     draftId,
-    activeThreadId,
-    phase,
-    runtimeMode,
-    interactionMode,
-    lockedProvider,
-    providerStatuses: providerStatuses as ServerProvider[],
-    activeUsageLimits,
-    resolvedTheme,
-    settings,
-    keybindings,
-    terminalOpen: Boolean(terminalUiState.terminalOpen),
-    gitCwd,
-    environmentUnavailableState: activeEnvironmentUnavailableState,
-    composerDraftTarget,
-    composerRef,
-    promptRef,
-    composerImagesRef,
-    composerTerminalContextsRef,
+    isExternallyBusy: isSendBusy || isConnecting || isRevertingCheckpoint,
     sendInFlightRef,
-    editableUserMessageIds,
-    setOptimisticUserMessages,
+    prepareOptimisticMessage: prepareEditedOptimisticMessage,
+    removeOptimisticMessage: removeEditedOptimisticMessage,
+    restorePrimaryComposer: restorePrimaryComposerAfterEdit,
     setThreadError,
-    prepareTimelineForOptimisticMessage,
     beginLocalDispatch,
     resetLocalDispatch,
     persistThreadSettingsForNextTurn: persistThreadSettingsForPreviousMessageEdit,
-    scheduleComposerFocus,
-    onInterrupt,
-    onImplementPlanInNewThread,
-    onRespondToApproval,
-    onSelectActivePendingUserInputOption,
-    onAdvanceActivePendingUserInput,
-    onPreviousActivePendingUserInputQuestion,
-    onChangeActivePendingUserInputCustomAnswer,
-    getModelDisabledReason,
-    setThreadErrorFromEditor: setThreadError,
     onExpandImage: onExpandTimelineImage,
-    formatOutgoingPrompt,
-    imageOnlyBootstrapPrompt: IMAGE_ONLY_BOOTSTRAP_PROMPT,
   });
 
   // Empty state: no active thread

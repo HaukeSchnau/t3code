@@ -9,6 +9,38 @@ export function editableTextFromUserMessage(text: string): string {
   return trimmed.startsWith("Ultrathink:\n") ? trimmed.slice("Ultrathink:\n".length) : trimmed;
 }
 
+export type PreviousMessageEditTransactionResult =
+  | { readonly kind: "delivered" }
+  | {
+      readonly kind: "failed";
+      readonly stage: "prune" | "replacement";
+      readonly error: unknown;
+    };
+
+export async function runPreviousMessageEditTransaction(input: {
+  readonly pruneHistory: () => Promise<void>;
+  readonly waitForPrunedHistory: () => Promise<void>;
+  readonly submitReplacement: () => Promise<void>;
+  readonly onHistoryPruned: () => void;
+  readonly onReplacementFailed: () => void;
+}): Promise<PreviousMessageEditTransactionResult> {
+  try {
+    await input.pruneHistory();
+    await input.waitForPrunedHistory();
+  } catch (error) {
+    return { kind: "failed", stage: "prune", error };
+  }
+
+  input.onHistoryPruned();
+  try {
+    await input.submitReplacement();
+    return { kind: "delivered" };
+  } catch (error) {
+    input.onReplacementFailed();
+    return { kind: "failed", stage: "replacement", error };
+  }
+}
+
 export async function hydrateMessageImagesForEdit(
   message: ChatMessage,
 ): Promise<ComposerImageAttachment[]> {
