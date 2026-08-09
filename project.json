@@ -1,13 +1,20 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "project": "t3code",
   "development": {
+    "workloads": {
+      "mobile": {},
+      "web": {}
+    },
     "endpoints": {
       "mobile": {
         "health": {
-          "paths": [
-            "/status"
-          ]
+          "paths": ["/status"]
+        }
+      },
+      "web": {
+        "health": {
+          "paths": ["/favicon.ico"]
         }
       }
     }
@@ -17,9 +24,7 @@
     "executable": "t3",
     "action": "web",
     "health": {
-      "paths": [
-        "/"
-      ]
+      "paths": ["/"]
     }
   }
 }
