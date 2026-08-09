@@ -1683,17 +1683,18 @@ const make = Effect.gen(function* () {
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
-  const readAuthoritativeTranscriptRecoveryCapability = Effect.fn(
-    "readAuthoritativeTranscriptRecoveryCapability",
-  )(function* (event: ProviderRuntimeEvent) {
-    const instanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-    return yield* providerService.getCapabilities(instanceId).pipe(
-      Effect.map((capabilities) => capabilities.assistantTranscriptRecovery === "authoritative"),
-      // Capability lookup failure must choose the lossless path. Volatile
-      // coalescing is an optimization that requires positive proof.
-      Effect.orElseSucceed(() => false),
-    );
-  });
+  const hasAuthoritativeTranscriptRecovery = Effect.fn("hasAuthoritativeTranscriptRecovery")(
+    function* (event: ProviderRuntimeEvent, journalBacked: boolean) {
+      if (journalBacked) return true;
+      const instanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
+      return yield* providerService.getCapabilities(instanceId).pipe(
+        Effect.map((capabilities) => capabilities.assistantTranscriptRecovery === "authoritative"),
+        // Capability lookup failure must choose the lossless path. Volatile
+        // coalescing is an optimization that requires positive proof.
+        Effect.orElseSucceed(() => false),
+      );
+    },
+  );
 
   const hydrateSubagentState = Effect.fn("hydrateSubagentState")(function* (input: {
     readonly event: ProviderRuntimeEvent & {
@@ -2112,7 +2113,11 @@ const make = Effect.gen(function* () {
       }
     });
 
-  const updateSubagentActivity = (input: { event: ProviderRuntimeEvent; threadId: ThreadId }) =>
+  const updateSubagentActivity = (input: {
+    event: ProviderRuntimeEvent;
+    threadId: ThreadId;
+    journalBacked: boolean;
+  }) =>
     Effect.gen(function* () {
       if (!isSubagentRuntimeEvent(input.event)) {
         return;
@@ -2168,8 +2173,8 @@ const make = Effect.gen(function* () {
 
       const existingState = subagentStates.get(key);
       const authoritativeTranscriptRecovery =
-        existingState?.authoritativeTranscriptRecovery ??
-        (yield* readAuthoritativeTranscriptRecoveryCapability(input.event));
+        existingState?.authoritativeTranscriptRecovery === true ||
+        (yield* hasAuthoritativeTranscriptRecovery(input.event, input.journalBacked));
       const hydratedState =
         existingState ??
         (yield* hydrateSubagentState({
@@ -2723,7 +2728,7 @@ const make = Effect.gen(function* () {
     },
   );
 
-  const processRuntimeEvent = (event: ProviderRuntimeEvent) =>
+  const processRuntimeEvent = (event: ProviderRuntimeEvent, journalBacked: boolean) =>
     Effect.gen(function* () {
       const now = event.createdAt;
 
@@ -2744,7 +2749,7 @@ const make = Effect.gen(function* () {
 
       if (isSubagentRuntimeEvent(event)) {
         const threadId = ThreadId.make(event.threadId);
-        yield* updateSubagentActivity({ event, threadId });
+        yield* updateSubagentActivity({ event, threadId, journalBacked });
         yield* appendActivities(
           event,
           threadId,
@@ -3013,8 +3018,10 @@ const make = Effect.gen(function* () {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
 
-        const authoritativeTranscriptRecovery =
-          yield* readAuthoritativeTranscriptRecoveryCapability(event);
+        const authoritativeTranscriptRecovery = yield* hasAuthoritativeTranscriptRecovery(
+          event,
+          journalBacked,
+        );
         const assistantDeliveryMode: AssistantDeliveryMode = authoritativeTranscriptRecovery
           ? yield* Effect.map(serverSettingsService.getSettings, (settings) =>
               settings.enableLegacyTokenStreaming ? "streaming" : "buffered",
@@ -3404,7 +3411,7 @@ const make = Effect.gen(function* () {
 
   const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
 
-  const processInput = (input: RuntimeIngestionInput) => {
+  const processInput = (input: RuntimeIngestionInput, journalBacked = false) => {
     if (input.source === "domain") {
       return processDomainEvent(input.event);
     }
@@ -3432,7 +3439,7 @@ const make = Effect.gen(function* () {
       // memory with provider chunk cardinality.
       return Effect.void;
     }
-    return processRuntimeEvent(input.event).pipe(
+    return processRuntimeEvent(input.event, journalBacked).pipe(
       Effect.andThen(rememberProcessedRuntimeEvent(input.event)),
     );
   };
@@ -3504,7 +3511,7 @@ const make = Effect.gen(function* () {
         yield* retryPersistence(transcriptJournal.removeMany(sourceEvents));
         return;
       }
-      yield* retryPersistence(processInput({ source: "runtime", event }));
+      yield* retryPersistence(processInput({ source: "runtime", event }, true));
       yield* Effect.forEach(sourceEvents.slice(1), rememberProcessedRuntimeEvent, {
         concurrency: 1,
         discard: true,
@@ -3565,13 +3572,7 @@ const make = Effect.gen(function* () {
         !fallbackWasJournaled &&
         !hasProcessedRuntimeEvent(fallbackEvent)
       ) {
-        yield* processJournaledRuntimeEvent(
-          {
-            event: fallbackEvent,
-            sourceEvents: [fallbackEvent],
-          },
-          "live",
-        );
+        yield* processInput({ source: "runtime", event: fallbackEvent });
       }
     });
 

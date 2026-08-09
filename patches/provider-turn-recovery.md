@@ -26,6 +26,10 @@ placeholder must not leave the thread looking permanently busy.
   associated with its batch.
 - Delivered/removal acknowledgment for every source row in a batch is atomic and chunked, avoiding thousands
   of SQLite connection acquisitions without permitting a partially acknowledged replay batch.
+- Journal-backed assistant transcript events count as authoritative recovery for buffered delivery on every
+  provider. Adapter transcript capabilities are consulted only for events that bypass the durable acceptance
+  seam, so production Codex, Claude, Cursor, Grok, and OpenCode turns honor the server streaming preference
+  without weakening the conservative fallback for plugins and test harnesses.
 
 ## Files
 
@@ -33,6 +37,7 @@ placeholder must not leave the thread looking permanently busy.
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
 - `apps/server/src/orchestration/ProviderTranscriptJournalBatch.ts`
 - `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
+- `apps/server/src/provider/ProviderRuntimeEventDurability.ts`
 - `apps/server/src/persistence/Services/ProviderTranscriptJournal.ts`
 - `apps/server/src/persistence/Layers/ProviderTranscriptJournal.ts`
 - `apps/server/src/persistence/Services/ProjectionTurns.ts`

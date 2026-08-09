@@ -10,6 +10,7 @@ import {
 } from "@t3tools/contracts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 
 import { makeOrchestrationIntegrationHarness } from "../OrchestrationEngineHarness.integration.ts";
 
@@ -129,6 +130,32 @@ const run = Effect.gen(function* () {
       delta: "parent durable prefix ",
     }),
   );
+  yield* adapter.emitRuntimeEvent({
+    type: "task.started",
+    eventId: EventId.make("evt-coalescing-hard-kill-buffering-barrier"),
+    provider: PROVIDER,
+    threadId: HARD_KILL_THREAD_ID,
+    turnId: HARD_KILL_TURN_ID,
+    createdAt: "2026-07-13T00:00:00.155Z",
+    payload: { taskId: "buffering-barrier", taskType: "analysis" },
+  });
+  yield* harness.waitForThread(HARD_KILL_THREAD_ID, (thread) =>
+    thread.activities.some(
+      (activity) => activity.id === "evt-coalescing-hard-kill-buffering-barrier",
+    ),
+  );
+  const bufferedParentThread =
+    yield* harness.snapshotQuery.getThreadDetailById(HARD_KILL_THREAD_ID);
+  if (
+    Option.isNone(bufferedParentThread) ||
+    bufferedParentThread.value.messages.some(
+      (message) => message.id === `assistant:${PARENT_ITEM_ID}`,
+    )
+  ) {
+    return yield* Effect.die(
+      "Expected journal-backed assistant text to remain buffered before a durable boundary.",
+    );
+  }
   yield* adapter.emitRuntimeEvent(hardKillParentPauseEvent());
   yield* harness.waitForThread(HARD_KILL_THREAD_ID, (thread) =>
     thread.messages.some(
