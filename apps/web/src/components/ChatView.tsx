@@ -114,11 +114,6 @@ import {
 import { collectAuthoritativeProjectedMessageIds } from "./ChatView.logic";
 import { useUiStateStore } from "../uiStateStore";
 import {
-  acceptHydratedHistoricalTurn,
-  hydratedHistoricalTurnIsCurrent,
-  type HydratedHistoricalTurn,
-} from "../historicalActivityHydration";
-import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
   resolvePlanFollowUpSubmission,
@@ -207,7 +202,7 @@ import {
   deriveLogicalProjectKeyFromSettings,
   selectProjectGroupingSettings,
 } from "../logicalProject";
-import { buildDraftThreadRouteParams, buildThreadRouteParams } from "../threadRoutes";
+import { buildDraftThreadRouteParams } from "../threadRoutes";
 import { buildPhysicalToLogicalProjectKeyMap } from "../sidebarProjectGrouping";
 import {
   type ComposerImageAttachment,
@@ -286,6 +281,8 @@ import { selectThreadDurableOutboxEntries } from "./chat/durableOutboxPresentati
 import { TrainNetworkStatus } from "./chat/TrainNetworkStatus";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { usePreviousMessageEditing } from "./chat/usePreviousMessageEditing";
+import { useCodexMessageForking } from "./chat/useCodexMessageForking";
+import { useHistoricalTurnHydration } from "./chat/useHistoricalTurnHydration";
 import { ThreadSyncStatusPill } from "./chat/ThreadSyncStatusPill";
 import {
   DRAFT_HERO_TRANSITION_ANIMATION_ID,
@@ -1257,9 +1254,6 @@ function ChatViewContent(props: ChatViewProps) {
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
     reportFailure: false,
   });
-  const loadThreadTurnActivities = useAtomCommand(threadEnvironment.loadTurnActivities, {
-    reportFailure: false,
-  });
   const openPreview = useAtomCommand(previewEnvironment.open, {
     reportFailure: false,
   });
@@ -1595,104 +1589,12 @@ function ChatViewContent(props: ChatViewProps) {
   const activeThreadKey = activeThreadRef ? scopedThreadKey(activeThreadRef) : null;
   const historicalActivityGroups =
     activeThread?.historicalActivityGroups ?? EMPTY_HISTORICAL_ACTIVITY_GROUPS;
-  const historicalTurnIds = useMemo(
-    () => new Set(historicalActivityGroups.map((group) => group.turnId)),
-    [historicalActivityGroups],
-  );
-  const historicalActivityRouteRef = useRef({
-    threadKey: activeThreadKey,
-    threadId: activeThread?.id ?? null,
-    groups: historicalActivityGroups,
-  });
-  historicalActivityRouteRef.current = {
-    threadKey: activeThreadKey,
-    threadId: activeThread?.id ?? null,
-    groups: historicalActivityGroups,
-  };
-  const [hydratedHistoricalActivities, setHydratedHistoricalActivities] = useState<{
-    readonly threadKey: string | null;
-    readonly byTurnId: ReadonlyMap<TurnId, HydratedHistoricalTurn>;
-  }>({ threadKey: activeThreadKey, byTurnId: new Map() });
-  const currentHydratedHistoricalActivities =
-    hydratedHistoricalActivities.threadKey === activeThreadKey
-      ? hydratedHistoricalActivities.byTurnId
-      : new Map<TurnId, HydratedHistoricalTurn>();
-  const hydratedHistoricalTurnIds = useMemo(
-    () =>
-      new Set(
-        historicalActivityGroups.flatMap((group) =>
-          hydratedHistoricalTurnIsCurrent(
-            group,
-            currentHydratedHistoricalActivities.get(group.turnId),
-          )
-            ? [group.turnId]
-            : [],
-        ),
-      ),
-    [currentHydratedHistoricalActivities, historicalActivityGroups],
-  );
-  useEffect(() => {
-    setHydratedHistoricalActivities((current) =>
-      current.threadKey === activeThreadKey
-        ? current
-        : { threadKey: activeThreadKey, byTurnId: new Map() },
-    );
-  }, [activeThreadKey]);
-  const hydrateHistoricalTurn = useCallback(
-    async (turnId: TurnId): Promise<boolean> => {
-      if (!activeThread || activeThreadKey === null) return false;
-      const group = historicalActivityGroups.find((entry) => entry.turnId === turnId);
-      if (!group) return true;
-      const cached = currentHydratedHistoricalActivities.get(turnId);
-      if (hydratedHistoricalTurnIsCurrent(group, cached)) return true;
-
-      const requestedThreadKey = activeThreadKey;
-      const result = await loadThreadTurnActivities({
-        environmentId: activeThread.environmentId,
-        input: { threadId: activeThread.id, turnId },
-      });
-      if (result._tag !== "Success") return false;
-
-      const currentRoute = historicalActivityRouteRef.current;
-      if (
-        currentRoute.threadKey !== requestedThreadKey ||
-        currentRoute.threadId !== activeThread.id
-      ) {
-        return false;
-      }
-      const currentGroup = currentRoute.groups.find((entry) => entry.turnId === turnId);
-      if (!currentGroup) return false;
-      const accepted = acceptHydratedHistoricalTurn({
-        threadId: activeThread.id,
-        group: currentGroup,
-        snapshot: result.value,
-      });
-      if (!accepted) return false;
-
-      setHydratedHistoricalActivities((current) => {
-        if (current.threadKey !== requestedThreadKey) return current;
-        const next = new Map(current.byTurnId);
-        next.set(turnId, accepted);
-        return { threadKey: current.threadKey, byTurnId: next };
-      });
-      return true;
-    },
-    [
-      activeThread,
-      activeThreadKey,
-      currentHydratedHistoricalActivities,
-      historicalActivityGroups,
-      loadThreadTurnActivities,
-    ],
-  );
-  const releaseHistoricalTurn = useCallback((turnId: TurnId) => {
-    setHydratedHistoricalActivities((current) => {
-      if (!current.byTurnId.has(turnId)) return current;
-      const next = new Map(current.byTurnId);
-      next.delete(turnId);
-      return { threadKey: current.threadKey, byTurnId: next };
-    });
-  }, []);
+  const {
+    historicalTurnIds,
+    hydratedHistoricalTurnIds,
+    hydrateHistoricalTurn,
+    releaseHistoricalTurn,
+  } = useHistoricalTurnHydration(activeThreadRef, historicalActivityGroups);
   const [timelineAnchor, setTimelineAnchor] = useState<{
     readonly threadKey: string | null;
     readonly messageId: MessageId | null;
@@ -6321,77 +6223,7 @@ function ChatViewContent(props: ChatViewProps) {
     }
     void onRevertToTurnCountRef.current(targetTurnCount);
   }, []);
-  const onForkAssistantMessage = useCallback(
-    async (messageId: MessageId, turnId: TurnId, options: { workspace?: "new" } = {}) => {
-      if (!activeThreadRef) {
-        return;
-      }
-      const api = readEnvironmentApi(activeThreadRef.environmentId);
-      if (!api) {
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not fork from message",
-            description: "Environment API unavailable.",
-          }),
-        );
-        return;
-      }
-
-      const result = await settlePromise(() =>
-        api.codex.forkThread({
-          threadId: activeThreadRef.threadId,
-          lastTurnId: turnId,
-          sourceMessageId: messageId,
-          ...(options.workspace === "new"
-            ? { workspace: { mode: "new" as const, kind: "auto" as const } }
-            : {}),
-        }),
-      );
-      if (result._tag === "Failure") {
-        const error = squashAtomCommandFailure(result);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Could not fork from message",
-            description: error instanceof Error ? error.message : "Failed to create fork.",
-          }),
-        );
-        return;
-      }
-
-      const forkedThreadRef = scopeThreadRef(activeThreadRef.environmentId, result.value.threadId);
-      const navigateResult = await settlePromise(() =>
-        navigate({
-          to: "/$environmentId/$threadId",
-          params: buildThreadRouteParams(forkedThreadRef),
-        }),
-      );
-      if (navigateResult._tag === "Failure") {
-        const error = squashAtomCommandFailure(navigateResult);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Fork created, but could not open it",
-            description: error instanceof Error ? error.message : "Navigation failed.",
-          }),
-        );
-        return;
-      }
-
-      toastManager.add(
-        stackedThreadToast({
-          type: "success",
-          title: options.workspace === "new" ? "Forked into new workspace" : "Forked from message",
-          description:
-            options.workspace === "new"
-              ? "Opened the fork with a copied workspace at the selected response."
-              : "Opened the fork with history up to that response.",
-        }),
-      );
-    },
-    [activeThreadRef, navigate],
-  );
+  const onForkAssistantMessage = useCodexMessageForking(activeThreadRef);
 
   const prepareTimelineForOptimisticMessage = useCallback(async () => {
     isAtEndRef.current = true;
