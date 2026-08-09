@@ -208,6 +208,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
+      turnContinuation: provider === CODEX_DRIVER ? "empty-input" : "unsupported",
     },
     startSession,
     sendTurn,
@@ -1916,6 +1917,48 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
 
 const validation = makeProviderServiceLayer();
 validation.layer("ProviderServiceLive validation", (it) => {
+  it.effect("allows empty continuation turns only for capable providers", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const codexThreadId = asThreadId("thread-codex-continuation");
+      const claudeThreadId = asThreadId("thread-claude-continuation");
+      validation.codex.sendTurn.mockClear();
+      validation.claude.sendTurn.mockClear();
+
+      yield* provider.startSession(codexThreadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId: codexThreadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.sendTurn({ threadId: codexThreadId, continuation: true });
+      assert.deepEqual(validation.codex.sendTurn.mock.lastCall?.[0], {
+        threadId: codexThreadId,
+        attachments: [],
+        continuation: true,
+      });
+      const mixedInputFailure = yield* provider
+        .sendTurn({ threadId: codexThreadId, input: "continue", continuation: true })
+        .pipe(Effect.flip);
+      assert.instanceOf(mixedInputFailure, ProviderValidationError);
+      assert.include(mixedInputFailure.issue, "cannot include input text or attachments");
+      assert.equal(validation.codex.sendTurn.mock.calls.length, 1);
+
+      yield* provider.startSession(claudeThreadId, {
+        provider: CLAUDE_AGENT_DRIVER,
+        providerInstanceId: claudeAgentInstanceId,
+        threadId: claudeThreadId,
+        runtimeMode: "full-access",
+      });
+      const failure = yield* provider
+        .sendTurn({ threadId: claudeThreadId, continuation: true })
+        .pipe(Effect.flip);
+      assert.instanceOf(failure, ProviderValidationError);
+      assert.include(failure.issue, "does not support continuing interrupted turns");
+      assert.equal(validation.claude.sendTurn.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("rejects session starts without an explicit provider instance id", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

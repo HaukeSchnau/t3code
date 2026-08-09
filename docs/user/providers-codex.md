@@ -10,6 +10,18 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Pause And Resume A Turn
+
+While Codex is working, use the Pause button in the composer to interrupt the current response.
+Once Codex has stopped, the empty composer shows Resume. Resuming continues from the interrupted
+thread context without adding a message such as “continue” to the conversation.
+
+If you want to change direction instead, type a new instruction. The Resume action becomes the
+normal Send action as soon as the composer has content.
+
+Pause and message-free resume are currently available for Codex threads. Other providers keep the
+Stop action until their runtimes expose an equivalent continuation operation.
+
 ## I Only Use One Codex Account
 
 Use the default provider.

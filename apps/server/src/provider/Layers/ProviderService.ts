@@ -669,7 +669,13 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
 
     const attachments = parsed.attachments ?? [];
-    if (!parsed.input && attachments.length === 0) {
+    if (parsed.continuation === true && (parsed.input || attachments.length > 0)) {
+      return yield* toValidationError(
+        "ProviderService.sendTurn",
+        "Continuation turns cannot include input text or attachments",
+      );
+    }
+    if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
         "Either input text or at least one attachment is required",
@@ -722,6 +728,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       metricProvider = routed.adapter.provider;
       metricModel = input.modelSelection?.model;
+      if (
+        input.continuation === true &&
+        routed.adapter.capabilities.turnContinuation !== "empty-input"
+      ) {
+        return yield* toValidationError(
+          "ProviderService.sendTurn",
+          `Provider '${routed.adapter.provider}' does not support continuing interrupted turns`,
+        );
+      }
       yield* Effect.annotateCurrentSpan({
         "provider.kind": routed.adapter.provider,
         ...(input.modelSelection?.model ? { "provider.model": input.modelSelection.model } : {}),
@@ -756,6 +771,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         runtimeMode: routed.runtimeMode,
         attachmentCount: input.attachments.length,
         hasInput: typeof input.input === "string" && input.input.trim().length > 0,
+        continuation: input.continuation === true,
       });
       return turn;
     }).pipe(

@@ -4580,6 +4580,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
+      turnContinuation: "unsupported",
     },
     startSession,
     sendTurn,

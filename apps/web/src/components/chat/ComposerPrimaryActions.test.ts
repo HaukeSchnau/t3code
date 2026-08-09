@@ -151,6 +151,79 @@ describe("formatPendingPrimaryActionLabel", () => {
 });
 
 describe("ComposerPrimaryActions", () => {
+  it("labels the Codex interrupt action as Pause generation", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        compact: true,
+        pendingAction: null,
+        isRunning: true,
+        canPauseTurn: true,
+        showPlanFollowUpPrompt: false,
+        promptHasText: false,
+        isSendBusy: false,
+        sendDisabledReason: null,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isPreparingWorktree: false,
+        hasSendableContent: false,
+        onPreviousPendingQuestion: () => {},
+        onInterrupt: () => {},
+        onImplementPlanInNewThread: () => {},
+      }),
+    );
+    expect(markup).toContain('aria-label="Pause generation"');
+  });
+
+  it("offers Resume when an interrupted turn has no replacement prompt", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        compact: false,
+        pendingAction: null,
+        isRunning: false,
+        canResumeInterruptedTurn: true,
+        showPlanFollowUpPrompt: false,
+        promptHasText: false,
+        isSendBusy: false,
+        sendDisabledReason: null,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isPreparingWorktree: false,
+        hasSendableContent: false,
+        onPreviousPendingQuestion: () => {},
+        onInterrupt: () => {},
+        onResumeInterruptedTurn: () => {},
+        onImplementPlanInNewThread: () => {},
+      }),
+    );
+    expect(markup).toContain('aria-label="Resume interrupted turn"');
+    expect(markup).toContain("Resume");
+  });
+
+  it("keeps Send available when the user writes a replacement prompt", () => {
+    const markup = renderToStaticMarkup(
+      createElement(ComposerPrimaryActions, {
+        compact: false,
+        pendingAction: null,
+        isRunning: false,
+        canResumeInterruptedTurn: true,
+        showPlanFollowUpPrompt: false,
+        promptHasText: true,
+        isSendBusy: false,
+        sendDisabledReason: null,
+        isConnecting: false,
+        isEnvironmentUnavailable: false,
+        isPreparingWorktree: false,
+        hasSendableContent: true,
+        onPreviousPendingQuestion: () => {},
+        onInterrupt: () => {},
+        onResumeInterruptedTurn: () => {},
+        onImplementPlanInNewThread: () => {},
+      }),
+    );
+    expect(markup).toContain('aria-label="Send message"');
+    expect(markup).not.toContain('aria-label="Resume interrupted turn"');
+  });
+
   it("offers Stop generation while a running turn is waiting for user input", () => {
     expect(renderPendingActions(true)).toContain('aria-label="Stop generation"');
   });

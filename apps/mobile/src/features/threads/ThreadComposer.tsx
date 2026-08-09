@@ -8,6 +8,7 @@ import type {
   RuntimeMode,
   ServerConfig as T3ServerConfig,
 } from "@t3tools/contracts";
+import { canPauseThreadTurn, canResumeThreadTurn } from "@t3tools/client-runtime/state/threads";
 import {
   detectComposerTrigger,
   replaceTextRange,
@@ -128,6 +129,7 @@ export interface ThreadComposerProps {
   readonly onNativePasteImages: (uris: ReadonlyArray<string>) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  readonly onResumeThread: () => void;
   readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
@@ -426,6 +428,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   const showStopAction =
     props.selectedThread.session?.status === "running" ||
     props.selectedThread.session?.status === "starting";
+  const canPauseTurn = canPauseThreadTurn(props.selectedThread);
+  const canResumeInterruptedTurn = !hasContent && canResumeThreadTurn(props.selectedThread);
 
   const sendLabel =
     props.connectionState !== "connected" || props.activeThreadBusy || props.queueCount > 0
@@ -886,7 +890,20 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           {!isExpanded ? (
             <Animated.View entering={FadeIn.duration(180)} exiting={FadeOut.duration(100)}>
               {showStopAction ? (
-                <ControlPill icon="stop.fill" variant="danger" onPress={props.onStopThread} />
+                <ControlPill
+                  icon={canPauseTurn ? "pause.fill" : "stop.fill"}
+                  variant="danger"
+                  accessibilityLabel={canPauseTurn ? "Pause" : "Stop"}
+                  onPress={props.onStopThread}
+                />
+              ) : canResumeInterruptedTurn ? (
+                <ControlPill
+                  icon="play"
+                  variant="primary"
+                  accessibilityLabel="Resume"
+                  disabled={props.connectionState !== "connected"}
+                  onPress={props.onResumeThread}
+                />
               ) : (
                 <ControlPill
                   icon="arrow.up"
@@ -924,8 +941,8 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 />
                 {showStopAction ? (
                   <ComposerToolbarButton
-                    accessibilityLabel="Stop"
-                    icon="stop.fill"
+                    accessibilityLabel={canPauseTurn ? "Pause" : "Stop"}
+                    icon={canPauseTurn ? "pause.fill" : "stop.fill"}
                     variant="danger"
                     onPress={props.onStopThread}
                     showChevron={false}
@@ -933,11 +950,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 ) : null}
               </ComposerToolbarScroller>
               <ComposerToolbarButton
-                accessibilityLabel={sendLabel}
-                icon="arrow.up"
+                accessibilityLabel={canResumeInterruptedTurn ? "Resume" : sendLabel}
+                icon={canResumeInterruptedTurn ? "play" : "arrow.up"}
                 variant="primary"
-                disabled={!canSend}
-                onPress={handleSend}
+                disabled={
+                  canResumeInterruptedTurn ? props.connectionState !== "connected" : !canSend
+                }
+                onPress={canResumeInterruptedTurn ? props.onResumeThread : handleSend}
                 showChevron={false}
               />
             </ComposerToolbarRow>

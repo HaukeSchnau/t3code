@@ -1709,6 +1709,7 @@ export function makeOpenCodeAdapter(
       capabilities: {
         sessionModelSwitch: "in-session",
         assistantTranscriptRecovery: "none",
+        turnContinuation: "unsupported",
       },
       startSession,
       sendTurn,

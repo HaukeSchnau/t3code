@@ -23,6 +23,7 @@ import {
   ThreadMetaUpdatedPayload,
   ThreadMessageQueueCommand,
   ThreadTurnStartCommand,
+  ThreadTurnResumeCommand,
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
@@ -36,6 +37,7 @@ const decodeProjectCreateCommand = Schema.decodeUnknownEffect(ProjectCreateComma
 const decodeProjectCreatedPayload = Schema.decodeUnknownEffect(ProjectCreatedPayload);
 const decodeProjectMetaUpdatedPayload = Schema.decodeUnknownEffect(ProjectMetaUpdatedPayload);
 const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartCommand);
+const decodeThreadTurnResumeCommand = Schema.decodeUnknownEffect(ThreadTurnResumeCommand);
 const decodeThreadMessageQueueCommand = Schema.decodeUnknownEffect(ThreadMessageQueueCommand);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
@@ -88,6 +90,30 @@ it.effect("decodes capability-gated shell cursor items", () =>
       includeCursorItems: true,
     });
     assert.deepStrictEqual(decodedByLegacyServer, { afterSequence: 7 });
+  }),
+);
+
+it.effect("decodes message-free interrupted turn continuation", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeThreadTurnResumeCommand({
+      type: "thread.turn.resume",
+      commandId: "command-resume",
+      threadId: "thread-1",
+      interruptedTurnId: "turn-1",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(command.interruptedTurnId, "turn-1");
+
+    const payload = yield* decodeThreadTurnStartRequestedPayload({
+      threadId: "thread-1",
+      messageId: null,
+      resumedFromTurnId: "turn-1",
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(payload.messageId, null);
+    assert.strictEqual(payload.resumedFromTurnId, "turn-1");
   }),
 );
 
