@@ -4,6 +4,7 @@ import {
   ProviderDriverKind,
   RuntimeItemId,
   RuntimeRequestId,
+  RuntimeTaskId,
   ThreadId,
   TurnId,
   type ProviderRuntimeEvent,
@@ -137,7 +138,7 @@ const run = Effect.gen(function* () {
     threadId: HARD_KILL_THREAD_ID,
     turnId: HARD_KILL_TURN_ID,
     createdAt: "2026-07-13T00:00:00.155Z",
-    payload: { taskId: "buffering-barrier", taskType: "analysis" },
+    payload: { taskId: RuntimeTaskId.make("buffering-barrier"), taskType: "analysis" },
   });
   yield* harness.waitForThread(HARD_KILL_THREAD_ID, (thread) =>
     thread.activities.some(
