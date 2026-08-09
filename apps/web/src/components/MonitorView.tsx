@@ -51,9 +51,8 @@ import { readEnvironmentApi } from "../environmentApi";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { cn, newCommandId, newMessageId } from "../lib/utils";
-import { appendElementContextsToPrompt, type ElementContextDraft } from "../lib/elementContext";
-import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
-import { appendTerminalContextsToPrompt, type TerminalContextDraft } from "../lib/terminalContext";
+import { type ElementContextDraft } from "../lib/elementContext";
+import { type TerminalContextDraft } from "../lib/terminalContext";
 import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
@@ -63,11 +62,7 @@ import {
 } from "../pendingUserInput";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../types";
 import type { QueuedMessage } from "../types";
-import {
-  getStartedThreadModelChangeBlockReason,
-  deriveComposerSendState,
-  readFileAsDataUrl,
-} from "./ChatView.logic";
+import { getStartedThreadModelChangeBlockReason } from "./ChatView.logic";
 import { Button } from "./ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "./ui/empty";
 import { SidebarInset } from "./ui/sidebar";
@@ -82,6 +77,14 @@ import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import type { ExpandedImagePreview } from "./chat/ExpandedImagePreview";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
+import {
+  analyzeThreadTurnDraft,
+  createDirectThreadTurnDeliveryAdapter,
+  resolveFollowUpSubmissionTitle,
+  submitThreadTurn,
+  threadComposerRevision,
+  threadTurnDraftFromComposer,
+} from "./chat/ThreadTurnSubmission";
 import { useProjects, useProviderUsageLimits, useThread, useThreadShells } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 
@@ -981,71 +984,81 @@ function MonitorThreadActions({
     if (!thread || busy) return;
     const sendContext = composerRef.current?.getSendContext();
     if (!sendContext) return;
-    const {
-      images,
-      terminalContexts,
-      elementContexts,
-      previewAnnotations,
-      selectedModelSelection,
-    } = sendContext;
-    const promptForSend = sendContext.prompt;
-    const { trimmedPrompt, sendableTerminalContexts, hasSendableContent } = deriveComposerSendState(
-      {
-        prompt: promptForSend,
-        imageCount: images.length,
-        terminalContexts,
-        elementContextCount: elementContexts.length + previewAnnotations.length,
-      },
-    );
-    if (!hasSendableContent) return;
+    // Monitor has never submitted review comments; retain that behavior while
+    // sharing the same prompt/context and command transaction as ChatView.
+    const submissionDraft = threadTurnDraftFromComposer(sendContext, { reviewComments: [] });
+    const analysis = analyzeThreadTurnDraft(submissionDraft);
+    if (!analysis.hasSendableContent) return;
     const api = readEnvironmentApi(threadRef.environmentId);
     if (!api) return;
     setBusy(true);
     setError(null);
-    try {
-      const messageTextWithContexts = appendElementContextsToPrompt(
-        appendTerminalContextsToPrompt(promptForSend, sendableTerminalContexts),
-        elementContexts,
-      );
-      const messageText = previewAnnotations.reduce(
-        (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
-        messageTextWithContexts,
-      );
-      const attachments = await Promise.all(
-        images.map(async (image) => ({
-          type: "image" as const,
-          name: image.name,
-          mimeType: image.mimeType,
-          sizeBytes: image.sizeBytes,
-          dataUrl: await readFileAsDataUrl(image.file),
-        })),
-      );
-      await api.orchestration.dispatchCommand({
-        type: isRunning ? "thread.message.queue" : "thread.turn.start",
-        commandId: newCommandId(),
+    await submitThreadTurn({
+      draft: submissionDraft,
+      analysis,
+      target: {
+        environmentId: threadRef.environmentId,
         threadId: threadRef.threadId,
-        message: {
-          messageId: newMessageId(),
-          role: "user",
-          text: messageText,
-          attachments,
-        },
-        modelSelection: selectedModelSelection,
-        titleSeed: trimmedPrompt || thread.title,
+        threadCreatedAt: thread.createdAt,
+        threadWorktreePath: thread.worktreePath,
+        projectId: thread.projectId,
+        projectWorkspaceRoot: activeProject?.workspaceRoot ?? "",
+        projectDefaultModelSelection: activeProject?.defaultModelSelection,
+        isServerThread: true,
+        isLocalDraftThread: false,
+        isFirstMessage: false,
+        queue: isRunning,
+        prepareWorkspace: false,
+        activeBranch: thread.branch,
+        baseRevision: null,
+        startFromOrigin: false,
         runtimeMode,
         interactionMode,
-        createdAt: new Date().toISOString(),
-      });
-      promptRef.current = "";
-      clearComposerDraftContent(threadRef);
-      composerRef.current?.resetCursorState();
-      setComposerExpanded(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to send follow-up.");
-    } finally {
-      setBusy(false);
-    }
-  }, [busy, clearComposerDraftContent, interactionMode, isRunning, runtimeMode, thread, threadRef]);
+      },
+      title: resolveFollowUpSubmissionTitle(analysis, thread.title),
+      delivery: createDirectThreadTurnDeliveryAdapter({
+        dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
+      }),
+      composer: {
+        clearOnSuccess: "always",
+        readCurrentRevision: () => {
+          const currentDraft = useComposerDraftStore.getState().getComposerDraft(threadRef);
+          return threadComposerRevision({
+            prompt: promptRef.current,
+            images: composerImagesRef.current,
+            terminalContexts: composerTerminalContextsRef.current,
+            elementContexts: composerElementContextsRef.current,
+            previewAnnotations: currentDraft?.previewAnnotations ?? [],
+            reviewComments: [],
+          });
+        },
+        clear: () => {
+          promptRef.current = "";
+          clearComposerDraftContent(threadRef);
+          composerRef.current?.resetCursorState();
+        },
+      },
+      lifecycle: {
+        delivered: () => setComposerExpanded(false),
+        failed: (error) =>
+          setError(error instanceof Error ? error.message : "Failed to send follow-up."),
+        settled: () => setBusy(false),
+      },
+      makeCommandId: newCommandId,
+      makeMessageId: newMessageId,
+      now: () => new Date().toISOString(),
+    });
+  }, [
+    activeProject?.defaultModelSelection,
+    activeProject?.workspaceRoot,
+    busy,
+    clearComposerDraftContent,
+    interactionMode,
+    isRunning,
+    runtimeMode,
+    thread,
+    threadRef,
+  ]);
 
   const interrupt = useCallback(async () => {
     const api = readEnvironmentApi(threadRef.environmentId);
