@@ -25,6 +25,12 @@ merge conflicts easier to reason about.
 - When upstream has advanced, create a dedicated merge sync change from fork `main` and
   `main@upstream`.
 - Do not mix feature work into upstream sync merges.
+- Resolve `package.json` manifests and `pnpm-workspace.yaml` before resolving the canonical
+  lockfile. `pnpm-lock.yaml` is derived output: regenerate it with `pnpm run fork:lockfile` instead of
+  hand-merging it. The command enforces the exact pnpm version pinned by the root `packageManager`,
+  runs without lifecycle scripts, and accepts the result only after frozen-lockfile validation.
+- Use `pnpm run fork:lockfile:check` for a non-mutating lockfile check. It restores the original
+  lockfile on success, staleness, and command failure.
 - For large upstream merge conflicts, delegate investigation/resolution to a subagent and then
   review the result before committing.
 - Run required checks before committing sync merges.
@@ -54,4 +60,15 @@ merge conflicts easier to reason about.
 
 - `jj log -r 'main@upstream..main' --no-graph` to inspect fork-only commits.
 - `jj diff --from main@upstream --to main --summary` to inspect fork delta.
-- Required repo gates: `vp check` and `vp run typecheck`.
+- `pnpm run fork:reconciliation-report -- --from main@upstream --to main` produces a deterministic,
+  read-only report of historical upstream-sync reconciliation paths, repeated hotspots, the current
+  fork delta, manifest/lockfile touchpoints, and generated-file warnings. The script only invokes
+  `jj log` and `jj diff`; it never mutates Jujutsu state.
+- `pnpm run fork:lockfile:check` verifies that the canonical lockfile can be reproduced and passes a
+  frozen validation.
+- After a canonical lockfile change, run
+  `node scripts/sync-pnpm-deploy-lock.mjs --check`. If the deploy lock is stale, regenerate it using
+  the documented Nix-shell workflow in `patches/nix-flake-packaging.md`. Then check the fixed-output
+  pnpm dependency hashes in `flake.nix` (`just prefetch-pnpm-deps` updates them when needed).
+- Run focused tests, lint, and package typechecks for the paths reconciled by the sync. CI owns the
+  repository-wide suite unless a maintainer explicitly requests it.
