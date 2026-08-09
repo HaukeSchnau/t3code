@@ -1,8 +1,6 @@
 import {
-  type EnvironmentId,
   type MessageId,
   type ModelSelection,
-  type ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderInteractionMode,
   type RuntimeMode,
@@ -10,92 +8,76 @@ import {
   type ServerProvider,
   type ThreadId,
 } from "@t3tools/contracts";
-import { truncate } from "@t3tools/shared/String";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type RefObject,
-  type SetStateAction,
-} from "react";
-import {
-  collapseExpandedComposerCursor,
-  parseStandaloneComposerSlashCommand,
-} from "../../composer-logic";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
+import { projectScriptCwd } from "@t3tools/shared/projectScripts";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { parseStandaloneComposerSlashCommand } from "../../composer-logic";
 import {
   type ComposerImageAttachment,
   type DraftId,
   useComposerDraftStore,
 } from "../../composerDraftStore";
 import { readEnvironmentApi } from "../../environmentApi";
-import {
-  appendTerminalContextsToPrompt,
-  formatTerminalContextLabel,
-  type TerminalContextDraft,
-} from "../../lib/terminalContext";
+import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
-import { type Project, type ChatMessage, type SessionPhase, type Thread } from "../../types";
+import { derivePhase } from "../../session-logic";
+import { type ChatMessage, type Thread } from "../../types";
 import { newCommandId, newDraftId, newMessageId } from "~/lib/utils";
 import {
   buildExpiredTerminalContextToastCopy,
   cloneComposerImageForRetry,
-  deriveComposerSendState,
+  deriveLockedProvider,
   getStartedThreadModelChangeBlockReason,
   readFileAsDataUrl,
-  revokeUserMessagePreviewUrls,
 } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { InlineMessageEditor } from "./InlineMessageEditor";
-import { type ChatComposerHandle, type ChatComposerProps } from "./ChatComposer";
+import { type ChatComposerHandle } from "./ChatComposer";
 import {
   editableTextFromUserMessage,
   hydrateMessageImagesForEdit,
+  runPreviousMessageEditTransaction,
   waitForMessagePrunedFromThread,
 } from "./previousMessageEditing";
 import { type UserMessageEditingController } from "./MessagesTimeline";
-import { type UnifiedSettings } from "@t3tools/contracts/settings";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { useEnvironmentSettings } from "../../hooks/useSettings";
+import { useTheme } from "../../hooks/useTheme";
+import { deriveLatestUsageLimitsSnapshotForSources } from "../../lib/usageLimits";
+import { useEnvironment } from "../../state/environments";
+import { useProject, useProviderUsageLimits, useThread } from "../../state/entities";
+import { primaryServerKeybindingsAtom } from "../../state/server";
+import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
+import {
+  analyzeThreadTurnDraft,
+  formatThreadTurnOutgoingText,
+  IMAGE_ONLY_BOOTSTRAP_PROMPT,
+  resolveNewThreadSubmissionTitle,
+  serializeThreadTurnPrompt,
+  threadTurnDraftFromComposer,
+  type ThreadTurnDraft,
+} from "./ThreadTurnSubmission";
+
+const NOOP = () => undefined;
+const NOOP_ASYNC = () => Promise.resolve(undefined);
+const EMPTY_PROVIDER_STATUSES: ReadonlyArray<ServerProvider> = [];
 
 interface UsePreviousMessageEditingInput {
-  activeThread: Thread | undefined;
-  activeProject: Project | undefined;
-  isServerThread: boolean;
-  isWorking: boolean;
-  isSendBusy: boolean;
-  isConnecting: boolean;
-  isRevertingCheckpoint: boolean;
-  activeEnvironmentUnavailable: unknown;
-  environmentId: EnvironmentId;
-  routeKind: "server" | "draft";
   routeThreadRef: ScopedThreadRef;
   draftId: DraftId | null;
-  activeThreadId: ThreadId | null;
-  phase: SessionPhase;
-  runtimeMode: RuntimeMode;
-  interactionMode: ProviderInteractionMode;
-  lockedProvider: ProviderDriverKind | null;
-  providerStatuses: ServerProvider[];
-  activeUsageLimits: ChatComposerProps["activeUsageLimits"];
-  resolvedTheme: "light" | "dark";
-  settings: UnifiedSettings;
-  keybindings: ChatComposerProps["keybindings"];
-  terminalOpen: boolean;
-  gitCwd: string | null;
-  environmentUnavailableState: ChatComposerProps["environmentUnavailable"];
-  composerDraftTarget: ScopedThreadRef | DraftId;
-  composerRef: RefObject<ChatComposerHandle | null>;
-  promptRef: RefObject<string>;
-  composerImagesRef: RefObject<ComposerImageAttachment[]>;
-  composerTerminalContextsRef: RefObject<TerminalContextDraft[]>;
+  isExternallyBusy: boolean;
   sendInFlightRef: RefObject<boolean>;
-  editableUserMessageIds: ReadonlySet<MessageId>;
-  setOptimisticUserMessages: Dispatch<SetStateAction<ChatMessage[]>>;
+  prepareOptimisticMessage: (message: ChatMessage) => Promise<void>;
+  removeOptimisticMessage: (messageId: MessageId) => void;
+  restorePrimaryComposer: (draft: {
+    readonly prompt: string;
+    readonly images: ReadonlyArray<ComposerImageAttachment>;
+    readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
+  }) => void;
   setThreadError: (threadId: ThreadId | null, error: string | null) => void;
-  prepareTimelineForOptimisticMessage: () => Promise<void>;
   beginLocalDispatch: (options?: { preparingWorktree?: boolean }) => void;
   resetLocalDispatch: () => void;
   persistThreadSettingsForNextTurn: (input: {
@@ -105,31 +87,7 @@ interface UsePreviousMessageEditingInput {
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
   }) => Promise<void>;
-  scheduleComposerFocus: () => void;
-  onInterrupt: () => void;
-  onImplementPlanInNewThread: () => void;
-  onRespondToApproval: ChatComposerProps["onRespondToApproval"];
-  onSelectActivePendingUserInputOption: (questionId: string, optionLabel: string) => void;
-  onAdvanceActivePendingUserInput: () => void;
-  onPreviousActivePendingUserInputQuestion: () => void;
-  onChangeActivePendingUserInputCustomAnswer: (
-    questionId: string,
-    value: string,
-    nextCursor: number,
-    expandedCursor: number,
-    cursorAdjacentToMention: boolean,
-  ) => void;
-  getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
-  setThreadErrorFromEditor: (threadId: ThreadId | null, error: string | null) => void;
   onExpandImage: (preview: ExpandedImagePreview) => void;
-  formatOutgoingPrompt: (params: {
-    provider: ProviderDriverKind;
-    model: string | null;
-    models: ReadonlyArray<ServerProvider["models"][number]>;
-    effort: string | null;
-    text: string;
-  }) => string;
-  imageOnlyBootstrapPrompt: string;
 }
 
 export interface PreviousMessageEditingState {
@@ -139,58 +97,100 @@ export interface PreviousMessageEditingState {
 }
 
 export function usePreviousMessageEditing({
-  activeThread,
-  activeProject,
-  isServerThread,
-  isWorking,
-  isSendBusy,
-  isConnecting,
-  isRevertingCheckpoint: isExternalRevertingCheckpoint,
-  activeEnvironmentUnavailable,
-  environmentId,
-  routeKind,
   routeThreadRef,
   draftId,
-  activeThreadId,
-  phase,
-  runtimeMode,
-  interactionMode,
-  lockedProvider,
-  providerStatuses,
-  activeUsageLimits,
-  resolvedTheme,
-  settings,
-  keybindings,
-  terminalOpen,
-  gitCwd,
-  environmentUnavailableState,
-  composerDraftTarget,
-  composerRef,
-  promptRef,
-  composerImagesRef,
-  composerTerminalContextsRef,
+  isExternallyBusy,
   sendInFlightRef,
-  editableUserMessageIds,
-  setOptimisticUserMessages,
+  prepareOptimisticMessage,
+  removeOptimisticMessage,
+  restorePrimaryComposer,
   setThreadError,
-  prepareTimelineForOptimisticMessage,
   beginLocalDispatch,
   resetLocalDispatch,
   persistThreadSettingsForNextTurn,
-  scheduleComposerFocus,
-  onInterrupt,
-  onImplementPlanInNewThread,
-  onRespondToApproval,
-  onSelectActivePendingUserInputOption,
-  onAdvanceActivePendingUserInput,
-  onPreviousActivePendingUserInputQuestion,
-  onChangeActivePendingUserInputCustomAnswer,
-  getModelDisabledReason,
-  setThreadErrorFromEditor,
   onExpandImage,
-  formatOutgoingPrompt,
-  imageOnlyBootstrapPrompt,
 }: UsePreviousMessageEditingInput): PreviousMessageEditingState {
+  const environmentId = routeThreadRef.environmentId;
+  const activeThread = useThread(routeThreadRef, { waitForShell: draftId !== null }) ?? undefined;
+  const activeThreadId = activeThread?.id ?? null;
+  const isServerThread = activeThread !== undefined;
+  const routeKind = draftId === null ? "server" : "draft";
+  const composerDraftTarget: ScopedThreadRef | DraftId = draftId ?? routeThreadRef;
+  const activeProjectRef = useMemo(
+    () =>
+      activeThread ? scopeProjectRef(activeThread.environmentId, activeThread.projectId) : null,
+    [activeThread?.environmentId, activeThread?.projectId],
+  );
+  const activeProject = useProject(activeProjectRef) ?? undefined;
+  const environment = useEnvironment(environmentId);
+  const activeEnvironmentUnavailable =
+    environment !== null && environment.connection.phase !== "connected";
+  const environmentUnavailableState = useMemo(
+    () =>
+      environment && activeEnvironmentUnavailable
+        ? { label: environment.label, connection: environment.connection }
+        : null,
+    [activeEnvironmentUnavailable, environment],
+  );
+  const settings = useEnvironmentSettings(environmentId);
+  const providerStatuses = environment?.serverConfig?.providers ?? EMPTY_PROVIDER_STATUSES;
+  const composerProviderStatuses = useMemo(() => [...providerStatuses], [providerStatuses]);
+  const providerUsageLimits = useProviderUsageLimits(environmentId);
+  const activeUsageLimits = useMemo(
+    () =>
+      deriveLatestUsageLimitsSnapshotForSources(
+        providerUsageLimits.map((entry) => ({
+          provider: entry.provider,
+          usageLimits: [entry.usageLimits],
+        })),
+        "codex",
+      ),
+    [providerUsageLimits],
+  );
+  const { resolvedTheme } = useTheme();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
+  const terminalOpen = useTerminalUiStateStore(
+    (state) =>
+      selectThreadTerminalUiState(state.terminalUiStateByThreadKey, routeThreadRef).terminalOpen,
+  );
+  const composerRuntimeMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.runtimeMode ?? null,
+  );
+  const composerInteractionMode = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.interactionMode ?? null,
+  );
+  const selectedProvider = useComposerDraftStore(
+    (store) => store.getComposerDraft(composerDraftTarget)?.activeProvider ?? null,
+  );
+  const runtimeMode = composerRuntimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const interactionMode = settings.planModeEnabled
+    ? (composerInteractionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE)
+    : DEFAULT_INTERACTION_MODE;
+  const phase = derivePhase(activeThread?.session ?? null);
+  const isWorking = phase === "running" || isExternallyBusy;
+  const lockedProvider = deriveLockedProvider({
+    thread: activeThread,
+    selectedProvider,
+    threadProvider:
+      activeThread?.modelSelection.instanceId ??
+      activeProject?.defaultModelSelection?.instanceId ??
+      null,
+  });
+  const editableUserMessageIds = useMemo(
+    () =>
+      new Set(
+        (activeThread?.messages ?? [])
+          .filter((message) => message.role === "user")
+          .map((message) => message.id),
+      ),
+    [activeThread?.messages],
+  );
+  const gitCwd = activeProject
+    ? projectScriptCwd({
+        project: { cwd: activeProject.workspaceRoot },
+        worktreePath: activeThread?.worktreePath ?? null,
+      })
+    : null;
   const setStickyComposerModelSelection = useComposerDraftStore(
     (store) => store.setStickyModelSelection,
   );
@@ -239,6 +239,21 @@ export function usePreviousMessageEditing({
       editComposerRef.current?.focusAtEnd();
     });
   }, []);
+
+  const getModelDisabledReason = useCallback(
+    (instanceId: ProviderInstanceId, model: string) => {
+      if (!activeThread) return null;
+      const reason = getStartedThreadModelChangeBlockReason({
+        providers: providerStatuses,
+        hasStartedSession: activeThread.session !== null,
+        currentModelSelection: activeThread.modelSelection,
+        currentProviderInstanceId: activeThread.session?.providerInstanceId ?? null,
+        nextModelSelection: { instanceId, model },
+      });
+      return reason ? `${reason.description} Start a new thread to use this model.` : null;
+    },
+    [activeThread, providerStatuses],
+  );
 
   const resetEditState = useCallback(() => {
     editPromptRef.current = "";
@@ -365,7 +380,6 @@ export function usePreviousMessageEditing({
         !isServerThread ||
         isPreparingEdit ||
         isSubmittingEdit ||
-        isExternalRevertingCheckpoint ||
         isEditPruningHistory ||
         isWorking
       ) {
@@ -412,7 +426,6 @@ export function usePreviousMessageEditing({
       clearEditDraft,
       editableUserMessageIds,
       isEditPruningHistory,
-      isExternalRevertingCheckpoint,
       isPreparingEdit,
       isServerThread,
       isSubmittingEdit,
@@ -437,8 +450,7 @@ export function usePreviousMessageEditing({
         !activeProject ||
         !editingUserMessage ||
         !isServerThread ||
-        isSendBusy ||
-        isConnecting ||
+        isExternallyBusy ||
         activeEnvironmentUnavailable ||
         sendInFlightRef.current
       ) {
@@ -446,26 +458,25 @@ export function usePreviousMessageEditing({
       }
       const sendCtx = editComposerRef.current?.getSendContext();
       if (!sendCtx) return;
-      const {
-        images: composerImages,
-        terminalContexts: composerTerminalContexts,
-        selectedProvider: ctxSelectedProvider,
-        selectedModel: ctxSelectedModel,
-        selectedProviderModels: ctxSelectedProviderModels,
-        selectedPromptEffort: ctxSelectedPromptEffort,
-        selectedModelSelection: ctxSelectedModelSelection,
-      } = sendCtx;
+      const submissionDraft: ThreadTurnDraft = {
+        ...threadTurnDraftFromComposer(sendCtx, {
+          previewAnnotations: [],
+          reviewComments: [],
+        }),
+        elementContexts: [],
+      };
+      const composerImages = submissionDraft.images;
       const promptForSend = editPromptRef.current;
+      const submissionAnalysis = analyzeThreadTurnDraft({
+        ...submissionDraft,
+        prompt: promptForSend,
+      });
       const {
         trimmedPrompt: trimmed,
         sendableTerminalContexts: sendableComposerTerminalContexts,
         expiredTerminalContextCount,
         hasSendableContent,
-      } = deriveComposerSendState({
-        prompt: promptForSend,
-        imageCount: composerImages.length,
-        terminalContexts: composerTerminalContexts,
-      });
+      } = submissionAnalysis;
       const standaloneSlashCommand =
         composerImages.length === 0 && sendableComposerTerminalContexts.length === 0
           ? parseStandaloneComposerSlashCommand(trimmed)
@@ -502,19 +513,18 @@ export function usePreviousMessageEditing({
       const editInteractionMode = editDraft?.interactionMode ?? interactionMode;
       const composerImagesSnapshot = [...composerImages];
       const composerTerminalContextsSnapshot = [...sendableComposerTerminalContexts];
-      const messageTextForSend = appendTerminalContextsToPrompt(
-        promptForSend,
-        composerTerminalContextsSnapshot,
-      );
+      const submittedDraft = {
+        ...submissionDraft,
+        prompt: promptForSend,
+        terminalContexts: composerTerminalContextsSnapshot,
+      };
       const messageIdForSend = newMessageId();
       const messageCreatedAt = new Date().toISOString();
-      const outgoingMessageText = formatOutgoingPrompt({
-        provider: ctxSelectedProvider,
-        model: ctxSelectedModel,
-        models: ctxSelectedProviderModels,
-        effort: ctxSelectedPromptEffort,
-        text: messageTextForSend || imageOnlyBootstrapPrompt,
-      });
+      const outgoingMessageText = formatThreadTurnOutgoingText(
+        submittedDraft,
+        serializeThreadTurnPrompt(submittedDraft, submissionAnalysis) ||
+          IMAGE_ONLY_BOOTSTRAP_PROMPT,
+      );
       const turnAttachmentsPromise = Promise.all(
         composerImagesSnapshot.map(async (image) => ({
           type: "image" as const,
@@ -538,135 +548,114 @@ export function usePreviousMessageEditing({
       setIsEditPruningHistory(true);
       setThreadError(threadIdForSend, null);
 
-      let historyPruneSucceeded = false;
       let turnStartSucceeded = false;
       try {
-        await api.orchestration.dispatchCommand({
-          type: "thread.history.prune",
-          commandId: newCommandId(),
-          threadId: threadIdForSend,
-          messageId: editingUserMessage.messageId,
-          createdAt: new Date().toISOString(),
-        });
-        await waitForMessagePrunedFromThread({
-          messageId: editingUserMessage.messageId,
-          readThread: () => activeThreadSnapshotRef.current,
-        });
-        historyPruneSucceeded = true;
-        setIsEditPruningHistory(false);
-
-        await prepareTimelineForOptimisticMessage();
-
-        setOptimisticUserMessages((existing) => [
-          ...existing,
-          {
-            id: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
-            turnId: null,
-            createdAt: messageCreatedAt,
-            updatedAt: messageCreatedAt,
-            streaming: false,
+        const result = await runPreviousMessageEditTransaction({
+          pruneHistory: async () => {
+            await api.orchestration.dispatchCommand({
+              type: "thread.history.prune",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              messageId: editingUserMessage.messageId,
+              createdAt: new Date().toISOString(),
+            });
           },
-        ]);
-
-        if (expiredTerminalContextCount > 0) {
-          const toastCopy = buildExpiredTerminalContextToastCopy(
-            expiredTerminalContextCount,
-            "omitted",
-          );
-          toastManager.add(
-            stackedThreadToast({
-              type: "warning",
-              title: toastCopy.title,
-              description: toastCopy.description,
+          waitForPrunedHistory: () =>
+            waitForMessagePrunedFromThread({
+              messageId: editingUserMessage.messageId,
+              readThread: () => activeThreadSnapshotRef.current,
             }),
+          onHistoryPruned: () => setIsEditPruningHistory(false),
+          submitReplacement: async () => {
+            await prepareOptimisticMessage({
+              id: messageIdForSend,
+              role: "user",
+              text: outgoingMessageText,
+              ...(optimisticAttachments.length > 0 ? { attachments: optimisticAttachments } : {}),
+              turnId: null,
+              createdAt: messageCreatedAt,
+              updatedAt: messageCreatedAt,
+              streaming: false,
+            });
+
+            if (expiredTerminalContextCount > 0) {
+              const toastCopy = buildExpiredTerminalContextToastCopy(
+                expiredTerminalContextCount,
+                "omitted",
+              );
+              toastManager.add(
+                stackedThreadToast({
+                  type: "warning",
+                  title: toastCopy.title,
+                  description: toastCopy.description,
+                }),
+              );
+            }
+
+            const resolvedTitle = resolveNewThreadSubmissionTitle(
+              submittedDraft,
+              submissionAnalysis,
+            );
+            const title = resolvedTitle === "New thread" ? activeThread.title : resolvedTitle;
+            if (activeThreadSnapshotRef.current?.messages.length === 0) {
+              await api.orchestration.dispatchCommand({
+                type: "thread.meta.update",
+                commandId: newCommandId(),
+                threadId: threadIdForSend,
+                title,
+              });
+            }
+
+            await persistThreadSettingsForNextTurn({
+              threadId: threadIdForSend,
+              createdAt: messageCreatedAt,
+              ...(submittedDraft.selectedModel
+                ? { modelSelection: submittedDraft.selectedModelSelection }
+                : {}),
+              runtimeMode: editRuntimeMode,
+              interactionMode: editInteractionMode,
+            });
+
+            const turnAttachments = await turnAttachmentsPromise;
+            beginLocalDispatch({ preparingWorktree: false });
+            await api.orchestration.dispatchCommand({
+              type: "thread.turn.start",
+              commandId: newCommandId(),
+              threadId: threadIdForSend,
+              message: {
+                messageId: messageIdForSend,
+                role: "user",
+                text: outgoingMessageText,
+                attachments: turnAttachments,
+              },
+              modelSelection: submittedDraft.selectedModelSelection,
+              titleSeed: title,
+              runtimeMode: editRuntimeMode,
+              interactionMode: editInteractionMode,
+              createdAt: messageCreatedAt,
+            });
+            clearComposerDraftContent(editingUserMessage.draftTarget);
+            resetEditState();
+          },
+          onReplacementFailed: () => {
+            removeOptimisticMessage(messageIdForSend);
+            const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
+            restorePrimaryComposer({
+              prompt: promptForSend,
+              images: retryComposerImages,
+              terminalContexts: composerTerminalContextsSnapshot,
+            });
+            clearEditDraft(editingUserMessage.draftTarget);
+            resetEditState();
+          },
+        });
+        turnStartSucceeded = result.kind === "delivered";
+        if (result.kind === "failed") {
+          setThreadError(
+            threadIdForSend,
+            result.error instanceof Error ? result.error.message : "Failed to edit message.",
           );
         }
-
-        const firstComposerImageName = composerImagesSnapshot[0]?.name ?? null;
-        let titleSeed = trimmed;
-        if (!titleSeed) {
-          if (firstComposerImageName) {
-            titleSeed = `Image: ${firstComposerImageName}`;
-          } else if (composerTerminalContextsSnapshot.length > 0) {
-            titleSeed = formatTerminalContextLabel(composerTerminalContextsSnapshot[0]!);
-          } else {
-            titleSeed = activeThread.title;
-          }
-        }
-        const title = truncate(titleSeed);
-        const currentThreadAfterRollback = activeThreadSnapshotRef.current;
-        if (currentThreadAfterRollback?.messages.length === 0) {
-          await api.orchestration.dispatchCommand({
-            type: "thread.meta.update",
-            commandId: newCommandId(),
-            threadId: threadIdForSend,
-            title,
-          });
-        }
-
-        await persistThreadSettingsForNextTurn({
-          threadId: threadIdForSend,
-          createdAt: messageCreatedAt,
-          ...(ctxSelectedModel ? { modelSelection: ctxSelectedModelSelection } : {}),
-          runtimeMode: editRuntimeMode,
-          interactionMode: editInteractionMode,
-        });
-
-        const turnAttachments = await turnAttachmentsPromise;
-        beginLocalDispatch({ preparingWorktree: false });
-        await api.orchestration.dispatchCommand({
-          type: "thread.turn.start",
-          commandId: newCommandId(),
-          threadId: threadIdForSend,
-          message: {
-            messageId: messageIdForSend,
-            role: "user",
-            text: outgoingMessageText,
-            attachments: turnAttachments,
-          },
-          modelSelection: ctxSelectedModelSelection,
-          titleSeed: title,
-          runtimeMode: editRuntimeMode,
-          interactionMode: editInteractionMode,
-          createdAt: messageCreatedAt,
-        });
-        turnStartSucceeded = true;
-        clearComposerDraftContent(editingUserMessage.draftTarget);
-        resetEditState();
-      } catch (err) {
-        if (historyPruneSucceeded && !turnStartSucceeded) {
-          setOptimisticUserMessages((existing) => {
-            const removed = existing.filter((message) => message.id === messageIdForSend);
-            for (const message of removed) {
-              revokeUserMessagePreviewUrls(message);
-            }
-            const next = existing.filter((message) => message.id !== messageIdForSend);
-            return next.length === existing.length ? existing : next;
-          });
-          promptRef.current = promptForSend;
-          const retryComposerImages = composerImagesSnapshot.map(cloneComposerImageForRetry);
-          composerImagesRef.current = retryComposerImages;
-          composerTerminalContextsRef.current = composerTerminalContextsSnapshot;
-          clearComposerDraftContent(composerDraftTarget);
-          setComposerDraftPrompt(composerDraftTarget, promptForSend);
-          addComposerDraftImages(composerDraftTarget, retryComposerImages);
-          setComposerDraftTerminalContexts(composerDraftTarget, composerTerminalContextsSnapshot);
-          composerRef.current?.resetCursorState({
-            cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
-            prompt: promptForSend,
-            detectTrigger: true,
-          });
-          clearEditDraft(editingUserMessage.draftTarget);
-          resetEditState();
-          scheduleComposerFocus();
-        }
-        setThreadError(
-          threadIdForSend,
-          err instanceof Error ? err.message : "Failed to edit message.",
-        );
       } finally {
         sendInFlightRef.current = false;
         setIsSubmittingEdit(false);
@@ -680,35 +669,24 @@ export function usePreviousMessageEditing({
       activeEnvironmentUnavailable,
       activeProject,
       activeThread,
-      addComposerDraftImages,
       beginLocalDispatch,
       clearComposerDraftContent,
       clearEditDraft,
-      composerDraftTarget,
-      composerImagesRef,
-      composerRef,
-      composerTerminalContextsRef,
       environmentId,
       editingUserMessage,
-      formatOutgoingPrompt,
-      imageOnlyBootstrapPrompt,
       interactionMode,
-      isConnecting,
-      isSendBusy,
+      isExternallyBusy,
       isServerThread,
       persistThreadSettingsForNextTurn,
-      prepareTimelineForOptimisticMessage,
-      promptRef,
+      prepareOptimisticMessage,
+      removeOptimisticMessage,
       resetEditState,
       resetLocalDispatch,
+      restorePrimaryComposer,
       runtimeMode,
-      scheduleComposerFocus,
       scheduleEditComposerFocus,
       sendInFlightRef,
       setComposerDraftInteractionMode,
-      setComposerDraftPrompt,
-      setComposerDraftTerminalContexts,
-      setOptimisticUserMessages,
       setThreadError,
     ],
   );
@@ -732,8 +710,8 @@ export function usePreviousMessageEditing({
         forceExpandedOnMobile
         projectSelectionRequired={false}
         phase={phase}
-        isConnecting={isConnecting}
-        isSendBusy={isSendBusy}
+        isConnecting={false}
+        isSendBusy={isExternallyBusy}
         isSubmitting={isSubmittingEdit}
         isPreparing={isPreparingEdit}
         isRevertingCheckpoint={isEditPruningHistory}
@@ -741,7 +719,7 @@ export function usePreviousMessageEditing({
         runtimeMode={runtimeMode}
         interactionMode={interactionMode}
         lockedProvider={lockedProvider}
-        providerStatuses={providerStatuses}
+        providerStatuses={composerProviderStatuses}
         activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
         activeThreadModelSelection={activeThread?.modelSelection}
         activeThreadActivities={activeThread?.activities}
@@ -756,13 +734,13 @@ export function usePreviousMessageEditing({
         composerTerminalContextsRef={editComposerTerminalContextsRef}
         composerElementContextsRef={editComposerElementContextsRef}
         onSend={onSendEditedMessage}
-        onInterrupt={onInterrupt}
-        onImplementPlanInNewThread={onImplementPlanInNewThread}
-        onRespondToApproval={onRespondToApproval}
-        onSelectActivePendingUserInputOption={onSelectActivePendingUserInputOption}
-        onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
-        onPreviousActivePendingUserInputQuestion={onPreviousActivePendingUserInputQuestion}
-        onChangeActivePendingUserInputCustomAnswer={onChangeActivePendingUserInputCustomAnswer}
+        onInterrupt={NOOP}
+        onImplementPlanInNewThread={NOOP}
+        onRespondToApproval={NOOP_ASYNC}
+        onSelectActivePendingUserInputOption={NOOP}
+        onAdvanceActivePendingUserInput={NOOP}
+        onPreviousActivePendingUserInputQuestion={NOOP}
+        onChangeActivePendingUserInputCustomAnswer={NOOP}
         onProviderModelSelect={onEditProviderModelSelect}
         getModelDisabledReason={getModelDisabledReason}
         toggleInteractionMode={() => {
@@ -775,7 +753,7 @@ export function usePreviousMessageEditing({
         handleInteractionModeChange={handleEditInteractionModeChange}
         focusComposer={() => editComposerRef.current?.focusAtEnd()}
         scheduleComposerFocus={scheduleEditComposerFocus}
-        setThreadError={setThreadErrorFromEditor}
+        setThreadError={setThreadError}
         onExpandImage={onExpandImage}
         onCancel={cancelEditUserMessage}
       />
@@ -786,6 +764,7 @@ export function usePreviousMessageEditing({
     activeThreadId,
     activeUsageLimits,
     cancelEditUserMessage,
+    composerProviderStatuses,
     draftId,
     editingUserMessage,
     environmentId,
@@ -795,23 +774,15 @@ export function usePreviousMessageEditing({
     handleEditInteractionModeChange,
     handleEditRuntimeModeChange,
     interactionMode,
-    isConnecting,
     isEditPruningHistory,
+    isExternallyBusy,
     isPreparingEdit,
-    isSendBusy,
     isServerThread,
     isSubmittingEdit,
     keybindings,
     lockedProvider,
-    onAdvanceActivePendingUserInput,
-    onChangeActivePendingUserInputCustomAnswer,
     onEditProviderModelSelect,
     onExpandImage,
-    onImplementPlanInNewThread,
-    onInterrupt,
-    onPreviousActivePendingUserInputQuestion,
-    onRespondToApproval,
-    onSelectActivePendingUserInputOption,
     onSendEditedMessage,
     phase,
     providerStatuses,
@@ -820,7 +791,7 @@ export function usePreviousMessageEditing({
     routeThreadRef,
     runtimeMode,
     scheduleEditComposerFocus,
-    setThreadErrorFromEditor,
+    setThreadError,
     settings,
     terminalOpen,
   ]);
