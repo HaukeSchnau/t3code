@@ -1174,6 +1174,7 @@ export function makeCursorAdapter(
       capabilities: {
         sessionModelSwitch: "in-session",
         assistantTranscriptRecovery: "none",
+        turnContinuation: "unsupported",
       },
       startSession,
       sendTurn,

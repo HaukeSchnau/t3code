@@ -1,5 +1,6 @@
 import {
   ORCHESTRATION_WS_METHODS,
+  ProviderDriverKind,
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationThread,
   type OrchestrationThreadActivityDetailMode,
@@ -43,6 +44,26 @@ import {
 export const AUTHORITATIVE_REFRESH_MAX_ATTEMPTS = 5;
 export const AUTHORITATIVE_REFRESH_RETRY_BASE_MS = 200;
 export const AUTHORITATIVE_REFRESH_RETRY_CAP_MS = 2_000;
+
+const CODEX_DRIVER = ProviderDriverKind.make("codex");
+
+type ThreadTurnContinuationState = Pick<OrchestrationThread, "latestTurn" | "session">;
+
+export function canPauseThreadTurn(thread: ThreadTurnContinuationState | null | undefined) {
+  return (
+    (thread?.session?.status === "starting" || thread?.session?.status === "running") &&
+    thread.session.providerName === CODEX_DRIVER
+  );
+}
+
+export function canResumeThreadTurn(thread: ThreadTurnContinuationState | null | undefined) {
+  return (
+    thread?.latestTurn?.state === "interrupted" &&
+    thread.session?.providerName === CODEX_DRIVER &&
+    thread.session.status !== "starting" &&
+    thread.session.status !== "running"
+  );
+}
 
 function authoritativeRefreshJitterHash(input: string): number {
   let hash = 0x811c9dc5;

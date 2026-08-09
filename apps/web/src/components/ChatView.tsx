@@ -210,6 +210,8 @@ import {
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
 import {
+  canPauseThreadTurn,
+  canResumeThreadTurn,
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
@@ -1215,6 +1217,9 @@ function ChatViewContent(props: ChatViewProps) {
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, {
     reportFailure: false,
   });
+  const resumeThreadTurn = useAtomCommand(threadEnvironment.resumeTurn, {
+    reportFailure: false,
+  });
   const respondToThreadApproval = useAtomCommand(threadEnvironment.respondToApproval, {
     reportFailure: false,
   });
@@ -1645,6 +1650,8 @@ function ChatViewContent(props: ChatViewProps) {
     return openTerminalThreadKeys.filter((nextThreadKey) => existingThreadKeys.has(nextThreadKey));
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
+  const canResumeInterruptedTurn = canResumeThreadTurn(activeThread);
+  const canPauseTurn = canPauseThreadTurn(activeThread);
   // Reading a finished thread clears the sidebar's Done badge. The visit is
   // stamped at the turn's completion time — not now/updatedAt — so it clears
   // exactly the completion the user is looking at: a wake or completion that
@@ -5243,6 +5250,24 @@ function ChatViewContent(props: ChatViewProps) {
     onError: setActiveThreadOutboxError,
   });
 
+  const onResumeInterruptedTurn = async () => {
+    if (!activeThread || !canResumeInterruptedTurn || !activeLatestTurn) return;
+    const result = await resumeThreadTurn({
+      environmentId,
+      input: {
+        threadId: activeThread.id,
+        interruptedTurnId: activeLatestTurn.turnId,
+      },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      setThreadError(
+        activeThread.id,
+        error instanceof Error ? error.message : "Failed to resume the interrupted turn.",
+      );
+    }
+  };
+
   const onRespondToApproval = useCallback(
     async (requestId: ApprovalRequestId, decision: ProviderApprovalDecision) => {
       if (!activeThreadId) return;
@@ -6348,6 +6373,9 @@ function ChatViewContent(props: ChatViewProps) {
                             composerElementContextsRef={composerElementContextsRef}
                             onSend={onSend}
                             onInterrupt={onInterrupt}
+                            canPauseTurn={canPauseTurn}
+                            canResumeInterruptedTurn={canResumeInterruptedTurn}
+                            onResumeInterruptedTurn={onResumeInterruptedTurn}
                             onImplementPlanInNewThread={onImplementPlanInNewThread}
                             onRespondToApproval={onRespondToApproval}
                             onSelectActivePendingUserInputOption={

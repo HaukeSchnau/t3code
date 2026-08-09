@@ -795,14 +795,25 @@ const make = Effect.gen(function* () {
     return startedSession.threadId;
   });
 
-  const buildSendTurnRequestForThread = Effect.fnUntraced(function* (input: {
-    readonly threadId: ThreadId;
-    readonly messageText: string;
-    readonly attachments?: ReadonlyArray<ChatAttachment>;
-    readonly modelSelection?: ModelSelection;
-    readonly interactionMode?: "default" | "plan";
-    readonly createdAt: string;
-  }) {
+  const buildSendTurnRequestForThread = Effect.fnUntraced(function* (
+    input: {
+      readonly threadId: ThreadId;
+      readonly modelSelection?: ModelSelection;
+      readonly interactionMode?: "default" | "plan";
+      readonly createdAt: string;
+    } & (
+      | {
+          readonly messageText: string;
+          readonly attachments?: ReadonlyArray<ChatAttachment>;
+          readonly continuation?: never;
+        }
+      | {
+          readonly continuation: true;
+          readonly messageText?: never;
+          readonly attachments?: never;
+        }
+    ),
+  ) {
     const thread = yield* resolveThread(input.threadId);
     if (!thread) {
       return yield* Effect.die(
@@ -816,8 +827,9 @@ const make = Effect.gen(function* () {
     if (input.modelSelection !== undefined) {
       threadModelSelections.set(input.threadId, input.modelSelection);
     }
-    const normalizedInput = toNonEmptyProviderInput(input.messageText);
-    const normalizedAttachments = input.attachments ?? [];
+    const normalizedInput =
+      input.continuation === true ? undefined : toNonEmptyProviderInput(input.messageText);
+    const normalizedAttachments = input.continuation === true ? [] : (input.attachments ?? []);
     const activeSession = yield* providerService
       .listSessions()
       .pipe(
@@ -852,6 +864,7 @@ const make = Effect.gen(function* () {
       ...(normalizedAttachments.length > 0 ? { attachments: normalizedAttachments } : {}),
       ...(modelForTurn !== undefined ? { modelSelection: modelForTurn } : {}),
       ...(input.interactionMode !== undefined ? { interactionMode: input.interactionMode } : {}),
+      ...(input.continuation === true ? { continuation: true as const } : {}),
     };
   });
 
@@ -1144,8 +1157,37 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const message = thread.messages.find((entry) => entry.id === event.payload.messageId);
-    if (!message || message.role !== "user") {
+    const isContinuation = event.payload.resumedFromTurnId !== undefined;
+    if (isContinuation !== (event.payload.messageId === null)) {
+      yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.turn.start.failed",
+        summary: "Provider turn start failed",
+        detail: "Turn start request has an invalid continuation message reference.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+      return;
+    }
+    if (
+      isContinuation &&
+      (thread.session?.status === "starting" || thread.session?.status === "running")
+    ) {
+      yield* appendProviderFailureActivity({
+        threadId: event.payload.threadId,
+        kind: "provider.turn.start.failed",
+        summary: "Provider turn start failed",
+        detail: "The interrupted turn is already being resumed.",
+        turnId: null,
+        createdAt: event.payload.createdAt,
+      });
+      return;
+    }
+    const message =
+      event.payload.messageId === null
+        ? null
+        : thread.messages.find((entry) => entry.id === event.payload.messageId);
+    if (!isContinuation && (!message || message.role !== "user")) {
       yield* appendProviderFailureActivity({
         threadId: event.payload.threadId,
         kind: "provider.turn.start.failed",
@@ -1176,8 +1218,8 @@ const make = Effect.gen(function* () {
     });
 
     const isFirstUserMessageTurn =
-      thread.messages.filter((entry) => entry.role === "user").length === 1;
-    if (isFirstUserMessageTurn) {
+      !isContinuation && thread.messages.filter((entry) => entry.role === "user").length === 1;
+    if (isFirstUserMessageTurn && message?.role === "user") {
       const project = yield* resolveProject(thread.projectId);
       const workspaceCwd = yield* threadWorkspaceService.resolvePrimaryCwd({
         threadId: event.payload.threadId,
@@ -1251,8 +1293,12 @@ const make = Effect.gen(function* () {
 
     const sendTurnRequest = yield* buildSendTurnRequestForThread({
       threadId: event.payload.threadId,
-      messageText: message.text,
-      ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+      ...(isContinuation
+        ? { continuation: true as const }
+        : {
+            messageText: message?.text ?? "",
+            ...(message?.attachments !== undefined ? { attachments: message.attachments } : {}),
+          }),
       ...(event.payload.modelSelection !== undefined
         ? { modelSelection: event.payload.modelSelection }
         : {}),

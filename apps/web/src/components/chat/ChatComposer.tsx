@@ -116,6 +116,8 @@ type ComposerCommandMenuPosition = {
   width: number;
 };
 
+const NOOP = () => {};
+
 function composerCommandMenuPositionsEqual(
   a: ComposerCommandMenuPosition,
   b: ComposerCommandMenuPosition,
@@ -201,6 +203,7 @@ import {
   LockIcon,
   LockOpenIcon,
   PenLineIcon,
+  PlayIcon,
   SparklesIcon,
   XIcon,
 } from "lucide-react";
@@ -424,6 +427,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  canPauseTurn: boolean;
+  canResumeInterruptedTurn: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -434,6 +439,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onResumeInterruptedTurn: () => void;
   onImplementPlanInNewThread: () => void;
 }) {
   return (
@@ -456,6 +462,8 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        canPauseTurn={props.canPauseTurn}
+        canResumeInterruptedTurn={props.canResumeInterruptedTurn}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -467,6 +475,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         preserveComposerFocusOnPointerDown={props.preserveComposerFocusOnPointerDown ?? false}
         onPreviousPendingQuestion={props.onPreviousPendingQuestion}
         onInterrupt={props.onInterrupt}
+        onResumeInterruptedTurn={props.onResumeInterruptedTurn}
         onImplementPlanInNewThread={props.onImplementPlanInNewThread}
       />
     </>
@@ -600,6 +609,9 @@ export interface ChatComposerProps {
   // Callbacks
   onSend: (e?: { preventDefault: () => void }) => void;
   onInterrupt: () => void;
+  canPauseTurn?: boolean;
+  canResumeInterruptedTurn?: boolean;
+  onResumeInterruptedTurn?: () => void;
   onImplementPlanInNewThread: () => void;
   onRespondToApproval: (
     requestId: ApprovalRequestId,
@@ -688,6 +700,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     composerElementContextsRef,
     onSend,
     onInterrupt,
+    canPauseTurn = false,
+    canResumeInterruptedTurn = false,
+    onResumeInterruptedTurn = NOOP,
     onImplementPlanInNewThread,
     onRespondToApproval,
     onSelectActivePendingUserInputOption,
@@ -1283,8 +1298,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     noProviderAvailable ||
     projectSelectionRequired ||
     environmentUnavailable !== null ||
-    !composerSendState.hasSendableContent;
-  const collapsedComposerPrimaryActionLabel = "Send message";
+    (!composerSendState.hasSendableContent && !canResumeInterruptedTurn);
+  const collapsedComposerPrimaryActionLabel = canResumeInterruptedTurn
+    ? "Resume interrupted turn"
+    : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;
   // ------------------------------------------------------------------
@@ -2902,18 +2919,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  submitComposer();
+                  if (canResumeInterruptedTurn && !composerSendState.hasSendableContent) {
+                    onResumeInterruptedTurn();
+                  } else {
+                    submitComposer();
+                  }
                 }}
               >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <path
-                    d="M8 3L8 13M8 3L4 7M8 3L12 7"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                </svg>
+                {canResumeInterruptedTurn && !composerSendState.hasSendableContent ? (
+                  <PlayIcon className="size-4" aria-hidden="true" />
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M8 3L8 13M8 3L4 7M8 3L12 7"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                )}
               </button>
             </div>
           ) : null}
@@ -3271,6 +3296,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeThreadProviderDisplayName={activeThreadProviderDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  canPauseTurn={canPauseTurn}
+                  canResumeInterruptedTurn={canResumeInterruptedTurn}
                   showPlanFollowUpPrompt={pendingUserInputs.length === 0 && showPlanFollowUpPrompt}
                   promptHasText={prompt.trim().length > 0}
                   isSendBusy={isSendBusy}
@@ -3286,6 +3313,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                   onInterrupt={handleInterruptPrimaryAction}
+                  onResumeInterruptedTurn={onResumeInterruptedTurn}
                   onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}
                 />
               </div>

@@ -53,6 +53,8 @@ export interface ThreadDetailScreenProps {
   readonly usesAutomaticContentInsets?: boolean;
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onStopThread: () => void;
+  readonly onResumeThread: () => void;
+  readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly showContent?: boolean;
 }
@@ -428,6 +430,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               onNativePasteImages={composer.onNativePasteImages}
               onRemoveDraftImage={composer.onRemoveDraftImage}
               onStopThread={props.onStopThread}
+              onResumeThread={props.onResumeThread}
               onSendMessage={handleSendMessage}
               onReconnectEnvironment={props.onReconnectEnvironment}
               onUpdateModelSelection={composer.onUpdateModelSelection}

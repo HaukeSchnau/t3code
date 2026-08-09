@@ -2825,7 +2825,7 @@ it.layer(makeProjectionPipelinePrefixedTestLayer("t3-pending-turn-terminal-test-
   },
 );
 
-it.effect("restores pending turn-start metadata across projection pipeline restart", () =>
+it.effect("restores pending turn starts and message-free continuations across restart", () =>
   Effect.gen(function* () {
     const { dbPath } = yield* ServerConfig;
     const persistenceLayer = makeSqlitePersistenceLive(dbPath);
@@ -2845,6 +2845,8 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
     const sourcePlanId = "plan-source";
     const turnStartedAt = "2026-02-26T14:00:00.000Z";
     const sessionSetAt = "2026-02-26T14:00:05.000Z";
+    const continuationThreadId = ThreadId.make("thread-continuation-restart");
+    const continuationTurnId = TurnId.make("turn-continuation-restart");
 
     yield* Effect.gen(function* () {
       const eventStore = yield* OrchestrationEventStore;
@@ -2868,6 +2870,25 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
             planId: sourcePlanId,
           },
           runtimeMode: "approval-required",
+          createdAt: turnStartedAt,
+        },
+      });
+      yield* eventStore.append({
+        type: "thread.turn-start-requested",
+        eventId: EventId.make("evt-continuation-restart-1"),
+        aggregateKind: "thread",
+        aggregateId: continuationThreadId,
+        occurredAt: turnStartedAt,
+        commandId: CommandId.make("cmd-continuation-restart-1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-continuation-restart-1"),
+        metadata: {},
+        payload: {
+          threadId: continuationThreadId,
+          messageId: null,
+          resumedFromTurnId: TurnId.make("turn-interrupted-before-restart"),
+          runtimeMode: "full-access",
+          interactionMode: "default",
           createdAt: turnStartedAt,
         },
       });
@@ -2903,6 +2924,29 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
           },
         },
       });
+      yield* eventStore.append({
+        type: "thread.session-set",
+        eventId: EventId.make("evt-continuation-restart-2"),
+        aggregateKind: "thread",
+        aggregateId: continuationThreadId,
+        occurredAt: sessionSetAt,
+        commandId: CommandId.make("cmd-continuation-restart-2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-continuation-restart-2"),
+        metadata: {},
+        payload: {
+          threadId: continuationThreadId,
+          session: {
+            threadId: continuationThreadId,
+            status: "running",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: continuationTurnId,
+            lastError: null,
+            updatedAt: sessionSetAt,
+          },
+        },
+      });
 
       yield* projectionPipeline.bootstrap;
 
@@ -2915,7 +2959,7 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
       `;
       assert.deepEqual(pendingRows, []);
 
-      return yield* sql<{
+      const metadataRows = yield* sql<{
         readonly turnId: string;
         readonly userMessageId: string | null;
         readonly sourceProposedPlanThreadId: string | null;
@@ -2931,14 +2975,34 @@ it.effect("restores pending turn-start metadata across projection pipeline resta
         FROM projection_turns
         WHERE turn_id = ${turnId}
       `;
+      const continuationRows = yield* sql<{
+        readonly turnId: string;
+        readonly userMessageId: string | null;
+        readonly startedAt: string;
+      }>`
+        SELECT
+          turn_id AS "turnId",
+          pending_message_id AS "userMessageId",
+          started_at AS "startedAt"
+        FROM projection_turns
+        WHERE turn_id = ${continuationTurnId}
+      `;
+      return { metadataRows, continuationRows };
     }).pipe(Effect.provide(secondProjectionLayer));
 
-    assert.deepEqual(turnRows, [
+    assert.deepEqual(turnRows.metadataRows, [
       {
         turnId: "turn-restart",
         userMessageId: "message-restart",
         sourceProposedPlanThreadId: "thread-plan-source",
         sourceProposedPlanId: "plan-source",
+        startedAt: turnStartedAt,
+      },
+    ]);
+    assert.deepEqual(turnRows.continuationRows, [
+      {
+        turnId: "turn-continuation-restart",
+        userMessageId: null,
         startedAt: turnStartedAt,
       },
     ]);

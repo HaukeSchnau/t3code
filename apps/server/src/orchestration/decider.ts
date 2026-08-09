@@ -179,6 +179,47 @@ type DecideOrchestrationCommandResult =
   | PlannedOrchestrationEvent
   | ReadonlyArray<PlannedOrchestrationEvent>;
 
+const activityLifecycleResetEvents = Effect.fn("activityLifecycleResetEvents")(function* (input: {
+  readonly thread: OrchestrationReadModel["threads"][number];
+  readonly commandId: OrchestrationCommand["commandId"];
+  readonly occurredAt: string;
+}) {
+  const events: PlannedOrchestrationEvent[] = [];
+  if (input.thread.settledOverride !== null) {
+    events.push({
+      ...(yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: input.thread.id,
+        occurredAt: input.occurredAt,
+        commandId: input.commandId,
+      })),
+      type: "thread.unsettled",
+      payload: {
+        threadId: input.thread.id,
+        reason: "activity",
+        updatedAt: input.occurredAt,
+      },
+    });
+  }
+  if (input.thread.snoozedUntil != null) {
+    events.push({
+      ...(yield* withEventBase({
+        aggregateKind: "thread",
+        aggregateId: input.thread.id,
+        occurredAt: input.occurredAt,
+        commandId: input.commandId,
+      })),
+      type: "thread.unsnoozed",
+      payload: {
+        threadId: input.thread.id,
+        reason: "activity",
+        updatedAt: input.occurredAt,
+      },
+    });
+  }
+  return events;
+});
+
 const decideCommandSequence = Effect.fn("decideCommandSequence")(function* ({
   commands,
   readModel,
@@ -1048,39 +1089,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       // thread can auto-settle again after this burst of work goes stale.
       // A snooze clears the same way — sending a message to a snoozed
       // thread is the user re-engaging, so the return ticket is spent.
-      const lifecycleResetEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
-      if (targetThread.settledOverride !== null) {
-        lifecycleResetEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsettled",
-          payload: {
-            threadId: command.threadId,
-            reason: "activity",
-            updatedAt: command.createdAt,
-          },
-        });
-      }
-      if (targetThread.snoozedUntil != null) {
-        lifecycleResetEvents.push({
-          ...(yield* withEventBase({
-            aggregateKind: "thread",
-            aggregateId: command.threadId,
-            occurredAt: command.createdAt,
-            commandId: command.commandId,
-          })),
-          type: "thread.unsnoozed",
-          payload: {
-            threadId: command.threadId,
-            reason: "activity",
-            updatedAt: command.createdAt,
-          },
-        });
-      }
+      const lifecycleResetEvents = yield* activityLifecycleResetEvents({
+        thread: targetThread,
+        commandId: command.commandId,
+        occurredAt: command.createdAt,
+      });
       return [
         ...settingsEvents,
         ...lifecycleResetEvents,
@@ -1341,6 +1354,56 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           createdAt: command.createdAt,
         },
       };
+    }
+
+    case "thread.turn.resume": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const latestTurn = thread.latestTurn;
+      if (
+        latestTurn === null ||
+        latestTurn.turnId !== command.interruptedTurnId ||
+        latestTurn.state !== "interrupted"
+      ) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Turn '${command.interruptedTurnId}' is not the latest interrupted turn on thread '${command.threadId}'.`,
+        });
+      }
+      if (thread.session?.status === "starting" || thread.session?.status === "running") {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Thread '${command.threadId}' still has an active provider turn.`,
+        });
+      }
+
+      const events = yield* activityLifecycleResetEvents({
+        thread,
+        commandId: command.commandId,
+        occurredAt: command.createdAt,
+      });
+      events.push({
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.turn-start-requested",
+        payload: {
+          threadId: command.threadId,
+          messageId: null,
+          resumedFromTurnId: command.interruptedTurnId,
+          modelSelection: thread.modelSelection,
+          runtimeMode: thread.runtimeMode,
+          interactionMode: thread.interactionMode,
+          createdAt: command.createdAt,
+        },
+      });
+      return events;
     }
 
     case "thread.approval.respond": {

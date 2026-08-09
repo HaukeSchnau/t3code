@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import * as Option from "effect/Option";
 import { EnvironmentId, ThreadId, type ProjectScript } from "@t3tools/contracts";
 import {
+  canResumeThreadTurn,
   requestOlderThreadTurns,
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
@@ -227,6 +228,7 @@ function ThreadRouteContent(
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
+  const resumeThreadTurn = useAtomCommand(threadEnvironment.resumeTurn, "thread resume");
   const navigation = useNavigation();
   const params = props.route.params;
   const environmentIdRaw = firstRouteParam(params.environmentId);
@@ -494,6 +496,24 @@ function ThreadRouteContent(
       },
     });
   }, [interruptThreadTurn, selectedThread]);
+
+  const handleResumeThread = useCallback(() => {
+    const latestTurn = selectedThread?.latestTurn;
+    if (
+      !selectedThread ||
+      latestTurn?.state !== "interrupted" ||
+      !canResumeThreadTurn(selectedThread)
+    ) {
+      return;
+    }
+    return resumeThreadTurn({
+      environmentId: selectedThread.environmentId,
+      input: {
+        threadId: selectedThread.id,
+        interruptedTurnId: latestTurn.turnId,
+      },
+    });
+  }, [resumeThreadTurn, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -781,6 +801,8 @@ function ThreadRouteContent(
           usesAutomaticContentInsets={usesNativeHeaderGlass}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
+          onResumeThread={handleResumeThread}
+          onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
         />
       </View>

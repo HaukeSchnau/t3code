@@ -1,5 +1,5 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ListPlusIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronLeftIcon, ListPlusIcon, PauseIcon, PlayIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
@@ -17,6 +17,8 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  canPauseTurn?: boolean;
+  canResumeInterruptedTurn?: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -28,6 +30,7 @@ interface ComposerPrimaryActionsProps {
   preserveComposerFocusOnPointerDown?: boolean;
   onPreviousPendingQuestion: () => void;
   onInterrupt: () => void;
+  onResumeInterruptedTurn?: () => void;
   onImplementPlanInNewThread: () => void;
 }
 
@@ -57,6 +60,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  canPauseTurn = false,
+  canResumeInterruptedTurn = false,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -68,6 +73,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   preserveComposerFocusOnPointerDown = false,
   onPreviousPendingQuestion,
   onInterrupt,
+  onResumeInterruptedTurn,
   onImplementPlanInNewThread,
 }: ComposerPrimaryActionsProps) {
   const pointerFocusProps = preserveComposerFocusOnPointerDown
@@ -84,11 +90,15 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       )}
       {...pointerFocusProps}
       onClick={onInterrupt}
-      aria-label="Stop generation"
+      aria-label={canPauseTurn ? "Pause generation" : "Stop generation"}
     >
-      <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-        <rect x="2" y="2" width="8" height="8" rx="1.5" />
-      </svg>
+      {canPauseTurn ? (
+        <PauseIcon className="size-3.5" aria-hidden="true" />
+      ) : (
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+          <rect x="2" y="2" width="8" height="8" rx="1.5" />
+        </svg>
+      )}
     </button>
   );
 
@@ -163,6 +173,23 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </Button>
         {renderStopGenerationButton(false)}
       </div>
+    );
+  }
+
+  if (canResumeInterruptedTurn && !hasSendableContent && onResumeInterruptedTurn) {
+    return (
+      <Button
+        type="button"
+        size={compact ? "icon-sm" : "sm"}
+        className={cn("rounded-full", compact ? "" : "px-3")}
+        {...pointerFocusProps}
+        disabled={isConnecting || isEnvironmentUnavailable}
+        onClick={onResumeInterruptedTurn}
+        aria-label="Resume interrupted turn"
+      >
+        <PlayIcon className="size-3.5" aria-hidden="true" />
+        {compact ? null : <span>Resume</span>}
+      </Button>
     );
   }
 

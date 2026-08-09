@@ -1063,6 +1063,14 @@ const ThreadTurnInterruptCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadTurnResumeCommand = Schema.Struct({
+  type: Schema.Literal("thread.turn.resume"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  interruptedTurnId: TurnId,
+  createdAt: IsoDateTime,
+});
+
 const ThreadApprovalRespondCommand = Schema.Struct({
   type: Schema.Literal("thread.approval.respond"),
   commandId: CommandId,
@@ -1133,6 +1141,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadQueuedMessageDeleteCommand,
   ThreadQueuedMessageDispatchCommand,
   ThreadTurnInterruptCommand,
+  ThreadTurnResumeCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1165,6 +1174,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadQueuedMessageDeleteCommand,
   ThreadQueuedMessageDispatchCommand,
   ThreadTurnInterruptCommand,
+  ThreadTurnResumeCommand,
   ThreadApprovalRespondCommand,
   ThreadUserInputRespondCommand,
   ThreadCheckpointRevertCommand,
@@ -1510,7 +1520,8 @@ export const ThreadQueuedMessageDispatchedPayload = Schema.Struct({
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
-  messageId: MessageId,
+  messageId: Schema.NullOr(MessageId),
+  resumedFromTurnId: Schema.optional(TurnId),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),

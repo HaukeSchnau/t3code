@@ -2009,6 +2009,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
+      turnContinuation: "empty-input",
     },
     startSession,
     sendTurn,
