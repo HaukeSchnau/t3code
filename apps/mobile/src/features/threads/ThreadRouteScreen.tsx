@@ -13,7 +13,7 @@ import {
   threadHasOlderTurns,
 } from "@t3tools/client-runtime/state/threads";
 import { projectScriptCwd, projectScriptRuntimeEnv } from "@t3tools/shared/projectScripts";
-import { ActivityIndicator, Platform, ScrollView, View } from "react-native";
+import { Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useWorkspaceState } from "../../state/workspace";
 import { useEnvironmentQuery } from "../../state/query";
@@ -21,7 +21,6 @@ import { dismissGitActionResult, useGitActionProgress } from "../../state/use-vc
 import { vcsEnvironment } from "../../state/vcs";
 
 import { EmptyState } from "../../components/EmptyState";
-import { AppText as Text } from "../../components/AppText";
 import {
   AndroidScreenHeader,
   type AndroidHeaderAction,
@@ -29,7 +28,6 @@ import {
 import { LoadingScreen } from "../../components/LoadingScreen";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
-import { connectionTone } from "../connection/connectionTone";
 
 import {
   useRemoteConnections,
@@ -51,6 +49,7 @@ import {
 } from "../terminal/terminalLaunchContext";
 import { terminalDebugLog } from "../terminal/terminalDebugLog";
 import { ThreadDetailScreen } from "./ThreadDetailScreen";
+import { PendingThreadCreationScreen } from "./PendingThreadCreationScreen";
 import {
   ThreadGitControls,
   useThreadGitCenterHeaderItems,
@@ -60,9 +59,7 @@ import { GitOverviewSheet } from "./git/GitOverviewSheet";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSelectedThreadGitActions } from "../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../state/use-selected-thread-git-state";
-import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
 import { useSelectedThreadWorktree } from "../../state/use-selected-thread-worktree";
-import { useThreadComposerState } from "../../state/use-thread-composer-state";
 import { threadEnvironment } from "../../state/threads";
 import { projectThreadContentPresentation } from "./threadContentPresentation";
 import { useEnvironmentConnectionFreshness } from "../../state/use-environment-connection-freshness";
@@ -78,9 +75,7 @@ import {
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
 import {
-  forgetPendingThreadCreation,
-  resolveThreadRoutePresentation,
-  usePendingThreadCreation,
+  useThreadRoutePresentation,
 } from "./pendingThreadNavigation";
 
 interface ThreadInspectorSelection {
@@ -137,48 +132,6 @@ function ThreadUnavailableScreen() {
   );
 }
 
-function PendingThreadCreationScreen(props: {
-  readonly environmentId: string;
-  readonly threadId: string;
-  readonly title: string;
-}) {
-  const navigation = useNavigation();
-  const handleBack = useCallback(() => {
-    if (navigation.canGoBack()) {
-      navigation.goBack();
-      return;
-    }
-    navigation.dispatch(StackActions.replace("Home"));
-  }, [navigation]);
-  useEffect(
-    () => () => forgetPendingThreadCreation(props.environmentId, props.threadId),
-    [props.environmentId, props.threadId],
-  );
-
-  return (
-    <View className="flex-1 bg-screen">
-      <NativeStackScreenOptions
-        options={{
-          headerShown: Platform.OS !== "android",
-          headerTitle: props.title,
-          title: props.title,
-        }}
-      />
-      {Platform.OS === "android" ? (
-        <AndroidScreenHeader title={props.title} onBack={handleBack} />
-      ) : null}
-      <View className="flex-1 items-center justify-center gap-4 px-8">
-        <ActivityIndicator size="large" />
-        <Text className="text-center text-lg font-t3-bold text-foreground">Creating thread…</Text>
-        <Text className="max-w-sm text-center text-sm leading-relaxed text-foreground-muted">
-          Your task is saved on this device. It will open here when the environment confirms it. You
-          can go back to edit or remove the pending task.
-        </Text>
-      </View>
-    </View>
-  );
-}
-
 export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
@@ -199,27 +152,21 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps) {
       ? null
       : scopedThreadKey(selectedThread.environmentId, selectedThread.id);
   const selectedThreadDetailState = useSelectedThreadDetailState();
-  const pendingCreation = usePendingThreadCreation(environmentIdRaw, threadIdRaw);
   const hasMatchingThread = selectedThread !== null && selectedThreadKey === routeThreadKey;
-  useEffect(() => {
-    if (hasMatchingThread && environmentIdRaw !== null && threadIdRaw !== null) {
-      forgetPendingThreadCreation(environmentIdRaw, threadIdRaw);
-    }
-  }, [environmentIdRaw, hasMatchingThread, threadIdRaw]);
-
-  if (environmentId === null || threadIdRaw === null) {
-    return <OpeningThreadLoadingScreen />;
-  }
-
   const stillHydrating =
     workspaceState.isLoadingConnections ||
     routeConnectionState === "connecting" ||
     routeConnectionState === "reconnecting";
-  const presentation = resolveThreadRoutePresentation({
+  const { pendingCreation, presentation } = useThreadRoutePresentation({
+    environmentId: environmentIdRaw,
+    threadId: threadIdRaw,
     hasMatchingThread,
-    pendingCreation: pendingCreation !== null,
     stillHydrating,
   });
+
+  if (environmentId === null || threadIdRaw === null) {
+    return <OpeningThreadLoadingScreen />;
+  }
 
   switch (presentation) {
     case "thread":
@@ -277,10 +224,8 @@ function ThreadRouteContent(
     };
   }, [selectedThread, selectedThreadDetailState]);
   const { selectedThreadCwd } = useSelectedThreadWorktree();
-  const composer = useThreadComposerState();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
-  const requests = useSelectedThreadRequests();
   const interruptThreadTurn = useAtomCommand(threadEnvironment.interruptTurn, "thread interrupt");
   const navigation = useNavigation();
   const params = props.route.params;
@@ -352,18 +297,6 @@ function ThreadRouteContent(
   const routeConnectionState =
     routeEnvironmentRuntime?.connectionState ?? (environmentId ? "available" : connectionState);
   const routeConnectionError = routeEnvironmentRuntime?.connectionError ?? null;
-  const selectedThreadWithDraftSettings = useMemo(
-    () =>
-      selectedThread
-        ? {
-            ...selectedThread,
-            modelSelection: composer.modelSelection ?? selectedThread.modelSelection,
-            runtimeMode: composer.runtimeMode ?? selectedThread.runtimeMode,
-            interactionMode: composer.interactionMode ?? selectedThread.interactionMode,
-          }
-        : null,
-    [composer.interactionMode, composer.modelSelection, composer.runtimeMode, selectedThread],
-  );
 
   const usesNativeHeaderGlass = NATIVE_LIQUID_GLASS_SUPPORTED;
   const headerSubtitle = [
@@ -543,9 +476,6 @@ function ThreadRouteContent(
   // stays anchored to the chat pane instead of floating above the inspector.
   useRegisterWorkspaceInspector(activeInspectorRenderer);
 
-  const handleOpenConnectionEditor = useCallback(() => {
-    void navigation.navigate("Connections");
-  }, [navigation]);
   const handleStopThread = useCallback(() => {
     if (
       !selectedThread ||
@@ -835,58 +765,23 @@ function ThreadRouteContent(
 
       <View className="flex-1 bg-screen">
         <ThreadDetailScreen
-          selectedThread={selectedThreadWithDraftSettings ?? selectedThread}
+          selectedThread={selectedThread}
           contentPresentation={contentPresentation}
-          screenTone={connectionTone(routeConnectionState)}
           connectionError={routeConnectionError}
           environmentLabel={selectedEnvironmentConnection?.environmentLabel ?? null}
-          selectedThreadFeed={composer.selectedThreadFeed}
-          activeWorkStartedAt={composer.activeWorkStartedAt}
-          activePendingApproval={requests.activePendingApproval}
-          respondingApprovalId={requests.respondingApprovalId}
-          activePendingUserInput={requests.activePendingUserInput}
-          activePendingUserInputDrafts={requests.activePendingUserInputDrafts}
-          activePendingUserInputAnswers={requests.activePendingUserInputAnswers}
-          respondingUserInputId={requests.respondingUserInputId}
-          draftMessage={composer.draftMessage}
-          draftAttachments={composer.draftAttachments}
           connectionStateLabel={routeConnectionState}
           connectionFreshness={connectionFreshness}
           threadSyncStatus={selectedThreadDetailState.status}
           loadEarlier={loadEarlierTurns}
-          activeThreadBusy={composer.activeThreadBusy}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
-          selectedThreadQueueCount={composer.selectedThreadQueueCount}
-          selectedThreadQueueStatus={composer.selectedThreadQueueStatus}
-          selectedThreadRejectedCount={composer.selectedThreadRejectedCount}
-          selectedThreadQueuedIntents={composer.selectedThreadQueuedIntents}
-          editingQueuedMessageId={composer.editingQueuedMessageId}
           remoteQueueCount={selectedThreadDetail?.queuedMessages?.length ?? 0}
-          onDiscardRejectedMessages={composer.discardRejectedMessages}
-          onEditPendingMessage={composer.editPendingMessage}
-          onCancelPendingMessage={composer.cancelPendingMessage}
-          onDiscardRejectedMessage={composer.discardRejectedMessage}
-          onCancelQueuedMessageEdit={composer.cancelQueuedMessageEdit}
           layoutVariant={layout.variant}
           usesAutomaticContentInsets={usesNativeHeaderGlass}
-          onOpenConnectionEditor={handleOpenConnectionEditor}
-          onChangeDraftMessage={composer.onChangeDraftMessage}
-          onPickDraftImages={composer.onPickDraftImages}
-          onNativePasteImages={composer.onNativePasteImages}
-          onRemoveDraftImage={composer.onRemoveDraftImage}
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
-          onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
-          onUpdateThreadModelSelection={composer.onUpdateModelSelection}
-          onUpdateThreadRuntimeMode={composer.onUpdateRuntimeMode}
-          onUpdateThreadInteractionMode={composer.onUpdateInteractionMode}
-          onRespondToApproval={requests.onRespondToApproval}
-          onSelectUserInputOption={requests.onSelectUserInputOption}
-          onChangeUserInputCustomAnswer={requests.onChangeUserInputCustomAnswer}
-          onSubmitUserInput={requests.onSubmitUserInput}
         />
       </View>
     </>
