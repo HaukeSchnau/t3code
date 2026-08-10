@@ -36,10 +36,7 @@ export interface ReconciliationReport {
   readonly warnings: ReadonlyArray<string>;
 }
 
-const scriptRoot = NodePath.resolve(
-  NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
-  "..",
-);
+const scriptRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 const syncMergeTitle = /^merge: sync upstream(?: main)?$/i;
 
 function defaultCommandRunner(input: ReadonlyCommand): string {
@@ -102,7 +99,9 @@ function warningsFor(paths: ReadonlyArray<string>): ReadonlyArray<string> {
     pathSet.has("pnpm-lock.yaml") ||
     pathSet.has("pnpm-deploy-lock.yaml")
   ) {
-    warnings.push("Check the fixed-output pnpm dependency hashes in flake.nix after lockfile changes.");
+    warnings.push(
+      "Check the fixed-output pnpm dependency hashes in flake.nix after lockfile changes.",
+    );
   }
   if (
     paths.some(
@@ -158,8 +157,9 @@ export function collectReconciliationReport(
   const currentForkPaths = parseDiffSummary(
     invoke(["diff", "--from", options.from, "--to", options.to, "--summary"]),
   );
-  const allPaths = [...new Set([...syncMerges.flatMap((merge) => merge.paths), ...currentForkPaths])]
-    .sort((left, right) => left.localeCompare(right));
+  const allPaths = [
+    ...new Set([...syncMerges.flatMap((merge) => merge.paths), ...currentForkPaths]),
+  ].sort((left, right) => left.localeCompare(right));
   return {
     from: options.from,
     to: options.to,

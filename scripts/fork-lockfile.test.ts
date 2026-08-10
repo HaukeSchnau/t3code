@@ -27,7 +27,10 @@ function snapshotTree(rootDir: string): ReadonlyArray<readonly [string, string]>
     .filter((entry) => entry.isFile())
     .map((entry) => {
       const relativePath = NodePath.relative(rootDir, NodePath.join(entry.parentPath, entry.name));
-      return [relativePath, NodeFS.readFileSync(NodePath.join(rootDir, relativePath), "base64")] as const;
+      return [
+        relativePath,
+        NodeFS.readFileSync(NodePath.join(rootDir, relativePath), "base64"),
+      ] as const;
     })
     .sort(([left], [right]) => left.localeCompare(right));
 }
@@ -156,7 +159,10 @@ describe("fork lockfile workflow", () => {
     });
 
     assert.deepStrictEqual(result, { changed: true, pnpmVersion: "11.10.0" });
-    assert.equal(NodeFS.readFileSync(NodePath.join(rootDir, "pnpm-lock.yaml"), "utf8"), generatedLockfile);
+    assert.equal(
+      NodeFS.readFileSync(NodePath.join(rootDir, "pnpm-lock.yaml"), "utf8"),
+      generatedLockfile,
+    );
     assert.ok(commands.at(-1)?.args.includes("--frozen-lockfile"));
   });
 

@@ -75,9 +75,7 @@ import {
   ThreadInspectorContentStack,
   type ThreadInspectorMode,
 } from "./thread-inspector-content-stack";
-import {
-  useThreadRoutePresentation,
-} from "./pendingThreadNavigation";
+import { useThreadRoutePresentation } from "./pendingThreadNavigation";
 
 interface ThreadInspectorSelection {
   readonly routeThreadIdentity: string | null;

@@ -66,9 +66,7 @@ function buildSearchSnippet(text: string, query: string): string {
   }`;
 }
 
-export function makeProjectionSnapshotReads(input: {
-  readonly sql: SqlClient.SqlClient;
-}) {
+export function makeProjectionSnapshotReads(input: { readonly sql: SqlClient.SqlClient }) {
   const readProjectionCounts = SqlSchema.findOne({
     Request: Schema.Void,
     Result: ProjectionCountsRowSchema,

@@ -38,10 +38,7 @@ export function useHistoricalTurnHydration(
     );
   }, [threadKey]);
 
-  const historicalTurnIds = useMemo(
-    () => new Set(groups.map((group) => group.turnId)),
-    [groups],
-  );
+  const historicalTurnIds = useMemo(() => new Set(groups.map((group) => group.turnId)), [groups]);
   const hydratedHistoricalTurnIds = useMemo(
     () =>
       new Set(

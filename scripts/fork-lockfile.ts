@@ -38,10 +38,7 @@ export interface ForkLockfileResult {
   readonly pnpmVersion: string;
 }
 
-const scriptRoot = NodePath.resolve(
-  NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)),
-  "..",
-);
+const scriptRoot = NodePath.resolve(NodePath.dirname(NodeURL.fileURLToPath(import.meta.url)), "..");
 
 function defaultCommandRunner(input: LockfileCommand): LockfileCommandResult {
   const result = NodeChildProcess.spawnSync(input.command, [...input.args], {
