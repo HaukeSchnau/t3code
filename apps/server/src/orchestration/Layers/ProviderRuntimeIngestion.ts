@@ -1665,8 +1665,9 @@ const make = Effect.gen(function* () {
       const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: thread.id,
       });
-      const hasPendingTurnStart =
-        Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
+      const hasPendingTurnStart = Option.isSome(pendingTurnStart);
+      const hasPendingRunningTurnStart =
+        hasPendingTurnStart && thread.session?.status === "running";
 
       if (event.type === "turn.completed") {
         yield* subagentActivityProjection.flush({
@@ -1763,7 +1764,10 @@ const make = Effect.gen(function* () {
           switch (event.type) {
             case "session.state.changed": {
               const runtimeStatus = orchestrationSessionStatusFromRuntimeState(event.payload.state);
-              return hasPendingTurnStart && runtimeStatus === "ready" ? "starting" : runtimeStatus;
+              if (hasPendingTurnStart && runtimeStatus === "ready") {
+                return hasPendingRunningTurnStart ? "running" : "starting";
+              }
+              return runtimeStatus;
             }
             case "turn.started":
               return "running";
@@ -1788,19 +1792,25 @@ const make = Effect.gen(function* () {
               return activeTurnId !== null ? "running" : hasPendingTurnStart ? "starting" : "ready";
           }
         })();
-        const nextActiveTurnId =
-          event.type === "turn.started"
-            ? (eventTurnId ?? null)
-            : event.type === "turn.completed" ||
-                event.type === "turn.aborted" ||
-                event.type === "session.exited"
-              ? null
-              : event.type === "session.state.changed" &&
-                  !sessionStatusAllowsActiveTurn(
-                    orchestrationSessionStatusFromRuntimeState(event.payload.state),
-                  )
-                ? null
-                : activeTurnId;
+        const nextActiveTurnId = (() => {
+          if (event.type === "turn.started") return eventTurnId ?? null;
+          if (
+            event.type === "turn.completed" ||
+            event.type === "turn.aborted" ||
+            event.type === "session.exited"
+          ) {
+            return null;
+          }
+          if (
+            event.type === "session.state.changed" &&
+            !sessionStatusAllowsActiveTurn(
+              orchestrationSessionStatusFromRuntimeState(event.payload.state),
+            )
+          ) {
+            return hasPendingRunningTurnStart ? activeTurnId : null;
+          }
+          return activeTurnId;
+        })();
         const lastError =
           event.type === "session.state.changed" && event.payload.state === "error"
             ? (event.payload.reason ?? thread.session?.lastError ?? "Provider session error")

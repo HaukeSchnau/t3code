@@ -1199,23 +1199,26 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    yield* setThreadSession({
-      threadId: event.payload.threadId,
-      session: {
+    const isSteeringRunningSession = !isContinuation && thread.session?.status === "running";
+    if (!isSteeringRunningSession) {
+      yield* setThreadSession({
         threadId: event.payload.threadId,
-        status: "starting",
-        providerName: thread.session?.providerName ?? null,
-        providerInstanceId:
-          thread.session?.providerInstanceId ??
-          event.payload.modelSelection?.instanceId ??
-          thread.modelSelection.instanceId,
-        runtimeMode: event.payload.runtimeMode,
-        activeTurnId: thread.session?.activeTurnId ?? null,
-        lastError: null,
-        updatedAt: event.payload.createdAt,
-      },
-      createdAt: event.payload.createdAt,
-    });
+        session: {
+          threadId: event.payload.threadId,
+          status: "starting",
+          providerName: thread.session?.providerName ?? null,
+          providerInstanceId:
+            thread.session?.providerInstanceId ??
+            event.payload.modelSelection?.instanceId ??
+            thread.modelSelection.instanceId,
+          runtimeMode: event.payload.runtimeMode,
+          activeTurnId: thread.session?.activeTurnId ?? null,
+          lastError: null,
+          updatedAt: event.payload.createdAt,
+        },
+        createdAt: event.payload.createdAt,
+      });
+    }
 
     const isFirstUserMessageTurn =
       !isContinuation && thread.messages.filter((entry) => entry.role === "user").length === 1;
