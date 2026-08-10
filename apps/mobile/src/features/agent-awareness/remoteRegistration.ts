@@ -67,6 +67,15 @@ export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentA
   }
 }
 
+export class AgentAwarenessDeliveryUnavailableError extends Schema.TaggedErrorClass<AgentAwarenessDeliveryUnavailableError>()(
+  "AgentAwarenessDeliveryUnavailableError",
+  {},
+) {
+  override get message(): string {
+    return "The paired server has no APNs provider credentials configured.";
+  }
+}
+
 const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>();
 // Activity tokens the paired server recently accepted, by acceptance time. The refresh
 // runs on transport setup, every app foreground, and every environment-connection
@@ -324,10 +333,7 @@ function registerDeviceWithEnvironment(
     });
     if (!result.deliveryConfigured) {
       setRegistrationStatus("failed");
-      return yield* new AgentAwarenessOperationError({
-        operation: "register-device-with-environment",
-        cause: new Error("The paired server has no APNs provider credentials configured."),
-      });
+      return yield* new AgentAwarenessDeliveryUnavailableError();
     }
     if (expectedGeneration !== deviceRegistrationGeneration) {
       logRegistrationDebug(
@@ -711,21 +717,6 @@ function ensureAppStateListener(): void {
       "active live activity reconciliation after app foreground failed",
     );
   });
-}
-
-function endLocalLiveActivities(context: string): void {
-  if (!canRegisterRemoteLiveActivities()) {
-    return;
-  }
-  try {
-    for (const activity of AgentActivity.getInstances()) {
-      activity.end("immediate").catch((error: unknown) => {
-        logRegistrationError(context, error);
-      });
-    }
-  } catch (error) {
-    logRegistrationError(context, error);
-  }
 }
 
 export function unregisterAllAgentAwarenessConnections(): void {

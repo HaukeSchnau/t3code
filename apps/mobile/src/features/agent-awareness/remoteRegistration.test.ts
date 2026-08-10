@@ -5,10 +5,12 @@ import * as Effect from "effect/Effect";
 import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
 import {
   __resetAgentAwarenessRemoteRegistrationForTest,
+  AgentAwarenessDeliveryUnavailableError,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
   registerLiveActivityPushToken,
   setAgentAwarenessEnvironmentTransport,
+  updateAgentAwarenessRegistrationPreferences,
 } from "./remoteRegistration";
 
 const activityMocks = vi.hoisted(() => ({
@@ -123,6 +125,28 @@ describe("accountless agent awareness registration", () => {
     setAgentAwarenessEnvironmentTransport(environment);
 
     await vi.waitFor(() => expect(getAgentAwarenessRegistrationStatus()).toBe("failed"));
+  });
+
+  it.effect("surfaces missing APNs credentials as an actionable error", () => {
+    const environment = transport({
+      registerDevice: vi.fn(() =>
+        Promise.resolve({ accepted: true as const, deliveryConfigured: false }),
+      ),
+    });
+    setAgentAwarenessEnvironmentTransport(environment);
+
+    return Effect.gen(function* () {
+      yield* Effect.promise(() =>
+        vi.waitFor(() => expect(getAgentAwarenessRegistrationStatus()).toBe("failed")),
+      );
+      const error = yield* Effect.flip(
+        updateAgentAwarenessRegistrationPreferences({ liveActivitiesEnabled: true }),
+      );
+      expect(error).toBeInstanceOf(AgentAwarenessDeliveryUnavailableError);
+      expect((error as Error).message).toBe(
+        "The paired server has no APNs provider credentials configured.",
+      );
+    });
   });
 
   it.effect("registers a Live Activity token with the paired environment", () => {

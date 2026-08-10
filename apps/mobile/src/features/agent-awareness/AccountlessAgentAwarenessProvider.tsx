@@ -1,15 +1,10 @@
 import type {
   AgentAwarenessDeviceRegistrationInput,
   AgentAwarenessLiveActivityRegistrationInput,
-  AgentAwarenessRegistrationResult,
   AgentAwarenessSnapshot,
   EnvironmentId,
 } from "@t3tools/contracts";
-import {
-  type AtomCommandResult,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type * as Cause from "effect/Cause";
+import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import { type ReactNode, useEffect, useMemo } from "react";
 
 import {
@@ -24,11 +19,7 @@ import {
   setAgentAwarenessEnvironmentTransport,
   type AgentAwarenessEnvironmentTransport,
 } from "./remoteRegistration";
-
-function commandFailure(result: { readonly cause: Cause.Cause<unknown> }): Error {
-  const failure = squashAtomCommandFailure(result);
-  return failure instanceof Error ? failure : new Error(String(failure));
-}
+import { commandFailure, runFirstConfiguredRegistration } from "./registrationEnvironmentSelection";
 
 export function AccountlessAgentAwarenessProvider(props: { readonly children: ReactNode }) {
   const { savedConnectionsById } = useSavedRemoteConnections();
@@ -75,7 +66,7 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
     const transport: AgentAwarenessEnvironmentTransport = {
       identity: environmentIds.join("|"),
       registerDevice: (input: AgentAwarenessDeviceRegistrationInput) =>
-        runFirst<AgentAwarenessRegistrationResult>((environmentId) =>
+        runFirstConfiguredRegistration(environmentIds, (environmentId) =>
           registerDevice({ environmentId, input }),
         ),
       unregisterDevice: async (deviceId: string) => {
@@ -88,7 +79,7 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
         if (failure) throw commandFailure(failure);
       },
       registerLiveActivity: (input: AgentAwarenessLiveActivityRegistrationInput) =>
-        runFirst<AgentAwarenessRegistrationResult>((environmentId) =>
+        runFirstConfiguredRegistration(environmentIds, (environmentId) =>
           registerLiveActivity({ environmentId, input }),
         ),
       getSnapshot: () =>
