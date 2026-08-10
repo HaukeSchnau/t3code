@@ -223,7 +223,7 @@ export function resolveMonitorThreadCandidate(
   thread: SidebarThreadSummary,
   now: number,
 ): MonitorThreadCandidate | null {
-  if (thread.archivedAt !== null) return null;
+  if (thread.archivedAt !== null || thread.settledOverride === "settled") return null;
 
   const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const latestTurn = thread.latestTurn;

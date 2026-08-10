@@ -112,6 +112,18 @@ describe("deriveMonitorTimelineEntries", () => {
 });
 
 describe("resolveMonitorThreadCandidate", () => {
+  it("hides settled threads even when they completed recently", () => {
+    const candidate = resolveMonitorThreadCandidate(
+      makeThread({
+        settledOverride: "settled",
+        settledAt: completedAt,
+      }),
+      recentNow,
+    );
+
+    expect(candidate).toBeNull();
+  });
+
   it("treats a completed default-mode thread with an old unimplemented plan as complete", () => {
     const candidate = resolveMonitorThreadCandidate(
       makeThread({

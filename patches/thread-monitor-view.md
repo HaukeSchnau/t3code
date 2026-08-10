@@ -14,6 +14,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Tile order must remain stable while activity streams in. New candidates append into the stored
   monitor order instead of constantly resorting.
 - The view is global across environments and projects.
+- Settled threads must leave the monitor immediately, including recently completed threads that
+  would otherwise remain in the recent-complete window.
 - Full thread detail subscriptions should be retained only for visible or near-visible tiles to
   avoid making the monitor a global full-history render surface.
 - Running/live badges should only reflect active session statuses (`starting` or `running`). Idle
