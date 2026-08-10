@@ -17,12 +17,13 @@ install a verified build.
 
 ## Current state
 
-- Upstream `main` at `9821bca1` was merged in a dedicated change before this work.
+- Upstream through the `v0.0.33` preparation change was merged in dedicated sync changes before
+  the final device pass.
 - The previously fixed medium home widget rendered its authoritative idle state on-device.
-- The prior locally signed production-shaped build used the development APNs entitlement, so it
-  did not prove production APNs delivery.
 - Account authentication is now removed from the fork's clients. Pairing credentials remain the
   trust boundary for each environment.
+- Signed development and Release builds are installed on the physical iPhone. The Release build
+  uses sandbox APNs for direct Xcode installation and has upstream Expo OTA delivery disabled.
 
 ## Plan
 
@@ -47,8 +48,9 @@ install a verified build.
 - Native review diff rendered a large cached diff with syntax/word highlights and scrolled on both
   axes.
 - Native composer accepted multiline text, command/path completion, and file chips. Long-pressing
-  a file chip incorrectly exposed image actions including Save to Camera Roll; the Swift delegate
-  fix compiles and awaits installation plus physical retest.
+  a file chip incorrectly exposed image actions including Save to Camera Roll. The Swift delegate
+  fix now passes the physical retest: a real `README.md` chip renders, and long-press exposes no
+  image-preview or camera-roll action.
 - Focused agent-awareness/native-surface tests and the mobile typecheck pass.
 - `agent-device push` cannot inject notifications on a physical iPhone, so it cannot substitute
   for an APNs-provider delivery test.
@@ -59,9 +61,21 @@ install a verified build.
 - The complete unsigned Release app and all extensions build successfully. Its embedded Expo
   config and entitlement both select sandbox APNs, and the packaged widget extension version now
   matches app version `1.0.2`.
+- A clean signed Release build and both extensions build successfully under Xcode 27 and are
+  installed in place on iPhone 16 Pro / iOS 27.0.
 - Added paired-environment RPCs for device enrollment, Live Activity token enrollment, and current
   awareness snapshots. The server persists registrations locally and sends notification and Live
   Activity updates directly to APNs.
+- Notification permission and the real device token path reach the disposable paired server. With
+  no provider key configured, the switch stays off and the app reports that the server could not
+  accept the device instead of claiming success.
+- Live Activity enrollment falls through an unavailable production environment process to a
+  second connected environment. With no APNs provider configured, the switch stays off and the
+  physical device shows the actionable message: `The paired server has no APNs provider
+  credentials configured.`
+- A real-device failure exposed that the fork was still enrolled in upstream's Expo Updates
+  project. A cached upstream bundle could override freshly installed fork code. Native OTA loading
+  is now disabled and the signed app's embedded fork bundle is authoritative.
 - Removed Clerk/T3 Connect UI, client providers, browser OAuth entry points, mobile onboarding, and
   native account-auth dependencies. Legacy relay-managed mobile connections are dropped during
   migration; direct paired connections remain.
@@ -73,6 +87,6 @@ install a verified build.
 
 - Create and download an Apple Push Notifications provider key for Apple team `2243J9RD68`, then
   configure it outside the repository. No `.p8` provider key is currently available on either host,
-  so Apple-originated delivery cannot yet be proven.
-- Install the accountless signed Release and dev-client builds and repeat the composer, notification,
-  widget, and Live Activity pass on the physical iPhone.
+  so Apple-originated notification delivery and remote Live Activity update/end transitions cannot
+  yet be proven. Once configured, repeat foreground, background, locked, and terminated delivery
+  plus Dynamic Island/Lock Screen update and end transitions.
