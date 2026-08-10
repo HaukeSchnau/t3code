@@ -5163,7 +5163,11 @@ function ChatViewContent(props: ChatViewProps) {
         updateTitle: async (nextTitle) => {
           const result = await updateThreadMetadata({
             environmentId,
-            input: { threadId: threadIdForSend, title: nextTitle },
+            input: {
+              threadId: threadIdForSend,
+              title: nextTitle,
+              titleMode: "automatic",
+            },
           });
           if (result._tag === "Failure") throw result;
         },

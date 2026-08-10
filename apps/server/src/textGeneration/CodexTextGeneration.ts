@@ -388,6 +388,7 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        automaticRefresh: input.automaticRefresh,
         attachments: input.attachments,
       });
 

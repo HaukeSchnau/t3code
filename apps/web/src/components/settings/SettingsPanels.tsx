@@ -535,6 +535,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.confirmThreadDelete !== DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete
         ? ["Delete confirmation"]
         : []),
+      ...(settings.refreshGeneratedThreadTitles !==
+      DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles
+        ? ["Automatic thread titles"]
+        : []),
       ...(isTextGenerationModelDirty ? ["Text generation model"] : []),
     ],
     [
@@ -542,6 +546,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       isBackgroundActivityDirty,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
+      settings.refreshGeneratedThreadTitles,
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
@@ -651,6 +656,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
+      refreshGeneratedThreadTitles: DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles,
       textGenerationModelSelection: DEFAULT_UNIFIED_SETTINGS.textGenerationModelSelection,
       fontFamilySans: DEFAULT_UNIFIED_SETTINGS.fontFamilySans,
       fontFamilyComposer: DEFAULT_UNIFIED_SETTINGS.fontFamilyComposer,
@@ -2156,6 +2162,34 @@ export function GeneralSettingsPanel() {
                 updateSettings({ confirmThreadDelete: Boolean(checked) })
               }
               aria-label="Confirm thread deletion"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("automatic-thread-titles")}
+          description="Refresh generated titles as the conversation's durable goal becomes clearer. Manually renamed and legacy threads stay unchanged."
+          resetAction={
+            settings.refreshGeneratedThreadTitles !==
+            DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles ? (
+              <SettingResetButton
+                label="automatic thread titles"
+                onClick={() =>
+                  updateSettings({
+                    refreshGeneratedThreadTitles:
+                      DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.refreshGeneratedThreadTitles}
+              onCheckedChange={(checked) =>
+                updateSettings({ refreshGeneratedThreadTitles: Boolean(checked) })
+              }
+              aria-label="Refresh generated thread titles"
             />
           }
         />
