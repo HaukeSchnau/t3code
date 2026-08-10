@@ -492,6 +492,32 @@ public final class T3ComposerEditorView: ExpoView, UITextViewDelegate, UITextDro
     emitSelection()
   }
 
+  @available(iOS 17.0, *)
+  public func textView(
+    _ textView: UITextView,
+    primaryActionFor textItem: UITextItem,
+    defaultAction: UIAction
+  ) -> UIAction? {
+    guard case let .textAttachment(attachment) = textItem.content,
+          attachment is ComposerTextAttachment else {
+      return defaultAction
+    }
+    return nil
+  }
+
+  @available(iOS 17.0, *)
+  public func textView(
+    _ textView: UITextView,
+    menuConfigurationFor textItem: UITextItem,
+    defaultMenu: UIMenu
+  ) -> UITextItem.MenuConfiguration? {
+    guard case let .textAttachment(attachment) = textItem.content,
+          attachment is ComposerTextAttachment else {
+      return UITextItem.MenuConfiguration(menu: defaultMenu)
+    }
+    return nil
+  }
+
   public func textView(
     _ textView: UITextView,
     shouldChangeTextIn range: NSRange,
