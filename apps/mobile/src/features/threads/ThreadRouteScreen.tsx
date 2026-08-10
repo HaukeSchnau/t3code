@@ -802,7 +802,6 @@ function ThreadRouteContent(
           serverConfig={serverConfig}
           onStopThread={handleStopThread}
           onResumeThread={handleResumeThread}
-          onSendMessage={composer.onSendMessage}
           onReconnectEnvironment={handleReconnectEnvironment}
         />
       </View>
