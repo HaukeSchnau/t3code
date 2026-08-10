@@ -22,7 +22,8 @@
 
 ## Current step
 
-- Run final build/typecheck verification, commit, push, and deploy.
+- Commit and push the refreshed Nix dependency hashes, advance the infrastructure pin, deploy
+  `srv-2`, and verify service health.
 
 ## Implementation status
 
@@ -56,6 +57,8 @@
 - Negative-control browser E2E set the isolated Codex binary to `/bin/false`, ran the conversation
   through Claude, and still generated `Migrate REST Polling to SSE` via the real Codex auth. This
   proves the live title did not use `codex exec`. The binary setting was restored afterward.
+- The complete `packages.aarch64-linux.t3code` Nix artifact builds after refreshing the server and
+  runtime pnpm fixed-output hashes for the new OAuth dependencies.
 
 ## Isolation incident
 
@@ -68,4 +71,6 @@
 
 ## Deployment status
 
-- Not started.
+- The feature commit is on fork `main`.
+- The first infrastructure evaluation exposed stale pnpm fixed-output hashes; both are now repaired
+  and the production T3 package builds. Infrastructure repinning and host activation remain.
