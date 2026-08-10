@@ -208,7 +208,7 @@ function makeFakeCodexAdapter(provider: ProviderDriverKind = CODEX_DRIVER) {
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
-      turnContinuation: provider === CODEX_DRIVER ? "empty-input" : "unsupported",
+      turnContinuation: provider === CODEX_DRIVER ? "prompt" : "unsupported",
     },
     startSession,
     sendTurn,
@@ -1917,7 +1917,7 @@ fanout.layer("ProviderServiceLive fanout", (it) => {
 
 const validation = makeProviderServiceLayer();
 validation.layer("ProviderServiceLive validation", (it) => {
-  it.effect("allows empty continuation turns only for capable providers", () =>
+  it.effect("allows hidden-prompt continuation turns only for capable providers", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
       const codexThreadId = asThreadId("thread-codex-continuation");

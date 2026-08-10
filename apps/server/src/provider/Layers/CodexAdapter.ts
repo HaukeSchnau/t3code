@@ -73,6 +73,8 @@ const isCodexSessionRuntimeThreadIdMissingError = Schema.is(
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 
 const PROVIDER = ProviderDriverKind.make("codex");
+const CODEX_TURN_CONTINUATION_PROMPT =
+  "Continue the interrupted task from exactly where you left off. Do not comment on the interruption, repeat completed work, or merely describe what was interrupted. Resume the next unfinished action.";
 
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
@@ -1849,9 +1851,10 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       input.modelSelection?.instanceId === boundInstanceId
         ? getCodexServiceTierOptionValue(input.modelSelection)
         : undefined;
+    const turnInput = input.continuation === true ? CODEX_TURN_CONTINUATION_PROMPT : input.input;
     return yield* session.runtime
       .sendTurn({
-        ...(input.input !== undefined ? { input: input.input } : {}),
+        ...(turnInput !== undefined ? { input: turnInput } : {}),
         ...(input.modelSelection?.instanceId === boundInstanceId
           ? { model: input.modelSelection.model }
           : {}),
@@ -2009,7 +2012,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
-      turnContinuation: "empty-input",
+      turnContinuation: "prompt",
     },
     startSession,
     sendTurn,
