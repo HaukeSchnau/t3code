@@ -1,13 +1,8 @@
-import { EnvironmentId, type AuthSessionState } from "@t3tools/contracts";
-import {
-  RelayConnectionRegistration,
-  RelayConnectionTarget,
-} from "@t3tools/client-runtime/connection";
+import { type AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
 import { APP_DISPLAY_NAME } from "../../branding";
-import { environmentCatalog } from "../../connection/catalog";
 import { connectPairing } from "../../connection/onboarding";
 import {
   peekPairingTokenFromUrl,
@@ -20,8 +15,6 @@ import {
   readHostedPairingRequest,
   type HostedPairingRequest,
 } from "../../hostedPairing";
-import { appAtomRegistry } from "../../rpc/atomRegistry";
-import { relayEnvironmentDiscovery } from "../../state/relay";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -179,12 +172,6 @@ export function HostedPairingRouteSurface() {
   const connectPairingEnvironment = useAtomCommand(connectPairing, {
     reportFailure: false,
   });
-  const registerEnvironment = useAtomCommand(environmentCatalog.register, {
-    reportFailure: false,
-  });
-  const refreshRelayEnvironments = useAtomCommand(relayEnvironmentDiscovery.refresh, {
-    reportFailure: false,
-  });
   const hostedPairingRequestRef = useRef(readHostedPairingRequest());
   const [status, setStatus] = useState<"pairing" | "paired" | "error">(() =>
     hostedPairingRequestRef.current ? "pairing" : "error",
@@ -202,47 +189,6 @@ export function HostedPairingRouteSurface() {
   const [canRetry, setCanRetry] = useState(false);
   const submitAttemptedRef = useRef(false);
   const tokenSubmittedRef = useRef(false);
-
-  const tryRegisterRelayEnvironment = useCallback(
-    async (request: HostedPairingRequest): Promise<boolean> => {
-      const environmentId = request.environmentId;
-      if (!environmentId) {
-        return false;
-      }
-
-      setMessage("Checking T3 Connect for this environment.");
-      const refreshResult = await refreshRelayEnvironments();
-      if (refreshResult._tag !== "Success") {
-        return false;
-      }
-
-      const discoveryState = appAtomRegistry.get(relayEnvironmentDiscovery.stateValueAtom);
-      const discovered = discoveryState.environments.get(EnvironmentId.make(environmentId));
-      if (!discovered || discovered.availability !== "online") {
-        return false;
-      }
-
-      setMessage("Saving this T3 Connect environment.");
-      const registerResult = await registerEnvironment(
-        new RelayConnectionRegistration({
-          target: new RelayConnectionTarget({
-            environmentId: discovered.environment.environmentId,
-            label: discovered.environment.label || request.label || "Remote environment",
-          }),
-        }),
-      );
-      if (registerResult._tag !== "Success") {
-        return false;
-      }
-
-      setStatus("paired");
-      setMessage(
-        `${discovered.environment.label || request.label || "The environment"} is saved through T3 Connect.`,
-      );
-      return true;
-    },
-    [refreshRelayEnvironments, registerEnvironment],
-  );
 
   const submitHostedPairingRequest = useCallback(async () => {
     const request = hostedPairingRequestRef.current;
@@ -262,19 +208,10 @@ export function HostedPairingRouteSurface() {
     }
 
     setStatus("pairing");
-    setMessage(
-      request.environmentId
-        ? "Looking for this environment in T3 Connect."
-        : "Connecting to this backend.",
-    );
+    setMessage("Connecting to this backend.");
     setCanRetry(false);
     setDirectPairingUrl(buildDirectHostedPairingUrl(request));
 
-    if (await tryRegisterRelayEnvironment(request)) {
-      return;
-    }
-
-    setMessage("Connecting to this backend.");
     tokenSubmittedRef.current = true;
 
     const result = await connectPairingEnvironment({
@@ -294,10 +231,10 @@ export function HostedPairingRouteSurface() {
     setCanRetry(!browserDenied);
     setMessage(
       browserDenied
-        ? "This browser blocked the hosted app from contacting the backend directly. Open the backend-hosted app instead, or link the environment to T3 Connect."
+        ? "This browser blocked the hosted app from contacting the backend directly. Open the backend-hosted app instead."
         : `${errorMessageFromUnknown(cause)} If the backend accepted this one-time token, request a new pairing link before retrying.`,
     );
-  }, [connectPairingEnvironment, tryRegisterRelayEnvironment]);
+  }, [connectPairingEnvironment]);
 
   useEffect(() => {
     if (submitAttemptedRef.current) {
