@@ -5,8 +5,6 @@ import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import compression from "compression";
-import { defineProject, type TestProjectInlineConfiguration } from "vite-plus/test/config";
-import "vite-plus/test/config";
 import { defineConfig, type Connect, type Plugin } from "vite-plus";
 import pkg from "./package.json" with { type: "json" };
 
@@ -63,19 +61,6 @@ const buildSourcemap: boolean | "hidden" =
     : sourcemapEnv === "hidden"
       ? "hidden"
       : true;
-
-const unitTestProject = {
-  extends: true,
-  test: {
-    name: "unit",
-    include: ["src/**/*.test.{ts,tsx}"],
-    // The web runtime suite exercises auth bootstrap, saved environments,
-    // and websocket subscription lifecycles. Under the full monorepo test
-    // run, those async tests can exceed Vitest's default 5s budget.
-    hookTimeout: 15_000,
-    testTimeout: 15_000,
-  },
-} satisfies TestProjectInlineConfiguration;
 
 function resolveDevProxyTarget(
   backendPort: string | undefined,
@@ -269,9 +254,6 @@ export default defineConfig(() => {
       outDir: "dist",
       emptyOutDir: true,
       sourcemap: buildSourcemap,
-    },
-    test: {
-      projects: [defineProject(unitTestProject)],
     },
   };
 });
