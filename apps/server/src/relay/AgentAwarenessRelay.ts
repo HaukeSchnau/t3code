@@ -34,6 +34,7 @@ import * as HttpClientRequest from "effect/unstable/http/HttpClientRequest";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as LocalAgentAwareness from "../agentAwareness/LocalAgentAwareness.ts";
 import {
   PUBLISH_AGENT_ACTIVITY_SECRET,
   RELAY_ENVIRONMENT_CREDENTIAL_SECRET,
@@ -295,6 +296,7 @@ export const make = Effect.gen(function* () {
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const snapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
+  const localAgentAwareness = yield* Effect.serviceOption(LocalAgentAwareness.LocalAgentAwareness);
   const crypto = yield* Crypto.Crypto;
   const cloudLinkKeyPair = yield* getOrCreateEnvironmentKeyPairFromSecretStore(secrets);
   const activeSnapshotPublishedRef = yield* Ref.make(false);
@@ -342,6 +344,23 @@ export const make = Effect.gen(function* () {
   let schedulePublishConfirm: (threadId: ThreadId) => Effect.Effect<void> = () => Effect.void;
 
   const publishThreadUnsafe = Effect.fn("publishThreadUnsafe")(function* (threadId: ThreadId) {
+    if (Option.isSome(localAgentAwareness)) {
+      const environmentId = yield* serverEnvironment.getEnvironmentId;
+      const thread = yield* snapshotQuery.getThreadShellById(threadId);
+      const project = Option.isSome(thread)
+        ? yield* snapshotQuery.getProjectShellById(thread.value.projectId)
+        : Option.none<OrchestrationProjectShell>();
+      const snapshot = resolveAgentAwarenessRelayPublishSnapshot({
+        environmentId,
+        threadId,
+        thread,
+        project,
+      });
+      yield* localAgentAwareness.value.publish({
+        threadId,
+        state: snapshot.state,
+      });
+    }
     const publishAgentActivity = yield* readPublishAgentActivityEnabled.pipe(
       Effect.orElseSucceed(() => false),
     );
@@ -577,6 +596,30 @@ export const make = Effect.gen(function* () {
 
   const start: AgentAwarenessRelay["Service"]["start"] = Effect.fn("AgentAwarenessRelay.start")(
     function* () {
+      if (Option.isSome(localAgentAwareness)) {
+        yield* Effect.logInfo(
+          "accountless agent activity publishing enabled for paired mobile devices",
+        );
+        yield* forkParked(
+          Effect.sleep("1 second").pipe(
+            Effect.andThen(
+              Effect.gen(function* () {
+                const environmentId = yield* serverEnvironment.getEnvironmentId;
+                const snapshot = yield* snapshotQuery.getShellSnapshot();
+                const activeThreadIds = resolveAgentAwarenessRelayActiveThreadIds({
+                  environmentId,
+                  projects: snapshot.projects,
+                  threads: snapshot.threads,
+                });
+                yield* Effect.forEach(activeThreadIds, publishThread, {
+                  concurrency: 4,
+                  discard: true,
+                });
+              }),
+            ),
+          ),
+        );
+      }
       const [relayConfig, publishEnabled] = yield* Effect.all([
         readRelayConfig.pipe(Effect.orElseSucceed(() => null)),
         readPublishAgentActivityEnabled.pipe(Effect.orElseSucceed(() => false)),

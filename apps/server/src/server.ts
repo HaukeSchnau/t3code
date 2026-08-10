@@ -61,6 +61,8 @@ import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderComma
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
+import * as ApnsProvider from "./agentAwareness/ApnsProvider.ts";
+import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
@@ -178,6 +180,11 @@ const BackgroundLayerLive = BackgroundPolicy.layer.pipe(
 );
 
 const UsageLayerLive = UsageService.layer.pipe(Layer.provide(ServerSettingsLayerLive));
+
+const AccountlessAgentAwarenessLayerLive = LocalAgentAwareness.layer.pipe(
+  Layer.provideMerge(ApnsProvider.layer),
+  Layer.provide(ServerSecretStore.layer),
+);
 
 const ResourceDiagnosticsLayerLive = Layer.mergeAll(
   ResourceTelemetryLayerLive,
@@ -756,6 +763,7 @@ export const makeServerLayer = Layer.unwrap(
 
     return serverApplicationLayer.pipe(
       Layer.provideMerge(runtimeServicesLive),
+      Layer.provide(AccountlessAgentAwarenessLayerLive),
       Layer.provide(
         Layer.mergeAll(OrchestrationRuntimeLayerLive, ProviderRegistryLayerLive, TerminalLayerLive),
       ),
