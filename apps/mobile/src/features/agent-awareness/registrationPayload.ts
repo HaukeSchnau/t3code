@@ -1,4 +1,4 @@
-import type { RelayDeviceRegistrationRequest } from "@t3tools/contracts/relay";
+import type { AgentAwarenessDeviceRegistrationInput } from "@t3tools/contracts";
 
 import type { Preferences } from "../../persistence/mobile-preferences";
 import { supportsAgentAwarenessPush } from "./capabilities";
@@ -16,7 +16,7 @@ export function resolveApsEnvironment(
   return appVariant === "development" ? "sandbox" : "production";
 }
 
-export function makeRelayDeviceRegistrationRequest(input: {
+export function makeAgentAwarenessDeviceRegistrationInput(input: {
   readonly deviceId: string;
   readonly label: string;
   readonly iosMajorVersion: number;
@@ -27,7 +27,7 @@ export function makeRelayDeviceRegistrationRequest(input: {
   readonly pushToStartToken?: string;
   readonly notificationsEnabled: boolean;
   readonly preferences: Preferences;
-}): RelayDeviceRegistrationRequest {
+}): AgentAwarenessDeviceRegistrationInput {
   const pushAvailable = supportsAgentAwarenessPush();
   const liveActivitiesEnabled = pushAvailable && input.preferences.liveActivitiesEnabled !== false;
   return {

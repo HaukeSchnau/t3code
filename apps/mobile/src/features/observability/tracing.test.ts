@@ -29,7 +29,9 @@ it.effect("exports spans through the scoped mobile OTLP layer", () => {
       appVariant: "test",
       serviceVersion: "1.2.3",
     },
-  ).pipe(Layer.provide(remoteHttpClientLayer(fetchFn)));
+  ).pipe(
+    Layer.provide(remoteHttpClientLayer((input, init) => fetchFn(input as RequestInfo, init))),
+  );
   const tracedApplication = Layer.effectDiscard(
     Effect.void.pipe(Effect.withSpan("mobile.test.span"), withRelayClientTracing),
   ).pipe(Layer.provide(tracingLayer));
@@ -65,7 +67,9 @@ it.effect("does not let OTLP serialization failures alter application effects", 
       appVariant: "test",
       serviceVersion: "1.2.3",
     },
-  ).pipe(Layer.provide(remoteHttpClientLayer(fetchFn)));
+  ).pipe(
+    Layer.provide(remoteHttpClientLayer((input, init) => fetchFn(input as RequestInfo, init))),
+  );
   const failure = { durationNanos: 1n };
   const tracedApplication = Layer.effectDiscard(
     Effect.fail(failure).pipe(

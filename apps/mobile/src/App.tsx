@@ -10,7 +10,7 @@ import { createStaticNavigation, DarkTheme, DefaultTheme } from "@react-navigati
 
 import { RegistryContext } from "@effect/atom-react";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
-import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
+import { AccountlessAgentAwarenessProvider } from "./features/agent-awareness/AccountlessAgentAwarenessProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
 import {
@@ -63,7 +63,7 @@ export default function App() {
 
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
-      <CloudAuthProvider>
+      <AccountlessAgentAwarenessProvider>
         <AppearancePreferencesProvider>
           <SplashScreenCoordinator />
           <GestureHandlerRootView className="flex-1">
@@ -96,7 +96,7 @@ export default function App() {
             </KeyboardProvider>
           </GestureHandlerRootView>
         </AppearancePreferencesProvider>
-      </CloudAuthProvider>
+      </AccountlessAgentAwarenessProvider>
     </RegistryContext.Provider>
   );
 }

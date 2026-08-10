@@ -16,9 +16,9 @@ This app has three variants:
 
 Run commands from `apps/mobile`.
 
-T3 Connect is optional and disabled in a fresh clone. Public configuration belongs in the
-repository-root `.env` or `.env.local`, not an `apps/mobile/.env` file. See
-[`../../.env.example`](../../.env.example).
+This fork has no T3 Connect account or sign-in flow. Add environments by pairing directly with a
+T3 Code server. Public observability configuration belongs in the repository-root `.env` or
+`.env.local`, not an `apps/mobile/.env` file. See [`../../.env.example`](../../.env.example).
 
 ## Development
 
@@ -147,9 +147,8 @@ The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin.
 
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
 
-For preview or production EAS environments, set `T3CODE_CLERK_PUBLISHABLE_KEY`,
-`T3CODE_CLERK_JWT_TEMPLATE`, and `T3CODE_RELAY_URL`
-as EAS environment variables. Expo config maps the canonical values into the mobile build.
+Preview and production builds do not require account-authentication environment variables. Configure
+APNs provider credentials on each paired T3 Code server instead; they are never embedded in the app.
 
 Create a PR preview dev-client build manually:
 

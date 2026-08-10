@@ -1,3 +1,5 @@
+/// <reference types="node" />
+
 import type { ExpoConfig } from "expo/config";
 
 import { BRAND_ASSET_PATHS } from "../../scripts/lib/brand-assets.ts";
@@ -10,6 +12,8 @@ Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const APNS_ENVIRONMENT = resolveApnsEnvironment(repoEnv.T3CODE_APNS_ENVIRONMENT, APP_VARIANT);
+const IOS_TEAM_ID = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || "2243J9RD68";
+const RUNTIME_VERSION_POLICY = resolveRuntimeVersionPolicy(process.env.MOBILE_VERSION_POLICY);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
@@ -66,7 +70,6 @@ const VARIANT_CONFIG = {
     scheme: "t3code-dev",
     iosBundleIdentifier: "com.t3tools.t3code.dev",
     androidPackage: "com.t3tools.t3code.dev",
-    relyingParty: "clerk.t3.codes",
     assets: DEVELOPMENT_ASSETS,
   },
   preview: {
@@ -74,7 +77,6 @@ const VARIANT_CONFIG = {
     scheme: "t3code-preview",
     iosBundleIdentifier: "com.t3tools.t3code.preview",
     androidPackage: "com.t3tools.t3code.preview",
-    relyingParty: "clerk.t3.codes",
     assets: PREVIEW_ASSETS,
   },
   production: {
@@ -82,7 +84,6 @@ const VARIANT_CONFIG = {
     scheme: "t3code",
     iosBundleIdentifier: "com.t3tools.t3code",
     androidPackage: "com.t3tools.t3code",
-    relyingParty: "clerk.t3.codes",
     assets: RELEASE_ASSETS,
   },
 } as const;
@@ -168,7 +169,7 @@ const config: ExpoConfig = {
     // project — native deps, config plugins, AND patches/ — matches the update.
     // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
     // could land on a binary missing the native changes it needs and crash.
-    policy: process.env.MOBILE_VERSION_POLICY ?? "fingerprint",
+    policy: RUNTIME_VERSION_POLICY,
   },
   orientation: "portrait",
   icon: variant.assets.appIcon,
@@ -186,14 +187,9 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
-    // Pin code signing to the T3 Tools team so non-interactive `expo run:ios`
-    // does not fall back to a personal team (which cannot sign app groups,
-    // Sign in with Apple, or push notification entitlements).
-    appleTeamId: "ARK85ZXQ4Z",
-    associatedDomains: [
-      `applinks:${variant.relyingParty}`,
-      `webcredentials:${variant.relyingParty}`,
-    ],
+    // Pin code signing to this fork's Apple Developer team so non-interactive
+    // builds keep the App Group and push-notification entitlements intact.
+    appleTeamId: IOS_TEAM_ID,
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
@@ -274,10 +270,6 @@ const config: ExpoConfig = {
         enableBackgroundRemoteNotifications: true,
       },
     ],
-    // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
-    // plugins earlier in this array, so it cannot strip the entitlement Clerk would add.
-    ["@clerk/expo", { theme: "./clerk-theme.json", appleSignIn: !isIosPersonalTeamBuild }],
-    "expo-web-browser",
     [
       "expo-quick-actions",
       {
@@ -346,22 +338,6 @@ const config: ExpoConfig = {
     appVariant: APP_VARIANT,
     apnsEnvironment: APNS_ENVIRONMENT,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
-    relay: {
-      url: repoEnv.T3CODE_RELAY_URL ?? null,
-    },
-    clerk: {
-      publishableKey: repoEnv.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY ?? null,
-      jwtTemplate: repoEnv.EXPO_PUBLIC_CLERK_JWT_TEMPLATE ?? null,
-    },
-    // Native Google sign-in credentials. @clerk/expo reads these from `extra`
-    // under their exact env-var names (not nested), and its config plugin reads
-    // the iOS URL scheme at prebuild to register it in Info.plist.
-    // Unset values must be omitted (not null): the public manifest serializes
-    // null to {}, which is truthy and would defeat Clerk's fallback checks.
-    EXPO_PUBLIC_CLERK_GOOGLE_WEB_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_WEB_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_IOS_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_IOS_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_ANDROID_CLIENT_ID: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_ANDROID_CLIENT_ID,
-    EXPO_PUBLIC_CLERK_GOOGLE_IOS_URL_SCHEME: repoEnv.EXPO_PUBLIC_CLERK_GOOGLE_IOS_URL_SCHEME,
     observability: {
       tracesUrl: repoEnv.EXPO_PUBLIC_OTLP_TRACES_URL ?? "https://api.axiom.co/v1/traces",
       tracesDataset: repoEnv.EXPO_PUBLIC_OTLP_TRACES_DATASET ?? null,
@@ -377,7 +353,8 @@ const config: ExpoConfig = {
 export default config;
 
 function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant: AppVariant) {
-  const baseBundleIdentifier = repoEnv.T3CODE_IOS_BUNDLE_IDENTIFIER_BASE?.trim();
+  const baseBundleIdentifier =
+    repoEnv.T3CODE_IOS_BUNDLE_IDENTIFIER_BASE?.trim() || "dev.schnau.t3code";
 
   if (!baseBundleIdentifier) {
     return defaultBundleIdentifier;
@@ -390,6 +367,17 @@ function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant:
       return `${baseBundleIdentifier}.preview`;
     case "production":
       return baseBundleIdentifier;
+  }
+}
+
+function resolveRuntimeVersionPolicy(value: string | undefined) {
+  switch (value) {
+    case "appVersion":
+    case "nativeVersion":
+    case "sdkVersion":
+      return value;
+    default:
+      return "fingerprint" as const;
   }
 }
 
