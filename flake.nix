@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-infra-modules = {
-      url = "github:HaukeSchnau/nix-infra-modules/a98ffae74550ae7a77933e3f61e500323826dcb7";
+      url = "github:HaukeSchnau/nix-infra-modules/c2998d026da5c5c4403269f2135d94a9e7c1f7cb";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -330,9 +330,9 @@
               pnpm
             ];
             text = ''
-              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
-              state_root="$("$PROJECT_RUNTIME_QUERY" path state)"
-              preparation_state="$state_root/preparation"
+              checkout="$(project-context path checkout)"
+              cache_root="$(project-context path cache)"
+              preparation_state="$cache_root/preparation"
               stamp_file="$preparation_state/dependencies.sha256"
               cd "$checkout"
 
@@ -372,16 +372,16 @@
               pkgs.git
             ];
             text = ''
-              web_url="$("$PROJECT_RUNTIME_QUERY" endpoint web url)"
-              web_host="$("$PROJECT_RUNTIME_QUERY" endpoint web listen-host)"
-              web_port="$("$PROJECT_RUNTIME_QUERY" endpoint web listen-port)"
-              web_host_names="$("$PROJECT_RUNTIME_QUERY" endpoint web host-names --json)"
+              web_url="$(project-context endpoint web url)"
+              web_host="$(project-context endpoint web listen-host)"
+              web_port="$(project-context endpoint web listen-port)"
+              web_host_names="$(project-context endpoint web host-names --json)"
               allowed_hosts="$(
                 node -e 'process.stdout.write(JSON.parse(process.argv[1]).join(","))' "$web_host_names"
               )"
-              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
-              state_root="$("$PROJECT_RUNTIME_QUERY" path state)"
-              cache_root="$("$PROJECT_RUNTIME_QUERY" path cache)"
+              checkout="$(project-context path checkout)"
+              state_root="$(project-context path state)"
+              cache_root="$(project-context path cache)"
               t3_home="$state_root/t3-home"
               web_cache="$cache_root/web"
               install -d -m 0700 "$t3_home" "$web_cache"
@@ -411,10 +411,10 @@
               pnpm
             ];
             text = ''
-              mobile_url="$("$PROJECT_RUNTIME_QUERY" endpoint mobile url)"
-              mobile_port="$("$PROJECT_RUNTIME_QUERY" endpoint mobile listen-port)"
-              checkout="$("$PROJECT_RUNTIME_QUERY" path checkout)"
-              cache_root="$("$PROJECT_RUNTIME_QUERY" path cache)"
+              mobile_url="$(project-context endpoint mobile url)"
+              mobile_port="$(project-context endpoint mobile listen-port)"
+              checkout="$(project-context path checkout)"
+              cache_root="$(project-context path cache)"
               mobile_cache="$cache_root/mobile"
               install -d -m 0700 "$mobile_cache/tmp"
 

@@ -542,6 +542,9 @@ function useLocalDispatchState(input: {
         phase: input.phase,
         latestTurn: input.activeLatestTurn,
         latestUserMessageId,
+        queuedMessageIds: (input.activeThread?.queuedMessages ?? []).map(
+          (message) => message.messageId,
+        ),
         session: input.activeThread?.session ?? null,
         hasPendingApproval: input.activePendingApproval !== null,
         hasPendingUserInput: input.activePendingUserInput !== null,
@@ -551,6 +554,7 @@ function useLocalDispatchState(input: {
       input.activeLatestTurn,
       input.activePendingApproval,
       input.activePendingUserInput,
+      input.activeThread?.queuedMessages,
       input.activeThread?.session,
       input.phase,
       input.threadError,
@@ -5186,7 +5190,13 @@ function ChatViewContent(props: ChatViewProps) {
           const toastCopy = buildExpiredTerminalContextToastCopy(count, "omitted");
           toastManager.add(stackedThreadToast({ type: "warning", ...toastCopy }));
         },
-        delivered: acknowledgeActiveThreadWoke,
+        delivered: () => {
+          acknowledgeActiveThreadWoke();
+          // Queued turns are durable as soon as the outbox accepts them. Keep
+          // the outbox entry as the delivery indicator and release the
+          // composer immediately so another follow-up can be queued.
+          if (shouldQueueMessage) resetLocalDispatch();
+        },
         failed: (failure) => {
           const atomFailure =
             typeof failure === "object" &&

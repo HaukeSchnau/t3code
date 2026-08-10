@@ -686,6 +686,65 @@ describe("ProviderCommandReactor", () => {
     );
   });
 
+  it("keeps a running session running while dispatching a steering message", async () => {
+    const harness = await createHarness();
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-running-before-steer");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-session-running-before-steer"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: createdAt,
+        },
+        createdAt,
+      }),
+    );
+    harness.runtimeSessions.push({
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId,
+      activeTurnId: turnId,
+      cwd: "/tmp/provider-project",
+      resumeCursor: { opaque: "resume-running-before-steer" },
+      createdAt,
+      updatedAt: createdAt,
+    });
+    await harness.runEffect(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-steer-running"),
+        threadId,
+        message: {
+          messageId: asMessageId("message-steer-running"),
+          role: "user",
+          text: "change direction",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+  });
+
   it("starts an independent thread while another thread session start is blocked", async () => {
     let releaseBlockedSession!: () => void;
     const blockedSession = new Promise<void>((resolve) => {
