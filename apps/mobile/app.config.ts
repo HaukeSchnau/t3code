@@ -176,10 +176,9 @@ const config: ExpoConfig = {
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
   updates: {
-    enabled: true,
-    url: "https://u.expo.dev/d763fcb8-d37c-41ea-a773-b54a0ab4a454",
-    checkAutomatically: "ON_LOAD",
-    fallbackToCacheTimeout: 0,
+    // This fork ships its own embedded bundle. Staying enrolled in upstream's
+    // Expo project lets an upstream OTA replace fork-only behavior after install.
+    enabled: false,
   },
   ios: {
     icon: variant.assets.iosIcon,
