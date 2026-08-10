@@ -25,7 +25,7 @@ import type * as Stream from "effect/Stream";
 
 export type ProviderSessionModelSwitchMode = "in-session" | "unsupported";
 export type ProviderAssistantTranscriptRecoveryMode = "none" | "authoritative";
-export type ProviderTurnContinuationMode = "empty-input" | "unsupported";
+export type ProviderTurnContinuationMode = "prompt" | "unsupported";
 export type ProviderRuntimeEventAcceptance = (
   event: ProviderRuntimeEvent,
 ) => Effect.Effect<boolean>;
@@ -41,7 +41,7 @@ export interface ProviderAdapterCapabilities {
    * integration-tested replay cursor or recovered snapshot may opt in.
    */
   readonly assistantTranscriptRecovery: ProviderAssistantTranscriptRecoveryMode;
-  /** Whether the provider can continue an interrupted thread without a new user message. */
+  /** How the provider continues an interrupted thread without a user-visible message. */
   readonly turnContinuation?: ProviderTurnContinuationMode;
 }
 

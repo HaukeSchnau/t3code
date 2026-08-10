@@ -730,7 +730,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       metricModel = input.modelSelection?.model;
       if (
         input.continuation === true &&
-        routed.adapter.capabilities.turnContinuation !== "empty-input"
+        routed.adapter.capabilities.turnContinuation !== "prompt"
       ) {
         return yield* toValidationError(
           "ProviderService.sendTurn",

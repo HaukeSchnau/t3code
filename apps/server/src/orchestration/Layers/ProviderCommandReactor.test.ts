@@ -339,7 +339,7 @@ describe("ProviderCommandReactor", () => {
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
           assistantTranscriptRecovery: "none",
-          turnContinuation: "empty-input",
+          turnContinuation: "prompt",
         }),
       getInstanceInfo: (instanceId) => {
         const raw = String(instanceId);
