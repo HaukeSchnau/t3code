@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import type { FetchFunction } from "@openai-oauth/core";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -13,8 +14,9 @@ import { CodexSettings, ProviderInstanceId, TextGenerationError } from "@t3tools
 
 import * as ServerConfig from "../config.ts";
 import * as TextGeneration from "./TextGeneration.ts";
-import { makeCodexTextGeneration } from "./CodexTextGeneration.ts";
+import { CodexManagedAuthRefreshError, makeCodexTextGeneration } from "./CodexTextGeneration.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
 const DEFAULT_TEST_MODEL_SELECTION = createModelSelection(
   ProviderInstanceId.make("codex"),
@@ -195,17 +197,131 @@ function withFakeCodexEnv<A, E, R>(
     stdinMustNotContain?: string;
     launchArgs?: string;
     environment?: NodeJS.ProcessEnv;
+    directFetch?: FetchFunction;
+    authAccessToken?: string;
+    refreshAccessToken?: string;
+    onRefresh?: () => void;
   },
   effectFn: (textGeneration: TextGeneration.TextGeneration["Service"]) => Effect.Effect<A, E, R>,
 ) {
   return Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
     const tempDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3code-codex-text-" });
     const codexPath = yield* makeFakeCodexBinary(tempDir, input);
-    const config = decodeCodexSettings({ binaryPath: codexPath, launchArgs: input.launchArgs });
-    const textGeneration = yield* makeCodexTextGeneration(config, input.environment);
+    const codexHome = path.join(tempDir, "codex-home");
+    const authFilePath = path.join(codexHome, "auth.json");
+    if (input.authAccessToken) {
+      yield* fs.makeDirectory(codexHome, { recursive: true });
+      yield* fs.writeFileString(
+        authFilePath,
+        encodeUnknownJson({
+          auth_mode: "chatgpt",
+          tokens: {
+            access_token: input.authAccessToken,
+            refresh_token: "refresh-token",
+            account_id: "account-id",
+          },
+          last_refresh: "2026-08-10T00:00:00.000Z",
+        }),
+      );
+    }
+    const config = decodeCodexSettings({
+      binaryPath: codexPath,
+      homePath: codexHome,
+      launchArgs: input.launchArgs,
+    });
+    const textGeneration = yield* makeCodexTextGeneration(config, input.environment, {
+      ...(input.directFetch
+        ? { directFetch: input.directFetch, directCodexVersion: "0.144.1" }
+        : {}),
+      ...(input.refreshAccessToken
+        ? {
+            refreshManagedAuth: () => {
+              input.onRefresh?.();
+              return fs
+                .writeFileString(
+                  authFilePath,
+                  encodeUnknownJson({
+                    auth_mode: "chatgpt",
+                    tokens: {
+                      access_token: input.refreshAccessToken,
+                      refresh_token: "refresh-token",
+                      account_id: "account-id",
+                    },
+                    last_refresh: "2026-08-10T00:01:00.000Z",
+                  }),
+                )
+                .pipe(Effect.mapError((cause) => new CodexManagedAuthRefreshError({ cause })));
+            },
+          }
+        : {}),
+    });
     return yield* effectFn(textGeneration);
   }).pipe(Effect.scoped);
+}
+
+function makeSuccessfulCodexFetch(input: {
+  readonly title: string;
+  readonly failFirstResponse?: boolean;
+  readonly failCatalogForToken?: string;
+  readonly malformedResponse?: boolean;
+  readonly requestHeaders: Array<Headers>;
+  readonly requestBodies: Array<Record<string, unknown>>;
+}): FetchFunction {
+  let responseCount = 0;
+  const fetchImpl = async (
+    request: Parameters<FetchFunction>[0],
+    init?: Parameters<FetchFunction>[1],
+  ) => {
+    const url = request instanceof Request ? request.url : request.toString();
+    if (url.includes("/models?")) {
+      if (new Headers(init?.headers).get("authorization") === input.failCatalogForToken) {
+        return new Response("unauthorized", { status: 401 });
+      }
+      return Response.json({
+        models: [{ slug: DEFAULT_TEST_MODEL_SELECTION.model, use_responses_lite: true }],
+      });
+    }
+    if (!url.endsWith("/responses")) {
+      throw new Error(`Unexpected direct Codex URL: ${url}`);
+    }
+
+    responseCount++;
+    input.requestHeaders.push(new Headers(init?.headers));
+    if (typeof init?.body !== "string") {
+      throw new Error("Expected a JSON string request body.");
+    }
+    input.requestBodies.push(JSON.parse(init.body) as Record<string, unknown>);
+    if (input.failFirstResponse && responseCount === 1) {
+      return new Response("unauthorized", { status: 401 });
+    }
+
+    const completed = {
+      type: "response.completed",
+      response: {
+        id: "response-id",
+        model: DEFAULT_TEST_MODEL_SELECTION.model,
+        status: "completed",
+        output: input.malformedResponse
+          ? []
+          : [
+              {
+                type: "message",
+                role: "assistant",
+                content: [{ type: "output_text", text: JSON.stringify({ title: input.title }) }],
+              },
+            ],
+      },
+    };
+    return new Response(`data: ${JSON.stringify(completed)}\n\ndata: [DONE]\n\n`, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    });
+  };
+  return Object.assign(fetchImpl, {
+    preconnect: (() => undefined) satisfies typeof fetch.preconnect,
+  });
 }
 
 it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
@@ -406,6 +522,161 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
         }),
     ),
   );
+
+  it.effect("generates text-only thread titles directly with Codex auth", () => {
+    const requestHeaders: Headers[] = [];
+    const requestBodies: Array<Record<string, unknown>> = [];
+    return withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "CLI fallback title" }),
+        authAccessToken: "direct-access-token",
+        directFetch: makeSuccessfulCodexFetch({
+          title: "Direct Codex title",
+          requestHeaders,
+          requestBodies,
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Please generate this title without spawning a full provider session.",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.title).toBe("Direct Codex title");
+          expect(requestHeaders).toHaveLength(1);
+          expect(requestHeaders[0]?.get("authorization")).toBe("Bearer direct-access-token");
+          expect(requestHeaders[0]?.get("chatgpt-account-id")).toBe("account-id");
+          expect(requestHeaders[0]?.get("x-openai-internal-codex-responses-lite")).toBe("true");
+          expect(requestBodies).toHaveLength(1);
+          expect(requestBodies[0]).toMatchObject({
+            model: DEFAULT_TEST_MODEL_SELECTION.model,
+            store: false,
+            stream: true,
+            reasoning: { effort: "low", context: "all_turns" },
+            text: {
+              format: {
+                type: "json_schema",
+                name: "thread_title",
+                strict: true,
+              },
+            },
+          });
+        }),
+    );
+  });
+
+  it.effect("asks Codex to refresh managed auth after a direct 401 and retries once", () => {
+    const requestHeaders: Headers[] = [];
+    const requestBodies: Array<Record<string, unknown>> = [];
+    let refreshCount = 0;
+    return withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "CLI fallback title" }),
+        authAccessToken: "expired-access-token",
+        refreshAccessToken: "refreshed-access-token",
+        onRefresh: () => refreshCount++,
+        directFetch: makeSuccessfulCodexFetch({
+          title: "Refreshed direct title",
+          failFirstResponse: true,
+          failCatalogForToken: "Bearer expired-access-token",
+          requestHeaders,
+          requestBodies,
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Retry the direct title after refreshing Codex auth.",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.title).toBe("Refreshed direct title");
+          expect(refreshCount).toBe(1);
+          expect(requestHeaders).toHaveLength(2);
+          expect(requestHeaders[0]?.get("authorization")).toBe("Bearer expired-access-token");
+          expect(requestHeaders[1]?.get("authorization")).toBe("Bearer refreshed-access-token");
+          expect(requestHeaders[1]?.get("x-openai-internal-codex-responses-lite")).toBe("true");
+        }),
+    );
+  });
+
+  it.effect("falls back to codex exec when the direct response is malformed", () => {
+    const requestHeaders: Headers[] = [];
+    const requestBodies: Array<Record<string, unknown>> = [];
+    return withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "CLI fallback title" }),
+        authAccessToken: "direct-access-token",
+        directFetch: makeSuccessfulCodexFetch({
+          title: "unused",
+          malformedResponse: true,
+          requestHeaders,
+          requestBodies,
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Fall back safely when the direct response is malformed.",
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.title).toBe("CLI fallback title");
+          expect(requestBodies).toHaveLength(1);
+        }),
+    );
+  });
+
+  it.effect("keeps image-backed thread titles on the codex exec path", () => {
+    const requestHeaders: Headers[] = [];
+    const requestBodies: Array<Record<string, unknown>> = [];
+    return withFakeCodexEnv(
+      {
+        output: JSON.stringify({ title: "Screenshot layout regression" }),
+        requireImage: true,
+        authAccessToken: "direct-access-token",
+        directFetch: makeSuccessfulCodexFetch({
+          title: "Direct title should not be used",
+          requestHeaders,
+          requestBodies,
+        }),
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const fs = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          const { attachmentsDir } = yield* ServerConfig.ServerConfig;
+          const attachmentId = "thread-title-image-attachment";
+          yield* fs.makeDirectory(attachmentsDir, { recursive: true });
+          yield* fs.writeFile(
+            path.join(attachmentsDir, `${attachmentId}.png`),
+            Buffer.from("image"),
+          );
+
+          const generated = yield* textGeneration.generateThreadTitle({
+            cwd: process.cwd(),
+            message: "Name this screenshot investigation.",
+            attachments: [
+              {
+                type: "image",
+                id: attachmentId,
+                name: "layout.png",
+                mimeType: "image/png",
+                sizeBytes: 5,
+              },
+            ],
+            modelSelection: DEFAULT_TEST_MODEL_SELECTION,
+          });
+
+          expect(generated.title).toBe("Screenshot layout regression");
+          expect(requestBodies).toHaveLength(0);
+        }),
+    );
+  });
 
   it.effect("generates thread titles and trims them for sidebar use", () =>
     withFakeCodexEnv(

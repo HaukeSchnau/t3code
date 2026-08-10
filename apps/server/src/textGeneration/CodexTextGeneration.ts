@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeOS from "node:os";
+import type { FetchFunction } from "@openai-oauth/core";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Option from "effect/Option";
@@ -36,9 +39,25 @@ import {
 } from "./TextGenerationUtils.ts";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { getCodexServiceTierOptionValue } from "../codexModelOptions.ts";
+import {
+  CodexDirectTextGenerationError,
+  makeCodexDirectTextGeneration,
+} from "./CodexDirectTextGeneration.ts";
 
 const CODEX_TIMEOUT_MS = 180_000;
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
+
+export interface CodexTextGenerationOptions {
+  readonly directFetch?: FetchFunction;
+  readonly directCodexVersion?: string;
+  readonly refreshManagedAuth?: () => Effect.Effect<void, CodexManagedAuthRefreshError>;
+}
+
+export class CodexManagedAuthRefreshError extends Schema.TaggedErrorClass<CodexManagedAuthRefreshError>()(
+  "CodexManagedAuthRefreshError",
+  { cause: Schema.Defect() },
+) {}
+
 /**
  * Build a Codex text-generation closure bound to a specific `CodexSettings`
  * payload. See `makeCodexAdapter` for the overall per-instance rationale.
@@ -46,12 +65,23 @@ const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknow
 export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(function* (
   codexConfig: CodexSettings,
   environment?: NodeJS.ProcessEnv,
+  options: CodexTextGenerationOptions = {},
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const commandSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const serverConfig = yield* Effect.service(ServerConfig.ServerConfig);
   const resolvedEnvironment = environment ?? process.env;
+  const authHomePath = expandHomePath(
+    codexConfig.homePath || resolvedEnvironment.CODEX_HOME || path.join(NodeOS.homedir(), ".codex"),
+  );
+  const makeDirectTextGeneration = () =>
+    makeCodexDirectTextGeneration({
+      authFilePath: path.join(authHomePath, "auth.json"),
+      ...(options.directFetch ? { fetch: options.directFetch } : {}),
+      ...(options.directCodexVersion ? { codexVersion: options.directCodexVersion } : {}),
+    });
+  let directTextGeneration = makeDirectTextGeneration();
 
   type MaterializedImageAttachments = {
     readonly imagePaths: ReadonlyArray<string>;
@@ -392,14 +422,62 @@ export const makeCodexTextGeneration = Effect.fn("makeCodexTextGeneration")(func
         attachments: input.attachments,
       });
 
-      const generated = yield* runCodexJson({
-        operation: "generateThreadTitle",
-        cwd: input.cwd,
-        prompt,
-        outputSchemaJson: outputSchema,
-        imagePaths,
-        modelSelection: input.modelSelection,
-      });
+      const generateWithCli = () =>
+        runCodexJson({
+          operation: "generateThreadTitle",
+          cwd: input.cwd,
+          prompt,
+          outputSchemaJson: outputSchema,
+          imagePaths,
+          modelSelection: input.modelSelection,
+        });
+      const generateDirect = () =>
+        directTextGeneration({
+          prompt,
+          outputSchema,
+          outputSchemaName: "thread_title",
+          modelSelection: input.modelSelection,
+        });
+
+      const generated =
+        imagePaths.length > 0
+          ? yield* generateWithCli()
+          : yield* generateDirect().pipe(
+              Effect.catch((initialError) => {
+                if (initialError.status !== 401 || !options.refreshManagedAuth) {
+                  return Effect.fail(initialError);
+                }
+                return options.refreshManagedAuth().pipe(
+                  Effect.tap(() =>
+                    Effect.sync(() => {
+                      // The transport caches model-catalog failures. Rebuild it after refresh so
+                      // an expired-token 401 while discovering models cannot poison the retry.
+                      directTextGeneration = makeDirectTextGeneration();
+                    }),
+                  ),
+                  Effect.mapError(
+                    (cause) =>
+                      new CodexDirectTextGenerationError({
+                        detail: "Codex-managed auth refresh failed.",
+                        cause,
+                      }),
+                  ),
+                  Effect.andThen(Effect.suspend(generateDirect)),
+                );
+              }),
+              Effect.catch((error) =>
+                Effect.logDebug(
+                  "Direct Codex title generation failed; falling back to codex exec.",
+                ).pipe(
+                  Effect.annotateLogs({
+                    errorTag: error._tag,
+                    detail: error.detail,
+                    ...(error.status === undefined ? {} : { httpStatus: error.status }),
+                  }),
+                  Effect.andThen(generateWithCli()),
+                ),
+              ),
+            );
 
       return {
         title: sanitizeThreadTitle(generated.title),

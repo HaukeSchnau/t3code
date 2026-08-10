@@ -5,7 +5,7 @@
  * one `ProviderInstance` bundling:
  *   - `snapshot`   — the live `ServerProviderShape` for this instance;
  *   - `adapter`    — the Codex session/turn/approval runtime;
- *   - `textGeneration` — commit/PR/branch/title generation via `codex exec`.
+ *   - `textGeneration` — direct title generation plus CLI-backed rich generation.
  *
  * Each call to `create()` captures the `codexConfig` argument in closures
  * owned by the returned instance. Two instances created with different
@@ -30,13 +30,21 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
+import {
+  CodexManagedAuthRefreshError,
+  makeCodexTextGeneration,
+} from "../../textGeneration/CodexTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
 import { makeCodexAdapter } from "../Layers/CodexAdapter.ts";
-import { checkCodexProviderStatus, makePendingCodexProvider } from "../Layers/CodexProvider.ts";
+import { resolveCodexLaunchArgs } from "../Layers/codexLaunchArgs.ts";
+import {
+  checkCodexProviderStatus,
+  makePendingCodexProvider,
+  refreshCodexManagedAuth,
+} from "../Layers/CodexProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import type { ProviderDriver, ProviderInstance } from "../ProviderDriver.ts";
@@ -169,7 +177,21 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
         acceptRuntimeEvent,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
       });
-      const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv);
+      const textGeneration = yield* makeCodexTextGeneration(effectiveConfig, processEnv, {
+        refreshManagedAuth: () =>
+          refreshCodexManagedAuth({
+            binaryPath: effectiveConfig.binaryPath,
+            homePath: effectiveConfig.homePath,
+            launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+            cwd: process.cwd(),
+            environment: processEnv,
+          }).pipe(
+            Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+            Effect.scoped,
+            Effect.timeout("30 seconds"),
+            Effect.mapError((cause) => new CodexManagedAuthRefreshError({ cause })),
+          ),
+      });
 
       // Build a managed snapshot whose settings never change — mutations come
       // in as instance rebuilds from the registry rather than in-place

@@ -20,6 +20,12 @@ conversation as its durable goal becomes clearer or changes.
   automatic refreshes are disabled.
 - Title generation uses the configured text-generation model, whose default is GPT-5.6 Luna at low
   reasoning effort.
+- Text-only Codex titles use a direct Responses request with the selected provider instance's
+  existing ChatGPT auth. This avoids starting a full `codex exec` process for the common path.
+- The direct adapter reads `CODEX_HOME/auth.json` without rotating credentials itself. After a 401,
+  a short-lived official Codex app-server refreshes managed auth and the request retries once.
+- Image-backed titles and any direct-path failure fall back to `codex exec`, preserving compatibility
+  with alternative auth stores and future Codex transport changes.
 
 ## Surfaces
 
@@ -37,6 +43,8 @@ conversation as its durable goal becomes clearer or changes.
   preservation for manual titles.
 - Migration, projection, prompt, settings, and shared client reducer tests cover the remaining
   persistence and transport path.
+- Codex adapter tests cover direct request shape, Responses Lite selection, managed-auth retry,
+  malformed-response fallback, and the image-backed CLI path.
 
 ## Maintenance
 
