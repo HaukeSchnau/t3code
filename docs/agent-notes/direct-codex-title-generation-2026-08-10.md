@@ -22,8 +22,8 @@
 
 ## Current step
 
-- Commit and push the refreshed Nix dependency hashes, advance the infrastructure pin, deploy
-  `srv-2`, and verify service health.
+- Wait for the existing deferred-restart timer to apply the activated package once all live T3
+  turns are idle; the rollout must not interrupt those turns.
 
 ## Implementation status
 
@@ -71,6 +71,12 @@
 
 ## Deployment status
 
-- The feature commit is on fork `main`.
-- The first infrastructure evaluation exposed stale pnpm fixed-output hashes; both are now repaired
-  and the production T3 package builds. Infrastructure repinning and host activation remain.
+- T3 feature and Nix repair commits are on fork `main` at `8485e2fc277b`.
+- Infra commit `9f184d91cdbc` pins that revision and is pushed to infra `main`.
+- `checks.aarch64-linux.srv-2` built successfully, `just apply-host srv-2` activated the new system
+  closure, and `just verify-host srv-2` passed every managed service check.
+- The new package `/nix/store/hk1vwasgyd2m2ym4c6b3jw58ahcafmgh-t3code-0.0.33` is recorded in
+  `desired.json`. The active service remains on the prior package while five real turns are busy;
+  the pending marker is present and the 30-second deferred-restart timer is correctly deferring.
+- Do not force the restart: this turn is one of the live turns it would terminate. Once all turns
+  become idle, the timer will restart T3, copy `desired.json` to `applied.json`, and clear `pending`.
