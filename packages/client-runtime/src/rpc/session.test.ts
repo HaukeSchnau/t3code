@@ -171,6 +171,7 @@ const LEGACY_SERVER_CONFIG = {
 };
 
 const DEPENDENCY_PING_CADENCE_MS = 5_000;
+const DEPENDENCY_LIVENESS_CLOSURE_MS = DEPENDENCY_PING_CADENCE_MS * 3;
 const LIVENESS_OBSERVATION_STEP_MS = 1_000;
 const POST_CLOSURE_OBSERVATION_MS = DEPENDENCY_PING_CADENCE_MS + 1_000;
 
@@ -234,18 +235,18 @@ const awaitLivenessClosure = Effect.fn("TestRpcSessionFactory.awaitLivenessClosu
 ) {
   for (
     let elapsedMs = 0;
-    elapsedMs <= DEPENDENCY_PING_CADENCE_MS;
+    elapsedMs <= DEPENDENCY_LIVENESS_CLOSURE_MS;
     elapsedMs += LIVENESS_OBSERVATION_STEP_MS
   ) {
     if (socket.readyState === TestWebSocket.CLOSED) {
       return;
     }
-    if (elapsedMs < DEPENDENCY_PING_CADENCE_MS) {
+    if (elapsedMs < DEPENDENCY_LIVENESS_CLOSURE_MS) {
       yield* TestClock.adjust(LIVENESS_OBSERVATION_STEP_MS);
     }
   }
   return yield* Effect.die(
-    new Error("Expected an unanswered Ping to close the session within five seconds."),
+    new Error("Expected unanswered Pings to close the session after the missed-pong tolerance."),
   );
 });
 
@@ -261,7 +262,15 @@ const eventuallySupervisorState = Effect.fn("TestRpcSessionFactory.eventuallySup
       }
       yield* Effect.yieldNow;
     }
-    return yield* Effect.die(new Error("Expected EnvironmentSupervisor state was not observed."));
+    const current = yield* SubscriptionRef.get(state);
+    if (predicate(current)) {
+      return current;
+    }
+    return yield* Effect.die(
+      new Error(
+        `Expected EnvironmentSupervisor state was not observed. Last phase: ${current.phase}`,
+      ),
+    );
   },
 );
 
@@ -437,7 +446,7 @@ describe("RpcSessionFactory", () => {
       expect(sockets).toHaveLength(1);
 
       const replacementSocketFiber = yield* Effect.forkChild(serveSocket(1));
-      yield* TestClock.adjust("1 second");
+      yield* TestClock.adjust("3 seconds");
       yield* eventuallySupervisorState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2,
