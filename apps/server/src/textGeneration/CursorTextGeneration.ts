@@ -243,6 +243,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        automaticRefresh: input.automaticRefresh,
         attachments: input.attachments,
       });
 

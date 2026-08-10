@@ -603,6 +603,7 @@ export function usePreviousMessageEditing({
                 commandId: newCommandId(),
                 threadId: threadIdForSend,
                 title,
+                titleMode: "automatic",
               });
             }
 

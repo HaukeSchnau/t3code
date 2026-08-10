@@ -21,9 +21,11 @@ import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
+import * as FiberMap from "effect/FiberMap";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
@@ -102,8 +104,17 @@ const DEFAULT_THREAD_TITLE = "New thread";
 const MAX_REGENERATION_ATTACHMENTS = 4;
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
+const TITLE_GENERATION_CONCURRENCY = 3;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
 const FIRST_USER_CONTEXT_TRUNCATION_MARKER = "\n[First user message truncated]";
+
+type ThreadTitleGenerationInput = {
+  readonly threadId: ThreadId;
+  readonly firstUserTurn: boolean;
+  readonly messageText: string;
+  readonly attachments?: ReadonlyArray<ChatAttachment>;
+  readonly titleSeed?: string;
+};
 
 export function collectPrunedProviderTurnIds(input: {
   readonly thread: OrchestrationThread;
@@ -387,6 +398,8 @@ const make = Effect.gen(function* () {
     timeToLive: HANDLED_TURN_START_KEY_TTL,
     lookup: () => Effect.succeed(true),
   });
+  const titleGenerationFibers = yield* FiberMap.make<ThreadId>();
+  const titleGenerationSemaphore = yield* Semaphore.make(TITLE_GENERATION_CONCURRENCY);
 
   const hasHandledTurnStartRecently = (key: string) =>
     Cache.getOption(handledTurnStartKeys, key).pipe(
@@ -929,30 +942,69 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const maybeGenerateThreadTitleForFirstTurn = Effect.fn("maybeGenerateThreadTitleForFirstTurn")(
-    function* (input: {
-      readonly threadId: ThreadId;
-      readonly cwd: string;
-      readonly messageText: string;
-      readonly attachments?: ReadonlyArray<ChatAttachment>;
-      readonly titleSeed?: string;
-    }) {
-      const attachments = input.attachments ?? [];
-      yield* Effect.gen(function* () {
-        const { textGenerationModelSelection: modelSelection } =
-          yield* serverSettingsService.getSettings;
-
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: input.cwd,
-          message: input.messageText,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          modelSelection,
-        });
-        if (!generated) return;
-
+  const generateThreadTitle = Effect.fn("generateThreadTitle")(function* (
+    input: ThreadTitleGenerationInput,
+  ) {
+    yield* titleGenerationSemaphore.withPermits(1)(
+      Effect.gen(function* () {
         const thread = yield* resolveThread(input.threadId);
-        if (!thread) return;
-        if (!canReplaceThreadTitle(thread.title, input.titleSeed)) {
+        if (!thread || thread.archivedAt !== null || thread.deletedAt !== null) {
+          return;
+        }
+
+        const settings = yield* serverSettingsService.getSettings;
+        if (
+          input.firstUserTurn
+            ? thread.titleMode === "manual" || !canReplaceThreadTitle(thread.title, input.titleSeed)
+            : !settings.refreshGeneratedThreadTitles || thread.titleMode !== "automatic"
+        ) {
+          return;
+        }
+
+        const project = yield* resolveProject(thread.projectId);
+        const workspaceCwd = yield* threadWorkspaceService.resolvePrimaryCwd({
+          threadId: thread.id,
+          projectId: thread.projectId,
+          workspaceId: thread.workspaceId ?? null,
+        });
+        const cwd =
+          workspaceCwd ??
+          resolveThreadWorkspaceCwd({
+            thread,
+            projects: project ? [project] : [],
+          }) ??
+          process.cwd();
+        const context = input.firstUserTurn
+          ? { message: input.messageText, attachments: input.attachments ?? [] }
+          : formatThreadTitleContext(thread.messages);
+        if (context.message.length === 0) {
+          return;
+        }
+
+        const previousTitle = thread.title;
+        const generated = yield* textGeneration.generateThreadTitle({
+          cwd,
+          message: context.message,
+          ...(input.firstUserTurn ? {} : { previousTitle, automaticRefresh: true }),
+          ...(context.attachments.length > 0 ? { attachments: context.attachments } : {}),
+          modelSelection: settings.textGenerationModelSelection,
+        });
+        if (
+          generated.title === DEFAULT_THREAD_TITLE ||
+          (!input.firstUserTurn && generated.title === previousTitle)
+        ) {
+          return;
+        }
+
+        const latestThread = yield* resolveThread(input.threadId);
+        if (
+          !latestThread ||
+          latestThread.title !== previousTitle ||
+          (input.firstUserTurn
+            ? latestThread.titleMode === "manual" ||
+              !canReplaceThreadTitle(latestThread.title, input.titleSeed)
+            : latestThread.titleMode !== "automatic")
+        ) {
           return;
         }
 
@@ -961,18 +1013,37 @@ const make = Effect.gen(function* () {
           commandId: yield* serverCommandId("thread-title-rename"),
           threadId: input.threadId,
           title: generated.title,
+          titleMode: "automatic",
+          expectedTitle: previousTitle,
         });
-      }).pipe(
+      }),
+    );
+  });
+
+  const scheduleThreadTitleGeneration = Effect.fn("scheduleThreadTitleGeneration")(function* (
+    input: ThreadTitleGenerationInput,
+  ) {
+    if (!input.firstUserTurn) {
+      const settings = yield* serverSettingsService.getSettings;
+      if (!settings.refreshGeneratedThreadTitles) {
+        return;
+      }
+    }
+    yield* FiberMap.run(
+      titleGenerationFibers,
+      input.threadId,
+      generateThreadTitle(input).pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("provider command reactor failed to generate or rename thread title", {
-            threadId: input.threadId,
-            cwd: input.cwd,
-            cause: Cause.pretty(cause),
-          }),
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("provider command reactor failed to refresh thread title", {
+                threadId: input.threadId,
+                cause: Cause.pretty(cause),
+              }),
         ),
-      );
-    },
-  );
+      ),
+    );
+  });
 
   const regenerateThreadTitle = Effect.fn("regenerateThreadTitle")(function* (
     event: Extract<ProviderIntentEvent, { type: "thread.meta-updated" }>,
@@ -1222,39 +1293,31 @@ const make = Effect.gen(function* () {
 
     const isFirstUserMessageTurn =
       !isContinuation && thread.messages.filter((entry) => entry.role === "user").length === 1;
-    if (isFirstUserMessageTurn && message?.role === "user") {
-      const project = yield* resolveProject(thread.projectId);
-      const workspaceCwd = yield* threadWorkspaceService.resolvePrimaryCwd({
-        threadId: event.payload.threadId,
-        projectId: thread.projectId,
-        workspaceId: thread.workspaceId ?? null,
-      });
-      const generationCwd =
-        workspaceCwd ??
-        resolveThreadWorkspaceCwd({
-          thread,
-          projects: project ? [project] : [],
-        }) ??
-        process.cwd();
+    if (!isContinuation && message?.role === "user") {
       const generationInput = {
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        ...generationInput,
-      }).pipe(Effect.forkScoped);
-
-      if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
-        yield* maybeGenerateThreadTitleForFirstTurn({
+      if (isFirstUserMessageTurn) {
+        yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
           threadId: event.payload.threadId,
-          cwd: generationCwd,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
           ...generationInput,
         }).pipe(Effect.forkScoped);
+      }
+
+      if (
+        (isFirstUserMessageTurn && canReplaceThreadTitle(thread.title, event.payload.titleSeed)) ||
+        (!isFirstUserMessageTurn && thread.titleMode === "automatic")
+      ) {
+        yield* scheduleThreadTitleGeneration({
+          threadId: event.payload.threadId,
+          firstUserTurn: isFirstUserMessageTurn,
+          ...generationInput,
+        });
       }
     }
 

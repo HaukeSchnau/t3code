@@ -414,6 +414,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           projectId: command.projectId,
           title: command.title,
+          titleMode: "automatic",
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
@@ -848,6 +849,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         thread.branch !== command.expectedBranch
           ? thread.branch
           : command.branch;
+      const title =
+        command.title !== undefined &&
+        (command.expectedTitle === undefined || command.expectedTitle === thread.title)
+          ? command.title
+          : undefined;
       const occurredAt = yield* nowIso;
       return {
         ...(yield* withEventBase({
@@ -859,7 +865,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
-          ...(command.title !== undefined ? { title: command.title } : {}),
+          ...(title !== undefined
+            ? { title, titleMode: command.titleMode ?? ("manual" as const) }
+            : {}),
           ...(command.regenerateTitle === true
             ? {
                 regenerateTitle: true as const,
@@ -870,7 +878,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
                 },
               }
             : {}),
-          ...(command.title !== undefined && thread.titleRegeneration != null
+          ...(title !== undefined && thread.titleRegeneration != null
             ? { titleRegeneration: null }
             : {}),
           ...(command.modelSelection !== undefined
@@ -903,6 +911,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         payload: {
           threadId: command.threadId,
           ...(requestIsCurrent && command.title !== undefined ? { title: command.title } : {}),
+          ...(requestIsCurrent ? { titleMode: "automatic" as const } : {}),
           ...(requestIsCurrent ? { titleRegeneration: null } : {}),
           updatedAt: requestIsCurrent ? occurredAt : thread.updatedAt,
         },
@@ -988,6 +997,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const settingsEvents: Array<Omit<OrchestrationEvent, "sequence">> = [];
       const title =
         targetThread.messages.length === 0 &&
+        targetThread.titleMode !== "manual" &&
         canReplaceThreadTitle(targetThread.title, command.titleSeed)
           ? command.titleSeed
           : undefined;
@@ -1002,7 +1012,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           type: "thread.meta-updated",
           payload: {
             threadId: command.threadId,
-            ...(title !== undefined ? { title } : {}),
+            ...(title !== undefined ? { title, titleMode: "automatic" as const } : {}),
             ...(command.modelSelection !== undefined
               ? { modelSelection: command.modelSelection }
               : {}),

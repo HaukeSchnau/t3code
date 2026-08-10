@@ -210,6 +210,7 @@ export function buildBranchNamePrompt(input: BranchNamePromptInput) {
 export interface ThreadTitlePromptInput {
   message: string;
   previousTitle?: string | undefined;
+  automaticRefresh?: boolean | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   policy?: TextGenerationPolicy | undefined;
 }
@@ -240,7 +241,7 @@ Editorial rules:
 - Use attached images as primary context for UI issues.
 - When a URL or attachment is the only source of the subject, use available tools to inspect it. If it cannot be resolved, remain accurate rather than guessing.`;
 
-function regenerateThreadTitlePrompt(previousTitle: string): string {
+function regenerateThreadTitlePrompt(previousTitle: string, automaticRefresh: boolean): string {
   return `Regenerate the title for an existing T3 Code thread so the user can recognize it weeks later.
 The previous title was ${JSON.stringify(previousTitle)}.
 Return JSON with exactly one key: title.
@@ -266,7 +267,11 @@ Editorial rules:
 - Avoid project names already visible in the UI, PR numbers, quotes, labels, filler, and trailing punctuation.
 - Use attached images as primary context for UI issues.
 - When a URL or attachment is the only source of the subject, use available tools to inspect it. If it cannot be resolved, remain accurate rather than guessing.
-- Return a meaningfully improved title, not a cosmetic paraphrase of the previous title.
+- ${
+    automaticRefresh
+      ? "Keep the previous title exactly when it remains accurate. Change it only for a meaningful specificity gain or a clear user-led topic shift."
+      : "Return a meaningfully improved title, not a cosmetic paraphrase of the previous title."
+  }
 
 Examples of the distinction:
 - A subagent-monitoring review that finds a Codex roster bug remains "Review Subagent Monitoring Risks," not "Codex Roster Bug Review."
@@ -308,7 +313,7 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
     prompt = `${INITIAL_THREAD_TITLE_PROMPT}\n\nUser message:\n${message}${threadTitlePromptSuffix(input)}`;
   } else {
     const message = preserveMessageEnd(input.message);
-    prompt = `${regenerateThreadTitlePrompt(input.previousTitle)}\n\nThread contents:\n${message}${threadTitlePromptSuffix(input)}`;
+    prompt = `${regenerateThreadTitlePrompt(input.previousTitle, input.automaticRefresh === true)}\n\nThread contents:\n${message}${threadTitlePromptSuffix(input)}`;
   }
   const outputSchema = Schema.Struct({
     title: Schema.String,

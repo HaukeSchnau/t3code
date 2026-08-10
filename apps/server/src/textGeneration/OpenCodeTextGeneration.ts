@@ -599,6 +599,7 @@ export const makeOpenCodeTextGeneration = Effect.fn("makeOpenCodeTextGeneration"
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        automaticRefresh: input.automaticRefresh,
         attachments: input.attachments,
       });
       const generated = yield* runOpenCodeJson({

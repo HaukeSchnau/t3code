@@ -1,5 +1,6 @@
 import {
   CommandId,
+  MessageId,
   ProjectId,
   ProviderInstanceId,
   ThreadId,
@@ -47,6 +48,79 @@ const readModel: OrchestrationReadModel = {
 };
 
 it.layer(NodeServices.layer)("title regeneration decider", (it) => {
+  it.effect("marks direct title edits as manual", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-manual-title"),
+          threadId: ThreadId.make("thread-1"),
+          title: "Curated title",
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.meta-updated");
+      if (event.type === "thread.meta-updated") {
+        expect(event.payload.title).toBe("Curated title");
+        expect(event.payload.titleMode).toBe("manual");
+      }
+    }),
+  );
+
+  it.effect("rejects a generated title when its expected title is stale", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.meta.update",
+          commandId: CommandId.make("cmd-stale-generated-title"),
+          threadId: ThreadId.make("thread-1"),
+          title: "Generated title",
+          titleMode: "automatic",
+          expectedTitle: "Older title",
+        },
+        readModel,
+      });
+      const event = Array.isArray(result) ? result[0] : result;
+
+      expect(event.type).toBe("thread.meta-updated");
+      if (event.type === "thread.meta-updated") {
+        expect(event.payload.title).toBeUndefined();
+        expect(event.payload.titleMode).toBeUndefined();
+      }
+    }),
+  );
+
+  it.effect("does not replace a manual title with the first-turn title seed", () =>
+    Effect.gen(function* () {
+      const result = yield* decideOrchestrationCommand({
+        command: {
+          type: "thread.turn.start",
+          commandId: CommandId.make("cmd-first-turn"),
+          threadId: ThreadId.make("thread-1"),
+          message: {
+            messageId: MessageId.make("message-1"),
+            role: "user",
+            text: "Start the work",
+            attachments: [],
+          },
+          titleSeed: "Manual title",
+          interactionMode: "default",
+          runtimeMode: "full-access",
+          createdAt: UPDATED_AT,
+        },
+        readModel: {
+          ...readModel,
+          threads: readModel.threads.map((thread) => ({ ...thread, titleMode: "manual" as const })),
+        },
+      });
+      const events = Array.isArray(result) ? result : [result];
+
+      expect(events.some((event) => event.type === "thread.meta-updated")).toBe(false);
+    }),
+  );
+
   it.effect("preserves updatedAt for a stale completion", () =>
     Effect.gen(function* () {
       const result = yield* decideOrchestrationCommand({

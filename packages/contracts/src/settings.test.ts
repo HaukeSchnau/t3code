@@ -110,6 +110,7 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
       model: "gpt-5.6-luna",
       options: [{ id: "reasoningEffort", value: "low" }],
     });
+    expect(DEFAULT_SERVER_SETTINGS.refreshGeneratedThreadTitles).toBe(true);
   });
 
   it("defaults to an empty record so legacy configs without the key still decode", () => {
