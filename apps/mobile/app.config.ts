@@ -13,6 +13,7 @@ Object.assign(process.env, repoEnv);
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const APNS_ENVIRONMENT = resolveApnsEnvironment(repoEnv.T3CODE_APNS_ENVIRONMENT, APP_VARIANT);
 const IOS_TEAM_ID = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || "2243J9RD68";
+const IOS_DEPLOYMENT_TARGET = "18.0";
 const RUNTIME_VERSION_POLICY = resolveRuntimeVersionPolicy(process.env.MOBILE_VERSION_POLICY);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
@@ -182,6 +183,10 @@ const config: ExpoConfig = {
   },
   ios: {
     icon: variant.assets.iosIcon,
+    // expo-widgets reads this top-level value when generating its extension.
+    // Keep it aligned with expo-build-properties below so the app, extensions,
+    // and Pods all compile against the same minimum iOS version.
+    deploymentTarget: IOS_DEPLOYMENT_TARGET,
     supportsTablet: true,
     // Multitasking-capable iPad apps cannot rotate programmatically, so the
     // showcase capture build requires full screen (see infoPlist below).
@@ -310,7 +315,7 @@ const config: ExpoConfig = {
       "expo-build-properties",
       {
         ios: {
-          deploymentTarget: "18.0",
+          deploymentTarget: IOS_DEPLOYMENT_TARGET,
           // AppCheckCore 11.3+ includes Swift and needs module maps for these Objective-C dependencies.
           extraPods: [
             { name: "GoogleUtilities", modular_headers: true },
