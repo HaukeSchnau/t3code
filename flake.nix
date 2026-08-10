@@ -142,7 +142,7 @@
             pname = "t3code-server-deps";
             src = manifestSource;
             workspaces = [ "t3..." ];
-            hash = "sha256-t9FaJ9oHnfFjcPmSSB7vv1IVkdlfRAEb+hIGMpevpTA=";
+            hash = "sha256-JUD6kzYSc6CDiE5yio8J7bPWtluDARWBEUhMAcSrgG4=";
           };
           runtimePnpmDeps = mkPnpmDeps {
             pname = "t3code-runtime-deps";
@@ -152,7 +152,7 @@
               cp pnpm-deploy-lock.yaml pnpm-lock.yaml
               printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
             '';
-            hash = "sha256-u0IsyS9Bx7RJULMGpzL22S4o/4/tfj345uJM63Qmc/o=";
+            hash = "sha256-+gcsyqR7DKfvl5ix1T6TglnfHRb1fxdrfEcCuQxja18=";
           };
 
           commonNativeBuildInputs = [
