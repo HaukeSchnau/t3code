@@ -54,7 +54,6 @@ export interface ThreadDetailScreenProps {
   readonly onHeaderMaterialVisibilityChange?: (visible: boolean) => void;
   readonly onStopThread: () => void;
   readonly onResumeThread: () => void;
-  readonly onSendMessage: () => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   readonly showContent?: boolean;
 }
