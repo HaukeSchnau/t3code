@@ -8,6 +8,7 @@ import {
   CodexSettings,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
+  ThreadId,
   type OrchestrationEvent,
   type OrchestrationThread,
 } from "@t3tools/contracts";
@@ -506,12 +507,8 @@ export const makeOrchestrationIntegrationHarness = (
     ) =>
       waitFor(
         snapshotQuery
-          .getSnapshot()
-          .pipe(
-            Effect.map(
-              (snapshot) => snapshot.threads.find((thread) => thread.id === threadId) ?? null,
-            ),
-          ),
+          .getThreadDetailById(ThreadId.make(threadId))
+          .pipe(Effect.map(Option.getOrNull)),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),
         `projected thread '${threadId}'`,
         timeoutMs,
