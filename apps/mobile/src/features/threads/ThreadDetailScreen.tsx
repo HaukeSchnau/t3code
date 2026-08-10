@@ -139,12 +139,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       runtimeMode: composer.runtimeMode ?? props.selectedThread.runtimeMode,
       interactionMode: composer.interactionMode ?? props.selectedThread.interactionMode,
     }),
-    [
-      composer.interactionMode,
-      composer.modelSelection,
-      composer.runtimeMode,
-      props.selectedThread,
-    ],
+    [composer.interactionMode, composer.modelSelection, composer.runtimeMode, props.selectedThread],
   );
   const agentLabel = `${selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, selectedThread.id);
