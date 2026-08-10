@@ -38,8 +38,8 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
   `T3CODE_MOBILE_METRO_HOST`.
 - Keep pairing URLs out of committed state and logs. Treat them as credentials.
-- Use the shared Project Runtime's `PROJECT_RUNTIME_QUERY` interface for the `web` and `mobile` Endpoint
-  listeners and URLs, and its exported checkout/State/Cache paths. The web adapter must run the existing
+- Use the shared Project Runtime's `project-context` interface for the `web` and `mobile` Endpoint
+  listeners, URLs, and Checkout/State/Cache paths. The web adapter must run the existing
   single-origin `scripts/dev-runner.ts dev` graph with a runtime-selected Vite port and origin, keep
   `VITE_HTTP_URL` and `VITE_WS_URL` unset, and place T3 Code data below per-Instance State. The mobile
   adapter remains repository-owned Expo/Metro. Persistent supervision, local listener allocation,
