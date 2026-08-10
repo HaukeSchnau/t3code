@@ -9409,7 +9409,7 @@ it.live(
                     const client = yield* makeCountingWsRpcClient;
 
                     const threadSnapshot = yield* measureHttpGet({
-                      url: `${baseUrl}/api/orchestration/threads/${TRANSFER_THREAD_ID}`,
+                      url: `${baseUrl}/api/orchestration/threads/${TRANSFER_THREAD_ID}?activityDetailMode=compact`,
                       headers: { cookie },
                     });
                     assert.equal(threadSnapshot.status, 200);
