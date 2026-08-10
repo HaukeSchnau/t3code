@@ -9,6 +9,7 @@ const repoEnv = loadRepoEnv();
 Object.assign(process.env, repoEnv);
 
 const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
+const APNS_ENVIRONMENT = resolveApnsEnvironment(repoEnv.T3CODE_APNS_ENVIRONMENT, APP_VARIANT);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
@@ -269,7 +270,8 @@ const config: ExpoConfig = {
       {
         icon: variant.assets.androidNotificationIcon,
         color: variant.assets.androidNotificationColor,
-        mode: APP_VARIANT === "development" ? "development" : "production",
+        mode: APNS_ENVIRONMENT === "sandbox" ? "development" : "production",
+        enableBackgroundRemoteNotifications: true,
       },
     ],
     // appleSignIn must be gated here: withoutIosPersonalTeamCapabilities.cjs runs before
@@ -342,6 +344,7 @@ const config: ExpoConfig = {
   ],
   extra: {
     appVariant: APP_VARIANT,
+    apnsEnvironment: APNS_ENVIRONMENT,
     iosPersonalTeamBuild: isIosPersonalTeamBuild,
     relay: {
       url: repoEnv.T3CODE_RELAY_URL ?? null,
@@ -388,4 +391,18 @@ function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant:
     case "production":
       return baseBundleIdentifier;
   }
+}
+
+export function resolveApnsEnvironment(
+  value: string | undefined,
+  appVariant: AppVariant,
+): "sandbox" | "production" {
+  const configured = value?.trim();
+  if (configured === "sandbox" || configured === "production") {
+    return configured;
+  }
+  if (configured) {
+    throw new Error("T3CODE_APNS_ENVIRONMENT must be either sandbox or production.");
+  }
+  return appVariant === "development" ? "sandbox" : "production";
 }

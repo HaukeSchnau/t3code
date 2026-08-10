@@ -742,7 +742,10 @@ function registerDevice(
         iosMajorVersion: iosMajorVersion(),
         appVersion: Constants.expoConfig?.version,
         ...(bundleId ? { bundleId } : {}),
-        apsEnvironment: resolveApsEnvironment(Constants.expoConfig?.extra?.appVariant),
+        apsEnvironment: resolveApsEnvironment(
+          Constants.expoConfig?.extra?.apnsEnvironment,
+          Constants.expoConfig?.extra?.appVariant,
+        ),
         ...(pushTokenRegistration.pushToken ? { pushToken: pushTokenRegistration.pushToken } : {}),
         notificationsEnabled: pushTokenRegistration.notificationsEnabled,
         preferences,

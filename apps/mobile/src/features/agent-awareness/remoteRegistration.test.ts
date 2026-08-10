@@ -275,7 +275,7 @@ describe("makeRelayDeviceRegistrationRequest", () => {
         iosMajorVersion: 18,
         appVersion: "1.0.0",
         bundleId: "com.t3tools.t3code.preview",
-        apsEnvironment: resolveApsEnvironment("preview"),
+        apsEnvironment: resolveApsEnvironment(undefined, "preview"),
         notificationsEnabled: true,
         preferences: {},
       }),
@@ -286,10 +286,15 @@ describe("makeRelayDeviceRegistrationRequest", () => {
   });
 
   it("routes development builds to the APNs sandbox", () => {
-    expect(resolveApsEnvironment("development")).toBe("sandbox");
-    expect(resolveApsEnvironment("preview")).toBe("production");
-    expect(resolveApsEnvironment("production")).toBe("production");
-    expect(resolveApsEnvironment(undefined)).toBe("production");
+    expect(resolveApsEnvironment(undefined, "development")).toBe("sandbox");
+    expect(resolveApsEnvironment(undefined, "preview")).toBe("production");
+    expect(resolveApsEnvironment(undefined, "production")).toBe("production");
+    expect(resolveApsEnvironment(undefined, undefined)).toBe("production");
+  });
+
+  it("prefers the APNs environment captured for the signed build", () => {
+    expect(resolveApsEnvironment("sandbox", "production")).toBe("sandbox");
+    expect(resolveApsEnvironment("production", "development")).toBe("production");
   });
 
   it("disables push features in Personal Team relay registrations", () => {
