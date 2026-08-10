@@ -99,6 +99,7 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
@@ -326,6 +327,7 @@ const makeWsRpcLayer = (
       const projectSetupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+      const localAgentAwareness = yield* LocalAgentAwareness.LocalAgentAwareness;
       const rpcClientIds = yield* Ref.make(new Set<RpcClientId>());
       yield* Effect.addFinalizer(() =>
         Ref.get(rpcClientIds).pipe(
@@ -492,6 +494,23 @@ const makeWsRpcLayer = (
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
       return WsRpcGroup.of({
+        [WS_METHODS.agentAwarenessRegisterDevice]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentAwarenessRegisterDevice,
+            localAgentAwareness.registerDevice(input),
+          ),
+        [WS_METHODS.agentAwarenessUnregisterDevice]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentAwarenessUnregisterDevice,
+            localAgentAwareness.unregisterDevice(input.deviceId),
+          ),
+        [WS_METHODS.agentAwarenessRegisterLiveActivity]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentAwarenessRegisterLiveActivity,
+            localAgentAwareness.registerLiveActivity(input),
+          ),
+        [WS_METHODS.agentAwarenessGetSnapshot]: () =>
+          observeRpcEffect(WS_METHODS.agentAwarenessGetSnapshot, localAgentAwareness.getSnapshot),
         [ORCHESTRATION_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.dispatchCommand,

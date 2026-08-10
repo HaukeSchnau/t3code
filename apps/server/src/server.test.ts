@@ -109,6 +109,7 @@ const collectQueueUntil = Effect.fn("TransferBudget.collectQueueUntil")(function
 });
 
 import * as BackgroundPolicy from "./background/BackgroundPolicy.ts";
+import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import { isThreadDetailEvent, resolveAvailableEditorsForConfig } from "./ws.ts";
@@ -966,6 +967,19 @@ const buildAppUnderTest = (options?: {
     );
 
     const appLayer = servedRoutesLayer.pipe(
+      Layer.provide(
+        Layer.succeed(
+          LocalAgentAwareness.LocalAgentAwareness,
+          LocalAgentAwareness.LocalAgentAwareness.of({
+            registerDevice: () => Effect.succeed({ accepted: true, deliveryConfigured: false }),
+            unregisterDevice: () => Effect.succeed({ removed: false }),
+            registerLiveActivity: () =>
+              Effect.succeed({ accepted: true, deliveryConfigured: false }),
+            getSnapshot: Effect.succeed({ aggregate: null }),
+            publish: () => Effect.void,
+          }),
+        ),
+      ),
       Layer.provide(resourceTelemetryLayer),
       Layer.provide(UsageService.layerTest),
       Layer.provide(

@@ -4,6 +4,14 @@ import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 
 import { ExternalLauncherError, LaunchEditorInput } from "./editor.ts";
 import {
+  AgentAwarenessDeviceRegistrationInput,
+  AgentAwarenessDeviceUnregistrationInput,
+  AgentAwarenessLiveActivityRegistrationInput,
+  AgentAwarenessRegistrationResult,
+  AgentAwarenessServiceError,
+  AgentAwarenessSnapshot,
+} from "./agentAwareness.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -183,6 +191,12 @@ import {
 import { VcsError } from "./vcs.ts";
 
 export const WS_METHODS = {
+  // Accountless mobile agent-awareness methods
+  agentAwarenessRegisterDevice: "agentAwareness.registerDevice",
+  agentAwarenessUnregisterDevice: "agentAwareness.unregisterDevice",
+  agentAwarenessRegisterLiveActivity: "agentAwareness.registerLiveActivity",
+  agentAwarenessGetSnapshot: "agentAwareness.getSnapshot",
+
   // Project registry methods
   projectsList: "projects.list",
   projectsAdd: "projects.add",
@@ -291,6 +305,36 @@ export const WS_METHODS = {
   subscribeBackgroundPolicy: "subscribeBackgroundPolicy",
   subscribeResourceTelemetry: "subscribeResourceTelemetry",
 } as const;
+
+export const WsAgentAwarenessRegisterDeviceRpc = Rpc.make(WS_METHODS.agentAwarenessRegisterDevice, {
+  payload: AgentAwarenessDeviceRegistrationInput,
+  success: AgentAwarenessRegistrationResult,
+  error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
+});
+
+export const WsAgentAwarenessUnregisterDeviceRpc = Rpc.make(
+  WS_METHODS.agentAwarenessUnregisterDevice,
+  {
+    payload: AgentAwarenessDeviceUnregistrationInput,
+    success: Schema.Struct({ removed: Schema.Boolean }),
+    error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsAgentAwarenessRegisterLiveActivityRpc = Rpc.make(
+  WS_METHODS.agentAwarenessRegisterLiveActivity,
+  {
+    payload: AgentAwarenessLiveActivityRegistrationInput,
+    success: AgentAwarenessRegistrationResult,
+    error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsAgentAwarenessGetSnapshotRpc = Rpc.make(WS_METHODS.agentAwarenessGetSnapshot, {
+  payload: Schema.Struct({}),
+  success: AgentAwarenessSnapshot,
+  error: Schema.Union([AgentAwarenessServiceError, EnvironmentAuthorizationError]),
+});
 
 export const WsServerUpsertKeybindingRpc = Rpc.make(WS_METHODS.serverUpsertKeybinding, {
   payload: ServerUpsertKeybindingInput,
@@ -892,6 +936,10 @@ export const WsSubscribeResourceTelemetryRpc = Rpc.make(WS_METHODS.subscribeReso
 });
 
 export const WsRpcGroup = RpcGroup.make(
+  WsAgentAwarenessRegisterDeviceRpc,
+  WsAgentAwarenessUnregisterDeviceRpc,
+  WsAgentAwarenessRegisterLiveActivityRpc,
+  WsAgentAwarenessGetSnapshotRpc,
   WsCodexResumeThreadRpc,
   WsCodexForkThreadRpc,
   WsServerProbeRpc,
