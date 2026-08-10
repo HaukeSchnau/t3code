@@ -21,6 +21,8 @@ install a verified build.
 - The previously fixed medium home widget rendered its authoritative idle state on-device.
 - The prior locally signed production-shaped build used the development APNs entitlement, so it
   did not prove production APNs delivery.
+- Account authentication is now removed from the fork's clients. Pairing credentials remain the
+  trust boundary for each environment.
 
 ## Plan
 
@@ -57,12 +59,20 @@ install a verified build.
 - The complete unsigned Release app and all extensions build successfully. Its embedded Expo
   config and entitlement both select sandbox APNs, and the packaged widget extension version now
   matches app version `1.0.2`.
+- Added paired-environment RPCs for device enrollment, Live Activity token enrollment, and current
+  awareness snapshots. The server persists registrations locally and sends notification and Live
+  Activity updates directly to APNs.
+- Removed Clerk/T3 Connect UI, client providers, browser OAuth entry points, mobile onboarding, and
+  native account-auth dependencies. Legacy relay-managed mobile connections are dropped during
+  migration; direct paired connections remain.
+- Contracts, web, desktop, and mobile typechecks pass. Focused agent-awareness tests pass (20 server
+  tests and 10 mobile tests), as do the desktop protocol tests. The full server typecheck reaches
+  only unrelated pre-existing `CodexThreadRpcWorkflow.test.ts` fixture errors.
 
 ## Remaining work
 
-- Remove Clerk account auth from the fork while retaining environment pairing authorization.
-- Decouple local Live Activity creation from relay-account state.
-- Route remote device enrollment through an already-paired environment and configure APNs provider
-  credentials for Apple team `2243J9RD68` outside the repository.
-- Install the resulting signed build and repeat the composer, notification, and Live Activity pass
-  on the physical iPhone.
+- Create and download an Apple Push Notifications provider key for Apple team `2243J9RD68`, then
+  configure it outside the repository. No `.p8` provider key is currently available on either host,
+  so Apple-originated delivery cannot yet be proven.
+- Install the accountless signed Release and dev-client builds and repeat the composer, notification,
+  widget, and Live Activity pass on the physical iPhone.
