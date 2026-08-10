@@ -162,6 +162,10 @@ function makeFakeCodexBinary(
               `printf "%s\\n" ${JSON.stringify(input.stderr)} >&2`,
             ]
           : []),
+        'if [ -z "$output_path" ]; then',
+        '  printf "%s\\n" "missing --output-last-message path; args: $original_args" >&2',
+        "  exit 10",
+        "fi",
         'if [ -n "$output_path" ]; then',
         "  cat > \"$output_path\" <<'__T3CODE_FAKE_CODEX_OUTPUT__'",
         input.output,
@@ -290,7 +294,10 @@ it.layer(CodexTextGenerationTestLayer)("CodexTextGeneration", (it) => {
           body: "",
         }),
         launchArgs: "--enable settings-feature",
-        environment: { T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off " },
+        environment: {
+          ...process.env,
+          T3CODE_CODEX_LAUNCH_ARGS: " --strict-config --listen off ",
+        },
         requireArg: "--strict-config",
         forbidArg: "settings-feature",
       },
