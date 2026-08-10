@@ -534,47 +534,49 @@ export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
     readonly event?: ProviderRuntimeEvent;
     readonly clear?: boolean;
   }) =>
-    Effect.forEach(
-      Array.from(states.keys()),
-      (key) =>
-        Effect.gen(function* () {
-          const state = states.get(key);
-          if (state === undefined) return;
-          if (input?.threadId !== undefined && state.threadId !== input.threadId) return;
-          if (
-            input?.turnId !== undefined &&
-            state.parentTurnId !== input.turnId &&
-            state.turnId !== input.turnId
-          ) {
-            return;
-          }
-          const terminalStatus = input?.terminalStatus ?? state.status;
-          const event = input?.event;
-          const nextState: ProjectionState = {
-            ...state,
-            status: terminalStatus,
-            ...(event
-              ? {
-                  updatedAt: event.createdAt,
-                  latestEventType: event.type,
-                  lastEventId: event.eventId,
-                }
-              : {}),
-            dirty:
-              state.dirty ||
-              terminalStatus !== state.status ||
-              (event !== undefined &&
-                (event.type !== state.latestEventType || event.eventId !== state.lastEventId)),
-          };
-          if (nextState.dirty) {
-            yield* publish(key, nextState, "subagent-thread-activity-flush");
-          }
-          if (input?.clear === true) {
-            states.delete(key);
-            adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
-          }
-        }),
-      { concurrency: 1, discard: true },
+    Effect.suspend(() =>
+      Effect.forEach(
+        Array.from(states.keys()),
+        (key) =>
+          Effect.gen(function* () {
+            const state = states.get(key);
+            if (state === undefined) return;
+            if (input?.threadId !== undefined && state.threadId !== input.threadId) return;
+            if (
+              input?.turnId !== undefined &&
+              state.parentTurnId !== input.turnId &&
+              state.turnId !== input.turnId
+            ) {
+              return;
+            }
+            const terminalStatus = input?.terminalStatus ?? state.status;
+            const event = input?.event;
+            const nextState: ProjectionState = {
+              ...state,
+              status: terminalStatus,
+              ...(event
+                ? {
+                    updatedAt: event.createdAt,
+                    latestEventType: event.type,
+                    lastEventId: event.eventId,
+                  }
+                : {}),
+              dirty:
+                state.dirty ||
+                terminalStatus !== state.status ||
+                (event !== undefined &&
+                  (event.type !== state.latestEventType || event.eventId !== state.lastEventId)),
+            };
+            if (nextState.dirty) {
+              yield* publish(key, nextState, "subagent-thread-activity-flush");
+            }
+            if (input?.clear === true) {
+              states.delete(key);
+              adjustWorkloadGauge("ingestion.subagent_coalescers.active", -1);
+            }
+          }),
+        { concurrency: 1, discard: true },
+      ),
     );
 
   const finalize = flush({ clear: true }).pipe(
