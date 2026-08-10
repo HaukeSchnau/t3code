@@ -498,6 +498,7 @@ export interface LocalDispatchSnapshot {
   startedAt: string;
   preparingWorktree: boolean;
   latestUserMessageId: ChatMessage["id"] | null;
+  queuedMessageIds: ReadonlyArray<ChatMessage["id"]>;
   latestTurnTurnId: TurnId | null;
   latestTurnRequestedAt: string | null;
   latestTurnStartedAt: string | null;
@@ -517,6 +518,7 @@ export function createLocalDispatchSnapshot(
     startedAt: new Date().toISOString(),
     preparingWorktree: Boolean(options?.preparingWorktree),
     latestUserMessageId: latestUserMessage?.id ?? null,
+    queuedMessageIds: (activeThread?.queuedMessages ?? []).map((message) => message.messageId),
     latestTurnTurnId: latestTurn?.turnId ?? null,
     latestTurnRequestedAt: latestTurn?.requestedAt ?? null,
     latestTurnStartedAt: latestTurn?.startedAt ?? null,
@@ -531,6 +533,7 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   phase: SessionPhase;
   latestTurn: Thread["latestTurn"] | null;
   latestUserMessageId: ChatMessage["id"] | null;
+  queuedMessageIds: ReadonlyArray<ChatMessage["id"]>;
   session: Thread["session"] | null;
   hasPendingApproval: boolean;
   hasPendingUserInput: boolean;
@@ -547,6 +550,11 @@ export function hasServerAcknowledgedLocalDispatch(input: {
   const session = input.session ?? null;
   const latestUserMessageChanged =
     input.localDispatch.latestUserMessageId !== input.latestUserMessageId;
+  const queuedMessagesChanged =
+    input.localDispatch.queuedMessageIds.length !== input.queuedMessageIds.length ||
+    input.localDispatch.queuedMessageIds.some(
+      (messageId, index) => messageId !== input.queuedMessageIds[index],
+    );
   const latestTurnChanged =
     input.localDispatch.latestTurnTurnId !== (latestTurn?.turnId ?? null) ||
     input.localDispatch.latestTurnRequestedAt !== (latestTurn?.requestedAt ?? null) ||
@@ -554,6 +562,9 @@ export function hasServerAcknowledgedLocalDispatch(input: {
     input.localDispatch.latestTurnCompletedAt !== (latestTurn?.completedAt ?? null);
 
   if (input.phase === "running") {
+    if (queuedMessagesChanged) {
+      return true;
+    }
     // Steering adds a user message to the current running turn without
     // necessarily changing any of the turn timestamps. Treat that projected
     // message as the server acknowledgment so the composer does not remain

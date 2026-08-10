@@ -944,17 +944,17 @@ export function DiagnosticsSettingsPanel() {
   const [isOpeningLogsDirectory, setIsOpeningLogsDirectory] = useState(false);
   const [openLogsDirectoryError, setOpenLogsDirectoryError] = useState<string | null>(null);
   const [signalingPid, setSignalingPid] = useState<number | null>(null);
+  const signalingPidRef = useRef<number | null>(null);
+  const environmentIdRef = useRef(environmentId);
+  const processDataRef = useRef(processData);
+  environmentIdRef.current = environmentId;
+  processDataRef.current = processData;
   const [isEnergyCapturePending, setIsEnergyCapturePending] = useState(false);
   const [energyCaptureResult, setEnergyCaptureResult] =
     useState<EnergyDiagnosticsCaptureResult | null>(null);
   const [energyCaptureError, setEnergyCaptureError] = useState<string | null>(null);
   const desktopEnergyDiagnosticsAvailable =
     typeof window !== "undefined" && Boolean(window.desktopBridge?.energyDiagnostics);
-  const signalingPidRef = useRef<number | null>(null);
-  const environmentIdRef = useRef(environmentId);
-  const processDataRef = useRef(processData);
-  environmentIdRef.current = environmentId;
-  processDataRef.current = processData;
 
   const openLogsDirectory = useCallback(() => {
     const logsDirectoryPath = observability?.logsDirectoryPath ?? null;
