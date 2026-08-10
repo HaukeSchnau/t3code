@@ -162,6 +162,7 @@ import { Input } from "./ui/input";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./ui/menu";
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
+import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -1862,6 +1863,7 @@ export default function Sidebar() {
   // archive keeps its original "remove from sidebar" meaning.
   const serverConfigs = useAtomValue(environmentServerConfigsAtom);
   const {
+    sidebarCardThreads,
     pinnedThreads,
     reorderablePinnedKeys,
     activeThreads,
@@ -1876,12 +1878,7 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter(
-      (thread) =>
-        thread.archivedAt === null &&
-        (scopedProjectKeys === null ||
-          scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-    );
+    const visible = threads.filter((thread) => thread.archivedAt === null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -1925,10 +1922,17 @@ export default function Sidebar() {
     // Server capability only gates DRAGGING — it must not influence the
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
+    const allPinnedThreads = sortPinnedThreadsForSidebar(pinned);
+    const allActiveThreads = sortThreadsForSidebar(active);
+    const isInProjectScope = (thread: EnvironmentThreadShell) =>
+      scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`);
     return {
-      pinnedThreads: sortPinnedThreadsForSidebar(pinned),
+      sidebarCardThreads: [...allPinnedThreads, ...allActiveThreads],
+      pinnedThreads: allPinnedThreads.filter(isInProjectScope),
       reorderablePinnedKeys: new Set(
         pinned
+          .filter(isInProjectScope)
           .filter(
             (thread) =>
               serverConfigs.get(thread.environmentId)?.environment.capabilities.threadPinReorder ===
@@ -1936,14 +1940,16 @@ export default function Sidebar() {
           )
           .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id))),
       ),
-      activeThreads: sortThreadsForSidebar(active),
+      activeThreads: allActiveThreads.filter(isInProjectScope),
       // Soonest wake first: "what comes back next" is the shelf's question.
-      snoozedThreads: snoozed.toSorted(
-        (left, right) =>
-          firstValidTimestampMs(left.snoozedUntil ?? null) -
-          firstValidTimestampMs(right.snoozedUntil ?? null),
-      ),
-      settledThreads: sortSettledThreadsForSidebar(settled),
+      snoozedThreads: snoozed
+        .filter(isInProjectScope)
+        .toSorted(
+          (left, right) =>
+            firstValidTimestampMs(left.snoozedUntil ?? null) -
+            firstValidTimestampMs(right.snoozedUntil ?? null),
+        ),
+      settledThreads: sortSettledThreadsForSidebar(settled.filter(isInProjectScope)),
       snoozeNow: preciseNow,
     };
   }, [
@@ -1955,6 +1961,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     threads,
   ]);
+  usePublishSidebarCardThreads(sidebarCardThreads);
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");

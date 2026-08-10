@@ -167,6 +167,7 @@ import {
   useSidebar,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { openCommandPalette } from "../commandPaletteBus";
 import {
   archiveSelectedThreadEntries,
@@ -3268,6 +3269,7 @@ export default function LegacySidebar() {
     () => sidebarThreads.filter((thread) => thread.archivedAt === null),
     [sidebarThreads],
   );
+  usePublishSidebarCardThreads(visibleThreads);
   const sortedProjects = useMemo(() => {
     const sortableProjects = sidebarProjects.map((project) => ({
       ...project,

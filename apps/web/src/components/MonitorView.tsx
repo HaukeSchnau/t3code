@@ -85,8 +85,9 @@ import {
   threadTurnDraftFromComposer,
 } from "./chat/ThreadTurnSubmission";
 import { useThreadQueuedMessageControls } from "./chat/useThreadDurableOutbox";
-import { useProjects, useProviderUsageLimits, useThread, useThreadShells } from "../state/entities";
+import { useProjects, useProviderUsageLimits, useThread } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
+import { useSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 
 type SidebarThreadSummary = EnvironmentThreadShell;
 type Thread = EnvironmentThread;
@@ -103,7 +104,6 @@ export function deriveMonitorTimelineEntries(
 }
 
 const MONITOR_ORDER_STORAGE_KEY = "t3code.monitor.threadOrder.v1";
-const RECENTLY_COMPLETED_WINDOW_MS = 30 * 60 * 1000;
 const EMPTY_TURN_DIFFS = new Map();
 const EMPTY_REVERT_COUNTS = new Map();
 const EMPTY_PROVIDER_SKILLS: [] = [];
@@ -113,7 +113,7 @@ const MONITOR_GRID_GAP_PX = 8;
 const MONITOR_TILE_TARGET_MIN_WIDTH_PX = 420;
 const MONITOR_TILE_TARGET_ASPECT_RATIO = 1.3;
 
-export type MonitorThreadReason = "actionable" | "error" | "running" | "plan" | "recent" | "pinned";
+export type MonitorThreadReason = "actionable" | "error" | "running" | "plan" | "ready";
 
 export interface MonitorThreadCandidate {
   thread: SidebarThreadSummary;
@@ -221,18 +221,9 @@ function hasPlanReadyPrompt(thread: SidebarThreadSummary): boolean {
 
 export function resolveMonitorThreadCandidate(
   thread: SidebarThreadSummary,
-  now: number,
-): MonitorThreadCandidate | null {
-  if (thread.archivedAt !== null || thread.settledOverride === "settled") return null;
-
+): MonitorThreadCandidate {
   const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const latestTurn = thread.latestTurn;
-  const completedAt = toTimestamp(latestTurn?.completedAt);
-  const recentlyCompleted =
-    latestTurn?.state === "completed" &&
-    Number.isFinite(completedAt) &&
-    now - completedAt <= RECENTLY_COMPLETED_WINDOW_MS;
-
   const actionable = thread.hasPendingApprovals || thread.hasPendingUserInput;
   const planReady = hasPlanReadyPrompt(thread);
   const hasError =
@@ -242,10 +233,6 @@ export function resolveMonitorThreadCandidate(
   const sessionStatus = thread.session?.status;
   const running = isLiveSessionStatus(sessionStatus);
 
-  if (!actionable && !hasError && !running && !planReady && !recentlyCompleted) {
-    return null;
-  }
-
   const reason: MonitorThreadReason = actionable
     ? "actionable"
     : hasError
@@ -254,7 +241,7 @@ export function resolveMonitorThreadCandidate(
         ? "running"
         : planReady
           ? "plan"
-          : "recent";
+          : "ready";
   const priority =
     reason === "actionable"
       ? 0
@@ -307,10 +294,8 @@ function reasonLabel(reason: MonitorThreadReason): string {
       return "Running";
     case "plan":
       return "Plan ready";
-    case "recent":
-      return "Complete";
-    case "pinned":
-      return "Pinned";
+    case "ready":
+      return "Ready";
   }
 }
 
@@ -324,10 +309,8 @@ function reasonClassName(reason: MonitorThreadReason): string {
       return "border-sky-400/40 bg-sky-500/10 text-sky-700 dark:text-sky-200";
     case "plan":
       return "border-violet-400/40 bg-violet-500/10 text-violet-700 dark:text-violet-200";
-    case "recent":
-      return "border-emerald-400/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200";
-    case "pinned":
-      return "border-violet-400/40 bg-violet-500/10 text-violet-700 dark:text-violet-200";
+    case "ready":
+      return "border-border bg-muted/40 text-muted-foreground";
   }
 }
 
@@ -400,13 +383,10 @@ function useMonitorGridColumns(count: number) {
 
 function useStableMonitorCandidates(threads: readonly SidebarThreadSummary[]) {
   const [order, setOrder] = useState<string[]>(() => readStoredOrder());
-  const candidates = useMemo(() => {
-    const now = Date.now();
-    return threads.flatMap((thread) => {
-      const candidate = resolveMonitorThreadCandidate(thread, now);
-      return candidate ? [candidate] : [];
-    });
-  }, [threads]);
+  const candidates = useMemo(
+    () => threads.map((thread) => resolveMonitorThreadCandidate(thread)),
+    [threads],
+  );
 
   useEffect(() => {
     setOrder((existing) => {
@@ -463,8 +443,8 @@ function useRetainedThreadDetail(threadRef: ScopedThreadRef, enabled: boolean): 
 }
 
 export function MonitorView() {
-  const sidebarThreads = useThreadShells();
-  const candidates = useStableMonitorCandidates(sidebarThreads);
+  const sidebarCardThreads = useSidebarCardThreads();
+  const candidates = useStableMonitorCandidates(sidebarCardThreads ?? []);
   const [gridViewportRef, gridColumns] = useMonitorGridColumns(candidates.length);
   const gridStyle = useMemo<MonitorGridStyle>(
     () => ({ "--monitor-grid-columns": gridColumns }),
@@ -479,7 +459,7 @@ export function MonitorView() {
             <EmptyHeader>
               <EmptyTitle>No active threads</EmptyTitle>
               <EmptyDescription>
-                Running, blocked, actionable, and recently completed threads will appear here.
+                Non-settled, non-snoozed threads will appear here.
               </EmptyDescription>
             </EmptyHeader>
           </Empty>

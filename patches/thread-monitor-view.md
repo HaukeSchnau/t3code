@@ -5,7 +5,7 @@
 Adds a global `/monitor` view for watching multiple active threads at once.
 
 The monitor is fork-specific product UX for users who run several agent threads concurrently. It
-shows running, interrupted/error, actionable, and recently completed threads in a stable-order
+shows the sidebar's full active-thread cards in a stable-order
 compact grid. Each tile hydrates the thread transcript, exposes a quick follow-up composer, and
 supports direct approval, simple user-input, interrupt, and full-thread navigation actions.
 
@@ -14,8 +14,8 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Tile order must remain stable while activity streams in. New candidates append into the stored
   monitor order instead of constantly resorting.
 - The view is global across environments and projects.
-- Settled threads must leave the monitor immediately, including recently completed threads that
-  would otherwise remain in the recent-complete window.
+- Monitor membership must match the sidebar's full thread-card blocks exactly: pinned and active
+  threads appear, while snoozed and settled shelf rows do not.
 - Full thread detail subscriptions should be retained only for visible or near-visible tiles to
   avoid making the monitor a global full-history render surface.
 - Running/live badges should only reflect active session statuses (`starting` or `running`). Idle
@@ -40,10 +40,6 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   strip's standard inset/layering relative to the collapsed or expanded composer surface.
 - Complex user-input forms that cannot be represented safely in a compact tile should route to the
   full thread instead of offering a partial response UI.
-- Recently completed threads depend on `projection_threads.latest_turn_id` continuing to reference
-  the latest concrete turn after a session leaves `running`. A final `thread.session-set` with
-  `activeTurnId: null` must not clear that pointer, or completed threads disappear from the monitor
-  before the recent-complete window expires.
 
 ## Maintenance Notes
 
@@ -53,8 +49,6 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
 - Shortcut handling: `apps/web/src/components/AppSidebarLayout.tsx`
 - Navigation memory: `apps/web/src/monitorNavigation.ts`
 - Generated TanStack route tree must include `/monitor`.
-- Migration `034_BackfillProjectionThreadLatestTurnId` repairs existing projection rows whose
-  `latest_turn_id` was cleared even though concrete turn rows still exist.
 
 When syncing upstream, keep this patch if upstream lacks a comparable multi-thread monitor. If an
 upstream implementation appears, prefer it only if it preserves stable order, global scope, compact
