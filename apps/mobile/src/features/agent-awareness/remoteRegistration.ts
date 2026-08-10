@@ -4,25 +4,22 @@ import * as Notifications from "expo-notifications";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { AppState, Platform } from "react-native";
-import type { EnvironmentId } from "@t3tools/contracts";
-import {
-  type RelayDeviceRegistrationRequest,
-  type RelayAgentActivitySnapshotResponse,
-  type RelayLiveActivityRegistrationRequest,
-} from "@t3tools/contracts/relay";
+import type {
+  AgentAwarenessDeviceRegistrationInput,
+  AgentAwarenessLiveActivityRegistrationInput,
+  AgentAwarenessRegistrationResult,
+  AgentAwarenessSnapshot,
+} from "@t3tools/contracts";
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
-import { ManagedRelay } from "@t3tools/client-runtime/relay";
 import {
   isAtomCommandInterrupted,
   settleAsyncResult,
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 
-import type { SavedRemoteConnection } from "../../lib/connection";
 import { runtime } from "../../lib/runtime";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import {
-  clearAgentAwarenessRegistrationRecord,
   loadAgentAwarenessDeviceId,
   loadAgentAwarenessRegistrationRecord,
   loadOrCreateAgentAwarenessDeviceId,
@@ -33,18 +30,21 @@ import AgentActivity, {
   AgentActivityWidget,
   type AgentActivityProps,
 } from "../../widgets/AgentActivity";
-import { resolveCloudPublicConfig } from "../cloud/publicConfig";
 import { supportsAgentAwarenessPush } from "./capabilities";
-import { makeRelayDeviceRegistrationRequest, resolveApsEnvironment } from "./registrationPayload";
+import {
+  makeAgentAwarenessDeviceRegistrationInput,
+  resolveApsEnvironment,
+} from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
 
 const AgentAwarenessOperation = Schema.Literals([
   "read-notification-permissions",
   "read-native-push-token",
-  "read-device-registration-relay-token",
-  "read-device-unregistration-relay-token",
-  "read-live-activity-registration-relay-token",
+  "register-device-with-environment",
+  "unregister-device-with-environment",
+  "register-live-activity-with-environment",
+  "read-agent-awareness-snapshot",
   "load-device-registration-identifier",
   "load-device-registration-preferences",
   "load-device-unregistration-identifier",
@@ -67,23 +67,22 @@ export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentA
   }
 }
 
-const environmentConnections = new Map<EnvironmentId, SavedRemoteConnection>();
 const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>();
-// Activity tokens the relay recently accepted, by acceptance time. The refresh
-// runs on sign-in, every app foreground, and every environment-connection
+// Activity tokens the paired server recently accepted, by acceptance time. The refresh
+// runs on transport setup, every app foreground, and every environment-connection
 // update, which arrive in bursts and spammed identical registrations. But the
-// registration is not a pure no-op: the relay replays the current aggregate to
+// registration is not a pure no-op: the server replays the current aggregate to
 // this device on every accepted registration, and that replay is the
 // foreground reconciliation that repairs drifted or orphaned activities. So
 // dedupe only within a short window — bursts collapse to one request, while a
 // foreground after real time away still triggers a replay. Cleared on
-// sign-out/identity change alongside the device registration state.
+// transport identity changes alongside the device registration state.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
 const registeredActivityPushTokens = new Map<string, number>();
 let pushTokenSubscription: { remove: () => void } | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
-// Whether the relay has actually accepted this device's registration. The
+// Whether the paired server has actually accepted this device's registration. The
 // notification/Live Activity settings toggles must reflect this rather than
 // only local iOS permission or saved preferences: if the registration request
 // never succeeded, the device cannot receive anything, so the switches must
@@ -113,8 +112,19 @@ export function subscribeAgentAwarenessRegistrationStatus(listener: () => void):
   };
 }
 let activeLiveActivityRegistrationRetry: ReturnType<typeof setTimeout> | null = null;
-let relayTokenProvider: (() => Promise<string | null>) | null = null;
-let relayTokenProviderIdentity: string | null = null;
+export interface AgentAwarenessEnvironmentTransport {
+  readonly identity: string;
+  readonly registerDevice: (
+    input: AgentAwarenessDeviceRegistrationInput,
+  ) => Promise<AgentAwarenessRegistrationResult>;
+  readonly unregisterDevice: (deviceId: string) => Promise<void>;
+  readonly registerLiveActivity: (
+    input: AgentAwarenessLiveActivityRegistrationInput,
+  ) => Promise<AgentAwarenessRegistrationResult>;
+  readonly getSnapshot: () => Promise<AgentAwarenessSnapshot>;
+}
+
+let environmentTransport: AgentAwarenessEnvironmentTransport | null = null;
 let deviceRegistrationGeneration = 0;
 let activeDeviceRegistration: {
   readonly input: DeviceRegistrationInput;
@@ -140,53 +150,23 @@ export function mergeAgentAwarenessRegistrationPreferences(
   return { ...stored, ...override };
 }
 
-export function normalizeAgentAwarenessRelayBaseUrl(
-  value: string | null | undefined,
-): string | null {
-  const trimmed = value?.trim();
-  if (!trimmed) {
-    return null;
-  }
-  return trimmed.replace(/\/+$/g, "");
-}
-
-function readRelayConfig(): { readonly url: string } | null {
-  const relayUrl = resolveCloudPublicConfig().relay.url;
-  if (!relayUrl) {
-    logRegistrationDebug("relay registration skipped; relay config missing");
-    return null;
-  }
-
-  return { url: relayUrl };
-}
-
 function canRegisterRemoteLiveActivities(): boolean {
   return Platform.OS === "ios";
 }
 
-export function shouldRegisterAgentAwarenessDeviceForProvider(
-  previousIdentity: string | null,
-  identity: string | undefined,
-): boolean {
-  return identity === undefined || identity !== previousIdentity;
-}
-
-export function setAgentAwarenessRelayTokenProvider(
-  provider: (() => Promise<string | null>) | null,
-  identity?: string,
+export function setAgentAwarenessEnvironmentTransport(
+  transport: AgentAwarenessEnvironmentTransport | null,
 ): void {
   const isExistingIdentity =
-    provider !== null &&
-    !shouldRegisterAgentAwarenessDeviceForProvider(relayTokenProviderIdentity, identity);
+    transport !== null && environmentTransport?.identity === transport.identity;
   if (!isExistingIdentity) {
     deviceRegistrationGeneration++;
     activeDeviceRegistration = null;
     pendingDeviceRegistration = null;
     registeredActivityPushTokens.clear();
   }
-  relayTokenProvider = provider;
-  relayTokenProviderIdentity = provider ? (identity ?? null) : null;
-  if (!provider) {
+  environmentTransport = transport;
+  if (!transport) {
     pushTokenSubscription?.remove();
     pushTokenSubscription = null;
     appStateSubscription?.remove();
@@ -195,54 +175,25 @@ export function setAgentAwarenessRelayTokenProvider(
       clearTimeout(activeLiveActivityRegistrationRetry);
       activeLiveActivityRegistrationRetry = null;
     }
-    // Without a signed-in user the relay can no longer update or end these
-    // activities, so they would sit orphaned on the lock screen.
-    endLocalLiveActivities("live activity cleanup after cloud sign-out failed");
-    if (canRegisterRemoteLiveActivities()) {
-      updateAgentActivityWidgetSnapshot(idleAgentActivityWidgetProps());
-    }
     setRegistrationStatus("unknown");
-    // Sign-out is the only thing that invalidates a stored registration, so the
-    // next sign-in re-registers.
-    void clearAgentAwarenessRegistrationRecord().catch((error: unknown) => {
-      logRegistrationError("clear registration record on sign-out failed", error);
-    });
     return;
   }
   ensurePushTokenListener();
   ensureAppStateListener();
   runRegistrationInBackground(
     refreshActiveLiveActivityRemoteRegistration(),
-    "active live activity registration after cloud sign-in failed",
+    "active live activity registration after paired environment activation failed",
   );
   if (isExistingIdentity) {
-    // Same account re-activating (e.g. Clerk token refresh) normally needs no
+    // Reinstalling the same environment transport normally needs no
     // re-registration — but if the previous attempt never succeeded, this is
     // the only trigger that will retry it before the next cold start.
     if (registrationStatus !== "registered") {
-      enqueueDeviceRegistration({}, "device registration retry after cloud session refresh failed");
+      enqueueDeviceRegistration({}, "device registration retry after environment refresh failed");
     }
     return;
   }
-  enqueueDeviceRegistration({}, "device registration after cloud sign-in failed");
-}
-
-// Detach the provider and native listeners without the destructive sign-out
-// cleanup. For provider teardown while the user is still signed in (e.g. the
-// auth bridge unmounting/remounting), ending lock-screen activities and wiping
-// the persisted registration would be wrong — the relay still holds a valid
-// registration and the next mount reuses it.
-export function releaseAgentAwarenessRelayTokenProvider(): void {
-  relayTokenProvider = null;
-  relayTokenProviderIdentity = null;
-  pushTokenSubscription?.remove();
-  pushTokenSubscription = null;
-  appStateSubscription?.remove();
-  appStateSubscription = null;
-  if (activeLiveActivityRegistrationRetry) {
-    clearTimeout(activeLiveActivityRegistrationRetry);
-    activeLiveActivityRegistrationRetry = null;
-  }
+  enqueueDeviceRegistration({}, "device registration after environment activation failed");
 }
 
 function iosMajorVersion(): number {
@@ -296,24 +247,10 @@ function nativePushTokenRegistration(observedPushToken?: string) {
   });
 }
 
-const relayToken = (
-  operation: "read-device-registration-relay-token" | "read-live-activity-registration-relay-token",
-) =>
-  Effect.gen(function* () {
-    const provider = relayTokenProvider;
-    if (!provider) {
-      return null;
-    }
-    return yield* Effect.tryPromise({
-      try: provider,
-      catch: (cause) => new AgentAwarenessOperationError({ operation, cause }),
-    });
-  });
-
-// Stable fingerprint of everything the relay stores for this device. When it
+// Stable fingerprint of everything the paired server stores for this device. When it
 // matches the last accepted registration for the same account, re-registering
 // is a no-op, so a launch that changed nothing skips the request entirely.
-function registrationSignature(body: RelayDeviceRegistrationRequest): string {
+function registrationSignature(body: AgentAwarenessDeviceRegistrationInput): string {
   return [
     body.deviceId,
     body.pushToken ?? "",
@@ -331,51 +268,33 @@ function registrationSignature(body: RelayDeviceRegistrationRequest): string {
   ].join("|");
 }
 
-function registerDeviceWithRelay(
-  body: RelayDeviceRegistrationRequest,
+function registerDeviceWithEnvironment(
+  body: AgentAwarenessDeviceRegistrationInput,
   expectedGeneration: number,
-): Effect.Effect<void, unknown, ManagedRelay.ManagedRelayClient> {
+): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
     if (expectedGeneration !== deviceRegistrationGeneration) {
-      logRegistrationDebug("device registration cancelled before relay request", {
+      logRegistrationDebug("device registration cancelled before environment request", {
         expectedGeneration,
         currentGeneration: deviceRegistrationGeneration,
       });
       return;
     }
-    const relayConfig = readRelayConfig();
-    if (!relayConfig) {
-      // Nothing is in flight and nothing can succeed until configuration
-      // appears; "pending" would otherwise stick forever.
-      setRegistrationStatus("unknown");
-      return;
-    }
-    const token = yield* relayToken("read-device-registration-relay-token");
-    if (expectedGeneration !== deviceRegistrationGeneration) {
-      logRegistrationDebug("device registration cancelled after auth lookup", {
-        expectedGeneration,
-        currentGeneration: deviceRegistrationGeneration,
-      });
-      return;
-    }
-    if (!token) {
-      logRegistrationDebug("relay device registration skipped; user is not signed in");
+    const transport = environmentTransport;
+    if (!transport) {
       setRegistrationStatus("unknown");
       return;
     }
 
-    // Skip the request when this account already registered an identical
-    // payload; the relay upsert would be a no-op. The record is only cleared on
-    // sign-out, so a device stays registered across launches without re-hitting
-    // the relay every time the app opens.
-    const identity = relayTokenProviderIdentity ?? "";
+    // Skip the request when this environment set already accepted an identical
+    // payload. Pairing identity changes invalidate the record automatically.
+    const identity = transport.identity;
     const persisted = yield* Effect.tryPromise({
       try: () => loadAgentAwarenessRegistrationRecord(),
       catch: (cause) => cause,
     }).pipe(Effect.orElseSucceed(() => null));
     if (expectedGeneration !== deviceRegistrationGeneration) {
-      // Signed out while the record loaded — do not resurrect the cleared
-      // record or report the previous account's registration as current.
+      // The paired environment set changed while the record loaded.
       logRegistrationDebug("device registration cancelled after record lookup", {
         expectedGeneration,
         currentGeneration: deviceRegistrationGeneration,
@@ -383,33 +302,41 @@ function registerDeviceWithRelay(
       return;
     }
     const payload = body;
-    // The relay URL participates so pointing the app at a different relay
-    // invalidates the record and re-registers there.
-    const signature = `${relayConfig.url}|${registrationSignature(payload)}`;
+    const signature = `${identity}|${registrationSignature(payload)}`;
     if (persisted && persisted.identity === identity && persisted.signature === signature) {
       setRegistrationStatus("registered");
-      logRegistrationDebug("relay device registration skipped; already registered for account", {
+      logRegistrationDebug("device registration skipped; already registered with environment", {
         expectedGeneration,
       });
       return;
     }
 
-    const client = yield* ManagedRelay.ManagedRelayClient;
-    logRegistrationDebug("relay device registration request started", {
+    logRegistrationDebug("environment device registration request started", {
       expectedGeneration,
     });
-    yield* client.registerDevice({
-      clerkToken: token,
-      payload,
+    const result = yield* Effect.tryPromise({
+      try: () => transport.registerDevice(payload),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "register-device-with-environment",
+          cause,
+        }),
     });
-    if (expectedGeneration !== deviceRegistrationGeneration) {
-      // Signed out while the request was in flight: the sign-out path already
-      // reset the status and cleared the record for the next account, so a
-      // stale success must not overwrite either.
-      logRegistrationDebug("device registration completed after sign-out; result discarded", {
-        expectedGeneration,
-        currentGeneration: deviceRegistrationGeneration,
+    if (!result.deliveryConfigured) {
+      setRegistrationStatus("failed");
+      return yield* new AgentAwarenessOperationError({
+        operation: "register-device-with-environment",
+        cause: new Error("The paired server has no APNs provider credentials configured."),
       });
+    }
+    if (expectedGeneration !== deviceRegistrationGeneration) {
+      logRegistrationDebug(
+        "device registration completed after environment change; result discarded",
+        {
+          expectedGeneration,
+          currentGeneration: deviceRegistrationGeneration,
+        },
+      );
       return;
     }
     setRegistrationStatus("registered");
@@ -421,35 +348,23 @@ function registerDeviceWithRelay(
         logRegistrationError("persist registration record failed", error);
       }),
     );
-    logRegistrationDebug("relay device registration request completed", {
+    logRegistrationDebug("environment device registration request completed", {
       expectedGeneration,
     });
   });
 }
 
-function unregisterDeviceWithRelay(input: {
-  readonly deviceId: string;
-  readonly tokenProvider: () => Promise<string | null>;
-}): Effect.Effect<void, unknown, ManagedRelay.ManagedRelayClient> {
+function unregisterDeviceWithEnvironment(deviceId: string): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
-    if (!readRelayConfig()) return;
-    const token = yield* Effect.tryPromise({
-      try: input.tokenProvider,
+    const transport = environmentTransport;
+    if (!transport) return;
+    yield* Effect.tryPromise({
+      try: () => transport.unregisterDevice(deviceId),
       catch: (cause) =>
         new AgentAwarenessOperationError({
-          operation: "read-device-unregistration-relay-token",
+          operation: "unregister-device-with-environment",
           cause,
         }),
-    });
-    if (!token) {
-      logRegistrationDebug("relay device unregistration skipped; user is not signed in");
-      return;
-    }
-
-    const client = yield* ManagedRelay.ManagedRelayClient;
-    yield* client.unregisterDevice({
-      clerkToken: token,
-      deviceId: input.deviceId,
     });
   });
 }
@@ -457,13 +372,13 @@ function unregisterDeviceWithRelay(input: {
 // Arms the lock-screen card the moment the user starts agent work from this
 // phone, while the app is still foregrounded and the fresh activity's token
 // can be registered immediately. The seeded row is a best-effort placeholder;
-// the relay's registration replay repaints it with the authoritative
+// the server's registration replay repaints it with the authoritative
 // aggregate within seconds. No-ops when a card is already armed.
 export function armAgentAwarenessLiveActivityForLocalWork(input: {
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
-  if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+  if (!canRegisterRemoteLiveActivities()) {
     return;
   }
   void loadPreferences()
@@ -539,19 +454,18 @@ function updateAgentActivityWidgetSnapshot(props: AgentActivityProps): void {
   }
 }
 
-function readAgentActivitySnapshot(): Effect.Effect<
-  RelayAgentActivitySnapshotResponse | null,
-  never,
-  ManagedRelay.ManagedRelayClient
-> {
+function readAgentActivitySnapshot(): Effect.Effect<AgentAwarenessSnapshot | null, never> {
   return Effect.gen(function* () {
-    if (!readRelayConfig()) return null;
-    const token = yield* relayToken("read-live-activity-registration-relay-token");
-    if (!token) {
-      return null;
-    }
-    const client = yield* ManagedRelay.ManagedRelayClient;
-    return yield* client.getAgentActivitySnapshot({ clerkToken: token });
+    const transport = environmentTransport;
+    if (!transport) return null;
+    return yield* Effect.tryPromise({
+      try: () => transport.getSnapshot(),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "read-agent-awareness-snapshot",
+          cause,
+        }),
+    });
   }).pipe(
     Effect.catch((error) =>
       Effect.sync(() => {
@@ -562,23 +476,21 @@ function readAgentActivitySnapshot(): Effect.Effect<
   );
 }
 
-function registerLiveActivityWithRelay(
-  body: RelayLiveActivityRegistrationRequest,
-): Effect.Effect<boolean, unknown, ManagedRelay.ManagedRelayClient> {
+function registerLiveActivityWithEnvironment(
+  body: AgentAwarenessLiveActivityRegistrationInput,
+): Effect.Effect<boolean, unknown> {
   return Effect.gen(function* () {
-    if (!readRelayConfig()) return false;
-    const token = yield* relayToken("read-live-activity-registration-relay-token");
-    if (!token) {
-      logRegistrationDebug("relay live activity registration skipped; user is not signed in");
-      return false;
-    }
-
-    const client = yield* ManagedRelay.ManagedRelayClient;
-    yield* client.registerLiveActivity({
-      clerkToken: token,
-      payload: body,
+    const transport = environmentTransport;
+    if (!transport) return false;
+    const result = yield* Effect.tryPromise({
+      try: () => transport.registerLiveActivity(body),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "register-live-activity-with-environment",
+          cause,
+        }),
     });
-    return true;
+    return result.deliveryConfigured;
   });
 }
 
@@ -601,7 +513,7 @@ function logRegistrationDebug(context: string, details?: unknown): void {
 }
 
 function runRegistrationInBackground(
-  operation: Effect.Effect<unknown, unknown, ManagedRelay.ManagedRelayClient>,
+  operation: Effect.Effect<unknown, unknown>,
   context: string,
 ): void {
   void (async () => {
@@ -655,7 +567,7 @@ function startPendingDeviceRegistration(): void {
     );
     if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
       // A transient failure on a later refresh (e.g. token rotation) leaves
-      // the prior accepted registration intact on the relay, so an already
+      // the prior accepted registration intact on the server, so an already
       // registered device stays "registered" rather than flipping the
       // settings toggles off.
       if (registrationStatus !== "registered") {
@@ -699,10 +611,15 @@ function enqueueDeviceRegistration(input: DeviceRegistrationInput, context: stri
 function registerDevice(
   input: RegisterDeviceInput = {},
   expectedGeneration = deviceRegistrationGeneration,
-): Effect.Effect<void, unknown, ManagedRelay.ManagedRelayClient> {
+): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
     if (!canRegisterRemoteLiveActivities()) {
       logRegistrationDebug("device registration skipped; platform does not support it");
+      return;
+    }
+    if (!environmentTransport) {
+      setRegistrationStatus("unknown");
+      logRegistrationDebug("device registration skipped; no paired environment is available");
       return;
     }
 
@@ -735,8 +652,8 @@ function registerDevice(
       notificationsEnabled: pushTokenRegistration.notificationsEnabled,
     });
     const bundleId = Constants.expoConfig?.ios?.bundleIdentifier?.trim();
-    yield* registerDeviceWithRelay(
-      makeRelayDeviceRegistrationRequest({
+    yield* registerDeviceWithEnvironment(
+      makeAgentAwarenessDeviceRegistrationInput({
         deviceId,
         label: Constants.deviceName?.trim() || "iOS device",
         iosMajorVersion: iosMajorVersion(),
@@ -755,11 +672,7 @@ function registerDevice(
   });
 }
 
-function registerDeviceForCurrentUser(): Effect.Effect<
-  void,
-  unknown,
-  ManagedRelay.ManagedRelayClient
-> {
+function registerDeviceForCurrentEnvironment(): Effect.Effect<void, unknown> {
   return registerDevice(undefined);
 }
 
@@ -778,11 +691,11 @@ function ensurePushTokenListener(): void {
   });
 }
 
-// Re-registering activity tokens on foreground makes the relay replay the
+// Re-registering activity tokens on foreground makes the paired server replay the
 // current aggregate to this device, which updates content that drifted while
 // pushes could not be delivered and ends orphaned activities whose end push
 // never arrived. (Deduped by ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS: rapid
-// foreground/sign-in bursts collapse to one registration, but returning after
+// foreground/reconnection bursts collapse to one registration, but returning after
 // real time away still replays.)
 function ensureAppStateListener(): void {
   if (appStateSubscription || !canRegisterRemoteLiveActivities()) {
@@ -815,31 +728,8 @@ function endLocalLiveActivities(context: string): void {
   }
 }
 
-export function registerAgentAwarenessConnection(connection: SavedRemoteConnection): void {
-  if (!canRegisterRemoteLiveActivities()) {
-    return;
-  }
-
-  environmentConnections.set(connection.environmentId, connection);
-  ensurePushTokenListener();
-  ensureAppStateListener();
-  enqueueDeviceRegistration({}, "device registration failed");
-  runRegistrationInBackground(
-    refreshActiveLiveActivityRemoteRegistration(),
-    "active live activity registration after environment connection failed",
-  );
-}
-
-function removeAgentAwarenessConnection(environmentId: EnvironmentId): void {
-  environmentConnections.delete(environmentId);
-}
-
-export function unregisterAgentAwarenessConnection(environmentId: EnvironmentId): void {
-  removeAgentAwarenessConnection(environmentId);
-}
-
 export function unregisterAllAgentAwarenessConnections(): void {
-  environmentConnections.clear();
+  environmentTransport = null;
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
   appStateSubscription?.remove();
@@ -850,12 +740,8 @@ export function unregisterAllAgentAwarenessConnections(): void {
   }
 }
 
-export function refreshAgentAwarenessRegistration(): Effect.Effect<
-  void,
-  never,
-  ManagedRelay.ManagedRelayClient
-> {
-  return registerDeviceForCurrentUser().pipe(
+export function refreshAgentAwarenessRegistration(): Effect.Effect<void, never> {
+  return registerDeviceForCurrentEnvironment().pipe(
     Effect.catch((error) =>
       Effect.sync(() => {
         // Same rationale as the queued path: a failed refresh does not undo an
@@ -871,7 +757,7 @@ export function refreshAgentAwarenessRegistration(): Effect.Effect<
 
 export function updateAgentAwarenessRegistrationPreferences(
   preferencesOverride: Partial<Preferences>,
-): Effect.Effect<void, unknown, ManagedRelay.ManagedRelayClient> {
+): Effect.Effect<void, unknown> {
   return registerDevice({ preferencesOverride }).pipe(
     Effect.tapError((error) =>
       Effect.sync(() => {
@@ -885,7 +771,7 @@ export function updateAgentAwarenessRegistrationPreferences(
 }
 
 export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
-  environmentConnections.clear();
+  environmentTransport = null;
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
   appStateSubscription?.remove();
@@ -894,8 +780,6 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
     clearTimeout(activeLiveActivityRegistrationRetry);
     activeLiveActivityRegistrationRetry = null;
   }
-  relayTokenProvider = null;
-  relayTokenProviderIdentity = null;
   deviceRegistrationGeneration++;
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
@@ -904,9 +788,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   registeredActivityPushTokens.clear();
 }
 
-export function unregisterAgentAwarenessDeviceForCurrentUser(
-  tokenProvider: () => Promise<string | null>,
-): Effect.Effect<void, never, ManagedRelay.ManagedRelayClient> {
+export function unregisterAgentAwarenessDeviceForCurrentEnvironment(): Effect.Effect<void, never> {
   return Effect.gen(function* () {
     const deviceId = yield* Effect.tryPromise({
       try: () => loadAgentAwarenessDeviceId(),
@@ -919,7 +801,7 @@ export function unregisterAgentAwarenessDeviceForCurrentUser(
     if (!deviceId) {
       return;
     }
-    yield* unregisterDeviceWithRelay({ deviceId, tokenProvider });
+    yield* unregisterDeviceWithEnvironment(deviceId);
   }).pipe(
     Effect.catch((error) =>
       Effect.sync(() => {
@@ -931,7 +813,7 @@ export function unregisterAgentAwarenessDeviceForCurrentUser(
 
 export function registerLiveActivityPushToken(input: {
   readonly activity: LiveActivity<AgentActivityProps>;
-}): Effect.Effect<boolean, unknown, ManagedRelay.ManagedRelayClient> {
+}): Effect.Effect<boolean, unknown> {
   return Effect.gen(function* () {
     if (!canRegisterRemoteLiveActivities()) {
       return false;
@@ -950,7 +832,7 @@ export function registerLiveActivityPushToken(input: {
         logRegistrationDebug(
           "live activity push token not available yet; token listener already registered",
           {
-            connectionCount: environmentConnections.size,
+            hasEnvironmentTransport: environmentTransport !== null,
           },
         );
         return false;
@@ -959,7 +841,7 @@ export function registerLiveActivityPushToken(input: {
       logRegistrationDebug(
         "live activity push token not available yet; listening for token event",
         {
-          connectionCount: environmentConnections.size,
+          hasEnvironmentTransport: environmentTransport !== null,
         },
       );
       activityPushTokenListeners.add(input.activity);
@@ -987,7 +869,7 @@ export function registerLiveActivityPushToken(input: {
 
 function registerLiveActivityPushTokenValue(input: {
   readonly activityPushToken: string;
-}): Effect.Effect<boolean, unknown, ManagedRelay.ManagedRelayClient> {
+}): Effect.Effect<boolean, unknown> {
   return Effect.gen(function* () {
     const acceptedAt = registeredActivityPushTokens.get(input.activityPushToken);
     if (
@@ -1004,7 +886,7 @@ function registerLiveActivityPushTokenValue(input: {
           cause,
         }),
     });
-    const registered = yield* registerLiveActivityWithRelay({
+    const registered = yield* registerLiveActivityWithEnvironment({
       deviceId,
       activityPushToken: input.activityPushToken,
     });
@@ -1019,7 +901,7 @@ function registerLiveActivityPushTokenValue(input: {
 }
 
 function scheduleActiveLiveActivityRegistrationRetry(): void {
-  if (activeLiveActivityRegistrationRetry || !relayTokenProvider) {
+  if (activeLiveActivityRegistrationRetry || !environmentTransport) {
     return;
   }
 
@@ -1032,13 +914,9 @@ function scheduleActiveLiveActivityRegistrationRetry(): void {
   }, REMOTE_ACTIVITY_REGISTRATION_RETRY_MS);
 }
 
-export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
-  void,
-  never,
-  ManagedRelay.ManagedRelayClient
-> {
+export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<void, never> {
   return Effect.gen(function* () {
-    if (!canRegisterRemoteLiveActivities() || !relayTokenProvider) {
+    if (!canRegisterRemoteLiveActivities() || !environmentTransport) {
       return;
     }
 
@@ -1058,7 +936,7 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
       ),
     );
 
-    // The relay tracks exactly one card per device; if concurrent arming ever
+    // The paired server tracks exactly one card per device; if concurrent arming ever
     // produced extras, end them so only one keeps receiving updates.
     if (activities.length > 1) {
       for (const extra of activities.slice(1)) {
@@ -1070,8 +948,8 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
     }
 
     // Unlike a Live Activity, the home-screen widget does not receive the
-    // relay's ActivityKit pushes. Reconcile its snapshot whenever the app
-    // signs in, reconnects, or returns to the foreground. A null aggregate is
+    // server's ActivityKit pushes. Reconcile its snapshot whenever the app
+    // reconnects or returns to the foreground. A null aggregate is
     // authoritative idle state; a null response means the read failed and
     // must not erase the last useful snapshot.
     const snapshot = yield* readAgentActivitySnapshot();
@@ -1080,9 +958,9 @@ export function refreshActiveLiveActivityRemoteRegistration(): Effect.Effect<
     }
 
     // Activities are only ever created here, in the foreground, where the
-    // update token can be observed and registered immediately — the relay
+    // update token can be observed and registered immediately — the server
     // never remote-starts one (background push-to-start wakes proved too
-    // unreliable to hand the token over). Arming is conditional: the relay is
+    // unreliable to hand the token over). Arming is conditional: the server is
     // asked what the card would show first, so an idle open never creates an
     // empty lock-screen card, and an armed card is born with the real
     // aggregate instead of a placeholder.
