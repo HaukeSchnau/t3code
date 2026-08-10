@@ -1,8 +1,8 @@
 import { describe, expect, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   EnvironmentId,
   MessageId,
-  OrchestrationDispatchCommandError,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -24,11 +24,13 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CodexThreadForkImporter } from "../mcp/toolkits/thread-orchestration/CodexThreadForkImporter.ts";
 import type * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
 import type * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import type * as ThreadWorkspaceService from "../workspace/ThreadWorkspaceService.ts";
 import type * as ProviderRegistry from "./Services/ProviderRegistry.ts";
 import type * as ProviderSessionDirectory from "./Services/ProviderSessionDirectory.ts";
+import { makeProviderRegistryMock } from "./testUtils/providerRegistryMock.ts";
 import { makeCodexThreadRpcWorkflow } from "./CodexThreadRpcWorkflow.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -111,9 +113,7 @@ const baseEngine: OrchestrationEngine.OrchestrationEngineShape = {
   streamDomainEvents: Stream.empty,
 };
 
-const baseProviderRegistry = {
-  getProviders: Effect.succeed([]),
-} as ProviderRegistry.ProviderRegistryShape;
+const baseProviderRegistry = makeProviderRegistryMock();
 
 const baseProviderSessionDirectory: ProviderSessionDirectory.ProviderSessionDirectoryShape = {
   upsert: () => Effect.die("unexpected binding write"),
@@ -131,6 +131,15 @@ const baseThreadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService[
 
 const baseForkImporter: CodexThreadForkImporter["Service"] = {
   fork: () => Effect.die("unexpected fork import"),
+};
+
+const baseServerSettings: ServerSettings.ServerSettingsService["Service"] = {
+  start: Effect.void,
+  ready: Effect.void,
+  getSettings: Effect.die("unexpected settings read"),
+  updateSettings: () => Effect.die("unexpected settings update"),
+  streamChanges: Stream.empty,
+  subscribeChanges: Effect.succeed(Stream.empty),
 };
 
 const testCrypto = Crypto.make({
@@ -153,9 +162,7 @@ const makeWorkflow = (overrides: {
     projectionSnapshotQuery: overrides.projectionSnapshotQuery ?? baseProjectionQuery,
     providerRegistry: overrides.providerRegistry ?? baseProviderRegistry,
     providerSessionDirectory: overrides.providerSessionDirectory ?? baseProviderSessionDirectory,
-    serverSettings: {
-      getSettings: Effect.die("unexpected settings read"),
-    } as ServerSettings.ServerSettingsService["Service"],
+    serverSettings: baseServerSettings,
     threadWorkspaceService: overrides.threadWorkspaceService ?? baseThreadWorkspaceService,
     codexThreadForkImporter: overrides.codexThreadForkImporter ?? baseForkImporter,
     dispatchNormalizedCommand: () => Effect.die("unexpected normalized dispatch"),
@@ -184,7 +191,9 @@ describe("CodexThreadRpcWorkflow", () => {
           }),
         },
       });
-      const error = yield* Effect.flip(workflow.resume({ threadId: "   " }));
+      const error = yield* Effect.flip(
+        workflow.resume({ threadId: "   " }).pipe(Effect.provide(NodeServices.layer)),
+      );
       expect(error.message).toBe("Codex thread id is required.");
       expect(providerReads).toBe(0);
     }),
@@ -193,7 +202,9 @@ describe("CodexThreadRpcWorkflow", () => {
   it.effect("reports unavailable Codex providers without touching persistence", () =>
     Effect.gen(function* () {
       const workflow = yield* makeWorkflow({});
-      const error = yield* Effect.flip(workflow.resume({ threadId: "provider-thread" }));
+      const error = yield* Effect.flip(
+        workflow.resume({ threadId: "provider-thread" }).pipe(Effect.provide(NodeServices.layer)),
+      );
       expect(error.message).toBe("No enabled Codex provider instance is available.");
     }),
   );
@@ -205,7 +216,7 @@ describe("CodexThreadRpcWorkflow", () => {
         fork: () =>
           Effect.sync(() => {
             imports += 1;
-          }).pipe(Effect.zipRight(Effect.die("unexpected fork import"))),
+          }).pipe(Effect.andThen(Effect.die("unexpected fork import"))),
       };
       const directory = {
         ...baseProviderSessionDirectory,
@@ -215,10 +226,10 @@ describe("CodexThreadRpcWorkflow", () => {
         latestTurn: {
           turnId: TurnId.make("turn-running"),
           state: "running",
+          requestedAt: now,
           startedAt: now,
           completedAt: null,
-          checkpointRef: null,
-          summary: null,
+          assistantMessageId: null,
         },
       });
       const busyWorkflow = yield* makeWorkflow({
@@ -244,6 +255,7 @@ describe("CodexThreadRpcWorkflow", () => {
             attachments: [],
             turnId: null,
             createdAt: now,
+            updatedAt: now,
             streaming: false,
           },
         ],
@@ -360,8 +372,9 @@ describe("CodexThreadRpcWorkflow", () => {
           ...baseEngine,
           dispatch: () =>
             Effect.fail(
-              new OrchestrationDispatchCommandError({
-                message: "relationship activity failed",
+              new OrchestrationCommandInvariantError({
+                commandType: "thread.activity.append",
+                detail: "relationship activity failed",
               }),
             ),
         },
