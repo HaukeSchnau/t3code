@@ -16,7 +16,6 @@ const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");
 const turnId = TurnId.make("turn-1");
 const completedAt = "2026-06-16T19:42:44.451Z";
-const recentNow = Date.parse("2026-06-16T19:50:00.000Z");
 
 function makeLatestTurn(
   overrides: Partial<NonNullable<SidebarThreadSummary["latestTurn"]>> = {},
@@ -112,41 +111,24 @@ describe("deriveMonitorTimelineEntries", () => {
 });
 
 describe("resolveMonitorThreadCandidate", () => {
-  it("hides settled threads even when they completed recently", () => {
+  it("treats an idle default-mode thread as ready", () => {
     const candidate = resolveMonitorThreadCandidate(
-      makeThread({
-        settledOverride: "settled",
-        settledAt: completedAt,
-      }),
-      recentNow,
+      makeThread({ hasActionableProposedPlan: true, session: makeSession() }),
     );
 
-    expect(candidate).toBeNull();
+    expect(candidate.reason).toBe("ready");
   });
 
-  it("treats a completed default-mode thread with an old unimplemented plan as complete", () => {
-    const candidate = resolveMonitorThreadCandidate(
-      makeThread({
-        hasActionableProposedPlan: true,
-        session: makeSession(),
-      }),
-      recentNow,
-    );
-
-    expect(candidate?.reason).toBe("recent");
-  });
-
-  it("classifies settled plan-mode threads with an unimplemented plan as plan ready", () => {
+  it("classifies plan-mode threads with an unimplemented plan as plan ready", () => {
     const candidate = resolveMonitorThreadCandidate(
       makeThread({
         interactionMode: "plan",
         hasActionableProposedPlan: true,
         session: makeSession(),
       }),
-      recentNow,
     );
 
-    expect(candidate?.reason).toBe("plan");
+    expect(candidate.reason).toBe("plan");
   });
 
   it("does not keep a thread blocked when a completed turn is newer than the session error", () => {
@@ -159,10 +141,9 @@ describe("resolveMonitorThreadCandidate", () => {
           updatedAt: "2026-06-16T19:34:27.275Z",
         }),
       }),
-      recentNow,
     );
 
-    expect(candidate?.reason).toBe("recent");
+    expect(candidate.reason).toBe("ready");
   });
 
   it("keeps current session errors blocked", () => {
@@ -175,9 +156,8 @@ describe("resolveMonitorThreadCandidate", () => {
           updatedAt: "2026-06-16T19:45:00.000Z",
         }),
       }),
-      recentNow,
     );
 
-    expect(candidate?.reason).toBe("error");
+    expect(candidate.reason).toBe("error");
   });
 });
