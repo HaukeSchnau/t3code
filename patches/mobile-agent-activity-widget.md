@@ -19,10 +19,19 @@ WidgetKit and ActivityKit store separate layouts and update state through differ
 - Clear the widget on cloud sign-out and seed it immediately when local agent work begins.
 - Keep the serialized widget render function self-contained; Expo serializes it into the extension
   bundle and cannot resolve module-local rendering helpers.
+- Enable the `remote-notification` background mode so ActivityKit and notification updates can be
+  processed while the app is suspended.
+- Keep the APNs entitlement, embedded relay registration environment, and actual signing mode in
+  agreement. Local Xcode builds use `T3CODE_APNS_ENVIRONMENT=sandbox`; distribution builds default
+  to production.
+- Keep the widget extension's marketing version and build number aligned with the containing app;
+  App Store validation rejects mismatched extension metadata.
 
 ## Upstream Touch Points
 
 - `apps/mobile/app.config.ts`
+- `apps/mobile/plugins/lib/syncWidgetBuildVersions.cjs`
+- `apps/mobile/plugins/withWidgetLogoAsset.cjs`
 - `apps/mobile/src/widgets/AgentActivity.tsx`
 - `apps/mobile/src/features/agent-awareness/remoteRegistration.ts`
 
@@ -34,5 +43,7 @@ background in SDK 56, making the `@expo/ui` modifier an application responsibili
 - Run the focused `AgentActivity` and remote-registration tests.
 - Typecheck `@t3tools/mobile` and run the native static checks.
 - Prebuild and install an iOS app with the widget/app-group entitlements.
+- Inspect the signed app's `aps-environment`, `UIBackgroundModes`, embedded Expo config, and widget
+  extension version before testing relay delivery.
 - On a physical device, confirm an existing widget no longer shows “Please adopt
   containerBackground API” and renders idle or aggregate content after opening the app.
