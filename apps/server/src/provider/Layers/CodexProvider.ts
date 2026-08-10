@@ -336,6 +336,72 @@ export function buildCodexInitializeParams(): CodexSchema.V1InitializeParams {
   };
 }
 
+interface CodexAppServerConnectionInput {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly launchArgs?: string;
+  readonly cwd: string;
+  readonly environment?: NodeJS.ProcessEnv;
+}
+
+const makeInitializedCodexAppServerClient = Effect.fn("makeInitializedCodexAppServerClient")(
+  function* (input: CodexAppServerConnectionInput) {
+    // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
+    // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
+    // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
+    // Expand here for parity with `CodexTextGeneration`/`CodexSessionRuntime`.
+    const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const environment = {
+      ...input.environment,
+      ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
+    };
+    const spawnCommand = yield* resolveSpawnCommand(
+      input.binaryPath,
+      codexAppServerArgs(input.launchArgs),
+      {
+        env: environment,
+        extendEnv: true,
+      },
+    );
+    const child = yield* spawner
+      .spawn(
+        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+          cwd: input.cwd,
+          env: environment,
+          extendEnv: true,
+          forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
+          shell: spawnCommand.shell,
+        }),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new CodexErrors.CodexAppServerSpawnError({
+              command: `${input.binaryPath} app-server`,
+              cause,
+            }),
+        ),
+      );
+    const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
+    const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
+      Effect.provide(clientContext),
+    );
+
+    const initialize = yield* client.request("initialize", buildCodexInitializeParams());
+    yield* client.notify("initialized", undefined);
+
+    return { client, initialize };
+  },
+);
+
+export const refreshCodexManagedAuth = Effect.fn("refreshCodexManagedAuth")(function* (
+  input: CodexAppServerConnectionInput,
+) {
+  const { client } = yield* makeInitializedCodexAppServerClient(input);
+  yield* client.request("account/read", { refreshToken: true });
+});
+
 const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(function* (input: {
   readonly binaryPath: string;
   readonly homePath?: string;
@@ -344,59 +410,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly customModels?: ReadonlyArray<string>;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
-  // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
-  // so `CODEX_HOME=~/.codex_work` would reach codex verbatim and trip
-  // "CODEX_HOME points to '~/.codex_work', but that path does not exist".
-  // Expand here for parity with `CodexTextGeneration`/`CodexSessionRuntime`.
-  const resolvedHomePath = input.homePath ? expandHomePath(input.homePath) : undefined;
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-  const environment = {
-    ...input.environment,
-    ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
-  };
-  const spawnCommand = yield* resolveSpawnCommand(
-    input.binaryPath,
-    codexAppServerArgs(input.launchArgs),
-    {
-      env: environment,
-      extendEnv: true,
-    },
-  );
-  const child = yield* spawner
-    .spawn(
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        cwd: input.cwd,
-        env: environment,
-        extendEnv: true,
-        forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
-        shell: spawnCommand.shell,
-      }),
-    )
-    .pipe(
-      Effect.mapError(
-        (cause) =>
-          new CodexErrors.CodexAppServerSpawnError({
-            command: `${input.binaryPath} app-server`,
-            cause,
-          }),
-      ),
-    );
-  const clientContext = yield* Layer.build(CodexClient.layerChildProcess(child));
-  const client = yield* Effect.service(CodexClient.CodexAppServerClient).pipe(
-    Effect.provide(clientContext),
-  );
-
-  const initialize = yield* client.request("initialize", {
-    clientInfo: {
-      name: "t3code_desktop",
-      title: "T3 Code Desktop",
-      version: "0.1.0",
-    },
-    capabilities: {
-      experimentalApi: true,
-    },
-  });
-  yield* client.notify("initialized", undefined);
+  const { client, initialize } = yield* makeInitializedCodexAppServerClient(input);
 
   // Extract the version string after the first '/' in userAgent, up to the next space or the end
   const versionMatch = initialize.userAgent.match(/\/([^\s]+)/);
