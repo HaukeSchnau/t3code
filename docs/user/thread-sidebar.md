@@ -25,3 +25,10 @@ from older T3 Code versions remain unchanged until you regenerate their titles.
 
 Turn off **Automatic thread titles** in General settings to keep first-message generation
 without later automatic updates. Explicit title regeneration remains available.
+
+## Environment artwork
+
+Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in
+the send button. Choose **Artwork**, **Version pill**, or **None** in Settings under environment
+identification. Artwork is recolored to match each built-in theme. Custom themes use the **Version
+pill** fallback because their colors are not controlled by T3 Code.
