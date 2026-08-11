@@ -388,7 +388,10 @@ export const make = Effect.gen(function* () {
       };
     }
     const pushToken = input.device.registration.pushToken;
-    if (!notification || !pushToken) return input.device;
+    if (!notification) {
+      return { ...input.device, lastAggregate: input.aggregate };
+    }
+    if (!pushToken) return input.device;
     const target = deliveryTarget(input.device, pushToken);
     if (!target) return input.device;
     const result = yield* apns

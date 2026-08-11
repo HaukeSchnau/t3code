@@ -4,11 +4,49 @@ import type {
   RelayDeviceRegistrationRequest,
 } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
+import * as TestClock from "effect/testing/TestClock";
 
+import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
+import * as ApnsProvider from "./ApnsProvider.ts";
 import {
   alertForLocalAgentActivityTransition,
+  make as makeLocalAgentAwareness,
   makeLocalAgentActivityAggregate,
 } from "./LocalAgentAwareness.ts";
+
+function makeMemorySecretStore() {
+  const values = new Map<string, Uint8Array>();
+  return {
+    get: ((name) =>
+      Effect.sync(() => {
+        const value = values.get(name);
+        return value === undefined ? Option.none() : Option.some(Uint8Array.from(value));
+      })) satisfies ServerSecretStore.ServerSecretStore["Service"]["get"],
+    set: ((name, value) =>
+      Effect.sync(() => {
+        values.set(name, Uint8Array.from(value));
+      })) satisfies ServerSecretStore.ServerSecretStore["Service"]["set"],
+    create: ((name, value) =>
+      Effect.sync(() => {
+        values.set(name, Uint8Array.from(value));
+      })) satisfies ServerSecretStore.ServerSecretStore["Service"]["create"],
+    getOrCreateRandom: ((name, bytes) =>
+      Effect.sync(() => {
+        const existing = values.get(name);
+        if (existing) return existing;
+        const generated = new Uint8Array(bytes);
+        values.set(name, generated);
+        return generated;
+      })) satisfies ServerSecretStore.ServerSecretStore["Service"]["getOrCreateRandom"],
+    remove: ((name) =>
+      Effect.sync(() => {
+        values.delete(name);
+      })) satisfies ServerSecretStore.ServerSecretStore["Service"]["remove"],
+  } satisfies ServerSecretStore.ServerSecretStore["Service"];
+}
 
 const runningState = {
   environmentId: EnvironmentId.make("environment-1"),
@@ -169,4 +207,45 @@ describe("local agent-awareness aggregation", () => {
       }),
     ).toEqual({ title: "Needs approval", body: "Approval: T3 Code" });
   });
+
+  it.effect("delivers repeated completion notifications for the same thread", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-10T12:01:00.000Z"));
+      const deliveryCount = yield* Ref.make(0);
+      const apns = {
+        configured: true,
+        sendLiveActivity: () => Effect.die("Live Activity delivery was not expected"),
+        sendNotification: () =>
+          Ref.update(deliveryCount, (count) => count + 1).pipe(
+            Effect.as({ ok: true, status: 200, reason: null, apnsId: "apns-id" }),
+          ),
+      } satisfies ApnsProvider.ApnsProvider["Service"];
+      const awareness = yield* makeLocalAgentAwareness.pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, makeMemorySecretStore()),
+        Effect.provideService(ApnsProvider.ApnsProvider, apns),
+      );
+      yield* awareness.registerDevice({
+        ...registration,
+        preferences: { ...registration.preferences, liveActivitiesEnabled: false },
+      });
+
+      const publish = (phase: "running" | "completed", updatedAt: string) =>
+        awareness.publish({
+          threadId: runningState.threadId,
+          state: {
+            ...runningState,
+            phase,
+            headline: phase === "completed" ? "Done" : "Working",
+            updatedAt,
+          },
+        });
+
+      yield* publish("running", "2026-08-10T12:00:00.000Z");
+      yield* publish("completed", "2026-08-10T12:00:10.000Z");
+      yield* publish("running", "2026-08-10T12:00:20.000Z");
+      yield* publish("completed", "2026-08-10T12:00:30.000Z");
+
+      expect(yield* Ref.get(deliveryCount)).toBe(2);
+    }),
+  );
 });
