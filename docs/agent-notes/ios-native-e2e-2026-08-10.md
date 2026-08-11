@@ -24,6 +24,10 @@ install a verified build.
   trust boundary for each environment.
 - Signed development and Release builds are installed on the physical iPhone. The Release build
   uses sandbox APNs for direct Xcode installation and has upstream Expo OTA delivery disabled.
+- Apple APNs provider key `LLC3MC4S8K` is configured on the production server for team
+  `2243J9RD68`; the private key remains outside this repository.
+- Real APNs delivery, Dynamic Island updates, the expanded Lock Screen Live Activity, and remote
+  Live Activity end have been exercised successfully on the physical iPhone.
 
 ## Plan
 
@@ -82,11 +86,15 @@ install a verified build.
 - Contracts, web, desktop, and mobile typechecks pass. Focused agent-awareness tests pass (20 server
   tests and 10 mobile tests), as do the desktop protocol tests. The full server typecheck reaches
   only unrelated pre-existing `CodexThreadRpcWorkflow.test.ts` fixture errors.
+- Standard notification delivery without an ActivityKit token was accepted by Apple and advanced
+  the server's persisted aggregate. Repeating completion in the same thread exposed a baseline bug:
+  non-alerting running states were not persisted after a previous completion, suppressing the next
+  completion alert. The server now persists every non-alerting aggregate and a focused integration
+  regression proves two successive completion notifications are sent.
 
 ## Remaining work
 
-- Create and download an Apple Push Notifications provider key for Apple team `2243J9RD68`, then
-  configure it outside the repository. No `.p8` provider key is currently available on either host,
-  so Apple-originated notification delivery and remote Live Activity update/end transitions cannot
-  yet be proven. Once configured, repeat foreground, background, locked, and terminated delivery
-  plus Dynamic Island/Lock Screen update and end transitions.
+- Deploy the repeated-completion fix, then repeat the same-thread running/completed cycle against
+  the physical iPhone with Live Activities disabled and confirm the second APNs alert is accepted.
+- Re-enable Live Activity Updates, remove the disposable paired environment, and restore the Mac
+  developer-security setting after the final device pass.
