@@ -1,7 +1,6 @@
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
-import * as Updates from "expo-updates";
 import { useNavigation } from "@react-navigation/native";
 import { NativeStackScreenOptions } from "../../native/StackHeader";
 import { SymbolView } from "../../components/AppSymbol";
@@ -36,6 +35,7 @@ import { mobilePreferencesAtom, updateMobilePreferencesAtom } from "../../state/
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import {
   type AppUpdateCheckState,
+  isAppUpdateCheckAvailable,
   registerHiddenUpdateTap,
   runAppUpdateCheck,
 } from "../updates/app-updates";
@@ -398,6 +398,7 @@ function AppSettingsSection() {
   const variant = (Constants.expoConfig?.extra?.appVariant as string | undefined) ?? "production";
   const variantLabel = variant === "production" ? "" : capitalize(variant);
   const versionLabel = variantLabel ? `${version} · ${variantLabel}` : version;
+  const updateCheckAvailable = isAppUpdateCheckAvailable();
   const busy =
     updateState === "checking" || updateState === "downloading" || updateState === "restarting";
 
@@ -425,13 +426,13 @@ function AppSettingsSection() {
   }, []);
 
   const handleVersionPress = useCallback(() => {
-    if (!Updates.isEnabled || updateInFlight.current) return;
+    if (!updateCheckAvailable || updateInFlight.current) return;
     const tap = registerHiddenUpdateTap(hiddenUpdateTapCount.current);
     hiddenUpdateTapCount.current = tap.nextCount;
     if (tap.shouldCheck) {
       void checkForUpdate();
     }
-  }, [checkForUpdate]);
+  }, [checkForUpdate, updateCheckAvailable]);
 
   const statusLabel =
     updateState === "checking"
@@ -467,7 +468,7 @@ function AppSettingsSection() {
     <SettingsSection title="App">
       <SettingsRow icon="internaldrive" label="Client Storage" target="SettingsClientStorage" />
       <SettingsRow icon="doc.text" label="Legal" fullScreenTarget="SettingsLegal" />
-      {Updates.isEnabled ? (
+      {updateCheckAvailable ? (
         <Pressable
           accessibilityLabel={`Version ${versionLabel}`}
           accessibilityRole="text"

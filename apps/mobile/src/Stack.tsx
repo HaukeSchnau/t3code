@@ -130,7 +130,7 @@ const LEGAL_DOCUMENT_HEADER_OPTIONS: AppScreenOptions = {
   presentation: "fullScreenModal",
 };
 
-const SettingsSheetStack = createNativeStackNavigator({
+const SettingsContentStack = createNativeStackNavigator({
   initialRouteName: "Settings",
   screenOptions: {
     ...GLASS_HEADER_OPTIONS,
@@ -193,6 +193,21 @@ const SettingsSheetStack = createNativeStackNavigator({
       options: {
         title: "Usage",
       },
+    }),
+  },
+});
+
+// Keep the settings header mounted inside the sheet so in-sheet routes animate
+// consistently. This accountless fork has no separate authentication routes.
+const SettingsSheetStack = createNativeStackNavigator({
+  initialRouteName: "SettingsContent",
+  screenOptions: {
+    headerShown: false,
+  },
+  screens: {
+    SettingsContent: createNativeStackScreen({
+      screen: SettingsContentStack,
+      linking: "",
     }),
   },
 });

@@ -55,7 +55,9 @@ export function DesktopOpenWorkspaceEffect() {
       dispatchCreateProject: async (command) => {
         await api.orchestration.dispatchCommand(command);
       },
-      handleNewThread,
+      handleNewThread: async (projectRef, options) => {
+        await handleNewThread(projectRef, options);
+      },
       navigateToThread: async (threadRef) => {
         await navigate({
           to: "/$environmentId/$threadId",
