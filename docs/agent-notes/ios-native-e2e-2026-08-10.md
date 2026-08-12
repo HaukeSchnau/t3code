@@ -28,6 +28,9 @@ install a verified build.
   `2243J9RD68`; the private key remains outside this repository.
 - Real APNs delivery, Dynamic Island updates, the expanded Lock Screen Live Activity, and remote
   Live Activity end have been exercised successfully on the physical iPhone.
+- The repeated-completion fix and synchronized deploy lock are pushed on fork `main`. The matching
+  NixOS generation is active on `srv-2`; its production T3 process restart is safely deferred until
+  the server reports no active agent work.
 
 ## Plan
 
@@ -76,7 +79,7 @@ install a verified build.
 - Live Activity enrollment falls through an unavailable production environment process to a
   second connected environment. With no APNs provider configured, the switch stays off and the
   physical device shows the actionable message: `The paired server has no APNs provider
-  credentials configured.`
+credentials configured.`
 - A real-device failure exposed that the fork was still enrolled in upstream's Expo Updates
   project. A cached upstream bundle could override freshly installed fork code. Native OTA loading
   is now disabled and the signed app's embedded fork bundle is authoritative.
@@ -91,10 +94,16 @@ install a verified build.
   non-alerting running states were not persisted after a previous completion, suppressing the next
   completion alert. The server now persists every non-alerting aggregate and a focused integration
   regression proves two successive completion notifications are sent.
+- The fixed, deployed Nix binary passed the physical-device regression with Live Activities off.
+  Two delayed turns completed in the same thread; the persisted aggregate advanced from
+  `2026-08-12T00:39:42.895Z` to `2026-08-12T00:41:22.479Z`, and the second completion produced a
+  visible T3 notification banner on the iPhone Home Screen.
+- `just verify-host srv-2` passed after activation. Live Activity Updates were restored on the
+  iPhone, the disposable paired environment was removed from the app, its public route and service
+  were stopped, and its state directory was moved to the remote trash.
+- The Mac's temporary developer-security mode was disabled again after device automation.
 
 ## Remaining work
 
-- Deploy the repeated-completion fix, then repeat the same-thread running/completed cycle against
-  the physical iPhone with Live Activities disabled and confirm the second APNs alert is accepted.
-- Re-enable Live Activity Updates, remove the disposable paired environment, and restore the Mac
-  developer-security setting after the final device pass.
+- No native validation remains. The activated `t3code-deferred-restart` unit will restart the
+  production T3 process after this active thread becomes idle.
