@@ -494,10 +494,24 @@ export const OrchestrationUsageLimitsSnapshot = Schema.Struct({
 });
 export type OrchestrationUsageLimitsSnapshot = typeof OrchestrationUsageLimitsSnapshot.Type;
 
+export const OrchestrationUsageLimitObservation = Schema.Struct({
+  observedAt: IsoDateTime,
+  usedPercent: Schema.Number,
+});
+export type OrchestrationUsageLimitObservation = typeof OrchestrationUsageLimitObservation.Type;
+
+export const OrchestrationUsageLimitHistoryWindow = Schema.Struct({
+  resetsAt: IsoDateTime,
+  windowDurationMins: Schema.Number,
+  points: Schema.Array(OrchestrationUsageLimitObservation),
+});
+export type OrchestrationUsageLimitHistoryWindow = typeof OrchestrationUsageLimitHistoryWindow.Type;
+
 export const OrchestrationProviderUsageLimits = Schema.Struct({
   provider: ProviderDriverKind,
   providerInstanceId: ProviderInstanceId,
   usageLimits: OrchestrationUsageLimitsSnapshot,
+  history: Schema.optional(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
 });
 export type OrchestrationProviderUsageLimits = typeof OrchestrationProviderUsageLimits.Type;
 

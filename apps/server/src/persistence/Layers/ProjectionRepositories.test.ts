@@ -7,19 +7,84 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
+import { ProjectionProviderUsageLimitsRepositoryLive } from "./ProjectionProviderUsageLimits.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
+import { ProjectionProviderUsageLimitsRepository } from "../Services/ProjectionProviderUsageLimits.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionProviderUsageLimitsRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
+  it.effect("retains bounded usage changes for adaptive forecasting", () =>
+    Effect.gen(function* () {
+      const usageLimits = yield* ProjectionProviderUsageLimitsRepository;
+      const providerInstanceId = ProviderInstanceId.make("codex");
+      const resetAt = "2026-08-20T08:15:43.000Z";
+
+      const upsertUsage = (usedPercent: number, updatedAt: string, resetsAt = resetAt) =>
+        usageLimits.upsert({
+          provider: "codex",
+          providerInstanceId,
+          usageLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "pro",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: { usedPercent, resetsAt, windowDurationMins: 10080 },
+            secondary: null,
+            updatedAt,
+          },
+          updatedAt,
+        });
+
+      yield* upsertUsage(5, "2026-08-13T10:10:00.000Z");
+      yield* upsertUsage(5, "2026-08-13T10:11:00.000Z");
+      yield* upsertUsage(8, "2026-08-13T12:10:00.000Z");
+
+      const persisted = Option.getOrThrow(
+        yield* usageLimits.getByProviderInstanceId({ providerInstanceId }),
+      );
+      assert.deepStrictEqual(persisted.history, [
+        {
+          resetsAt: resetAt,
+          windowDurationMins: 10080,
+          points: [
+            { observedAt: "2026-08-13T10:10:00.000Z", usedPercent: 5 },
+            { observedAt: "2026-08-13T12:10:00.000Z", usedPercent: 8 },
+          ],
+        },
+      ]);
+
+      for (let week = 1; week <= 9; week += 1) {
+        const resetsAt = new Date(
+          Date.parse(resetAt) + week * 7 * 24 * 60 * 60 * 1000,
+        ).toISOString();
+        yield* upsertUsage(
+          week,
+          new Date(Date.parse(resetsAt) - 6 * 24 * 60 * 60 * 1000).toISOString(),
+          resetsAt,
+        );
+      }
+
+      const bounded = Option.getOrThrow(
+        yield* usageLimits.getByProviderInstanceId({ providerInstanceId }),
+      );
+      assert.strictEqual(bounded.history.length, 8);
+      assert.ok(
+        bounded.history.every((window) => window.points.every((point) => point.usedPercent > 0)),
+      );
+    }),
+  );
+
   it.effect("stores SQL NULL for missing project model options", () =>
     Effect.gen(function* () {
       const projects = yield* ProjectionProjectRepository;

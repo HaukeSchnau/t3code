@@ -5,6 +5,7 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
+  OrchestrationUsageLimitHistoryWindow,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationSession,
@@ -27,6 +28,7 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
+  ProviderInstanceId,
   ThreadId,
   ThreadWorkspaceId,
 } from "@t3tools/contracts";
@@ -47,7 +49,10 @@ import {
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
 import { ProjectionCheckpoint } from "../../persistence/Services/ProjectionCheckpoints.ts";
-import { ProjectionProviderUsageLimits } from "../../persistence/Services/ProjectionProviderUsageLimits.ts";
+import {
+  GetProjectionProviderUsageLimitsInput,
+  ProjectionProviderUsageLimits,
+} from "../../persistence/Services/ProjectionProviderUsageLimits.ts";
 import {
   layer as ThreadBackgroundLivenessLayer,
   ThreadBackgroundLivenessService,
@@ -110,6 +115,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
 const ProjectionProviderUsageLimitsDbRowSchema = ProjectionProviderUsageLimits.mapFields(
   Struct.assign({
     usageLimits: Schema.fromJsonString(OrchestrationUsageLimitsSnapshot),
+    history: Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
   }),
 );
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
@@ -802,9 +808,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           provider_instance_id AS "providerInstanceId",
           provider,
           usage_limits_json AS "usageLimits",
+          history_json AS "history",
           updated_at AS "updatedAt"
         FROM projection_provider_usage_limits
         ORDER BY updated_at DESC, provider_instance_id ASC
+      `,
+  });
+
+  const getProviderUsageLimitsRow = SqlSchema.findOneOption({
+    Request: GetProjectionProviderUsageLimitsInput,
+    Result: ProjectionProviderUsageLimitsDbRowSchema,
+    execute: ({ providerInstanceId }) =>
+      sql`
+        SELECT
+          provider_instance_id AS "providerInstanceId",
+          provider,
+          usage_limits_json AS "usageLimits",
+          history_json AS "history",
+          updated_at AS "updatedAt"
+        FROM projection_provider_usage_limits
+        WHERE provider_instance_id = ${providerInstanceId}
       `,
   });
 
@@ -1638,6 +1661,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   provider: row.provider,
                   providerInstanceId: row.providerInstanceId,
                   usageLimits: row.usageLimits,
+                  history: row.history,
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
@@ -1904,6 +1928,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   provider: row.provider,
                   providerInstanceId: row.providerInstanceId,
                   usageLimits: row.usageLimits,
+                  history: row.history,
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
@@ -2059,6 +2084,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   provider: row.provider,
                   providerInstanceId: row.providerInstanceId,
                   usageLimits: row.usageLimits,
+                  history: row.history,
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
@@ -2222,6 +2248,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   provider: row.provider,
                   providerInstanceId: row.providerInstanceId,
                   usageLimits: row.usageLimits,
+                  history: row.history,
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
@@ -2323,6 +2350,26 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
                 ),
               ),
+      ),
+    );
+
+  const getProviderUsageLimitsByInstanceId: NonNullable<
+    ProjectionSnapshotQueryShape["getProviderUsageLimitsByInstanceId"]
+  > = (providerInstanceId: ProviderInstanceId) =>
+    getProviderUsageLimitsRow({ providerInstanceId }).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProviderUsageLimitsByInstanceId:query",
+          "ProjectionSnapshotQuery.getProviderUsageLimitsByInstanceId:decodeRow",
+        ),
+      ),
+      Effect.map(
+        Option.map((row) => ({
+          provider: row.provider,
+          providerInstanceId: row.providerInstanceId,
+          usageLimits: row.usageLimits,
+          history: row.history,
+        })),
       ),
     );
 
@@ -2484,6 +2531,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     sql,
     getThreadShellById,
     getProjectShellById,
+    getProviderUsageLimitsByInstanceId,
   });
 
   interface ThreadDetailBounds {

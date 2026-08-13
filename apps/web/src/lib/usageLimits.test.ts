@@ -359,6 +359,77 @@ describe("usageLimits", () => {
     expect(displayed?.secondary?.projectedPercentAtReset).toBeCloseTo(50 / (95.75 / 104.5));
   });
 
+  it("forecasts from the typical remainder of recent completed windows", () => {
+    const durationMs = 7 * 24 * 60 * 60 * 1000;
+    const currentResetMs = Date.parse("2026-08-20T08:15:00.000Z");
+    const nowMs = currentResetMs - durationMs + 115 * 60 * 1000;
+    const history = [
+      { resetMs: currentResetMs - 3 * durationMs, usedAtNow: 2, finalUsed: 80 },
+      { resetMs: currentResetMs - 2 * durationMs, usedAtNow: 6, finalUsed: 100 },
+      { resetMs: currentResetMs - durationMs, usedAtNow: 4, finalUsed: 92 },
+    ].map(({ resetMs, usedAtNow, finalUsed }) => ({
+      resetsAt: new Date(resetMs).toISOString(),
+      windowDurationMins: 10080,
+      points: [
+        {
+          observedAt: new Date(resetMs - durationMs + 115 * 60 * 1000).toISOString(),
+          usedPercent: usedAtNow,
+        },
+        { observedAt: new Date(resetMs - 60 * 1000).toISOString(), usedPercent: finalUsed },
+      ],
+    }));
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources([
+      {
+        provider: "codex",
+        usageHistory: history,
+        usageLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "pro",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: {
+              usedPercent: 5,
+              resetsAt: new Date(currentResetMs).toISOString(),
+              windowDurationMins: 10080,
+            },
+            secondary: null,
+            updatedAt: new Date(nowMs).toISOString(),
+          },
+        ],
+      },
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
+
+    expect(displayed?.projectedPercentAtReset).toBeCloseTo(93);
+    expect(displayed?.projectionBasis).toBe("history");
+    expect(displayed?.historicalWindowCount).toBe(3);
+    expect(displayed?.projectedPercentRange).toEqual({ low: 83, high: 99 });
+  });
+
+  it("regularizes an opening-window pace when no history exists", () => {
+    const resetMs = Date.parse("2026-08-20T08:15:00.000Z");
+    const nowMs = resetMs - 7 * 24 * 60 * 60 * 1000 + 115 * 60 * 1000;
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-early", "account.rate-limits.updated", {
+        primary: {
+          usedPercent: 5,
+          resetsAt: new Date(resetMs).toISOString(),
+          windowDurationMins: 10080,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
+
+    expect(displayed?.projectedPercentAtReset).toBeGreaterThanOrEqual(95);
+    expect(displayed?.projectedPercentAtReset).toBeLessThanOrEqual(115);
+    expect(displayed?.projectionBasis).toBe("regularized");
+    expect(displayed?.historicalWindowCount).toBe(0);
+  });
+
   it("prefers the newest valid snapshot across matching provider threads", () => {
     const snapshot = deriveLatestUsageLimitsSnapshotForSources(
       [

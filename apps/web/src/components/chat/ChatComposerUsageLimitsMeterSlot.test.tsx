@@ -1,5 +1,5 @@
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
 import { type UsageLimitsSnapshot } from "../../lib/usageLimits";
@@ -21,6 +21,8 @@ const usageLimits: UsageLimitsSnapshot = {
 };
 
 describe("ComposerUsageLimitsMeterSlot", () => {
+  afterEach(() => vi.useRealTimers());
+
   it("renders usage limits for Codex", () => {
     const html = renderToStaticMarkup(
       <ComposerUsageLimitsMeterSlot
@@ -44,5 +46,47 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     );
 
     expect(html).toBe("");
+  });
+
+  it("explains forecasts learned from recent windows", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-13T10:10:00.000Z"));
+    const adaptiveUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      primary: {
+        usedPercent: 5,
+        resetsAt: "2026-08-20T08:15:00.000Z",
+        windowDurationMins: 10080,
+      },
+      updatedAt: "2026-08-13T10:10:00.000Z",
+      history: [80, 100, 92].map((finalUsed, index) => {
+        const resetMs = Date.parse("2026-08-13T08:15:00.000Z") - index * 7 * 24 * 60 * 60 * 1000;
+        return {
+          resetsAt: new Date(resetMs).toISOString(),
+          windowDurationMins: 10080,
+          points: [
+            {
+              observedAt: new Date(
+                resetMs - 7 * 24 * 60 * 60 * 1000 + 115 * 60 * 1000,
+              ).toISOString(),
+              usedPercent: 5,
+            },
+            { observedAt: new Date(resetMs - 60 * 1000).toISOString(), usedPercent: finalUsed },
+          ],
+        };
+      }),
+    };
+
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("codex")}
+        activeUsageLimits={adaptiveUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("forecast");
+    expect(html).toContain("Based on 3 recent windows");
+    expect(html).toContain("Typical range");
   });
 });

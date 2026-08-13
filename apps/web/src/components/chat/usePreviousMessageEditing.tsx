@@ -142,6 +142,7 @@ export function usePreviousMessageEditing({
         providerUsageLimits.map((entry) => ({
           provider: entry.provider,
           usageLimits: [entry.usageLimits],
+          usageHistory: entry.history,
         })),
         "codex",
       ),

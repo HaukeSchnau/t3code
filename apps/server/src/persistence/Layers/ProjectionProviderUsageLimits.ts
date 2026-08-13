@@ -1,10 +1,14 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Struct from "effect/Struct";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
-import { OrchestrationUsageLimitsSnapshot } from "@t3tools/contracts";
+import {
+  OrchestrationUsageLimitHistoryWindow,
+  OrchestrationUsageLimitsSnapshot,
+} from "@t3tools/contracts";
 
 import { toPersistenceDecodeError, toPersistenceSqlError } from "../Errors.ts";
 import {
@@ -13,10 +17,12 @@ import {
   ProjectionProviderUsageLimitsRepository,
   type ProjectionProviderUsageLimitsRepositoryShape,
 } from "../Services/ProjectionProviderUsageLimits.ts";
+import { appendProviderUsageHistory } from "../ProviderUsageHistory.ts";
 
 const ProjectionProviderUsageLimitsDbRowSchema = ProjectionProviderUsageLimits.mapFields(
   Struct.assign({
     usageLimits: Schema.fromJsonString(OrchestrationUsageLimitsSnapshot),
+    history: Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
   }),
 );
 
@@ -38,18 +44,21 @@ const makeProjectionProviderUsageLimitsRepository = Effect.gen(function* () {
           provider_instance_id,
           provider,
           usage_limits_json,
+          history_json,
           updated_at
         )
         VALUES (
           ${row.providerInstanceId},
           ${row.provider},
           ${JSON.stringify(row.usageLimits)},
+          ${JSON.stringify(row.history)},
           ${row.updatedAt}
         )
         ON CONFLICT (provider_instance_id)
         DO UPDATE SET
           provider = excluded.provider,
           usage_limits_json = excluded.usage_limits_json,
+          history_json = excluded.history_json,
           updated_at = excluded.updated_at
       `,
   });
@@ -63,6 +72,7 @@ const makeProjectionProviderUsageLimitsRepository = Effect.gen(function* () {
           provider_instance_id AS "providerInstanceId",
           provider,
           usage_limits_json AS "usageLimits",
+          history_json AS "history",
           updated_at AS "updatedAt"
         FROM projection_provider_usage_limits
         WHERE provider_instance_id = ${providerInstanceId}
@@ -78,6 +88,7 @@ const makeProjectionProviderUsageLimitsRepository = Effect.gen(function* () {
           provider_instance_id AS "providerInstanceId",
           provider,
           usage_limits_json AS "usageLimits",
+          history_json AS "history",
           updated_at AS "updatedAt"
         FROM projection_provider_usage_limits
         ORDER BY updated_at DESC, provider_instance_id ASC
@@ -85,14 +96,28 @@ const makeProjectionProviderUsageLimitsRepository = Effect.gen(function* () {
   });
 
   const upsert: ProjectionProviderUsageLimitsRepositoryShape["upsert"] = (row) =>
-    upsertProjectionProviderUsageLimitsRow(row).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionProviderUsageLimitsRepository.upsert:query",
-          "ProjectionProviderUsageLimitsRepository.upsert:encodeRequest",
+    sql
+      .withTransaction(
+        getProjectionProviderUsageLimitsRow({ providerInstanceId: row.providerInstanceId }).pipe(
+          Effect.flatMap((existing) =>
+            upsertProjectionProviderUsageLimitsRow({
+              ...row,
+              history: appendProviderUsageHistory(
+                Option.getOrUndefined(existing)?.history ?? [],
+                row.usageLimits,
+              ),
+            }),
+          ),
         ),
-      ),
-    );
+      )
+      .pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionProviderUsageLimitsRepository.upsert:query",
+            "ProjectionProviderUsageLimitsRepository.upsert:encodeRequest",
+          ),
+        ),
+      );
 
   const getByProviderInstanceId: ProjectionProviderUsageLimitsRepositoryShape["getByProviderInstanceId"] =
     (input) =>
