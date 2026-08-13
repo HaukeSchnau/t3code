@@ -914,39 +914,62 @@ describe("EnvironmentThreads", () => {
     }),
   );
 
-  it.effect("caps transient refresh attempts before restarting from the pinned cursor", () =>
-    Effect.gen(function* () {
-      const compactThread = compactThreadWithHistory();
-      const harness = yield* makeHarness({
-        cached: compactThread,
-        cachedActivityDetailMode: "compact",
-        requestedActivityDetailMode: "compact",
-        httpOutcomes: Array.from({ length: AUTHORITATIVE_REFRESH_MAX_ATTEMPTS }, () => ({
-          _tag: "TransientFailure" as const,
-          message: "temporary snapshot failure",
-        })),
-      });
-      expect(yield* Queue.take(harness.subscriptionAttempts)).toMatchObject({
-        afterSequence: CACHED_SNAPSHOT_SEQUENCE,
-      });
-      yield* Queue.offer(harness.inputs, historicalActivityAppended());
+  it.effect(
+    "falls back to a fresh snapshot after authoritative refresh retries are exhausted",
+    () =>
+      Effect.gen(function* () {
+        const compactThread = compactThreadWithHistory();
+        const recoveredThread = { ...compactThread, title: "Recovered from fresh snapshot" };
+        const harness = yield* makeHarness({
+          cached: compactThread,
+          cachedActivityDetailMode: "compact",
+          requestedActivityDetailMode: "compact",
+          completionMarker: true,
+          httpOutcomes: Array.from({ length: AUTHORITATIVE_REFRESH_MAX_ATTEMPTS }, () => ({
+            _tag: "TransientFailure" as const,
+            message: "temporary snapshot failure",
+          })),
+        });
+        expect(yield* Queue.take(harness.subscriptionAttempts)).toMatchObject({
+          afterSequence: CACHED_SNAPSHOT_SEQUENCE,
+        });
+        yield* Queue.offer(harness.inputs, historicalActivityAppended());
 
-      for (let attempt = 0; attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS; attempt += 1) {
-        for (let spin = 0; spin < 100; spin += 1) {
-          if ((yield* Ref.get(harness.loaderCalls)) >= attempt + 1) break;
-          yield* Effect.yieldNow;
+        for (let attempt = 0; attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+          for (let spin = 0; spin < 100; spin += 1) {
+            if ((yield* Ref.get(harness.loaderCalls)) >= attempt + 1) break;
+            yield* Effect.yieldNow;
+          }
+          if (attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS - 1) {
+            yield* TestClock.adjust(authoritativeRefreshTestDelay(attempt) + 1);
+          }
         }
-        if (attempt < AUTHORITATIVE_REFRESH_MAX_ATTEMPTS - 1) {
-          yield* TestClock.adjust(authoritativeRefreshTestDelay(attempt) + 1);
-        }
-      }
-      yield* TestClock.adjust("51 millis");
-      const restarted = yield* Queue.take(harness.subscriptionAttempts);
+        yield* TestClock.adjust("51 millis");
+        const restarted = yield* Queue.take(harness.subscriptionAttempts);
 
-      expect(restarted.afterSequence).toBe(CACHED_SNAPSHOT_SEQUENCE);
-      expect(yield* Ref.get(harness.loaderCalls)).toBe(AUTHORITATIVE_REFRESH_MAX_ATTEMPTS);
-      expect(Option.isSome((yield* Ref.get(harness.latest)).error)).toBe(true);
-    }),
+        expect(restarted.afterSequence).toBeUndefined();
+        expect(yield* Ref.get(harness.loaderCalls)).toBe(AUTHORITATIVE_REFRESH_MAX_ATTEMPTS);
+        expect(Option.isSome((yield* Ref.get(harness.latest)).error)).toBe(true);
+
+        yield* Queue.offer(harness.inputs, {
+          kind: "snapshot",
+          snapshot: {
+            snapshotSequence: CACHED_SNAPSHOT_SEQUENCE + 1,
+            activityDetailMode: "compact",
+            thread: recoveredThread,
+          },
+        });
+        yield* Queue.offer(harness.inputs, synchronized());
+
+        const recovered = yield* awaitThreadState(
+          harness.observed,
+          (value) =>
+            value.status === "live" &&
+            Option.isSome(value.data) &&
+            value.data.value.title === recoveredThread.title,
+        );
+        expect(Option.isNone(recovered.error)).toBe(true);
+      }),
   );
 
   it.effect("interrupts refresh backoff when the connection generation changes", () =>

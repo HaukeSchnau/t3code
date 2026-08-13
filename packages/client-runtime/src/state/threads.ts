@@ -243,6 +243,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       onSome: (snapshot) => snapshot.snapshotSequence,
     }),
   );
+  // An exhausted authoritative refresh means the cached cursor cannot be
+  // reduced safely. Keep rendering the cached data, but do not offer that
+  // cursor again: replaying from it would deterministically hit the same
+  // refresh boundary and leave the thread synchronizing forever.
+  const resumeCursorTrusted = yield* Ref.make(true);
   const awaitingCompletion = yield* Ref.make(false);
   // Bumped whenever loaded history may have been rewritten out from under an
   // in-flight older-page fetch (snapshot replacement, revert, deletion). A
@@ -503,6 +508,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
       }
       if (attempt === AUTHORITATIVE_REFRESH_MAX_ATTEMPTS - 1) {
+        yield* Ref.set(resumeCursorTrusted, false);
         return yield* new AuthoritativeRefreshRestart({ reason: "retries-exhausted" });
       }
       const delay = authoritativeRefreshRetryDelayMs({
@@ -557,6 +563,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       // in the preserved history with no event left to remove it. The
       // epoch bump discards any older-page fetch racing this snapshot.
       yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+      yield* Ref.set(resumeCursorTrusted, true);
       yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
       yield* setThread(item.snapshot.thread, pageStateFromSnapshot(item.snapshot.page));
       return;
@@ -863,8 +870,11 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               }
             }
 
-            const sequence = yield* SubscriptionRef.get(lastSequence);
-            const canResume = Option.isSome(current.data);
+            const [sequence, cursorTrusted] = yield* Effect.all([
+              SubscriptionRef.get(lastSequence),
+              Ref.get(resumeCursorTrusted),
+            ]);
+            const canResume = Option.isSome(current.data) && cursorTrusted;
             if (!supportsCompletionMarker && canResume) {
               yield* SubscriptionRef.update(state, (value) => ({
                 ...value,
