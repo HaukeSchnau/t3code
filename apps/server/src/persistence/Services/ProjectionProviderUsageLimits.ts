@@ -1,5 +1,6 @@
 import {
   IsoDateTime,
+  OrchestrationUsageLimitHistoryWindow,
   OrchestrationUsageLimitsSnapshot,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -15,9 +16,18 @@ export const ProjectionProviderUsageLimits = Schema.Struct({
   provider: ProviderDriverKind,
   providerInstanceId: ProviderInstanceId,
   usageLimits: OrchestrationUsageLimitsSnapshot,
+  history: Schema.Array(OrchestrationUsageLimitHistoryWindow),
   updatedAt: IsoDateTime,
 });
 export type ProjectionProviderUsageLimits = typeof ProjectionProviderUsageLimits.Type;
+
+export const UpsertProjectionProviderUsageLimits = Schema.Struct({
+  provider: ProviderDriverKind,
+  providerInstanceId: ProviderInstanceId,
+  usageLimits: OrchestrationUsageLimitsSnapshot,
+  updatedAt: IsoDateTime,
+});
+export type UpsertProjectionProviderUsageLimits = typeof UpsertProjectionProviderUsageLimits.Type;
 
 export const GetProjectionProviderUsageLimitsInput = Schema.Struct({
   providerInstanceId: ProviderInstanceId,
@@ -27,7 +37,7 @@ export type GetProjectionProviderUsageLimitsInput =
 
 export interface ProjectionProviderUsageLimitsRepositoryShape {
   readonly upsert: (
-    row: ProjectionProviderUsageLimits,
+    row: UpsertProjectionProviderUsageLimits,
   ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly getByProviderInstanceId: (
     input: GetProjectionProviderUsageLimitsInput,

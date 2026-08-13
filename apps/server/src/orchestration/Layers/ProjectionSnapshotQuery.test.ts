@@ -757,11 +757,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           provider_instance_id,
           provider,
           usage_limits_json,
+          history_json,
           updated_at
         ) VALUES (
           'codex',
           'codex',
           ${usageLimitsJson},
+          '[{"resetsAt":"2026-04-13T00:00:00.000Z","windowDurationMins":10080,"points":[{"observedAt":"2026-04-06T00:00:08.000Z","usedPercent":5}]}]',
           '2026-04-06T00:00:08.000Z'
         )
       `;
@@ -802,6 +804,13 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
       assert.equal(shellSnapshot.threads[0]?.workspaceId, "workspace-active");
       assert.equal(shellSnapshot.threads[0]?.backgroundLiveness, "working");
       assert.equal(shellSnapshot.usageLimits[0]?.providerInstanceId, "codex");
+      assert.deepStrictEqual(shellSnapshot.usageLimits[0]?.history, [
+        {
+          resetsAt: "2026-04-13T00:00:00.000Z",
+          windowDurationMins: 10080,
+          points: [{ observedAt: "2026-04-06T00:00:08.000Z", usedPercent: 5 }],
+        },
+      ]);
 
       const activeThreadShell = yield* snapshotQuery.getThreadShellById(
         ThreadId.make("thread-active"),

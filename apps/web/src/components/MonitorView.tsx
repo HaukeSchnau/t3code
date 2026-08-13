@@ -736,6 +736,7 @@ function MonitorThreadActions({
         providerUsageLimits.map((entry) => ({
           provider: entry.provider,
           usageLimits: [entry.usageLimits],
+          usageHistory: entry.history,
         })),
         ProviderDriverKind.make("codex"),
       ),

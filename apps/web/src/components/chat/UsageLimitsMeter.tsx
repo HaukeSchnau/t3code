@@ -162,6 +162,19 @@ function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): strin
   return "Reset time unavailable";
 }
 
+function formatProjectionBasis(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
+  if (windowSnapshot.projectionBasis !== "history" || windowSnapshot.historicalWindowCount <= 0) {
+    return windowSnapshot.projectionBasis === "regularized" ? "Early estimate" : null;
+  }
+  const suffix = windowSnapshot.historicalWindowCount === 1 ? "window" : "windows";
+  return `Based on ${windowSnapshot.historicalWindowCount} recent ${suffix}`;
+}
+
+function formatProjectionRange(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
+  const range = windowSnapshot.projectedPercentRange;
+  return range ? `Typical range: ${formatPercent(range.low)}–${formatPercent(range.high)}` : null;
+}
+
 export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; compact?: boolean }) {
   const [nowMs, setNowMs] = useState(() => Date.now());
 
@@ -215,7 +228,13 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
     visibleWindows.length > 0
       ? `${usage.limitName ?? "Codex usage"}. ${visibleWindows
           .map(({ label, snapshot }) => {
-            return [label, formatPercent(snapshot.usedPercent), windowStatusLabel(snapshot.status)]
+            return [
+              label,
+              `${formatPercent(readInlineProjectedPercent(snapshot))} forecast`,
+              `${formatPercent(snapshot.usedPercent)} used`,
+              formatProjectionBasis(snapshot),
+              formatProjectionRange(snapshot),
+            ]
               .filter((part) => part && part.length > 0)
               .join(" ");
           })
@@ -298,14 +317,16 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
 
             const label = buildWindowLabel(windowSnapshot.durationLabel, index === 0 ? "5h" : "1w");
             const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
+            const projectionBasis = formatProjectionBasis(windowSnapshot);
+            const projectionRange = formatProjectionRange(windowSnapshot);
             const assessment =
               windowSnapshot.status === "reached"
                 ? "Limit reached."
                 : windowSnapshot.status === "atRisk"
-                  ? `At current pace, projects to ${projectedUsage ?? "100%+"} by reset.`
+                  ? `Forecast: ${projectedUsage ?? "100%+"} by reset.`
                   : windowSnapshot.status === "ok"
-                    ? `On pace to land near ${projectedUsage ?? "0%"} by reset.`
-                    : "Pace estimate unavailable.";
+                    ? `Forecast: ${projectedUsage ?? "0%"} by reset.`
+                    : "Forecast unavailable.";
 
             return (
               <div
@@ -324,6 +345,12 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                   {formatResetLine(windowSnapshot)}
                 </div>
                 <div className="text-xs text-muted-foreground">{assessment}</div>
+                {projectionBasis ? (
+                  <div className="text-xs text-muted-foreground">{projectionBasis}</div>
+                ) : null}
+                {projectionRange ? (
+                  <div className="text-xs text-muted-foreground">{projectionRange}</div>
+                ) : null}
               </div>
             );
           })}

@@ -1,4 +1,7 @@
-import type { OrchestrationThreadActivity } from "@t3tools/contracts";
+import type {
+  OrchestrationThreadActivity,
+  OrchestrationUsageLimitHistoryWindow,
+} from "@t3tools/contracts";
 
 import { formatRelativeTimeUntilLabel } from "../timestampFormat";
 
@@ -9,6 +12,9 @@ const SLEEP_START_HOUR_LOCAL = 2;
 const SLEEP_END_HOUR_LOCAL = 7;
 const SLEEP_USAGE_WEIGHT = 0;
 const RESET_WINDOW_TOLERANCE_MS = 60 * 1000;
+const REGULARIZED_PACE_CONFIDENCE_PERCENT = 50;
+const HISTORY_FULL_CONFIDENCE_WINDOWS = 3;
+const HISTORY_RECENCY_HALF_LIFE_WINDOWS = 3;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -91,12 +97,14 @@ export interface UsageLimitsSnapshot {
   } | null;
   primary: UsageLimitWindowSnapshot | null;
   secondary: UsageLimitWindowSnapshot | null;
+  history?: ReadonlyArray<OrchestrationUsageLimitHistoryWindow> | undefined;
   updatedAt: string;
 }
 
 export interface UsageLimitsActivitySource {
   provider: string | null;
   usageLimits?: ReadonlyArray<UsageLimitsSnapshot> | null | undefined;
+  usageHistory?: ReadonlyArray<OrchestrationUsageLimitHistoryWindow> | null | undefined;
   activities?: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
 }
 
@@ -110,6 +118,9 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
   // hours and low-usage weekend hours are discounted.
   elapsedPercent: number | null;
   projectedPercentAtReset: number | null;
+  projectedPercentRange: { readonly low: number; readonly high: number } | null;
+  projectionBasis: "history" | "regularized" | null;
+  historicalWindowCount: number;
   status: UsageLimitWindowStatus;
 }
 
@@ -349,7 +360,110 @@ function deriveProjectedPercentAtReset(
   if (elapsedPercent === null || elapsedPercent <= 0) {
     return null;
   }
-  return (usedPercent / elapsedPercent) * 100;
+  const linearProjection = (usedPercent / elapsedPercent) * 100;
+  const confidence = Math.min(1, elapsedPercent / REGULARIZED_PACE_CONFIDENCE_PERCENT);
+  return 100 + (linearProjection - 100) * confidence;
+}
+
+function weightedMedian(
+  values: ReadonlyArray<{ readonly value: number; readonly weight: number }>,
+): number {
+  const sorted = values.toSorted((left, right) => left.value - right.value);
+  const midpoint = sorted.reduce((total, item) => total + item.weight, 0) / 2;
+  let accumulated = 0;
+  for (const item of sorted) {
+    accumulated += item.weight;
+    if (accumulated >= midpoint) {
+      return item.value;
+    }
+  }
+  return sorted.at(-1)?.value ?? 0;
+}
+
+function deriveHistoricalProjection(input: {
+  readonly window: UsageLimitWindowSnapshot;
+  readonly history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>;
+  readonly nowMs: number;
+  readonly regularizedProjection: number | null;
+}): {
+  readonly projectedPercentAtReset: number | null;
+  readonly projectedPercentRange: { readonly low: number; readonly high: number } | null;
+  readonly projectionBasis: "history" | "regularized" | null;
+  readonly historicalWindowCount: number;
+} {
+  const durationMins = input.window.windowDurationMins;
+  const resetMs = parseTimestampMs(input.window.resetsAt);
+  if (!durationMins || durationMins <= 0 || resetMs === null) {
+    return {
+      projectedPercentAtReset: input.regularizedProjection,
+      projectedPercentRange: null,
+      projectionBasis: input.regularizedProjection === null ? null : "regularized",
+      historicalWindowCount: 0,
+    };
+  }
+
+  const durationMs = durationMins * 60 * 1000;
+  const windowStartMs = resetMs - durationMs;
+  const elapsedMs = Math.min(durationMs, Math.max(0, input.nowMs - windowStartMs));
+  const completed = input.history
+    .filter(
+      (window) =>
+        window.windowDurationMins === durationMins &&
+        Date.parse(window.resetsAt) <= windowStartMs + RESET_WINDOW_TOLERANCE_MS &&
+        window.points.length > 0,
+    )
+    .toSorted((left, right) => Date.parse(left.resetsAt) - Date.parse(right.resetsAt));
+
+  const estimates = completed.flatMap((window, index) => {
+    const historicalResetMs = Date.parse(window.resetsAt);
+    const historicalCutoffMs = historicalResetMs - durationMs + elapsedMs;
+    const points = window.points
+      .filter((point) => Number.isFinite(Date.parse(point.observedAt)))
+      .toSorted((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
+    const finalUsed = points.at(-1)?.usedPercent;
+    if (finalUsed === undefined) {
+      return [];
+    }
+    const usedAtCutoff = points.findLast(
+      (point) => Date.parse(point.observedAt) <= historicalCutoffMs,
+    )?.usedPercent;
+    const remaining = Math.max(0, finalUsed - (usedAtCutoff ?? 0));
+    const age = completed.length - index - 1;
+    return [
+      {
+        value: input.window.usedPercent + remaining,
+        weight: 2 ** (-age / HISTORY_RECENCY_HALF_LIFE_WINDOWS),
+      },
+    ];
+  });
+
+  if (estimates.length === 0) {
+    return {
+      projectedPercentAtReset: input.regularizedProjection,
+      projectedPercentRange: null,
+      projectionBasis: input.regularizedProjection === null ? null : "regularized",
+      historicalWindowCount: 0,
+    };
+  }
+
+  const historicalProjection = weightedMedian(estimates);
+  const historyConfidence = Math.min(1, estimates.length / HISTORY_FULL_CONFIDENCE_WINDOWS);
+  const projectedPercentAtReset =
+    input.regularizedProjection === null
+      ? historicalProjection
+      : input.regularizedProjection * (1 - historyConfidence) +
+        historicalProjection * historyConfidence;
+  const estimateValues = estimates.map((estimate) => estimate.value);
+
+  return {
+    projectedPercentAtReset,
+    projectedPercentRange:
+      estimates.length >= HISTORY_FULL_CONFIDENCE_WINDOWS
+        ? { low: Math.min(...estimateValues), high: Math.max(...estimateValues) }
+        : null,
+    projectionBasis: "history",
+    historicalWindowCount: estimates.length,
+  };
 }
 
 function deriveWindowStatus(input: {
@@ -369,6 +483,7 @@ function deriveWindowStatus(input: {
 function deriveWindowDisplay(
   window: UsageLimitWindowSnapshot | null,
   rateLimitReachedType: string | null,
+  history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>,
   nowMs: number,
 ): DerivedUsageLimitWindowSnapshot | null {
   if (!window) {
@@ -376,7 +491,13 @@ function deriveWindowDisplay(
   }
 
   const elapsedPercent = deriveProjectionElapsedPercent(window, nowMs);
-  const projectedPercentAtReset = deriveProjectedPercentAtReset(window.usedPercent, elapsedPercent);
+  const regularizedProjection = deriveProjectedPercentAtReset(window.usedPercent, elapsedPercent);
+  const projection = deriveHistoricalProjection({
+    window,
+    history,
+    nowMs,
+    regularizedProjection,
+  });
 
   return {
     ...window,
@@ -386,10 +507,10 @@ function deriveWindowDisplay(
       : null,
     resetAbsoluteLabel: formatAbsoluteResetLabel(window.resetsAt),
     elapsedPercent,
-    projectedPercentAtReset,
+    ...projection,
     status: deriveWindowStatus({
       usedPercent: window.usedPercent,
-      projectedPercentAtReset,
+      projectedPercentAtReset: projection.projectedPercentAtReset,
       rateLimitReachedType,
     }),
   };
@@ -550,6 +671,7 @@ function deriveLatestMetadataCandidate(
 
 function aggregateUsageLimitsSnapshots(
   candidates: ReadonlyArray<UsageLimitsSnapshotCandidate>,
+  history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow> = [],
 ): UsageLimitsSnapshot | null {
   const metadataCandidate = deriveLatestMetadataCandidate(candidates);
   if (!metadataCandidate) {
@@ -581,6 +703,7 @@ function aggregateUsageLimitsSnapshots(
     ...metadataCandidate.snapshot,
     primary: primary?.window ?? null,
     secondary: secondary?.window ?? null,
+    history,
     updatedAt: new Date(
       Math.max(
         metadataCandidate.updatedAtMs,
@@ -602,6 +725,7 @@ export function deriveLatestUsageLimitsSnapshotForSources(
   provider: string | null | undefined = null,
 ): UsageLimitsSnapshot | null {
   const candidates: Array<UsageLimitsSnapshotCandidate> = [];
+  const history: Array<OrchestrationUsageLimitHistoryWindow> = [];
 
   for (const source of sources) {
     if (provider && source.provider !== provider) {
@@ -612,9 +736,10 @@ export function deriveLatestUsageLimitsSnapshotForSources(
       ...collectUsageLimitsSnapshotCandidatesFromSnapshots(source.usageLimits ?? []),
       ...collectUsageLimitsSnapshotCandidates(source.activities ?? []),
     );
+    history.push(...(source.usageHistory ?? []));
   }
 
-  return aggregateUsageLimitsSnapshots(candidates);
+  return aggregateUsageLimitsSnapshots(candidates, history);
 }
 
 export function deriveDisplayedUsageLimitsSnapshot(
@@ -625,8 +750,19 @@ export function deriveDisplayedUsageLimitsSnapshot(
     return null;
   }
 
-  const primary = deriveWindowDisplay(snapshot.primary, snapshot.rateLimitReachedType, nowMs);
-  const secondary = deriveWindowDisplay(snapshot.secondary, snapshot.rateLimitReachedType, nowMs);
+  const history = snapshot.history ?? [];
+  const primary = deriveWindowDisplay(
+    snapshot.primary,
+    snapshot.rateLimitReachedType,
+    history,
+    nowMs,
+  );
+  const secondary = deriveWindowDisplay(
+    snapshot.secondary,
+    snapshot.rateLimitReachedType,
+    history,
+    nowMs,
+  );
   const compactWindow = primary ? "primary" : secondary ? "secondary" : null;
   const compactWindowStatus =
     compactWindow === "primary"
