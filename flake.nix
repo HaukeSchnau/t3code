@@ -50,8 +50,11 @@
           };
         };
 
-      mkT3CodePackage =
-        pkgs:
+      mkT3CodePackageWith =
+        {
+          pkgs,
+          preferLocalWebBuild ? false,
+        }:
         let
           nodejs = pkgs.nodejs_24;
           pnpm = mkPnpm pkgs nodejs;
@@ -169,6 +172,7 @@
           web = pkgs.stdenv.mkDerivation {
             pname = "t3code-web";
             version = packageJson.version;
+            preferLocalBuild = preferLocalWebBuild;
             src = webSource;
             pnpmDeps = webPnpmDeps;
             pnpmWorkspaces = [ "@t3tools/web..." ];
@@ -306,6 +310,8 @@
               --suffix PATH : "${runtimePath}" \
               --set-default NODE_ENV production
           '';
+
+      mkT3CodePackage = pkgs: mkT3CodePackageWith { inherit pkgs; };
 
       mkProjectRuntime =
         system:
@@ -451,7 +457,7 @@
     in
     {
       lib = {
-        inherit mkT3CodePackage;
+        inherit mkT3CodePackage mkT3CodePackageWith;
         project = projectDescriptor;
       };
 

@@ -253,6 +253,7 @@ export default defineConfig(() => {
     build: {
       outDir: "dist",
       emptyOutDir: true,
+      reportCompressedSize: false,
       sourcemap: buildSourcemap,
     },
   };
