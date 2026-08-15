@@ -34,6 +34,24 @@ export function nextCommandOutboxGenerationSequence(
   return Math.max(manifestSequence, ...fileNames.map((name) => generationSequence(name) ?? 0)) + 1;
 }
 
+const inFlightWrites = new Set<Promise<void>>();
+
+function trackInFlightWrite(operation: Promise<void>): Promise<void> {
+  inFlightWrites.add(operation);
+  void operation.catch(() => undefined).finally(() => inFlightWrites.delete(operation));
+  return operation;
+}
+
+/**
+ * Awaits queued-message writes so an app update restart cannot tear down the
+ * runtime while one is mid-file.
+ */
+export async function flushThreadOutboxWrites(): Promise<void> {
+  while (inFlightWrites.size > 0) {
+    await Promise.allSettled(inFlightWrites);
+  }
+}
+
 export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
   {
@@ -246,12 +264,16 @@ export function createThreadOutboxStorage(fileSystem: ThreadOutboxFileSystem): T
     write: async (message) => {
       const fileName = messageFileName(message.messageId);
       try {
-        const directory = await fileSystem.directory();
-        const file = await fileSystem.file(directory, fileName);
-        const temporary = await fileSystem.file(directory, `${file.name}.${Date.now()}.tmp`);
-        temporary.create({ intermediates: true, overwrite: true });
-        temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
-        await fileSystem.move(temporary, file, { overwrite: true });
+        await trackInFlightWrite(
+          (async () => {
+            const directory = await fileSystem.directory();
+            const file = await fileSystem.file(directory, fileName);
+            const temporary = await fileSystem.file(directory, `${file.name}.${Date.now()}.tmp`);
+            temporary.create({ intermediates: true, overwrite: true });
+            temporary.write(JSON.stringify(encodeQueuedThreadMessage(message)));
+            await fileSystem.move(temporary, file, { overwrite: true });
+          })(),
+        );
       } catch (cause) {
         throw new ThreadOutboxStorageError({
           operation: "write",

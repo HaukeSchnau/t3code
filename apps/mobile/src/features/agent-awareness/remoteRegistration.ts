@@ -9,6 +9,7 @@ import type {
   AgentAwarenessLiveActivityRegistrationInput,
   AgentAwarenessRegistrationResult,
   AgentAwarenessSnapshot,
+  EnvironmentId,
 } from "@t3tools/contracts";
 import { findErrorTraceId } from "@t3tools/client-runtime/errors";
 import {
@@ -18,6 +19,8 @@ import {
 } from "@t3tools/client-runtime/state/runtime";
 
 import { runtime } from "../../lib/runtime";
+import { appAtomRegistry } from "../../state/atom-registry";
+import { environmentServerConfigsAtom } from "../../state/server";
 import type { Preferences } from "../../persistence/mobile-preferences";
 import {
   loadAgentAwarenessDeviceId,
@@ -375,16 +378,36 @@ function unregisterDeviceWithEnvironment(deviceId: string): Effect.Effect<void, 
   });
 }
 
+// The environment descriptor advertises whether agent-activity publishes
+// currently leave that server (`capabilities.agentActivityPublishing`). Only
+// an explicit false skips the seed card: older servers omit the capability
+// but may still publish.
+function environmentPublishesAgentActivity(environmentId: EnvironmentId): boolean {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .agentActivityPublishing !== false
+  );
+}
+
 // Arms the lock-screen card the moment the user starts agent work from this
 // phone, while the app is still foregrounded and the fresh activity's token
 // can be registered immediately. The seeded row is a best-effort placeholder;
 // the server's registration replay repaints it with the authoritative
-// aggregate within seconds. No-ops when a card is already armed.
+// aggregate within seconds. No-ops when a card is already armed, and skips
+// environments that report publishing disabled — the seed would sit on
+// "Connecting" forever with no update ever arriving to repaint or end it.
 export function armAgentAwarenessLiveActivityForLocalWork(input: {
+  readonly environmentId: EnvironmentId;
   readonly threadTitle: string;
   readonly projectTitle: string;
 }): void {
   if (!canRegisterRemoteLiveActivities()) {
+    return;
+  }
+  if (!environmentPublishesAgentActivity(input.environmentId)) {
+    logRegistrationDebug("live activity arming skipped; environment does not publish", {
+      environmentId: input.environmentId,
+    });
     return;
   }
   void loadPreferences()

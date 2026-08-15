@@ -6,7 +6,9 @@ export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
   "desktop:consume-pending-open-workspace-requests";
 export const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";
+export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
+export const QUIT_SHORTCUT_CHANNEL = "desktop:quit-shortcut";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
 export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";
 export const UPDATE_STATE_CHANNEL = "desktop:update-state";
@@ -19,6 +21,7 @@ export const ENERGY_CAPTURE_PROCESS_SNAPSHOT_CHANNEL = "desktop:energy-capture-p
 export const ENERGY_WRITE_CAPTURE_ARTIFACT_CHANNEL = "desktop:energy-write-capture-artifact";
 export const ENERGY_REVEAL_CAPTURE_ARTIFACT_CHANNEL = "desktop:energy-reveal-capture-artifact";
 export const GET_APP_BRANDING_CHANNEL = "desktop:get-app-branding";
+export const GET_SYSTEM_LOCALE_CHANNEL = "desktop:get-system-locale";
 export const GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL = "desktop:get-local-environment-bootstraps";
 export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";

@@ -1406,7 +1406,6 @@ describe("OrchestrationEngine", () => {
 
     await system.dispose();
   });
-
   for (const scenario of [
     {
       commandType: "thread.turn.start",

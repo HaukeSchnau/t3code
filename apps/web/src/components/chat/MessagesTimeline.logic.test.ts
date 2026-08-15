@@ -8,6 +8,7 @@ import {
   normalizeCompactToolLabel,
   resolveAssistantMessageCopyState,
   shouldShowInitialConversationLoader,
+  shouldPreserveAssistantLineBreaks,
 } from "./MessagesTimeline.logic";
 
 describe("historical turn hydration", () => {
@@ -33,6 +34,17 @@ describe("initial conversation loading", () => {
   it("shows the loader only while synchronizing with no visible content", () => {
     expect(shouldShowInitialConversationLoader(0, true)).toBe(true);
     expect(shouldShowInitialConversationLoader(0, false)).toBe(false);
+  });
+});
+
+describe("shouldPreserveAssistantLineBreaks", () => {
+  it("preserves Claude insight formatting without changing regular markdown", () => {
+    expect(
+      shouldPreserveAssistantLineBreaks(
+        "★ Insight ─────────────────\\nFirst observation\\nSecond observation\\n─────────────────",
+      ),
+    ).toBe(true);
+    expect(shouldPreserveAssistantLineBreaks("A normal\\nmarkdown paragraph")).toBe(false);
   });
 });
 
