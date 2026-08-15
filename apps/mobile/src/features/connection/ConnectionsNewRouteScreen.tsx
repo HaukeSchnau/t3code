@@ -3,7 +3,7 @@ import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/Stac
 import { StackActions, useNavigation, type StaticScreenProps } from "@react-navigation/native";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Alert, Platform, ScrollView, View } from "react-native";
+import { Alert, Linking, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useThemeColor } from "../../lib/useThemeColor";
 
@@ -11,9 +11,8 @@ import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { ErrorBanner } from "../../components/ErrorBanner";
 import { ConnectionSheetButton } from "./ConnectionSheetButton";
-import { extractPairingUrlFromQrPayload } from "./pairing";
+import { buildPairingUrl, extractPairingUrlFromQrPayload, parsePairingUrl } from "./pairing";
 import { useRemoteConnections } from "../../state/use-remote-environment-registry";
-import { buildPairingUrl, parsePairingUrl } from "./pairing";
 import { resolveConnectionPairingAutomation } from "./connectionPairingAutomation";
 
 type ConnectionsNewRouteParams = {
@@ -43,8 +42,10 @@ export function ConnectionsNewRouteScreen({
   const consumedPairingUrlRef = useRef<string | null>(null);
 
   const pairingAutomation = resolveConnectionPairingAutomation({
-    routePairingUrl: params.pairingUrl,
-    routeAutoConnect: params.autoConnect,
+    // Deep-link prefill exists for development automation only. A production
+    // link must not arrive with attacker-chosen host and token already filled.
+    routePairingUrl: __DEV__ ? params.pairingUrl : undefined,
+    routeAutoConnect: __DEV__ ? params.autoConnect : undefined,
     developmentPairingUrl: __DEV__ ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL : undefined,
     developmentAutoConnect: __DEV__
       ? process.env.EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT
@@ -60,46 +61,6 @@ export function ConnectionsNewRouteScreen({
     setHostInput(host);
     setCodeInput(code);
   }, [connectionPairingUrl]);
-
-  useEffect(() => {
-    if (
-      pairingAutomation === null ||
-      consumedPairingUrlRef.current === pairingAutomation.pairingUrl
-    ) {
-      return;
-    }
-
-    const { pairingUrl, autoConnect } = pairingAutomation;
-    consumedPairingUrlRef.current = pairingUrl;
-    const { host, code } = parsePairingUrl(pairingUrl);
-    setHostInput(host);
-    setCodeInput(code);
-    onChangeConnectionPairingUrl(pairingUrl);
-
-    if (!autoConnect) return;
-
-    setIsSubmitting(true);
-    void onConnectPress(pairingUrl).then(
-      (result) => {
-        if (!AsyncResult.isSuccess(result)) {
-          setIsSubmitting(false);
-          return;
-        }
-        if (navigation.canGoBack()) {
-          navigation.goBack();
-        } else {
-          navigation.dispatch(StackActions.replace("Home"));
-        }
-      },
-      () => setIsSubmitting(false),
-    );
-  }, [
-    navigation,
-    onChangeConnectionPairingUrl,
-    onConnectPress,
-    pairingAutomation?.autoConnect,
-    pairingAutomation?.pairingUrl,
-  ]);
 
   useEffect(() => {
     if (pairingConnectionError) {
@@ -129,9 +90,21 @@ export function ConnectionsNewRouteScreen({
       return;
     }
 
+    if (permission.canAskAgain) {
+      Alert.alert(
+        "Camera access needed",
+        "Allow camera access to scan an environment pairing QR code.",
+      );
+      return;
+    }
+
     Alert.alert(
       "Camera access needed",
-      "Allow camera access to scan an environment pairing QR code.",
+      "Camera access was denied for this app. Open Settings to enable it.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Open Settings", onPress: () => void Linking.openSettings() },
+      ],
     );
   }, [cameraPermission?.granted, requestCameraPermission]);
 
@@ -169,22 +142,48 @@ export function ConnectionsNewRouteScreen({
     [onChangeConnectionPairingUrl, scannerLocked],
   );
 
-  const handleSubmit = useCallback(async () => {
-    setIsSubmitting(true);
-
-    const pairingUrl = buildPairingUrl(hostInput, codeInput);
-    onChangeConnectionPairingUrl(pairingUrl);
-    const result = await onConnectPress(pairingUrl);
-    if (AsyncResult.isSuccess(result)) {
-      if (navigation.canGoBack()) {
-        navigation.goBack();
-      } else {
-        navigation.dispatch(StackActions.replace("Home"));
+  const connectAndClose = useCallback(
+    async (pairingUrl: string, replaceWithHome: boolean) => {
+      setIsSubmitting(true);
+      onChangeConnectionPairingUrl(pairingUrl);
+      try {
+        const result = await onConnectPress(pairingUrl);
+        if (AsyncResult.isSuccess(result)) {
+          if (replaceWithHome || !navigation.canGoBack()) {
+            navigation.dispatch(StackActions.replace("Home"));
+          } else {
+            navigation.goBack();
+          }
+        }
+      } finally {
+        setIsSubmitting(false);
       }
-    } else {
-      setIsSubmitting(false);
+    },
+    [navigation, onChangeConnectionPairingUrl, onConnectPress],
+  );
+
+  const handleSubmit = useCallback(async () => {
+    await connectAndClose(buildPairingUrl(hostInput, codeInput), false);
+  }, [codeInput, connectAndClose, hostInput]);
+
+  useEffect(() => {
+    if (
+      pairingAutomation === null ||
+      consumedPairingUrlRef.current === pairingAutomation.pairingUrl
+    ) {
+      return;
     }
-  }, [codeInput, hostInput, onChangeConnectionPairingUrl, onConnectPress, navigation]);
+
+    const { pairingUrl, autoConnect } = pairingAutomation;
+    consumedPairingUrlRef.current = pairingUrl;
+    const { host, code } = parsePairingUrl(pairingUrl);
+    setHostInput(host);
+    setCodeInput(code);
+    onChangeConnectionPairingUrl(pairingUrl);
+    if (autoConnect) {
+      void connectAndClose(pairingUrl, true);
+    }
+  }, [connectAndClose, onChangeConnectionPairingUrl, pairingAutomation]);
 
   return (
     <View collapsable={false} className="flex-1 bg-sheet">

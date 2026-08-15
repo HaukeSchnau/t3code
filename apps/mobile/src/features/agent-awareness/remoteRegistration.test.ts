@@ -2,10 +2,13 @@ import { beforeEach, vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 
+import type { EnvironmentId } from "@t3tools/contracts";
+import type { Preferences } from "../../persistence/mobile-preferences";
 import type { AgentAwarenessEnvironmentTransport } from "./remoteRegistration";
 import {
   __resetAgentAwarenessRemoteRegistrationForTest,
   AgentAwarenessDeliveryUnavailableError,
+  armAgentAwarenessLiveActivityForLocalWork,
   getAgentAwarenessRegistrationStatus,
   mergeAgentAwarenessRegistrationPreferences,
   registerLiveActivityPushToken,
@@ -15,7 +18,14 @@ import {
 
 const activityMocks = vi.hoisted(() => ({
   getInstances: vi.fn(() => []),
+  start: vi.fn(() => ({})),
   updateSnapshot: vi.fn(),
+}));
+const environmentConfigsMock = vi.hoisted(() => ({
+  configs: new Map<
+    string,
+    { environment: { capabilities: { agentActivityPublishing?: boolean } } }
+  >(),
 }));
 const registrationRecord = vi.hoisted(() => ({
   value: null as { readonly identity: string; readonly signature: string } | null,
@@ -32,6 +42,10 @@ vi.mock("expo-constants", () => ({
   },
 }));
 
+vi.mock("expo-widgets", () => ({
+  addPushToStartTokenListener: vi.fn(() => ({ remove: vi.fn() })),
+}));
+
 vi.mock("expo-notifications", () => ({
   addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
   getDevicePushTokenAsync: vi.fn(() => Promise.resolve({ type: "ios", data: "apns-token" })),
@@ -44,8 +58,21 @@ vi.mock("react-native", () => ({
 }));
 
 vi.mock("../../widgets/AgentActivity", () => ({
-  default: { getInstances: activityMocks.getInstances },
+  default: {
+    getInstances: activityMocks.getInstances,
+    start: activityMocks.start,
+  },
   AgentActivityWidget: { updateSnapshot: activityMocks.updateSnapshot },
+}));
+
+vi.mock("../../state/atom-registry", () => ({
+  appAtomRegistry: {
+    get: () => environmentConfigsMock.configs,
+  },
+}));
+
+vi.mock("../../state/server", () => ({
+  environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
 }));
 
 vi.mock("../../lib/runtime", () => ({
@@ -88,6 +115,9 @@ describe("accountless agent awareness registration", () => {
     vi.stubGlobal("__DEV__", false);
     __resetAgentAwarenessRemoteRegistrationForTest();
     registrationRecord.value = null;
+    environmentConfigsMock.configs.clear();
+    activityMocks.getInstances.mockReset();
+    activityMocks.getInstances.mockReturnValue([]);
     vi.clearAllMocks();
   });
 
@@ -164,5 +194,54 @@ describe("accountless agent awareness registration", () => {
         activityPushToken: "activity-token",
       });
     });
+  });
+
+  it("skips the Live Activity seed when the environment reports publishing disabled", async () => {
+    const { loadPreferences } = await import("../../persistence/imperative");
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    environmentConfigsMock.configs.set("env-1", {
+      environment: { capabilities: { agentActivityPublishing: false } },
+    });
+
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-1" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(activityMocks.start).not.toHaveBeenCalled();
+  });
+
+  it("seeds the Live Activity for publishing and pre-capability environments", async () => {
+    const { loadPreferences } = await import("../../persistence/imperative");
+    environmentConfigsMock.configs.set("env-publishing", {
+      environment: { capabilities: { agentActivityPublishing: true } },
+    });
+
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-publishing" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(activityMocks.start).toHaveBeenCalledTimes(1);
+
+    activityMocks.start.mockClear();
+    vi.mocked(loadPreferences).mockResolvedValueOnce({
+      liveActivitiesEnabled: true,
+    } as Preferences);
+    armAgentAwarenessLiveActivityForLocalWork({
+      environmentId: "env-pre-capability" as EnvironmentId,
+      threadTitle: "Fix the flaky test",
+      projectTitle: "t3code",
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(activityMocks.start).toHaveBeenCalledTimes(1);
   });
 });

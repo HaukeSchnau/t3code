@@ -259,6 +259,14 @@ export function formatThreadTurnOutgoingText(draft: ThreadTurnDraft, text: strin
   });
 }
 
+export function resolveThreadTurnOutgoingText(
+  draft: ThreadTurnDraft,
+  analysis: ThreadTurnDraftAnalysis = analyzeThreadTurnDraft(draft),
+): string {
+  const serializedText = serializeThreadTurnPrompt(draft, analysis);
+  return formatThreadTurnOutgoingText(draft, serializedText || IMAGE_ONLY_BOOTSTRAP_PROMPT);
+}
+
 export function resolveNewThreadSubmissionTitle(
   draft: ThreadTurnDraft,
   analysis: ThreadTurnDraftAnalysis,

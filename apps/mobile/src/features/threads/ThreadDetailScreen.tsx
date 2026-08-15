@@ -51,6 +51,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { ControlPill } from "../../components/ControlPill";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
+import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import type { ThreadFeedEntry } from "../../lib/threadActivity";
 import { useSelectedThreadRequests } from "../../state/use-selected-thread-requests";
@@ -217,7 +218,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     }
   }, []);
   const windowHeight = useWindowDimensions().height;
-  const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + 44;
+  const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + IOS_NAV_BAR_HEIGHT;
   const agentLabel = `${selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, selectedThread.id);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -706,7 +707,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onCancelPendingMessage={composer.cancelPendingMessage}
                 onDiscardRejectedMessage={composer.discardRejectedMessage}
                 onCancelQueuedMessageEdit={composer.cancelQueuedMessageEdit}
-                activeThreadBusy={composer.activeThreadBusy}
                 environmentId={props.environmentId}
                 projectCwd={props.projectWorkspaceRoot}
                 bottomInset={composerBottomInset}

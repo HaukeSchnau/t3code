@@ -70,7 +70,6 @@ export class OrchestrationCommandReceiptMismatchError extends Schema.TaggedError
     return `Command id reuse rejected (${this.commandId}, ${this.reason}): ${this.detail}`;
   }
 }
-
 export class OrchestrationProjectorDecodeError extends Schema.TaggedErrorClass<OrchestrationProjectorDecodeError>()(
   "OrchestrationProjectorDecodeError",
   {
