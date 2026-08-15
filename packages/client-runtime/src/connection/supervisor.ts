@@ -789,7 +789,17 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     Effect.withSpan("EnvironmentSupervisor.disconnect"),
   );
 
-  const retryNow = Ref.set(resetRetryState, true).pipe(
+  const retryNow = connectivity.status.pipe(
+    Effect.flatMap((network) =>
+      Ref.update(intent, (current) => ({
+        ...current,
+        // Browser connectivity events are advisory and can be missed while a
+        // tab is suspended. Explicit retry must not trust an offline hint
+        // enough to suppress the connection attempt the user requested.
+        network: network === "offline" ? "unknown" : network,
+      })),
+    ),
+    Effect.andThen(Ref.set(resetRetryState, true)),
     Effect.andThen(signal({ _tag: "RetryRequested" })),
     Effect.withSpan("EnvironmentSupervisor.retryNow"),
   );

@@ -5,6 +5,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -116,9 +117,9 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   readonly ready?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
   readonly probe?: (attempt: number) => Effect.Effect<void, ConnectionAttemptError>;
 }) {
-  const networkStatus = yield* SubscriptionRef.make<NetworkStatus>(
-    options?.networkStatus ?? "online",
-  );
+  const initialNetworkStatus = options?.networkStatus ?? "online";
+  const networkStatus = yield* Ref.make<NetworkStatus>(initialNetworkStatus);
+  const networkChanges = yield* Queue.unbounded<NetworkStatus>();
   const prepareCount = yield* Ref.make(0);
   const sessionCount = yield* Ref.make(0);
   const releaseCount = yield* Ref.make(0);
@@ -134,8 +135,8 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
   >([]);
 
   const connectivity = Connectivity.Connectivity.of({
-    status: SubscriptionRef.get(networkStatus),
-    changes: SubscriptionRef.changes(networkStatus),
+    status: Ref.get(networkStatus),
+    changes: Stream.fromQueue(networkChanges),
   });
 
   const prepare = Effect.fn("TestConnectionDriver.prepare")(function* (target: ConnectionTarget) {
@@ -197,7 +198,9 @@ const makeHarness = Effect.fn("TestConnectionHarness.make")(function* (options?:
     prepareCount,
     sessionCount,
     releaseCount,
-    setNetworkStatus: (status: NetworkStatus) => SubscriptionRef.set(networkStatus, status),
+    setNetworkStatus: (status: NetworkStatus) =>
+      Ref.set(networkStatus, status).pipe(Effect.andThen(Queue.offer(networkChanges, status))),
+    setNetworkStatusWithoutEvent: (status: NetworkStatus) => Ref.set(networkStatus, status),
     wake: (reason: ConnectionWakeups.ConnectionWakeup) =>
       SubscriptionRef.update(wakeups, (event) => ({
         sequence: event.sequence + 1,
@@ -307,6 +310,23 @@ describe("EnvironmentSupervisor", () => {
         generation: 1,
         lastFailure: null,
       });
+      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+    }),
+  );
+
+  it.effect("explicit retry escapes a stale offline network signal", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ networkStatus: "offline" });
+      const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
+        initiallyDesired: true,
+      }).pipe(Effect.provide(harness.dependencies));
+
+      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
+      yield* harness.setNetworkStatusWithoutEvent("online");
+      yield* supervisor.retryNow;
+
+      const ready = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
+      expect(ready).toMatchObject({ network: "online", attempt: 1, generation: 1 });
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
     }),
   );
