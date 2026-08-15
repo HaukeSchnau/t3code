@@ -21,7 +21,7 @@ import {
   requireThreadNotArchived,
 } from "./commandInvariants.ts";
 import { projectEvent } from "./projector.ts";
-import { canReplaceThreadTitle } from "./threadTitle.ts";
+import { canReplaceThreadTitle } from "./threadTitles.ts";
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
