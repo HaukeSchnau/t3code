@@ -53,7 +53,6 @@ import {
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadWorkspaceService } from "../../workspace/ThreadWorkspaceService.ts";
-import { canReplaceThreadTitle } from "../threadTitle.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
