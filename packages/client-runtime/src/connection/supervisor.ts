@@ -105,6 +105,12 @@ function retryDelayMs(failureCount: number): number {
   return RETRY_DELAYS_MS[Math.min(failureCount, RETRY_DELAYS_MS.length - 1)] ?? 16_000;
 }
 
+function normalizeDesiredIntent(intent: SupervisorIntent): SupervisorIntent {
+  return intent.desired && intent.network === "offline"
+    ? { ...intent, network: "unknown" }
+    : intent;
+}
+
 function annotateTarget(target: ConnectionTarget) {
   return Effect.annotateCurrentSpan({
     "environment.id": target.environmentId,
@@ -122,24 +128,6 @@ function availableState(intent: SupervisorIntent, generation: number): Superviso
     attempt: 0,
     generation,
     lastFailure: null,
-    retryAt: null,
-  };
-}
-
-function offlineState(
-  intent: SupervisorIntent,
-  generation: number,
-  attempt: number,
-  lastFailure: ConnectionAttemptError | null,
-): SupervisorConnectionState {
-  return {
-    desired: true,
-    network: intent.network,
-    phase: "offline",
-    stage: null,
-    attempt,
-    generation,
-    lastFailure,
     retryAt: null,
   };
 }
@@ -225,10 +213,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const connectivity = yield* Connectivity.Connectivity;
   const driver = yield* ConnectionDriver.ConnectionDriver;
   const wakeups = yield* ConnectionWakeups.ConnectionWakeups;
-  const initialIntent: SupervisorIntent = {
+  const initialIntent = normalizeDesiredIntent({
     desired: options?.initiallyDesired ?? false,
     network: yield* connectivity.status,
-  };
+  });
   const intent = yield* Ref.make(initialIntent);
   const signals = yield* Queue.unbounded<SupervisorSignal>();
   const resetRetryState = yield* Ref.make(false);
@@ -239,9 +227,7 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
   const state = yield* SubscriptionRef.make<SupervisorConnectionState>(
     !initialIntent.desired
       ? availableState(initialIntent, 0)
-      : initialIntent.network === "offline"
-        ? offlineState(initialIntent, 0, 0, null)
-        : connectingState(initialIntent, 0, 1, null),
+      : connectingState(initialIntent, 0, 1, null),
   );
   const session = yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(Option.none());
   const prepared = yield* SubscriptionRef.make<Option.Option<PreparedConnection>>(Option.none());
@@ -560,8 +546,11 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
     }
 
     const active = establishment.exit.value;
-    const currentIntent = yield* Ref.get(intent);
-    if (!currentIntent.desired || currentIntent.network === "offline") {
+    const currentIntent = yield* Ref.modify(intent, (current) => {
+      const normalized = normalizeDesiredIntent(current);
+      return [normalized, normalized];
+    });
+    if (!currentIntent.desired) {
       return {
         _tag: "Interrupted",
         established: false,
@@ -656,7 +645,10 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         latestFailure = null;
         pendingRetry = Option.none();
       }
-      const currentIntent = yield* Ref.get(intent);
+      const currentIntent = yield* Ref.modify(intent, (current) => {
+        const normalized = normalizeDesiredIntent(current);
+        return [normalized, normalized];
+      });
       if (!currentIntent.desired) {
         resetRetryLadder();
         latestFailure = null;
@@ -665,16 +657,6 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
         yield* waitForSignal;
         continue;
       }
-      if (currentIntent.network === "offline") {
-        yield* clearLease;
-        yield* setState(offlineState(currentIntent, generation, failureCount + 1, latestFailure));
-        const applicationActivated = yield* waitForSignal;
-        if (applicationActivated) {
-          resetRetryLadder();
-        }
-        continue;
-      }
-
       const attempt = failureCount + 1;
       const nextGeneration = generation + 1;
       const outcome: AttemptOutcome = yield* Effect.scoped(
@@ -791,13 +773,12 @@ export const make = Effect.fn("EnvironmentSupervisor.make")(function* (
 
   const retryNow = connectivity.status.pipe(
     Effect.flatMap((network) =>
-      Ref.update(intent, (current) => ({
-        ...current,
-        // Browser connectivity events are advisory and can be missed while a
-        // tab is suspended. Explicit retry must not trust an offline hint
-        // enough to suppress the connection attempt the user requested.
-        network: network === "offline" ? "unknown" : network,
-      })),
+      Ref.update(intent, (current) =>
+        normalizeDesiredIntent({
+          ...current,
+          network,
+        }),
+      ),
     ),
     Effect.andThen(Ref.set(resetRetryState, true)),
     Effect.andThen(signal({ _tag: "RetryRequested" })),

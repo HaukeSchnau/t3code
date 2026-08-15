@@ -10,9 +10,10 @@ failure, and absolute retry time alongside the shell snapshot's categorical fres
 
 - `EnvironmentSupervisor` remains the only owner of desired connection state, retry scheduling, and
   replacement sessions.
-- An explicit retry re-reads platform connectivity before signaling the supervisor. A reported
-  offline state is treated as unknown for that attempt so a missed browser `online` event or a stale
-  `navigator.onLine` value cannot make the Reconnect action a no-op.
+- Browser connectivity is advisory while an environment connection is desired. A reported offline
+  state is normalized to unknown before initial setup, automatic recovery, and explicit retry so a
+  stale `navigator.onLine` value cannot park a reachable transport. Connection attempts and their
+  bounded backoff remain the authority for reachability.
 - The projection observes `SupervisorConnectionState`; it never calls `connect`, `retryNow`, or any
   transport/session API.
 - `retryAt` is copied unchanged as an absolute epoch time. `retryRemainingMs` only compares it with a
@@ -61,7 +62,7 @@ that contradicts desired/network state, or cached freshness without a snapshot.
 Focused tests cover every connection phase, active setup stages, exact retry-time observation,
 snapshot identity coupling, retained cached data, transport/freshness independence, and rejection of
 impossible nullable source combinations. They also cover the immediate disconnect/backoff/blocked
-cross-source race, explicit recovery from a stale offline signal, and cursor-only content-sequence
-semantics. RPC/state tests cover replaced-session and stale generation marker races, genuine
+cross-source race, initial and automatic recovery from stale offline signals, and cursor-only
+content-sequence semantics. RPC/state tests cover replaced-session and stale generation marker races, genuine
 same-generation loss, deleted/no-data states, and a real WebSocket catch-up through both the shell
 and thread synchronization markers.

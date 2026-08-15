@@ -289,77 +289,65 @@ describe("EnvironmentSupervisor", () => {
     }),
   );
 
-  it.effect("waits while offline and connects immediately when the network returns", () =>
+  it.effect("attempts the initial connection when the browser offline hint is stale", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness({ networkStatus: "offline" });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
-      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
-      expect(yield* Ref.get(harness.prepareCount)).toBe(0);
+      const ready = yield* eventuallyState(
+        supervisor.state,
+        (state) => state.phase === "connected",
+      );
 
-      yield* harness.setNetworkStatus("online");
-      const ready = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-
-      expect(ready).toMatchObject({
-        desired: true,
-        network: "online",
-        phase: "connected",
-        attempt: 1,
-        generation: 1,
-        lastFailure: null,
-      });
+      expect(ready).toMatchObject({ network: "unknown", attempt: 1, generation: 1 });
       expect(yield* Ref.get(harness.prepareCount)).toBe(1);
     }),
   );
 
   it.effect("explicit retry escapes a stale offline network signal", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness({ networkStatus: "offline" });
+      const harness = yield* makeHarness({
+        prepare: (attempt) =>
+          attempt === 1 ? Effect.fail(transient()) : Effect.succeed(PREPARED_CONNECTION),
+      });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
-      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
-      yield* harness.setNetworkStatusWithoutEvent("online");
+      yield* awaitState(supervisor.state, (state) => state.phase === "backoff");
+      yield* harness.setNetworkStatusWithoutEvent("offline");
       yield* supervisor.retryNow;
 
       const ready = yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-      expect(ready).toMatchObject({ network: "online", attempt: 1, generation: 1 });
-      expect(yield* Ref.get(harness.prepareCount)).toBe(1);
+      expect(ready).toMatchObject({ network: "unknown", attempt: 1, generation: 1 });
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
     }),
   );
 
-  it.effect("resets retries when activation arrives before the network returns", () =>
+  it.effect("retries when an offline hint interrupts backoff", () =>
     Effect.gen(function* () {
-      const harness = yield* makeHarness();
+      const harness = yield* makeHarness({
+        prepare: (attempt) =>
+          attempt === 1 ? Effect.fail(transient()) : Effect.succeed(PREPARED_CONNECTION),
+      });
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
         initiallyDesired: true,
       }).pipe(Effect.provide(harness.dependencies));
 
-      yield* awaitState(supervisor.state, (state) => state.phase === "connected");
-      yield* harness.closeLatestSession();
       yield* awaitState(
         supervisor.state,
         (state) => state.phase === "backoff" && state.attempt === 1,
       );
       yield* harness.setNetworkStatus("offline");
-      yield* awaitState(
+      const ready = yield* awaitState(
         supervisor.state,
-        (state) => state.phase === "offline" && state.attempt === 2,
+        (state) => state.phase === "connected" && state.generation === 1,
       );
 
-      yield* harness.wake("application-active-reconnect");
-      yield* awaitState(
-        supervisor.state,
-        (state) => state.phase === "offline" && state.attempt === 1,
-      );
-      yield* harness.setNetworkStatus("online");
-      yield* awaitState(
-        supervisor.state,
-        (state) => state.phase === "connected" && state.generation === 2 && state.attempt === 1,
-      );
+      expect(ready).toMatchObject({ network: "unknown", attempt: 2 });
+      expect(yield* Ref.get(harness.prepareCount)).toBe(2);
     }),
   );
 
@@ -622,7 +610,7 @@ describe("EnvironmentSupervisor", () => {
     }).pipe(Effect.provide(TestClock.layer())),
   );
 
-  it.effect("releases a live session while offline and starts a new generation when online", () =>
+  it.effect("reconnects when an offline hint interrupts a live session", () =>
     Effect.gen(function* () {
       const harness = yield* makeHarness();
       const supervisor = yield* EnvironmentSupervisor.make(TARGET_ENTRY, {
@@ -634,16 +622,13 @@ describe("EnvironmentSupervisor", () => {
         (state) => state.phase === "connected" && state.generation === 1,
       );
       yield* harness.setNetworkStatus("offline");
-      yield* awaitState(supervisor.state, (state) => state.phase === "offline");
-
-      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
-      expect(Option.isNone(yield* SubscriptionRef.get(supervisor.session))).toBe(true);
-
-      yield* harness.setNetworkStatus("online");
-      yield* awaitState(
+      const ready = yield* awaitState(
         supervisor.state,
         (state) => state.phase === "connected" && state.generation === 2,
       );
+
+      expect(ready.network).toBe("unknown");
+      expect(yield* Ref.get(harness.releaseCount)).toBe(1);
       expect(yield* Ref.get(harness.sessionCount)).toBe(2);
     }),
   );
