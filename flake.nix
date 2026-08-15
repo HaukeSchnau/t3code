@@ -109,6 +109,7 @@
               (productionFiles ./packages/effect-codex-app-server)
               (productionFiles ./packages/shared)
               (productionFiles ./packages/tailscale)
+              ./scripts/lib/cli-external-packages.ts
               ./scripts/lib/public-config.ts
             ];
           };
@@ -139,13 +140,13 @@
             pname = "t3code-web-deps";
             src = manifestSource;
             workspaces = [ "@t3tools/web..." ];
-            hash = "sha256-stSkG6iExOJC99bOqKWZWWuKrfx3wQqKHraKn/oyL90=";
+            hash = "sha256-5EfCqZxuPqiLyifMYXCoX5lQz14MwBvtTkRXw4f7b1k=";
           };
           serverPnpmDeps = mkPnpmDeps {
             pname = "t3code-server-deps";
             src = manifestSource;
             workspaces = [ "t3..." ];
-            hash = "sha256-JUD6kzYSc6CDiE5yio8J7bPWtluDARWBEUhMAcSrgG4=";
+            hash = "sha256-wWrsBoU8MwEu/J5u2afJqBvoytC56nViYTci5xMS34I=";
           };
           runtimePnpmDeps = mkPnpmDeps {
             pname = "t3code-runtime-deps";
@@ -155,7 +156,7 @@
               cp pnpm-deploy-lock.yaml pnpm-lock.yaml
               printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
             '';
-            hash = "sha256-+gcsyqR7DKfvl5ix1T6TglnfHRb1fxdrfEcCuQxja18=";
+            hash = "sha256-r4CX8KEmgjfUzjqOS+h9g/Oze8ZWx9RCTP/kSBJNbqI=";
           };
 
           commonNativeBuildInputs = [
