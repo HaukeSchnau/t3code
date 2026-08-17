@@ -2,7 +2,6 @@ import { type MessageId } from "@t3tools/contracts";
 import { CornerDownLeftIcon, XIcon } from "lucide-react";
 import {
   cloneElement,
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -10,12 +9,12 @@ import {
   useState,
   useSyncExternalStore,
   type KeyboardEvent,
-  type MouseEvent,
   type ReactElement,
 } from "react";
 import { createPortal } from "react-dom";
 import ChatMarkdown, {
   type ChatMarkdownBlockRenderer,
+  type ChatMarkdownBlock,
   type ChatMarkdownProps,
 } from "../ChatMarkdown";
 import { cn } from "../../lib/utils";
@@ -29,12 +28,6 @@ interface SelectionAction {
   readonly blockId: string;
   readonly quote: string;
   readonly textRange: { readonly start: number; readonly end: number };
-  readonly left: number;
-  readonly top: number;
-}
-
-interface HoveredBlockAction {
-  readonly blockId: string;
   readonly left: number;
   readonly top: number;
 }
@@ -165,6 +158,79 @@ function InlineReplyEditor({
   );
 }
 
+function InlineReplyBlock({
+  messageId,
+  block,
+  element,
+  store,
+  onParagraphReply,
+}: {
+  messageId: MessageId;
+  block: ChatMarkdownBlock;
+  element: ReactElement;
+  store: InlineReplyDraftStore;
+  onParagraphReply: (blockId: string) => void;
+}) {
+  const replies = useSyncExternalStore(
+    useCallback(
+      (listener) => store.subscribeToBlock(messageId, block.id, listener),
+      [block.id, messageId, store],
+    ),
+    useCallback(() => store.getForBlock(messageId, block.id), [block.id, messageId, store]),
+    useCallback(() => store.getForBlock(messageId, block.id), [block.id, messageId, store]),
+  );
+  const hasParagraphReply = replies.some((reply) => reply.anchorKind === "paragraph");
+  const htmlElement = element as ReactElement<React.HTMLAttributes<HTMLElement>>;
+  const decoratedElement = cloneElement(
+    htmlElement,
+    {
+      className: cn(
+        htmlElement.props.className,
+        "group/inline-reply-block relative",
+        block.kind === "list-item" &&
+          "[&_[data-inline-reply-block-kind=paragraph]_[data-inline-reply-hover-affordance]]:hidden",
+      ),
+      "data-inline-reply-block-id": block.id,
+      "data-inline-reply-block-kind": block.kind,
+    } as React.HTMLAttributes<HTMLElement>,
+    htmlElement.props.children,
+    hasParagraphReply ? (
+      <span
+        key="reply-indicator"
+        data-inline-reply-ui
+        aria-hidden="true"
+        className="absolute top-[0.65rem] -left-3 size-1 rounded-full bg-primary/60"
+      />
+    ) : null,
+    <button
+      key="reply-action"
+      type="button"
+      data-inline-reply-ui
+      data-inline-reply-hover-affordance
+      aria-label="Reply to this paragraph"
+      className="absolute top-0 left-full z-10 flex h-6 w-7 items-center pl-1 opacity-0 group-hover/inline-reply-block:opacity-100 hover:opacity-100 focus-visible:opacity-100 max-sm:hidden"
+      onClick={() => onParagraphReply(block.id)}
+    >
+      <span className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground">
+        <CornerDownLeftIcon className="size-3.5" />
+      </span>
+    </button>,
+    block.kind === "list-item"
+      ? replies.map((reply) => <InlineReplyEditor key={reply.id} reply={reply} store={store} />)
+      : null,
+  );
+
+  if (block.kind === "list-item") return decoratedElement;
+  return (
+    <>
+      {decoratedElement}
+      {replies.map((reply) => (
+        <InlineReplyEditor key={reply.id} reply={reply} store={store} />
+      ))}
+    </>
+  );
+}
+
 export function AssistantInlineReplies({
   messageId,
   store,
@@ -173,7 +239,6 @@ export function AssistantInlineReplies({
 }: AssistantInlineRepliesProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const [selectionAction, setSelectionAction] = useState<SelectionAction | null>(null);
-  const [hoveredBlockAction, setHoveredBlockAction] = useState<HoveredBlockAction | null>(null);
   const replies = useSyncExternalStore(
     useCallback((listener) => store.subscribeToMessage(messageId, listener), [messageId, store]),
     useCallback(() => store.getForMessage(messageId), [messageId, store]),
@@ -196,14 +261,11 @@ export function AssistantInlineReplies({
   }, [messageId, replies, store]);
 
   useEffect(() => {
-    if (!selectionAction && !hoveredBlockAction) return;
-    const dismissOnScroll = () => {
-      setSelectionAction(null);
-      setHoveredBlockAction(null);
-    };
+    if (!selectionAction) return;
+    const dismissOnScroll = () => setSelectionAction(null);
     window.addEventListener("scroll", dismissOnScroll, true);
     return () => window.removeEventListener("scroll", dismissOnScroll, true);
-  }, [hoveredBlockAction, selectionAction]);
+  }, [selectionAction]);
 
   const addParagraphReply = useCallback(
     (blockId: string) => {
@@ -219,92 +281,24 @@ export function AssistantInlineReplies({
         anchorKind: "paragraph",
         quote,
       });
-      setHoveredBlockAction(null);
       focusReplyEditor(replyId);
     },
     [messageId, store],
   );
 
   const renderBlock = useCallback<ChatMarkdownBlockRenderer>(
-    (block, element) => {
-      const blockReplies = replies.filter((reply) => reply.blockId === block.id);
-      const hasParagraphReply = blockReplies.some((reply) => reply.anchorKind === "paragraph");
-      const htmlElement = element as ReactElement<React.HTMLAttributes<HTMLElement>>;
-      const decoratedElement = cloneElement(
-        htmlElement,
-        {
-          ...htmlElement.props,
-          className: cn(htmlElement.props.className, "group/inline-reply-block relative"),
-          "data-inline-reply-block-id": block.id,
-          "data-inline-reply-block-kind": block.kind,
-        } as React.HTMLAttributes<HTMLElement>,
-        htmlElement.props.children,
-        hasParagraphReply ? (
-          <span
-            key="reply-indicator"
-            data-inline-reply-ui
-            aria-hidden="true"
-            className="absolute top-[0.65rem] -left-3 size-1 rounded-full bg-primary/60"
-          />
-        ) : null,
-        block.kind === "list-item"
-          ? blockReplies.map((reply) => (
-              <InlineReplyEditor key={reply.id} reply={reply} store={store} />
-            ))
-          : null,
-      );
-
-      if (block.kind === "list-item") return decoratedElement;
-      return (
-        <Fragment key={block.id}>
-          {decoratedElement}
-          {blockReplies.map((reply) => (
-            <InlineReplyEditor key={reply.id} reply={reply} store={store} />
-          ))}
-        </Fragment>
-      );
-    },
-    [replies, store],
+    (block, element) => (
+      <InlineReplyBlock
+        key={block.id}
+        messageId={messageId}
+        block={block}
+        element={element}
+        store={store}
+        onParagraphReply={addParagraphReply}
+      />
+    ),
+    [addParagraphReply, messageId, store],
   );
-
-  const updateHoveredBlock = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    const root = rootRef.current;
-    const target = event.target;
-    if (!root || !(target instanceof Node)) return;
-    if (target instanceof Element && target.closest("[data-inline-reply-hover-affordance]")) {
-      return;
-    }
-    if (target instanceof Element && target.closest("[data-inline-reply-ui]")) {
-      setHoveredBlockAction(null);
-      return;
-    }
-    const block = sourceBlockForNode(target, root);
-    const blockId = block?.dataset.inlineReplyBlockId;
-    if (!block || !blockId) {
-      setHoveredBlockAction(null);
-      return;
-    }
-    const bounds = block.getBoundingClientRect();
-    const left =
-      bounds.right + 28 <= window.innerWidth ? bounds.right : Math.max(8, bounds.right - 28);
-    const next = { blockId, left, top: Math.max(8, bounds.top) };
-    setHoveredBlockAction((current) =>
-      current?.blockId === next.blockId && current.left === next.left && current.top === next.top
-        ? current
-        : next,
-    );
-  }, []);
-
-  const dismissHoveredBlock = useCallback((event: MouseEvent<HTMLDivElement>) => {
-    const nextTarget = event.relatedTarget;
-    if (
-      nextTarget instanceof Element &&
-      nextTarget.closest("[data-inline-reply-hover-affordance]")
-    ) {
-      return;
-    }
-    setHoveredBlockAction(null);
-  }, []);
 
   const updateSelectionAction = useCallback(() => {
     if (isStreaming) return;
@@ -390,37 +384,8 @@ export function AssistantInlineReplies({
   if (isStreaming) return <ChatMarkdown {...markdownProps} isStreaming />;
 
   return (
-    <div
-      ref={rootRef}
-      onMouseMove={updateHoveredBlock}
-      onMouseLeave={dismissHoveredBlock}
-      onMouseUp={updateSelectionAction}
-      onKeyUp={updateSelectionAction}
-    >
+    <div ref={rootRef} onMouseUp={updateSelectionAction} onKeyUp={updateSelectionAction}>
       <ChatMarkdown {...markdownProps} renderBlock={renderBlock} />
-      {hoveredBlockAction && !selectionAction && typeof document !== "undefined"
-        ? createPortal(
-            <button
-              type="button"
-              data-inline-reply-ui
-              data-inline-reply-hover-affordance
-              aria-label="Reply to this paragraph"
-              className="fixed z-40 flex h-6 w-7 items-center pl-1 max-sm:hidden"
-              style={{ left: hoveredBlockAction.left, top: hoveredBlockAction.top }}
-              onMouseLeave={(event) => {
-                const nextTarget = event.relatedTarget;
-                if (nextTarget instanceof Node && rootRef.current?.contains(nextTarget)) return;
-                setHoveredBlockAction(null);
-              }}
-              onClick={() => addParagraphReply(hoveredBlockAction.blockId)}
-            >
-              <span className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground">
-                <CornerDownLeftIcon className="size-3.5" />
-              </span>
-            </button>,
-            document.body,
-          )
-        : null}
       {selectionAction && typeof document !== "undefined"
         ? createPortal(
             <button

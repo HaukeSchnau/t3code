@@ -104,4 +104,35 @@ describe("inline replies", () => {
     expect(firstListener).toHaveBeenCalledTimes(2);
     expect(secondListener).not.toHaveBeenCalled();
   });
+
+  it("keeps unrelated block snapshots and subscribers stable while typing", () => {
+    const store = createInlineReplyDraftStore();
+    const messageId = MessageId.make("assistant-1");
+    const firstBlockListener = vi.fn();
+    const secondBlockListener = vi.fn();
+    store.subscribeToBlock(messageId, "paragraph:0", firstBlockListener);
+    store.subscribeToBlock(messageId, "paragraph:42", secondBlockListener);
+
+    const firstReplyId = store.add({
+      messageId,
+      blockId: "paragraph:0",
+      anchorKind: "paragraph",
+      quote: "First paragraph.",
+    });
+    store.add({
+      messageId,
+      blockId: "paragraph:42",
+      anchorKind: "paragraph",
+      quote: "Second paragraph.",
+    });
+    const secondBlockSnapshot = store.getForBlock(messageId, "paragraph:42");
+    firstBlockListener.mockClear();
+    secondBlockListener.mockClear();
+
+    store.update(firstReplyId, "Typing must not replace the other block.");
+
+    expect(firstBlockListener).toHaveBeenCalledOnce();
+    expect(secondBlockListener).not.toHaveBeenCalled();
+    expect(store.getForBlock(messageId, "paragraph:42")).toBe(secondBlockSnapshot);
+  });
 });
