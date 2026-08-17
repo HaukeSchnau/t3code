@@ -177,6 +177,7 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "./u
 import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./ui/sidebar";
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
+import { SidebarThreadDetailPrewarmer } from "./sidebar/SidebarThreadDetailPrewarmer";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -3365,6 +3366,7 @@ export default function Sidebar() {
   const newThreadInProjectShortcutLabel = shortcutLabelForCommand(keybindings, "chat.newLocal");
   return (
     <>
+      <SidebarThreadDetailPrewarmer threadKeys={orderedThreadKeys} />
       <SidebarChromeHeader isElectron={isElectron} />
       <SidebarContent
         className="gap-0"

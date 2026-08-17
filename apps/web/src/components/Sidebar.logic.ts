@@ -21,7 +21,8 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // activities, growing as agents work) for as long as the row stays visible,
 // so this limit is a direct renderer-heap and server-load multiplier — keep
 // it small; cold opens still render instantly from the cached snapshot.
-export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
+// Keep one of the three thread-detail catch-up permits available for foreground navigation.
+export const SIDEBAR_THREAD_PREWARM_LIMIT = 2;
 
 type SidebarProject = {
   id: string;
