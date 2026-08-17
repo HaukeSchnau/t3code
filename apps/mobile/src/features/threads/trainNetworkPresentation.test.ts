@@ -97,7 +97,7 @@ describe("mobile train network presentation", () => {
     );
   });
 
-  it("calls the first fetch loading and cached recovery checking for updates", () => {
+  it("calls the first fetch loading and keeps cached recovery quiet", () => {
     const connection = {
       phase: "connected" as const,
       stage: "ready" as const,
@@ -125,12 +125,15 @@ describe("mobile train network presentation", () => {
         environmentLabel: null,
         nowMs: 0,
         hasThreadContent: true,
-      })?.label,
-    ).toBe("Checking saved conversation for updates");
+      }),
+    ).toBeNull();
   });
 
   it("ships deterministic screenshot fixtures with local and remote queues separated", () => {
     expect(Object.keys(TRAIN_NETWORK_SCREENSHOT_FIXTURES)).toHaveLength(6);
+    expect(
+      TRAIN_NETWORK_SCREENSHOT_FIXTURES.cachedBackgroundReconciliation.connectionLabel,
+    ).toBeNull();
     expect(TRAIN_NETWORK_SCREENSHOT_FIXTURES.remoteQueueDistinct.localIntent.label).toBe(
       "Saved on this device",
     );

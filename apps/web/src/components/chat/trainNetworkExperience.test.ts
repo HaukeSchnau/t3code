@@ -128,6 +128,39 @@ describe("train network experience presentation", () => {
     expect(view).toBeNull();
   });
 
+  it("keeps connected cached content quiet while it reconciles", () => {
+    const view = deriveTrainNetworkExperience(
+      projection({
+        phase: "connected",
+        stage: "ready",
+        attempt: 1,
+        generation: 1,
+        failure: null,
+      }),
+      0,
+    );
+
+    expect(view).toBeNull();
+  });
+
+  it("shows loading while connected when the conversation cache is empty", () => {
+    const view = deriveTrainNetworkExperience(
+      projection(
+        {
+          phase: "connected",
+          stage: "ready",
+          attempt: 1,
+          generation: 1,
+          failure: null,
+        },
+        { status: "synchronizing", snapshot: null, error: null },
+      ),
+      0,
+    );
+
+    expect(view).toMatchObject({ title: "Loading", detail: "Loading this conversation." });
+  });
+
   it("keeps the specified anti-flicker holds within the feedback budget", () => {
     expect(NETWORK_DEGRADATION_HOLD_MS).toBe(250);
     expect(NETWORK_DEGRADATION_HOLD_MS).toBeLessThan(300);

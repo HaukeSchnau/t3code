@@ -78,7 +78,7 @@ export interface ThreadDetailScreenProps {
   readonly environmentLabel: string | null;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
   readonly connectionFreshness: EnvironmentConnectionFreshnessProjection | null;
-  /** Message sync status for the selected thread (drives the composer status pill). */
+  /** Message sync status for the selected thread (drives the cache-miss loading pill). */
   readonly threadSyncStatus?: EnvironmentThreadStatus;
   /** Non-null when older turns exist beyond the loaded window. */
   readonly loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
@@ -241,17 +241,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     ? 0
     : Math.max(insets.bottom, 12);
   const contentPresentationKind = props.contentPresentation.kind;
-  // The raw sync status enters "synchronizing" on every full fetch, cached or
-  // not. Whether messages are already on screen decides the pill label: no
-  // data yet → "Loading messages", cached data reconciling → "Syncing".
+  // Only cache misses get a foreground loading pill; usable content reconciles
+  // in the background without interrupting the conversation.
   const threadSyncPhase = (() => {
     switch (props.threadSyncStatus) {
       case "empty":
       case "cached":
       case "synchronizing":
-        if (contentPresentationKind === "ready") {
-          return "syncing" as const;
-        }
         return contentPresentationKind === "loading" ? ("loading" as const) : null;
       default:
         return null;
