@@ -587,6 +587,38 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("&lt;details&gt;");
   });
 
+  it("gives assistant comparison tables a wide, keyboard-scrollable data lane", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const table = [
+      "| Approach | Strongest at | Falls short |",
+      "| --- | --- | --- |",
+      "| Paper cuts | Cheap capture | Limited structure |",
+    ].join("\n");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildAssistantTimelineEntry(table)]} />,
+    );
+
+    expect(markup).toContain("max-w-6xl");
+    expect(markup).toContain("max-w-3xl");
+    expect(markup).toContain('data-wide-tables=""');
+    expect(markup).toContain(
+      'class="chat-markdown-table-scroll" role="region" tabindex="0" aria-label="Scrollable table"',
+    );
+    expect(markup).not.toContain("data-expanded");
+    expect(markup).not.toContain("Expand table cells");
+  });
+
+  it("keeps user-authored tables in the prose lane", async () => {
+    const { MessagesTimeline } = await import("./MessagesTimeline");
+    const table = ["| Key | Value |", "| --- | --- |", "| Mode | Fast |"].join("\n");
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildUserTimelineEntry(table)]} />,
+    );
+
+    expect(markup).not.toContain("data-wide-tables");
+    expect(markup).toContain('class="chat-markdown-table-scroll"');
+  });
+
   it("sanitizes executable HTML while preserving supported assistant markup", async () => {
     const { MessagesTimeline } = await import("./MessagesTimeline");
     const markup = renderToStaticMarkup(
