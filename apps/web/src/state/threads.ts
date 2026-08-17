@@ -1,4 +1,4 @@
-import { useAtomValue } from "@effect/atom-react";
+import { useAtomMount, useAtomValue } from "@effect/atom-react";
 import {
   createEnvironmentThreadDetailAtoms,
   createEnvironmentThreadShellAtoms,
@@ -44,4 +44,8 @@ export function useEnvironmentThread(
     AsyncResult.value(result),
     () => EMPTY_ENVIRONMENT_THREAD_STATE,
   ) as EnvironmentThreadState;
+}
+
+export function useEnvironmentThreadMount(environmentId: EnvironmentId, threadId: ThreadId): void {
+  useAtomMount(environmentThreads.stateAtom(environmentId, threadId));
 }
