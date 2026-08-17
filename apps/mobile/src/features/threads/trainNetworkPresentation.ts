@@ -61,7 +61,7 @@ export function presentLocalIntent(
 }
 
 export type TrainConnectionStatus = {
-  readonly kind: "unavailable" | "reconnecting" | "syncing";
+  readonly kind: "loading" | "unavailable" | "reconnecting";
   readonly label: string;
   readonly accessibilityLabel: string;
 };
@@ -127,26 +127,12 @@ export function presentTrainConnectionStatus(input: {
         accessibilityLabel: `${environment} is not connected. ${input.hasThreadContent ? "Showing saved conversation." : ""}`,
       };
     case "connected":
-      if (snapshot.status === "synchronizing") {
+      if (snapshot.status === "synchronizing" || snapshot.status === "cached") {
+        if (input.hasThreadContent) return null;
         return {
-          kind: "syncing",
-          label: input.hasThreadContent
-            ? "Checking saved conversation for updates"
-            : "Loading conversation",
-          accessibilityLabel: input.hasThreadContent
-            ? "Connected. Showing saved conversation while checking for updates."
-            : "Connected. Loading conversation.",
-        };
-      }
-      if (snapshot.status === "cached") {
-        return {
-          kind: "syncing",
-          label: input.hasThreadContent
-            ? "Connected · showing saved conversation"
-            : "Loading conversation",
-          accessibilityLabel: input.hasThreadContent
-            ? "Connected. Showing saved conversation until updates arrive."
-            : "Connected. Loading conversation.",
+          kind: "loading",
+          label: "Loading conversation",
+          accessibilityLabel: "Connected. Loading conversation.",
         };
       }
       return null;
@@ -183,8 +169,8 @@ export const TRAIN_NETWORK_SCREENSHOT_FIXTURES = {
     }),
     remoteQueueCount: 0,
   },
-  synchronizingCached: {
-    connectionLabel: "Checking saved conversation for updates",
+  cachedBackgroundReconciliation: {
+    connectionLabel: null,
     freshness: "synchronizing",
     localIntent: null,
     remoteQueueCount: 0,

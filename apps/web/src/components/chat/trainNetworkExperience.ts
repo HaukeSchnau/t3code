@@ -28,24 +28,18 @@ export function deriveTrainNetworkExperience(
 ): TrainNetworkExperienceView | null {
   const { connection, snapshot } = projection;
 
-  if (connection.phase === "connected" && snapshot.status === "live") {
-    return null;
-  }
-
   if (connection.phase === "connected") {
+    if (snapshot.snapshot !== null) {
+      return null;
+    }
+
     return {
       kind: "degraded",
-      title: "Updating",
-      detail:
-        snapshot.snapshot === null
-          ? "Loading this conversation."
-          : "Showing saved content while changes sync.",
+      title: "Loading",
+      detail: "Loading this conversation.",
       attempt: connection.attempt,
       retryRemainingMs: null,
-      announcement:
-        snapshot.snapshot === null
-          ? "Connected. Loading this conversation."
-          : "Connected. Showing saved content while changes sync.",
+      announcement: "Connected. Loading this conversation.",
     };
   }
 

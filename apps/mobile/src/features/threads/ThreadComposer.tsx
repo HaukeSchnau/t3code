@@ -106,12 +106,8 @@ export interface ThreadComposerProps {
   readonly hasThreadContent: boolean;
   readonly connectionError: string | null;
   readonly environmentLabel: string | null;
-  /**
-   * Message sync phase for the selected thread (drives the status pill):
-   * "loading" = first fetch, nothing to show yet; "syncing" = cached messages
-   * are on screen while they reconcile with the server.
-   */
-  readonly threadSyncPhase?: "loading" | "syncing" | null;
+  /** Message sync phase for the selected thread; only cache misses are foregrounded. */
+  readonly threadSyncPhase?: "loading" | null;
   readonly selectedThread: OrchestrationThreadShell;
   readonly serverConfig: T3ServerConfig | null;
   readonly queueCount: number;
@@ -209,7 +205,7 @@ function composerConnectionStatus(input: {
   readonly connectionError: string | null;
   readonly connectionState: RemoteClientConnectionState;
   readonly environmentLabel: string | null;
-  readonly threadSyncPhase?: "loading" | "syncing" | null;
+  readonly threadSyncPhase?: "loading" | null;
 }): ComposerStatusPillState | null {
   const environmentLabel = input.environmentLabel ?? "Environment";
 
@@ -248,21 +244,13 @@ function composerConnectionStatus(input: {
       break;
   }
 
-  // Connected: the pill is the single loading/sync indicator. One stable
-  // label per open — "Loading" when starting from scratch, "Syncing" when
-  // cached messages are already visible.
+  // Connected: foreground only a true cache miss.
   switch (input.threadSyncPhase) {
     case "loading":
       return {
-        kind: "syncing",
+        kind: "loading",
         label: "Loading messages...",
         accessibilityLabel: "Loading messages.",
-      };
-    case "syncing":
-      return {
-        kind: "syncing",
-        label: "Syncing messages...",
-        accessibilityLabel: "Syncing messages.",
       };
     default:
       return null;
@@ -273,7 +261,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
   readonly onPress: () => void;
   readonly status: ComposerStatusPillState;
 }) {
-  const isReconnecting = props.status.kind !== "unavailable";
+  const showsProgress = props.status.kind !== "unavailable";
 
   return (
     <Animated.View
@@ -289,7 +277,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
         onPress={props.onPress}
         className="min-h-11 max-w-full flex-row items-center gap-2 rounded-full bg-card px-3 py-2 shadow-sm active:opacity-70"
       >
-        {isReconnecting ? (
+        {showsProgress ? (
           <ActivityIndicator size="small" color="#8e8e93" />
         ) : (
           <View className="h-2 w-2 rounded-full bg-red-500" />

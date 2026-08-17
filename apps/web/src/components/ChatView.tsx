@@ -6557,7 +6557,7 @@ function ChatViewContent(props: ChatViewProps) {
                     />
                   )}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
-                    <ThreadSyncStatusPill phase={threadSyncPhase} />
+                    <ThreadSyncStatusPill />
                   ) : null}
                   <div
                     className="relative"

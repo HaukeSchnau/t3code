@@ -1,9 +1,7 @@
 import { LoaderCircleIcon } from "lucide-react";
 
-import { threadSyncLabel, type ThreadSyncPhase } from "../../threadSync";
-
-export function ThreadSyncStatusPill({ phase }: { readonly phase: ThreadSyncPhase }) {
-  const label = threadSyncLabel(phase);
+export function ThreadSyncStatusPill() {
+  const label = "Loading messages...";
 
   return (
     <div
