@@ -1,8 +1,39 @@
 import { MessageId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { createInlineReplyDraftStore, formatInlineReplyPrompt } from "./inlineReplies";
+import {
+  createInlineReplyDraftStore,
+  formatInlineReplyPrompt,
+  resolveInlineReplySelectionScope,
+} from "./inlineReplies";
 
 describe("inline replies", () => {
+  it("accepts word and browser-native whole-paragraph selections", () => {
+    expect(
+      resolveInlineReplySelectionScope({
+        selectedText: "marketplace",
+        startBlockText: "Pin the marketplace to the audited commit.",
+        endsInStartBlock: true,
+      }),
+    ).toBe("selection");
+    expect(
+      resolveInlineReplySelectionScope({
+        selectedText: "Pin the marketplace to the audited commit.",
+        startBlockText: "Pin the marketplace to the audited commit.",
+        endsInStartBlock: false,
+      }),
+    ).toBe("whole-block");
+  });
+
+  it("rejects a selection containing text from multiple blocks", () => {
+    expect(
+      resolveInlineReplySelectionScope({
+        selectedText: "First paragraph. Second paragraph.",
+        startBlockText: "First paragraph.",
+        endsInStartBlock: false,
+      }),
+    ).toBeNull();
+  });
+
   it("formats authored replies and an overall note as one ordinary prompt", () => {
     const store = createInlineReplyDraftStore();
     const messageId = MessageId.make("assistant-1");

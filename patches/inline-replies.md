@@ -24,6 +24,9 @@ one ordinary user turn when sent.
   subscriptions keep editor keystrokes from rerendering the whole virtualized timeline.
 - `ChatMarkdown.renderBlock` is the narrow upstream seam. Preserve its default output when no
   decorator is supplied; do not fork or replace the Markdown renderer.
+- The block affordance is portaled, so pointer events over the affordance must preserve the hovered
+  block. Text selection follows the document `selectionchange` event; whole-block browser selections
+  may end at the next block boundary and must be normalized back to the source block.
 - Inline reply state is intentionally authoring-local and resets when the routed thread changes.
 - The feature currently ships on the web client and therefore the Electron desktop client. The
   React Native mobile timeline remains unchanged until it has a native text-selection interaction.
