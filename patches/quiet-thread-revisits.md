@@ -44,6 +44,13 @@ than a cold sidebar, but avoid foreground catch-up on the most likely switches. 
 limit without measuring renderer memory and `subscriptions.detail.active` on a representative
 database.
 
+Before this patch, the existing environment reported one active detail subscription, zero active
+shell subscriptions, 38 replay operations, and 231 ms of cumulative replay work. The mounted
+lifecycle test measures three React owners (the active chat plus two warmup entries) collapsing to
+two keyed atoms when the active thread overlaps the warmup window, then verifies that the warmup
+owners release on unmount. A cold active thread outside the window raises the bounded maximum to
+three detail atoms.
+
 ## Maintenance notes
 
 - Keep cache residency and live subscription lifetime distinct in future architecture work. A
@@ -60,6 +67,8 @@ database.
 - `apps/web/src/components/chat/ThreadSyncStatusPill.test.tsx`
 - `apps/web/src/components/chat/trainNetworkExperience.test.ts`
 - `apps/web/src/components/sidebar/SidebarThreadDetailPrewarmer.test.tsx`
+- `apps/web/src/components/sidebar/SidebarThreadDetailPrewarmer.lifecycle.test.tsx`
+- `apps/web/src/components/chat/TrainNetworkStatus.test.tsx`
 - `apps/mobile/src/features/threads/trainNetworkPresentation.test.ts`
 - Targeted web and mobile typechecks.
 - An integrated browser pass should switch repeatedly among prewarmed and cold threads on seeded

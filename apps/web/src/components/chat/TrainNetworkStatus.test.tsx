@@ -41,6 +41,11 @@ const live: EnvironmentConnectionFreshnessProjection = {
   snapshot: { ...cachedSnapshot, status: "live" },
 };
 
+const synchronizing: EnvironmentConnectionFreshnessProjection = {
+  connection: live.connection,
+  snapshot: { ...cachedSnapshot, status: "synchronizing" },
+};
+
 function visibleStatus(renderer: ReactTestRenderer): string | undefined {
   return renderer.root.findAll((node) => node.props["data-train-network-status"] !== undefined)[0]
     ?.props["data-train-network-status"];
@@ -94,6 +99,23 @@ describe("TrainNetworkStatus mounted timing", () => {
     expect(visibleStatus(renderer!)).toBe("recovered");
     await act(async () => vi.advanceTimersByTime(1));
     expect(visibleStatus(renderer!)).toBeUndefined();
+
+    await act(async () => renderer!.unmount());
+  });
+
+  it("clears reconnecting quietly until the cached snapshot becomes live", async () => {
+    let renderer: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<TrainNetworkStatus projection={offline} />);
+    });
+    await act(async () => vi.advanceTimersByTime(NETWORK_DEGRADATION_HOLD_MS));
+    expect(visibleStatus(renderer!)).toBe("degraded");
+
+    await act(async () => renderer!.update(<TrainNetworkStatus projection={synchronizing} />));
+    expect(visibleStatus(renderer!)).toBeUndefined();
+
+    await act(async () => renderer!.update(<TrainNetworkStatus projection={live} />));
+    expect(visibleStatus(renderer!)).toBe("recovered");
 
     await act(async () => renderer!.unmount());
   });

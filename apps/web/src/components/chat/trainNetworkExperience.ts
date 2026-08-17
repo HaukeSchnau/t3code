@@ -29,6 +29,20 @@ export function deriveTrainNetworkExperience(
   const { connection, snapshot } = projection;
 
   if (connection.phase === "connected") {
+    if (snapshot.error !== null) {
+      const errorSentence = /[.!?]$/.test(snapshot.error) ? snapshot.error : `${snapshot.error}.`;
+      const detail =
+        snapshot.snapshot === null ? snapshot.error : `${errorSentence} Showing saved content.`;
+      return {
+        kind: "degraded",
+        title: "Update failed",
+        detail,
+        attempt: connection.attempt,
+        retryRemainingMs: null,
+        announcement: `Update failed. ${detail}`,
+      };
+    }
+
     if (snapshot.snapshot !== null) {
       return null;
     }

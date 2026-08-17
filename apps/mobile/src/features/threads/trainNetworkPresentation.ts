@@ -127,6 +127,16 @@ export function presentTrainConnectionStatus(input: {
         accessibilityLabel: `${environment} is not connected. ${input.hasThreadContent ? "Showing saved conversation." : ""}`,
       };
     case "connected":
+      if (snapshot.error !== null) {
+        const errorSentence = /[.!?]$/.test(snapshot.error) ? snapshot.error : `${snapshot.error}.`;
+        return {
+          kind: "unavailable",
+          label: input.hasThreadContent
+            ? "Update failed · showing saved conversation"
+            : "Update failed",
+          accessibilityLabel: `Could not update this conversation. ${errorSentence} ${input.hasThreadContent ? "Showing saved conversation." : ""}`,
+        };
+      }
       if (snapshot.status === "synchronizing" || snapshot.status === "cached") {
         if (input.hasThreadContent) return null;
         return {

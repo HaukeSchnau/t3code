@@ -143,6 +143,27 @@ describe("train network experience presentation", () => {
     expect(view).toBeNull();
   });
 
+  it("keeps a cached refresh failure visible while showing saved content", () => {
+    const view = deriveTrainNetworkExperience(
+      projection(
+        {
+          phase: "connected",
+          stage: "ready",
+          attempt: 1,
+          generation: 1,
+          failure: null,
+        },
+        { ...snapshot, error: "Environment refresh failed" },
+      ),
+      0,
+    );
+
+    expect(view).toMatchObject({
+      title: "Update failed",
+      detail: "Environment refresh failed. Showing saved content.",
+    });
+  });
+
   it("shows loading while connected when the conversation cache is empty", () => {
     const view = deriveTrainNetworkExperience(
       projection(
