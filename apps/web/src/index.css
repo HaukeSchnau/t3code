@@ -1675,6 +1675,12 @@ code {
   margin-top: 0.25rem;
 }
 
+::highlight(inline-reply-anchor) {
+  background-color: color-mix(in oklab, var(--primary) 12%, transparent);
+  text-decoration: underline color-mix(in oklab, var(--primary) 38%, transparent);
+  text-underline-offset: 3px;
+}
+
 /* GitHub-style task lists: the checkbox replaces the list marker. */
 .chat-markdown li.task-list-item {
   list-style-type: none;

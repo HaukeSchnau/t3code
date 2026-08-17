@@ -35,6 +35,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  type ReactElement,
   type ReactNode,
 } from "react";
 import type { Components, Options as ReactMarkdownOptions } from "react-markdown";
@@ -110,7 +111,17 @@ import {
   BrowserPreviewUnavailableError,
 } from "../browser/openFileInPreview";
 
-interface ChatMarkdownProps {
+export interface ChatMarkdownBlock {
+  readonly id: string;
+  readonly kind: "paragraph" | "list-item";
+}
+
+export type ChatMarkdownBlockRenderer = (
+  block: ChatMarkdownBlock,
+  element: ReactElement,
+) => ReactNode;
+
+export interface ChatMarkdownProps {
   text: string;
   cwd: string | undefined;
   environmentId?: EnvironmentId | undefined;
@@ -123,6 +134,8 @@ interface ChatMarkdownProps {
   lineBreaks?: boolean;
   /** Parse sanitized raw HTML instead of displaying its source text. */
   parseRawHtml?: boolean;
+  /** Decorate replyable prose blocks without replacing the markdown renderer. */
+  renderBlock?: ChatMarkdownBlockRenderer;
 }
 
 const EMPTY_MARKDOWN_SKILLS: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">> = [];
@@ -1388,6 +1401,7 @@ function ChatMarkdown({
   className,
   lineBreaks = false,
   parseRawHtml = true,
+  renderBlock,
 }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
@@ -1580,8 +1594,12 @@ function ChatMarkdown({
     };
 
     return {
-      p({ node: _node, children, ...props }) {
-        return <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
+      p({ node, children, ...props }) {
+        const element = <p {...props}>{renderSkillInlineMarkdownChildren(children, skills)}</p>;
+        const offset = node?.position?.start.offset;
+        return typeof offset === "number"
+          ? (renderBlock?.({ id: `paragraph:${offset}`, kind: "paragraph" }, element) ?? element)
+          : element;
       },
       blockquote({ node: _node, children, ...props }) {
         const alert =
@@ -1616,11 +1634,15 @@ function ChatMarkdown({
         const listItemStart = node?.position?.start.offset;
         const markerOffset =
           typeof listItemStart === "number" ? findTaskListMarkerOffset(text, listItemStart) : null;
-        return (
+        const element = (
           <li {...props} data-task-marker-offset={markerOffset ?? undefined}>
             {renderSkillInlineMarkdownChildren(children, skills)}
           </li>
         );
+        return typeof listItemStart === "number"
+          ? (renderBlock?.({ id: `list-item:${listItemStart}`, kind: "list-item" }, element) ??
+              element)
+          : element;
       },
       input({ node: _node, type, checked, disabled: _disabled, ...props }) {
         if (type !== "checkbox" || !onTaskListChange) {
@@ -1813,6 +1835,7 @@ function ChatMarkdown({
     openExternalLinkInPreview,
     openMarkdownFileInPreview,
     resolvedTheme,
+    renderBlock,
     skills,
     text,
     threadRef,

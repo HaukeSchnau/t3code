@@ -120,6 +120,8 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
+import { AssistantInlineReplies } from "./AssistantInlineReplies";
+import { type InlineReplyDraftStore } from "./inlineReplies";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -143,6 +145,7 @@ interface TimelineRowSharedState {
   resolvedTheme: "light" | "dark";
   workspaceRoot: string | undefined;
   skills: ReadonlyArray<Pick<ServerProviderSkill, "name" | "displayName">>;
+  inlineReplyStore: InlineReplyDraftStore | null;
   activeThreadEnvironmentId: EnvironmentId;
   canForkAssistantMessage: boolean;
   onRevertUserMessage: (messageId: MessageId) => void;
@@ -281,6 +284,7 @@ interface MessagesTimelineProps {
   topFadeEnabled?: boolean;
   /** Non-null when older turns exist beyond the loaded window. */
   loadEarlier?: { readonly loading: boolean; readonly onLoadEarlier: () => void } | null;
+  inlineReplyStore?: InlineReplyDraftStore | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -329,6 +333,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   hideEmptyPlaceholder = false,
   topFadeEnabled = false,
   loadEarlier = null,
+  inlineReplyStore = null,
 }: MessagesTimelineProps) {
   const [expandedTurnIds, setExpandedTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
   const [hydratingTurnIds, setHydratingTurnIds] = useState<ReadonlySet<TurnId>>(new Set());
@@ -576,6 +581,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       skills,
+      inlineReplyStore,
       activeThreadEnvironmentId,
       canForkAssistantMessage,
       onRevertUserMessage,
@@ -595,6 +601,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       resolvedTheme,
       workspaceRoot,
       skills,
+      inlineReplyStore,
       activeThreadEnvironmentId,
       canForkAssistantMessage,
       onRevertUserMessage,
@@ -1244,15 +1251,29 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
   return (
     <>
       <div className="relative min-w-0 px-1 py-0.5">
-        <ChatMarkdown
-          text={messageText}
-          cwd={ctx.markdownCwd}
-          environmentId={ctx.activeThreadEnvironmentId}
-          threadRef={ctx.threadRef ?? undefined}
-          isStreaming={Boolean(row.message.streaming)}
-          lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
-          skills={ctx.skills}
-        />
+        {ctx.inlineReplyStore ? (
+          <AssistantInlineReplies
+            messageId={row.message.id}
+            store={ctx.inlineReplyStore}
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            environmentId={ctx.activeThreadEnvironmentId}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        ) : (
+          <ChatMarkdown
+            text={messageText}
+            cwd={ctx.markdownCwd}
+            environmentId={ctx.activeThreadEnvironmentId}
+            threadRef={ctx.threadRef ?? undefined}
+            isStreaming={Boolean(row.message.streaming)}
+            lineBreaks={shouldPreserveAssistantLineBreaks(messageText)}
+            skills={ctx.skills}
+          />
+        )}
         <AssistantChangedFilesSection
           turnSummary={row.assistantTurnDiffSummary}
           routeThreadKey={ctx.routeThreadKey}

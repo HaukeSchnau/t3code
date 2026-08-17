@@ -561,6 +561,7 @@ export interface ChatComposerProps {
   isConnecting: boolean;
   isSendBusy: boolean;
   sendDisabledReason?: string | null;
+  hasExternalSendableContent?: boolean;
   isPreparingWorktree: boolean;
   environmentUnavailable: {
     readonly label: string;
@@ -677,6 +678,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isConnecting,
     isSendBusy,
     sendDisabledReason = null,
+    hasExternalSendableContent = false,
     isPreparingWorktree,
     environmentUnavailable,
     activePendingApproval,
@@ -1077,6 +1079,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       prompt,
     ],
   );
+  const hasSendableContent = composerSendState.hasSendableContent || hasExternalSendableContent;
 
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu
@@ -1220,11 +1223,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (showPlanFollowUpPrompt) {
       return prompt.trim().length > 0 ? "plan:refine" : "plan:implement";
     }
-    return `idle:${composerSendState.hasSendableContent}:${isSendBusy}:${isConnecting}:${isPreparingWorktree}`;
+    return `idle:${hasSendableContent}:${isSendBusy}:${isConnecting}:${isPreparingWorktree}`;
   }, [
     activePendingIsResponding,
     activePendingProgress,
-    composerSendState.hasSendableContent,
+    hasSendableContent,
     isConnecting,
     isPreparingWorktree,
     isSendBusy,
@@ -1306,7 +1309,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     noProviderAvailable ||
     projectSelectionRequired ||
     environmentUnavailable !== null ||
-    (!composerSendState.hasSendableContent && !canResumeInterruptedTurn);
+    (!hasSendableContent && !canResumeInterruptedTurn);
   const collapsedComposerPrimaryActionLabel = canResumeInterruptedTurn
     ? "Resume interrupted turn"
     : "Send message";
@@ -1880,11 +1883,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (activePendingProgress) {
       return activePendingProgress.isLastQuestion && Boolean(activePendingResolvedAnswers);
     }
-    return showPlanFollowUpPrompt || composerSendState.hasSendableContent;
+    return showPlanFollowUpPrompt || hasSendableContent;
   }, [
     activePendingProgress,
     activePendingResolvedAnswers,
-    composerSendState.hasSendableContent,
+    hasSendableContent,
     environmentUnavailable,
     isConnecting,
     isMobileViewport,
@@ -2934,7 +2937,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ? activePendingProgress.customAnswer ||
                     "Type your own answer, or leave this blank to use the selected option"
                   : prompt.trim() ||
-                    (noProviderAvailable ? "Enable a provider in Settings" : "Ask anything...")}
+                    (noProviderAvailable
+                      ? "Enable a provider in Settings"
+                      : hasExternalSendableContent
+                        ? "Optional overall note…"
+                        : "Ask anything...")}
               </button>
               <button
                 type="button"
@@ -2944,14 +2951,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 onPointerDown={(event) => event.preventDefault()}
                 onClick={(event) => {
                   event.stopPropagation();
-                  if (canResumeInterruptedTurn && !composerSendState.hasSendableContent) {
+                  if (canResumeInterruptedTurn && !hasSendableContent) {
                     onResumeInterruptedTurn();
                   } else {
                     submitComposer();
                   }
                 }}
               >
-                {canResumeInterruptedTurn && !composerSendState.hasSendableContent ? (
+                {canResumeInterruptedTurn && !hasSendableContent ? (
                   <PlayIcon className="size-4" aria-hidden="true" />
                 ) : (
                   <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
@@ -3169,9 +3176,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           ? "Choose a project above to start a thread"
                           : noProviderAvailable
                             ? "Enable a provider in Settings to send a message"
-                            : phase === "disconnected"
-                              ? "Ask for follow-up changes or attach images"
-                              : "Ask anything, @tag files/folders, $use skills, or / for commands"
+                            : hasExternalSendableContent
+                              ? "Optional overall note…"
+                              : phase === "disconnected"
+                                ? "Ask for follow-up changes or attach images"
+                                : "Ask anything, @tag files/folders, $use skills, or / for commands"
                 }
                 disabled={isConnecting || isComposerApprovalState || projectSelectionRequired}
               />
@@ -3338,7 +3347,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     projectSelectionRequired
                   }
                   isPreparingWorktree={isPreparingWorktree}
-                  hasSendableContent={composerSendState.hasSendableContent}
+                  hasSendableContent={hasSendableContent}
                   preserveComposerFocusOnPointerDown={isMobileViewport}
                   showSendWhileRunning={isMobileViewport}
                   onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
