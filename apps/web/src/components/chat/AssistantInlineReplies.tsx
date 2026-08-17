@@ -19,7 +19,11 @@ import ChatMarkdown, {
   type ChatMarkdownProps,
 } from "../ChatMarkdown";
 import { cn } from "../../lib/utils";
-import { type InlineReplyDraft, type InlineReplyDraftStore } from "./inlineReplies";
+import {
+  resolveInlineReplySelectionScope,
+  type InlineReplyDraft,
+  type InlineReplyDraftStore,
+} from "./inlineReplies";
 
 interface SelectionAction {
   readonly blockId: string;
@@ -53,6 +57,20 @@ function normalizedBlockText(block: HTMLElement): string {
   const copy = block.cloneNode(true) as HTMLElement;
   for (const replyUi of copy.querySelectorAll("[data-inline-reply-ui]")) replyUi.remove();
   return (copy.textContent ?? "").replace(/\s+/g, " ").trim();
+}
+
+function selectableBlockTextLength(root: HTMLElement): number {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let length = 0;
+  let node = walker.nextNode();
+  while (node) {
+    const textNode = node as Text;
+    if (!textNode.parentElement?.closest("[data-inline-reply-ui]")) {
+      length += textNode.data.length;
+    }
+    node = walker.nextNode();
+  }
+  return length;
 }
 
 function restoreTextRange(
@@ -253,6 +271,9 @@ export function AssistantInlineReplies({
     const root = rootRef.current;
     const target = event.target;
     if (!root || !(target instanceof Node)) return;
+    if (target instanceof Element && target.closest("[data-inline-reply-hover-affordance]")) {
+      return;
+    }
     if (target instanceof Element && target.closest("[data-inline-reply-ui]")) {
       setHoveredBlockAction(null);
       return;
@@ -265,7 +286,7 @@ export function AssistantInlineReplies({
     }
     const bounds = block.getBoundingClientRect();
     const left =
-      bounds.right + 30 <= window.innerWidth ? bounds.right + 4 : Math.max(8, bounds.right - 26);
+      bounds.right + 28 <= window.innerWidth ? bounds.right : Math.max(8, bounds.right - 28);
     const next = { blockId, left, top: Math.max(8, bounds.top) };
     setHoveredBlockAction((current) =>
       current?.blockId === next.blockId && current.left === next.left && current.top === next.top
@@ -301,28 +322,56 @@ export function AssistantInlineReplies({
       return;
     }
 
-    const startBlock = sourceBlockForNode(selection.anchorNode, root);
-    const endBlock = sourceBlockForNode(selection.focusNode, root);
+    const range = selection.getRangeAt(0);
+    const startBlock = sourceBlockForNode(range.startContainer, root);
+    const endBlock = sourceBlockForNode(range.endContainer, root);
     const blockId = startBlock?.dataset.inlineReplyBlockId;
-    if (!startBlock || startBlock !== endBlock || !blockId) {
+    if (!startBlock || !blockId) {
       setSelectionAction(null);
       return;
     }
 
-    const range = selection.getRangeAt(0);
+    const scope = resolveInlineReplySelectionScope({
+      selectedText: quote,
+      startBlockText: normalizedBlockText(startBlock),
+      endsInStartBlock: startBlock === endBlock,
+    });
+    if (!scope) {
+      setSelectionAction(null);
+      return;
+    }
+
+    const effectiveRange =
+      scope === "whole-block"
+        ? restoreTextRange(startBlock, {
+            start: 0,
+            end: selectableBlockTextLength(startBlock),
+          })
+        : range;
+    if (!effectiveRange) {
+      setSelectionAction(null);
+      return;
+    }
+
     const precedingRange = document.createRange();
     precedingRange.selectNodeContents(startBlock);
-    precedingRange.setEnd(range.startContainer, range.startOffset);
+    precedingRange.setEnd(effectiveRange.startContainer, effectiveRange.startOffset);
     const start = precedingRange.toString().length;
-    const bounds = range.getBoundingClientRect();
+    const bounds = effectiveRange.getBoundingClientRect();
+    const selectedRangeText = effectiveRange.toString();
     setSelectionAction({
       blockId,
-      quote,
-      textRange: { start, end: start + range.toString().length },
+      quote: selectedRangeText.replace(/\s+/g, " ").trim(),
+      textRange: { start, end: start + selectedRangeText.length },
       left: Math.min(window.innerWidth - 144, Math.max(12, bounds.left + bounds.width / 2 - 66)),
       top: Math.max(12, bounds.top - 38),
     });
   }, [isStreaming]);
+
+  useEffect(() => {
+    document.addEventListener("selectionchange", updateSelectionAction);
+    return () => document.removeEventListener("selectionchange", updateSelectionAction);
+  }, [updateSelectionAction]);
 
   const addSelectionReply = useCallback(() => {
     if (!selectionAction) return;
@@ -356,7 +405,7 @@ export function AssistantInlineReplies({
               data-inline-reply-ui
               data-inline-reply-hover-affordance
               aria-label="Reply to this paragraph"
-              className="fixed z-40 flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground max-sm:hidden"
+              className="fixed z-40 flex h-6 w-7 items-center pl-1 max-sm:hidden"
               style={{ left: hoveredBlockAction.left, top: hoveredBlockAction.top }}
               onMouseLeave={(event) => {
                 const nextTarget = event.relatedTarget;
@@ -365,7 +414,9 @@ export function AssistantInlineReplies({
               }}
               onClick={() => addParagraphReply(hoveredBlockAction.blockId)}
             >
-              <CornerDownLeftIcon className="size-3.5" />
+              <span className="flex size-6 items-center justify-center rounded text-muted-foreground hover:bg-muted/60 hover:text-foreground">
+                <CornerDownLeftIcon className="size-3.5" />
+              </span>
             </button>,
             document.body,
           )

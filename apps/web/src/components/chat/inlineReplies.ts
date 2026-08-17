@@ -35,6 +35,19 @@ export interface InlineReplyDraftStore {
   clearHighlightRanges: (messageId: MessageId) => void;
 }
 
+export function resolveInlineReplySelectionScope({
+  selectedText,
+  startBlockText,
+  endsInStartBlock,
+}: {
+  readonly selectedText: string;
+  readonly startBlockText: string;
+  readonly endsInStartBlock: boolean;
+}): "selection" | "whole-block" | null {
+  if (endsInStartBlock) return "selection";
+  return selectedText === startBlockText ? "whole-block" : null;
+}
+
 function authoredReplies(
   replies: ReadonlyArray<InlineReplyDraft>,
 ): ReadonlyArray<InlineReplyDraft> {
