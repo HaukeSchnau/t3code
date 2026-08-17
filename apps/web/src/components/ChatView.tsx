@@ -55,6 +55,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type RefObject,
 } from "react";
 import { flushSync } from "react-dom";
@@ -279,6 +280,7 @@ import { QueuedMessagesStrip } from "./chat/QueuedMessagesStrip";
 import { usePreviousMessageEditing } from "./chat/usePreviousMessageEditing";
 import { useCodexMessageForking } from "./chat/useCodexMessageForking";
 import { useHistoricalTurnHydration } from "./chat/useHistoricalTurnHydration";
+import { createInlineReplyDraftStore, formatInlineReplyPrompt } from "./chat/inlineReplies";
 import {
   analyzeThreadTurnDraft,
   createDurableThreadTurnDeliveryAdapter,
@@ -1217,6 +1219,12 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
+  const inlineReplyStore = useMemo(() => createInlineReplyDraftStore(), [routeThreadKey]);
+  const hasInlineReplyContent = useSyncExternalStore(
+    inlineReplyStore.subscribe,
+    inlineReplyStore.hasSendableContent,
+    inlineReplyStore.hasSendableContent,
+  );
   const updateProject = useAtomCommand(projectEnvironment.update, {
     reportFailure: false,
   });
@@ -5083,6 +5091,11 @@ function ChatViewContent(props: ChatViewProps) {
       notifyDirectAnnotationAttached();
       return;
     }
+    const inlineRepliesForSend = inlineReplyStore.getAll();
+    const hasInlineRepliesForSend = inlineReplyStore.hasSendableContent();
+    const promptWithInlineReplies = hasInlineRepliesForSend
+      ? formatInlineReplyPrompt(inlineRepliesForSend, promptRef.current)
+      : promptRef.current;
     const composerImages =
       directAnnotation?.image &&
       !sendCtx.images.some((image) => image.id === directAnnotation.image?.id)
@@ -5104,10 +5117,13 @@ function ChatViewContent(props: ChatViewProps) {
           ]
         : sendCtx.previewAnnotations;
     const promptForSend = promptRef.current;
-    const submissionDraft = threadTurnDraftFromComposer(sendCtx, {
+    const baseSubmissionDraft = threadTurnDraftFromComposer(sendCtx, {
       images: composerImages,
       previewAnnotations: composerPreviewAnnotations,
     });
+    const submissionDraft = hasInlineRepliesForSend
+      ? { ...baseSubmissionDraft, prompt: promptWithInlineReplies }
+      : baseSubmissionDraft;
     const submissionAnalysis = analyzeThreadTurnDraft(submissionDraft);
     const {
       trimmedPrompt: trimmed,
@@ -5131,6 +5147,7 @@ function ChatViewContent(props: ChatViewProps) {
         promptRef.current = "";
         clearComposerDraftContent(composerDraftTarget);
         readComposerHandle(composerRef)?.resetCursorState();
+        if (inlineRepliesForSend === inlineReplyStore.getAll()) inlineReplyStore.clear();
       }
       await onSubmitPlanFollowUp({
         text: followUp.text,
@@ -5155,6 +5172,7 @@ function ChatViewContent(props: ChatViewProps) {
         promptRef.current = "";
         clearComposerDraftContent(composerDraftTarget);
         readComposerHandle(composerRef)?.resetCursorState();
+        if (inlineRepliesForSend === inlineReplyStore.getAll()) inlineReplyStore.clear();
       }
       return;
     }
@@ -5246,8 +5264,11 @@ function ChatViewContent(props: ChatViewProps) {
           const currentDraft = useComposerDraftStore
             .getState()
             .getComposerDraft(composerDraftTarget);
+          const currentPrompt = inlineReplyStore.hasSendableContent()
+            ? formatInlineReplyPrompt(inlineReplyStore.getAll(), promptRef.current)
+            : promptRef.current;
           return threadComposerRevision({
-            prompt: promptRef.current,
+            prompt: currentPrompt,
             images: composerImagesRef.current,
             terminalContexts: composerTerminalContextsRef.current,
             elementContexts: composerElementContextsRef.current,
@@ -5258,22 +5279,24 @@ function ChatViewContent(props: ChatViewProps) {
         clear: () => {
           promptRef.current = "";
           clearComposerDraftContent(composerDraftTarget);
+          inlineReplyStore.clear();
           readComposerHandle(composerRef)?.resetCursorState();
         },
         restore: (retryDraft) => {
-          promptRef.current = retryDraft.prompt;
+          promptRef.current = promptForSend;
           composerImagesRef.current = [...retryDraft.images];
           composerTerminalContextsRef.current = [...retryDraft.terminalContexts];
           composerElementContextsRef.current = [...retryDraft.elementContexts];
-          setComposerDraftPrompt(composerDraftTarget, retryDraft.prompt);
+          setComposerDraftPrompt(composerDraftTarget, promptForSend);
           addComposerDraftImages(composerDraftTarget, [...retryDraft.images]);
           setComposerDraftTerminalContexts(composerDraftTarget, [...retryDraft.terminalContexts]);
           setComposerDraftElementContexts(composerDraftTarget, retryDraft.elementContexts);
           setComposerDraftPreviewAnnotations(composerDraftTarget, retryDraft.previewAnnotations);
           setComposerDraftReviewComments(composerDraftTarget, retryDraft.reviewComments);
+          inlineReplyStore.replaceAll(inlineRepliesForSend);
           readComposerHandle(composerRef)?.resetCursorState({
-            cursor: collapseExpandedComposerCursor(retryDraft.prompt, retryDraft.prompt.length),
-            prompt: retryDraft.prompt,
+            cursor: collapseExpandedComposerCursor(promptForSend, promptForSend.length),
+            prompt: promptForSend,
             detectTrigger: true,
           });
         },
@@ -6452,6 +6475,7 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+                inlineReplyStore={inlineReplyStore}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -6569,6 +6593,7 @@ function ChatViewContent(props: ChatViewProps) {
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
+                            hasExternalSendableContent={hasInlineReplyContent}
                             isPreparingWorktree={isPreparingWorktree}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
