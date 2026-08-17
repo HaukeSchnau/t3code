@@ -287,7 +287,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       invoke(IpcChannels.ENERGY_REVEAL_CAPTURE_ARTIFACT_CHANNEL, path),
   },
   preview: {
-    createTab: (tabId) => invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, { tabId }),
+    createTab: (tabId, defaults) =>
+      invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
+        tabId,
+        zoomFactor: defaults?.zoomFactor,
+        colorScheme: defaults?.colorScheme,
+      }),
     closeTab: (tabId) => invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
     registerWebview: (tabId, webContentsId) =>
       invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),

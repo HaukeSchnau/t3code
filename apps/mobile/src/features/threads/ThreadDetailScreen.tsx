@@ -28,7 +28,6 @@ import {
   AppState,
   Keyboard,
   Platform,
-  useColorScheme,
   useWindowDimensions,
   View,
   type GestureResponderEvent,
@@ -49,6 +48,7 @@ import Animated, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ControlPill } from "../../components/ControlPill";
+import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
@@ -508,7 +508,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, scrollMessageToEnd]);
 
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
-  const isDarkMode = useColorScheme() === "dark";
+  const { themeAppearance } = useAppearancePreferences();
+  const isDarkMode = themeAppearance === "dark";
 
   const handleFeedTouchStart = useCallback((event: GestureResponderEvent) => {
     feedTouchStartRef.current = {

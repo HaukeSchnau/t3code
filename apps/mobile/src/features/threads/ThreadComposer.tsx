@@ -286,7 +286,7 @@ const ComposerConnectionStatusPill = memo(function ComposerConnectionStatusPill(
         accessibilityLabel={props.status.accessibilityLabel}
         accessibilityLiveRegion="polite"
         onPress={props.onPress}
-        className="min-h-11 max-w-full flex-row items-center gap-2 rounded-full bg-white/90 px-3 py-2 shadow-sm active:opacity-70 dark:bg-neutral-900/90"
+        className="min-h-11 max-w-full flex-row items-center gap-2 rounded-full bg-card px-3 py-2 shadow-sm active:opacity-70"
       >
         {isReconnecting ? (
           <ActivityIndicator size="small" color="#8e8e93" />
@@ -461,8 +461,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       hasThreadContent: props.hasThreadContent,
       remoteQueueCount: props.remoteQueueCount,
     });
-  const toolbarFadeOpaque = isDarkMode ? "rgba(0,0,0,0.95)" : "rgba(255,255,255,0.95)";
-  const toolbarFadeTransparent = isDarkMode ? "rgba(0,0,0,0)" : "rgba(255,255,255,0)";
+  const toolbarSurface = String(useThemeColor("--color-card"));
+  const backdropSurface = String(useThemeColor("--color-screen"));
+  const toolbarFadeOpaque = themeColorWithAlpha(toolbarSurface, 0.95);
+  const toolbarFadeTransparent = themeColorWithAlpha(toolbarSurface, 0);
+  const backdropGradient = `linear-gradient(to bottom, ${themeColorWithAlpha(backdropSurface, 0)} 0%, ${themeColorWithAlpha(backdropSurface, 0.6)} 55%, ${themeColorWithAlpha(backdropSurface, 0.9)} 100%)`;
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (
