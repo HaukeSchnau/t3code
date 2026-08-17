@@ -129,6 +129,31 @@ describe("mobile train network presentation", () => {
     ).toBeNull();
   });
 
+  it("keeps a cached refresh failure visible", () => {
+    const status = presentTrainConnectionStatus({
+      projection: {
+        connection: {
+          phase: "connected",
+          stage: "ready",
+          attempt: 1,
+          generation: 1,
+          failure: null,
+        },
+        snapshot: {
+          status: "cached",
+          snapshot: SNAPSHOT,
+          error: "Environment refresh failed",
+        },
+      },
+      environmentLabel: null,
+      nowMs: 0,
+      hasThreadContent: true,
+    });
+
+    expect(status?.label).toBe("Update failed · showing saved conversation");
+    expect(status?.accessibilityLabel).toContain("Environment refresh failed");
+  });
+
   it("ships deterministic screenshot fixtures with local and remote queues separated", () => {
     expect(Object.keys(TRAIN_NETWORK_SCREENSHOT_FIXTURES)).toHaveLength(6);
     expect(

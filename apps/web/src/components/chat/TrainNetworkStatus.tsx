@@ -34,6 +34,8 @@ export function TrainNetworkStatus({
     () => (projection === null ? null : deriveTrainNetworkExperience(projection, nowMs)),
     [nowMs, projection],
   );
+  const fullyRecovered =
+    projection?.connection.phase === "connected" && projection.snapshot.status === "live";
   const [displayedView, setDisplayedView] = useState<TrainNetworkExperienceView | null>(() =>
     immediate ? nextView : null,
   );
@@ -60,11 +62,16 @@ export function TrainNetworkStatus({
       return;
     }
 
+    if (!fullyRecovered) {
+      setDisplayedView(null);
+      return;
+    }
+
     previouslyDegradedRef.current = false;
     setDisplayedView(RECOVERED_NETWORK_EXPERIENCE);
     const timeout = window.setTimeout(() => setDisplayedView(null), NETWORK_RECOVERY_HOLD_MS);
     return () => window.clearTimeout(timeout);
-  }, [immediate, nextView]);
+  }, [fullyRecovered, immediate, nextView]);
 
   useEffect(() => {
     if (nextView?.retryRemainingMs === null || nextView?.retryRemainingMs === undefined) return;

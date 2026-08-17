@@ -167,6 +167,17 @@ With mise, asdf, fnm, or nodenv, make sure the tool's shim directory is installe
 
 If reconnecting after an app update fails, retry the SSH launch once. The launcher now compares its generated runner script, stops stale launcher-managed remote servers, clears the SSH launch PID/port state, and starts a fresh remote server. You should not normally need to delete `~/.t3/ssh-launch` or kill `t3` processes manually.
 
+## Switching Threads on Slow Connections
+
+T3 Code keeps recently viewed conversations available while it checks the server for newer
+messages. Switching back to one of those conversations shows the saved messages immediately and
+refreshes them in the background. A loading message appears only when that conversation is not
+available on the device yet.
+
+Offline, reconnecting, and failed-update messages still appear when saved conversation content is
+visible. These messages describe connection freshness; they do not prevent you from reading the
+saved conversation.
+
 ## Updating a Remote Server
 
 When the T3 Code web or desktop app and a remote server use different versions, a warning appears in
