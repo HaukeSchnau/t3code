@@ -415,13 +415,19 @@ function getClaudeVersionUpgradeMessage(
   return formatClaudeOpus47UpgradeMessage(version);
 }
 
-export function getClaudeModelCapabilities(model: string | null | undefined): ModelCapabilities {
+export function getClaudeModelCapabilities(
+  model: string | null | undefined,
+  customModels: ReadonlyArray<string> = [],
+): ModelCapabilities {
   const slug = model?.trim();
   if (!slug) return EMPTY_CLAUDE_MODEL_CAPABILITIES;
-  return (
-    BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
-    CUSTOM_CLAUDE_MODEL_CAPABILITIES
-  );
+  const builtInCapabilities = BUILT_IN_MODELS.find(
+    (candidate) => candidate.slug === slug,
+  )?.capabilities;
+  if (builtInCapabilities) return builtInCapabilities;
+  return customModels.includes(slug)
+    ? CUSTOM_CLAUDE_MODEL_CAPABILITIES
+    : EMPTY_CLAUDE_MODEL_CAPABILITIES;
 }
 
 export function resolveClaudeEffort(
@@ -875,6 +881,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   ) => Effect.Effect<ClaudeCapabilitiesProbe | undefined>,
   environment?: NodeJS.ProcessEnv,
   cwd?: string,
+  options?: { readonly requireAuthenticatedStatusProbe?: boolean },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -976,6 +983,29 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings.includeBuiltInModels,
   );
 
+  const authenticated = options?.requireAuthenticatedStatusProbe
+    ? yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment)
+    : undefined;
+
+  if (options?.requireAuthenticatedStatusProbe && authenticated !== true) {
+    return buildServerProvider({
+      presentation: CLAUDE_PRESENTATION,
+      enabled: claudeSettings.enabled,
+      checkedAt,
+      models,
+      probe: {
+        installed: true,
+        version: parsedVersion,
+        status: "warning",
+        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
+        message:
+          authenticated === false
+            ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
+            : `Could not verify authentication with \`${claudeSettings.binaryPath} auth status\`.`,
+      },
+    });
+  }
+
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
@@ -983,7 +1013,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const slashCommands = capabilities?.slashCommands ?? [];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
-  if (!capabilities) {
+  if (!capabilities && authenticated !== true) {
     const fallbackAuthenticated = yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment);
 
     return buildServerProvider({
@@ -1006,11 +1036,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const authMetadata =
-    claudeAuthMetadata({
-      subscriptionType: capabilities.subscriptionType,
-      authMethod: capabilities.tokenSource,
-    }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
+  const authMetadata = capabilities
+    ? (claudeAuthMetadata({
+        subscriptionType: capabilities.subscriptionType,
+        authMethod: capabilities.tokenSource,
+      }) ?? apiProviderAuthMetadata(capabilities.apiProvider))
+    : undefined;
   return buildServerProvider({
     presentation: CLAUDE_PRESENTATION,
     enabled: claudeSettings.enabled,
@@ -1024,7 +1055,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       status: "ready",
       auth: {
         status: "authenticated",
-        ...(capabilities.email ? { email: capabilities.email } : {}),
+        ...(capabilities?.email ? { email: capabilities.email } : {}),
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),

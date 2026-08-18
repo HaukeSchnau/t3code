@@ -58,5 +58,16 @@ it.layer(NodeServices.layer)("ClaudeHome", (it) => {
         );
       }),
     );
+
+    it.effect("can isolate routed runtimes while sharing Claude configuration", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const resolved = path.resolve(NodeOS.homedir());
+
+        expect(yield* makeClaudeContinuationGroupKey({ homePath: "" }, "claudex")).toBe(
+          `claude:home:${resolved}:claudex`,
+        );
+      }),
+    );
   });
 });

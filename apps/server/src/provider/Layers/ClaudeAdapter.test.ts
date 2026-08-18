@@ -443,7 +443,7 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect("preserves routed custom-model effort levels", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ claudeConfig: { customModels: ["gpt-5.6-sol"] } });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
       yield* adapter.startSession({
@@ -459,6 +459,28 @@ describe("ClaudeAdapterLive", () => {
 
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.effort, "xhigh");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not invent effort support for an unconfigured routed model", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "unknown-routed-model",
+          [{ id: "effort", value: "xhigh" }],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      assert.equal(harness.getLastCreateQueryInput()?.options.effort, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
