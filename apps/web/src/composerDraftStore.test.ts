@@ -11,6 +11,7 @@ import {
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  MessageId,
   ThreadId,
   type ModelSelection,
   type ProviderOptionSelection,
@@ -466,6 +467,46 @@ describe("composerDraftStore clearComposerContent", () => {
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft).toBeUndefined();
     expect(revokeSpy).not.toHaveBeenCalledWith("blob:optimistic");
+  });
+});
+
+describe("composerDraftStore inline replies", () => {
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, ThreadId.make("thread-inline-replies"));
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("persists inline replies with the thread draft and clears them after send", () => {
+    const store = useComposerDraftStore.getState();
+    store.setInlineReplies(threadRef, [
+      {
+        id: "inline-reply-1",
+        messageId: MessageId.make("assistant-1"),
+        blockId: "paragraph:0",
+        anchorKind: "selection",
+        quote: "persist this selection",
+        textRange: { start: 0, end: 22 },
+        text: "My annotation",
+      },
+    ]);
+
+    expect(store.getComposerDraft(threadRef)?.inlineReplies[0]?.text).toBe("My annotation");
+
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
+      };
+    };
+    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
+      draftsByThreadKey?: Record<string, { inlineReplies?: Array<{ text: string }> }>;
+    };
+    expect(
+      persisted.draftsByThreadKey?.[scopedThreadKey(threadRef)]?.inlineReplies?.[0]?.text,
+    ).toBe("My annotation");
+
+    store.clearComposerContent(threadRef);
+    expect(store.getComposerDraft(threadRef)).toBeNull();
   });
 });
 

@@ -22,12 +22,16 @@ one ordinary user turn when sent.
 
 - `chat/inlineReplies.ts` owns the external draft store and prompt formatting. Per-block
   subscriptions keep editor keystrokes from replacing Markdown renderers or disturbing other blocks.
+- Inline replies are persisted as part of `composerDraftStore`'s per-thread draft. Creating a routed
+  editor restores that slice, and every inline edit writes it back through the composer's existing
+  debounced local-storage path.
 - `ChatMarkdown.renderBlock` is the narrow upstream seam. Preserve its default output when no
   decorator is supplied; do not fork or replace the Markdown renderer.
 - The transparent hit target for each block affordance is always mounted in the adjacent gutter; its
   icon becomes visible when either the block or that target is hovered. Text selection follows the
   document `selectionchange` event; whole-block browser selections may end at the next block boundary
   and must be normalized back to the source block.
-- Inline reply state is intentionally authoring-local and resets when the routed thread changes.
+- Successful sends and explicit draft clearing remove inline replies with the rest of the composer
+  content.
 - The feature currently ships on the web client and therefore the Electron desktop client. The
   React Native mobile timeline remains unchanged until it has a native text-selection interaction.

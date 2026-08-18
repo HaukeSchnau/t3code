@@ -7,6 +7,40 @@ import {
 } from "./inlineReplies";
 
 describe("inline replies", () => {
+  it("restores persisted replies and continues emitting draft changes", () => {
+    const messageId = MessageId.make("assistant-1");
+    const onChange = vi.fn();
+    const store = createInlineReplyDraftStore({
+      initialReplies: [
+        {
+          id: "inline-reply-1",
+          messageId,
+          blockId: "paragraph:0",
+          anchorKind: "paragraph",
+          quote: "The first paragraph.",
+          text: "Keep this reply while navigating.",
+        },
+      ],
+      onChange,
+    });
+
+    expect(store.getAll()).toHaveLength(1);
+    expect(store.getForBlock(messageId, "paragraph:0")[0]?.text).toBe(
+      "Keep this reply while navigating.",
+    );
+    expect(onChange).not.toHaveBeenCalled();
+
+    const nextId = store.add({
+      messageId,
+      blockId: "paragraph:1",
+      anchorKind: "paragraph",
+      quote: "The second paragraph.",
+    });
+
+    expect(nextId).toBe("inline-reply-2");
+    expect(onChange).toHaveBeenLastCalledWith(store.getAll());
+  });
+
   it("accepts word and browser-native whole-paragraph selections", () => {
     expect(
       resolveInlineReplySelectionScope({

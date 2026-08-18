@@ -1,21 +1,7 @@
 import { type MessageId } from "@t3tools/contracts";
+import { type InlineReplyDraft } from "../../inlineReplyDraft";
 
-export type InlineReplyAnchorKind = "paragraph" | "selection";
-
-export interface InlineReplyTextRange {
-  readonly start: number;
-  readonly end: number;
-}
-
-export interface InlineReplyDraft {
-  readonly id: string;
-  readonly messageId: MessageId;
-  readonly blockId: string;
-  readonly anchorKind: InlineReplyAnchorKind;
-  readonly quote: string;
-  readonly textRange?: InlineReplyTextRange;
-  readonly text: string;
-}
+export type { InlineReplyDraft } from "../../inlineReplyDraft";
 
 type Listener = () => void;
 
@@ -76,7 +62,10 @@ export function formatInlineReplyPrompt(
   return replySections.join("\n\n");
 }
 
-export function createInlineReplyDraftStore(): InlineReplyDraftStore {
+export function createInlineReplyDraftStore(options?: {
+  readonly initialReplies?: ReadonlyArray<InlineReplyDraft>;
+  readonly onChange?: (replies: ReadonlyArray<InlineReplyDraft>) => void;
+}): InlineReplyDraftStore {
   const highlightName = "inline-reply-anchor";
   let replies: ReadonlyArray<InlineReplyDraft> = [];
   let repliesByMessage = new Map<MessageId, ReadonlyArray<InlineReplyDraft>>();
@@ -124,6 +113,7 @@ export function createInlineReplyDraftStore(): InlineReplyDraftStore {
   const replaceReplies = (
     nextReplies: ReadonlyArray<InlineReplyDraft>,
     affectedMessageIds: ReadonlySet<MessageId>,
+    emitChange = true,
   ) => {
     if (nextReplies === replies) return;
     const previousRepliesByBlock = repliesByBlock;
@@ -156,7 +146,11 @@ export function createInlineReplyDraftStore(): InlineReplyDraftStore {
       ]),
     );
     notify(affectedMessageIds, previousRepliesByBlock);
+    if (emitChange) options?.onChange?.(replies);
   };
+
+  const initialReplies = options?.initialReplies ?? [];
+  replaceReplies(initialReplies, new Set(initialReplies.map((reply) => reply.messageId)), false);
 
   return {
     highlightName,
@@ -201,7 +195,10 @@ export function createInlineReplyDraftStore(): InlineReplyDraftStore {
       );
       if (existing) return existing.id;
 
-      const id = `inline-reply-${nextReplyId++}`;
+      let id = `inline-reply-${nextReplyId++}`;
+      while (replies.some((reply) => reply.id === id)) {
+        id = `inline-reply-${nextReplyId++}`;
+      }
       replaceReplies([...replies, { ...input, id, text: "" }], new Set([input.messageId]));
       return id;
     },

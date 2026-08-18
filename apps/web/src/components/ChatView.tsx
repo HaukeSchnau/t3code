@@ -1219,12 +1219,6 @@ function ChatViewContent(props: ChatViewProps) {
     [environmentId, threadId],
   );
   const routeThreadKey = useMemo(() => scopedThreadKey(routeThreadRef), [routeThreadRef]);
-  const inlineReplyStore = useMemo(() => createInlineReplyDraftStore(), [routeThreadKey]);
-  const hasInlineReplyContent = useSyncExternalStore(
-    inlineReplyStore.subscribe,
-    inlineReplyStore.hasSendableContent,
-    inlineReplyStore.hasSendableContent,
-  );
   const updateProject = useAtomCommand(projectEnvironment.update, {
     reportFailure: false,
   });
@@ -1283,6 +1277,18 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const composerDraftTarget: ScopedThreadRef | DraftId =
     routeKind === "server" ? routeThreadRef : props.draftId;
+  const inlineReplyStore = useMemo(() => {
+    const draftStore = useComposerDraftStore.getState();
+    return createInlineReplyDraftStore({
+      initialReplies: draftStore.getComposerDraft(composerDraftTarget)?.inlineReplies ?? [],
+      onChange: (replies) => draftStore.setInlineReplies(composerDraftTarget, replies),
+    });
+  }, [composerDraftTarget]);
+  const hasInlineReplyContent = useSyncExternalStore(
+    inlineReplyStore.subscribe,
+    inlineReplyStore.hasSendableContent,
+    inlineReplyStore.hasSendableContent,
+  );
   const draftThread = useComposerDraftStore((store) =>
     routeKind === "server"
       ? store.getDraftSessionByRef(routeThreadRef)
