@@ -8,6 +8,8 @@ installation while reusing the existing Claude Code driver.
 ## Behavior
 
 - `Claudex` is always visible, enabled by default, and non-deletable.
+- It has a dedicated orange X mark, leaving native Claude on the standard Claude icon without an
+  ambiguous `CL` instance badge.
 - Users may disable it or edit its provider-instance settings.
 - It launches `claudex`, shares the normal Claude configuration and skills, and offers only
   `gpt-5.6-sol` by default.
@@ -34,6 +36,8 @@ installation while reusing the existing Claude Code driver.
 - `apps/server/src/provider/Layers/ProviderRegistry.ts`
 - `apps/server/src/provider/providerStatusCache.ts`
 - `apps/web/src/components/settings/SettingsPanels.tsx`
+- `apps/web/src/components/Icons.tsx`
+- `apps/web/src/components/chat/ProviderInstanceIcon.tsx`
 - `apps/web/src/providerInstances.ts`
 - Claude and provider architecture documentation
 

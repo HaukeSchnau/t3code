@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProviderDriverKind } from "@t3tools/contracts";
+import type { EnvironmentId, ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 import { FolderGit2Icon, FolderIcon, GitBranchIcon } from "lucide-react";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ProviderInstanceIcon } from "./chat/ProviderInstanceIcon";
@@ -43,6 +43,7 @@ export function ThreadCommandSubtitle(props: {
   worktreePath: string | null;
   isCurrent: boolean;
   driverKind?: ProviderDriverKind | null;
+  providerInstanceId?: ProviderInstanceId | null;
   providerDisplayName?: string | null;
   variant?: ThreadCommandSubtitleVariant;
   className?: string;
@@ -50,7 +51,10 @@ export function ThreadCommandSubtitle(props: {
   const variant = props.variant ?? THREAD_COMMAND_SUBTITLE_VARIANT;
   const isWorktree = props.worktreePath != null && props.worktreePath.trim().length > 0;
   const showHarness =
-    variant !== "favicon-workspace" && props.driverKind != null && props.providerDisplayName;
+    variant !== "favicon-workspace" &&
+    props.driverKind != null &&
+    props.providerInstanceId != null &&
+    props.providerDisplayName;
 
   const projectLabel = props.projectTitle?.trim() || null;
   const branchLabel = props.branch?.trim() || null;
@@ -90,10 +94,11 @@ export function ThreadCommandSubtitle(props: {
         </>
       ) : null}
 
-      {showHarness && props.driverKind ? (
+      {showHarness && props.driverKind && props.providerInstanceId ? (
         <>
           {projectLabel || branchLabel ? <Dot /> : null}
           <ProviderInstanceIcon
+            instanceId={props.providerInstanceId}
             driverKind={props.driverKind}
             displayName={props.providerDisplayName ?? props.driverKind}
             iconClassName="size-3 shrink-0 opacity-70"

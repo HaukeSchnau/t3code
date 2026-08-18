@@ -503,6 +503,25 @@ export const ClaudeAI: Icon = ({ className, ...props }) => (
   </svg>
 );
 
+/** Fork-only Claudex mark: the routed runtime gets its own identity instead of a Claude badge. */
+export const ClaudexIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 24 24"
+    className={cn("shrink-0", className)}
+    data-provider-icon="claudex"
+  >
+    <rect width="20" height="20" x="2" y="2" rx="6" fill="var(--provider-accent, #f97316)" />
+    <path
+      d="m7.5 7.5 9 9m0-9-9 9"
+      fill="none"
+      stroke="white"
+      strokeLinecap="round"
+      strokeWidth="2.25"
+    />
+  </svg>
+);
+
 export const Gemini: Icon = (props) => (
   <svg {...props} viewBox="0 0 296 298" fill="none">
     <mask

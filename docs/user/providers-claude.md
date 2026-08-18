@@ -13,7 +13,8 @@ Common reasons:
 ## Claudex in this fork
 
 This fork includes an always-visible `Claudex` provider profile. It runs the host-provided
-`claudex` executable through the normal Claude driver and offers only `gpt-5.6-sol` by default.
+`claudex` executable through the normal Claude driver, uses its own orange X icon, and offers only
+`gpt-5.6-sol` by default. Native Claude keeps the standard Claude icon.
 
 Claudex shares the normal Claude configuration and skills unless customized in Settings, but T3
 Code keeps its resumable sessions separate from first-party Claude. It can be disabled or edited,
