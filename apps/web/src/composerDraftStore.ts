@@ -53,9 +53,11 @@ import { createDebouncedStorage, createMemoryStorage } from "./lib/storage";
 import { getDefaultServerModel } from "./providerModels";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewCommentContext";
+import { InlineReplyDraftSchema, type InlineReplyDraft } from "./inlineReplyDraft";
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
+const isInlineReplyDraft = Schema.is(InlineReplyDraftSchema);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
@@ -133,6 +135,7 @@ const PersistedComposerThreadDraftState = Schema.Struct({
   elementContexts: Schema.optionalKey(Schema.Array(PersistedElementContextDraft)),
   previewAnnotations: Schema.optionalKey(Schema.Array(PreviewAnnotationPayloadSchema)),
   reviewComments: Schema.optionalKey(Schema.Array(ReviewCommentContextSchema)),
+  inlineReplies: Schema.optionalKey(Schema.Array(InlineReplyDraftSchema)),
   // Keyed by `ProviderInstanceId` (open branded slug) so custom provider
   // instances (e.g. `codex_personal`) round-trip alongside the built-in
   // `codex` / `claudeAgent` / ... entries. Every prior `ProviderDriverKind`
@@ -276,6 +279,7 @@ export interface ComposerThreadDraftState {
   elementContexts: ElementContextDraft[];
   previewAnnotations: PreviewAnnotationPayload[];
   reviewComments: ReviewCommentContext[];
+  inlineReplies: InlineReplyDraft[];
   /**
    * Per-instance model selection. Keyed by `ProviderInstanceId` (open
    * branded slug) so a default `codex` instance and a user-authored
@@ -312,7 +316,8 @@ export function composerDraftHasUserContent(
     draft.terminalContexts.length > 0 ||
     draft.elementContexts.length > 0 ||
     draft.previewAnnotations.length > 0 ||
-    draft.reviewComments.length > 0
+    draft.reviewComments.length > 0 ||
+    draft.inlineReplies.length > 0
   );
 }
 
@@ -550,6 +555,10 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     comments: ReadonlyArray<ReviewCommentContext>,
   ) => void;
+  setInlineReplies: (
+    threadRef: ComposerThreadTarget,
+    replies: ReadonlyArray<InlineReplyDraft>,
+  ) => void;
   removeReviewComment: (threadRef: ComposerThreadTarget, commentId: string) => void;
   clearPersistedAttachments: (threadRef: ComposerThreadTarget) => void;
   syncPersistedAttachments: (
@@ -646,6 +655,7 @@ const EMPTY_TERMINAL_CONTEXTS: TerminalContextDraft[] = [];
 const EMPTY_ELEMENT_CONTEXTS: ElementContextDraft[] = [];
 const EMPTY_PREVIEW_ANNOTATIONS: PreviewAnnotationPayload[] = [];
 const EMPTY_REVIEW_COMMENTS: ReviewCommentContext[] = [];
+const EMPTY_INLINE_REPLIES: InlineReplyDraft[] = [];
 const EMPTY_PROMPT_STASHES: PromptStash[] = [];
 Object.freeze(EMPTY_IMAGES);
 Object.freeze(EMPTY_IDS);
@@ -653,6 +663,7 @@ Object.freeze(EMPTY_PERSISTED_ATTACHMENTS);
 Object.freeze(EMPTY_ELEMENT_CONTEXTS);
 Object.freeze(EMPTY_PREVIEW_ANNOTATIONS);
 Object.freeze(EMPTY_REVIEW_COMMENTS);
+Object.freeze(EMPTY_INLINE_REPLIES);
 Object.freeze(EMPTY_PROMPT_STASHES);
 const EMPTY_MODEL_SELECTION_BY_PROVIDER: Partial<Record<ProviderDriverKind, ModelSelection>> =
   Object.freeze({});
@@ -670,6 +681,7 @@ const EMPTY_THREAD_DRAFT = Object.freeze<ComposerThreadDraftState>({
   elementContexts: EMPTY_ELEMENT_CONTEXTS,
   previewAnnotations: EMPTY_PREVIEW_ANNOTATIONS,
   reviewComments: EMPTY_REVIEW_COMMENTS,
+  inlineReplies: EMPTY_INLINE_REPLIES,
   modelSelectionByProvider: EMPTY_MODEL_SELECTION_BY_PROVIDER,
   activeProvider: null,
   runtimeMode: null,
@@ -692,6 +704,7 @@ export function createEmptyThreadDraft(): ComposerThreadDraftState {
     elementContexts: [],
     previewAnnotations: [],
     reviewComments: [],
+    inlineReplies: [],
     modelSelectionByProvider: {},
     activeProvider: null,
     runtimeMode: null,
@@ -765,6 +778,7 @@ function shouldRemoveDraft(draft: ComposerThreadDraftState): boolean {
     draft.elementContexts.length === 0 &&
     draft.previewAnnotations.length === 0 &&
     draft.reviewComments.length === 0 &&
+    draft.inlineReplies.length === 0 &&
     Object.keys(draft.modelSelectionByProvider).length === 0 &&
     draft.activeProvider === null &&
     draft.runtimeMode === null &&
@@ -1144,6 +1158,13 @@ function cloneComposerImageAttachment(image: ComposerImageAttachment): ComposerI
   };
 }
 
+function cloneInlineReplyDraft(reply: InlineReplyDraft) {
+  return {
+    ...reply,
+    ...(reply.textRange ? { textRange: { ...reply.textRange } } : {}),
+  };
+}
+
 function cloneComposerDraftState(draft: ComposerThreadDraftState): ComposerThreadDraftState {
   return {
     prompt: draft.prompt,
@@ -1159,6 +1180,7 @@ function cloneComposerDraftState(draft: ComposerThreadDraftState): ComposerThrea
       (annotation) => ({ ...annotation }) as PreviewAnnotationPayload,
     ),
     reviewComments: draft.reviewComments.map((comment) => ({ ...comment })),
+    inlineReplies: draft.inlineReplies.map(cloneInlineReplyDraft),
     modelSelectionByProvider: compactModelSelectionByProvider(draft.modelSelectionByProvider),
     activeProvider: draft.activeProvider,
     runtimeMode: draft.runtimeMode,
@@ -1834,6 +1856,9 @@ function normalizePersistedDraftsByThreadId(
     const reviewComments = Array.isArray(draftCandidate.reviewComments)
       ? draftCandidate.reviewComments.filter(isReviewCommentContext)
       : [];
+    const inlineReplies = Array.isArray(draftCandidate.inlineReplies)
+      ? draftCandidate.inlineReplies.filter(isInlineReplyDraft)
+      : [];
     const runtimeMode = isRuntimeMode(draftCandidate.runtimeMode)
       ? draftCandidate.runtimeMode
       : null;
@@ -1899,6 +1924,7 @@ function normalizePersistedDraftsByThreadId(
       terminalContexts.length === 0 &&
       elementContexts.length === 0 &&
       reviewComments.length === 0 &&
+      inlineReplies.length === 0 &&
       !hasModelData &&
       !runtimeMode &&
       !interactionMode
@@ -1923,6 +1949,7 @@ function normalizePersistedDraftsByThreadId(
       ...(terminalContexts.length > 0 ? { terminalContexts } : {}),
       ...(elementContexts.length > 0 ? { elementContexts } : {}),
       ...(reviewComments.length > 0 ? { reviewComments } : {}),
+      ...(inlineReplies.length > 0 ? { inlineReplies } : {}),
       ...(hasModelData
         ? {
             modelSelectionByProvider: compactModelSelectionByProvider(modelSelectionByProvider),
@@ -1963,6 +1990,11 @@ function toMutablePersistedComposerThreadDraftState(
       : {}),
     ...(draft.reviewComments
       ? { reviewComments: draft.reviewComments.map((comment) => ({ ...comment })) }
+      : {}),
+    ...(draft.inlineReplies
+      ? {
+          inlineReplies: draft.inlineReplies.map(cloneInlineReplyDraft),
+        }
       : {}),
     ...(draft.modelSelectionByProvider
       ? {
@@ -2086,6 +2118,7 @@ function toPersistedComposerThreadDraftState(
     draft.elementContexts.length === 0 &&
     draft.previewAnnotations.length === 0 &&
     draft.reviewComments.length === 0 &&
+    draft.inlineReplies.length === 0 &&
     !hasModelData &&
     draft.runtimeMode === null &&
     draft.interactionMode === null
@@ -2135,6 +2168,11 @@ function toPersistedComposerThreadDraftState(
     ...(draft.reviewComments.length > 0
       ? {
           reviewComments: draft.reviewComments.map((comment) => ({ ...comment })),
+        }
+      : {}),
+    ...(draft.inlineReplies.length > 0
+      ? {
+          inlineReplies: draft.inlineReplies.map(cloneInlineReplyDraft),
         }
       : {}),
     ...(hasModelData
@@ -2453,6 +2491,7 @@ function toHydratedThreadDraft(
     previewAnnotations:
       persistedDraft.previewAnnotations?.map((annotation) => ({ ...annotation })) ?? [],
     reviewComments: persistedDraft.reviewComments?.map((comment) => ({ ...comment })) ?? [],
+    inlineReplies: persistedDraft.inlineReplies?.map(cloneInlineReplyDraft) ?? [],
     modelSelectionByProvider,
     activeProvider,
     runtimeMode: persistedDraft.runtimeMode ?? null,
@@ -3827,6 +3866,19 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
             return { draftsByThreadKey: nextDraftsByThreadKey };
           });
         },
+        setInlineReplies: (threadRef, replies) => {
+          const threadKey = resolveComposerDraftKey(get(), threadRef);
+          if (!threadKey) return;
+          const inlineReplies = replies.filter(isInlineReplyDraft).map(cloneInlineReplyDraft);
+          set((state) => {
+            const existing = state.draftsByThreadKey[threadKey] ?? createEmptyThreadDraft();
+            const nextDraft = { ...existing, inlineReplies };
+            const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
+            if (shouldRemoveDraft(nextDraft)) delete nextDraftsByThreadKey[threadKey];
+            else nextDraftsByThreadKey[threadKey] = nextDraft;
+            return { draftsByThreadKey: nextDraftsByThreadKey };
+          });
+        },
         removeReviewComment: (threadRef, commentId) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           if (!threadKey || !commentId) return;
@@ -3917,6 +3969,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               elementContexts: [],
               previewAnnotations: [],
               reviewComments: [],
+              inlineReplies: [],
             };
             const nextDraftsByThreadKey = { ...state.draftsByThreadKey };
             if (shouldRemoveDraft(nextDraft)) {
