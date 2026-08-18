@@ -1,5 +1,6 @@
-import { ProviderDriverKind } from "@t3tools/contracts";
-import { ClaudeAI, CursorIcon, GrokIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
+import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
+import { ClaudeAI, ClaudexIcon, CursorIcon, GrokIcon, Icon, OpenAI, OpenCodeIcon } from "../Icons";
 import { PROVIDER_OPTIONS } from "../../session-logic";
 
 export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>> = {
@@ -9,6 +10,13 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("cursor")]: CursorIcon,
   [ProviderDriverKind.make("grok")]: GrokIcon,
 };
+
+export function getProviderInstanceIcon(
+  instanceId: ProviderInstanceId,
+  driverKind: ProviderDriverKind,
+): Icon | undefined {
+  return isClaudexInstance(instanceId) ? ClaudexIcon : PROVIDER_ICON_BY_PROVIDER[driverKind];
+}
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
   value: ProviderDriverKind;

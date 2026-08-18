@@ -24,7 +24,10 @@ import {
   type ServerSettings,
   type ServerProviderState,
 } from "@t3tools/contracts";
-import { withBundledProviderInstances } from "@t3tools/shared/bundledProviderInstances";
+import {
+  isClaudexInstance,
+  withBundledProviderInstances,
+} from "@t3tools/shared/bundledProviderInstances";
 
 import { formatProviderDriverKindLabel } from "./providerModels";
 
@@ -119,10 +122,17 @@ export function shouldShowInstanceBadge(
   entry: ProviderInstanceEntry,
   entries: Iterable<ProviderInstanceEntry>,
 ): boolean {
+  if (isClaudexInstance(entry.instanceId)) return false;
   if (entry.accentColor) return true;
   let sharedDriverCount = 0;
   for (const candidate of entries) {
-    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) return true;
+    if (
+      !isClaudexInstance(candidate.instanceId) &&
+      candidate.driverKind === entry.driverKind &&
+      ++sharedDriverCount > 1
+    ) {
+      return true;
+    }
   }
   return false;
 }

@@ -30,7 +30,7 @@ import {
   scopeThreadRef,
   scopedThreadKey,
 } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import type { ProviderInstanceId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
 import type { TimestampFormat } from "@t3tools/contracts/settings";
 import {
   AlarmClockIcon,
@@ -273,7 +273,7 @@ function SidebarThreadTooltip({
   environmentLabel: string | null;
   providerEntry: ProviderInstanceEntry | null;
   showInstanceBadge: boolean;
-  modelInstanceId: string;
+  modelInstanceId: ProviderInstanceId;
   modelLabel: string;
   branchMismatch: {
     threadBranch: string;
@@ -330,6 +330,7 @@ function SidebarThreadTooltip({
           {driverKind ? (
             <div className="flex min-w-0 items-center gap-2">
               <ProviderInstanceIcon
+                instanceId={modelInstanceId}
                 driverKind={driverKind}
                 displayName={
                   providerEntry?.displayName ?? thread.session?.providerName ?? modelInstanceId
@@ -1556,6 +1557,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 {driverKind ? (
                   <span className="inline-flex shrink-0 items-center">
                     <ProviderInstanceIcon
+                      instanceId={modelInstanceId}
                       driverKind={driverKind}
                       displayName={
                         providerEntry?.displayName ??

@@ -9,6 +9,7 @@ import {
   resolveDefaultProviderModelSelection,
   resolveSelectableProviderInstance,
   resolveProviderDriverKindForInstanceSelection,
+  shouldShowInstanceBadge,
 } from "./providerInstances";
 
 function provider(input: {
@@ -19,11 +20,13 @@ function provider(input: {
   displayName?: string;
   status?: ServerProvider["status"];
   models?: ServerProvider["models"];
+  accentColor?: string;
 }): ServerProvider {
   return {
     instanceId: ProviderInstanceId.make(input.instanceId),
     driver: input.provider,
     ...(input.displayName ? { displayName: input.displayName } : {}),
+    ...(input.accentColor ? { accentColor: input.accentColor } : {}),
     enabled: input.enabled ?? true,
     installed: true,
     version: null,
@@ -36,6 +39,37 @@ function provider(input: {
     skills: [],
   };
 }
+
+describe("shouldShowInstanceBadge", () => {
+  it("keeps native Claude unbadged when Claudex has its own icon", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudeAgent",
+        displayName: "Claude",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("claudeAgent"),
+        instanceId: "claudex",
+        displayName: "Claudex",
+        accentColor: "#f97316",
+      }),
+    ]);
+
+    expect(shouldShowInstanceBadge(entries[0]!, entries)).toBe(false);
+    expect(shouldShowInstanceBadge(entries[1]!, entries)).toBe(false);
+  });
+
+  it("still badges Claude instances that share the same driver icon", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
+      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claude_work" }),
+    ]);
+
+    expect(shouldShowInstanceBadge(entries[0]!, entries)).toBe(true);
+    expect(shouldShowInstanceBadge(entries[1]!, entries)).toBe(true);
+  });
+});
 
 const model = (slug: string, isCustom = false, isDefault = false) => ({
   slug,
