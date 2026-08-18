@@ -126,7 +126,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       toJsonSchemaObject(outputSchemaJson),
       "Failed to encode structured output schema.",
     );
-    const caps = getClaudeModelCapabilities(modelSelection.model);
+    const caps = getClaudeModelCapabilities(modelSelection.model, claudeSettings.customModels);
     const descriptors = getProviderOptionDescriptors({
       caps,
       selections: modelSelection.options,

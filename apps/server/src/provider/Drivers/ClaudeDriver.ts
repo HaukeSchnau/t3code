@@ -13,7 +13,7 @@
  * @module provider/Drivers/ClaudeDriver
  */
 import { ClaudeSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
-import { isBundledProviderInstance } from "@t3tools/shared/bundledProviderInstances";
+import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
@@ -104,10 +104,10 @@ const withInstanceIdentity =
     ...snapshot,
     instanceId: input.instanceId,
     driver: DRIVER_KIND,
-    ...(isBundledProviderInstance(input.instanceId) && snapshot.auth.status === "authenticated"
+    ...(isClaudexInstance(input.instanceId) && snapshot.auth.status === "authenticated"
       ? { auth: { ...snapshot.auth, type: "proxy", label: "CLIProxyAPI" } }
       : {}),
-    ...(isBundledProviderInstance(input.instanceId) && snapshot.auth.status === "unauthenticated"
+    ...(isClaudexInstance(input.instanceId) && snapshot.auth.status === "unauthenticated"
       ? {
           message:
             "CLIProxyAPI has no Codex account for gpt-5.6-sol. Run `cliproxyapi-auth codex-device` on this host.",
@@ -153,7 +153,11 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
       });
-      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig);
+      // Claudex deliberately shares Claude's config and skills, but not its resumable sessions.
+      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(
+        effectiveConfig,
+        isClaudexInstance(instanceId) ? "claudex" : undefined,
+      );
       const stampIdentity = withInstanceIdentity({
         instanceId,
         displayName,
@@ -187,6 +191,9 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
         processEnv,
         cwd,
+        {
+          requireAuthenticatedStatusProbe: isClaudexInstance(instanceId),
+        },
       ).pipe(
         Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

@@ -4118,7 +4118,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.instanceId === boundInstanceId ? input.modelSelection : undefined;
-      const caps = getClaudeModelCapabilities(modelSelection?.model);
+      const caps = getClaudeModelCapabilities(modelSelection?.model, claudeSettings.customModels);
       const descriptors = getProviderOptionDescriptors({ caps });
       const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;
       const initialContextWindow = selectedClaudeContextWindow(modelSelection);
@@ -4391,7 +4391,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...context.session,
         model: modelSelection.model,
       };
-      const turnCaps = getClaudeModelCapabilities(modelSelection.model);
+      const turnCaps = getClaudeModelCapabilities(
+        modelSelection.model,
+        claudeSettings.customModels,
+      );
       const turnEffort = resolveClaudeEffort(
         turnCaps,
         getModelSelectionStringOptionValue(modelSelection, "effort"),

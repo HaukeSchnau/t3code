@@ -12,7 +12,8 @@ Ship Claudex as a reusable T3 Code fork feature: it is always present in provide
 - Default configuration: `binaryPath: "claudex"`, shared Claude home (`homePath: ""`), built-in model discovery disabled, and `customModels: ["gpt-5.6-sol"]`.
 - A bundled provider may be enabled or disabled and otherwise edited, but cannot be deleted. Missing bundled instances are restored when settings are projected into the runtime or UI; existing user overrides win.
 - Add `includeBuiltInModels` to Claude instance configuration. It defaults to `true`, preserving stock Claude behavior; Claudex sets it to `false` so its picker contains only its configured proxy model.
-- Sharing Claude's home intentionally keeps normal Claude and Claudex in the same continuation/session namespace.
+- Claudex shares Claude's config and skills, but uses a distinct T3 continuation group so native
+  Claude sessions cannot resume through the routed runtime.
 
 ## Workstreams
 
@@ -32,6 +33,8 @@ Ship Claudex as a reusable T3 Code fork feature: it is always present in provide
 
 - Isolated jj workspace created at `/Users/haukeschnau/Code/t3code-claudex` from `main`.
 - Bundled provider projection, Claude model filtering, non-deletable settings behavior, tests, and fork documentation are implemented.
+- Follow-up cleanup in August 2026 narrowed proxy behavior to the explicit Claudex instance and
+  restored the wrapper-level authoritative auth probe after an upstream merge had dropped it.
 - Focused verification: 128 tests passed across contracts, provider registry, settings persistence, and web instance projection.
 - Repository gates: `vp check` passed with no errors (pre-existing warnings remain); `vp run typecheck` passed all 15 packages.
 - Next: commit/push T3 Code, then implement and deploy the srv-2 runtime contract from `~/infra`.

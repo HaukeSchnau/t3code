@@ -2392,6 +2392,60 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           ),
         ),
       );
+
+      it.effect("requires the Claudex wrapper auth probe even when SDK metadata is available", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, binaryPath: "claudex" },
+            claudeCapabilities({ tokenSource: "ANTHROPIC_AUTH_TOKEN" }),
+            undefined,
+            undefined,
+            { requireAuthenticatedStatusProbe: true },
+          );
+
+          assert.strictEqual(status.status, "warning");
+          assert.strictEqual(status.auth.status, "unauthenticated");
+          assert.strictEqual(
+            status.message,
+            "Claude is not authenticated. Run `claudex auth login` to authenticate.",
+          );
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return { stdout: '{"loggedIn":false}\n', stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("accepts a healthy Claudex wrapper without SDK account metadata", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            { ...defaultClaudeSettings, binaryPath: "claudex" },
+            noClaudeCapabilities,
+            undefined,
+            undefined,
+            { requireAuthenticatedStatusProbe: true },
+          );
+
+          assert.strictEqual(status.status, "ready");
+          assert.strictEqual(status.auth.status, "authenticated");
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return { stdout: '{"loggedIn":true}\n', stderr: "", code: 0 };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
     });
   },
 );

@@ -15,9 +15,10 @@ Common reasons:
 This fork includes an always-visible `Claudex` provider profile. It runs the host-provided
 `claudex` executable through the normal Claude driver and offers only `gpt-5.6-sol` by default.
 
-Claudex shares the normal Claude configuration unless customized in Settings. It can be disabled
-or edited, but it cannot be deleted. The machine running the T3 Code server must provide the
-executable and its local proxy service.
+Claudex shares the normal Claude configuration and skills unless customized in Settings, but T3
+Code keeps its resumable sessions separate from first-party Claude. It can be disabled or edited,
+but it cannot be deleted. The machine running the T3 Code server must provide the executable and
+its local proxy service.
 
 For other routed Claude profiles, turn off **Include built-in models** when only the custom model
 IDs configured on that instance should appear in model pickers.

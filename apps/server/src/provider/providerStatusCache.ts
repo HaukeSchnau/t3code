@@ -5,7 +5,7 @@ import {
   ServerProvider as ServerProviderSchema,
 } from "@t3tools/contracts";
 import { causeErrorTag } from "@t3tools/shared/observability";
-import { isBundledProviderInstance } from "@t3tools/shared/bundledProviderInstances";
+import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
@@ -60,7 +60,7 @@ export const hydrateCachedProvider = (input: {
   const { message: _fallbackMessage, ...fallbackWithoutMessage } = input.fallbackProvider;
   const hydratedProvider: ServerProvider = {
     ...fallbackWithoutMessage,
-    models: isBundledProviderInstance(input.fallbackProvider.instanceId)
+    models: isClaudexInstance(input.fallbackProvider.instanceId)
       ? input.fallbackProvider.models
       : mergeProviderModels(input.fallbackProvider.models, input.cachedProvider.models),
     installed: input.cachedProvider.installed,

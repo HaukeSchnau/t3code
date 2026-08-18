@@ -3,13 +3,15 @@ import { ProviderDriverKind, ProviderInstanceId } from "@t3tools/contracts";
 
 import {
   BUNDLED_PROVIDER_INSTANCES,
+  CLAUDEX_INSTANCE_ID,
   isBundledProviderInstance,
+  isClaudexInstance,
   isExternallyManagedProviderInstance,
   withBundledProviderInstances,
 } from "./bundledProviderInstances.ts";
 
 describe("bundled provider instances", () => {
-  const claudexId = ProviderInstanceId.make("claudex");
+  const claudexId = CLAUDEX_INSTANCE_ID;
 
   it("provides Claudex as an enabled Claude profile", () => {
     expect(BUNDLED_PROVIDER_INSTANCES[claudexId]).toEqual({
@@ -27,6 +29,8 @@ describe("bundled provider instances", () => {
     });
     expect(isBundledProviderInstance(claudexId)).toBe(true);
     expect(isBundledProviderInstance(ProviderInstanceId.make("claudeAgent"))).toBe(false);
+    expect(isClaudexInstance(claudexId)).toBe(true);
+    expect(isClaudexInstance(ProviderInstanceId.make("claudeAgent"))).toBe(false);
   });
 
   it("marks the host-provided Claudex wrapper as externally managed", () => {
