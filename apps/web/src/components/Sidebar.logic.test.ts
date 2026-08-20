@@ -771,7 +771,7 @@ describe("sortThreadsForSidebar", () => {
         sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
         sortable({ id: "middle", createdAt: "2026-03-09T10:00:00.000Z" }),
       ],
-      () => "idle",
+      () => "normal",
     );
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
@@ -783,7 +783,7 @@ describe("sortThreadsForSidebar", () => {
         sortable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z" }),
         sortable({ id: "a", createdAt: "2026-03-09T10:00:00.000Z" }),
       ],
-      () => "idle",
+      () => "normal",
     );
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
@@ -817,7 +817,7 @@ describe("resolveSidebarThreadAttentionBand", () => {
     ).toBe("attention");
   });
 
-  it("recedes working threads and does not promote them for a recent message", () => {
+  it("keeps working threads in the normal recency band", () => {
     expect(
       resolveSidebarThreadAttentionBand(
         makeThreadShell({
@@ -835,10 +835,10 @@ describe("resolveSidebarThreadAttentionBand", () => {
         }),
         { lastVisitedAt: undefined, wokeAt: null },
       ),
-    ).toBe("background");
+    ).toBe("normal");
   });
 
-  it("drops an acknowledged wake back into the idle band", () => {
+  it("drops an acknowledged wake back into the normal band", () => {
     const thread = makeThreadShell();
     expect(
       resolveSidebarThreadAttentionBand(thread, {
@@ -851,7 +851,7 @@ describe("resolveSidebarThreadAttentionBand", () => {
         lastVisitedAt: "2026-03-09T11:00:00.000Z",
         wokeAt: "2026-03-09T10:00:00.000Z",
       }),
-    ).toBe("idle");
+    ).toBe("normal");
   });
 });
 

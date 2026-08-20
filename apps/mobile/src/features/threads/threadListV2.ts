@@ -160,10 +160,7 @@ export function resolveThreadListV2AttentionBand(
   if (status === "approval" || status === "input" || status === "failed" || hasPlanReadyPrompt) {
     return "attention";
   }
-  if (status === "working" || thread.backgroundLiveness != null) {
-    return "background";
-  }
-  return "idle";
+  return "normal";
 }
 
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not

@@ -2,10 +2,10 @@
 
 ## Requirement
 
-The default sidebar is an inbox. Threads that need the user appear before ordinary ready threads,
-while running and monitoring work recedes until it finishes. Latest user message orders threads
-inside each group. Opening a thread, assistant output, tool activity, and metadata changes do not
-affect its position.
+The default sidebar is an inbox. Threads that need the user appear before all other active threads.
+Latest user message orders threads inside each group. Working and monitoring remain normally
+prominent and keep their recency position. Opening a thread, assistant output, tool activity, and
+metadata changes do not affect its position.
 
 Pinned, snoozed, and settled sections retain their existing order. Project pickers derive their
 order from the first live thread each project owns in the sidebar, then place projects without live

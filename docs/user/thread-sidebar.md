@@ -1,9 +1,8 @@
 # Organizing threads
 
-The sidebar puts threads that need you first, followed by ordinary ready threads. Work that is
-still running or monitoring recedes until it finishes. Within each group, the thread with the most
-recent user message appears first. Opening a thread, streaming a response, and tool activity do not
-change its position.
+The sidebar puts threads that need you first, followed by all other active threads. Within each
+group, the thread with the most recent user message appears first. Opening a thread, streaming a
+response, and tool activity do not change its position.
 
 Project pickers follow the same order: the project containing the highest-ranked live thread appears
 first. Projects without live threads follow alphabetically.
