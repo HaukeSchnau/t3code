@@ -472,6 +472,31 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
     }),
   );
 
+  it.effect("resumes a compatible instance from persisted state after the runtime stops", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-codex-instance-handoff-persisted");
+      const personalSession = yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.personalInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+      yield* provider.stopSession({ threadId });
+      multiCodex.work.startSession.mockClear();
+
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: multiCodex.workInstanceId,
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const replacementInput = multiCodex.work.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(replacementInput?.resumeCursor, personalSession.resumeCursor);
+    }),
+  );
+
   it.effect("does not start the replacement when the bound instance cannot stop", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;

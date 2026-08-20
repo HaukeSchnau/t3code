@@ -2763,8 +2763,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-variant={variant}
     >
       <div
+        data-chat-composer-main-surface="true"
         className={cn(
-          "group rounded-[22px] p-px transition-colors duration-200",
+          "group relative z-10 rounded-[22px] p-px transition-colors duration-200",
           isInlineComposer && "rounded-xl",
           composerProviderState.composerFrameClassName,
         )}
