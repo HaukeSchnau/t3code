@@ -43,6 +43,7 @@ import {
   LinkIcon,
   MessageSquareIcon,
   PaletteIcon,
+  ServerIcon,
   SettingsIcon,
   SquarePenIcon,
   TextSearchIcon,
@@ -133,7 +134,11 @@ import { ProjectFavicon } from "./ProjectFavicon";
 import { ProjectFilePicker } from "./files/ProjectFilePicker";
 import { ProjectContentSearchDialog } from "./search/ProjectContentSearchDialog";
 import { toggleThemeEditorForTheme } from "./settings/themeEditorStore";
-import { ThreadCommandSubtitle } from "./ThreadCommandSubtitle";
+import {
+  COMMAND_PALETTE_META_ICON_CLASS,
+  CommandPaletteMetaDot,
+  ThreadCommandSubtitle,
+} from "./ThreadCommandSubtitle";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
 import { resolveMonitorToggleTarget } from "../monitorNavigation";
 import { primaryServerKeybindingsAtom, primaryServerProvidersAtom } from "../state/server";
@@ -499,7 +504,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
       >
         {children}
         <CommandPaletteDialog
-          open={state.open}
           mode={state.mode}
           openIntent={state.openIntent}
           setOpen={setOpen}
@@ -512,7 +516,6 @@ export function CommandPalette({ children }: { children: ReactNode }) {
 }
 
 function CommandPaletteDialog(props: {
-  readonly open: boolean;
   readonly mode: SearchOverlayMode;
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
@@ -520,10 +523,6 @@ function CommandPaletteDialog(props: {
   readonly clearOpenIntent: () => void;
 }) {
   const composerHandleRef = useComposerHandleContext();
-
-  if (!props.open) {
-    return null;
-  }
 
   return (
     <CommandDialogPopup
@@ -659,6 +658,27 @@ function OpenCommandPaletteDialog(props: {
     () =>
       new Map(
         environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
+  const projectEnvironmentLocationById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => {
+          const isPrimary = environment.entry.target._tag === "PrimaryConnectionTarget";
+          const isLocal = isPrimary || isDesktopLocalConnectionTarget(environment.entry.target);
+          return [
+            environment.environmentId,
+            {
+              kind: isLocal ? "local" : "remote",
+              label: isPrimary
+                ? "Local"
+                : isLocal
+                  ? `${environment.label} (Local)`
+                  : environment.label,
+            },
+          ] as const;
+        }),
       ),
     [environments],
   );
@@ -1016,8 +1036,29 @@ function OpenCommandPaletteDialog(props: {
           valuePrefix: "new-thread-in",
           searchTerms: (project) => {
             const group = projectGroupByTargetKey.get(`${project.environmentId}:${project.id}`);
+            const location = projectEnvironmentLocationById.get(project.environmentId);
+            return [
+              ...(group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ??
+                []),
+              ...(location ? [location.label] : []),
+            ];
+          },
+          renderDescription: (project) => {
+            const location = projectEnvironmentLocationById.get(project.environmentId) ?? {
+              kind: "remote",
+              label: "Remote",
+            };
             return (
-              group?.memberProjects.flatMap((member) => [member.title, member.workspaceRoot]) ?? []
+              <span className="flex min-w-0 items-center gap-1">
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  {location.kind === "remote" ? (
+                    <ServerIcon aria-hidden className={COMMAND_PALETTE_META_ICON_CLASS} />
+                  ) : null}
+                  <span className="truncate">{location.label}</span>
+                </span>
+                <CommandPaletteMetaDot />
+                <span className="truncate">{project.workspaceRoot}</span>
+              </span>
             );
           },
           icon: projectFavicon,
@@ -1038,7 +1079,13 @@ function OpenCommandPaletteDialog(props: {
           },
         }),
       ),
-    [contextualProjectRef, handleNewThread, pickerProjects, projectGroupByTargetKey],
+    [
+      contextualProjectRef,
+      handleNewThread,
+      pickerProjects,
+      projectEnvironmentLocationById,
+      projectGroupByTargetKey,
+    ],
   );
 
   const allThreadItems = useMemo(
