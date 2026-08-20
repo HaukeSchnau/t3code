@@ -13,6 +13,14 @@ export interface ThreadSortInput {
   }>;
 }
 
+export type SidebarAttentionBand = "attention" | "idle" | "background";
+
+const SIDEBAR_ATTENTION_BAND_ORDER: Record<SidebarAttentionBand, number> = {
+  attention: 0,
+  idle: 1,
+  background: 2,
+};
+
 export function toSortableTimestamp(iso: string | undefined): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
@@ -86,6 +94,38 @@ export function sortThreads<T extends { readonly id: string } & ThreadSortInput>
       }),
     ),
   );
+}
+
+/**
+ * Orders the default sidebar by ownership of the next action. Streaming and
+ * assistant activity are deliberately absent from the comparator: only the
+ * attention band and latest user message can move an active row.
+ */
+export function sortThreadsByAttention<
+  T extends {
+    readonly id: string;
+    readonly environmentId?: string | undefined;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+  return [...threads].sort((left, right) => {
+    const byBand =
+      SIDEBAR_ATTENTION_BAND_ORDER[getBand(left)] - SIDEBAR_ATTENTION_BAND_ORDER[getBand(right)];
+    if (byBand !== 0) return byBand;
+
+    const leftTimestamp =
+      getFirstSortableTimestamp(left.latestUserMessageAt, left.createdAt) ??
+      Number.NEGATIVE_INFINITY;
+    const rightTimestamp =
+      getFirstSortableTimestamp(right.latestUserMessageAt, right.createdAt) ??
+      Number.NEGATIVE_INFINITY;
+    return (
+      rightTimestamp - leftTimestamp ||
+      left.id.localeCompare(right.id) ||
+      (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
+    );
+  });
 }
 
 export function getLatestThreadForProject<

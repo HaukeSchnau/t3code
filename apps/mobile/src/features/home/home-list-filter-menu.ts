@@ -43,8 +43,8 @@ export function buildHomeListFilterMenu(props: {
   readonly onProjectChange: (projectKey: string | null) => void;
   readonly onProjectSortOrderChange: (sortOrder: HomeProjectSortOrder) => void;
   readonly onThreadSortOrderChange: (sortOrder: SidebarThreadSortOrder) => void;
-  /** False hides the sort/group submenus. Thread List v2 uses a fixed
-      creation-order layout, so offering those controls while it silently
+  /** False hides the sort/group submenus. Thread List v2 uses one opinionated
+      attention order, so offering those controls while it silently
       ignores them would be a lie; the environment filter still applies. */
   readonly listOrganization?: boolean;
 }): HomeListFilterMenu {

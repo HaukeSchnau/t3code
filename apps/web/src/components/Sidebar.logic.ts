@@ -3,8 +3,10 @@ import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
   getThreadSortTimestamp,
+  sortThreadsByAttention,
   sortThreads,
   toSortableTimestamp,
+  type SidebarAttentionBand,
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
@@ -532,18 +534,52 @@ export function firstValidTimestamp(
   return null;
 }
 
-// Sidebar sort: static creation order, newest thread on top. Activity NEVER
-// reorders the list — a row holds its position from open until settled, so
-// the screen only moves at lifecycle transitions. Status (including pending
-// approval) is carried by each card's edge strip, not by position.
+export function resolveSidebarThreadAttentionBand(
+  thread: SidebarThreadSummary,
+  options: {
+    readonly lastVisitedAt: string | undefined;
+    readonly wokeAt: string | null;
+  },
+): SidebarAttentionBand {
+  const status = resolveSidebarThreadStatus(thread);
+  const wokeAtMs = options.wokeAt === null ? Number.NaN : Date.parse(options.wokeAt);
+  const lastVisitedAtMs =
+    options.lastVisitedAt === undefined ? Number.NaN : Date.parse(options.lastVisitedAt);
+  const hasUnacknowledgedWake =
+    Number.isFinite(wokeAtMs) && (!Number.isFinite(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs);
+  const hasPlanReadyPrompt =
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    isLatestTurnSettled(thread.latestTurn, thread.session);
+
+  if (
+    status === "approval" ||
+    status === "input" ||
+    status === "failed" ||
+    hasPlanReadyPrompt ||
+    hasUnseenCompletion({ ...thread, lastVisitedAt: options.lastVisitedAt }) ||
+    hasUnacknowledgedWake
+  ) {
+    return "attention";
+  }
+  if (status === "working" || status === "monitoring") {
+    return "background";
+  }
+  return "idle";
+}
+
+// The default sidebar is an inbox: things that need the user rise, ordinary
+// ready threads follow, and background work recedes until its state changes.
+// Latest user message is the only recency signal inside each band.
 export function sortThreadsForSidebar<
-  T extends { readonly id: string; readonly createdAt: string },
->(threads: readonly T[]): T[] {
-  return [...threads].toSorted(
-    (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
-  );
+  T extends {
+    readonly id: string;
+    readonly environmentId?: string | undefined;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+  return sortThreadsByAttention(threads, getBand);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -915,6 +951,40 @@ export function sortLogicalProjectsForSidebar<
     (left, right) =>
       left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
   );
+}
+
+/**
+ * Orders project pickers by the first live thread each project owns in the
+ * already-sorted sidebar. Projects without a live card follow by name.
+ */
+export function sortLogicalProjectsByThreadOrder<
+  TProject extends LogicalSidebarProject,
+  TThread extends Pick<ScopedSidebarThread, "environmentId" | "projectId">,
+>(projects: readonly TProject[], orderedThreads: readonly TThread[]): TProject[] {
+  const projectKeyByRef = new Map(
+    projects.flatMap((project) =>
+      project.memberProjectRefs.map(
+        (projectRef) =>
+          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
+      ),
+    ),
+  );
+  const firstThreadIndexByProjectKey = new Map<string, number>();
+  orderedThreads.forEach((thread, index) => {
+    const projectKey = projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
+    if (projectKey !== undefined && !firstThreadIndexByProjectKey.has(projectKey)) {
+      firstThreadIndexByProjectKey.set(projectKey, index);
+    }
+  });
+
+  return [...projects].toSorted((left, right) => {
+    const leftIndex = firstThreadIndexByProjectKey.get(left.projectKey);
+    const rightIndex = firstThreadIndexByProjectKey.get(right.projectKey);
+    if (leftIndex !== undefined || rightIndex !== undefined) {
+      return (leftIndex ?? Number.POSITIVE_INFINITY) - (rightIndex ?? Number.POSITIVE_INFINITY);
+    }
+    return left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey);
+  });
 }
 
 /**

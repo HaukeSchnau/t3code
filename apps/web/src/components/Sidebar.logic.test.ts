@@ -17,6 +17,7 @@ import {
   orderItemsByPreferredIds,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
+  resolveSidebarThreadAttentionBand,
   resolveThreadRowClassName,
   resolveSidebarThreadStatus,
   resolveThreadStatusPill,
@@ -26,6 +27,7 @@ import {
   shouldNavigateAfterProjectRemoval,
   shouldClearThreadSelectionOnMouseDown,
   sortLogicalProjectsForSidebar,
+  sortLogicalProjectsByThreadOrder,
   sortSettledThreadsForSidebar,
   pinOrderKeyBetween,
   planPinnedReorder,
@@ -43,6 +45,7 @@ import {
   ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 
 import {
   DEFAULT_INTERACTION_MODE,
@@ -762,22 +765,93 @@ describe("sortThreadsForSidebar", () => {
   });
 
   it("orders by creation time, newest first, ignoring activity", () => {
-    const sorted = sortThreadsForSidebar([
-      sortable({ id: "oldest", createdAt: "2026-03-09T08:00:00.000Z" }),
-      sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
-      sortable({ id: "middle", createdAt: "2026-03-09T10:00:00.000Z" }),
-    ]);
+    const sorted = sortThreadsForSidebar(
+      [
+        sortable({ id: "oldest", createdAt: "2026-03-09T08:00:00.000Z" }),
+        sortable({ id: "newest", createdAt: "2026-03-09T12:00:00.000Z" }),
+        sortable({ id: "middle", createdAt: "2026-03-09T10:00:00.000Z" }),
+      ],
+      () => "idle",
+    );
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
 
   it("breaks creation-time ties by id so the order is stable", () => {
-    const sorted = sortThreadsForSidebar([
-      sortable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z" }),
-      sortable({ id: "a", createdAt: "2026-03-09T10:00:00.000Z" }),
-    ]);
+    const sorted = sortThreadsForSidebar(
+      [
+        sortable({ id: "b", createdAt: "2026-03-09T10:00:00.000Z" }),
+        sortable({ id: "a", createdAt: "2026-03-09T10:00:00.000Z" }),
+      ],
+      () => "idle",
+    );
 
     expect(sorted.map((thread) => thread.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("resolveSidebarThreadAttentionBand", () => {
+  it("puts user-blocked and failed threads in the attention band", () => {
+    expect(
+      resolveSidebarThreadAttentionBand(makeThreadShell({ hasPendingApprovals: true }), {
+        lastVisitedAt: undefined,
+        wokeAt: null,
+      }),
+    ).toBe("attention");
+    expect(
+      resolveSidebarThreadAttentionBand(
+        makeThreadShell({
+          session: {
+            threadId: ThreadId.make("failed"),
+            status: "error",
+            providerName: "Codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+            activeTurnId: null,
+            lastError: "failed",
+            updatedAt: "2026-03-09T10:00:00.000Z",
+          },
+        }),
+        { lastVisitedAt: undefined, wokeAt: null },
+      ),
+    ).toBe("attention");
+  });
+
+  it("recedes working threads and does not promote them for a recent message", () => {
+    expect(
+      resolveSidebarThreadAttentionBand(
+        makeThreadShell({
+          latestUserMessageAt: "2026-03-09T12:00:00.000Z",
+          session: {
+            threadId: ThreadId.make("working"),
+            status: "running",
+            providerName: "Codex",
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: DEFAULT_RUNTIME_MODE,
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: "2026-03-09T12:00:00.000Z",
+          },
+        }),
+        { lastVisitedAt: undefined, wokeAt: null },
+      ),
+    ).toBe("background");
+  });
+
+  it("drops an acknowledged wake back into the idle band", () => {
+    const thread = makeThreadShell();
+    expect(
+      resolveSidebarThreadAttentionBand(thread, {
+        lastVisitedAt: "2026-03-09T09:00:00.000Z",
+        wokeAt: "2026-03-09T10:00:00.000Z",
+      }),
+    ).toBe("attention");
+    expect(
+      resolveSidebarThreadAttentionBand(thread, {
+        lastVisitedAt: "2026-03-09T11:00:00.000Z",
+        wokeAt: "2026-03-09T10:00:00.000Z",
+      }),
+    ).toBe("idle");
   });
 });
 
@@ -1323,6 +1397,17 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   };
 }
 
+function makeThreadShell(overrides: Partial<EnvironmentThreadShell> = {}): EnvironmentThreadShell {
+  return {
+    ...makeThread(),
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
+}
+
 describe("getFallbackThreadIdAfterDelete", () => {
   it("returns the top remaining thread in the deleted thread's project sidebar order", () => {
     const fallbackThreadId = getFallbackThreadIdAfterDelete({
@@ -1653,5 +1738,43 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+describe("sortLogicalProjectsByThreadOrder", () => {
+  it("follows the best live thread and puts empty projects last by name", () => {
+    const projects = [
+      {
+        ...makeProject({ id: ProjectId.make("project-idle"), title: "Idle" }),
+        projectKey: "idle",
+        memberProjectRefs: [
+          { environmentId: localEnvironmentId, projectId: ProjectId.make("project-idle") },
+        ],
+      },
+      {
+        ...makeProject({ id: ProjectId.make("project-attention"), title: "Attention" }),
+        projectKey: "attention",
+        memberProjectRefs: [
+          { environmentId: localEnvironmentId, projectId: ProjectId.make("project-attention") },
+        ],
+      },
+      {
+        ...makeProject({ id: ProjectId.make("project-empty"), title: "Empty" }),
+        projectKey: "empty",
+        memberProjectRefs: [
+          { environmentId: localEnvironmentId, projectId: ProjectId.make("project-empty") },
+        ],
+      },
+    ];
+    const orderedThreads = [
+      makeThread({ projectId: ProjectId.make("project-attention") }),
+      makeThread({ id: ThreadId.make("idle-thread"), projectId: ProjectId.make("project-idle") }),
+    ];
+
+    expect(
+      sortLogicalProjectsByThreadOrder(projects, orderedThreads).map(
+        (project) => project.projectKey,
+      ),
+    ).toEqual(["attention", "idle", "empty"]);
   });
 });

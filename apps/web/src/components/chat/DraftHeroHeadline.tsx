@@ -13,7 +13,8 @@ import {
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
+import { sortLogicalProjectsByThreadOrder, sortLogicalProjectsForSidebar } from "../Sidebar.logic";
+import { useSidebarCardThreads } from "../sidebar/SidebarCardThreadsContext";
 import {
   Menu,
   MenuItem,
@@ -36,6 +37,7 @@ export function DraftHeroHeadline({
 }: DraftHeroHeadlineProps) {
   const projects = useProjects();
   const threads = useThreadShells();
+  const sidebarCardThreads = useSidebarCardThreads();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -50,28 +52,25 @@ export function DraftHeroHeadline({
       ),
     [environments],
   );
-  const projectGroups = useMemo(
-    () =>
-      sortLogicalProjectsForSidebar(
-        buildSidebarProjectSnapshots({
-          projects,
-          settings: projectGroupingSettings,
-          primaryEnvironmentId,
-          resolveEnvironmentLabel: (environmentId) =>
-            environmentLabelById.get(environmentId) ?? null,
-        }),
-        threads,
-        projectSortOrder,
-      ),
-    [
-      environmentLabelById,
-      primaryEnvironmentId,
-      projectGroupingSettings,
-      projectSortOrder,
+  const projectGroups = useMemo(() => {
+    const groups = buildSidebarProjectSnapshots({
       projects,
-      threads,
-    ],
-  );
+      settings: projectGroupingSettings,
+      primaryEnvironmentId,
+      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
+    });
+    return sidebarCardThreads === null
+      ? sortLogicalProjectsForSidebar(groups, threads, projectSortOrder)
+      : sortLogicalProjectsByThreadOrder(groups, sidebarCardThreads);
+  }, [
+    environmentLabelById,
+    primaryEnvironmentId,
+    projectGroupingSettings,
+    projectSortOrder,
+    projects,
+    sidebarCardThreads,
+    threads,
+  ]);
   const projectPickerEntries = useMemo(
     () =>
       buildSidebarProjectPickerEntries({

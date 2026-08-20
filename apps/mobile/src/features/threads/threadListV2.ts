@@ -12,7 +12,11 @@ import type {
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
-import { sortPinnedThreadsByOrderKey } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  sortPinnedThreadsByOrderKey,
+  sortThreadsByAttention,
+  type SidebarAttentionBand,
+} from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -143,6 +147,25 @@ export function resolveThreadListV2Status(
   return "ready";
 }
 
+export function resolveThreadListV2AttentionBand(
+  thread: EnvironmentThreadShell,
+): SidebarAttentionBand {
+  const status = resolveThreadListV2Status(thread);
+  const hasPlanReadyPrompt =
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    thread.latestTurn?.completedAt != null &&
+    thread.session?.status !== "running" &&
+    thread.session?.status !== "starting";
+  if (status === "approval" || status === "input" || status === "failed" || hasPlanReadyPrompt) {
+    return "attention";
+  }
+  if (status === "working" || thread.backgroundLiveness != null) {
+    return "background";
+  }
+  return "idle";
+}
+
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 function parseTimestampMs(isoDate: string): number {
@@ -161,22 +184,15 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
   return 0;
 }
 
-/**
- * v2 sort: static creation order, newest thread on top. Activity NEVER
- * reorders the list — a row holds its position from open until settled, so
- * the screen only moves at lifecycle transitions. Mirrors web's
- * sortThreadsForSidebarV2.
- */
-export function sortThreadsForListV2<T extends { readonly id: string; readonly createdAt: string }>(
-  threads: readonly T[],
-): T[] {
-  // .sort() on a copy, not .toSorted(): Hermes doesn't ship the ES2023
-  // change-by-copy array methods.
-  return [...threads].sort(
-    (left, right) =>
-      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
-      left.id.localeCompare(right.id),
-  );
+/** Attention-first ordering shared with the web sidebar. */
+export function sortThreadsForListV2<
+  T extends {
+    readonly id: string;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+  },
+>(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+  return sortThreadsByAttention(threads, getBand);
 }
 
 export interface ThreadListV2Item {
@@ -308,8 +324,8 @@ export function buildThreadListV2ListItems(input: {
 }
 
 /**
- * Partitions visible threads into the active card block (creation order) and
- * the settled recency tail, matching the web v2 list. Mobile stores these
+ * Partitions visible threads into the attention-ordered active card block and
+ * the settled recency tail, matching the web sidebar. Mobile stores these
  * auto-settle preferences per device.
  */
 export function buildThreadListV2Items(input: {
@@ -422,7 +438,7 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = sortThreadsForListV2(active);
+  const orderedActive = sortThreadsForListV2(active, resolveThreadListV2AttentionBand);
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

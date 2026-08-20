@@ -70,8 +70,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
   const iconColor = useThemeColor("--color-icon");
   const mutedColor = useThemeColor("--color-foreground-muted");
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
+  // The default list has one opinionated attention order, so the legacy
+  // sort/group filter controls would be ignored. Hide them and
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
@@ -301,8 +301,8 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
   const iconColor = useThemeColor("--color-icon");
-  // Thread List v2 lays the list out in fixed creation order, so the
-  // sort/group filter controls would be silently ignored — hide them and
+  // The default list has one opinionated attention order, so the legacy
+  // sort/group filter controls would be ignored. Hide them and
   // key the "customized" icon state off the environment filter alone.
   const threadListV2Enabled = useThreadListV2Enabled();
   const hasCustomListOptions = threadListV2Enabled
