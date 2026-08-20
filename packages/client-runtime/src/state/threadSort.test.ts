@@ -79,16 +79,16 @@ describe("sortThreads", () => {
 describe("sortThreadsByAttention", () => {
   const thread = (
     id: string,
-    band: "attention" | "idle" | "background",
+    band: "attention" | "normal",
     latestUserMessageAt: string | null,
     createdAt = "2026-03-09T08:00:00.000Z",
   ) => ({ id, band, latestUserMessageAt, createdAt });
 
-  it("orders attention first and background work last", () => {
+  it("orders attention before normal active work", () => {
     const sorted = sortThreadsByAttention(
       [
-        thread("working-new", "background", "2026-03-09T12:00:00.000Z"),
-        thread("idle", "idle", "2026-03-09T09:00:00.000Z"),
+        thread("working-new", "normal", "2026-03-09T12:00:00.000Z"),
+        thread("idle", "normal", "2026-03-09T09:00:00.000Z"),
         thread("attention-old", "attention", "2026-03-09T08:00:00.000Z"),
       ],
       (candidate) => candidate.band,
@@ -96,17 +96,17 @@ describe("sortThreadsByAttention", () => {
 
     expect(sorted.map((candidate) => candidate.id)).toEqual([
       "attention-old",
-      "idle",
       "working-new",
+      "idle",
     ]);
   });
 
   it("uses latest user message within a band and creation time as its fallback", () => {
     const sorted = sortThreadsByAttention(
       [
-        thread("message-old", "idle", "2026-03-09T09:00:00.000Z"),
-        thread("created", "idle", null, "2026-03-09T10:00:00.000Z"),
-        thread("message-new", "idle", "2026-03-09T11:00:00.000Z"),
+        thread("message-old", "normal", "2026-03-09T09:00:00.000Z"),
+        thread("created", "normal", null, "2026-03-09T10:00:00.000Z"),
+        thread("message-new", "normal", "2026-03-09T11:00:00.000Z"),
       ],
       (candidate) => candidate.band,
     );

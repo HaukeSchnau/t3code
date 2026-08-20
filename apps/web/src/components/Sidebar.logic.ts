@@ -562,14 +562,11 @@ export function resolveSidebarThreadAttentionBand(
   ) {
     return "attention";
   }
-  if (status === "working" || status === "monitoring") {
-    return "background";
-  }
-  return "idle";
+  return "normal";
 }
 
 // The default sidebar is an inbox: things that need the user rise, ordinary
-// ready threads follow, and background work recedes until its state changes.
+// active threads follow, regardless of whether the agent is currently working.
 // Latest user message is the only recency signal inside each band.
 export function sortThreadsForSidebar<
   T extends {

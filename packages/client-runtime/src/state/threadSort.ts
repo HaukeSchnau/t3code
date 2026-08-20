@@ -13,12 +13,11 @@ export interface ThreadSortInput {
   }>;
 }
 
-export type SidebarAttentionBand = "attention" | "idle" | "background";
+export type SidebarAttentionBand = "attention" | "normal";
 
 const SIDEBAR_ATTENTION_BAND_ORDER: Record<SidebarAttentionBand, number> = {
   attention: 0,
-  idle: 1,
-  background: 2,
+  normal: 1,
 };
 
 export function toSortableTimestamp(iso: string | undefined): number | null {

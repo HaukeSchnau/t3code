@@ -259,7 +259,7 @@ describe("sortThreadsForListV2", () => {
         { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
         { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
       ],
-      () => "idle",
+      () => "normal",
     );
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
