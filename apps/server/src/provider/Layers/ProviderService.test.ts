@@ -404,6 +404,7 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: multiCodex.personalInstanceId,
         threadId,
+        cwd: "/shared/project",
         runtimeMode: "full-access",
       });
 
@@ -411,7 +412,6 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
         provider: CODEX_DRIVER,
         providerInstanceId: multiCodex.workInstanceId,
         threadId,
-        resumeCursor: personalSession.resumeCursor,
         runtimeMode: "full-access",
       });
 
@@ -420,6 +420,9 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
       assert.isDefined(stopOrder);
       assert.isDefined(replacementStartOrder);
       assert.isBelow(stopOrder, replacementStartOrder);
+      const replacementInput = multiCodex.work.startSession.mock.calls[0]?.[0];
+      assert.deepEqual(replacementInput?.resumeCursor, personalSession.resumeCursor);
+      assert.equal(replacementInput?.cwd, "/shared/project");
       assert.equal(yield* multiCodex.personal.hasSession(threadId), false);
       assert.equal(yield* multiCodex.work.hasSession(threadId), true);
 
@@ -455,7 +458,6 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
           provider: CODEX_DRIVER,
           providerInstanceId: multiCodex.workInstanceId,
           threadId,
-          resumeCursor: personalSession.resumeCursor,
           runtimeMode: "full-access",
         }),
       );
@@ -475,7 +477,7 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
       const provider = yield* ProviderService.ProviderService;
       const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory;
       const threadId = asThreadId("thread-codex-instance-handoff-stop-failure");
-      const personalSession = yield* provider.startSession(threadId, {
+      yield* provider.startSession(threadId, {
         provider: CODEX_DRIVER,
         providerInstanceId: multiCodex.personalInstanceId,
         threadId,
@@ -497,7 +499,6 @@ multiCodex.layer("ProviderServiceLive provider instance handoff", (it) => {
           provider: CODEX_DRIVER,
           providerInstanceId: multiCodex.workInstanceId,
           threadId,
-          resumeCursor: personalSession.resumeCursor,
           runtimeMode: "full-access",
         }),
       );
