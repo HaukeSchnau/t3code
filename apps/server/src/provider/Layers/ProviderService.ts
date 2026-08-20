@@ -577,6 +577,48 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     );
   });
 
+  const stopBoundSessionBeforeInstanceChange = Effect.fn("stopBoundSessionBeforeInstanceChange")(
+    function* (input: {
+      readonly threadId: ThreadId;
+      readonly nextInstanceId: ProviderInstanceId;
+      readonly binding: ProviderSessionDirectory.ProviderRuntimeBinding | undefined;
+    }) {
+      if (input.binding === undefined) {
+        return;
+      }
+      const previousInstanceId = yield* requireBindingInstanceId(
+        "ProviderService.startSession",
+        input.binding,
+      );
+      if (previousInstanceId === input.nextInstanceId) {
+        return;
+      }
+
+      const previousAdapter = (yield* getAdapterEntries).find(
+        ([instanceId]) => instanceId === previousInstanceId,
+      )?.[1];
+      if (previousAdapter === undefined || !(yield* previousAdapter.hasSession(input.threadId))) {
+        return;
+      }
+
+      // Compatible provider instances share the same native conversation store.
+      // Release its single-writer lock before the replacement tries to resume it.
+      yield* previousAdapter.stopSession(input.threadId);
+      yield* analytics.record("provider.session.stopped", {
+        provider: previousAdapter.provider,
+      });
+      yield* directory.upsert({
+        ...input.binding,
+        status: "stopped",
+        runtimePayload: {
+          activeTurnId: null,
+          lastRuntimeEvent: "provider.instance-handoff",
+          lastRuntimeEventAt: yield* nowIso,
+        },
+      });
+    },
+  );
+
   const startSession: ProviderServiceMethod<"startSession"> = Effect.fn("startSession")(
     function* (threadId, rawInput) {
       const parsed = yield* decodeInputOrValidationError({
@@ -648,6 +690,11 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.cwd.effective": effectiveCwd ?? "",
         });
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
+        yield* stopBoundSessionBeforeInstanceChange({
+          threadId,
+          nextInstanceId: resolvedInstanceId,
+          binding: persistedBinding,
+        });
         yield* prepareMcpSession(threadId, resolvedInstanceId);
         const session = yield* adapter
           .startSession({
