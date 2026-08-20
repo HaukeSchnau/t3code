@@ -695,8 +695,8 @@ function ThreadNavigationSidebarPane(
               ],
             },
           ] satisfies MenuAction[])),
-      // v2 lays the list out in fixed creation order — offering sort/group
-      // controls it silently ignores would be a lie. Environment still
+      // The default list has one opinionated attention order. Offering legacy
+      // sort/group controls it ignores would be a lie. Environment still
       // scopes the v2 partition, so it stays.
       ...(threadListV2Enabled
         ? []

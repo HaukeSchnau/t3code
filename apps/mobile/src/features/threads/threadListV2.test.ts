@@ -252,12 +252,15 @@ describe("resolveThreadListV2SnoozeGateExpiryMs", () => {
 });
 
 describe("sortThreadsForListV2", () => {
-  it("orders by creation time, newest first, ignoring activity", () => {
-    const sorted = sortThreadsForListV2([
-      { id: "oldest", createdAt: "2026-06-01T08:00:00.000Z" },
-      { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
-      { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
-    ]);
+  it("uses creation time when idle threads have no user message", () => {
+    const sorted = sortThreadsForListV2(
+      [
+        { id: "oldest", createdAt: "2026-06-01T08:00:00.000Z" },
+        { id: "newest", createdAt: "2026-06-01T12:00:00.000Z" },
+        { id: "middle", createdAt: "2026-06-01T10:00:00.000Z" },
+      ],
+      () => "idle",
+    );
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "middle", "oldest"]);
   });
 });
@@ -579,14 +582,14 @@ describe("buildThreadListV2Items", () => {
     expect(layout.settledShelfHeaderIndex).toBe(0);
   });
 
-  it("keeps cards in creation order while settled sorts by recency", () => {
+  it("uses latest user message for active cards while settled sorts by recency", () => {
     const { items } = buildThreadListV2Items({
       threads: [
         makeThread({
           id: ThreadId.make("older-created"),
           title: "Older",
           createdAt: "2026-06-01T08:00:00.000Z",
-          updatedAt: NOW, // recent activity must NOT promote it
+          latestUserMessageAt: NOW,
         }),
         makeThread({
           id: ThreadId.make("newer-created"),
@@ -599,7 +602,7 @@ describe("buildThreadListV2Items", () => {
       now: NOW,
     });
 
-    expect(items.map((item) => item.thread.id)).toEqual(["newer-created", "older-created"]);
+    expect(items.map((item) => item.thread.id)).toEqual(["older-created", "newer-created"]);
   });
 
   it("keeps settled threads in the tail and filters by search query", () => {

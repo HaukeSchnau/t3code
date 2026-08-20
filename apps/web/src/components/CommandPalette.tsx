@@ -125,7 +125,12 @@ import {
   reduceCommandPaletteUiState,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
-import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
+import {
+  orderItemsByPreferredIds,
+  sortLogicalProjectsByThreadOrder,
+  sortLogicalProjectsForSidebar,
+} from "./Sidebar.logic";
+import { useSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteContent } from "./CommandPaletteContent";
 import { CommandPaletteResults } from "./CommandPaletteResults";
@@ -597,6 +602,7 @@ function OpenCommandPaletteDialog(props: {
   const projects = useProjects();
   const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
+  const sidebarCardThreads = useSidebarCardThreads();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const { theme, themeHalves, resolvedTheme } = useTheme();
   const providers = useAtomValue(primaryServerProvidersAtom);
@@ -714,12 +720,14 @@ function OpenCommandPaletteDialog(props: {
   );
   const projectGroups = useMemo(
     () =>
-      sortLogicalProjectsForSidebar(
-        unsortedProjectGroups,
-        threads,
-        clientSettings.sidebarProjectSortOrder,
-      ),
-    [clientSettings.sidebarProjectSortOrder, threads, unsortedProjectGroups],
+      sidebarCardThreads === null
+        ? sortLogicalProjectsForSidebar(
+            unsortedProjectGroups,
+            threads,
+            clientSettings.sidebarProjectSortOrder,
+          )
+        : sortLogicalProjectsByThreadOrder(unsortedProjectGroups, sidebarCardThreads),
+    [clientSettings.sidebarProjectSortOrder, sidebarCardThreads, threads, unsortedProjectGroups],
   );
   const contextualProjectRef = useMemo(
     () =>

@@ -89,12 +89,12 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
-import { getProjectOrderKey, selectProjectGroupingSettings } from "../logicalProject";
+import { selectProjectGroupingSettings } from "../logicalProject";
 import {
   buildSidebarProjectSnapshots,
   type SidebarProjectSnapshot,
 } from "../sidebarProjectGrouping";
-import { legacyProjectCwdPreferenceKey, useUiStateStore } from "../uiStateStore";
+import { useUiStateStore } from "../uiStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -132,10 +132,11 @@ import {
   resolveAdjacentThreadId,
   resolveSettledTimestamp,
   resolveSidebarThreadStatus,
+  resolveSidebarThreadAttentionBand,
   searchSidebarThreadsByTitle,
   shouldCreateNewThreadInCurrentProject,
   resolveWorkingStartedAt,
-  sortLogicalProjectsForSidebar,
+  sortLogicalProjectsByThreadOrder,
   sortPinnedThreadsForSidebar,
   sortSettledThreadsForSidebar,
   sortThreadsForSidebar,
@@ -809,9 +810,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // switching sidebars must not light up every historical thread as unread.
   const isUnread = hasUnseenCompletion({ ...thread, lastVisitedAt });
   const status = resolveSidebarThreadStatus(thread);
-  // A woken thread reappears at its original position (the sort is
-  // deliberately static), so the pill has to carry the weight. Snoozing is
-  // an explicit act, so the pill clears only when the user re-engages:
+  // A woken thread rises into the attention band, and the pill explains why.
+  // Snoozing is an explicit act, so the pill clears only when the user re-engages:
   // reading a completion-triggered wake, clicking the pill, sending a
   // message, settling, archiving, or a change request state that settles the
   // thread. Timer wakes survive a mere visit. An unparseable visit timestamp
@@ -1702,7 +1702,6 @@ const SidebarSearchResultRow = memo(function SidebarSearchResultRow(props: {
 
 export default function Sidebar() {
   const projects = useProjects();
-  const projectOrder = useUiStateStore((store) => store.projectOrder);
   const threads = useThreadShells();
   const router = useRouter();
   const { isMobile, setOpenMobile } = useSidebar();
@@ -1711,7 +1710,6 @@ export default function Sidebar() {
   const autoSettleOnMerge = useClientSettings((s) => s.sidebarAutoSettleOnMerge);
   const confirmThreadDelete = useClientSettings((s) => s.confirmThreadDelete);
   const confirmThreadArchive = useClientSettings((s) => s.confirmThreadArchive);
-  const sidebarProjectSortOrder = useClientSettings((s) => s.sidebarProjectSortOrder);
   const timestampFormat = useClientSettings((s) => s.timestampFormat);
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
   const {
@@ -1797,6 +1795,7 @@ export default function Sidebar() {
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
   const markThreadUnread = useUiStateStore((s) => s.markThreadUnread);
   const markThreadVisited = useUiStateStore((s) => s.markThreadVisited);
+  const threadLastVisitedAtById = useUiStateStore((s) => s.threadLastVisitedAtById);
   const acknowledgeWoke = useCallback(
     (threadRef: ScopedThreadRef, visitedAt: string) => {
       markThreadVisited(scopedThreadKey(threadRef), visitedAt);
@@ -1830,40 +1829,17 @@ export default function Sidebar() {
       ),
     [environments],
   );
-  const orderedProjects = useMemo(
-    () =>
-      orderItemsByPreferredIds({
-        items: projects,
-        preferredIds: projectOrder,
-        getId: getProjectOrderKey,
-        getPreferenceIds: (project) => [
-          getProjectOrderKey(project),
-          legacyProjectCwdPreferenceKey(project.workspaceRoot),
-        ],
-      }),
-    [projectOrder, projects],
-  );
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
-        projects: sidebarProjectSortOrder === "manual" ? orderedProjects : projects,
+        projects,
         settings: projectGroupingSettings,
         primaryEnvironmentId,
         resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
       }),
-    [
-      environmentLabelById,
-      orderedProjects,
-      primaryEnvironmentId,
-      projectGroupingSettings,
-      projects,
-      sidebarProjectSortOrder,
-    ],
+    [environmentLabelById, primaryEnvironmentId, projectGroupingSettings, projects],
   );
-  const projectGroups = useMemo(
-    () => sortLogicalProjectsForSidebar(unsortedProjectGroups, threads, sidebarProjectSortOrder),
-    [sidebarProjectSortOrder, threads, unsortedProjectGroups],
-  );
+  const baseProjectGroups = unsortedProjectGroups;
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const providerEntryByInstanceId = useMemo(
     () =>
@@ -1894,13 +1870,13 @@ export default function Sidebar() {
   const projectDisplayNameByKey = useMemo(
     () =>
       new Map(
-        projectGroups.flatMap((group) =>
+        baseProjectGroups.flatMap((group) =>
           group.memberProjects.map(
             (project) => [`${project.environmentId}:${project.id}`, group.displayName] as const,
           ),
         ),
       ),
-    [projectGroups],
+    [baseProjectGroups],
   );
 
   // now is quantized to the minute so effectiveSettled memoization doesn't
@@ -1922,8 +1898,8 @@ export default function Sidebar() {
     () =>
       projectScopeKey === null
         ? null
-        : (projectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
-    [projectGroups, projectScopeKey],
+        : (baseProjectGroups.find((project) => project.projectKey === projectScopeKey) ?? null),
+    [baseProjectGroups, projectScopeKey],
   );
   const scopedProjectKeys = useMemo(
     () =>
@@ -2064,7 +2040,13 @@ export default function Sidebar() {
     // sort, or mixed-version fleets would render different pinned orders on
     // web and mobile from the same data.
     const allPinnedThreads = sortPinnedThreadsForSidebar(pinned);
-    const allActiveThreads = sortThreadsForSidebar(active);
+    const allActiveThreads = sortThreadsForSidebar(active, (thread) => {
+      const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      return resolveSidebarThreadAttentionBand(thread, {
+        lastVisitedAt: threadLastVisitedAtById[threadKey],
+        wokeAt: threadWokeAt(thread, { now: preciseNow }),
+      });
+    });
     const isInProjectScope = (thread: EnvironmentThreadShell) =>
       scopedProjectKeys === null ||
       scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`);
@@ -2101,9 +2083,14 @@ export default function Sidebar() {
     scopedProjectKeys,
     serverConfigs,
     snoozeWakeTick,
+    threadLastVisitedAtById,
     threads,
   ]);
   usePublishSidebarCardThreads(sidebarCardThreads);
+  const projectGroups = useMemo(
+    () => sortLogicalProjectsByThreadOrder(baseProjectGroups, sidebarCardThreads),
+    [baseProjectGroups, sidebarCardThreads],
+  );
 
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
