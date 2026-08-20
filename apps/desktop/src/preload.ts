@@ -309,6 +309,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     openDevTools: (tabId) => invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     clearCookies: () => invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
     clearCache: () => invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
+    setAudioMuted: (tabId, audioMuted) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     getPreviewConfig: (environmentId) =>
       invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId }),
     setAnnotationTheme: (theme) =>
