@@ -4,6 +4,7 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
 import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
+import { resolveInlineCodeWebLink } from "@t3tools/shared/markdownLinks";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useNavigation } from "@react-navigation/native";
@@ -615,13 +616,16 @@ function useMarkdownStyles(onLinkPress: (href: string) => void): MarkdownStyleSe
       ),
       code_inline: ({ content }) => {
         const value = content ?? "";
+        const link = resolveInlineCodeWebLink(value);
         return (
           <NativeText
             className="font-mono"
+            onPress={link ? () => onLinkPress(link.href) : undefined}
             style={{
-              color: inlineCodeTextColor,
+              color: link ? markdownLinkColor : inlineCodeTextColor,
               fontSize: markdownFontSizes.codeBlockFontSize,
               lineHeight: markdownFontSizes.bodyLineHeight,
+              textDecorationLine: link ? "underline" : "none",
             }}
           >
             {value}

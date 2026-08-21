@@ -1,4 +1,5 @@
 import type { MarkdownNode } from "react-native-nitro-markdown/headless";
+import { resolveInlineCodeWebLink } from "@t3tools/shared/markdownLinks";
 
 import type { SelectableMarkdownSkill } from "./SelectableMarkdownText.types";
 import { resolveMarkdownLinkPresentation, type MarkdownFileIcon } from "./markdownLinks";
@@ -283,8 +284,15 @@ function appendNode(
       return appendRun(runs, textNodeContent(nodeTextContent(node)), context);
     case "html_inline":
       return appendRun(runs, inlineHtmlText(nodeTextContent(node)), context);
-    case "code_inline":
-      return appendRun(runs, nodeTextContent(node), { ...context, code: true });
+    case "code_inline": {
+      const value = nodeTextContent(node);
+      const link = resolveInlineCodeWebLink(value);
+      return appendRun(runs, value, {
+        ...context,
+        code: true,
+        ...(link ? { href: link.href, externalHost: link.host } : {}),
+      });
+    }
     case "soft_break":
       return appendRun(runs, " ", context);
     case "line_break":
