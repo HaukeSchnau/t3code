@@ -79,6 +79,7 @@ describe("cycleComposerReasoningEffort", () => {
         model: MODEL,
         models,
         modelOptions: selections(["reasoningEffort", "medium"], ["fastMode", true]),
+        planModeEnabled: true,
       }),
     ).toEqual(selections(["reasoningEffort", "high"], ["fastMode", true]));
   });
@@ -90,6 +91,7 @@ describe("cycleComposerReasoningEffort", () => {
         model: MODEL,
         models,
         modelOptions: selections(["reasoningEffort", "high"]),
+        planModeEnabled: true,
       }),
     ).toEqual(selections(["reasoningEffort", "low"]));
   });
@@ -101,6 +103,7 @@ describe("cycleComposerReasoningEffort", () => {
         model: MODEL,
         models: modelWith([booleanDescriptor("thinking")]),
         modelOptions: undefined,
+        planModeEnabled: true,
       }),
     ).toBeNull();
   });

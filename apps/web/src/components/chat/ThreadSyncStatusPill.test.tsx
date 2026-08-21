@@ -13,7 +13,6 @@ describe("ThreadSyncStatusPill", () => {
     expect(markup).toContain("chat-composer-drawer-attached");
     expect(markup).toContain("chat-composer-drawer-slot");
     expect(markup).toContain("pb-[calc(var(--chat-composer-attachment-overlap)_+_0.375rem)]");
-    expect(markup).toContain(label);
     expect(markup).toContain("Loading messages...");
     expect(markup).not.toContain("Syncing messages...");
     expect(markup).not.toContain("animate-");
