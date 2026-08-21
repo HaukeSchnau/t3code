@@ -37,7 +37,11 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderAdapterProcessError, ProviderAdapterValidationError } from "../Errors.ts";
 import type { ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import { makeClaudeAdapter, type ClaudeAdapterLiveOptions } from "./ClaudeAdapter.ts";
+import {
+  claudeUsageLimitsFromControlResponse,
+  makeClaudeAdapter,
+  type ClaudeAdapterLiveOptions,
+} from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -161,8 +165,18 @@ function makeHarness(config?: {
   readonly baseDir?: string;
   readonly claudeConfig?: Partial<ClaudeSettings>;
   readonly instanceId?: ProviderInstanceId;
+  readonly usageResponse?: unknown;
 }) {
   const query = new FakeClaudeQuery();
+  let usageCalls = 0;
+  if (config?.usageResponse !== undefined) {
+    Object.assign(query, {
+      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => {
+        usageCalls += 1;
+        return config.usageResponse;
+      },
+    });
+  }
   let createInput:
     | {
         readonly prompt: AsyncIterable<SDKUserMessage>;
@@ -207,6 +221,7 @@ function makeHarness(config?: {
     ),
     query,
     getLastCreateQueryInput: () => createInput,
+    getUsageCalls: () => usageCalls,
   };
 }
 
@@ -273,6 +288,169 @@ const THREAD_ID = ThreadId.make("thread-claude-1");
 const RESUME_THREAD_ID = ThreadId.make("thread-claude-resume");
 
 describe("ClaudeAdapterLive", () => {
+  it("normalizes every supported Claude subscription usage window", () => {
+    const result = claudeUsageLimitsFromControlResponse({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: {
+          utilization: 97,
+          resets_at: "2026-08-21T17:00:00.000Z",
+        },
+        seven_day: {
+          utilization: 13,
+          resets_at: "2026-08-28T05:00:00.000Z",
+        },
+        limits: [
+          {
+            kind: "session",
+            group: "session",
+            percent: 97,
+            resets_at: "2026-08-21T17:00:00.000Z",
+            scope: null,
+          },
+          {
+            kind: "weekly_all",
+            group: "weekly",
+            percent: 13,
+            resets_at: "2026-08-28T05:00:00.000Z",
+            scope: null,
+          },
+          {
+            kind: "weekly_scoped",
+            group: "weekly",
+            percent: 0,
+            resets_at: null,
+            scope: {
+              model: { id: null, display_name: "Fable" },
+              surface: null,
+            },
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(result, {
+      limitId: "claude",
+      limitName: "Claude usage",
+      planType: null,
+      rateLimitReachedType: null,
+      credits: null,
+      primary: {
+        key: "session",
+        label: "Current session",
+        usedPercent: 97,
+        resetsAt: "2026-08-21T17:00:00.000Z",
+        windowDurationMins: 300,
+      },
+      secondary: {
+        key: "weekly-all",
+        label: "All models",
+        usedPercent: 13,
+        resetsAt: "2026-08-28T05:00:00.000Z",
+        windowDurationMins: 10080,
+      },
+      windows: [
+        {
+          key: "session",
+          label: "Current session",
+          usedPercent: 97,
+          resetsAt: "2026-08-21T17:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        {
+          key: "weekly-all",
+          label: "All models",
+          usedPercent: 13,
+          resetsAt: "2026-08-28T05:00:00.000Z",
+          windowDurationMins: 10080,
+        },
+        {
+          key: "weekly-scoped:fable",
+          label: "Fable",
+          usedPercent: 0,
+          resetsAt: null,
+          windowDurationMins: 10080,
+        },
+      ],
+    });
+  });
+
+  it("falls back to the documented Claude usage windows", () => {
+    const result = claudeUsageLimitsFromControlResponse({
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
+        seven_day: { utilization: 7, resets_at: "2026-08-28T05:00:00.000Z" },
+      },
+    });
+
+    assert.deepEqual(
+      result?.windows.map((window) => [window.key, window.usedPercent]),
+      [
+        ["session", 42],
+        ["weekly-all", 7],
+      ],
+    );
+  });
+
+  it.effect("publishes Claude subscription limits when a session starts", () => {
+    const harness = makeHarness({
+      usageResponse: {
+        rate_limits_available: true,
+        rate_limits: {
+          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
+          seven_day: { utilization: 7, resets_at: "2026-08-28T05:00:00.000Z" },
+        },
+      },
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const usageEventFiber = yield* Stream.filter(
+        adapter.streamEvents,
+        (event) => event.type === "account.rate-limits.updated",
+      ).pipe(Stream.runHead, Effect.forkChild);
+
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+
+      const usageEvent = yield* Fiber.join(usageEventFiber);
+      assert.equal(usageEvent._tag, "Some");
+      if (usageEvent._tag === "Some") {
+        assert.equal(usageEvent.value.type, "account.rate-limits.updated");
+        if (usageEvent.value.type === "account.rate-limits.updated") {
+          assert.deepEqual(
+            (usageEvent.value.payload.rateLimits as { readonly windows?: ReadonlyArray<unknown> })
+              .windows,
+            [
+              {
+                key: "session",
+                label: "Current session",
+                usedPercent: 42,
+                resetsAt: "2026-08-21T17:00:00.000Z",
+                windowDurationMins: 300,
+              },
+              {
+                key: "weekly-all",
+                label: "All models",
+                usedPercent: 7,
+                resetsAt: "2026-08-28T05:00:00.000Z",
+                windowDurationMins: 10080,
+              },
+            ],
+          );
+        }
+      }
+      assert.equal(harness.getUsageCalls(), 1);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {

@@ -3,11 +3,12 @@ import type {
   OrchestrationUsageLimitsSnapshot,
 } from "@t3tools/contracts";
 
-const MAX_HISTORY_WINDOWS_PER_DURATION = 8;
+const MAX_HISTORY_WINDOWS_PER_LIMIT = 8;
 const MAX_POINTS_PER_WINDOW = 24;
 const RESET_MATCH_TOLERANCE_MS = 5 * 60 * 1000;
 
 export interface UsageLimitObservationInput {
+  readonly windowKey?: string;
   readonly observedAt: string;
   readonly resetsAt: string;
   readonly usedPercent: number;
@@ -30,18 +31,19 @@ function compactPoints(
 function pruneHistory(
   history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>,
 ): ReadonlyArray<OrchestrationUsageLimitHistoryWindow> {
-  const windowsByDuration = new Map<number, Array<OrchestrationUsageLimitHistoryWindow>>();
+  const windowsByKey = new Map<string, Array<OrchestrationUsageLimitHistoryWindow>>();
   for (const window of history) {
-    const windows = windowsByDuration.get(window.windowDurationMins) ?? [];
+    const key = `${window.windowKey ?? "legacy"}:${window.windowDurationMins}`;
+    const windows = windowsByKey.get(key) ?? [];
     windows.push(window);
-    windowsByDuration.set(window.windowDurationMins, windows);
+    windowsByKey.set(key, windows);
   }
 
-  return Array.from(windowsByDuration.values())
+  return Array.from(windowsByKey.values())
     .flatMap((windows) =>
       windows
         .toSorted((left, right) => Date.parse(left.resetsAt) - Date.parse(right.resetsAt))
-        .slice(-MAX_HISTORY_WINDOWS_PER_DURATION),
+        .slice(-MAX_HISTORY_WINDOWS_PER_LIMIT),
     )
     .toSorted((left, right) => Date.parse(left.resetsAt) - Date.parse(right.resetsAt));
 }
@@ -62,6 +64,7 @@ export function appendUsageLimitObservation(
   const resetMs = Date.parse(observation.resetsAt);
   const existing = history.findLast(
     (window) =>
+      window.windowKey === observation.windowKey &&
       window.windowDurationMins === observation.windowDurationMins &&
       Math.abs(Date.parse(window.resetsAt) - resetMs) <= RESET_MATCH_TOLERANCE_MS,
   );
@@ -78,6 +81,7 @@ export function appendUsageLimitObservation(
     return pruneHistory([
       ...history,
       {
+        ...(observation.windowKey ? { windowKey: observation.windowKey } : {}),
         resetsAt: observation.resetsAt,
         windowDurationMins: observation.windowDurationMins,
         points: [point],
@@ -99,11 +103,16 @@ export function appendProviderUsageHistory(
   usageLimits: OrchestrationUsageLimitsSnapshot,
 ): ReadonlyArray<OrchestrationUsageLimitHistoryWindow> {
   let next = history;
-  for (const window of [usageLimits.primary, usageLimits.secondary]) {
+  const windows =
+    usageLimits.windows && usageLimits.windows.length > 0
+      ? usageLimits.windows
+      : [usageLimits.primary, usageLimits.secondary];
+  for (const window of windows) {
     if (!window?.resetsAt || !window.windowDurationMins) {
       continue;
     }
     next = appendUsageLimitObservation(next, {
+      ...(window.key ? { windowKey: window.key } : {}),
       observedAt: usageLimits.updatedAt,
       resetsAt: window.resetsAt,
       usedPercent: window.usedPercent,

@@ -36,11 +36,60 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     expect(html).toContain("20%");
   });
 
-  it("hides usage limits for non-Codex providers", () => {
+  it("renders Claude usage limits", () => {
+    const claudeUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      limitId: "claude",
+      limitName: "Claude usage",
+      planType: null,
+      primary: {
+        key: "session",
+        label: "Current session",
+        usedPercent: 96,
+        resetsAt: "2099-01-01T05:00:00.000Z",
+        windowDurationMins: 300,
+      },
+      windows: [
+        {
+          key: "session",
+          label: "Current session",
+          usedPercent: 96,
+          resetsAt: "2099-01-01T05:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        {
+          key: "weekly-all",
+          label: "All models",
+          usedPercent: 13,
+          resetsAt: "2099-01-08T05:00:00.000Z",
+          windowDurationMins: 10080,
+        },
+        {
+          key: "weekly-scoped:fable",
+          label: "Fable",
+          usedPercent: 0,
+          resetsAt: null,
+          windowDurationMins: 10080,
+        },
+      ],
+    };
     const html = renderToStaticMarkup(
       <ComposerUsageLimitsMeterSlot
         compact={false}
         selectedProvider={ProviderDriverKind.make("claudeAgent")}
+        activeUsageLimits={claudeUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("Claude usage");
+    expect(html).toContain("96%");
+  });
+
+  it("hides usage limits for unsupported providers", () => {
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("cursor")}
         activeUsageLimits={usageLimits}
       />,
     );

@@ -99,7 +99,174 @@ import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogg
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 
+const ClaudeUsageLimitEntry = Schema.Struct({
+  kind: Schema.String,
+  group: Schema.optional(Schema.String),
+  percent: Schema.Number,
+  resets_at: Schema.optional(Schema.NullOr(Schema.String)),
+  scope: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        model: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              id: Schema.optional(Schema.NullOr(Schema.String)),
+              display_name: Schema.optional(Schema.NullOr(Schema.String)),
+            }),
+          ),
+        ),
+        surface: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+});
+const decodeClaudeUsageLimitEntry = Schema.decodeUnknownExit(ClaudeUsageLimitEntry);
+
+const ClaudeUsageLegacyWindow = Schema.Struct({
+  utilization: Schema.NullOr(Schema.Number),
+  resets_at: Schema.NullOr(Schema.String),
+});
+const decodeClaudeUsageLegacyWindow = Schema.decodeUnknownExit(ClaudeUsageLegacyWindow);
+
+const ClaudeUsageControlResponse = Schema.Struct({
+  rate_limits_available: Schema.Boolean,
+  rate_limits: Schema.NullOr(
+    Schema.Struct({
+      limits: Schema.optional(Schema.Array(Schema.Unknown)),
+      five_hour: Schema.optional(Schema.Unknown),
+      seven_day: Schema.optional(Schema.Unknown),
+    }),
+  ),
+});
+const decodeClaudeUsageControlResponse = Schema.decodeUnknownExit(ClaudeUsageControlResponse);
+
+interface ClaudeUsageWindowSnapshot {
+  readonly key: string;
+  readonly label: string;
+  readonly usedPercent: number;
+  readonly resetsAt: string | null;
+  readonly windowDurationMins: number;
+}
+
+function usageScopeKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeClaudeUsageLimitEntry(value: unknown): ClaudeUsageWindowSnapshot | null {
+  const decoded = decodeClaudeUsageLimitEntry(value);
+  if (Exit.isFailure(decoded) || !Number.isFinite(decoded.value.percent)) {
+    return null;
+  }
+
+  const modelId = decoded.value.scope?.model?.id?.trim() || null;
+  const modelName = decoded.value.scope?.model?.display_name?.trim() || null;
+  const surface = decoded.value.scope?.surface?.trim() || null;
+  const scopedId = modelId ?? modelName ?? surface;
+
+  switch (decoded.value.kind) {
+    case "session":
+      return {
+        key: "session",
+        label: "Current session",
+        usedPercent: Math.max(0, decoded.value.percent),
+        resetsAt: decoded.value.resets_at ?? null,
+        windowDurationMins: 5 * 60,
+      };
+    case "weekly_all":
+      return {
+        key: "weekly-all",
+        label: "All models",
+        usedPercent: Math.max(0, decoded.value.percent),
+        resetsAt: decoded.value.resets_at ?? null,
+        windowDurationMins: 7 * 24 * 60,
+      };
+    case "weekly_scoped":
+      if (!scopedId) return null;
+      return {
+        key: `weekly-scoped:${usageScopeKey(scopedId)}`,
+        label: modelName ?? modelId ?? surface ?? "Scoped weekly limit",
+        usedPercent: Math.max(0, decoded.value.percent),
+        resetsAt: decoded.value.resets_at ?? null,
+        windowDurationMins: 7 * 24 * 60,
+      };
+    default:
+      return null;
+  }
+}
+
+function normalizeClaudeLegacyUsageWindow(
+  value: unknown,
+  input: Pick<ClaudeUsageWindowSnapshot, "key" | "label" | "windowDurationMins">,
+): ClaudeUsageWindowSnapshot | null {
+  const decoded = decodeClaudeUsageLegacyWindow(value);
+  if (
+    Exit.isFailure(decoded) ||
+    decoded.value.utilization === null ||
+    !Number.isFinite(decoded.value.utilization)
+  ) {
+    return null;
+  }
+  return {
+    ...input,
+    usedPercent: Math.max(0, decoded.value.utilization),
+    resetsAt: decoded.value.resets_at,
+  };
+}
+
+/** Normalizes the experimental Claude `/usage` response without retaining its transcript analysis. */
+export function claudeUsageLimitsFromControlResponse(value: unknown) {
+  const decoded = decodeClaudeUsageControlResponse(value);
+  if (Exit.isFailure(decoded) || !decoded.value.rate_limits_available) {
+    return undefined;
+  }
+
+  const rateLimits = decoded.value.rate_limits;
+  const genericWindows = (rateLimits?.limits ?? []).flatMap((entry) => {
+    const normalized = normalizeClaudeUsageLimitEntry(entry);
+    return normalized ? [normalized] : [];
+  });
+  const legacyWindows = [
+    normalizeClaudeLegacyUsageWindow(rateLimits?.five_hour, {
+      key: "session",
+      label: "Current session",
+      windowDurationMins: 5 * 60,
+    }),
+    normalizeClaudeLegacyUsageWindow(rateLimits?.seven_day, {
+      key: "weekly-all",
+      label: "All models",
+      windowDurationMins: 7 * 24 * 60,
+    }),
+  ].filter((window): window is ClaudeUsageWindowSnapshot => window !== null);
+  const windows = [
+    ...genericWindows,
+    ...legacyWindows.filter(
+      (legacyWindow) => !genericWindows.some((window) => window.key === legacyWindow.key),
+    ),
+  ];
+  const primary = windows.find((window) => window.key === "session") ?? null;
+  const secondary = windows.find((window) => window.key === "weekly-all") ?? null;
+  if (windows.length === 0) {
+    return undefined;
+  }
+
+  return {
+    limitId: "claude",
+    limitName: "Claude usage",
+    planType: null,
+    rateLimitReachedType: null,
+    credits: null,
+    primary,
+    secondary,
+    windows,
+  };
+}
+
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
+const CLAUDE_USAGE_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
 type ClaudeToolResultStreamKind = Extract<
   RuntimeContentStreamKind,
@@ -279,6 +446,7 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  readonly scheduleUsageLimitsRefresh: (force?: boolean) => void;
   stopped: boolean;
 }
 
@@ -290,6 +458,8 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
+  // TODO: Replace this with the stable SDK usage control once Anthropic publishes it.
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
   readonly close: () => void;
 }
 
@@ -1693,6 +1863,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
   const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
+  let usageLimitsRefreshInFlight = false;
+  let nextUsageLimitsRefreshAtMs = 0;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -1715,6 +1887,68 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         accepted ? Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid) : Effect.void,
       ),
     );
+
+  const refreshClaudeUsageLimits = Effect.fn("refreshClaudeUsageLimits")(function* (input: {
+    readonly query: ClaudeQueryRuntime;
+    readonly threadId: ThreadId;
+    readonly force: boolean;
+  }) {
+    const readUsage = input.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
+    if (!readUsage || usageLimitsRefreshInFlight) {
+      return;
+    }
+
+    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+    if (!input.force && nowMs < nextUsageLimitsRefreshAtMs) {
+      return;
+    }
+
+    usageLimitsRefreshInFlight = true;
+    nextUsageLimitsRefreshAtMs = nowMs + CLAUDE_USAGE_REFRESH_INTERVAL_MS;
+    try {
+      const response = yield* Effect.tryPromise({
+        try: () => readUsage.call(input.query),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET",
+            detail: "Failed to refresh Claude usage limits.",
+            cause,
+          }),
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("claude.usage-limits.refresh-failed", {
+            threadId: input.threadId,
+            cause,
+          }).pipe(Effect.as(undefined)),
+        ),
+      );
+      if (response === undefined) {
+        return;
+      }
+
+      const rateLimits = claudeUsageLimitsFromControlResponse(response);
+      if (!rateLimits) {
+        yield* Effect.logWarning("claude.usage-limits.invalid-response", {
+          threadId: input.threadId,
+        });
+        return;
+      }
+
+      const stamp = yield* makeEventStamp();
+      yield* offerRuntimeEvent({
+        type: "account.rate-limits.updated",
+        eventId: stamp.eventId,
+        provider: PROVIDER,
+        createdAt: stamp.createdAt,
+        threadId: input.threadId,
+        payload: { rateLimits },
+        providerRefs: {},
+      });
+    } finally {
+      usageLimitsRefreshInFlight = false;
+    }
+  });
 
   const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
@@ -2307,6 +2541,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         hasUsage: result?.usage !== undefined,
         ...(errorMessage ? { errorMessage } : {}),
       });
+      context.scheduleUsageLimitsRefresh();
       return;
     }
 
@@ -2393,6 +2628,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
+    context.scheduleUsageLimitsRefresh();
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -3512,6 +3748,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      context.scheduleUsageLimitsRefresh(true);
       yield* offerRuntimeEvent({
         ...base,
         type: "account.rate-limits.updated",
@@ -4281,6 +4518,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        scheduleUsageLimitsRefresh: (force = false) => {
+          runFork(
+            refreshClaudeUsageLimits({
+              query: queryRuntime,
+              threadId,
+              force,
+            }),
+          );
+        },
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
@@ -4353,6 +4599,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
+      context.scheduleUsageLimitsRefresh();
 
       return {
         ...session,

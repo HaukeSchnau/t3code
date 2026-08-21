@@ -61,4 +61,44 @@ describe("usageLimitsFromRuntimeEvent", () => {
       windowDurationMins: null,
     });
   });
+
+  it("preserves keyed provider windows with labels", () => {
+    expect(
+      usageLimitsFromRuntimeEvent(
+        event({
+          limitId: "claude",
+          primary: {
+            key: "session",
+            label: "Current session",
+            usedPercent: 97,
+            resetsAt: "2026-08-21T17:00:00.000Z",
+            windowDurationMins: 300,
+          },
+          secondary: null,
+          windows: [
+            {
+              key: "weekly-scoped:fable",
+              label: "Fable",
+              usedPercent: 0,
+              resetsAt: null,
+              windowDurationMins: 10080,
+            },
+          ],
+        }),
+      ),
+    ).toMatchObject({
+      limitId: "claude",
+      primary: {
+        key: "session",
+        label: "Current session",
+      },
+      windows: [
+        {
+          key: "weekly-scoped:fable",
+          label: "Fable",
+          usedPercent: 0,
+        },
+      ],
+    });
+  });
 });

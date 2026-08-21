@@ -67,6 +67,107 @@ describe("usageLimits", () => {
     expect(snapshot?.secondary?.windowDurationMins).toBe(10080);
   });
 
+  it("keeps Claude scoped limits alongside its session and weekly windows", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "claudeAgent",
+          usageLimits: [
+            {
+              limitId: "claude",
+              limitName: "Claude usage",
+              planType: null,
+              rateLimitReachedType: null,
+              credits: null,
+              primary: {
+                key: "session",
+                label: "Current session",
+                usedPercent: 96,
+                resetsAt: "2026-08-21T17:00:00.000Z",
+                windowDurationMins: 300,
+              },
+              secondary: {
+                key: "weekly-all",
+                label: "All models",
+                usedPercent: 13,
+                resetsAt: "2026-08-28T05:00:00.000Z",
+                windowDurationMins: 10080,
+              },
+              windows: [
+                {
+                  key: "session",
+                  label: "Current session",
+                  usedPercent: 96,
+                  resetsAt: "2026-08-21T17:00:00.000Z",
+                  windowDurationMins: 300,
+                },
+                {
+                  key: "weekly-all",
+                  label: "All models",
+                  usedPercent: 13,
+                  resetsAt: "2026-08-28T05:00:00.000Z",
+                  windowDurationMins: 10080,
+                },
+                {
+                  key: "weekly-scoped:fable",
+                  label: "Fable",
+                  usedPercent: 0,
+                  resetsAt: null,
+                  windowDurationMins: 10080,
+                },
+              ],
+              updatedAt: "2026-08-21T12:00:00.000Z",
+            },
+          ],
+        },
+      ],
+      "claudeAgent",
+    );
+
+    expect(
+      snapshot?.windows?.map((window) => [window.key, window.label, window.usedPercent]),
+    ).toEqual([
+      ["session", "Current session", 96],
+      ["weekly-all", "All models", 13],
+      ["weekly-scoped:fable", "Fable", 0],
+    ]);
+  });
+
+  it("uses limits from the selected provider instance", () => {
+    const makeSnapshot = (usedPercent: number) => ({
+      limitId: "claude",
+      limitName: "Claude usage",
+      planType: null,
+      rateLimitReachedType: null,
+      credits: null,
+      primary: {
+        usedPercent,
+        resetsAt: "2026-08-21T17:00:00.000Z",
+        windowDurationMins: 300,
+      },
+      secondary: null,
+      updatedAt: "2026-08-21T12:00:00.000Z",
+    });
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources(
+      [
+        {
+          provider: "claudeAgent",
+          providerInstanceId: "claude-personal",
+          usageLimits: [makeSnapshot(96)],
+        },
+        {
+          provider: "claudeAgent",
+          providerInstanceId: "claude-work",
+          usageLimits: [makeSnapshot(12)],
+        },
+      ],
+      "claudeAgent",
+      "claude-work",
+    );
+
+    expect(snapshot?.primary?.usedPercent).toBe(12);
+  });
+
   it("unwraps nested Codex rate limit payload envelopes", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
       makeActivity("activity-1", "account.rate-limits.updated", {
