@@ -20,3 +20,8 @@ Before enough completed history exists, the meter shows an early estimate that k
 hours of a weekly window from dominating the entire forecast. After three completed windows, its
 details show how many recent windows informed the estimate and the range those windows produced.
 The server retains only a compact history of the eight newest windows for each limit duration.
+
+When the forecast exceeds 100%, the compact meter estimates how long the remaining usage will last.
+Open the meter for the approximate date and time. If recent windows disagree, the details show a
+likely timing range or say that usage may still last until reset. These estimates use the same sleep
+and weekend weighting as the percentage forecast and update as new usage arrives.

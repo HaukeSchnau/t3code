@@ -88,5 +88,31 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     expect(html).toContain("forecast");
     expect(html).toContain("Based on 3 recent windows");
     expect(html).toContain("Typical range");
+    expect(html).toContain("Expected to last until reset");
+  });
+
+  it("shows depletion timing in the compact meter when usage is at risk", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:30:00.000Z"));
+    const atRiskUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      primary: {
+        usedPercent: 60,
+        resetsAt: "2026-03-23T15:00:00.000Z",
+        windowDurationMins: 300,
+      },
+      updatedAt: "2026-03-23T12:30:00.000Z",
+    };
+
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact
+        selectedProvider={ProviderDriverKind.make("codex")}
+        activeUsageLimits={atRiskUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("out ~1h45m");
+    expect(html).toContain("Early estimate: may run out in about 1h 45m");
   });
 });
