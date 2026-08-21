@@ -11,6 +11,37 @@ import {
 } from "@t3tools/mobile-markdown-text/markdown";
 
 describe("nativeMarkdownTextRuns", () => {
+  it("makes URLs wrapped in inline code clickable", () => {
+    const node: MarkdownNode = {
+      type: "paragraph",
+      children: [
+        { type: "code_inline", content: "https://files.schnau.dev/schnipsel-app/" },
+        { type: "text", content: " and " },
+        { type: "code_inline", content: "files.schnau.dev" },
+        { type: "text", content: " then " },
+        { type: "code_inline", content: "index.ts" },
+      ],
+    };
+
+    expect(nativeMarkdownTextRuns(node)).toEqual([
+      {
+        text: "https://files.schnau.dev/schnipsel-app/",
+        code: true,
+        href: "https://files.schnau.dev/schnipsel-app/",
+        externalHost: "files.schnau.dev",
+      },
+      { text: " and " },
+      {
+        text: "files.schnau.dev",
+        code: true,
+        href: "https://files.schnau.dev/",
+        externalHost: "files.schnau.dev",
+      },
+      { text: " then " },
+      { text: "index.ts", code: true },
+    ]);
+  });
+
   it("preserves inline emphasis and code styles", () => {
     const node: MarkdownNode = {
       type: "paragraph",
