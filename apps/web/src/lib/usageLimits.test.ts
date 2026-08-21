@@ -232,6 +232,36 @@ describe("usageLimits", () => {
 
     expect(displayed?.primary?.elapsedPercent).toBe(50);
     expect(displayed?.primary?.projectedPercentAtReset).toBe(120);
+    expect(displayed?.primary?.depletionForecast).toEqual({
+      kind: "beforeReset",
+      estimatedAtMs: new Date(2026, 2, 23, 14, 10).getTime(),
+      range: null,
+    });
+  });
+
+  it("carries depletion estimates across discounted sleep hours", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity("activity-1", "account.rate-limits.updated", {
+        rateLimitReachedType: null,
+        primary: {
+          usedPercent: 40,
+          resetsAt: localIso(2026, 2, 23, 8),
+          windowDurationMins: 480,
+        },
+      }),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      new Date(2026, 2, 23, 1).getTime(),
+    )?.primary;
+
+    expect(displayed?.depletionForecast.kind).toBe("beforeReset");
+    if (displayed?.depletionForecast.kind === "beforeReset") {
+      const estimatedAt = new Date(displayed.depletionForecast.estimatedAtMs);
+      expect(estimatedAt.getHours()).toBe(7);
+      expect(estimatedAt.getMinutes()).toBe(38);
+    }
   });
 
   it("discounts sleep hours in 5h projections", () => {
@@ -295,6 +325,7 @@ describe("usageLimits", () => {
     );
 
     expect(displayed?.primary?.status).toBe("reached");
+    expect(displayed?.primary?.depletionForecast).toEqual({ kind: "reached" });
     expect(displayed?.compactWindow).toBe("primary");
   });
 
@@ -407,6 +438,64 @@ describe("usageLimits", () => {
     expect(displayed?.projectionBasis).toBe("history");
     expect(displayed?.historicalWindowCount).toBe(3);
     expect(displayed?.projectedPercentRange).toEqual({ low: 83, high: 99 });
+    expect(displayed?.depletionForecast).toEqual({ kind: "untilReset" });
+  });
+
+  it("turns a historical forecast range into a depletion time range", () => {
+    const durationMs = 5 * 60 * 60 * 1000;
+    const currentResetMs = new Date(2026, 2, 23, 15).getTime();
+    const nowMs = new Date(2026, 2, 23, 12, 30).getTime();
+    const history = [120, 130, 140].map((finalUsed, index) => {
+      const resetMs = currentResetMs - (index + 1) * durationMs;
+      return {
+        resetsAt: new Date(resetMs).toISOString(),
+        windowDurationMins: 300,
+        points: [
+          {
+            observedAt: new Date(resetMs - durationMs / 2).toISOString(),
+            usedPercent: 60,
+          },
+          { observedAt: new Date(resetMs - 60 * 1000).toISOString(), usedPercent: finalUsed },
+        ],
+      };
+    });
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources([
+      {
+        provider: "codex",
+        usageHistory: history,
+        usageLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "pro",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: {
+              usedPercent: 60,
+              resetsAt: new Date(currentResetMs).toISOString(),
+              windowDurationMins: 300,
+            },
+            secondary: null,
+            updatedAt: new Date(nowMs).toISOString(),
+          },
+        ],
+      },
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
+
+    expect(displayed?.projectedPercentAtReset).toBe(130);
+    expect(displayed?.depletionForecast.kind).toBe("beforeReset");
+    if (displayed?.depletionForecast.kind === "beforeReset") {
+      expect(displayed.depletionForecast.estimatedAtMs).toBeCloseTo(
+        new Date(2026, 2, 23, 13, 55, 43).getTime(),
+        -3,
+      );
+      expect(displayed.depletionForecast.range).toEqual({
+        earliestAtMs: new Date(2026, 2, 23, 13, 45).getTime(),
+        latestAtMs: new Date(2026, 2, 23, 14, 10).getTime(),
+      });
+    }
   });
 
   it("regularizes an opening-window pace when no history exists", () => {

@@ -112,30 +112,94 @@ function windowStatusLabel(status: UsageLimitWindowStatus): string {
   }
 }
 
-function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot): {
-  readonly resetLabel: string | null;
-  readonly paceLabel: string | null;
+function formatDurationParts(totalMinutes: number): string {
+  const days = Math.floor(totalMinutes / (24 * 60));
+  const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+  const minutes = totalMinutes % 60;
+  return [
+    days > 0 ? `${days}d` : null,
+    hours > 0 ? `${hours}h` : null,
+    minutes > 0 ? `${minutes}m` : null,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" ");
+}
+
+function formatApproximateDurationUntil(
+  targetMs: number,
+  nowMs: number,
+): {
+  readonly compact: string;
+  readonly long: string;
 } {
+  const deltaMs = Math.max(0, targetMs - nowMs);
+  const hours = deltaMs / (60 * 60 * 1000);
+
+  if (hours < 6) {
+    const roundedMinutes = Math.max(15, Math.round(deltaMs / (15 * 60 * 1000)) * 15);
+    const label = formatDurationParts(roundedMinutes);
+    return { compact: label.replaceAll(" ", ""), long: label };
+  }
+
+  if (hours < 48) {
+    const roundedHours = Math.max(1, Math.round(hours));
+    const label = formatDurationParts(roundedHours * 60);
+    return { compact: label.replaceAll(" ", ""), long: label };
+  }
+
+  const roundedDays = Math.max(1, Math.round(hours / 24));
+  return {
+    compact: `${roundedDays}d`,
+    long: `${roundedDays} ${roundedDays === 1 ? "day" : "days"}`,
+  };
+}
+
+function formatEstimatedMoment(targetMs: number, nowMs: number): string {
+  const deltaMs = targetMs - nowMs;
+  if (deltaMs > 48 * 60 * 60 * 1000) {
+    const hour = new Date(targetMs).getHours();
+    const daypart = hour < 12 ? "morning" : hour < 18 ? "afternoon" : "evening";
+    const date = new Intl.DateTimeFormat(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    }).format(new Date(targetMs));
+    return `${date} ${daypart}`;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(targetMs));
+}
+
+function buildInlineWindowStats(
+  windowSnapshot: DerivedUsageLimitWindowSnapshot,
+  nowMs: number,
+): { readonly trailingLabel: string | null } {
   const resetLabel = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
-  const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
 
   if (windowSnapshot.status === "reached") {
     return {
-      resetLabel,
-      paceLabel: "hit",
+      trailingLabel: resetLabel ? `resets ${resetLabel}` : "hit",
     };
   }
 
-  if (windowSnapshot.status === "unknown") {
+  if (windowSnapshot.depletionForecast.kind === "beforeReset") {
+    const duration = formatApproximateDurationUntil(
+      windowSnapshot.depletionForecast.estimatedAtMs,
+      nowMs,
+    );
     return {
-      resetLabel,
-      paceLabel: projectedUsage ? `${projectedUsage} pace` : null,
+      trailingLabel: `out ~${duration.compact}`,
     };
   }
 
   return {
-    resetLabel,
-    paceLabel: projectedUsage ? `${projectedUsage} pace` : null,
+    trailingLabel: resetLabel ?? windowStatusLabel(windowSnapshot.status),
   };
 }
 
@@ -164,13 +228,51 @@ function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): strin
 
 function formatProjectionBasis(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
   if (windowSnapshot.projectionBasis !== "history" || windowSnapshot.historicalWindowCount <= 0) {
-    return windowSnapshot.projectionBasis === "regularized" ? "Early estimate" : null;
+    return null;
   }
   const suffix = windowSnapshot.historicalWindowCount === 1 ? "window" : "windows";
   return `Based on ${windowSnapshot.historicalWindowCount} recent ${suffix}`;
 }
 
-function formatProjectionRange(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
+function formatDepletionLine(
+  windowSnapshot: DerivedUsageLimitWindowSnapshot,
+  nowMs: number,
+): string | null {
+  const forecast = windowSnapshot.depletionForecast;
+  if (forecast.kind === "reached") {
+    const resetLabel = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
+    return resetLabel ? `Available again in ${resetLabel}.` : null;
+  }
+  if (forecast.kind === "untilReset") {
+    return windowSnapshot.projectionBasis === "regularized"
+      ? "Early estimate: expected to last until reset."
+      : "Expected to last until reset.";
+  }
+  if (forecast.kind !== "beforeReset") {
+    return null;
+  }
+
+  const duration = formatApproximateDurationUntil(forecast.estimatedAtMs, nowMs);
+  const moment = formatEstimatedMoment(forecast.estimatedAtMs, nowMs);
+  return windowSnapshot.projectionBasis === "regularized"
+    ? `Early estimate: may run out in about ${duration.long}, around ${moment}.`
+    : `Likely out in about ${duration.long}, around ${moment}.`;
+}
+
+function formatProjectionRange(
+  windowSnapshot: DerivedUsageLimitWindowSnapshot,
+  nowMs: number,
+): string | null {
+  const depletion = windowSnapshot.depletionForecast;
+  if (depletion.kind === "beforeReset" && depletion.range) {
+    const earliest = formatApproximateDurationUntil(depletion.range.earliestAtMs, nowMs);
+    if (depletion.range.latestAtMs === null) {
+      return `Could run out as early as ${earliest.long}, but may last until reset.`;
+    }
+    const latest = formatApproximateDurationUntil(depletion.range.latestAtMs, nowMs);
+    return `Typical timing: ${earliest.long} to ${latest.long}.`;
+  }
+
   const range = windowSnapshot.projectedPercentRange;
   return range ? `Typical range: ${formatPercent(range.low)}–${formatPercent(range.high)}` : null;
 }
@@ -232,8 +334,9 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
               label,
               `${formatPercent(readInlineProjectedPercent(snapshot))} forecast`,
               `${formatPercent(snapshot.usedPercent)} used`,
+              formatDepletionLine(snapshot, nowMs),
               formatProjectionBasis(snapshot),
-              formatProjectionRange(snapshot),
+              formatProjectionRange(snapshot, nowMs),
             ]
               .filter((part) => part && part.length > 0)
               .join(" ");
@@ -258,7 +361,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
           >
             <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
               {visibleWindows.map(({ key, label, snapshot }) => {
-                const stats = buildInlineWindowStats(snapshot);
+                const stats = buildInlineWindowStats(snapshot, nowMs);
                 const projectedPercent = readInlineProjectedPercent(snapshot);
                 const normalizedPercentage = Math.max(0, Math.min(100, projectedPercent));
                 const severityColor = projectedSeverityColor(snapshot);
@@ -289,7 +392,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                       {formatPercent(projectedPercent)}
                     </span>
                     <span className="min-w-0 truncate text-muted-foreground">
-                      {stats.resetLabel ?? windowStatusLabel(snapshot.status)}
+                      {stats.trailingLabel}
                     </span>
                   </span>
                 );
@@ -318,7 +421,8 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             const label = buildWindowLabel(windowSnapshot.durationLabel, index === 0 ? "5h" : "1w");
             const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
             const projectionBasis = formatProjectionBasis(windowSnapshot);
-            const projectionRange = formatProjectionRange(windowSnapshot);
+            const depletionLine = formatDepletionLine(windowSnapshot, nowMs);
+            const projectionRange = formatProjectionRange(windowSnapshot, nowMs);
             const assessment =
               windowSnapshot.status === "reached"
                 ? "Limit reached."
@@ -345,6 +449,9 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                   {formatResetLine(windowSnapshot)}
                 </div>
                 <div className="text-xs text-muted-foreground">{assessment}</div>
+                {depletionLine ? (
+                  <div className="text-xs text-muted-foreground">{depletionLine}</div>
+                ) : null}
                 {projectionBasis ? (
                   <div className="text-xs text-muted-foreground">{projectionBasis}</div>
                 ) : null}

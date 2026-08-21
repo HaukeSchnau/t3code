@@ -110,6 +110,19 @@ export interface UsageLimitsActivitySource {
 
 export type UsageLimitWindowStatus = "ok" | "atRisk" | "reached" | "unknown";
 
+export type UsageDepletionForecast =
+  | { readonly kind: "reached" }
+  | {
+      readonly kind: "beforeReset";
+      readonly estimatedAtMs: number;
+      readonly range: {
+        readonly earliestAtMs: number;
+        readonly latestAtMs: number | null;
+      } | null;
+    }
+  | { readonly kind: "untilReset" }
+  | { readonly kind: "unknown" };
+
 export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapshot {
   durationLabel: string | null;
   resetRelativeLabel: string | null;
@@ -121,6 +134,7 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
   projectedPercentRange: { readonly low: number; readonly high: number } | null;
   projectionBasis: "history" | "regularized" | null;
   historicalWindowCount: number;
+  depletionForecast: UsageDepletionForecast;
   status: UsageLimitWindowStatus;
 }
 
@@ -307,6 +321,42 @@ function deriveExpectedUsageDurationMs(
   return expectedUsageMs;
 }
 
+function deriveExpectedUsageTimestampMs(
+  startMs: number,
+  endMs: number,
+  windowDurationMins: number,
+  targetExpectedUsageMs: number,
+): number | null {
+  if (
+    !Number.isFinite(startMs) ||
+    !Number.isFinite(endMs) ||
+    endMs <= startMs ||
+    !Number.isFinite(targetExpectedUsageMs) ||
+    targetExpectedUsageMs < 0
+  ) {
+    return null;
+  }
+
+  let cursorMs = startMs;
+  let remainingExpectedUsageMs = targetExpectedUsageMs;
+
+  while (cursorMs < endMs) {
+    const cursorDate = new Date(cursorMs);
+    const nextBoundaryMs = Math.min(nextLocalBoundaryMs(cursorDate), endMs);
+    const weight = deriveUsageWeight(cursorDate, windowDurationMins);
+    const segmentExpectedUsageMs = (nextBoundaryMs - cursorMs) * weight;
+
+    if (weight > 0 && remainingExpectedUsageMs <= segmentExpectedUsageMs) {
+      return cursorMs + remainingExpectedUsageMs / weight;
+    }
+
+    remainingExpectedUsageMs -= segmentExpectedUsageMs;
+    cursorMs = nextBoundaryMs;
+  }
+
+  return remainingExpectedUsageMs <= 1 ? endMs : null;
+}
+
 function deriveExpectedUsageElapsedPercent(
   resetMs: number,
   durationMs: number,
@@ -480,6 +530,99 @@ function deriveWindowStatus(input: {
   return input.projectedPercentAtReset >= 100 ? "atRisk" : "ok";
 }
 
+function deriveEstimatedDepletionAtMs(input: {
+  readonly window: UsageLimitWindowSnapshot;
+  readonly projectedPercentAtReset: number;
+  readonly nowMs: number;
+}): number | null {
+  const resetMs = parseTimestampMs(input.window.resetsAt);
+  const durationMins = input.window.windowDurationMins;
+  if (
+    resetMs === null ||
+    !durationMins ||
+    durationMins <= 0 ||
+    input.window.usedPercent >= 100 ||
+    input.projectedPercentAtReset <= 100
+  ) {
+    return null;
+  }
+
+  const durationMs = durationMins * 60 * 1000;
+  const windowStartMs = resetMs - durationMs;
+  const effectiveNowMs = Math.min(Math.max(input.nowMs, windowStartMs), resetMs);
+  const expectedRemainingMs = deriveExpectedUsageDurationMs(effectiveNowMs, resetMs, durationMins);
+  const projectedRemainingPercent = input.projectedPercentAtReset - input.window.usedPercent;
+  if (expectedRemainingMs <= 0 || projectedRemainingPercent <= 0) {
+    return null;
+  }
+
+  const fractionUntilDepletion = (100 - input.window.usedPercent) / projectedRemainingPercent;
+  if (fractionUntilDepletion < 0 || fractionUntilDepletion >= 1) {
+    return null;
+  }
+
+  return deriveExpectedUsageTimestampMs(
+    effectiveNowMs,
+    resetMs,
+    durationMins,
+    expectedRemainingMs * fractionUntilDepletion,
+  );
+}
+
+function deriveDepletionForecast(input: {
+  readonly window: UsageLimitWindowSnapshot;
+  readonly projectedPercentAtReset: number | null;
+  readonly projectedPercentRange: { readonly low: number; readonly high: number } | null;
+  readonly status: UsageLimitWindowStatus;
+  readonly nowMs: number;
+}): UsageDepletionForecast {
+  if (input.status === "reached") {
+    return { kind: "reached" };
+  }
+  if (input.status === "unknown" || input.projectedPercentAtReset === null) {
+    return { kind: "unknown" };
+  }
+  if (input.projectedPercentAtReset <= 100) {
+    return { kind: "untilReset" };
+  }
+
+  const estimatedAtMs = deriveEstimatedDepletionAtMs({
+    window: input.window,
+    projectedPercentAtReset: input.projectedPercentAtReset,
+    nowMs: input.nowMs,
+  });
+  if (estimatedAtMs === null) {
+    return { kind: "unknown" };
+  }
+
+  const earliestAtMs = input.projectedPercentRange
+    ? deriveEstimatedDepletionAtMs({
+        window: input.window,
+        projectedPercentAtReset: input.projectedPercentRange.high,
+        nowMs: input.nowMs,
+      })
+    : null;
+  const latestAtMs = input.projectedPercentRange
+    ? deriveEstimatedDepletionAtMs({
+        window: input.window,
+        projectedPercentAtReset: input.projectedPercentRange.low,
+        nowMs: input.nowMs,
+      })
+    : null;
+
+  return {
+    kind: "beforeReset",
+    estimatedAtMs,
+    range:
+      earliestAtMs === null
+        ? null
+        : {
+            earliestAtMs,
+            latestAtMs,
+          },
+  };
+}
+
 function deriveWindowDisplay(
   window: UsageLimitWindowSnapshot | null,
   rateLimitReachedType: string | null,
@@ -498,6 +641,11 @@ function deriveWindowDisplay(
     nowMs,
     regularizedProjection,
   });
+  const status = deriveWindowStatus({
+    usedPercent: window.usedPercent,
+    projectedPercentAtReset: projection.projectedPercentAtReset,
+    rateLimitReachedType,
+  });
 
   return {
     ...window,
@@ -508,11 +656,14 @@ function deriveWindowDisplay(
     resetAbsoluteLabel: formatAbsoluteResetLabel(window.resetsAt),
     elapsedPercent,
     ...projection,
-    status: deriveWindowStatus({
-      usedPercent: window.usedPercent,
+    depletionForecast: deriveDepletionForecast({
+      window,
       projectedPercentAtReset: projection.projectedPercentAtReset,
-      rateLimitReachedType,
+      projectedPercentRange: projection.projectedPercentRange,
+      status,
+      nowMs,
     }),
+    status,
   };
 }
 

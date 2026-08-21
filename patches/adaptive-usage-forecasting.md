@@ -18,6 +18,9 @@ extrapolation is unstable, and adapt it to the user's changing usage over time.
   window still affects the forecast immediately and joins history only after its reset passes.
 - The compact meter remains forecast-first. Its details identify early estimates, state how many
   recent windows informed an adaptive estimate, and show the observed range after three windows.
+- Forecasts above 100% also derive an exhaustion time from the same projected usage. The estimate
+  follows the existing sleep and weekend weighting, and historical percentage ranges become timing
+  ranges. This calculation stays in the web client and adds no persistence or contract state.
 
 ## Surfaces
 
