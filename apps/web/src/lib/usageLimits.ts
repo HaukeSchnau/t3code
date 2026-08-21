@@ -41,7 +41,8 @@ function hasRateLimitSnapshotFields(value: Record<string, unknown>): boolean {
     value.limitName !== undefined ||
     value.planType !== undefined ||
     value.rateLimitReachedType !== undefined ||
-    value.credits !== undefined
+    value.credits !== undefined ||
+    value.windows !== undefined
   );
 }
 
@@ -80,6 +81,8 @@ function normalizeResetAt(value: unknown): string | null {
 }
 
 export interface UsageLimitWindowSnapshot {
+  key?: string | undefined;
+  label?: string | undefined;
   usedPercent: number;
   resetsAt: string | null;
   windowDurationMins: number | null;
@@ -97,12 +100,14 @@ export interface UsageLimitsSnapshot {
   } | null;
   primary: UsageLimitWindowSnapshot | null;
   secondary: UsageLimitWindowSnapshot | null;
+  windows?: ReadonlyArray<UsageLimitWindowSnapshot> | undefined;
   history?: ReadonlyArray<OrchestrationUsageLimitHistoryWindow> | undefined;
   updatedAt: string;
 }
 
 export interface UsageLimitsActivitySource {
   provider: string | null;
+  providerInstanceId?: string | null | undefined;
   usageLimits?: ReadonlyArray<UsageLimitsSnapshot> | null | undefined;
   usageHistory?: ReadonlyArray<OrchestrationUsageLimitHistoryWindow> | null | undefined;
   activities?: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
@@ -140,10 +145,11 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
 
 export interface DerivedUsageLimitsSnapshot extends Omit<
   UsageLimitsSnapshot,
-  "primary" | "secondary"
+  "primary" | "secondary" | "windows"
 > {
   primary: DerivedUsageLimitWindowSnapshot | null;
   secondary: DerivedUsageLimitWindowSnapshot | null;
+  windows: ReadonlyArray<DerivedUsageLimitWindowSnapshot>;
   compactWindow: "primary" | "secondary" | null;
   compactWindowStatus: UsageLimitWindowStatus | null;
 }
@@ -166,7 +172,11 @@ function normalizeWindow(value: unknown): UsageLimitWindowSnapshot | null {
     return null;
   }
 
+  const key = asString(record?.key);
+  const label = asString(record?.label);
   return {
+    ...(key ? { key } : {}),
+    ...(label ? { label } : {}),
     usedPercent,
     resetsAt: normalizeResetAt(record?.resetsAt),
     windowDurationMins: asFiniteNumber(record?.windowDurationMins),
@@ -458,6 +468,7 @@ function deriveHistoricalProjection(input: {
   const completed = input.history
     .filter(
       (window) =>
+        (input.window.key === undefined || window.windowKey === input.window.key) &&
         window.windowDurationMins === durationMins &&
         Date.parse(window.resetsAt) <= windowStartMs + RESET_WINDOW_TOLERANCE_MS &&
         window.points.length > 0,
@@ -680,7 +691,13 @@ function activityToUsageLimitsSnapshot(
     normalizeWindow(payload?.secondary),
     normalizeIndividualLimitWindow(payload?.individualLimit),
   );
-  if (primary === null && secondary === null) {
+  const windows = Array.isArray(payload?.windows)
+    ? payload.windows.flatMap((window) => {
+        const normalized = normalizeWindow(window);
+        return normalized ? [normalized] : [];
+      })
+    : [];
+  if (primary === null && secondary === null && windows.length === 0) {
     return null;
   }
 
@@ -703,6 +720,7 @@ function activityToUsageLimitsSnapshot(
         : null,
     primary,
     secondary,
+    ...(windows.length > 0 ? { windows } : {}),
     updatedAt: activity.createdAt,
   };
 }
@@ -831,6 +849,7 @@ function aggregateUsageLimitsSnapshots(
 
   const primaryCandidates: Array<UsageLimitWindowCandidate> = [];
   const secondaryCandidates: Array<UsageLimitWindowCandidate> = [];
+  const windowCandidates = new Map<string, Array<UsageLimitWindowCandidate>>();
 
   for (const candidate of candidates) {
     const primary = makeWindowCandidate(candidate, candidate.snapshot.primary);
@@ -842,11 +861,24 @@ function aggregateUsageLimitsSnapshots(
     if (secondary) {
       secondaryCandidates.push(secondary);
     }
+
+    for (const [index, window] of (candidate.snapshot.windows ?? []).entries()) {
+      const normalized = makeWindowCandidate(candidate, window);
+      if (!normalized) continue;
+      const key = window.key ?? `legacy-window-${index}`;
+      const entries = windowCandidates.get(key) ?? [];
+      entries.push(normalized);
+      windowCandidates.set(key, entries);
+    }
   }
 
   const primary = selectBestWindowCandidate(primaryCandidates);
   const secondary = selectBestWindowCandidate(secondaryCandidates);
-  if (!primary && !secondary) {
+  const windows = Array.from(windowCandidates.values()).flatMap((entries) => {
+    const selected = selectBestWindowCandidate(entries);
+    return selected ? [selected] : [];
+  });
+  if (!primary && !secondary && windows.length === 0) {
     return null;
   }
 
@@ -854,12 +886,14 @@ function aggregateUsageLimitsSnapshots(
     ...metadataCandidate.snapshot,
     primary: primary?.window ?? null,
     secondary: secondary?.window ?? null,
+    ...(windows.length > 0 ? { windows: windows.map((entry) => entry.window) } : {}),
     history,
     updatedAt: new Date(
       Math.max(
         metadataCandidate.updatedAtMs,
         primary?.updatedAtMs ?? Number.NEGATIVE_INFINITY,
         secondary?.updatedAtMs ?? Number.NEGATIVE_INFINITY,
+        ...windows.map((entry) => entry.updatedAtMs),
       ),
     ).toISOString(),
   };
@@ -874,12 +908,16 @@ export function deriveLatestUsageLimitsSnapshot(
 export function deriveLatestUsageLimitsSnapshotForSources(
   sources: ReadonlyArray<UsageLimitsActivitySource>,
   provider: string | null | undefined = null,
+  providerInstanceId: string | null | undefined = null,
 ): UsageLimitsSnapshot | null {
   const candidates: Array<UsageLimitsSnapshotCandidate> = [];
   const history: Array<OrchestrationUsageLimitHistoryWindow> = [];
 
   for (const source of sources) {
-    if (provider && source.provider !== provider) {
+    if (
+      (provider && source.provider !== provider) ||
+      (providerInstanceId && source.providerInstanceId !== providerInstanceId)
+    ) {
       continue;
     }
 
@@ -914,6 +952,10 @@ export function deriveDisplayedUsageLimitsSnapshot(
     history,
     nowMs,
   );
+  const windows = (snapshot.windows ?? []).flatMap((window) => {
+    const derived = deriveWindowDisplay(window, snapshot.rateLimitReachedType, history, nowMs);
+    return derived ? [derived] : [];
+  });
   const compactWindow = primary ? "primary" : secondary ? "secondary" : null;
   const compactWindowStatus =
     compactWindow === "primary"
@@ -930,6 +972,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
     ...snapshot,
     primary,
     secondary,
+    windows,
     compactWindow,
     compactWindowStatus,
   };

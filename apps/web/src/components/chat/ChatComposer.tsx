@@ -232,7 +232,11 @@ import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow";
-import { deriveLatestUsageLimitsSnapshot } from "../../lib/usageLimits";
+import {
+  deriveLatestUsageLimitsSnapshotForSources,
+  type UsageLimitsActivitySource,
+  type UsageLimitsSnapshot,
+} from "../../lib/usageLimits";
 import { formatProviderSkillDisplayName } from "@t3tools/client-runtime/providerSkills";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -408,9 +412,12 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 export function ComposerUsageLimitsMeterSlot(props: {
   compact: boolean;
   selectedProvider: ProviderDriverKind;
-  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
+  activeUsageLimits: UsageLimitsSnapshot | null;
 }) {
-  if (props.selectedProvider !== ProviderDriverKind.make("codex") || !props.activeUsageLimits) {
+  const supportsUsageLimits =
+    props.selectedProvider === ProviderDriverKind.make("codex") ||
+    props.selectedProvider === ProviderDriverKind.make("claudeAgent");
+  if (!supportsUsageLimits || !props.activeUsageLimits) {
     return null;
   }
 
@@ -421,7 +428,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
   compact: boolean;
   selectedProvider: ProviderDriverKind;
   activeContextWindow: ReturnType<typeof deriveLatestContextWindowSnapshot>;
-  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
+  activeUsageLimits: UsageLimitsSnapshot | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -601,7 +608,7 @@ export interface ChatComposerProps {
 
   // Context window
   activeThreadActivities: Thread["activities"] | undefined;
-  activeUsageLimits: ReturnType<typeof deriveLatestUsageLimitsSnapshot>;
+  usageLimitsSources: ReadonlyArray<UsageLimitsActivitySource>;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -699,7 +706,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeThreadActivities,
-    activeUsageLimits,
+    usageLimitsSources,
     resolvedTheme,
     settings,
     keybindings,
@@ -898,6 +905,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabled.
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
+  const activeUsageLimits = useMemo(
+    () =>
+      deriveLatestUsageLimitsSnapshotForSources(
+        usageLimitsSources,
+        selectedProvider,
+        selectedInstanceId,
+      ),
+    [selectedInstanceId, selectedProvider, usageLimitsSources],
+  );
 
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,

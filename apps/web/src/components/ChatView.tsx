@@ -251,7 +251,6 @@ import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
-import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
 import { PanelLayoutControls, RightPanelMaximizeControl } from "./chat/PanelLayoutControls";
@@ -2308,16 +2307,14 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const selectedProvider: ProviderDriverKind = lockedProvider ?? unlockedSelectedProvider;
   const providerUsageLimits = useProviderUsageLimits(activeThread?.environmentId ?? null);
-  const activeUsageLimits = useMemo(
+  const usageLimitsSources = useMemo(
     () =>
-      deriveLatestUsageLimitsSnapshotForSources(
-        providerUsageLimits.map((entry) => ({
-          provider: entry.provider,
-          usageLimits: [entry.usageLimits],
-          usageHistory: entry.history,
-        })),
-        ProviderDriverKind.make("codex"),
-      ),
+      providerUsageLimits.map((entry) => ({
+        provider: entry.provider,
+        providerInstanceId: entry.providerInstanceId,
+        usageLimits: [entry.usageLimits],
+        usageHistory: entry.history,
+      })),
     [providerUsageLimits],
   );
   const phase = derivePhase(activeThread?.session ?? null);
@@ -6728,7 +6725,7 @@ function ChatViewContent(props: ChatViewProps) {
                             }
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeThreadActivities={activeThread?.activities}
-                            activeUsageLimits={activeUsageLimits}
+                            usageLimitsSources={usageLimitsSources}
                             resolvedTheme={resolvedTheme}
                             settings={settings}
                             keybindings={keybindings}

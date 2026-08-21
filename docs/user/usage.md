@@ -9,17 +9,22 @@ Use **Past 24h** for an hourly chart covering the exact rolling 24-hour period. 
 **30 days**, and **90 days** ranges use daily resolution. Cost and token toggles update both the
 headline and chart, and refreshing rescans every connected environment.
 
-## Understand the Codex limit forecast
+## Understand limit forecasts
 
-The Codex usage meter beside the composer forecasts how much of each limit window you are likely to
-use by its reset. It learns from the changing percentage during recent completed windows, so shifts
-in your working pattern gradually change future forecasts. The current window affects the estimate
-immediately.
+The usage meter beside the composer supports Codex and Claude. It forecasts how much of each limit
+window you are likely to use by its reset. It learns from the changing percentage during recent
+completed windows, so shifts in your working pattern gradually change future forecasts. The current
+window affects the estimate immediately.
+
+For Claude, open the meter to see every limit Claude reports, including the current session, the
+weekly all-model limit, and model-specific weekly limits. Claude does not always return a plan name,
+so T3 Code shows the limit data without guessing one. The meter appears only when the connected
+Claude account reports subscription rate limits; API-billed setups may not provide them.
 
 Before enough completed history exists, the meter shows an early estimate that keeps the opening
 hours of a weekly window from dominating the entire forecast. After three completed windows, its
 details show how many recent windows informed the estimate and the range those windows produced.
-The server retains only a compact history of the eight newest windows for each limit duration.
+The server retains only a compact history of the eight newest windows for each distinct limit.
 
 When the forecast exceeds 100%, the compact meter estimates how long the remaining usage will last.
 Open the meter for the approximate date and time. If recent windows disagree, the details show a

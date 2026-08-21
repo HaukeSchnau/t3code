@@ -17,7 +17,6 @@ import type {
 } from "@t3tools/client-runtime/state/shell";
 import {
   type ApprovalRequestId,
-  ProviderDriverKind,
   type ProviderInstanceId,
   type ProviderApprovalDecision,
   type ScopedThreadRef,
@@ -53,7 +52,6 @@ import { useTheme } from "../hooks/useTheme";
 import { cn, newCommandId, newMessageId } from "../lib/utils";
 import { type ElementContextDraft } from "../lib/elementContext";
 import { type TerminalContextDraft } from "../lib/terminalContext";
-import { deriveLatestUsageLimitsSnapshotForSources } from "../lib/usageLimits";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
   buildPendingUserInputAnswers,
@@ -730,16 +728,14 @@ function MonitorThreadActions({
     [projects, thread],
   );
   const providerUsageLimits = useProviderUsageLimits(threadRef.environmentId);
-  const activeUsageLimits = useMemo(
+  const usageLimitsSources = useMemo(
     () =>
-      deriveLatestUsageLimitsSnapshotForSources(
-        providerUsageLimits.map((entry) => ({
-          provider: entry.provider,
-          usageLimits: [entry.usageLimits],
-          usageHistory: entry.history,
-        })),
-        ProviderDriverKind.make("codex"),
-      ),
+      providerUsageLimits.map((entry) => ({
+        provider: entry.provider,
+        providerInstanceId: entry.providerInstanceId,
+        usageLimits: [entry.usageLimits],
+        usageHistory: entry.history,
+      })),
     [providerUsageLimits],
   );
   const composerRuntimeMode = useComposerDraftStore(
@@ -1139,7 +1135,7 @@ function MonitorThreadActions({
                 activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                 activeThreadModelSelection={thread.modelSelection}
                 activeThreadActivities={thread.activities}
-                activeUsageLimits={activeUsageLimits}
+                usageLimitsSources={usageLimitsSources}
                 resolvedTheme={resolvedTheme}
                 settings={settings}
                 keybindings={keybindings}

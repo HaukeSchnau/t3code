@@ -37,6 +37,8 @@ function normalizeResetTimestamp(value: unknown): string | null {
 }
 
 interface UsageLimitWindow {
+  readonly key?: string;
+  readonly label?: string;
   readonly usedPercent: number;
   readonly resetsAt: string | null;
   readonly windowDurationMins: number | null;
@@ -46,7 +48,11 @@ function normalizeRateLimitWindow(value: unknown): UsageLimitWindow | null {
   const record = asRecord(value);
   const usedPercent = asFiniteNumber(record?.usedPercent);
   if (usedPercent === null) return null;
+  const key = asString(record?.key);
+  const label = asString(record?.label);
   return {
+    ...(key ? { key } : {}),
+    ...(label ? { label } : {}),
     usedPercent,
     resetsAt: normalizeResetTimestamp(record?.resetsAt),
     windowDurationMins: asFiniteNumber(record?.windowDurationMins),
@@ -84,7 +90,8 @@ function hasSnapshotFields(value: Record<string, unknown>): boolean {
     value.limitName !== undefined ||
     value.planType !== undefined ||
     value.rateLimitReachedType !== undefined ||
-    value.credits !== undefined
+    value.credits !== undefined ||
+    value.windows !== undefined
   );
 }
 
@@ -117,9 +124,16 @@ export function usageLimitsFromRuntimeEvent(event: ProviderRuntimeEvent) {
     normalizeRateLimitWindow(rateLimits.secondary),
     normalizeSpendControlLimitWindow(rateLimits.individualLimit),
   );
+  const windows = Array.isArray(rateLimits.windows)
+    ? rateLimits.windows.flatMap((window) => {
+        const normalized = normalizeRateLimitWindow(window);
+        return normalized ? [normalized] : [];
+      })
+    : [];
   if (
     primary === null &&
     secondary === null &&
+    windows.length === 0 &&
     asString(rateLimits.limitId) === null &&
     asString(rateLimits.limitName) === null &&
     asString(rateLimits.planType) === null &&
@@ -137,6 +151,7 @@ export function usageLimitsFromRuntimeEvent(event: ProviderRuntimeEvent) {
     credits,
     primary,
     secondary,
+    ...(windows.length > 0 ? { windows } : {}),
     updatedAt: event.createdAt,
   };
 }

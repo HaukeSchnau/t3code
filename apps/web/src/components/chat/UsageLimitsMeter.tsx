@@ -223,6 +223,9 @@ function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): strin
   if (absolute) {
     return `Resets at ${absolute}`;
   }
+  if (windowSnapshot.usedPercent === 0) {
+    return "Not used yet";
+  }
   return "Reset time unavailable";
 }
 
@@ -307,7 +310,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
   const secondaryLabel = usage.secondary
     ? formatWindowBadgeLabel(usage.secondary.durationLabel, "1w")
     : null;
-  const visibleWindows = [
+  const compactWindows = [
     usage.primary
       ? {
           key: "primary",
@@ -326,9 +329,11 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
     (entry): entry is { key: string; label: string; snapshot: DerivedUsageLimitWindowSnapshot } =>
       entry !== null,
   );
+  const detailWindows =
+    usage.windows.length > 0 ? usage.windows : compactWindows.map((entry) => entry.snapshot);
   const inlineAriaLabel =
-    visibleWindows.length > 0
-      ? `${usage.limitName ?? "Codex usage"}. ${visibleWindows
+    compactWindows.length > 0
+      ? `${usage.limitName ?? "Usage limits"}. ${compactWindows
           .map(({ label, snapshot }) => {
             return [
               label,
@@ -342,7 +347,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
               .join(" ");
           })
           .join(". ")}`
-      : `${usage.limitName ?? "Codex usage"} ${formatPercent(compactWindow.usedPercent)} used`;
+      : `${usage.limitName ?? "Usage limits"} ${formatPercent(compactWindow.usedPercent)} used`;
 
   return (
     <Popover>
@@ -360,7 +365,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             aria-label={inlineAriaLabel}
           >
             <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
-              {visibleWindows.map(({ key, label, snapshot }) => {
+              {compactWindows.map(({ key, label, snapshot }) => {
                 const stats = buildInlineWindowStats(snapshot, nowMs);
                 const projectedPercent = readInlineProjectedPercent(snapshot);
                 const normalizedPercentage = Math.max(0, Math.min(100, projectedPercent));
@@ -405,7 +410,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
         <div className="space-y-2 leading-tight">
           <div className="space-y-1">
             <div className="text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
-              {usage.limitName ?? "Codex usage"}
+              {usage.limitName ?? "Usage limits"}
             </div>
             {planLabel ? <div className="text-xs text-foreground">{planLabel}</div> : null}
             {creditsLine ? (
@@ -413,12 +418,15 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             ) : null}
           </div>
 
-          {[usage.primary, usage.secondary].map((windowSnapshot, index) => {
-            if (!windowSnapshot) {
-              return null;
-            }
-
-            const label = buildWindowLabel(windowSnapshot.durationLabel, index === 0 ? "5h" : "1w");
+          {detailWindows.map((windowSnapshot, index) => {
+            const durationFallback = windowSnapshot.windowDurationMins === 5 * 60 ? "5h" : "1w";
+            const durationLabel = formatWindowBadgeLabel(
+              windowSnapshot.durationLabel,
+              durationFallback,
+            );
+            const label = windowSnapshot.label
+              ? `${windowSnapshot.label} · ${durationLabel}`
+              : buildWindowLabel(windowSnapshot.durationLabel, durationFallback);
             const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
             const projectionBasis = formatProjectionBasis(windowSnapshot);
             const depletionLine = formatDepletionLine(windowSnapshot, nowMs);
@@ -434,7 +442,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
 
             return (
               <div
-                key={label}
+                key={windowSnapshot.key ?? `${label}-${index}`}
                 className="space-y-1.5 border-t border-border/50 pt-2 first:border-t-0 first:pt-0"
               >
                 <div className="flex items-center justify-between gap-3">

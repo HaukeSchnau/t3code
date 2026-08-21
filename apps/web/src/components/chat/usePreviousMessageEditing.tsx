@@ -45,7 +45,6 @@ import { type UserMessageEditingController } from "./MessagesTimeline";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
-import { deriveLatestUsageLimitsSnapshotForSources } from "../../lib/usageLimits";
 import { useEnvironment } from "../../state/environments";
 import { useProject, useProviderUsageLimits, useThread } from "../../state/entities";
 import { primaryServerKeybindingsAtom } from "../../state/server";
@@ -136,16 +135,14 @@ export function usePreviousMessageEditing({
   const providerStatuses = environment?.serverConfig?.providers ?? EMPTY_PROVIDER_STATUSES;
   const composerProviderStatuses = useMemo(() => [...providerStatuses], [providerStatuses]);
   const providerUsageLimits = useProviderUsageLimits(environmentId);
-  const activeUsageLimits = useMemo(
+  const usageLimitsSources = useMemo(
     () =>
-      deriveLatestUsageLimitsSnapshotForSources(
-        providerUsageLimits.map((entry) => ({
-          provider: entry.provider,
-          usageLimits: [entry.usageLimits],
-          usageHistory: entry.history,
-        })),
-        "codex",
-      ),
+      providerUsageLimits.map((entry) => ({
+        provider: entry.provider,
+        providerInstanceId: entry.providerInstanceId,
+        usageLimits: [entry.usageLimits],
+        usageHistory: entry.history,
+      })),
     [providerUsageLimits],
   );
   const { resolvedTheme } = useTheme();
@@ -725,7 +722,7 @@ export function usePreviousMessageEditing({
         activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
         activeThreadModelSelection={activeThread?.modelSelection}
         activeThreadActivities={activeThread?.activities}
-        activeUsageLimits={activeUsageLimits}
+        usageLimitsSources={usageLimitsSources}
         resolvedTheme={resolvedTheme}
         settings={settings}
         keybindings={keybindings}
@@ -764,7 +761,7 @@ export function usePreviousMessageEditing({
     activeProject?.defaultModelSelection,
     activeThread,
     activeThreadId,
-    activeUsageLimits,
+    usageLimitsSources,
     cancelEditUserMessage,
     composerProviderStatuses,
     draftId,

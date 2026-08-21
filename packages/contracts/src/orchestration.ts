@@ -483,6 +483,11 @@ export const OrchestrationThread = Schema.Struct({
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
 export const OrchestrationUsageLimitWindowSnapshot = Schema.Struct({
+  // Optional so older snapshots remain decodable. New provider-neutral
+  // snapshots use the key to keep same-duration limits and their histories
+  // separate, such as Claude's overall and model-scoped weekly limits.
+  key: Schema.optional(TrimmedNonEmptyString),
+  label: Schema.optional(TrimmedNonEmptyString),
   usedPercent: Schema.Number,
   resetsAt: Schema.NullOr(IsoDateTime),
   windowDurationMins: Schema.NullOr(Schema.Number),
@@ -504,6 +509,9 @@ export const OrchestrationUsageLimitsSnapshot = Schema.Struct({
   ),
   primary: Schema.NullOr(OrchestrationUsageLimitWindowSnapshot),
   secondary: Schema.NullOr(OrchestrationUsageLimitWindowSnapshot),
+  // New clients prefer the complete keyed list. Primary and secondary stay on
+  // the wire so old clients can render the two compact provider windows.
+  windows: Schema.optional(Schema.Array(OrchestrationUsageLimitWindowSnapshot)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationUsageLimitsSnapshot = typeof OrchestrationUsageLimitsSnapshot.Type;
@@ -515,6 +523,7 @@ export const OrchestrationUsageLimitObservation = Schema.Struct({
 export type OrchestrationUsageLimitObservation = typeof OrchestrationUsageLimitObservation.Type;
 
 export const OrchestrationUsageLimitHistoryWindow = Schema.Struct({
+  windowKey: Schema.optional(TrimmedNonEmptyString),
   resetsAt: IsoDateTime,
   windowDurationMins: Schema.Number,
   points: Schema.Array(OrchestrationUsageLimitObservation),
