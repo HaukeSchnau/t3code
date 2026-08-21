@@ -26,6 +26,7 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
+import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { projectEnvironmentConnectionFreshness } from "@t3tools/client-runtime/state/connection-freshness";
 import {
   changeRequestAutoSettles,
@@ -1212,6 +1213,17 @@ type LocalThreadErrorEntry = {
 
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
+}
+
+/**
+ * Drops the send-time anchored end space when the timeline returns to normal
+ * end-following. Leaving it installed keeps LegendList's own end-following
+ * disabled after manual navigation returns to the live edge.
+ */
+function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | null }>(
+  current: T,
+): T {
+  return current.messageId === null ? current : { ...current, messageId: null };
 }
 
 function ChatViewContent(props: ChatViewProps) {
@@ -3965,9 +3977,7 @@ function ChatViewContent(props: ChatViewProps) {
     activeTimelineAnchorIndexRef.current = null;
     showScrollDebouncer.current.cancel();
     setShowScrollToBottom(false);
-    setTimelineAnchor((current) =>
-      current.messageId === null ? current : { ...current, messageId: null },
-    );
+    setTimelineAnchor(releaseChatTimelineAnchor);
     requestAnimationFrame(() => {
       void legendListRef.current?.scrollToEnd?.({ animated });
     });
@@ -4142,6 +4152,7 @@ function ChatViewContent(props: ChatViewProps) {
       timelineScrollModeRef.current = "following-end";
       liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
       setTimelineLiveFollowEnabled(true);
+      setTimelineAnchor(releaseChatTimelineAnchor);
       showScrollDebouncer.current.cancel();
       setShowScrollToBottom(false);
     } else {
@@ -5480,6 +5491,20 @@ function ChatViewContent(props: ChatViewProps) {
             return;
           }
           const error = atomFailure ? squashAtomCommandFailure(atomFailure) : failure;
+          if (isLocalDraftThread && draftId && wasBootstrapThreadDeleted(error)) {
+            const failedDraftSession = getDraftSession(draftId);
+            if (failedDraftSession?.threadId === threadIdForSend) {
+              setLogicalProjectDraftThreadId(
+                failedDraftSession.logicalProjectKey,
+                scopeProjectRef(failedDraftSession.environmentId, failedDraftSession.projectId),
+                draftId,
+                {
+                  threadId: newThreadId(),
+                  createdAt: new Date().toISOString(),
+                },
+              );
+            }
+          }
           setThreadError(
             threadIdForSend,
             error instanceof Error ? error.message : "Failed to send message.",

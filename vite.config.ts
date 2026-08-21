@@ -9,7 +9,6 @@ export default defineConfig({
     ignorePatterns: [
       ".reference",
       ".repos/**",
-      ".plans",
       ".alchemy",
       "dist",
       "dist-electron",
