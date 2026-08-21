@@ -4332,14 +4332,6 @@ function ChatViewContent(props: ChatViewProps) {
   // partition (same shell, same capability gate, same PR auto-settle input)
   // so the banner and the sidebar row never disagree.
   const activeThreadShell = useThreadShell(isServerThread ? activeThreadRef : null);
-  const activeComposerTasksProgress =
-    activeLatestTurn !== null && !latestTurnSettled
-      ? (activeThreadShell?.planProgress ?? null)
-      : null;
-  const activeComposerTaskSteps =
-    activeComposerTasksProgress && activePlan && activePlan.turnId === activeLatestTurn?.turnId
-      ? activePlan.steps
-      : null;
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
   const activeThreadPr = resolveDisplayedThreadPr({
@@ -6715,7 +6707,6 @@ function ChatViewContent(props: ChatViewProps) {
                             sendDisabledReason={threadDetailLoading ? "Messages loading" : null}
                             hasExternalSendableContent={hasInlineReplyContent}
                             isPreparingWorktree={isPreparingWorktree}
-                            externalDrawerAttached={externalComposerDrawerAttached}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
                             pendingApprovals={pendingApprovals}
@@ -6728,8 +6719,6 @@ function ChatViewContent(props: ChatViewProps) {
                             respondingRequestIds={respondingRequestIds}
                             showPlanFollowUpPrompt={showPlanFollowUpPrompt}
                             activeProposedPlan={activeProposedPlan}
-                            activeTasksProgress={activeComposerTasksProgress}
-                            activeTaskSteps={activeComposerTaskSteps}
                             runtimeMode={runtimeMode}
                             interactionMode={interactionMode}
                             lockedProvider={lockedProvider}
