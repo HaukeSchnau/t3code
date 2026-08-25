@@ -233,6 +233,10 @@ export function getProviderUpdateInitialToastView(input: {
   };
 }
 
+export function shouldShowPrimaryProviderUpdateToast(view: ProviderUpdateToastView): boolean {
+  return view.phase !== "running";
+}
+
 export function getProviderUpdateRunningToastView(providerCount: number): ProviderUpdateToastView {
   return {
     phase: "running",

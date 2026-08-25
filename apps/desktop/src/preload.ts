@@ -205,6 +205,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   setWslDistro: (distro) => invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
   setWslOnly: (enabled) => invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
   pickFolder: (options) => invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+  pickProjectFavicon: (initialPath) =>
+    invoke(IpcChannels.PICK_PROJECT_FAVICON_CHANNEL, initialPath),
   pickThemeFiles: () => invoke(IpcChannels.PICK_THEME_FILES_CHANNEL, undefined),
   setTheme: (theme) => invoke(IpcChannels.SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) =>

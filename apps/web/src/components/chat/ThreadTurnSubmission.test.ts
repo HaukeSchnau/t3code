@@ -221,10 +221,10 @@ describe("ThreadTurnSubmission", () => {
     if (result.kind !== "delivered") return;
     assert.equal(result.prepared.command.type, "thread.turn.start");
     if (result.prepared.command.type !== "thread.turn.start") return;
-    assert.equal(
-      result.prepared.command.message.attachments[0]?.dataUrl,
-      "data:image/png;base64,AA==",
-    );
+    const attachment = result.prepared.command.message.attachments[0];
+    assert.ok(attachment && "dataUrl" in attachment);
+    if (!attachment || !("dataUrl" in attachment)) return;
+    assert.equal(attachment.dataUrl, "data:image/png;base64,AA==");
     assert.equal(result.prepared.command.bootstrap?.createThread?.projectId, projectId);
     assert.equal(
       result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.baseRevision,

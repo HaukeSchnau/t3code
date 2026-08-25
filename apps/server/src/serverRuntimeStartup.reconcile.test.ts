@@ -55,6 +55,7 @@ const makeProviderService = (liveThreadIds: ReadonlyArray<ThreadId> = []) =>
     getCapabilities: () => Effect.die("unused"),
     getInstanceInfo: () => Effect.die("unused"),
     rollbackConversation: () => Effect.die("unused"),
+    uploadFeedback: () => Effect.die("unused"),
     streamEvents: Stream.empty,
   }) satisfies ProviderService.ProviderService["Service"];
 
@@ -82,6 +83,7 @@ const runReconciliation = (input: {
     Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
       readEvents: () => Stream.empty,
       dispatch: input.dispatch,
+      resolveReceipt: () => Effect.succeed(Option.none()),
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
     }),
@@ -287,6 +289,7 @@ it.effect("does not fail startup when the live provider session inventory cannot
     Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
       readEvents: () => Stream.empty,
       dispatch: () => Effect.die("unused"),
+      resolveReceipt: () => Effect.succeed(Option.none()),
       streamDomainEvents: Stream.empty,
       latestSequence: Effect.succeed(0),
     }),

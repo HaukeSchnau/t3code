@@ -20,6 +20,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
+import Constants from "expo-constants";
 import * as Network from "expo-network";
 import { AppState } from "react-native";
 
@@ -140,7 +141,7 @@ const capabilitiesLayer = Layer.effectContext(
       Context.add(
         ClientPresentation,
         ClientPresentation.of({
-          metadata: authClientMetadata(),
+          metadata: authClientMetadata(Constants.expoConfig?.version),
           scopes: AuthStandardClientScopes,
         }),
       ),
