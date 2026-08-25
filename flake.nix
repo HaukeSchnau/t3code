@@ -461,11 +461,14 @@
         let
           pkgs = mkPkgs system;
           package = mkT3CodePackage pkgs;
-          releaseEnvironment = ''
+          runtimeIdentity = ''
             export HOME CODEX_HOME T3CODE_HOME
             HOME="$(project-context parameter homeDirectory)"
             CODEX_HOME="$(project-context parameter codexHome)"
             T3CODE_HOME="$(project-context parameter t3Home)"
+          '';
+          webEnvironment = ''
+            ${runtimeIdentity}
             export T3CODE_APNS_KEY_ID T3CODE_APNS_PRIVATE_KEY_FILE T3CODE_APNS_TEAM_ID
             T3CODE_APNS_KEY_ID="$(project-context parameter apnsKeyId)"
             T3CODE_APNS_PRIVATE_KEY_FILE="$(project-context secret-file apnsPrivateKey --required)"
@@ -477,7 +480,7 @@
           webAction = pkgs.writeShellApplication {
             name = "t3code-release-web";
             text = ''
-              ${releaseEnvironment}
+              ${webEnvironment}
               host="$(project-context endpoint web listen-host)"
               port="$(project-context endpoint web listen-port)"
               cd "$HOME"
@@ -491,7 +494,7 @@
           idleAction = pkgs.writeShellApplication {
             name = "t3code-release-idle";
             text = ''
-              ${releaseEnvironment}
+              ${runtimeIdentity}
               exec ${lib.getExe package} status idle \
                 --base-dir "$T3CODE_HOME" \
                 --quiet
