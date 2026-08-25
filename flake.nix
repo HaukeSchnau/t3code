@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-infra-modules = {
-      url = "github:HaukeSchnau/nix-infra-modules/3d11957d4d1c585578548c9a66a95be4edb4021d";
+      url = "github:HaukeSchnau/nix-infra-modules/075299e38b166458dcd7f890434afe5265acac3b";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -455,6 +455,60 @@
         };
 
       projectRuntimes = forAllSystems mkProjectRuntime;
+
+      mkProjectRelease =
+        system:
+        let
+          pkgs = mkPkgs system;
+          package = mkT3CodePackage pkgs;
+          releaseEnvironment = ''
+            export HOME CODEX_HOME T3CODE_HOME
+            HOME="$(project-context parameter homeDirectory)"
+            CODEX_HOME="$(project-context parameter codexHome)"
+            T3CODE_HOME="$(project-context parameter t3Home)"
+            export T3CODE_APNS_KEY_ID T3CODE_APNS_PRIVATE_KEY_FILE T3CODE_APNS_TEAM_ID
+            T3CODE_APNS_KEY_ID="$(project-context parameter apnsKeyId)"
+            T3CODE_APNS_PRIVATE_KEY_FILE="$(project-context secret-file apnsPrivateKey --required)"
+            T3CODE_APNS_TEAM_ID="$(project-context parameter apnsTeamId)"
+            export T3CODE_OTLP_METRICS_URL T3CODE_OTLP_SERVICE_NAME
+            T3CODE_OTLP_METRICS_URL="$(project-context parameter otlpMetricsUrl)"
+            T3CODE_OTLP_SERVICE_NAME="$(project-context parameter otlpServiceName)"
+          '';
+          webAction = pkgs.writeShellApplication {
+            name = "t3code-release-web";
+            text = ''
+              ${releaseEnvironment}
+              host="$(project-context endpoint web listen-host)"
+              port="$(project-context endpoint web listen-port)"
+              cd "$HOME"
+              exec ${lib.getExe package} serve \
+                --host "$host" \
+                --port "$port" \
+                --base-dir "$T3CODE_HOME" \
+                "$HOME"
+            '';
+          };
+          idleAction = pkgs.writeShellApplication {
+            name = "t3code-release-idle";
+            text = ''
+              ${releaseEnvironment}
+              exec ${lib.getExe package} status idle \
+                --base-dir "$T3CODE_HOME" \
+                --quiet
+            '';
+          };
+        in
+        nix-infra-modules.lib.projectRuntime.mkServiceRelease {
+          inherit pkgs;
+          descriptorPath = ./project.json;
+          payloads = [ package ];
+          actions = {
+            web = webAction;
+            idle = idleAction;
+          };
+        };
+
+      projectReleases = forAllSystems mkProjectRelease;
     in
     {
       lib = {
@@ -471,6 +525,7 @@
           t3code = mkT3CodePackage pkgs;
           default = t3code;
           projectRuntime = projectRuntimes.${system}.package;
+          projectRelease = projectReleases.${system}.package;
         }
       );
 
@@ -520,6 +575,7 @@
         let
           pkgs = mkPkgs system;
           runtime = projectRuntimes.${system};
+          release = projectReleases.${system};
         in
         {
           package = self.packages.${system}.default;
@@ -540,14 +596,23 @@
             assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/" ];
             assert normalizedProjectDescriptor.development.endpoints.web.health.startupTimeoutSec == 300;
             assert normalizedProjectDescriptor.development.endpoints.web.health.requestTimeoutSec == 300;
-            assert normalizedProjectDescriptor.release.package == "t3code";
-            assert normalizedProjectDescriptor.release.executable == "t3";
+            assert normalizedProjectDescriptor.release.package == "projectRelease";
+            assert normalizedProjectDescriptor.release.executable == "project-release-runtime";
             assert normalizedProjectDescriptor.release.action == "web";
             assert normalizedProjectDescriptor.release.health.paths == [ "/" ];
+            assert normalizedProjectDescriptor.release.preDeployTasks.wait-for-idle.failureMode == "defer";
+            assert normalizedProjectDescriptor.release.ingress.streamCloseDelaySec == 300;
             pkgs.runCommand "t3code-project-descriptor-check" { } ''
               touch "$out"
             '';
           projectRuntimeInterface = runtime.checks.interface;
+          projectReleaseInterface = release.checks.interface;
+          projectReleaseDescriptor = release.checks.descriptorExact;
+          projectReleaseGate = pkgs.runCommand "t3code-project-release-gate" { } ''
+            test -x ${release.package}/bin/project-release-runtime
+            test -f ${release.package}/share/project/descriptor.json
+            touch "$out"
+          '';
         }
       );
 

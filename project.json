@@ -2,6 +2,20 @@
   "$schema": "https://raw.githubusercontent.com/HaukeSchnau/nix-infra-modules/main/schemas/project-descriptor/v2.json",
   "schemaVersion": 2,
   "project": "t3code",
+  "secrets": {
+    "apnsPrivateKey": {
+      "description": "APNs signing key used for mobile push notifications"
+    }
+  },
+  "parameters": {
+    "homeDirectory": { "description": "Home and default provider working directory" },
+    "t3Home": { "description": "Persistent T3 Code state directory" },
+    "codexHome": { "description": "Codex provider state directory" },
+    "apnsKeyId": { "description": "APNs key identifier" },
+    "apnsTeamId": { "description": "Apple developer team identifier" },
+    "otlpMetricsUrl": { "description": "OpenTelemetry metrics endpoint" },
+    "otlpServiceName": { "description": "OpenTelemetry service identity" }
+  },
   "development": {
     "workloads": {
       "mobile": {},
@@ -23,11 +37,24 @@
     }
   },
   "release": {
-    "package": "t3code",
-    "executable": "t3",
+    "package": "projectRelease",
     "action": "web",
+    "preDeployTasks": {
+      "wait-for-idle": {
+        "action": "idle",
+        "failureMode": "defer",
+        "timeoutSec": 30
+      }
+    },
     "health": {
       "paths": ["/"]
+    },
+    "ingress": {
+      "compression": true,
+      "responseHeaders": {
+        "Access-Control-Allow-Private-Network": "true"
+      },
+      "streamCloseDelaySec": 300
     }
   }
 }
