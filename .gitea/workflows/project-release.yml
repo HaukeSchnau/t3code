@@ -10,6 +10,6 @@ permissions:
 
 jobs:
   release:
-    uses: HaukeSchnau/nix-infra-modules/.github/workflows/project-release.yml@main
+    uses: schnau/nix-infra-modules/.gitea/workflows/project-release.yml@main
     with:
       verification_check: projectReleaseGate
