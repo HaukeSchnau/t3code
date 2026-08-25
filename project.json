@@ -4,17 +4,18 @@
   "project": "t3code",
   "secrets": {
     "apnsPrivateKey": {
-      "description": "APNs signing key used for mobile push notifications"
+      "description": "APNs signing key used for mobile push notifications",
+      "required": false
     }
   },
   "parameters": {
-    "homeDirectory": { "description": "Home and default provider working directory" },
-    "t3Home": { "description": "Persistent T3 Code state directory" },
-    "codexHome": { "description": "Codex provider state directory" },
-    "apnsKeyId": { "description": "APNs key identifier" },
-    "apnsTeamId": { "description": "Apple developer team identifier" },
-    "otlpMetricsUrl": { "description": "OpenTelemetry metrics endpoint" },
-    "otlpServiceName": { "description": "OpenTelemetry service identity" }
+    "homeDirectory": { "description": "Home and default provider working directory", "required": false },
+    "t3Home": { "description": "Persistent T3 Code state directory", "required": false },
+    "codexHome": { "description": "Codex provider state directory", "required": false },
+    "apnsKeyId": { "description": "APNs key identifier", "required": false },
+    "apnsTeamId": { "description": "Apple developer team identifier", "required": false },
+    "otlpMetricsUrl": { "description": "OpenTelemetry metrics endpoint", "required": false },
+    "otlpServiceName": { "description": "OpenTelemetry service identity", "required": false }
   },
   "development": {
     "workloads": {
