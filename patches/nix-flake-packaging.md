@@ -12,6 +12,11 @@ The flake exposes:
 - `devShells.default`: Node 24, pnpm 11.10, JJ, Git, SSH, and native build tooling.
 - `nixosModules.default`: a `services.t3code` systemd service module for NixOS hosts.
 
+Pushes to the fork's Gitea `main` branch call the shared Project Release workflow from the pinned public
+infrastructure module. The workflow verifies `projectReleaseGate`, publishes the immutable closure to the
+configured binary cache, and asks every infrastructure-owned placement to activate that exact revision.
+GitHub remains a downstream code mirror and the home of the upstream project.
+
 ## Packaging behavior
 
 The package follows the existing server publish flow, but models the web bundle, server bundle, and
