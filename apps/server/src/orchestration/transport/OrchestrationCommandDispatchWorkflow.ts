@@ -16,7 +16,11 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { normalizeDispatchCommand, prepareDispatchCommand } from "../Normalizer.ts";
+import {
+  cleanupFailedUploadedAttachments,
+  normalizeDispatchCommand,
+  prepareDispatchCommand,
+} from "../Normalizer.ts";
 import type * as OrchestrationEngine from "../Services/OrchestrationEngine.ts";
 import {
   type CommandPreprocessingProgress,
@@ -81,7 +85,12 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
   readonly projectSetupScriptRunner: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   readonly terminalManager: TerminalManager.TerminalManager["Service"];
   readonly vcsStatusBroadcaster: VcsStatusBroadcaster.VcsStatusBroadcaster["Service"];
+  readonly dispatchCommand?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
+  readonly onCommandDispatched?: (
+    command: OrchestrationCommand,
+  ) => Effect.Effect<void, never, never>;
 }) {
+  const dispatchCommand = input.dispatchCommand ?? input.orchestrationEngine.dispatch;
   const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
     isOrchestrationDispatchCommandError(cause)
       ? cause
@@ -129,7 +138,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       activity.parentCommand,
       `setup-activity-${activity.phase}`,
     );
-    return input.orchestrationEngine.dispatch({
+    return dispatchCommand({
       type: "thread.activity.append",
       commandId,
       threadId: activity.threadId,
@@ -296,7 +305,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread && !progress.threadCreated) {
-          yield* input.orchestrationEngine.dispatch({
+          yield* dispatchCommand({
             type: "thread.create",
             commandId: preprocessingCommandId(command, "thread-create"),
             threadId: command.threadId,
@@ -343,7 +352,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           });
           targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;
           if (!progress.workspacePrepared) {
-            yield* input.orchestrationEngine.dispatch({
+            yield* dispatchCommand({
               type: "thread.meta.update",
               commandId: preprocessingCommandId(command, "thread-workspace-meta"),
               threadId: command.threadId,
@@ -363,7 +372,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
         // Bootstrap remains in the durable envelope fingerprint even though the
         // decider intentionally excludes it from emitted events.
-        return yield* input.orchestrationEngine.dispatch(command);
+        return yield* dispatchCommand(command);
       });
 
       return yield* bootstrapProgram.pipe(
@@ -414,7 +423,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                   ) {
                     return yield* dispatchBootstrapTurnStart(normalizedCommand, progress);
                   }
-                  return yield* input.orchestrationEngine.dispatch(normalizedCommand);
+                  return yield* dispatchCommand(normalizedCommand);
                 }),
             }),
           ),
@@ -463,7 +472,10 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       const result = yield* dispatchNormalizedCommand(
         normalizedCommand,
         preparedCommand.performDeferredPreprocessing,
-      );
+      ).pipe(Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)));
+      if (input.onCommandDispatched) {
+        yield* input.onCommandDispatched(normalizedCommand);
+      }
 
       if (parkingCommand) {
         const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";

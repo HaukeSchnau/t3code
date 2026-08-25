@@ -10,6 +10,7 @@ import {
   type RuntimeMode,
   type ServerProvider,
   type ThreadId,
+  type UploadChatAttachment,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
@@ -48,7 +49,7 @@ export const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 
 type ComposerSendContext = ReturnType<ChatComposerHandle["getSendContext"]>;
-type TurnAttachment = DurableClientCommand["message"]["attachments"][number];
+type TurnAttachment = UploadChatAttachment;
 
 export interface ThreadTurnDraft {
   readonly prompt: string;

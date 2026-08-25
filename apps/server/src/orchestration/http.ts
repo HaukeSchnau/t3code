@@ -7,7 +7,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
 
-import { prepareDispatchCommand } from "./Normalizer.ts";
+import { cleanupFailedUploadedAttachments, prepareDispatchCommand } from "./Normalizer.ts";
 import { CommandPreprocessingCoordinator } from "./Services/CommandPreprocessingCoordinator.ts";
 import {
   annotateEnvironmentRequest,
@@ -150,6 +150,9 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
                     ),
                   ),
               }),
+            ),
+            Effect.tapError(() =>
+              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
             ),
             Effect.catch((cause) =>
               failEnvironmentInternal("orchestration_dispatch_failed", cause),

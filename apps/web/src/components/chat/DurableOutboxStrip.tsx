@@ -167,18 +167,21 @@ export const DurableOutboxStrip = memo(function DurableOutboxStrip({
                   event.preventDefault();
                   const text = editText.trim();
                   if (!text) return;
-                  void run(commandId, () =>
-                    onReplace(
-                      commandId,
-                      {
-                        ...command,
-                        commandId: newCommandId(),
-                        message: { ...command.message, text },
-                        titleSeed: text,
-                      },
-                      "Pending",
-                    ),
-                  );
+                  const replacement: DurableClientCommand =
+                    command.type === "thread.turn.start"
+                      ? {
+                          ...command,
+                          commandId: newCommandId(),
+                          message: { ...command.message, text },
+                          titleSeed: text,
+                        }
+                      : {
+                          ...command,
+                          commandId: newCommandId(),
+                          message: { ...command.message, text },
+                          titleSeed: text,
+                        };
+                  void run(commandId, () => onReplace(commandId, replacement, "Pending"));
                 }}
               >
                 <label className="sr-only" htmlFor={`outbox-edit-${commandId}`}>

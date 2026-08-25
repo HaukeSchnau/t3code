@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadLinkedPullRequest,
   ThreadId,
   ThreadTitleMode,
   ThreadWorkspaceId,
@@ -31,7 +32,9 @@ export const ProjectionThread = Schema.Struct({
   threadId: ThreadId,
   projectId: ProjectId,
   title: Schema.String,
-  titleMode: Schema.NullOr(ThreadTitleMode),
+  titleMode: Schema.NullOr(ThreadTitleMode).pipe(
+    Schema.withDecodingDefault(EffectRuntime.succeed(null)),
+  ),
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
@@ -40,6 +43,7 @@ export const ProjectionThread = Schema.Struct({
   workspaceId: Schema.NullOr(ThreadWorkspaceId).pipe(
     Schema.withDecodingDefault(EffectRuntime.succeed(null)),
   ),
+  linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   latestTurnId: Schema.NullOr(TurnId),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,

@@ -35,7 +35,6 @@ export function useConnectionController() {
     () => environments.map(projectWorkspaceEnvironment),
     [environments],
   );
-
   const connectPairingUrl = useCallback(
     (pairingUrl: string) => connectPairingUrlMutation(pairingUrl),
     [connectPairingUrlMutation],

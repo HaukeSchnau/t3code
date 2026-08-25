@@ -3,8 +3,13 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
+import { WS_METHODS } from "@t3tools/contracts";
 
-import { createAtomCommandScheduler, createEnvironmentCommand } from "./runtime.ts";
+import {
+  createAtomCommandScheduler,
+  createEnvironmentCommand,
+  createEnvironmentRpcCommand,
+} from "./runtime.ts";
 import {
   type ArchiveThreadInput,
   type CreateThreadInput,
@@ -249,6 +254,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     stopSession: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:stop-session",
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
+      scheduler,
+      concurrency,
+    }),
+    uploadFeedback: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:commands:thread:upload-feedback",
+      tag: WS_METHODS.providerUploadFeedback,
       scheduler,
       concurrency,
     }),

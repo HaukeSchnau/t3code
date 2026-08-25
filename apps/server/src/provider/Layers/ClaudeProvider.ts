@@ -929,7 +929,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         status: "error",
         auth: { status: "unknown" },
         message: isCommandMissingCause(error)
-          ? `Configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) is not installed or not on PATH.`
+          ? claudeSettings.binaryPath === "claude"
+            ? "Claude Agent CLI (`claude`) was not found on PATH."
+            : `Configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) is not installed or not on PATH.`
           : `Failed to execute configured Claude Agent CLI (\`${claudeSettings.binaryPath}\`) health check.`,
       },
     });
@@ -1010,7 +1012,13 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
     : undefined;
   const skills = yield* discoverClaudeSkills(claudeSettings, cwd, resolvedEnvironment);
-  const slashCommands = capabilities?.slashCommands ?? [];
+  const slashCommands = [
+    {
+      name: "compact",
+      description: "Summarize the conversation and reduce context usage",
+    },
+    ...(capabilities?.slashCommands ?? []),
+  ];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
   if (!capabilities && authenticated !== true) {

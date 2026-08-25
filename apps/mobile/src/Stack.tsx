@@ -2,6 +2,7 @@ import {
   createPathConfigForStaticNavigation,
   getPathFromState,
   NavigationState,
+  type PrivateValueStore,
   StackActions,
   useNavigation,
 } from "@react-navigation/native";
@@ -616,12 +617,16 @@ export const RootStack = createNativeStackNavigator({
     }),
   },
 });
-type RootStackType = typeof RootStack;
-
 const navigationPathConfig = {
   screens: createPathConfigForStaticNavigation(RootStack) ?? {},
 };
+type RootStackParamList =
+  typeof RootStack extends PrivateValueStore<[infer ParamList, unknown, unknown]>
+    ? ParamList
+    : never;
 
-declare module "@react-navigation/native" {
-  interface RootNavigator extends RootStackType {}
+declare global {
+  namespace ReactNavigation {
+    interface RootParamList extends RootStackParamList {}
+  }
 }

@@ -503,6 +503,9 @@ export function projectEvent(
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
             ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
+            ...(payload.linkedPullRequest !== undefined
+              ? { linkedPullRequest: payload.linkedPullRequest }
+              : {}),
             updatedAt: payload.updatedAt,
           }),
         })),
