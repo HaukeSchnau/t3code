@@ -442,6 +442,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
@@ -481,6 +482,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
@@ -522,6 +524,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
@@ -946,6 +949,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           archived_at AS "archivedAt",
           settled_override AS "settledOverride",
           settled_at AS "settledAt",
+          unsettled_at AS "unsettledAt",
           snoozed_until AS "snoozedUntil",
           snoozed_at AS "snoozedAt",
           pinned_at AS "pinnedAt",
@@ -1775,6 +1779,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 archivedAt: row.archivedAt,
                 settledOverride: row.settledOverride,
                 settledAt: row.settledAt,
+                unsettledAt: row.unsettledAt,
                 snoozedUntil: row.snoozedUntil,
                 snoozedAt: row.snoozedAt,
                 pinnedAt: row.pinnedAt,
@@ -2047,6 +2052,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   archivedAt: row.archivedAt,
                   settledOverride: row.settledOverride,
                   settledAt: row.settledAt,
+                  unsettledAt: row.unsettledAt,
                   snoozedUntil: row.snoozedUntil,
                   snoozedAt: row.snoozedAt,
                   pinnedAt: row.pinnedAt,
@@ -2208,6 +2214,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                         archivedAt: row.archivedAt,
                         settledOverride: row.settledOverride,
                         settledAt: row.settledAt,
+                        unsettledAt: row.unsettledAt,
                         snoozedUntil: row.snoozedUntil,
                         snoozedAt: row.snoozedAt,
                         pinnedAt: row.pinnedAt,
@@ -2233,6 +2240,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
+
 
               return yield* decodeShellSnapshot(snapshot).pipe(
                 Effect.mapError(
@@ -2376,6 +2384,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                     archivedAt: row.archivedAt,
                     settledOverride: row.settledOverride,
                     settledAt: row.settledAt,
+                    unsettledAt: row.unsettledAt,
                     snoozedUntil: row.snoozedUntil,
                     snoozedAt: row.snoozedAt,
                     pinnedAt: row.pinnedAt,
@@ -2405,6 +2414,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 Effect.mapError(
                   toPersistenceDecodeError(
                     "ProjectionSnapshotQuery.getArchivedShellSnapshot:decodeShellSnapshot",
+
                   ),
                 ),
               );
@@ -2661,6 +2671,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         archivedAt: threadRow.value.archivedAt,
         settledOverride: threadRow.value.settledOverride,
         settledAt: threadRow.value.settledAt,
+        unsettledAt: threadRow.value.unsettledAt,
         snoozedUntil: threadRow.value.snoozedUntil,
         snoozedAt: threadRow.value.snoozedAt,
         pinnedAt: threadRow.value.pinnedAt,
@@ -2832,6 +2843,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         archivedAt: threadRow.value.archivedAt,
         settledOverride: threadRow.value.settledOverride,
         settledAt: threadRow.value.settledAt,
+        unsettledAt: threadRow.value.unsettledAt,
         snoozedUntil: threadRow.value.snoozedUntil,
         snoozedAt: threadRow.value.snoozedAt,
         pinnedAt: threadRow.value.pinnedAt,

@@ -1,8 +1,13 @@
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
-import type { OrchestrationUsageLimitHistoryWindow } from "@t3tools/contracts";
+import { OrchestrationUsageLimitHistoryWindow } from "@t3tools/contracts";
 
 import { appendUsageLimitObservation } from "../ProviderUsageHistory.ts";
+
+const encodeHistory = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
+);
 
 export default Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -72,7 +77,7 @@ export default Effect.gen(function* () {
   for (const [providerInstanceId, history] of historyByProvider) {
     yield* sql`
       UPDATE projection_provider_usage_limits
-      SET history_json = ${JSON.stringify(history)}
+      SET history_json = ${encodeHistory(history)}
       WHERE provider_instance_id = ${providerInstanceId}
     `;
   }

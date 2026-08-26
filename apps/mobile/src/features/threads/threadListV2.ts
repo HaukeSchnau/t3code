@@ -13,6 +13,7 @@ import type {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
+  activeThreadAnchorTimestampMs,
   sortPinnedThreadsByOrderKey,
   sortThreadsByAttention,
   type SidebarAttentionBand,
@@ -210,14 +211,22 @@ function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | unde
   return 0;
 }
 
-/** Attention-first ordering shared with the web sidebar. */
+/** Attention-first ordering shared with the web sidebar. Without a band resolver, preserve upstream's re-entry ordering. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
+    readonly unsettledAt?: string | null | undefined;
   },
->(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+>(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
+  if (getBand === undefined) {
+    return [...threads].sort(
+      (left, right) =>
+        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+        left.id.localeCompare(right.id),
+    );
+  }
   return sortThreadsByAttention(threads, getBand);
 }
 

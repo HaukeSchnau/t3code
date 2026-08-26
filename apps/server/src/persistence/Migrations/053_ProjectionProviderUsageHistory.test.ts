@@ -1,12 +1,19 @@
 import { assert, it } from "@effect/vitest";
+import { OrchestrationUsageLimitHistoryWindow } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
+const encodeTestJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
+const decodeHistory = Schema.decodeUnknownSync(
+  Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
+);
 
 layer("053_ProjectionProviderUsageHistory", (it) => {
   it.effect("adds bounded history storage to provider usage projections", () =>
@@ -32,13 +39,15 @@ layer("053_ProjectionProviderUsageHistory", (it) => {
       yield* sql`
         INSERT INTO projection_provider_usage_limits (
           provider_instance_id, provider, usage_limits_json, updated_at
-        ) VALUES ('codex', 'codex', ${JSON.stringify(usageLimits)}, ${usageLimits.updatedAt})
+        ) VALUES ('codex', 'codex', ${encodeTestJson(usageLimits)}, ${usageLimits.updatedAt})
       `;
 
       for (const [index, usedPercent] of [5, 5, 8].entries()) {
-        const occurredAt = new Date(
-          Date.parse("2026-08-13T10:10:00.000Z") + index * 60_000,
-        ).toISOString();
+        const occurredAt = DateTime.formatIso(
+          DateTime.add(DateTime.makeUnsafe("2026-08-13T10:10:00.000Z"), {
+            minutes: index,
+          }),
+        );
         const payload = {
           provider: "codex",
           providerInstanceId: "codex",
@@ -55,7 +64,7 @@ layer("053_ProjectionProviderUsageHistory", (it) => {
           ) VALUES (
             ${`event-${index}`}, 'provider', 'codex', ${index + 1},
             'provider.usage-limits-updated', ${occurredAt}, 'system',
-            ${JSON.stringify(payload)}, '{}'
+            ${encodeTestJson(payload)}, '{}'
           )
         `;
       }
@@ -72,7 +81,7 @@ layer("053_ProjectionProviderUsageHistory", (it) => {
         FROM projection_provider_usage_limits
         WHERE provider_instance_id = 'codex'
       `;
-      assert.deepStrictEqual(JSON.parse(rows[0]!.history), [
+      assert.deepStrictEqual(decodeHistory(rows[0]!.history), [
         {
           resetsAt: "2026-08-20T08:15:43.000Z",
           windowDurationMins: 10080,
