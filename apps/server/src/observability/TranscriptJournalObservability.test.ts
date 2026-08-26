@@ -37,6 +37,7 @@ const TrackerProbe = Context.Service<TranscriptJournalTrackerShape>(
 function delta(sequence: number, text = "x"): ProviderTranscriptJournalEntry {
   return {
     sequence,
+    batchId: null,
     event: {
       type: "content.delta",
       eventId: EventId.make(`observability-event-${sequence}`),

@@ -19,6 +19,8 @@ that can delay visible work: orchestration replay and provider transcript journa
 - Transcript journal metrics report the last observed undelivered depth and oldest canonical-event age.
   Batch counters, histograms, and timers use only the bounded `phase`, `batchKind`, and `outcome`
   dimensions; provider, thread, turn, item, command, and event identifiers are never metric labels.
+- Live assistant batches carry persisted membership. The batch tracker therefore reports the same source count
+  and character count after a crash as it did before dispatch, including a partial final frame.
 - One runtime-scoped tracker is shared by adapter acceptance and ingestion. Newly accepted durable events are
   registered immediately, successful batches remove their sources incrementally, and a compacting min-heap
   maintains oldest age without rescanning the journal or retaining unbounded stale nodes.

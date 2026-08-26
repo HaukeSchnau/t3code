@@ -69,4 +69,39 @@ describe("makeKeyedDrainableWorker", () => {
       }),
     ),
   );
+
+  it.live("replaces redundant queued tails without inflating outstanding work", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const processed: string[] = [];
+        const firstStarted = yield* Deferred.make<void>();
+        const releaseFirst = yield* Deferred.make<void>();
+        const worker = yield* makeKeyedDrainableWorker<string, string, never, never>({
+          concurrency: 1,
+          replacePendingTail: (pending, incoming) =>
+            pending.startsWith("journal-") && incoming.startsWith("journal-"),
+          process: (item) =>
+            Effect.gen(function* () {
+              processed.push(item);
+              if (item === "first") {
+                yield* Deferred.succeed(firstStarted, undefined).pipe(Effect.orDie);
+                yield* Deferred.await(releaseFirst);
+              }
+            }),
+        });
+
+        yield* worker.enqueue("thread-a", "first");
+        yield* Deferred.await(firstStarted);
+        yield* Effect.forEach(
+          Array.from({ length: 100 }, (_, index) => `journal-${index}`),
+          (item) => worker.enqueue("thread-a", item),
+          { discard: true },
+        );
+        yield* Deferred.succeed(releaseFirst, undefined);
+        yield* worker.drain;
+
+        expect(processed).toEqual(["first", "journal-99"]);
+      }),
+    ),
+  );
 });

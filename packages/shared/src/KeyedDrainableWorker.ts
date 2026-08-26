@@ -27,6 +27,8 @@ interface KeyedDrainableWorkerState<K, A> {
 export const makeKeyedDrainableWorker = <K, A, E, R>(options: {
   readonly concurrency: number;
   readonly process: (item: A, key: K) => Effect.Effect<void, E, R>;
+  /** Replace a queued tail when the incoming item makes it redundant. */
+  readonly replacePendingTail?: (pendingTail: A, incoming: A) => boolean;
 }): Effect.Effect<KeyedDrainableWorker<K, A>, never, Scope.Scope | R> =>
   Effect.gen(function* () {
     const readyKeys = yield* Effect.acquireRelease(TxQueue.unbounded<K>(), TxQueue.shutdown);
@@ -102,15 +104,34 @@ export const makeKeyedDrainableWorker = <K, A, E, R>(options: {
     const enqueue: KeyedDrainableWorker<K, A>["enqueue"] = (key, item) =>
       TxRef.modify(stateRef, (state) => {
         const pendingByKey = new Map(state.pendingByKey);
-        pendingByKey.set(key, [...(pendingByKey.get(key) ?? []), item]);
+        const pending = pendingByKey.get(key) ?? [];
+        const pendingTail = pending.at(-1);
+        const replacesPendingTail =
+          pendingTail !== undefined && options.replacePendingTail?.(pendingTail, item) === true;
+        pendingByKey.set(
+          key,
+          replacesPendingTail ? [...pending.slice(0, -1), item] : [...pending, item],
+        );
         if (state.activeKeys.has(key) || state.queuedKeys.has(key)) {
-          return [false, { ...state, pendingByKey, outstanding: state.outstanding + 1 }] as const;
+          return [
+            false,
+            {
+              ...state,
+              pendingByKey,
+              outstanding: state.outstanding + (replacesPendingTail ? 0 : 1),
+            },
+          ] as const;
         }
         const queuedKeys = new Set(state.queuedKeys);
         queuedKeys.add(key);
         return [
           true,
-          { ...state, pendingByKey, queuedKeys, outstanding: state.outstanding + 1 },
+          {
+            ...state,
+            pendingByKey,
+            queuedKeys,
+            outstanding: state.outstanding + (replacesPendingTail ? 0 : 1),
+          },
         ] as const;
       }).pipe(
         Effect.flatMap((shouldOffer) =>

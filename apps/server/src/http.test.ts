@@ -1,7 +1,30 @@
 import { expect, it } from "@effect/vitest";
+import { NodeHttpServer } from "@effect/platform-node";
 import { describe } from "vite-plus/test";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { HttpClient, HttpRouter } from "effect/unstable/http";
 
-import { assetResponseHeaders, isLoopbackHostname, resolveDevRedirectUrl } from "./http.ts";
+import {
+  assetResponseHeaders,
+  healthRouteLayer,
+  isLoopbackHostname,
+  resolveDevRedirectUrl,
+} from "./http.ts";
+
+it.effect("serves an unauthenticated constant-time health response", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      yield* HttpRouter.serve(healthRouteLayer, {
+        disableListenLog: true,
+        disableLogger: true,
+      }).pipe(Layer.build);
+      const response = yield* (yield* HttpClient.HttpClient).get("/healthz");
+
+      expect(response.status).toBe(204);
+    }),
+  ).pipe(Effect.provide(NodeHttpServer.layerTest)),
+);
 
 describe("http dev routing", () => {
   it("treats localhost and loopback addresses as local", () => {

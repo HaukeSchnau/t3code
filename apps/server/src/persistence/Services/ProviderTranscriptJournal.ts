@@ -12,7 +12,13 @@ import type { ProjectionRepositoryError } from "../Errors.ts";
 
 export interface ProviderTranscriptJournalEntry {
   readonly sequence: number;
+  readonly batchId: string | null;
   readonly event: ProviderRuntimeEvent;
+}
+
+export interface ProviderTranscriptJournalBatchSeal {
+  readonly batchId: string;
+  readonly sourceEvents: ReadonlyArray<ProviderRuntimeEvent>;
 }
 
 export interface ProviderTranscriptJournalShape {
@@ -27,6 +33,9 @@ export interface ProviderTranscriptJournalShape {
     ReadonlyArray<ProviderTranscriptJournalEntry>,
     ProjectionRepositoryError
   >;
+  readonly sealBatches: (
+    batches: ReadonlyArray<ProviderTranscriptJournalBatchSeal>,
+  ) => Effect.Effect<void, ProjectionRepositoryError>;
   readonly markDelivered: (
     event: ProviderRuntimeEvent,
   ) => Effect.Effect<void, ProjectionRepositoryError>;

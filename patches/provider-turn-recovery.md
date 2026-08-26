@@ -21,9 +21,10 @@ placeholder must not leave the thread looking permanently busy.
 - Durable parent assistant-text deltas are projected in bounded batches, including independent turns whose
   provider tokens arrive interleaved. Ordering remains exact within a turn, and subagent/lifecycle events are
   hard barriers.
-- Batch membership must be stable across crashes: fixed-size/full batches and hard-boundary batches are
-  immutable, while a partial open tail remains per-event until it is sealed. Every original journal row stays
-  associated with its batch.
+- Batch membership must be stable across crashes. Ingestion gives the durable adapter burst one frame, then
+  records one batch ID on every selected journal row before dispatch. Later rows cannot join that batch. A
+  restart therefore rebuilds the same command payload and receipt identity even when the process died between
+  orchestration dispatch and journal acknowledgement. Every original journal row stays associated with its batch.
 - Delivered/removal acknowledgment for every source row in a batch is atomic and chunked, avoiding thousands
   of SQLite connection acquisitions without permitting a partially acknowledged replay batch.
 - Journal-backed assistant transcript events count as authoritative recovery for buffered delivery on every

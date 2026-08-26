@@ -38,6 +38,7 @@ const JournalAppend = Schema.Struct({
 
 const JournalRow = Schema.Struct({
   sequence: NonNegativeInt,
+  batchId: Schema.NullOr(Schema.String),
   eventJson: Schema.String,
 });
 
@@ -45,6 +46,7 @@ const BULK_IDENTITY_CHUNK_SIZE = 500;
 
 const decodeJournalRow = (row: typeof JournalRow.Type) => ({
   sequence: row.sequence,
+  batchId: row.batchId,
   // This is an internal write-ahead record produced only after adapters have
   // already built a typed runtime event. Avoid re-decoding through schemas
   // that normalize transcript whitespace: the journal must be byte-exact.
@@ -153,7 +155,7 @@ const make = Effect.gen(function* () {
     Request: Schema.Void,
     Result: JournalRow,
     execute: () => sql`
-      SELECT sequence, event_json AS "eventJson"
+      SELECT sequence, batch_id AS "batchId", event_json AS "eventJson"
       FROM provider_transcript_journal
       ORDER BY sequence ASC
     `,
@@ -163,7 +165,7 @@ const make = Effect.gen(function* () {
     Request: Schema.Void,
     Result: JournalRow,
     execute: () => sql`
-      SELECT sequence, event_json AS "eventJson"
+      SELECT sequence, batch_id AS "batchId", event_json AS "eventJson"
       FROM provider_transcript_journal
       WHERE delivered = 0
       ORDER BY sequence ASC
@@ -258,6 +260,34 @@ const make = Effect.gen(function* () {
     Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.listUndelivered")),
     Effect.map((rows) => rows.map(decodeJournalRow)),
   );
+  const sealBatches: ProviderTranscriptJournalShape["sealBatches"] = (batches) => {
+    if (batches.length === 0) return Effect.void;
+    return sql
+      .withTransaction(
+        Effect.forEach(
+          batches,
+          ({ batchId, sourceEvents }) =>
+            Effect.forEach(
+              groupEventIdsByProviderInstance(sourceEvents),
+              ([providerInstanceId, eventIds]) =>
+                Effect.forEach(
+                  chunksOf(eventIds),
+                  (chunk) => sql`
+                    UPDATE provider_transcript_journal
+                    SET batch_id = ${batchId}
+                    WHERE provider_instance_id = ${providerInstanceId}
+                      AND event_id IN ${sql.in(chunk)}
+                      AND batch_id IS NULL
+                  `,
+                  { concurrency: 1, discard: true },
+                ),
+              { concurrency: 1, discard: true },
+            ),
+          { concurrency: 1, discard: true },
+        ),
+      )
+      .pipe(Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.sealBatches")));
+  };
   const markDelivered: ProviderTranscriptJournalShape["markDelivered"] = (event) =>
     markDeliveredRow(identity(event)).pipe(
       Effect.mapError(toPersistenceSqlError("ProviderTranscriptJournal.markDelivered")),
@@ -347,6 +377,7 @@ const make = Effect.gen(function* () {
     append,
     list,
     listUndelivered,
+    sealBatches,
     markDelivered,
     markDeliveredMany,
     remove,

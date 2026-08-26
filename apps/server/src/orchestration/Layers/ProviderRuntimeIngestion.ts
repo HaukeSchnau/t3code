@@ -2389,6 +2389,11 @@ const make = Effect.gen(function* () {
   const worker = yield* makeKeyedDrainableWorker({
     concurrency: 8,
     process: (input: RuntimeIngestionInput, _threadId: ThreadId) => processInputSafely(input),
+    replacePendingTail: (pending, incoming) =>
+      pending.source === "runtime" &&
+      incoming.source === "runtime" &&
+      transcriptJournalIngestion.accepts(pending.event) &&
+      transcriptJournalIngestion.accepts(incoming.event),
   });
   const drain = worker.drain.pipe(
     Effect.andThen(

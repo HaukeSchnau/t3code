@@ -20,6 +20,7 @@ import {
   serverEnvironmentHttpApiLayer,
   staticAndDevRouteLayer,
   browserApiCorsLayer,
+  healthRouteLayer,
   httpCompressionLayer,
 } from "./http.ts";
 import { guardHttpResponseWriteErrors } from "./httpResponseErrorGuard.ts";
@@ -275,6 +276,7 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 
 const ProviderEventLoggersLayerLive = ProviderEventLoggers.ProviderEventLoggersLive;
 const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeLive;
+const ModelManifestLayerLive = ModelManifest.layer;
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 const ProviderTranscriptJournalLayerLive = ProviderTranscriptJournalLive.pipe(
   Layer.provide(PersistenceLayerLive),
@@ -284,6 +286,7 @@ const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationLive.
   Layer.provideMerge(ProviderEventLoggersLayerLive),
   Layer.provideMerge(OpenCodeRuntimeLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
+  Layer.provide(ModelManifestLayerLive),
 );
 
 // Adapter acceptance and runtime ingestion must observe the same tracker.
@@ -484,7 +487,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   // `ModelManifest.layer` is the legacy-model classification data, refreshed
   // from the repo's `model-manifest.json` on `main` and applied by the
   // Codex/Claude drivers.
-  Layer.provideMerge(Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer)),
+  Layer.provideMerge(Layer.mergeAll(ProviderEventLoggers.layer, ModelManifestLayerLive)),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and
@@ -570,6 +573,7 @@ export const makeRoutesLayer = Layer.mergeAll(
     otlpTracesProxyRouteLayer,
     assetRouteLayer,
     attachmentUploadRouteLayer,
+    healthRouteLayer,
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),

@@ -15,11 +15,15 @@ import {
   type TranscriptJournalIngestionPhase,
 } from "../observability/TranscriptJournalObservability.ts";
 import { isPersistenceError } from "../persistence/Errors.ts";
-import { ProviderTranscriptJournal } from "../persistence/Services/ProviderTranscriptJournal.ts";
+import {
+  ProviderTranscriptJournal,
+  type ProviderTranscriptJournalEntry,
+} from "../persistence/Services/ProviderTranscriptJournal.ts";
 import { isTranscriptDurabilityEvent } from "../provider/ProviderRuntimeEventDurability.ts";
 import {
   batchProviderTranscriptJournalEntries,
   isBatchableParentAssistantDelta,
+  planProviderTranscriptJournalBatchSeals,
   type ProviderTranscriptJournalBatch,
 } from "./ProviderTranscriptJournalBatch.ts";
 import { isSubagentRuntimeEvent } from "./ProviderSubagentActivityProjection.ts";
@@ -184,6 +188,17 @@ export function makeProviderTranscriptJournalIngestion(input: {
       );
     };
 
+    const sealPending = <E>(
+      pending: ReadonlyArray<ProviderTranscriptJournalEntry>,
+      reload: Effect.Effect<ReadonlyArray<ProviderTranscriptJournalEntry>, E>,
+    ) => {
+      const seals = planProviderTranscriptJournalBatchSeals(pending);
+      if (seals.length === 0) return Effect.succeed(pending);
+      return retryPersistence(transcriptJournal.sealBatches(seals)).pipe(
+        Effect.andThen(retryPersistence(reload)),
+      );
+    };
+
     const drain = <E, R>(
       fallbackEvent: ProviderRuntimeEvent | undefined,
       processEvent: (
@@ -203,13 +218,23 @@ export function makeProviderTranscriptJournalIngestion(input: {
           yield* Effect.sleep("16 millis");
           pending = yield* retryPersistence(transcriptJournal.listUndelivered);
         }
-        yield* tracker.registerEntries(pending);
-        let fallbackWasJournaled = false;
         const relevantPending =
           fallbackEvent === undefined
             ? pending
             : pending.filter(({ event }) => event.threadId === fallbackEvent.threadId);
-        for (const batch of batchProviderTranscriptJournalEntries(relevantPending)) {
+        const sealedPending = yield* sealPending(
+          relevantPending,
+          transcriptJournal.listUndelivered.pipe(
+            Effect.map((entries) =>
+              fallbackEvent === undefined
+                ? entries
+                : entries.filter(({ event }) => event.threadId === fallbackEvent.threadId),
+            ),
+          ),
+        );
+        yield* tracker.registerEntries(sealedPending);
+        let fallbackWasJournaled = false;
+        for (const batch of batchProviderTranscriptJournalEntries(sealedPending)) {
           if (fallbackEvent !== undefined) {
             fallbackWasJournaled ||= batch.sourceEvents.some(
               (event) =>
@@ -238,7 +263,8 @@ export function makeProviderTranscriptJournalIngestion(input: {
       afterRecovery: Effect.Effect<void, E2, R2>,
     ) =>
       Effect.gen(function* () {
-        const pending = yield* retryPersistence(transcriptJournal.list).pipe(Effect.orDie);
+        let pending = yield* retryPersistence(transcriptJournal.list).pipe(Effect.orDie);
+        pending = yield* sealPending(pending, transcriptJournal.list).pipe(Effect.orDie);
         const initiallyUndelivered = yield* retryPersistence(
           transcriptJournal.listUndelivered,
         ).pipe(Effect.orDie);

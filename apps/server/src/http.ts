@@ -60,6 +60,7 @@ import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./ht
 
 const LOCAL_IMAGE_ROUTE_PATH = "/local-image";
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
+export const HEALTH_ROUTE_PATH = "/healthz";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
 const DESKTOP_RENDERER_ORIGINS = ["t3code://app", "t3code-dev://app"];
 const SVG_CONTENT_SECURITY_POLICY = "default-src 'none'; style-src 'unsafe-inline'; sandbox";
@@ -81,6 +82,12 @@ export function assetResponseHeaders(filePath: string): Record<string, string> {
 export const httpCompressionLayer = HttpRouter.middleware(HttpMiddleware.compression(), {
   global: true,
 });
+
+export const healthRouteLayer = HttpRouter.add(
+  "GET",
+  HEALTH_ROUTE_PATH,
+  Effect.succeed(HttpServerResponse.empty({ status: 204 })),
+);
 
 export const browserApiCorsLayer = Layer.unwrap(
   Effect.gen(function* () {
