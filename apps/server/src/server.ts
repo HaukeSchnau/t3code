@@ -37,6 +37,7 @@ import { ProviderSessionDirectoryLive } from "./provider/Layers/ProviderSessionD
 import * as ProviderSessionRuntime from "./persistence/ProviderSessionRuntime.ts";
 import { ProjectionTurnRepositoryLive } from "./persistence/Layers/ProjectionTurns.ts";
 import { ProviderAdapterRegistryLive } from "./provider/Layers/ProviderAdapterRegistry.ts";
+import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
 import { ProviderServiceLive } from "./provider/Layers/ProviderService.ts";
 import { ProviderSessionReaperLive } from "./provider/Layers/ProviderSessionReaper.ts";
@@ -480,7 +481,10 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   // `ProviderService` (canonical stream, written after event normalization).
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
-  Layer.provideMerge(ProviderEventLoggers.layer),
+  // `ModelManifest.layer` is the legacy-model classification data, refreshed
+  // from the repo's `model-manifest.json` on `main` and applied by the
+  // Codex/Claude drivers.
+  Layer.provideMerge(Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer)),
   // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
   // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
   // the rewritten registry reads snapshots off the instance registry and

@@ -3,6 +3,7 @@ import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
+  activeThreadAnchorTimestampMs,
   getThreadSortTimestamp,
   sortThreadsByAttention,
   sortThreads,
@@ -574,15 +575,24 @@ export function resolveSidebarThreadAttentionBand(
 
 // The default sidebar is an inbox: things that need the user rise, ordinary
 // active threads follow, regardless of whether the agent is currently working.
-// Latest user message is the only recency signal inside each band.
+// Latest user message is the only recency signal inside each band. Callers
+// without a band resolver retain the upstream re-entry ordering.
 export function sortThreadsForSidebar<
   T extends {
     readonly id: string;
     readonly environmentId?: string | undefined;
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
+    readonly unsettledAt?: string | null | undefined;
   },
->(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+>(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
+  if (getBand === undefined) {
+    return [...threads].toSorted(
+      (left, right) =>
+        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+        left.id.localeCompare(right.id),
+    );
+  }
   return sortThreadsByAttention(threads, getBand);
 }
 
