@@ -141,4 +141,40 @@ layer("ProviderTranscriptJournal", (it) => {
       assert.lengthOf(yield* journal.list, initialEntries.length);
     }),
   );
+
+  it.effect("keeps sealed batch membership immutable", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const journal = yield* ProviderTranscriptJournal;
+      yield* sql`PRAGMA foreign_keys = OFF`;
+      const first = {
+        ...base,
+        turnId: TurnId.make("journal-sealed-turn"),
+        itemId: RuntimeItemId.make("journal-sealed-item"),
+        type: "content.delta",
+        eventId: EventId.make("journal-sealed-1"),
+        createdAt: "2026-08-26T00:00:00.000Z",
+        payload: { streamKind: "assistant_text", delta: "one" },
+      } as const satisfies ProviderRuntimeEvent;
+      const second = {
+        ...first,
+        eventId: EventId.make("journal-sealed-2"),
+        createdAt: "2026-08-26T00:00:00.001Z",
+        payload: { ...first.payload, delta: "two" },
+      } as const satisfies ProviderRuntimeEvent;
+      yield* journal.append(first);
+      yield* journal.append(second);
+
+      yield* journal.sealBatches([{ batchId: "batch-one", sourceEvents: [first, second] }]);
+      yield* journal.sealBatches([{ batchId: "batch-two", sourceEvents: [first] }]);
+
+      const sealed = (yield* journal.list).filter(({ event }) =>
+        event.eventId.startsWith("journal-sealed-"),
+      );
+      assert.deepStrictEqual(
+        sealed.map(({ batchId }) => batchId),
+        ["batch-one", "batch-one"],
+      );
+    }),
+  );
 });

@@ -7,19 +7,21 @@ import {
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
+import type { ProviderTranscriptJournalEntry } from "../persistence/Services/ProviderTranscriptJournal.ts";
 
-import { batchProviderTranscriptJournalEntries } from "./ProviderTranscriptJournalBatch.ts";
+import {
+  batchProviderTranscriptJournalEntries,
+  planProviderTranscriptJournalBatchSeals,
+} from "./ProviderTranscriptJournalBatch.ts";
 
 function delta(
   sequence: number,
   text: string,
   scope: { readonly turnId?: string; readonly itemId?: string } = {},
-): {
-  readonly sequence: number;
-  readonly event: ProviderRuntimeEvent;
-} {
+): ProviderTranscriptJournalEntry {
   return {
     sequence,
+    batchId: null,
     event: {
       type: "content.delta",
       eventId: EventId.make(`event-${sequence}`),
@@ -41,7 +43,7 @@ function subagentBoundary(sequence: number) {
       ...source.event,
       agentContext: { providerThreadId: "provider-child-thread" },
     },
-  } satisfies { readonly sequence: number; readonly event: ProviderRuntimeEvent };
+  } satisfies ProviderTranscriptJournalEntry;
 }
 
 describe("batchProviderTranscriptJournalEntries", () => {
@@ -176,6 +178,29 @@ describe("batchProviderTranscriptJournalEntries", () => {
     expect(sealedBatches).toHaveLength(1);
     expect(sealedWithTail[0]).toEqual(sealedBatches[0]);
     expect(sealedWithTail[1]?.sourceEvents).toEqual([sealedWithTail[1]?.event]);
+  });
+
+  it("freezes a partial live tail without admitting later rows", () => {
+    const first = delta(1, "one");
+    const second = delta(2, "two");
+    const later = delta(3, "three");
+    const [seal] = planProviderTranscriptJournalBatchSeals([first, second]);
+
+    expect(seal?.sourceEvents.map((event) => event.eventId)).toEqual([
+      first.event.eventId,
+      second.event.eventId,
+    ]);
+    const sealedEntries = [first, second].map((entry) => ({
+      ...entry,
+      batchId: seal!.batchId,
+    }));
+    const initial = batchProviderTranscriptJournalEntries(sealedEntries);
+    const extended = batchProviderTranscriptJournalEntries([...sealedEntries, later]);
+
+    expect(initial).toHaveLength(1);
+    expect(initial[0]?.event).toMatchObject({ payload: { delta: "onetwo" } });
+    expect(extended[0]).toEqual(initial[0]);
+    expect(extended[1]?.sourceEvents).toEqual([later.event]);
   });
 
   it("preserves first-occurrence timestamps for asymmetrically interleaved turns", () => {

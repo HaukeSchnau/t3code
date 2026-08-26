@@ -9,7 +9,10 @@
     }
   },
   "parameters": {
-    "homeDirectory": { "description": "Home and default provider working directory", "required": false },
+    "homeDirectory": {
+      "description": "Home and default provider working directory",
+      "required": false
+    },
     "t3Home": { "description": "Persistent T3 Code state directory", "required": false },
     "codexHome": { "description": "Codex provider state directory", "required": false },
     "apnsKeyId": { "description": "APNs key identifier", "required": false },
@@ -30,7 +33,7 @@
       },
       "web": {
         "health": {
-          "paths": ["/"],
+          "paths": ["/healthz"],
           "startupTimeoutSec": 300,
           "requestTimeoutSec": 300
         }
@@ -48,7 +51,7 @@
       }
     },
     "health": {
-      "paths": ["/"]
+      "paths": ["/healthz"]
     },
     "ingress": {
       "compression": true,

@@ -33,6 +33,11 @@ interface PendingAssistantDeltaBatch {
   sealed: boolean;
 }
 
+export interface ProviderTranscriptJournalBatchSeal {
+  readonly batchId: string;
+  readonly sourceEvents: ReadonlyArray<ProviderRuntimeEvent>;
+}
+
 export function isBatchableParentAssistantDelta(
   event: ProviderRuntimeEvent,
 ): event is AssistantDeltaEvent {
@@ -65,9 +70,14 @@ function assistantDeltaTurnScope(event: AssistantDeltaEvent): string {
 
 export function batchProviderTranscriptJournalEntries(
   entries: ReadonlyArray<ProviderTranscriptJournalEntry>,
+  options: { readonly sealOpenBatches?: boolean } = {},
 ): ReadonlyArray<ProviderTranscriptJournalBatch> {
   const batches: ProviderTranscriptJournalBatch[] = [];
   const pendingByTurn = new Map<string, Array<PendingAssistantDeltaBatch>>();
+  const persistedByBatchId = new Map<
+    string,
+    { readonly firstIndex: number; readonly sourceEvents: Array<AssistantDeltaEvent> }
+  >();
 
   function appendBatch(sourceEvents: ReadonlyArray<AssistantDeltaEvent>): void {
     const firstEvent = sourceEvents[0];
@@ -88,7 +98,10 @@ export function batchProviderTranscriptJournalEntries(
   }
 
   function flushPending(sealOpenBatches: boolean): void {
-    const pending = [...pendingByTurn.values()].flat();
+    const pending = [
+      ...[...persistedByBatchId.values()].map((batch) => ({ ...batch, sealed: true })),
+      ...[...pendingByTurn.values()].flat(),
+    ];
     pending.sort((left, right) => left.firstIndex - right.firstIndex);
     for (const pendingBatch of pending) {
       if (sealOpenBatches || pendingBatch.sealed) {
@@ -100,12 +113,23 @@ export function batchProviderTranscriptJournalEntries(
       }
     }
     pendingByTurn.clear();
+    persistedByBatchId.clear();
   }
 
-  for (const [index, { event }] of entries.entries()) {
+  for (const [index, { batchId, event }] of entries.entries()) {
     if (!isBatchableParentAssistantDelta(event)) {
       flushPending(true);
       batches.push({ event, sourceEvents: [event] });
+      continue;
+    }
+
+    if (batchId !== null) {
+      const persisted = persistedByBatchId.get(batchId);
+      if (persisted === undefined) {
+        persistedByBatchId.set(batchId, { firstIndex: index, sourceEvents: [event] });
+      } else {
+        persisted.sourceEvents.push(event);
+      }
       continue;
     }
 
@@ -138,10 +162,43 @@ export function batchProviderTranscriptJournalEntries(
     }
     pendingByTurn.set(turnScope, scopeBatches);
   }
-  // A final partial batch can still gain newly accepted tail events before its
-  // acknowledgment is durable. Keep those events individual so replay command
-  // identity never changes across a crash. Full batches and hard barriers are
-  // stable because later rows cannot change their membership.
-  flushPending(false);
+  // Unpersisted open tails remain individual by default. Ingestion opts into
+  // sealing them only before it records their membership in the journal.
+  flushPending(options.sealOpenBatches ?? false);
   return batches;
+}
+
+/** Freeze every currently open assistant tail before it enters orchestration. */
+export function planProviderTranscriptJournalBatchSeals(
+  entries: ReadonlyArray<ProviderTranscriptJournalEntry>,
+): ReadonlyArray<ProviderTranscriptJournalBatchSeal> {
+  const seals: ProviderTranscriptJournalBatchSeal[] = [];
+  let unsealed: ProviderTranscriptJournalEntry[] = [];
+
+  const flush = () => {
+    for (const batch of batchProviderTranscriptJournalEntries(unsealed, {
+      sealOpenBatches: true,
+    })) {
+      if (!isBatchableParentAssistantDelta(batch.event)) continue;
+      const firstEvent = batch.sourceEvents[0];
+      if (firstEvent === undefined) continue;
+      seals.push({
+        batchId: `${encodeURIComponent(
+          firstEvent.providerInstanceId ?? firstEvent.provider,
+        )}:${encodeURIComponent(firstEvent.eventId)}`,
+        sourceEvents: batch.sourceEvents,
+      });
+    }
+    unsealed = [];
+  };
+
+  for (const entry of entries) {
+    if (entry.batchId !== null) {
+      flush();
+      continue;
+    }
+    unsealed.push(entry);
+  }
+  flush();
+  return seals;
 }

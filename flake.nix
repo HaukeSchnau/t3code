@@ -596,13 +596,13 @@
                 "web"
               ];
             assert normalizedProjectDescriptor.development.endpoints.mobile.health.paths == [ "/status" ];
-            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/" ];
+            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/healthz" ];
             assert normalizedProjectDescriptor.development.endpoints.web.health.startupTimeoutSec == 300;
             assert normalizedProjectDescriptor.development.endpoints.web.health.requestTimeoutSec == 300;
             assert normalizedProjectDescriptor.release.package == "projectRelease";
             assert normalizedProjectDescriptor.release.executable == "project-release-runtime";
             assert normalizedProjectDescriptor.release.action == "web";
-            assert normalizedProjectDescriptor.release.health.paths == [ "/" ];
+            assert normalizedProjectDescriptor.release.health.paths == [ "/healthz" ];
             assert normalizedProjectDescriptor.release.preDeployTasks.wait-for-idle.failureMode == "defer";
             assert normalizedProjectDescriptor.release.ingress.streamCloseDelaySec == 300;
             pkgs.runCommand "t3code-project-descriptor-check" { } ''
