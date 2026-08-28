@@ -1,25 +1,24 @@
-# Codex Thread Orchestration Tools
+# Dormant Codex thread orchestration tools
 
-T3 Code exposes Desktop-style thread orchestration primitives to Codex-backed agents.
+T3 Code retains its Desktop-style thread orchestration implementation, but does
+not register those MCP tools or advertise them to Codex-backed agents. The
+implementation and focused tests remain so we can reconsider the feature
+without rebuilding it.
 
-The patch exposes `list_projects` as the normal discovery entrypoint for
-orchestrators. It returns local and registered remote environments plus their
-projects, so agents can choose a `projectId` or `environmentId` without learning
-provider/model details.
-For the common case, `create_thread` can omit both `target` and `modelSelection`;
-it defaults to a sibling thread in the calling thread's current project, current
-environment, current provider/model/options, runtime mode, and interaction mode.
-Supplying `target.environment.type: "worktree"` or an explicit `modelSelection`
-is reserved for intentional isolation or provider/model fanout.
+When enabled, `list_projects` is the normal discovery entrypoint. It returns
+local and registered remote environments plus their projects. `create_thread`
+can omit both `target` and `modelSelection`; it then defaults to a sibling thread
+in the caller's current project and environment with the current provider,
+model, options, runtime mode, and interaction mode.
 
-Provider/model discovery is exposed separately through `list_thread_models`.
-That tool returns curated model choices with exact `modelSelection` objects that
+Provider and model discovery lives in `list_thread_models`. That dormant tool
+returns curated model choices with exact `modelSelection` objects that
 can be passed to `create_thread.modelSelection`, plus compact reasoning metadata
-when a provider exposes a reasoning selector. Agents are instructed not to call
-it for ordinary child threads. Hidden orchestration models such as small, stale,
-or internal models are omitted and cannot be explicitly selected via the
-orchestration tools, though existing threads may continue to inherit their
-current model settings.
+when a provider exposes a reasoning selector. When the toolkit is enabled, its
+instructions tell agents not to call this tool for ordinary child threads.
+Hidden orchestration models such as small, stale, or internal models are omitted
+from explicit selection. Existing threads may still inherit their current model
+settings.
 
 Remote host orchestration is represented explicitly through `environmentId`.
 The local T3 server owns a backend-to-backend remote orchestration registry,
@@ -31,8 +30,7 @@ environment and registered remotes; agents pass the returned `environmentId` to 
 existing thread tools rather than using a separate remote-only tool family. Omitting
 `environmentId` preserves the current host/current project/current provider defaults.
 
-This fork-specific patch extends the existing MCP thread toolkit with compact passive
-observability tools:
+The retained MCP thread toolkit includes compact passive observability tools:
 
 - `read_thread_result` returns thread status, queue count, and latest messages without
   loading the full transcript.
@@ -75,7 +73,7 @@ The message-level fork action is destination-aware. The fork button opens a menu
 The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
 archived sources, running latest turns, active provider turns, streaming messages, queued messages,
 pending approvals, and pending user-input requests before preparing any workspace or forking provider
-history. The agent-facing thread orchestration `fork_thread` path also rejects busy sources before
+history. The dormant agent-facing `fork_thread` path also rejects busy sources before
 preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
 "source must be idle" rule. The public RPC accepts `auto` and `directory-copy`, defaulting to
 `auto` so repository-backed projects avoid copying dependency directories and other ignored payloads.

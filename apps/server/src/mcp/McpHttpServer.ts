@@ -22,12 +22,6 @@ import {
   PreviewSnapshotToolkit,
   PreviewStandardToolkit,
 } from "./toolkits/preview/tools.ts";
-import { ThreadOrchestrationToolkitHandlersLive } from "./toolkits/thread-orchestration/handlers.ts";
-import { CodexThreadForkImporterLive } from "./toolkits/thread-orchestration/CodexThreadForkImporter.ts";
-import { layer as RemoteEnvironmentRegistryLive } from "./toolkits/thread-orchestration/RemoteEnvironmentRegistry.ts";
-import { layer as RemoteThreadOrchestrationClientLive } from "./toolkits/thread-orchestration/RemoteThreadOrchestrationClient.ts";
-import { layer as ThreadOrchestrationServiceLive } from "./toolkits/thread-orchestration/service.ts";
-import { ThreadOrchestrationToolkit } from "./toolkits/thread-orchestration/tools.ts";
 
 const unauthorized = HttpServerResponse.jsonUnsafe(
   {
@@ -217,19 +211,6 @@ const PreviewSnapshotRegistrationLive = Layer.effectDiscard(registerPreviewSnaps
   Layer.provide(PreviewSnapshotToolkitHandlersLive),
 );
 
-const ThreadOrchestrationToolkitRegistrationLive = McpServer.toolkit(
-  ThreadOrchestrationToolkit,
-).pipe(
-  Layer.provide(ThreadOrchestrationToolkitHandlersLive),
-  Layer.provide(
-    ThreadOrchestrationServiceLive.pipe(
-      Layer.provide(CodexThreadForkImporterLive),
-      Layer.provide(RemoteThreadOrchestrationClientLive),
-      Layer.provide(RemoteEnvironmentRegistryLive),
-    ),
-  ),
-);
-
 export const PreviewToolkitRegistrationLive = Layer.mergeAll(
   PreviewStandardToolkitRegistrationLive,
   PreviewSnapshotRegistrationLive,
@@ -242,9 +223,8 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-// Keep the preview toolkit implementation available for focused tests and a
-// future capability-gated rollout, but do not advertise unavailable browser
-// tools to agents in this fork.
-export const McpToolkitRegistrationLive = ThreadOrchestrationToolkitRegistrationLive;
+// Keep the toolkit implementations available for focused tests and a possible
+// future rollout, but do not register agent-facing MCP tools in this fork.
+export const McpToolkitRegistrationLive = Layer.empty;
 
 export const layer = McpToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));

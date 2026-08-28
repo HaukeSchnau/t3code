@@ -38,6 +38,9 @@ const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
 );
+const DisabledToolkitsTestLayer = McpHttpServer.McpToolkitRegistrationLive.pipe(
+  Layer.provideMerge(McpServer.McpServer.layer),
+);
 
 it("normalizes empty successful notification responses to accepted", () => {
   const notificationResponse = McpHttpServer.normalizeMcpHttpResponse(
@@ -50,6 +53,13 @@ it("normalizes empty successful notification responses to accepted", () => {
   );
   expect(resultResponse.status).toBe(200);
 });
+
+it.effect("does not register agent-facing MCP tools", () =>
+  Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    expect(server.tools).toEqual([]);
+  }).pipe(Effect.provide(DisabledToolkitsTestLayer)),
+);
 
 it.effect("returns bounded structural preview snapshot failures", () =>
   Effect.scoped(

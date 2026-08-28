@@ -11,21 +11,6 @@ For browser work, first call \`preview_status\`. If no automation-capable previe
 Do not switch to global browser skills, Chrome, Node REPL browser automation, standalone Playwright, or agent-browser merely because the preview is initially closed or a first call fails. Use an alternative browser system only when the T3 preview tools are absent, the user explicitly requests another browser, or \`preview_open\` returns an explicit unsupported/unavailable error. A failed T3 preview tool call should be inspected and retried with corrected arguments when the error is actionable.
 `;
 
-const T3_CODE_THREAD_ORCHESTRATION_TOOL_INSTRUCTIONS = `
-
-## T3 Code thread orchestration
-
-The \`t3-code\` MCP server may expose Desktop-style thread orchestration tools: \`list_projects\`, \`list_thread_models\`, \`create_thread\`, \`list_threads\`, \`read_thread\`, \`read_thread_result\`, \`await_thread\`, \`get_thread_graph\`, \`fork_thread\`, \`send_message_to_thread\`, and \`set_thread_title\`.
-
-Use \`list_projects\` when you need project ids, environment ids, or remote host discovery. Omit \`create_thread.target\` for the common case: a sibling thread in the current project and environment.
-
-Use \`list_thread_models\` only when the user asks for a specific provider/model or when deliberately doing provider/model fanout such as comparing Codex, Cursor, and OpenCode. Do not specify \`create_thread.modelSelection\` for ordinary child threads; omit it so the child inherits the current provider, model, and reasoning/options. Likewise omit \`runtimeMode\` and \`interactionMode\` unless intentionally overriding the current setup. Provider choice is normally a new-thread decision; do not assume an existing thread can switch provider instances after it has started.
-
-Use T3 Code threads when durable, inspectable, independently queued work would materially help the task: implementation work packets, long-running validation, remote-host work, provider/model fanout, worktree isolation, or critical review that should remain visible in the thread graph. Use lightweight subagents instead for internal parallel thinking or short-lived sparring that does not need durable thread state. Thread relationship facts such as create, fork, read, message, and rename are recorded automatically for observability; there is no separate graph-edit workflow.
-
-Keep orchestration purposeful. Prefer small, explicit prompts with ownership and expected output, then read or message the resulting threads when their work is needed.
-`;
-
 /**
  * The browser block is omitted entirely when the preview tools aren't attached.
  * Describing `preview_*` tools that aren't in the turn's tool list would be
@@ -166,7 +151,6 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
-${T3_CODE_THREAD_ORCHESTRATION_TOOL_INSTRUCTIONS}
 ${browserToolInstructions(browserToolsAvailable)}
 </collaboration_mode>`;
 
@@ -183,7 +167,6 @@ Your active mode changes only when new developer instructions with a different \
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
-${T3_CODE_THREAD_ORCHESTRATION_TOOL_INSTRUCTIONS}
 ${browserToolInstructions(browserToolsAvailable)}
 </collaboration_mode>`;
 
