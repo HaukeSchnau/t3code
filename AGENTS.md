@@ -137,6 +137,10 @@ reviewable, and document every custom patch and its requirements in `patches/*.m
 - Push completed fork work directly to `main` with `jj-push main`; do not open a PR unless explicitly
   requested.
 
+## Coupling to `infra`
+
+Since this is a purely personal fork, we have the freedom to invent concepts that are dependent on my specific NixOS-based infrastructure. I have T3 Code mostly running on NixOS servers. While we should maintain clear boundaries as to what belongs in T3 Code vs what belongs in `infra`, we absolutely can make them dependent on each other, forming a kind of symbiosis between the two.
+
 ## Plans and work artifacts
 
 - Do not commit implementation plans, research notes, or agent scratch files. Keep temporary working material outside the worktree. `.plans/` is gitignored only as a safety net for legacy tooling.
