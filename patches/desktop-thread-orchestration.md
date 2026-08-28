@@ -1,8 +1,8 @@
-# Desktop Thread Orchestration
+# Dormant Desktop thread orchestration
 
-T3 Code exposes a Desktop-style orchestration toolkit through the existing
-per-thread `t3-code` MCP server. Provider sessions receive the `threads`
-capability next to `preview`, which makes these tools available to agents:
+T3 Code retains a Desktop-style orchestration toolkit, but the per-thread
+`t3-code` MCP server does not register it. Provider sessions also omit the
+`threads` capability. Agents therefore receive none of these tools:
 
 - `list_projects`
 - `list_thread_models`
@@ -16,23 +16,24 @@ capability next to `preview`, which makes these tools available to agents:
 - `send_message_to_thread`
 - `set_thread_title`
 
-The implementation intentionally stays close to the Codex Desktop App tool
-surface while mapping to T3 Code's own orchestration model. Tool calls use the
+The implementation stays in the repository so we can reconsider it later. Do
+not expose individual tools from this list while the toolkit is dormant. A
+future rollout should register the toolkit as one unit, restore the `threads`
+credential capability, and restore provider instructions in the same change.
+
+The dormant implementation maps the Codex Desktop App tool set to T3 Code's
 event-sourced thread engine, project snapshot query, and managed thread
-workspace service instead of adding a separate workflow controller.
+workspace service.
 
 Thread relationship facts are recorded automatically as
 `thread.activity.append` entries with kind
 `thread-orchestration.relationship`. This currently captures create, fork,
-read, message, and rename interactions for future graph/UI use without
-exposing graph-edit operations to agents.
+read, message, and rename interactions for future graph/UI use. The toolkit
+does not include graph-edit operations.
 
-The first version intentionally grants the `threads` capability to provider
-MCP credentials together with `preview`. A scoped T3 Code agent can list
-projects/threads and target any known thread id; this matches the desired
-Desktop-style orchestration power rather than a same-project-only subagent
-boundary. The boundary is therefore the issued per-thread MCP credential, not
-the project graph.
+When enabled, the toolkit's boundary is the issued per-thread MCP credential,
+not the project graph. A credential with the `threads` capability can list
+projects and threads, then target any known thread id.
 
 Codex-backed `fork_thread` calls now follow the official Codex fork semantics:
 T3 Code asks Codex App Server to run `thread/fork`, imports the returned copied

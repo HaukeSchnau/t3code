@@ -549,6 +549,19 @@ describe("T3 browser developer instructions", () => {
   });
 });
 
+describe("T3 orchestration developer instructions", () => {
+  it("does not advertise disabled thread orchestration tools", () => {
+    for (const instructions of [
+      codexDefaultModeDeveloperInstructions(true),
+      codexPlanModeDeveloperInstructions(true),
+    ]) {
+      NodeAssert.doesNotMatch(instructions, /T3 Code thread orchestration/);
+      NodeAssert.doesNotMatch(instructions, /create_thread/);
+      NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
+    }
+  });
+});
+
 describe("hasConfiguredMcpServer", () => {
   it("detects inline Codex MCP configuration arguments", () => {
     NodeAssert.equal(hasConfiguredMcpServer(undefined), false);
