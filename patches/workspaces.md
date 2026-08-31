@@ -21,11 +21,12 @@ support non-Git backends.
 ## Current Behavior
 
 - New managed workspaces are requested through `prepareWorkspace`.
-- Managed checkout and VCS workspace names are derived once from the creation-time display-name
-  seed, normalized for filesystem and DNS use, and suffixed with a stable thread hash. The same
-  naming rule applies to detached Git, Jujutsu, and directory-copy workspaces. Later automatic
-  thread-title refreshes do not rename a live workspace because terminals, setup scripts, and
-  external development tooling may already hold its path.
+- Managed checkout names are derived once from the creation-time display-name seed and normalized
+  for filesystem and DNS use. A numeric suffix appears only when the project has already claimed
+  the same semantic name. The same naming rule applies to detached Git, Jujutsu, and directory-copy
+  workspaces. Jujutsu uses the semantic name for both its workspace and checkout path. Later
+  automatic thread-title refreshes do not rename a live workspace because
+  terminals, setup scripts, and external development tooling may already hold its path.
 - Legacy `prepareWorktree` requests are still accepted and translated into a
   single-root `git-detached` workspace request.
 - Threads now carry `workspaceId` in addition to compatibility `branch` and
