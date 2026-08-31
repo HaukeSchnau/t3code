@@ -41,7 +41,11 @@ import {
   OrchestrationTurnActivitiesSnapshot,
 } from "./orchestration.ts";
 import {
+  ThreadOrchestrationAwaitBatchResult,
   ThreadOrchestrationAwaitThreadResult,
+  ThreadOrchestrationBatch,
+  ThreadOrchestrationCleanupBatchResult,
+  ThreadOrchestrationCreateBatchResult,
   ThreadOrchestrationCreateThreadResult,
   ThreadOrchestrationError,
   ThreadOrchestrationForkThreadResult,
@@ -49,10 +53,15 @@ import {
   ThreadOrchestrationListThreadModelsResult,
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationScopedAwaitThreadInput,
+  ThreadOrchestrationScopedAwaitBatchInput,
+  ThreadOrchestrationScopedCancelBatchInput,
+  ThreadOrchestrationScopedCleanupBatchInput,
+  ThreadOrchestrationScopedCreateBatchInput,
   ThreadOrchestrationScopedCreateThreadInput,
   ThreadOrchestrationScopedForkThreadInput,
   ThreadOrchestrationScopedListThreadsInput,
   ThreadOrchestrationScopedReadThreadInput,
+  ThreadOrchestrationScopedReadBatchInput,
   ThreadOrchestrationScopedReadThreadResultInput,
   ThreadOrchestrationScopedSendMessageInput,
   ThreadOrchestrationScopedSetThreadTitleInput,
@@ -691,6 +700,46 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedCreateThreadInput,
       success: ThreadOrchestrationCreateThreadResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createBatch", "/api/thread-orchestration/create-batch", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCreateBatchInput,
+      success: ThreadOrchestrationCreateBatchResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readBatch", "/api/thread-orchestration/read-batch", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadBatchInput,
+      success: ThreadOrchestrationBatch,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("awaitBatch", "/api/thread-orchestration/await-batch", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedAwaitBatchInput,
+      success: ThreadOrchestrationAwaitBatchResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cancelBatch", "/api/thread-orchestration/cancel-batch", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCancelBatchInput,
+      success: ThreadOrchestrationBatch,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cleanupBatch", "/api/thread-orchestration/cleanup-batch", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCleanupBatchInput,
+      success: ThreadOrchestrationCleanupBatchResult,
       error: EnvironmentThreadOrchestrationOperateErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

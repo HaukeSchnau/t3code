@@ -119,6 +119,49 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "createBatch",
+        Effect.fn("environment.threadOrchestration.createBatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.createBatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "readBatch",
+        Effect.fn("environment.threadOrchestration.readBatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.readBatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "awaitBatch",
+        Effect.fn("environment.threadOrchestration.awaitBatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.awaitBatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "cancelBatch",
+        Effect.fn("environment.threadOrchestration.cancelBatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.cancelBatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "cleanupBatch",
+        Effect.fn("environment.threadOrchestration.cleanupBatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.cleanupBatch(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
         "forkThread",
         Effect.fn("environment.threadOrchestration.forkThread")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
