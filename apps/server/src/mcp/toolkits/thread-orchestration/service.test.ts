@@ -10,6 +10,7 @@ import {
   ThreadWorkspaceRootId,
   type ServerProvider,
   type OrchestrationCommand,
+  type ProjectId,
   type OrchestrationProject,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
@@ -155,6 +156,74 @@ const getThreadResultContextById =
         activityCount: thread.activities.length,
       });
     });
+
+const getProjectShellById =
+  (model: OrchestrationReadModel = readModel) =>
+  (projectId: ProjectId) =>
+    Effect.sync(() => {
+      const project = model.projects.find(
+        (candidate) => candidate.id === projectId && candidate.deletedAt === null,
+      );
+      if (!project) return Option.none();
+      const { deletedAt: _deletedAt, ...projectShell } = project;
+      return Option.some(projectShell);
+    });
+
+const getThreadShellById =
+  (model: OrchestrationReadModel = readModel) =>
+  (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const thread = model.threads.find(
+        (candidate) =>
+          candidate.id === threadId &&
+          candidate.deletedAt === null &&
+          candidate.archivedAt === null,
+      );
+      return thread ? Option.some(makeThreadShell(thread)) : Option.none();
+    });
+
+const getThreadDetailById =
+  (model: OrchestrationReadModel = readModel) =>
+  (threadId: ThreadId) =>
+    Effect.sync(() => {
+      const thread = model.threads.find(
+        (candidate) =>
+          candidate.id === threadId &&
+          candidate.deletedAt === null &&
+          candidate.archivedAt === null,
+      );
+      return thread ? Option.some(thread) : Option.none();
+    });
+
+const listThreadRelationshipActivities =
+  (model: OrchestrationReadModel = readModel) =>
+  () =>
+    Effect.sync(() =>
+      model.threads.flatMap((thread) =>
+        thread.activities.filter(
+          (activity) => activity.kind === "thread-orchestration.relationship",
+        ),
+      ),
+    );
+
+const makeShellSnapshot = (
+  model: OrchestrationReadModel,
+  archived: boolean,
+): OrchestrationShellSnapshot => ({
+  snapshotSequence: model.snapshotSequence,
+  projects: model.projects
+    .filter((project) => project.deletedAt === null)
+    .map(({ deletedAt: _deletedAt, ...project }) => project),
+  threads: model.threads
+    .filter(
+      (thread) =>
+        thread.deletedAt === null &&
+        (archived ? thread.archivedAt !== null : thread.archivedAt === null),
+    )
+    .map(makeThreadShell),
+  usageLimits: model.usageLimits,
+  updatedAt: model.updatedAt,
+});
 
 const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
   fork: (input) =>
@@ -324,19 +393,20 @@ it.effect("lists thread model choices with curated model selections and reasonin
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -369,7 +439,10 @@ it.effect("lists thread model choices with curated model selections and reasonin
           values: ["low", "medium", "high", "xhigh"],
           defaultValue: "high",
         },
-        modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.4",
+        },
       },
       {
         environmentId: scope.environmentId,
@@ -378,7 +451,10 @@ it.effect("lists thread model choices with curated model selections and reasonin
         driver: "cursor",
         model: "composer-2",
         name: "Composer 2",
-        modelSelection: { instanceId: ProviderInstanceId.make("cursor"), model: "composer-2" },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("cursor"),
+          model: "composer-2",
+        },
       },
       {
         environmentId: scope.environmentId,
@@ -387,7 +463,10 @@ it.effect("lists thread model choices with curated model selections and reasonin
         driver: "opencode",
         model: "openai/gpt-5",
         name: "OpenAI GPT-5",
-        modelSelection: { instanceId: ProviderInstanceId.make("opencode"), model: "openai/gpt-5" },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "openai/gpt-5",
+        },
       },
     ]);
   }).pipe(Effect.provide(testLayer));
@@ -408,19 +487,20 @@ it.effect("lists environments and projects without provider model metadata", () 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -523,19 +603,20 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -610,19 +691,20 @@ it.effect("queues cross-thread messages and records relationship activities", ()
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
-        getSnapshot: () => Effect.succeed(model),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(model),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(model),
         getThreadResultContextById: getThreadResultContextById(model),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(model),
+        getThreadDetailById: getThreadDetailById(model),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -703,19 +785,20 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -829,19 +912,20 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -895,19 +979,20 @@ it.effect("creates threads before starting their initial turn", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1024,19 +1109,20 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1111,19 +1197,20 @@ it.effect("prepares requested worktrees for forked threads", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1246,19 +1333,20 @@ it.effect("rejects fork requests while the source thread is running", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(runningReadModel),
-        getSnapshot: () => Effect.succeed(runningReadModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(runningReadModel),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
-        getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(runningReadModel),
+        getThreadResultContextById: getThreadResultContextById(runningReadModel),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(runningReadModel),
+        getThreadDetailById: getThreadDetailById(runningReadModel),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1315,19 +1403,20 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1428,19 +1517,20 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1458,7 +1548,9 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.forkThread(scope, { threadId: targetThreadId });
+    const result = yield* service.forkThread(scope, {
+      threadId: targetThreadId,
+    });
 
     expect(importerInputs).toMatchObject([
       {
@@ -1517,19 +1609,20 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1584,7 +1677,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("reads compact thread results without recording read relationships", () => {
+it.effect("reads targeted thread detail and compact results without full snapshots", () => {
   const dispatched: OrchestrationCommand[] = [];
   const assistantMessage = {
     id: "message-assistant" as OrchestrationThread["messages"][number]["id"],
@@ -1635,19 +1728,20 @@ it.effect("reads compact thread results without recording read relationships", (
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
-        getSnapshot: () => Effect.succeed(model),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(model),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(model),
         getThreadResultContextById: getThreadResultContextById(model),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(model),
+        getThreadDetailById: getThreadDetailById(model),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1665,8 +1759,15 @@ it.effect("reads compact thread results without recording read relationships", (
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
-    const result = yield* service.readThreadResult(scope, { threadId: targetThreadId });
+    const detail = yield* service.readThread(
+      { ...scope, threadId: targetThreadId },
+      { threadId: targetThreadId, turnLimit: 1 },
+    );
+    const result = yield* service.readThreadResult(scope, {
+      threadId: targetThreadId,
+    });
 
+    expect(detail.messages).toEqual(model.threads[1]?.messages);
     expect(result.thread.threadId).toBe(targetThreadId);
     expect(result.latestAssistantMessage).toEqual(assistantMessage);
     expect(result.queuedMessageCount).toBe(0);
@@ -1694,19 +1795,20 @@ it.effect("awaits idle threads without polling side effects", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.succeed(readModel),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),
@@ -1798,19 +1900,20 @@ it.effect("reads relationship graphs without adding read edges", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
-        getSnapshot: () => Effect.succeed(model),
-        getShellSnapshot: () => Effect.die("unused"),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
+        getShellSnapshot: () => Effect.succeed(makeShellSnapshot(model, false)),
         getArchivedShellSnapshot: () => Effect.die("unused"),
         getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
         getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
         getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(model),
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(model),
         getThreadResultContextById: getThreadResultContextById(),
-        getThreadDetailById: () => Effect.succeed(Option.none()),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(model),
+        getThreadDetailById: getThreadDetailById(model),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
         searchThreads: () => Effect.succeed({ matches: [] }),

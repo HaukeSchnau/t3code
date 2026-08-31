@@ -42,8 +42,17 @@ const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
 
 export interface CodexThreadForkImportInput {
   readonly threadId: ThreadId;
-  readonly sourceThread: OrchestrationThread;
-  readonly project: OrchestrationProject;
+  readonly sourceThread: Pick<
+    OrchestrationThread,
+    | "id"
+    | "modelSelection"
+    | "runtimeMode"
+    | "interactionMode"
+    | "branch"
+    | "worktreePath"
+    | "workspaceId"
+  >;
+  readonly project: Pick<OrchestrationProject, "id" | "title" | "workspaceRoot">;
   readonly title: string;
   readonly createdAt: string;
   readonly preparedWorkspace?: PreparedThreadWorkspace;

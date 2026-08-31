@@ -18,6 +18,7 @@ import type {
   OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
   OrchestrationThread,
+  OrchestrationThreadActivity,
   OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
@@ -219,6 +220,12 @@ export interface ProjectionSnapshotQueryShape {
   readonly getThreadResultContextById: (
     threadId: ThreadId,
   ) => Effect.Effect<Option.Option<ProjectionThreadResultContext>, ProjectionRepositoryError>;
+
+  /** Read only persisted thread-orchestration relationship activities. */
+  readonly listThreadRelationshipActivities: () => Effect.Effect<
+    ReadonlyArray<OrchestrationThreadActivity>,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read a single active thread detail snapshot by id.

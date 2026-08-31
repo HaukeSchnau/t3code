@@ -638,6 +638,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listThreadRelationshipActivityRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          activity_revision AS "activityRevision",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE kind = 'thread-orchestration.relationship'
+        ORDER BY created_at ASC, activity_id ASC
+      `,
+  });
+
   const listThreadSessionRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadSessionDbRowSchema,
@@ -2258,7 +2280,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
-
               return yield* decodeShellSnapshot(snapshot).pipe(
                 Effect.mapError(
                   toPersistenceDecodeError(
@@ -2431,7 +2452,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                 Effect.mapError(
                   toPersistenceDecodeError(
                     "ProjectionSnapshotQuery.getArchivedShellSnapshot:decodeShellSnapshot",
-
                   ),
                 ),
               );
@@ -2711,6 +2731,18 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadShellById,
     getProjectShellById,
   });
+
+  const listThreadRelationshipActivities: ProjectionSnapshotQueryShape["listThreadRelationshipActivities"] =
+    () =>
+      listThreadRelationshipActivityRows(undefined).pipe(
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProjectionSnapshotQuery.listThreadRelationshipActivities:query",
+            "ProjectionSnapshotQuery.listThreadRelationshipActivities:decodeRows",
+          ),
+        ),
+        Effect.map((rows) => rows.map(mapProjectionActivityRow)),
+      );
 
   interface ThreadDetailBounds {
     readonly minAnchorAt: string;
@@ -3055,6 +3087,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getFullThreadDiffContext,
     getThreadShellById,
     getThreadResultContextById,
+    listThreadRelationshipActivities,
     getThreadDetailById,
     getThreadDetailSnapshot,
     getTurnActivitiesSnapshot,

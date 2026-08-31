@@ -259,6 +259,7 @@ describe("ProviderSessionReaper", () => {
                 : Option.none(),
             ),
           getThreadResultContextById: () => Effect.die("unused"),
+          listThreadRelationshipActivities: () => Effect.die("unused"),
           getThreadDetailById: () => Effect.die("unused"),
           getThreadDetailSnapshot: () => Effect.die("unused"),
           getTurnActivitiesSnapshot: () => Effect.die("unused"),
