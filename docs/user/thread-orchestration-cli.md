@@ -15,6 +15,14 @@ t3 thread read <thread-id> --json
 t3 thread result <thread-id> --json
 t3 thread await <thread-id> --until idle --json
 t3 thread graph <thread-id> --json
+t3 thread batch create "Review the parser" \
+  --worker 'codex=codexAgent/gpt-5.6-sol?effort:high' \
+  --worker 'claude=claudeAgent/claude-opus-5?effort:high' \
+  --worktree --timeout-ms 1800000 --json
+t3 thread batch read <batch-id> --json
+t3 thread batch await <batch-id> --json
+t3 thread batch cancel <batch-id> --json
+t3 thread batch cleanup <batch-id> --json
 t3 thread create "Review the parser" --worktree --json
 t3 thread fork --worktree --json
 t3 thread send <thread-id> "Please run the focused tests" --json
@@ -27,6 +35,38 @@ an unrelated shell, pass `--from-thread <thread-id>` if the command needs caller
 identity. `create` requires caller identity because it inherits the caller's
 project, provider, model, runtime mode, and interaction mode unless those
 choices are overridden.
+
+## Durable batches
+
+`t3 thread batch create` launches one or more independent workers with the same
+prompt. Each `--worker` uses
+`label=provider-instance/model?option:value`; repeat the flag to compare models,
+providers, or reasoning settings. The server assigns an opaque batch id, stores
+the exact membership on the coordinator thread, and keeps monitoring after the
+CLI command or coordinator turn exits.
+
+The barrier settles when every worker completes, fails, or is interrupted. A
+worker blocked on approval or user input keeps the barrier open and queues an
+attention message on the coordinator; resolving the request lets the same
+batch continue. A deadline settles the barrier and interrupts live local
+workers. Once settled, the server queues one result message on the coordinator
+thread so it can compare the results without holding a tool call open. Barrier
+state is reconstructed from durable activities after a server restart.
+
+Worker summaries expose normalized outcomes (`queued`, `running`, `completed`,
+`failed`, `interrupted`, `blocked-approval`, or `blocked-input`) alongside the
+provider's raw status and latest assistant response.
+
+Cancellation and workspace cleanup are intentionally separate. `cancel`
+interrupts live local workers but preserves their partial work. `cleanup`
+deletes managed local workspaces only after the batch is terminal. A worktree
+isolates working state; it is not a security boundary and does not prevent a
+full-access worker from reading sibling paths. Sandboxed blind evaluations need
+a container, microVM, or another restricted runtime.
+
+Batch membership and graph lineage support workers on registered remote hosts.
+Cross-host cancel and cleanup currently fail explicitly before changing any
+member; they do not silently report success while remote workers keep running.
 
 Use `--environment <environment-id>` with the id returned by
 `t3 thread projects` to target a registered remote host. Register hosts with

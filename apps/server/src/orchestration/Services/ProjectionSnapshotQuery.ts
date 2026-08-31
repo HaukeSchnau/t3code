@@ -227,6 +227,12 @@ export interface ProjectionSnapshotQueryShape {
     ProjectionRepositoryError
   >;
 
+  /** Read persisted batch lifecycle activities without hydrating thread transcripts. */
+  readonly listThreadOrchestrationBatchActivities?: () => Effect.Effect<
+    ReadonlyArray<OrchestrationThreadActivity>,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Read a single active thread detail snapshot by id.
    */

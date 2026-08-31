@@ -30,7 +30,11 @@ import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceServi
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
-import { ThreadOrchestrationService, layer as ThreadOrchestrationServiceLive } from "./service.ts";
+import {
+  __testing,
+  ThreadOrchestrationService,
+  layer as ThreadOrchestrationServiceLive,
+} from "./service.ts";
 
 const actorThreadId = ThreadId.make("thread-actor");
 const targetThreadId = ThreadId.make("thread-target");
@@ -48,6 +52,23 @@ const actorModelSelection = {
 };
 const actorRuntimeMode = "auto-accept-edits" as const;
 const actorInteractionMode = "plan" as const;
+
+it("keeps blocked batches open and cleanup-ineligible", () => {
+  const outcomes = ["completed", "blocked-approval", "running"] as const;
+  expect(__testing.statusForBatch({ cancelled: false, deadlineExceeded: false, outcomes })).toBe(
+    "blocked",
+  );
+  expect(__testing.isTerminalBatchStatus("blocked")).toBe(false);
+  expect(outcomes.every(__testing.isTerminalBatchMemberOutcome)).toBe(false);
+});
+
+it("settles mixed terminal worker outcomes as failed", () => {
+  const outcomes = ["completed", "failed", "interrupted"] as const;
+  expect(__testing.statusForBatch({ cancelled: false, deadlineExceeded: false, outcomes })).toBe(
+    "failed",
+  );
+  expect(outcomes.every(__testing.isTerminalBatchMemberOutcome)).toBe(true);
+});
 
 const scope: McpInvocationContext.McpInvocationScope = {
   environmentId: EnvironmentId.make("environment-1"),

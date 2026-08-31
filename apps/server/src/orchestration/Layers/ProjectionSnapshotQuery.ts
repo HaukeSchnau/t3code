@@ -660,6 +660,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
       `,
   });
 
+  const listThreadOrchestrationBatchActivityRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          activity_revision AS "activityRevision",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE kind LIKE 'thread-orchestration.batch.%'
+        ORDER BY created_at ASC, activity_id ASC
+      `,
+  });
+
   const listThreadSessionRows = SqlSchema.findAll({
     Request: Schema.Void,
     Result: ProjectionThreadSessionDbRowSchema,
@@ -2744,6 +2766,19 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         Effect.map((rows) => rows.map(mapProjectionActivityRow)),
       );
 
+  const listThreadOrchestrationBatchActivities: NonNullable<
+    ProjectionSnapshotQueryShape["listThreadOrchestrationBatchActivities"]
+  > = () =>
+    listThreadOrchestrationBatchActivityRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.listThreadOrchestrationBatchActivities:query",
+          "ProjectionSnapshotQuery.listThreadOrchestrationBatchActivities:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => rows.map(mapProjectionActivityRow)),
+    );
+
   interface ThreadDetailBounds {
     readonly minAnchorAt: string;
     readonly minTurnKey: string;
@@ -3088,6 +3123,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     getThreadShellById,
     getThreadResultContextById,
     listThreadRelationshipActivities,
+    listThreadOrchestrationBatchActivities,
     getThreadDetailById,
     getThreadDetailSnapshot,
     getTurnActivitiesSnapshot,

@@ -3290,4 +3290,39 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       );
     }),
   );
+
+  it.effect("reads only durable thread-orchestration batch activities", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+        ) VALUES
+          (
+            'batch-created', 'thread-actor', NULL, 'tool',
+            'thread-orchestration.batch.created', 'batch created',
+            '{"batchId":"batch-1"}', '2026-08-31T00:00:00.000Z'
+          ),
+          (
+            'relationship', 'thread-target', NULL, 'tool',
+            'thread-orchestration.relationship', 'relationship',
+            '{}', '2026-08-31T00:00:01.000Z'
+          ),
+          (
+            'batch-notified', 'thread-actor', NULL, 'tool',
+            'thread-orchestration.batch.notified', 'batch notified',
+            '{"batchId":"batch-1"}', '2026-08-31T00:00:02.000Z'
+          )
+      `;
+
+      const activities = yield* snapshotQuery.listThreadOrchestrationBatchActivities!();
+      assert.deepStrictEqual(
+        activities.map((activity) => activity.id),
+        [EventId.make("batch-created"), EventId.make("batch-notified")],
+      );
+    }),
+  );
 });
