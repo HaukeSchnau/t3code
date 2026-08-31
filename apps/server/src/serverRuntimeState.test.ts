@@ -78,6 +78,42 @@ describe("serverRuntimeState", () => {
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 
+  it.effect("only clears runtime state owned by the calling server", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const root = yield* fileSystem.makeTempDirectoryScoped({
+        prefix: "t3-server-runtime-state-test-",
+      });
+      const statePath = path.join(root, "server.json");
+      const state: ServerRuntimeState.PersistedServerRuntimeState = {
+        version: 1,
+        pid: 123,
+        port: 4_971,
+        origin: "http://127.0.0.1:4971",
+        startedAt: "2026-06-20T00:00:00.000Z",
+      };
+
+      yield* ServerRuntimeState.persistServerRuntimeState({ path: statePath, state });
+      yield* ServerRuntimeState.clearPersistedServerRuntimeState({
+        path: statePath,
+        ownerPid: 456,
+      });
+      assert.deepEqual(
+        Option.getOrThrow(yield* ServerRuntimeState.readPersistedServerRuntimeState(statePath)),
+        state,
+      );
+
+      yield* ServerRuntimeState.clearPersistedServerRuntimeState({
+        path: statePath,
+        ownerPid: state.pid,
+      });
+      assert.isTrue(
+        Option.isNone(yield* ServerRuntimeState.readPersistedServerRuntimeState(statePath)),
+      );
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("preserves malformed state decode failures", () => {
     const logs: CapturedLog[] = [];
     const logger = Logger.make(({ fiber, message }) => {
