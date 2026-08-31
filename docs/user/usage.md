@@ -18,9 +18,11 @@ working pattern gradually change future forecasts. The current window affects th
 immediately.
 
 For GLM, T3 Code uses the API key and API endpoint already resolved by OpenCode for the selected
-model. The meter appears only while that matching GLM model is selected. It shows the coding-token
-allowance; the separate monthly MCP allowance is not included. GLM activity is not yet included in
-the historical Usage page.
+model. The meter appears only while that matching GLM model is selected. Its compact rows show the
+five-hour coding allowance and the weekly allowance when Z.AI reports one. Open the meter to see the
+monthly MCP quota for Z.AI Web Search, Web Reader, and ZRead calls. Other MCP servers do not consume
+that allowance, and Z.AI's vision MCP shares the five-hour coding pool instead. GLM activity is not
+yet included in the historical Usage page.
 
 For Claude, open the meter to see every limit Claude reports, including the current session, the
 weekly all-model limit, and model-specific weekly limits. Claude does not always return a plan name,

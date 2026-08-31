@@ -52,15 +52,13 @@ function trimmed(value: string | null | undefined): string | null {
   return text && text.length > 0 ? text : null;
 }
 
-function durationMinutes(unit: number, count: number): number | null {
+function codingDurationMinutes(unit: number, count: number): number | null {
   if (count <= 0) return null;
   switch (unit) {
     case 1:
       return count * 24 * 60;
     case 3:
       return count * 60;
-    case 5:
-      return count;
     case 6:
       return count * 7 * 24 * 60;
     default:
@@ -68,11 +66,38 @@ function durationMinutes(unit: number, count: number): number | null {
   }
 }
 
-function resetTimestamp(value: number | null | undefined): string | null {
+function resetEpochMillis(value: number | null | undefined): number | null {
   if (value === null || value === undefined || !Number.isFinite(value) || value <= 0) {
     return null;
   }
-  const epochMs = value >= 1_000_000_000_000 ? value : value * 1000;
+  return value >= 1_000_000_000_000 ? value : value * 1000;
+}
+
+function mcpDurationMinutes(
+  unit: number,
+  count: number,
+  nextResetTime: number | null | undefined,
+): number | null {
+  if (unit !== 5 || count <= 0) return null;
+
+  // Z.AI encodes this as calendar months. Derive the real span from the reset
+  // date so February and 31-day months forecast from the correct start.
+  const resetEpochMs = resetEpochMillis(nextResetTime);
+  const reset = resetEpochMs === null ? Option.none() : DateTime.make(resetEpochMs);
+  return Option.match(reset, {
+    onNone: () => count * 30 * 24 * 60,
+    onSome: (resetAt) =>
+      Math.round(
+        (DateTime.toEpochMillis(resetAt) -
+          DateTime.toEpochMillis(DateTime.subtract(resetAt, { months: count }))) /
+          (60 * 1000),
+      ),
+  });
+}
+
+function resetTimestamp(value: number | null | undefined): string | null {
+  const epochMs = resetEpochMillis(value);
+  if (epochMs === null) return null;
   return Option.match(DateTime.make(epochMs), {
     onNone: () => null,
     onSome: DateTime.formatIso,
@@ -95,10 +120,10 @@ export function zaiUsageLimitsFromResponse(
     return undefined;
   }
 
-  const windows = decoded.value.data.limits
+  const codingWindows = decoded.value.data.limits
     .flatMap((limit) => {
       if (limit.type !== "TOKENS_LIMIT") return [];
-      const windowDurationMins = durationMinutes(limit.unit, limit.number);
+      const windowDurationMins = codingDurationMinutes(limit.unit, limit.number);
       if (windowDurationMins === null || !Number.isFinite(limit.percentage)) return [];
       return [
         {
@@ -111,7 +136,23 @@ export function zaiUsageLimitsFromResponse(
       ];
     })
     .toSorted((left, right) => left.windowDurationMins - right.windowDurationMins);
-  if (windows.length === 0) return undefined;
+  if (codingWindows.length === 0) return undefined;
+
+  const mcpWindows = decoded.value.data.limits.flatMap((limit) => {
+    if (limit.type !== "TIME_LIMIT") return [];
+    const windowDurationMins = mcpDurationMinutes(limit.unit, limit.number, limit.nextResetTime);
+    if (windowDurationMins === null || !Number.isFinite(limit.percentage)) return [];
+    return [
+      {
+        key: `zai:mcp:${limit.unit}:${limit.number}`,
+        label: "MCP quota",
+        usedPercent: Math.max(0, Math.min(100, limit.percentage)),
+        resetsAt: resetTimestamp(limit.nextResetTime),
+        windowDurationMins,
+      },
+    ];
+  });
+  const windows = [...codingWindows, ...mcpWindows];
 
   const planType =
     [
@@ -130,8 +171,8 @@ export function zaiUsageLimitsFromResponse(
     planType,
     rateLimitReachedType: null,
     credits: null,
-    primary: windows[0] ?? null,
-    secondary: windows.length > 1 ? (windows.at(-1) ?? null) : null,
+    primary: codingWindows[0] ?? null,
+    secondary: codingWindows.length > 1 ? (codingWindows.at(-1) ?? null) : null,
     windows,
   };
 }

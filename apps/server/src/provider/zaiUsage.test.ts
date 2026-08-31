@@ -10,7 +10,7 @@ import {
 } from "./zaiUsage.ts";
 
 describe("zaiUsageLimitsFromResponse", () => {
-  it("normalizes the live personal-plan response without treating MCP as coding quota", () => {
+  it("keeps the monthly MCP allowance separate from the primary coding quota", () => {
     expect(
       zaiUsageLimitsFromResponse(
         {
@@ -60,11 +60,18 @@ describe("zaiUsageLimitsFromResponse", () => {
           resetsAt: "2026-08-31T14:21:41.938Z",
           windowDurationMins: 300,
         },
+        {
+          key: "zai:mcp:5:1",
+          label: "MCP quota",
+          usedPercent: 0,
+          resetsAt: "2026-09-03T17:01:21.998Z",
+          windowDurationMins: 44_640,
+        },
       ],
     });
   });
 
-  it("sorts an optional weekly window behind the five-hour window", () => {
+  it("keeps an optional weekly window secondary when MCP is also present", () => {
     const usage = zaiUsageLimitsFromResponse(
       {
         code: 200,
@@ -72,6 +79,13 @@ describe("zaiUsageLimitsFromResponse", () => {
         data: {
           planName: "Max",
           limits: [
+            {
+              type: "TIME_LIMIT",
+              unit: 5,
+              number: 1,
+              percentage: 9,
+              nextResetTime: 1_788_454_881_998,
+            },
             {
               type: "TOKENS_LIMIT",
               unit: 6,
@@ -105,9 +119,14 @@ describe("zaiUsageLimitsFromResponse", () => {
       windowDurationMins: 10_080,
     });
     expect(usage?.planType).toBe("Max");
+    expect(usage?.windows?.map((window) => window.key)).toEqual([
+      "zai:tokens:3:5",
+      "zai:tokens:6:1",
+      "zai:mcp:5:1",
+    ]);
   });
 
-  it("rejects unsuccessful, malformed, and unsupported-only responses", () => {
+  it("rejects unsuccessful, malformed, and responses without coding quota", () => {
     expect(
       zaiUsageLimitsFromResponse(
         { code: 500, success: false, data: { limits: [] } },
