@@ -46,6 +46,22 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "listAllProjects",
+        Effect.fn("environment.threadOrchestration.listAllProjects")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.listProjects();
+        }),
+      )
+      .handle(
+        "listAllThreadModels",
+        Effect.fn("environment.threadOrchestration.listAllThreadModels")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.listThreadModels();
+        }),
+      )
+      .handle(
         "listThreads",
         Effect.fn("environment.threadOrchestration.listThreads")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -100,6 +116,14 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
             scopeFromActor(args.payload.scope),
             args.payload.input,
           );
+        }),
+      )
+      .handle(
+        "forkThread",
+        Effect.fn("environment.threadOrchestration.forkThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.forkThread(scopeFromActor(args.payload.scope), args.payload.input);
         }),
       )
       .handle(
