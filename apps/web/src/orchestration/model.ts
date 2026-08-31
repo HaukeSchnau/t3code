@@ -6,10 +6,10 @@
  * wait over that exact set: it reports every member's terminal disposition and
  * wakes the coordinator once.
  *
- * The wire shapes below mirror the contract additions proposed to the platform
- * side (`ThreadOrchestrationBatch` and friends). They are declared structurally
- * so the generated contract types assign to them without a rewrite here; when
- * the contract lands, these interfaces are the only thing to delete.
+ * The wire shapes below form a presentation boundary over the server contract
+ * (`ThreadOrchestrationBatch` and friends). They are declared structurally so
+ * generated contract values assign to them without coupling view derivation to
+ * transport details.
  *
  * Everything the UI renders comes out of `deriveBatchViews`. Components stay
  * dumb: no status arithmetic, no formatting, no "is this really running" logic

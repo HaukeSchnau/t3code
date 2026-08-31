@@ -1,11 +1,11 @@
 /**
  * Development-only fixture for the orchestration view.
  *
- * The server side of batches is not on the wire yet, so this stands in for it.
- * It is written in **contract shape** and pushed through `toOrchestrationSnapshot`
- * rather than hand-authored as view models: the page then renders exactly what
- * it will render against a real environment, and any mapping that is wrong here
- * is wrong in production too.
+ * The dashboard's aggregate snapshot query is not wired yet, so this stands in
+ * for it. It is written in **contract shape** and pushed through
+ * `toOrchestrationSnapshot` rather than hand-authored as view models: the page
+ * then renders exactly what it will render against a real environment, and any
+ * mapping that is wrong here is wrong in production too.
  *
  * It deliberately covers the cases that break naive dashboards:
  *
@@ -40,6 +40,10 @@ const ENVIRONMENT_LABELS = new Map([
 ]);
 
 const WORKSPACE_ROOT = "/Users/hauke/Code/t3code";
+const AUTH_BATCH_ID = "thread-orchestration:batch:01JCQ7X2K3AUTHREWRITE";
+const MIGRATION_BATCH_ID = "thread-orchestration:batch:01JCQ8B9M4MIGRATIONPROBE";
+const FLAKY_BATCH_ID = "thread-orchestration:batch:01JCQ9F1P7FLAKYSWEEP";
+const RELEASE_BATCH_ID = "thread-orchestration:batch:01JCQ5T0H2RELEASEAUDIT";
 
 const minutes = (count: number) => count * 60_000;
 
@@ -93,7 +97,7 @@ const NESTED_COORDINATOR_THREAD = "thread-auth-risk-first";
 function sampleBatches(now: number): readonly BatchContractBatch[] {
   return [
     {
-      batchId: "batch_01JCQ7X2K3AUTHREWRITE",
+      batchId: AUTH_BATCH_ID,
       coordinatorEnvironmentId: LOCAL_ENVIRONMENT,
       coordinatorThreadId: COORDINATOR_THREAD,
       title: "Session auth rewrite — 3 approaches",
@@ -142,7 +146,7 @@ function sampleBatches(now: number): readonly BatchContractBatch[] {
       ],
     },
     {
-      batchId: "batch_01JCQ8B9M4MIGRATIONPROBE",
+      batchId: MIGRATION_BATCH_ID,
       coordinatorEnvironmentId: LOCAL_ENVIRONMENT,
       // Launched by a worker of the batch above: the graph's third column.
       coordinatorThreadId: NESTED_COORDINATOR_THREAD,
@@ -178,7 +182,7 @@ function sampleBatches(now: number): readonly BatchContractBatch[] {
       ],
     },
     {
-      batchId: "batch_01JCQ9F1P7FLAKYSWEEP",
+      batchId: FLAKY_BATCH_ID,
       coordinatorEnvironmentId: LOCAL_ENVIRONMENT,
       coordinatorThreadId: COORDINATOR_THREAD,
       title: "Flaky test sweep",
@@ -246,7 +250,7 @@ function sampleBatches(now: number): readonly BatchContractBatch[] {
       ],
     },
     {
-      batchId: "batch_01JCQ5T0H2RELEASEAUDIT",
+      batchId: RELEASE_BATCH_ID,
       coordinatorEnvironmentId: LOCAL_ENVIRONMENT,
       coordinatorThreadId: COORDINATOR_THREAD,
       title: "Release audit — two hosts",
@@ -330,21 +334,11 @@ function sampleRelationships(now: number): readonly BatchContractRelationship[] 
   });
 
   return [
-    createdBy(COORDINATOR_THREAD, NESTED_COORDINATOR_THREAD, "batch_01JCQ7X2K3AUTHREWRITE", 96),
-    createdBy(COORDINATOR_THREAD, "thread-auth-mvp-first", "batch_01JCQ7X2K3AUTHREWRITE", 96),
-    createdBy(COORDINATOR_THREAD, "thread-auth-control", "batch_01JCQ7X2K3AUTHREWRITE", 96),
-    createdBy(
-      NESTED_COORDINATOR_THREAD,
-      "thread-probe-sqlite",
-      "batch_01JCQ8B9M4MIGRATIONPROBE",
-      63,
-    ),
-    createdBy(
-      NESTED_COORDINATOR_THREAD,
-      "thread-probe-postgres",
-      "batch_01JCQ8B9M4MIGRATIONPROBE",
-      63,
-    ),
+    createdBy(COORDINATOR_THREAD, NESTED_COORDINATOR_THREAD, AUTH_BATCH_ID, 96),
+    createdBy(COORDINATOR_THREAD, "thread-auth-mvp-first", AUTH_BATCH_ID, 96),
+    createdBy(COORDINATOR_THREAD, "thread-auth-control", AUTH_BATCH_ID, 96),
+    createdBy(NESTED_COORDINATOR_THREAD, "thread-probe-sqlite", MIGRATION_BATCH_ID, 63),
+    createdBy(NESTED_COORDINATOR_THREAD, "thread-probe-postgres", MIGRATION_BATCH_ID, 63),
     {
       kind: "messagedBy",
       actorEnvironmentId: LOCAL_ENVIRONMENT,
