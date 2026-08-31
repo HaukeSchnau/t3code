@@ -54,6 +54,9 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
+const isMissingAggregateInvariant = (error: OrchestrationCommandInvariantError) =>
+  error.detail.includes("does not exist for command");
+
 interface CommandEnvelope {
   command: OrchestrationCommand;
   origin: OrchestrationClientOrigin | undefined;
@@ -244,19 +247,32 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return yield* resolveExistingReceipt(existingReceipt.value, receiptIdentity);
         }
 
-        const eventBase = yield* decideOrchestrationCommand({
-          command: envelope.command,
-          readModel: commandReadModel,
-        }).pipe(
-          Effect.provideService(Crypto.Crypto, crypto),
-          Effect.mapError((cause) =>
-            isOrchestrationCommandInvariantError(cause)
-              ? cause
-              : new OrchestrationCommandInvariantError({
-                  commandType: envelope.command.type,
-                  detail: "Failed to generate an event identifier.",
-                  cause,
-                }),
+        const decide = () =>
+          decideOrchestrationCommand({
+            command: envelope.command,
+            readModel: commandReadModel,
+          }).pipe(
+            Effect.provideService(Crypto.Crypto, crypto),
+            Effect.mapError((cause) =>
+              isOrchestrationCommandInvariantError(cause)
+                ? cause
+                : new OrchestrationCommandInvariantError({
+                    commandType: envelope.command.type,
+                    detail: "Failed to generate an event identifier.",
+                    cause,
+                  }),
+            ),
+          );
+        const eventBase = yield* decide().pipe(
+          Effect.catchIf(isMissingAggregateInvariant, (initialError) =>
+            Effect.gen(function* () {
+              commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
+              return yield* decide().pipe(
+                Effect.mapError((refreshedError) =>
+                  isMissingAggregateInvariant(refreshedError) ? initialError : refreshedError,
+                ),
+              );
+            }),
           ),
         );
         const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
