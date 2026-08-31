@@ -438,11 +438,22 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 export function ComposerUsageLimitsMeterSlot(props: {
   compact: boolean;
   selectedProvider: ProviderDriverKind;
+  selectedModel?: string | null;
   activeUsageLimits: UsageLimitsSnapshot | null;
 }) {
+  const selectedModelSeparator = props.selectedModel?.indexOf("/") ?? -1;
+  const selectedOpenCodeProvider =
+    selectedModelSeparator > 0 ? props.selectedModel?.slice(0, selectedModelSeparator) : null;
+  const selectedOpenCodeModel =
+    selectedModelSeparator > 0 ? props.selectedModel?.slice(selectedModelSeparator + 1) : null;
+  const supportsOpenCodeGlmUsageLimits =
+    props.selectedProvider === ProviderDriverKind.make("opencode") &&
+    selectedOpenCodeModel?.toLowerCase().startsWith("glm-") === true &&
+    selectedOpenCodeProvider === props.activeUsageLimits?.limitId;
   const supportsUsageLimits =
     props.selectedProvider === ProviderDriverKind.make("codex") ||
-    props.selectedProvider === ProviderDriverKind.make("claudeAgent");
+    props.selectedProvider === ProviderDriverKind.make("claudeAgent") ||
+    supportsOpenCodeGlmUsageLimits;
   if (!supportsUsageLimits || !props.activeUsageLimits) {
     return null;
   }
@@ -453,6 +464,7 @@ export function ComposerUsageLimitsMeterSlot(props: {
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
   selectedProvider: ProviderDriverKind;
+  selectedModel: string;
   activeContextWindow: ContextWindowSnapshot | null;
   activeUsageLimits: UsageLimitsSnapshot | null;
   activeThreadModelDisplayName: string | null;
@@ -498,6 +510,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
       <ComposerUsageLimitsMeterSlot
         compact={props.compact}
         selectedProvider={props.selectedProvider}
+        selectedModel={props.selectedModel}
         activeUsageLimits={props.activeUsageLimits}
       />
       {props.isPreparingWorktree ? (
@@ -3559,6 +3572,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 <ComposerFooterPrimaryActions
                   compact={isComposerPrimaryActionsCompact}
                   selectedProvider={selectedProvider}
+                  selectedModel={selectedModel}
                   activeContextWindow={activeContextWindow}
                   activeUsageLimits={activeUsageLimits}
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
