@@ -2,9 +2,7 @@
  * Browser defaults - resolves the configured starting state for preview tabs.
  *
  * Settings → Integrations → Browser lets the user pick the viewport, zoom, and
- * appearance a preview tab should open at. Those preferences apply to every
- * entry point that opens a tab without stating its own: the user opening a
- * browser panel, and agents calling `preview_open` with no size.
+ * appearance a hand-opened preview tab should use.
  *
  * The values live in client settings because the Chromium guest they configure
  * is desktop-local, so this module reads them through the same external store

@@ -470,7 +470,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "high",
     });
 
-    NodeAssert.ok(instructions.startsWith(codexDefaultModeDeveloperInstructions(true)));
+    NodeAssert.ok(instructions.startsWith(codexDefaultModeDeveloperInstructions));
     NodeAssert.match(instructions, /T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
@@ -482,7 +482,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "medium",
     });
 
-    NodeAssert.ok(instructions.startsWith(codexPlanModeDeveloperInstructions(true)));
+    NodeAssert.ok(instructions.startsWith(codexPlanModeDeveloperInstructions));
     NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
   });
 
@@ -511,49 +511,30 @@ describe("buildCodexDeveloperInstructions", () => {
 });
 
 describe("T3 browser developer instructions", () => {
-  it("does not advertise disabled preview tools in either collaboration mode", () => {
+  it("does not advertise disabled preview tools", () => {
     for (const instructions of [
-      codexDefaultModeDeveloperInstructions(true),
-      codexPlanModeDeveloperInstructions(true),
+      codexDefaultModeDeveloperInstructions,
+      codexPlanModeDeveloperInstructions,
+      buildCodexDeveloperInstructions("default", {
+        model: "gpt-5.3-codex",
+        reasoningEffort: "high",
+      }),
     ]) {
       NodeAssert.doesNotMatch(instructions, /T3 Code collaborative browser/);
       NodeAssert.doesNotMatch(instructions, /preview_status/);
       NodeAssert.doesNotMatch(instructions, /preview_open/);
-    }
-  });
-
-  it("omits the browser block entirely when the preview tools are not attached", () => {
-    for (const instructions of [
-      codexDefaultModeDeveloperInstructions(false),
-      codexPlanModeDeveloperInstructions(false),
-    ]) {
-      NodeAssert.doesNotMatch(instructions, /preview_status/);
-      NodeAssert.doesNotMatch(instructions, /preview_open/);
-      NodeAssert.doesNotMatch(instructions, /T3 Code collaborative browser/);
-      // Steering away from other browser automation must go with the tools;
-      // keeping it would leave the model talked out of its only option.
       NodeAssert.doesNotMatch(instructions, /Do not switch to global browser skills/);
-      // The rest of the collaboration mode is untouched.
       NodeAssert.match(instructions, /<collaboration_mode>/);
       NodeAssert.match(instructions, /<\/collaboration_mode>/);
     }
-  });
-
-  it("tracks the turn's MCP configuration rather than defaulting to on", () => {
-    const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
-    NodeAssert.match(buildCodexDeveloperInstructions("default", runtime, true), /preview_open/);
-    NodeAssert.doesNotMatch(
-      buildCodexDeveloperInstructions("default", runtime, false),
-      /preview_open/,
-    );
   });
 });
 
 describe("T3 orchestration developer instructions", () => {
   it("does not advertise disabled thread orchestration tools", () => {
     for (const instructions of [
-      codexDefaultModeDeveloperInstructions(true),
-      codexPlanModeDeveloperInstructions(true),
+      codexDefaultModeDeveloperInstructions,
+      codexPlanModeDeveloperInstructions,
     ]) {
       NodeAssert.doesNotMatch(instructions, /T3 Code thread orchestration/);
       NodeAssert.doesNotMatch(instructions, /create_thread/);

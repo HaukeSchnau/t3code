@@ -14,6 +14,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
+  EnvironmentId,
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
@@ -60,6 +61,7 @@ import {
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as AnalyticsService from "../../telemetry/AnalyticsService.ts";
+import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { makeAdapterRegistryMock } from "../testUtils/providerAdapterRegistryMock.ts";
 
 const defaultServerSettingsLayer = ServerSettings.ServerSettingsService.layerTest();
@@ -2445,12 +2447,10 @@ validation.layer("ProviderServiceLive validation", (it) => {
   );
 });
 
-describe("agent browser access", () => {
-  const revokedThreads: Array<ThreadId> = [];
-
-  const startSessionWith = (enableAgentBrowserAccess: boolean, threadId: ThreadId) =>
-    Effect.gen(function* () {
-      const issued: Array<ThreadId> = [];
+describe("disabled agent browser access", () => {
+  it.effect("clears stale MCP configuration before starting a provider", () => {
+    const threadId = asThreadId("thread-browser-disabled");
+    return Effect.gen(function* () {
       const codex = makeFakeCodexAdapter();
       const providerAdapterLayer = Layer.succeed(
         ProviderAdapterRegistry.ProviderAdapterRegistry,
@@ -2462,17 +2462,9 @@ describe("agent browser access", () => {
       const directoryLayer = ProviderSessionDirectoryLive.pipe(
         Layer.provide(runtimeRepositoryLayer),
       );
-      const providerLayer = makeProviderServiceLive({
-        issueMcpCredential: (request) =>
-          Effect.sync(() => {
-            issued.push(request.threadId);
-            return undefined;
-          }),
-        revokeMcpCredential: (revoked) => Effect.sync(() => void revokedThreads.push(revoked)),
-      }).pipe(
+      const providerLayer = makeProviderServiceLive().pipe(
         Layer.provide(providerAdapterLayer),
         Layer.provide(directoryLayer),
-        Layer.provide(ServerSettings.ServerSettingsService.layerTest({ enableAgentBrowserAccess })),
         Layer.provide(serverConfigTestLayer),
         Layer.provide(AnalyticsService.layerTest),
         Layer.provide(
@@ -2483,9 +2475,18 @@ describe("agent browser access", () => {
         ),
       );
 
+      McpProviderSession.setMcpProviderSession({
+        environmentId: EnvironmentId.make("environment-browser-disabled"),
+        threadId,
+        providerSessionId: "provider-session-browser-disabled",
+        providerInstanceId: codexInstanceId,
+        endpoint: "http://127.0.0.1/mcp",
+        authorizationHeader: "Bearer stale",
+      });
+
       yield* Effect.gen(function* () {
         const provider = yield* ProviderService.ProviderService;
-        return yield* provider.startSession(threadId, {
+        yield* provider.startSession(threadId, {
           provider: CODEX_DRIVER,
           providerInstanceId: codexInstanceId,
           threadId,
@@ -2493,41 +2494,10 @@ describe("agent browser access", () => {
         });
       }).pipe(Effect.provide(providerLayer));
 
-      return issued;
-    });
-
-  // Credential issuance is the observable that matters: it is the only place a
-  // credential is minted, and `/mcp` accepts nothing else, so withholding it is
-  // what actually denies every provider and external MCP client.
-  it.effect("requests no MCP credential when agent browser access is off", () =>
-    Effect.gen(function* () {
-      const issued = yield* startSessionWith(false, asThreadId("thread-browser-off"));
-
-      assert.deepEqual(issued, []);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("revokes an already-issued credential when access is off", () =>
-    Effect.gen(function* () {
-      const threadId = asThreadId("thread-browser-revoke");
-      revokedThreads.length = 0;
-
-      yield* startSessionWith(false, threadId);
-
-      // Clearing the in-memory map is not enough: a token issued before the
-      // toggle flipped stays valid against `/mcp` for its whole liveness
-      // window, and later turns refresh it.
-      assert.deepEqual(revokedThreads, [threadId]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
-
-  it.effect("requests an MCP credential when agent browser access is on", () =>
-    Effect.gen(function* () {
-      const threadId = asThreadId("thread-browser-on");
-
-      const issued = yield* startSessionWith(true, threadId);
-
-      assert.deepEqual(issued, [threadId]);
-    }).pipe(Effect.provide(NodeServices.layer)),
-  );
+      assert.equal(McpProviderSession.readMcpProviderSession(threadId), undefined);
+    }).pipe(
+      Effect.ensuring(Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+      Effect.provide(NodeServices.layer),
+    );
+  });
 });
