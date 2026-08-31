@@ -2,7 +2,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ProviderDriverKind } from "@t3tools/contracts";
 
-import { type UsageLimitsSnapshot } from "../../lib/usageLimits";
+import {
+  deriveDisplayedUsageLimitsSnapshot,
+  type UsageLimitsSnapshot,
+} from "../../lib/usageLimits";
 import { ComposerUsageLimitsMeterSlot } from "./ChatComposer";
 
 const usageLimits: UsageLimitsSnapshot = {
@@ -110,6 +113,22 @@ describe("ComposerUsageLimitsMeterSlot", () => {
         resetsAt: "2099-01-01T05:00:00.000Z",
         windowDurationMins: 300,
       },
+      windows: [
+        {
+          key: "zai:tokens:3:5",
+          label: "Current window",
+          usedPercent: 6,
+          resetsAt: "2099-01-01T05:00:00.000Z",
+          windowDurationMins: 300,
+        },
+        {
+          key: "zai:mcp:5:1",
+          label: "MCP quota",
+          usedPercent: 0,
+          resetsAt: "2099-02-01T05:00:00.000Z",
+          windowDurationMins: 44_640,
+        },
+      ],
     };
     const html = renderToStaticMarkup(
       <ComposerUsageLimitsMeterSlot
@@ -122,6 +141,9 @@ describe("ComposerUsageLimitsMeterSlot", () => {
 
     expect(html).toContain("GLM Coding Plan");
     expect(html).toContain("6%");
+    expect(
+      deriveDisplayedUsageLimitsSnapshot(glmUsageLimits)?.windows.map((window) => window.label),
+    ).toContain("MCP quota");
   });
 
   it("hides GLM usage for a different OpenCode provider or model family", () => {

@@ -2,8 +2,8 @@
 
 ## Purpose
 
-Show the coding-token allowance from a Z.AI Coding Plan beside the composer when OpenCode is using
-the matching GLM model.
+Show coding and MCP allowances from a Z.AI Coding Plan beside the composer when OpenCode is using the
+matching GLM model.
 
 ## Contract
 
@@ -11,8 +11,9 @@ the matching GLM model.
   Z.AI API host, and its provider must expose a resolved API key.
 - Send the API key only to the corresponding HTTPS Z.AI quota endpoint. Do not log, persist, or send
   it through T3 Code's client contracts.
-- Normalize `TOKENS_LIMIT` entries into the existing provider-neutral usage snapshot. Ignore
-  `TIME_LIMIT`, which represents the separate monthly MCP allowance rather than coding tokens.
+- Normalize `TOKENS_LIMIT` entries into coding windows and the monthly `TIME_LIMIT` entry into a
+  separate keyed MCP window. Keep the five-hour coding window primary and the weekly coding window
+  secondary, so MCP usage never displaces either compact row.
 - Fetch after a matching session starts, after completed turns, and every five minutes while at least
   one identified Z.AI session is alive.
 - Share one scheduler across OpenCode sessions. Coalesce requests and allow at most one refresh per
@@ -21,6 +22,8 @@ the matching GLM model.
   observation unchanged.
 - Show the meter only when OpenCode is selected, the active model is in the `glm-*` family, and the
   model's provider id matches the usage snapshot's `limitId`.
+- Show every normalized window in the expanded meter. The MCP window covers Z.AI Web Search, Web
+  Reader, and ZRead calls; unrelated MCP servers do not consume it.
 - Reuse the existing rate-limit event, projection, history, forecasting, and stale-state behavior.
   This patch adds no wire schema or database migration.
 
@@ -33,8 +36,8 @@ the matching GLM model.
 
 ## Verification
 
-- Z.AI normalization tests cover the coding window, optional weekly windows, malformed responses,
-  MCP exclusion, and allowed API hosts.
+- Z.AI normalization tests cover five-hour, optional weekly, and monthly MCP windows, malformed
+  responses, MCP separation, and allowed API hosts.
 - OpenCode adapter tests cover provider discovery, startup publication, and five-minute polling.
 - Composer render tests cover matching GLM models and both provider and model-family mismatches.
 
