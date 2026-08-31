@@ -1412,7 +1412,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     environmentUnavailable !== null ||
     (!hasSendableContent && !canResumeInterruptedTurn);
   const collapsedComposerPrimaryActionLabel = canResumeInterruptedTurn
-    ? "Resume interrupted turn"
+    ? "Resume turn"
     : "Send message";
   const showMobilePendingAnswerActions =
     isMobileViewport && !isComposerCollapsedMobile && pendingPrimaryAction !== null;

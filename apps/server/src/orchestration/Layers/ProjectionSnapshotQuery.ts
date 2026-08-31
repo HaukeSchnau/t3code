@@ -9,6 +9,7 @@ import {
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
   OrchestrationSession,
+  OrchestrationTurnRetry,
   OrchestrationQueuedMessage,
   OrchestrationUsageLimitsSnapshot,
   OrchestrationShellSnapshot,
@@ -124,7 +125,11 @@ const ProjectionProviderUsageLimitsDbRowSchema = ProjectionProviderUsageLimits.m
     history: Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
   }),
 );
-const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession;
+const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession.mapFields(
+  Struct.assign({
+    turnRetry: Schema.NullOr(Schema.fromJsonString(OrchestrationTurnRetry)),
+  }),
+);
 const ProjectionCheckpointDbRowSchema = ProjectionCheckpoint.mapFields(
   Struct.assign({
     files: Schema.fromJsonString(Schema.Array(OrchestrationCheckpointFile)),
@@ -286,6 +291,8 @@ function mapSessionRow(
     runtimeMode: row.runtimeMode,
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
+    lastErrorClass: row.lastErrorClass,
+    turnRetry: row.turnRetry,
     updatedAt: row.updatedAt,
   };
 }
@@ -646,6 +653,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_error_class AS "lastErrorClass",
+          turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         ORDER BY thread_id ASC
@@ -667,6 +676,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.last_error_class AS "lastErrorClass",
+          sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -692,6 +703,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.runtime_mode AS "runtimeMode",
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
+          sessions.last_error_class AS "lastErrorClass",
+          sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
         INNER JOIN projection_threads threads
@@ -1091,6 +1104,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           runtime_mode AS "runtimeMode",
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
+          last_error_class AS "lastErrorClass",
+          turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
         WHERE thread_id = ${threadId}
@@ -1736,6 +1751,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
                   runtimeMode: row.runtimeMode,
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
+                  lastErrorClass: row.lastErrorClass,
+                  turnRetry: row.turnRetry,
                   updatedAt: row.updatedAt,
                 });
               }

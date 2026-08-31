@@ -23,6 +23,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { isProviderOverloadedError, ProviderErrorClass } from "./providerError.ts";
 import { ThreadWorkspaceRetentionPolicy, ThreadWorkspaceRootRole } from "./workspace.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -326,6 +327,26 @@ export const OrchestrationSessionStatus = Schema.Literals([
 ]);
 export type OrchestrationSessionStatus = typeof OrchestrationSessionStatus.Type;
 
+export const OrchestrationTurnRetry = Schema.Union([
+  Schema.Struct({
+    phase: Schema.Literal("scheduled"),
+    sourceTurnId: TurnId,
+    attempt: PositiveInt,
+    retryAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    phase: Schema.Literal("running"),
+    sourceTurnId: TurnId,
+    attempt: PositiveInt,
+  }),
+  Schema.Struct({
+    phase: Schema.Literal("exhausted"),
+    sourceTurnId: TurnId,
+    attempt: PositiveInt,
+  }),
+]);
+export type OrchestrationTurnRetry = typeof OrchestrationTurnRetry.Type;
+
 export const OrchestrationSession = Schema.Struct({
   threadId: ThreadId,
   status: OrchestrationSessionStatus,
@@ -334,6 +355,8 @@ export const OrchestrationSession = Schema.Struct({
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
+  lastErrorClass: Schema.optional(Schema.NullOr(ProviderErrorClass)),
+  turnRetry: Schema.optional(Schema.NullOr(OrchestrationTurnRetry)),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationSession = typeof OrchestrationSession.Type;
@@ -430,6 +453,36 @@ export const OrchestrationLatestTurn = Schema.Struct({
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
+
+type ThreadTurnContinuationState = {
+  readonly latestTurn: OrchestrationLatestTurn | null;
+  readonly session: OrchestrationSession | null;
+};
+
+export function canResumeThreadTurnState(thread: ThreadTurnContinuationState | null | undefined) {
+  const latestTurn = thread?.latestTurn;
+  const session = thread?.session;
+  if (
+    latestTurn === null ||
+    latestTurn === undefined ||
+    session?.providerName !== "codex" ||
+    session.status === "starting" ||
+    session.status === "running"
+  ) {
+    return false;
+  }
+  if (latestTurn.state === "interrupted") {
+    return true;
+  }
+  return (
+    latestTurn.state === "error" &&
+    session.activeTurnId === null &&
+    isProviderOverloadedError({
+      errorClass: session.lastErrorClass,
+      message: session.lastError,
+    })
+  );
+}
 
 export const ThreadTitleRegeneration = Schema.Struct({
   requestId: CommandId,
@@ -1145,6 +1198,7 @@ export const ThreadTurnResumeCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   interruptedTurnId: TurnId,
+  automaticRetryAttempt: Schema.optional(PositiveInt),
   createdAt: IsoDateTime,
 });
 
@@ -1602,6 +1656,7 @@ export const ThreadTurnStartRequestedPayload = Schema.Struct({
   threadId: ThreadId,
   messageId: Schema.NullOr(MessageId),
   resumedFromTurnId: Schema.optional(TurnId),
+  automaticRetryAttempt: Schema.optional(PositiveInt),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),

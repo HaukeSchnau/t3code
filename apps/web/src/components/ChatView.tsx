@@ -1832,6 +1832,16 @@ function ChatViewContent(props: ChatViewProps) {
   }, [draftThreadKeys, openTerminalThreadKeys, serverThreadKeys]);
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const canResumeInterruptedTurn = canResumeThreadTurn(activeThread);
+  const turnRetryDetail = (() => {
+    switch (activeThread?.session?.turnRetry?.phase) {
+      case "scheduled":
+        return "Retrying automatically soon. Select Resume to retry now.";
+      case "exhausted":
+        return "Automatic retries exhausted. Select Resume to try again.";
+      default:
+        return null;
+    }
+  })();
   const canPauseTurn = canPauseThreadTurn(activeThread);
   const activeRunningTurnId =
     (activeThread?.session?.status === "running" ? activeThread.session.activeTurnId : null) ??
@@ -6898,6 +6908,7 @@ function ChatViewContent(props: ChatViewProps) {
 
         <ThreadErrorBanner
           error={visibleThreadError}
+          detail={turnRetryDetail}
           onDismiss={() => {
             setThreadError(activeThread.id, null);
             dismissThreadErrorBannerForSession(threadErrorBannerKey);

@@ -9,6 +9,8 @@ import {
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
+  type OrchestrationTurnRetry,
+  canResumeThreadTurnState,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
@@ -17,7 +19,9 @@ import {
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -68,7 +72,8 @@ type ProviderIntentEvent = Extract<
       | "thread.approval-response-requested"
       | "thread.user-input-response-requested"
       | "thread.history-prune-requested"
-      | "thread.session-stop-requested";
+      | "thread.session-stop-requested"
+      | "thread.session-set";
   }
 >;
 
@@ -400,6 +405,7 @@ const make = Effect.gen(function* () {
     lookup: () => Effect.succeed(true),
   });
   const titleGenerationFibers = yield* FiberMap.make<ThreadId>();
+  const turnRetryFibers = yield* FiberMap.make<ThreadId>();
   const titleGenerationSemaphore = yield* Semaphore.make(TITLE_GENERATION_CONCURRENCY);
 
   const hasHandledTurnStartRecently = (key: string) =>
@@ -502,6 +508,8 @@ const make = Effect.gen(function* () {
         status: session?.status === "stopped" ? "stopped" : "error",
         activeTurnId: null,
         lastError: input.detail,
+        lastErrorClass: "provider_error",
+        turnRetry: null,
         updatedAt: input.createdAt,
       },
       createdAt: input.createdAt,
@@ -564,6 +572,64 @@ const make = Effect.gen(function* () {
     return yield* projectionSnapshotQuery
       .getThreadDetailById(threadId)
       .pipe(Effect.map(Option.getOrUndefined));
+  });
+
+  const scheduleTurnRetry = Effect.fn("scheduleTurnRetry")(function* (
+    threadId: ThreadId,
+    retry: Extract<OrchestrationTurnRetry, { phase: "scheduled" }>,
+  ) {
+    yield* FiberMap.run(
+      turnRetryFibers,
+      threadId,
+      Effect.gen(function* () {
+        const remainingMs = Date.parse(retry.retryAt) - (yield* Clock.currentTimeMillis);
+        if (remainingMs > 0) {
+          yield* Effect.sleep(Duration.millis(remainingMs));
+        }
+
+        const thread = yield* resolveThread(threadId);
+        const currentRetry = thread?.session?.turnRetry;
+        if (
+          !thread ||
+          currentRetry?.phase !== "scheduled" ||
+          currentRetry.sourceTurnId !== retry.sourceTurnId ||
+          currentRetry.attempt !== retry.attempt ||
+          !canResumeThreadTurnState(thread)
+        ) {
+          return;
+        }
+
+        yield* orchestrationEngine.dispatch({
+          type: "thread.turn.resume",
+          commandId: yield* serverCommandId("automatic-turn-retry"),
+          threadId,
+          interruptedTurnId: retry.sourceTurnId,
+          automaticRetryAttempt: retry.attempt,
+          createdAt: DateTime.formatIso(yield* DateTime.now),
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("provider command reactor failed to schedule turn retry", {
+                threadId,
+                attempt: retry.attempt,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+      ),
+    );
+  });
+
+  const reconcileTurnRetry = Effect.fn("reconcileTurnRetry")(function* (
+    threadId: ThreadId,
+    retry: OrchestrationTurnRetry | null | undefined,
+  ) {
+    if (retry?.phase === "scheduled") {
+      yield* scheduleTurnRetry(threadId, retry);
+      return;
+    }
+    yield* FiberMap.remove(turnRetryFibers, threadId);
   });
 
   const rejectStartedThreadModelChangeIfRequired = Effect.fnUntraced(function* (input: {
@@ -722,6 +788,8 @@ const make = Effect.gen(function* () {
           runtimeMode: desiredRuntimeMode,
           activeTurnId: null,
           lastError: null,
+          lastErrorClass: null,
+          turnRetry: thread.session?.turnRetry ?? null,
           updatedAt: createdAt,
         },
         createdAt,
@@ -778,6 +846,8 @@ const make = Effect.gen(function* () {
             // Provider turn ids are not orchestration turn ids.
             activeTurnId: null,
             lastError: session.lastError ?? null,
+            lastErrorClass: thread.session?.lastErrorClass ?? null,
+            turnRetry: thread.session?.turnRetry ?? null,
             updatedAt: session.updatedAt,
           },
           createdAt,
@@ -1333,6 +1403,16 @@ const make = Effect.gen(function* () {
           runtimeMode: event.payload.runtimeMode,
           activeTurnId: thread.session?.activeTurnId ?? null,
           lastError: null,
+          lastErrorClass: null,
+          turnRetry:
+            event.payload.automaticRetryAttempt !== undefined &&
+            event.payload.resumedFromTurnId !== undefined
+              ? {
+                  phase: "running",
+                  sourceTurnId: event.payload.resumedFromTurnId,
+                  attempt: event.payload.automaticRetryAttempt,
+                }
+              : null,
           updatedAt: event.payload.createdAt,
         },
         createdAt: event.payload.createdAt,
@@ -1727,6 +1807,8 @@ const make = Effect.gen(function* () {
         runtimeMode: thread.session?.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         activeTurnId: null,
         lastError: thread.session?.lastError ?? null,
+        lastErrorClass: thread.session?.lastErrorClass ?? null,
+        turnRetry: null,
         updatedAt: now,
       },
       createdAt: now,
@@ -1745,6 +1827,9 @@ const make = Effect.gen(function* () {
       eventType: event.type,
     });
     switch (event.type) {
+      case "thread.session-set":
+        yield* reconcileTurnRetry(event.payload.threadId, event.payload.session.turnRetry);
+        return;
       case "thread.meta-updated":
         yield* threadTitleRegenerationWorker.enqueue(event);
         return;
@@ -1827,6 +1912,7 @@ const make = Effect.gen(function* () {
     const processEvent = Effect.fn("processEvent")(function* (event: OrchestrationEvent) {
       if (
         (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
+        event.type === "thread.session-set" ||
         event.type === "thread.runtime-mode-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
@@ -1844,6 +1930,23 @@ const make = Effect.gen(function* () {
     // stream fiber one turn to subscribe before start returns. The stream is
     // hot, so an immediate dispatch would otherwise be lost.
     yield* Effect.yieldNow;
+
+    const readModel = yield* projectionSnapshotQuery.getCommandReadModel().pipe(
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause)
+          ? Effect.interrupt
+          : Effect.logWarning("provider command reactor failed to recover scheduled turn retries", {
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(null)),
+      ),
+    );
+    if (readModel !== null) {
+      yield* Effect.forEach(
+        readModel.threads,
+        (thread) => reconcileTurnRetry(thread.id, thread.session?.turnRetry),
+        { discard: true },
+      );
+    }
 
     // The domain event stream is hot, so work pending before this reactor
     // starts cannot be resumed. Correlated completions only clear the request
