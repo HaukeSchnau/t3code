@@ -403,6 +403,53 @@ describe("ProviderRuntimeIngestion", () => {
     expect(thread.session?.lastError).toBe("turn failed");
   });
 
+  it("persists a scheduled retry for an overloaded Codex turn", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-overloaded");
+    const message = "Selected model is at capacity. Please try a different model.";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-overloaded-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+      payload: {},
+    });
+    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-overloaded-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId,
+      payload: {
+        state: "failed",
+        errorMessage: message,
+        errorClass: "provider_overloaded",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.turnRetry?.phase === "scheduled",
+    );
+    expect(thread.session).toMatchObject({
+      lastErrorClass: "provider_overloaded",
+      turnRetry: {
+        phase: "scheduled",
+        sourceTurnId: turnId,
+        attempt: 1,
+      },
+    });
+    expect(
+      thread.session?.turnRetry?.phase === "scheduled" && thread.session.turnRetry.retryAt,
+    ).toMatch(/^2026-01-01T00:00:0[5-7]\./);
+  });
+
   it("dispatches the oldest queued message when the active turn completes", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";

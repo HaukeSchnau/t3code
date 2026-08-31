@@ -85,4 +85,16 @@ describe("ThreadErrorBanner", () => {
     expect(markup).toContain("h-lh w-4");
     expect(markup).toContain("h-lh self-start");
   });
+
+  it("shows automatic retry status below the provider error", () => {
+    const markup = renderToStaticMarkup(
+      <ThreadErrorBanner
+        error="Selected model is at capacity."
+        detail="Retrying automatically soon."
+      />,
+    );
+
+    expect(markup).toContain("Selected model is at capacity.");
+    expect(markup).toContain("Retrying automatically soon.");
+  });
 });

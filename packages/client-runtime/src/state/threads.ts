@@ -1,6 +1,7 @@
 import {
   ORCHESTRATION_WS_METHODS,
   ProviderDriverKind,
+  canResumeThreadTurnState,
   type EnvironmentId as EnvironmentIdType,
   type OrchestrationThread,
   type OrchestrationThreadActivityDetailMode,
@@ -57,12 +58,7 @@ export function canPauseThreadTurn(thread: ThreadTurnContinuationState | null | 
 }
 
 export function canResumeThreadTurn(thread: ThreadTurnContinuationState | null | undefined) {
-  return (
-    thread?.latestTurn?.state === "interrupted" &&
-    thread.session?.providerName === CODEX_DRIVER &&
-    thread.session.status !== "starting" &&
-    thread.session.status !== "running"
-  );
+  return canResumeThreadTurnState(thread);
 }
 
 function authoritativeRefreshJitterHash(input: string): number {

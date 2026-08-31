@@ -19,6 +19,16 @@ thread context without adding a message such as “continue” to the conversati
 If you want to change direction instead, type a new instruction. The Resume action becomes the
 normal Send action as soon as the composer has content.
 
+Resume is also available when a Codex turn stops because the selected model is at capacity. T3
+Code retries that failure automatically up to five times, with waits of roughly 5, 10, 20, 40,
+and 80 seconds. The retry remains scheduled if the T3 Code server restarts. The error banner shows
+whether another attempt is scheduled or the automatic retries are exhausted; select Resume at any
+time to retry immediately.
+
+A retry sequence resets after Codex makes meaningful progress. Other provider errors remain visible
+without automatic retries so repeated authentication, permission, or validation failures do not
+loop in the background.
+
 Pause and message-free resume are currently available for Codex threads. Other providers keep the
 Stop action until their runtimes expose an equivalent continuation operation.
 

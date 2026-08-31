@@ -13,7 +13,9 @@ import {
   type CodexSettings,
   ProviderDriverKind,
   type ProviderEvent,
+  isProviderOverloadedError,
   ProviderInstanceId,
+  type ProviderErrorClass,
   type ProviderRuntimeEvent,
   type ProviderRequestKind,
   type ThreadTokenUsageSnapshot,
@@ -75,7 +77,7 @@ const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 
 const PROVIDER = ProviderDriverKind.make("codex");
 const CODEX_TURN_CONTINUATION_PROMPT =
-  "Continue the interrupted task from exactly where you left off. Do not comment on the interruption, repeat completed work, or merely describe what was interrupted. Resume the next unfinished action.";
+  "Continue the task from exactly where you left off. Do not comment on the interruption or failure, repeat completed work, or merely describe what stopped. Resume the next unfinished action.";
 
 export interface CodexAdapterLiveOptions {
   readonly instanceId?: ProviderInstanceId;
@@ -152,6 +154,15 @@ function readPayload<A>(
 function trimText(value: string | undefined | null): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function classifyCodexError(
+  codexErrorInfo: unknown,
+  message: string | undefined,
+): ProviderErrorClass {
+  return codexErrorInfo === "serverOverloaded" || isProviderOverloadedError({ message })
+    ? "provider_overloaded"
+    : "provider_error";
 }
 
 const FATAL_CODEX_STDERR_SNIPPETS = ["failed to connect to websocket"];
@@ -788,7 +799,7 @@ function mapToRuntimeEvents(
         type: "runtime.error",
         payload: {
           message: event.message,
-          class: "provider_error",
+          class: classifyCodexError(undefined, event.message),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },
@@ -1066,6 +1077,9 @@ function mapToRuntimeEvents(
       return [];
     }
     const errorMessage = trimText(payload.turn.error?.message);
+    const errorClass = errorMessage
+      ? classifyCodexError(payload.turn.error?.codexErrorInfo, errorMessage)
+      : undefined;
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1073,6 +1087,7 @@ function mapToRuntimeEvents(
         payload: {
           state: toTurnStatus(payload.turn.status),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(errorClass ? { errorClass } : {}),
         },
       },
     ];
@@ -1569,7 +1584,9 @@ function mapToRuntimeEvents(
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
           message,
-          ...(!willRetry ? { class: "provider_error" as const } : {}),
+          ...(!willRetry
+            ? { class: classifyCodexError(payload?.error.codexErrorInfo, message) }
+            : {}),
           ...(event.payload !== undefined ? { detail: event.payload } : {}),
         },
       },

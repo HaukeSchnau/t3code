@@ -422,7 +422,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
 
       NodeAssert.deepStrictEqual(runtime.sendTurnImpl.mock.calls[0]?.[0], {
         input:
-          "Continue the interrupted task from exactly where you left off. Do not comment on the interruption, repeat completed work, or merely describe what was interrupted. Resume the next unfinished action.",
+          "Continue the task from exactly where you left off. Do not comment on the interruption or failure, repeat completed work, or merely describe what stopped. Resume the next unfinished action.",
       });
     }),
   );
@@ -984,6 +984,60 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
       }
       NodeAssert.equal(firstEvent.value.turnId, "turn-1");
       NodeAssert.equal(firstEvent.value.payload.message, "Reconnecting... 2/5");
+    }),
+  );
+
+  it.effect("preserves overload identity on terminal Codex errors", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 2)).pipe(
+        Effect.forkChild,
+      );
+      const message = "Selected model is at capacity. Please try a different model.";
+
+      yield* runtime.emit({
+        id: asEventId("evt-overloaded-error"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        method: "error",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          error: { message, codexErrorInfo: "serverOverloaded" },
+          willRetry: false,
+        },
+      } satisfies ProviderEvent);
+      yield* runtime.emit({
+        id: asEventId("evt-overloaded-completed"),
+        kind: "notification",
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-01-01T00:00:00.001Z",
+        method: "turn/completed",
+        turnId: asTurnId("turn-1"),
+        payload: {
+          threadId: "thread-1",
+          turn: {
+            id: "turn-1",
+            items: [],
+            status: "failed",
+            error: { message, codexErrorInfo: "serverOverloaded" },
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      NodeAssert.equal(events[0]?.type, "runtime.error");
+      if (events[0]?.type === "runtime.error") {
+        NodeAssert.equal(events[0].payload.class, "provider_overloaded");
+      }
+      NodeAssert.equal(events[1]?.type, "turn.completed");
+      if (events[1]?.type === "turn.completed") {
+        NodeAssert.equal(events[1].payload.errorClass, "provider_overloaded");
+      }
     }),
   );
 

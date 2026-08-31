@@ -7,6 +7,7 @@ import {
   type OrchestrationEvent,
   type OrchestrationMessage,
   type OrchestrationProposedPlanId,
+  type OrchestrationTurnRetry,
   CheckpointRef,
   classifyTaskAgentKind,
   isToolLifecycleItemType,
@@ -19,6 +20,7 @@ import {
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
   defaultInstanceIdForDriver,
+  isProviderOverloadedError,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
@@ -58,11 +60,29 @@ import {
 import { makeProviderTranscriptJournalIngestion } from "../ProviderTranscriptJournalIngestion.ts";
 import { usageLimitsFromRuntimeEvent } from "../ProviderUsageLimitsProjection.ts";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
+import { MAX_PROVIDER_TURN_RETRY_ATTEMPTS, providerTurnRetryAt } from "../providerTurnRetry.ts";
 
 export { subagentActivityIdForRuntime } from "../ProviderSubagentActivityProjection.ts";
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
+
+function isMeaningfulTurnProgress(event: ProviderRuntimeEvent) {
+  switch (event.type) {
+    case "content.delta":
+    case "item.started":
+    case "item.updated":
+    case "item.completed":
+    case "turn.plan.updated":
+    case "turn.proposed.delta":
+    case "task.started":
+    case "task.progress":
+    case "tool.progress":
+      return true;
+    default:
+      return false;
+  }
+}
 
 // Fallback when the in-memory description cache no longer has the task name
 // (server restart, session-exit sweep, TTL/capacity eviction): earlier
@@ -519,6 +539,7 @@ export function runtimeEventToActivities(
           summary: subagentAwareSummary(event, "Runtime error"),
           payload: {
             message: truncateDetail(event.payload.message),
+            ...(event.payload.class !== undefined ? { class: event.payload.class } : {}),
             ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1690,6 +1711,22 @@ const make = Effect.gen(function* () {
       const hasPendingRunningTurnStart =
         hasPendingTurnStart && thread.session?.status === "running";
 
+      if (thread.session?.turnRetry?.phase === "running" && isMeaningfulTurnProgress(event)) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.session.set",
+          commandId: yield* providerCommandId(event, "turn-retry-progress-session-set"),
+          threadId: thread.id,
+          session: {
+            ...thread.session,
+            lastError: null,
+            lastErrorClass: null,
+            turnRetry: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        });
+      }
+
       if (event.type === "turn.completed") {
         yield* subagentActivityProjection.flush({
           threadId: thread.id,
@@ -1843,6 +1880,52 @@ const make = Effect.gen(function* () {
                 : status === "ready"
                   ? null
                   : (thread.session?.lastError ?? null);
+        const lastErrorClass =
+          event.type === "turn.completed" &&
+          normalizeRuntimeTurnState(event.payload.state) === "failed"
+            ? (event.payload.errorClass ?? thread.session?.lastErrorClass ?? null)
+            : status === "ready"
+              ? null
+              : (thread.session?.lastErrorClass ?? null);
+        const turnRetry = ((): OrchestrationTurnRetry | null => {
+          if (
+            event.type === "turn.completed" &&
+            normalizeRuntimeTurnState(event.payload.state) === "failed" &&
+            eventTurnId !== undefined &&
+            isProviderOverloadedError({
+              errorClass: event.payload.errorClass ?? thread.session?.lastErrorClass,
+              message: lastError,
+            })
+          ) {
+            const completedAttempt =
+              thread.session?.turnRetry?.phase === "running" ? thread.session.turnRetry.attempt : 0;
+            const nextAttempt = completedAttempt + 1;
+            return nextAttempt <= MAX_PROVIDER_TURN_RETRY_ATTEMPTS
+              ? {
+                  phase: "scheduled",
+                  sourceTurnId: eventTurnId,
+                  attempt: nextAttempt,
+                  retryAt: providerTurnRetryAt({
+                    threadId: thread.id,
+                    attempt: nextAttempt,
+                    failedAt: now,
+                  }),
+                }
+              : {
+                  phase: "exhausted",
+                  sourceTurnId: eventTurnId,
+                  attempt: completedAttempt,
+                };
+          }
+          if (
+            event.type === "turn.completed" ||
+            event.type === "turn.aborted" ||
+            event.type === "session.exited"
+          ) {
+            return null;
+          }
+          return thread.session?.turnRetry ?? null;
+        })();
 
         if (shouldApplyThreadLifecycle) {
           if (event.type === "turn.started" && acceptedTurnStartedSourcePlan !== null) {
@@ -1879,6 +1962,8 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: nextActiveTurnId,
               lastError,
+              lastErrorClass,
+              turnRetry,
               updatedAt: now,
             },
             createdAt: now,
@@ -2183,6 +2268,8 @@ const make = Effect.gen(function* () {
               runtimeMode: thread.session?.runtimeMode ?? "full-access",
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
+              lastErrorClass: event.payload.class,
+              turnRetry: thread.session?.turnRetry ?? null,
               updatedAt: now,
             },
             createdAt: now,

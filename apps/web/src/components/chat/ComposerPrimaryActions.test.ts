@@ -226,7 +226,7 @@ describe("ComposerPrimaryActions", () => {
         onImplementPlanInNewThread: () => {},
       }),
     );
-    expect(markup).toContain('aria-label="Resume interrupted turn"');
+    expect(markup).toContain('aria-label="Resume turn"');
     expect(markup).toContain("Resume");
   });
 
@@ -252,7 +252,7 @@ describe("ComposerPrimaryActions", () => {
       }),
     );
     expect(markup).toContain('aria-label="Send message"');
-    expect(markup).not.toContain('aria-label="Resume interrupted turn"');
+    expect(markup).not.toContain('aria-label="Resume turn"');
   });
 
   it("offers Stop generation while a running turn is waiting for user input", () => {

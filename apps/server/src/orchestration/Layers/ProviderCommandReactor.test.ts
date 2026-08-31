@@ -156,6 +156,7 @@ describe("ProviderCommandReactor", () => {
     readonly requiresNewThreadForModelChange?: boolean;
     readonly titleRegenerationCompletionDispatchFailures?: number;
     readonly titleRegenerationBeforeStart?: "one" | "two";
+    readonly turnRetryBeforeStart?: boolean;
     readonly refreshGeneratedThreadTitles?: boolean;
     readonly beforeStartSession?: (threadId: ThreadId) => Effect.Effect<void>;
     readonly interruptTurnEffect?: () => Effect.Effect<void, ProviderAdapterRequestError>;
@@ -546,6 +547,62 @@ describe("ProviderCommandReactor", () => {
         }),
       );
     }
+    if (input?.turnRetryBeforeStart === true) {
+      const threadId = ThreadId.make("thread-1");
+      const turnId = asTurnId("turn-retry-before-start");
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-retry-before-start-running"),
+          threadId,
+          session: {
+            threadId,
+            status: "running",
+            providerName: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: null,
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("cmd-retry-before-start-interrupt"),
+          threadId,
+          turnId,
+          createdAt: now,
+        }),
+      );
+      await Effect.runPromise(
+        engine.dispatch({
+          type: "thread.session.set",
+          commandId: CommandId.make("cmd-retry-before-start-scheduled"),
+          threadId,
+          session: {
+            threadId,
+            status: "interrupted",
+            providerName: ProviderDriverKind.make("codex"),
+            providerInstanceId: ProviderInstanceId.make("codex"),
+            runtimeMode: "approval-required",
+            activeTurnId: turnId,
+            lastError: "Selected model is at capacity. Please try a different model.",
+            lastErrorClass: "provider_overloaded",
+            turnRetry: {
+              phase: "scheduled",
+              sourceTurnId: turnId,
+              attempt: 1,
+              retryAt: "2025-12-31T23:59:59.000Z",
+            },
+            updatedAt: now,
+          },
+          createdAt: now,
+        }),
+      );
+    }
 
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(reactor.start().pipe(Scope.provide(scope)));
@@ -707,6 +764,103 @@ describe("ProviderCommandReactor", () => {
     expect((await harness.readModel()).threads[0]?.messages).toHaveLength(
       messagesBeforeResume ?? 0,
     );
+  });
+
+  it("dispatches a persisted automatic retry when it becomes due", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = ThreadId.make("thread-1");
+    const turnId = asTurnId("turn-1");
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-auto-retry-initial-turn"),
+        threadId,
+        message: {
+          messageId: asMessageId("user-message-auto-retry"),
+          role: "user",
+          text: "start work",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-auto-retry-running"),
+        threadId,
+        session: {
+          threadId,
+          status: "running",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: null,
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.interrupt",
+        commandId: CommandId.make("cmd-auto-retry-interrupt"),
+        threadId,
+        turnId,
+        createdAt: now,
+      }),
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.session.set",
+        commandId: CommandId.make("cmd-auto-retry-scheduled"),
+        threadId,
+        session: {
+          threadId,
+          status: "interrupted",
+          providerName: ProviderDriverKind.make("codex"),
+          providerInstanceId: ProviderInstanceId.make("codex"),
+          runtimeMode: "approval-required",
+          activeTurnId: turnId,
+          lastError: "Selected model is at capacity. Please try a different model.",
+          lastErrorClass: "provider_overloaded",
+          turnRetry: {
+            phase: "scheduled",
+            sourceTurnId: turnId,
+            attempt: 1,
+            retryAt: "2025-12-31T23:59:59.000Z",
+          },
+          updatedAt: now,
+        },
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 2);
+    expect(harness.sendTurn.mock.calls[1]?.[0]).toMatchObject({
+      threadId,
+      continuation: true,
+    });
+    await waitFor(async () => {
+      const retry = (await harness.readModel()).threads[0]?.session?.turnRetry;
+      return retry?.phase === "running" && retry.attempt === 1;
+    });
+  });
+
+  it("recovers a scheduled automatic retry when the reactor starts", async () => {
+    const harness = await createHarness({ turnRetryBeforeStart: true });
+
+    await waitFor(() => harness.sendTurn.mock.calls.length === 1);
+    expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+      threadId: ThreadId.make("thread-1"),
+      continuation: true,
+    });
   });
 
   it("keeps a running session running while dispatching a steering message", async () => {

@@ -143,27 +143,31 @@ it.effect("decodes capability-gated shell cursor items", () =>
   }),
 );
 
-it.effect("decodes message-free interrupted turn continuation", () =>
+it.effect("decodes message-free turn continuation and automatic retry metadata", () =>
   Effect.gen(function* () {
     const command = yield* decodeThreadTurnResumeCommand({
       type: "thread.turn.resume",
       commandId: "command-resume",
       threadId: "thread-1",
       interruptedTurnId: "turn-1",
+      automaticRetryAttempt: 2,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(command.interruptedTurnId, "turn-1");
+    assert.strictEqual(command.automaticRetryAttempt, 2);
 
     const payload = yield* decodeThreadTurnStartRequestedPayload({
       threadId: "thread-1",
       messageId: null,
       resumedFromTurnId: "turn-1",
+      automaticRetryAttempt: 2,
       runtimeMode: "full-access",
       interactionMode: "default",
       createdAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(payload.messageId, null);
     assert.strictEqual(payload.resumedFromTurnId, "turn-1");
+    assert.strictEqual(payload.automaticRetryAttempt, 2);
   }),
 );
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
@@ -996,6 +1000,29 @@ it.effect("decodes orchestration session runtime mode defaults", () =>
       updatedAt: "2026-01-01T00:00:00.000Z",
     });
     assert.strictEqual(parsed.runtimeMode, DEFAULT_RUNTIME_MODE);
+  }),
+);
+
+it.effect("decodes durable provider turn retry state", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeOrchestrationSession({
+      threadId: "thread-1",
+      status: "error",
+      providerName: "codex",
+      runtimeMode: "full-access",
+      activeTurnId: null,
+      lastError: "Selected model is at capacity. Please try a different model.",
+      lastErrorClass: "provider_overloaded",
+      turnRetry: {
+        phase: "scheduled",
+        sourceTurnId: "turn-1",
+        attempt: 1,
+        retryAt: "2026-01-01T00:00:05.000Z",
+      },
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(parsed.lastErrorClass, "provider_overloaded");
+    assert.strictEqual(parsed.turnRetry?.phase, "scheduled");
   }),
 );
 

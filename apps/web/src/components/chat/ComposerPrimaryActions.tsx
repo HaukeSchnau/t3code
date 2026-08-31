@@ -201,7 +201,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         {...pointerFocusProps}
         disabled={isConnecting || isEnvironmentUnavailable}
         onClick={onResumeInterruptedTurn}
-        aria-label="Resume interrupted turn"
+        aria-label="Resume turn"
       >
         <PlayIcon className="size-3.5" aria-hidden="true" />
         {compact ? null : <span>Resume</span>}

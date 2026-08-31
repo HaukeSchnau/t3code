@@ -3,6 +3,7 @@ import {
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
+  canResumeThreadTurnState,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Crypto from "effect/Crypto";
@@ -1388,14 +1389,10 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         threadId: command.threadId,
       });
       const latestTurn = thread.latestTurn;
-      if (
-        latestTurn === null ||
-        latestTurn.turnId !== command.interruptedTurnId ||
-        latestTurn.state !== "interrupted"
-      ) {
+      if (latestTurn === null || latestTurn.turnId !== command.interruptedTurnId) {
         return yield* new OrchestrationCommandInvariantError({
           commandType: command.type,
-          detail: `Turn '${command.interruptedTurnId}' is not the latest interrupted turn on thread '${command.threadId}'.`,
+          detail: `Turn '${command.interruptedTurnId}' is not the latest resumable turn on thread '${command.threadId}'.`,
         });
       }
       if (thread.session?.status === "starting" || thread.session?.status === "running") {
@@ -1404,7 +1401,25 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           detail: `Thread '${command.threadId}' still has an active provider turn.`,
         });
       }
-
+      if (!canResumeThreadTurnState(thread)) {
+        return yield* new OrchestrationCommandInvariantError({
+          commandType: command.type,
+          detail: `Turn '${command.interruptedTurnId}' is not the latest resumable turn on thread '${command.threadId}'.`,
+        });
+      }
+      if (command.automaticRetryAttempt !== undefined) {
+        const retry = thread.session?.turnRetry;
+        if (
+          retry?.phase !== "scheduled" ||
+          retry.sourceTurnId !== command.interruptedTurnId ||
+          retry.attempt !== command.automaticRetryAttempt
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `Automatic retry ${command.automaticRetryAttempt} is no longer scheduled for turn '${command.interruptedTurnId}'.`,
+          });
+        }
+      }
       const events = yield* activityLifecycleResetEvents({
         thread,
         commandId: command.commandId,
@@ -1422,6 +1437,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           messageId: null,
           resumedFromTurnId: command.interruptedTurnId,
+          ...(command.automaticRetryAttempt !== undefined
+            ? { automaticRetryAttempt: command.automaticRetryAttempt }
+            : {}),
           modelSelection: thread.modelSelection,
           runtimeMode: thread.runtimeMode,
           interactionMode: thread.interactionMode,
