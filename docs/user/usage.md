@@ -21,6 +21,12 @@ weekly all-model limit, and model-specific weekly limits. Claude does not always
 so T3 Code shows the limit data without guessing one. The meter appears only when the connected
 Claude account reports subscription rate limits; API-billed setups may not provide them.
 
+While a Claude session is active, T3 Code checks the account after completed turns and at least every
+five minutes. Open the meter to see when its values were last updated. If the last successful check
+is more than ten minutes old, the meter marks the values as stale and pauses its forecast. An expired
+window stays visible as the previous observation while T3 Code waits for refreshed limits instead of
+presenting it as current.
+
 Before enough completed history exists, the meter shows an early estimate that keeps the opening
 hours of a weekly window from dominating the entire forecast. After three completed windows, its
 details show how many recent windows informed the estimate and the range those windows produced.
@@ -29,4 +35,6 @@ The server retains only a compact history of the eight newest windows for each d
 When the forecast exceeds 100%, the compact meter estimates how long the remaining usage will last.
 Open the meter for the approximate date and time. If recent windows disagree, the details show a
 likely timing range or say that usage may still last until reset. These estimates use the same sleep
-and weekend weighting as the percentage forecast and update as new usage arrives.
+and weekend weighting as the percentage forecast and update as new usage arrives. A forecast is
+anchored to the time its usage percentage was observed; only the reset countdown advances between
+provider updates.

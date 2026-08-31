@@ -164,4 +164,33 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     expect(html).toContain("out ~1h45m");
     expect(html).toContain("Early estimate: may run out in about 1h 45m");
   });
+
+  it("labels stale, expired observations as awaiting a refresh", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:06:00.000Z"));
+    const staleUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      limitId: "claude",
+      limitName: "Claude usage",
+      primary: {
+        usedPercent: 45,
+        resetsAt: "2026-03-23T12:03:00.000Z",
+        windowDurationMins: 300,
+      },
+      updatedAt: "2026-03-23T11:55:00.000Z",
+    };
+
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("claudeAgent")}
+        activeUsageLimits={staleUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("Updated 11m ago; may be stale");
+    expect(html).toContain("previous window ended; update pending");
+    expect(html).toContain("update pending");
+    expect(html).not.toContain("Resets in Expired");
+  });
 });

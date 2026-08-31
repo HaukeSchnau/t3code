@@ -180,6 +180,13 @@ function buildInlineWindowStats(
   windowSnapshot: DerivedUsageLimitWindowSnapshot,
   nowMs: number,
 ): { readonly trailingLabel: string | null } {
+  if (windowSnapshot.resetExpired) {
+    return { trailingLabel: "update pending" };
+  }
+  if (windowSnapshot.isStale) {
+    return { trailingLabel: "stale" };
+  }
+
   const resetLabel = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
 
   if (windowSnapshot.status === "reached") {
@@ -204,7 +211,9 @@ function buildInlineWindowStats(
 }
 
 function readInlineProjectedPercent(windowSnapshot: DerivedUsageLimitWindowSnapshot): number {
-  return windowSnapshot.projectedPercentAtReset !== null &&
+  return !windowSnapshot.isStale &&
+    !windowSnapshot.resetExpired &&
+    windowSnapshot.projectedPercentAtReset !== null &&
     Number.isFinite(windowSnapshot.projectedPercentAtReset)
     ? windowSnapshot.projectedPercentAtReset
     : windowSnapshot.usedPercent;
@@ -214,6 +223,9 @@ function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): strin
   const relative = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
   const absolute = windowSnapshot.resetAbsoluteLabel;
 
+  if (windowSnapshot.resetExpired) {
+    return absolute ? `Previous window ended at ${absolute}` : "Previous window ended";
+  }
   if (relative && absolute) {
     return `Resets in ${relative} at ${absolute}`;
   }
@@ -230,7 +242,12 @@ function formatResetLine(windowSnapshot: DerivedUsageLimitWindowSnapshot): strin
 }
 
 function formatProjectionBasis(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
-  if (windowSnapshot.projectionBasis !== "history" || windowSnapshot.historicalWindowCount <= 0) {
+  if (
+    windowSnapshot.isStale ||
+    windowSnapshot.resetExpired ||
+    windowSnapshot.projectionBasis !== "history" ||
+    windowSnapshot.historicalWindowCount <= 0
+  ) {
     return null;
   }
   const suffix = windowSnapshot.historicalWindowCount === 1 ? "window" : "windows";
@@ -241,6 +258,9 @@ function formatDepletionLine(
   windowSnapshot: DerivedUsageLimitWindowSnapshot,
   nowMs: number,
 ): string | null {
+  if (windowSnapshot.isStale || windowSnapshot.resetExpired) {
+    return null;
+  }
   const forecast = windowSnapshot.depletionForecast;
   if (forecast.kind === "reached") {
     const resetLabel = formatResetCountdownLabel(windowSnapshot.resetRelativeLabel);
@@ -266,6 +286,9 @@ function formatProjectionRange(
   windowSnapshot: DerivedUsageLimitWindowSnapshot,
   nowMs: number,
 ): string | null {
+  if (windowSnapshot.isStale || windowSnapshot.resetExpired) {
+    return null;
+  }
   const depletion = windowSnapshot.depletionForecast;
   if (depletion.kind === "beforeReset" && depletion.range) {
     const earliest = formatApproximateDurationUntil(depletion.range.earliestAtMs, nowMs);
@@ -331,22 +354,39 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
   );
   const detailWindows =
     usage.windows.length > 0 ? usage.windows : compactWindows.map((entry) => entry.snapshot);
+  const freshnessLabel = usage.updatedRelativeLabel
+    ? `${usage.updatedRelativeLabel}${usage.isStale ? "; may be stale" : ""}`
+    : null;
   const inlineAriaLabel =
     compactWindows.length > 0
-      ? `${usage.limitName ?? "Usage limits"}. ${compactWindows
-          .map(({ label, snapshot }) => {
-            return [
-              label,
-              `${formatPercent(readInlineProjectedPercent(snapshot))} forecast`,
-              `${formatPercent(snapshot.usedPercent)} used`,
-              formatDepletionLine(snapshot, nowMs),
-              formatProjectionBasis(snapshot),
-              formatProjectionRange(snapshot, nowMs),
-            ]
-              .filter((part) => part && part.length > 0)
-              .join(" ");
-          })
-          .join(". ")}`
+      ? [
+          usage.limitName ?? "Usage limits",
+          freshnessLabel,
+          compactWindows
+            .map(({ label, snapshot }) => {
+              const isCurrentEstimate = !snapshot.isStale && !snapshot.resetExpired;
+              return [
+                label,
+                isCurrentEstimate
+                  ? `${formatPercent(readInlineProjectedPercent(snapshot))} forecast`
+                  : null,
+                `${formatPercent(snapshot.usedPercent)} used`,
+                snapshot.resetExpired
+                  ? "previous window ended; update pending"
+                  : snapshot.isStale
+                    ? "stale observation"
+                    : null,
+                formatDepletionLine(snapshot, nowMs),
+                formatProjectionBasis(snapshot),
+                formatProjectionRange(snapshot, nowMs),
+              ]
+                .filter((part) => part && part.length > 0)
+                .join(" ");
+            })
+            .join(". "),
+        ]
+          .filter((part) => part && part.length > 0)
+          .join(". ")
       : `${usage.limitName ?? "Usage limits"} ${formatPercent(compactWindow.usedPercent)} used`;
 
   return (
@@ -416,6 +456,12 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             {creditsLine ? (
               <div className="text-xs text-muted-foreground">{creditsLine}</div>
             ) : null}
+            {usage.updatedRelativeLabel ? (
+              <div className="text-xs text-muted-foreground">
+                {usage.updatedRelativeLabel}
+                {usage.isStale ? ". May be stale." : null}
+              </div>
+            ) : null}
           </div>
 
           {detailWindows.map((windowSnapshot, index) => {
@@ -431,14 +477,17 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             const projectionBasis = formatProjectionBasis(windowSnapshot);
             const depletionLine = formatDepletionLine(windowSnapshot, nowMs);
             const projectionRange = formatProjectionRange(windowSnapshot, nowMs);
-            const assessment =
-              windowSnapshot.status === "reached"
-                ? "Limit reached."
-                : windowSnapshot.status === "atRisk"
-                  ? `Forecast: ${projectedUsage ?? "100%+"} by reset.`
-                  : windowSnapshot.status === "ok"
-                    ? `Forecast: ${projectedUsage ?? "0%"} by reset.`
-                    : "Forecast unavailable.";
+            const assessment = windowSnapshot.resetExpired
+              ? "Waiting for refreshed limits."
+              : windowSnapshot.isStale
+                ? "Forecast paused until fresh usage arrives."
+                : windowSnapshot.status === "reached"
+                  ? "Limit reached."
+                  : windowSnapshot.status === "atRisk"
+                    ? `Forecast: ${projectedUsage ?? "100%+"} by reset.`
+                    : windowSnapshot.status === "ok"
+                      ? `Forecast: ${projectedUsage ?? "0%"} by reset.`
+                      : "Forecast unavailable.";
 
             return (
               <div

@@ -3,7 +3,7 @@ import type {
   OrchestrationUsageLimitHistoryWindow,
 } from "@t3tools/contracts";
 
-import { formatRelativeTimeUntilLabel } from "../timestampFormat";
+import { formatElapsedDurationLabel, formatRelativeTimeUntilLabel } from "../timestampFormat";
 
 const WEEKLY_WINDOW_DURATION_MINS = 7 * 24 * 60;
 const WEEKDAY_USAGE_WEIGHT = 1;
@@ -15,6 +15,7 @@ const RESET_WINDOW_TOLERANCE_MS = 60 * 1000;
 const REGULARIZED_PACE_CONFIDENCE_PERCENT = 50;
 const HISTORY_FULL_CONFIDENCE_WINDOWS = 3;
 const HISTORY_RECENCY_HALF_LIFE_WINDOWS = 3;
+const USAGE_LIMITS_STALE_AFTER_MS = 10 * 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -141,6 +142,8 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
   historicalWindowCount: number;
   depletionForecast: UsageDepletionForecast;
   status: UsageLimitWindowStatus;
+  isStale: boolean;
+  resetExpired: boolean;
 }
 
 export interface DerivedUsageLimitsSnapshot extends Omit<
@@ -152,6 +155,8 @@ export interface DerivedUsageLimitsSnapshot extends Omit<
   windows: ReadonlyArray<DerivedUsageLimitWindowSnapshot>;
   compactWindow: "primary" | "secondary" | null;
   compactWindowStatus: UsageLimitWindowStatus | null;
+  isStale: boolean;
+  updatedRelativeLabel: string | null;
 }
 
 interface UsageLimitsSnapshotCandidate {
@@ -638,25 +643,32 @@ function deriveWindowDisplay(
   window: UsageLimitWindowSnapshot | null,
   rateLimitReachedType: string | null,
   history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>,
+  observedAtMs: number,
   nowMs: number,
+  isStale: boolean,
 ): DerivedUsageLimitWindowSnapshot | null {
   if (!window) {
     return null;
   }
 
-  const elapsedPercent = deriveProjectionElapsedPercent(window, nowMs);
+  const resetMs = parseTimestampMs(window.resetsAt);
+  const resetExpired = resetMs !== null && resetMs <= nowMs;
+  const elapsedPercent = deriveProjectionElapsedPercent(window, observedAtMs);
   const regularizedProjection = deriveProjectedPercentAtReset(window.usedPercent, elapsedPercent);
   const projection = deriveHistoricalProjection({
     window,
     history,
-    nowMs,
+    nowMs: observedAtMs,
     regularizedProjection,
   });
-  const status = deriveWindowStatus({
-    usedPercent: window.usedPercent,
-    projectedPercentAtReset: projection.projectedPercentAtReset,
-    rateLimitReachedType,
-  });
+  const status =
+    isStale || resetExpired
+      ? "unknown"
+      : deriveWindowStatus({
+          usedPercent: window.usedPercent,
+          projectedPercentAtReset: projection.projectedPercentAtReset,
+          rateLimitReachedType,
+        });
 
   return {
     ...window,
@@ -672,9 +684,11 @@ function deriveWindowDisplay(
       projectedPercentAtReset: projection.projectedPercentAtReset,
       projectedPercentRange: projection.projectedPercentRange,
       status,
-      nowMs,
+      nowMs: observedAtMs,
     }),
     status,
+    isStale,
+    resetExpired,
   };
 }
 
@@ -939,21 +953,44 @@ export function deriveDisplayedUsageLimitsSnapshot(
     return null;
   }
 
+  const updatedAtMs = Date.parse(snapshot.updatedAt);
+  const hasValidUpdatedAt = Number.isFinite(updatedAtMs);
+  const observedAtMs = hasValidUpdatedAt ? Math.min(updatedAtMs, nowMs) : nowMs;
+  const isStale = !hasValidUpdatedAt || nowMs - observedAtMs >= USAGE_LIMITS_STALE_AFTER_MS;
+  const elapsedLabel = hasValidUpdatedAt
+    ? formatElapsedDurationLabel(snapshot.updatedAt, nowMs)
+    : "";
+  const updatedRelativeLabel = elapsedLabel
+    ? elapsedLabel === "just now"
+      ? "Updated just now"
+      : `Updated ${elapsedLabel} ago`
+    : null;
   const history = snapshot.history ?? [];
   const primary = deriveWindowDisplay(
     snapshot.primary,
     snapshot.rateLimitReachedType,
     history,
+    observedAtMs,
     nowMs,
+    isStale,
   );
   const secondary = deriveWindowDisplay(
     snapshot.secondary,
     snapshot.rateLimitReachedType,
     history,
+    observedAtMs,
     nowMs,
+    isStale,
   );
   const windows = (snapshot.windows ?? []).flatMap((window) => {
-    const derived = deriveWindowDisplay(window, snapshot.rateLimitReachedType, history, nowMs);
+    const derived = deriveWindowDisplay(
+      window,
+      snapshot.rateLimitReachedType,
+      history,
+      observedAtMs,
+      nowMs,
+      isStale,
+    );
     return derived ? [derived] : [];
   });
   const compactWindow = primary ? "primary" : secondary ? "secondary" : null;
@@ -975,5 +1012,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
     windows,
     compactWindow,
     compactWindowStatus,
+    isStale,
+    updatedRelativeLabel,
   };
 }
