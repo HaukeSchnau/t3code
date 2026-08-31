@@ -4,6 +4,7 @@ import {
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
   LayoutDashboardIcon,
+  NetworkIcon,
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -162,9 +163,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
           ? "monitor"
           : location.pathname === "/usage"
             ? "usage"
-            : location.pathname === "/pull-requests"
-              ? "pull-requests"
-              : null,
+            : location.pathname === "/orchestration"
+              ? "orchestration"
+              : location.pathname === "/pull-requests"
+                ? "pull-requests"
+                : null,
   });
   const { environments } = useEnvironments();
   // The page reads every connected server, so one of them offering pull requests is enough for
@@ -193,6 +196,11 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const handleUsageClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/usage" });
+  }, [closeMobileSidebar, navigate]);
+
+  const handleOrchestrationClick = useCallback(() => {
+    closeMobileSidebar();
+    void navigate({ to: "/orchestration" });
   }, [closeMobileSidebar, navigate]);
 
   const handleBackClick = useCallback(() => {
@@ -237,6 +245,15 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             label="Usage"
             onClick={handleUsageClick}
           />
+          {/* Dev-only until batches are served: the page renders a fixture, and
+              a link to sample data does not belong in a shipped build. */}
+          {import.meta.env.DEV ? (
+            <SidebarUtilityItem
+              icon={<NetworkIcon />}
+              label="Orchestration"
+              onClick={handleOrchestrationClick}
+            />
+          ) : null}
         </>
       )}
       <SidebarUpdatePill />
