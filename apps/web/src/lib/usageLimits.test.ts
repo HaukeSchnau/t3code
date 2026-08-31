@@ -263,19 +263,24 @@ describe("usageLimits", () => {
     vi.setSystemTime(new Date(2026, 2, 23, 12, 30));
 
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        primary: {
-          usedPercent: 60,
-          resetsAt: localIso(2026, 2, 23, 15),
-          windowDurationMins: 300,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          primary: {
+            usedPercent: 60,
+            resetsAt: localIso(2026, 2, 23, 15),
+            windowDurationMins: 300,
+          },
+          secondary: {
+            usedPercent: 10,
+            resetsAt: "2026-03-30T00:00:00.000Z",
+            windowDurationMins: 10080,
+          },
         },
-        secondary: {
-          usedPercent: 10,
-          resetsAt: "2026-03-30T00:00:00.000Z",
-          windowDurationMins: 10080,
-        },
-      }),
+        localIso(2026, 2, 23, 12, 30),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, Date.now());
@@ -314,16 +319,105 @@ describe("usageLimits", () => {
     vi.useRealTimers();
   });
 
+  it("keeps forecasts anchored to the observation while countdowns advance", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity(
+        "activity-anchored",
+        "account.rate-limits.updated",
+        {
+          primary: {
+            usedPercent: 45,
+            resetsAt: "2026-03-23T15:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+        "2026-03-23T11:55:00.000Z",
+      ),
+    ]);
+
+    const first = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      Date.parse("2026-03-23T12:00:00.000Z"),
+    );
+    const later = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      Date.parse("2026-03-23T12:04:00.000Z"),
+    );
+
+    expect(later?.primary?.elapsedPercent).toBe(first?.primary?.elapsedPercent);
+    expect(later?.primary?.projectedPercentAtReset).toBe(first?.primary?.projectedPercentAtReset);
+    expect(first?.primary?.resetRelativeLabel).toBe("3h left");
+    expect(later?.primary?.resetRelativeLabel).toBe("2h left");
+  });
+
+  it("marks ten-minute-old observations stale and pauses their forecast", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity(
+        "activity-stale",
+        "account.rate-limits.updated",
+        {
+          primary: {
+            usedPercent: 45,
+            resetsAt: "2026-03-23T15:00:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+        "2026-03-23T11:55:00.000Z",
+      ),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      Date.parse("2026-03-23T12:06:00.000Z"),
+    );
+
+    expect(displayed?.isStale).toBe(true);
+    expect(displayed?.updatedRelativeLabel).toBe("Updated 11m ago");
+    expect(displayed?.primary?.isStale).toBe(true);
+    expect(displayed?.primary?.status).toBe("unknown");
+    expect(displayed?.primary?.depletionForecast).toEqual({ kind: "unknown" });
+  });
+
+  it("treats an expired observed window as awaiting refresh", () => {
+    const snapshot = deriveLatestUsageLimitsSnapshot([
+      makeActivity(
+        "activity-expired",
+        "account.rate-limits.updated",
+        {
+          primary: {
+            usedPercent: 45,
+            resetsAt: "2026-03-23T12:03:00.000Z",
+            windowDurationMins: 300,
+          },
+        },
+        "2026-03-23T11:55:00.000Z",
+      ),
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(
+      snapshot,
+      Date.parse("2026-03-23T12:06:00.000Z"),
+    );
+
+    expect(displayed?.primary?.resetExpired).toBe(true);
+    expect(displayed?.primary?.status).toBe("unknown");
+  });
+
   it("keeps daytime 5h projections equivalent to wall-clock elapsed time", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        primary: {
-          usedPercent: 60,
-          resetsAt: localIso(2026, 2, 23, 15),
-          windowDurationMins: 300,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          primary: {
+            usedPercent: 60,
+            resetsAt: localIso(2026, 2, 23, 15),
+            windowDurationMins: 300,
+          },
         },
-      }),
+        localIso(2026, 2, 23, 12, 30),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(
@@ -367,14 +461,19 @@ describe("usageLimits", () => {
 
   it("discounts sleep hours in 5h projections", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        primary: {
-          usedPercent: 40,
-          resetsAt: localIso(2026, 2, 23, 8),
-          windowDurationMins: 300,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          primary: {
+            usedPercent: 40,
+            resetsAt: localIso(2026, 2, 23, 8),
+            windowDurationMins: 300,
+          },
         },
-      }),
+        localIso(2026, 2, 23, 7, 30),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(
@@ -410,14 +509,19 @@ describe("usageLimits", () => {
 
   it("marks reached limits when the provider reports a reached type", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: "rate_limit_reached",
-        primary: {
-          usedPercent: 82,
-          resetsAt: "2026-03-23T05:00:00.000Z",
-          windowDurationMins: 300,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: "rate_limit_reached",
+          primary: {
+            usedPercent: 82,
+            resetsAt: "2026-03-23T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
         },
-      }),
+        "2026-03-23T02:30:00.000Z",
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(
@@ -432,14 +536,19 @@ describe("usageLimits", () => {
 
   it("discounts remaining weekend time in weekly projections", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        secondary: {
-          usedPercent: 40,
-          resetsAt: localIso(2026, 3, 27),
-          windowDurationMins: 10080,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          secondary: {
+            usedPercent: 40,
+            resetsAt: localIso(2026, 3, 27),
+            windowDurationMins: 10080,
+          },
         },
-      }),
+        localIso(2026, 3, 24),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, new Date(2026, 3, 24).getTime());
@@ -451,14 +560,19 @@ describe("usageLimits", () => {
 
   it("partially weights elapsed weekend segments in weekly projections", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        secondary: {
-          usedPercent: 50,
-          resetsAt: localIso(2026, 3, 27),
-          windowDurationMins: 10080,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          secondary: {
+            usedPercent: 50,
+            resetsAt: localIso(2026, 3, 27),
+            windowDurationMins: 10080,
+          },
         },
-      }),
+        localIso(2026, 3, 25, 12),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(
@@ -472,14 +586,19 @@ describe("usageLimits", () => {
 
   it("combines sleep and weekend weighting in weekly projections", () => {
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-1", "account.rate-limits.updated", {
-        rateLimitReachedType: null,
-        secondary: {
-          usedPercent: 50,
-          resetsAt: localIso(2026, 3, 27),
-          windowDurationMins: 10080,
+      makeActivity(
+        "activity-1",
+        "account.rate-limits.updated",
+        {
+          rateLimitReachedType: null,
+          secondary: {
+            usedPercent: 50,
+            resetsAt: localIso(2026, 3, 27),
+            windowDurationMins: 10080,
+          },
         },
-      }),
+        localIso(2026, 3, 25, 8),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(
@@ -603,13 +722,18 @@ describe("usageLimits", () => {
     const resetMs = Date.parse("2026-08-20T08:15:00.000Z");
     const nowMs = resetMs - 7 * 24 * 60 * 60 * 1000 + 115 * 60 * 1000;
     const snapshot = deriveLatestUsageLimitsSnapshot([
-      makeActivity("activity-early", "account.rate-limits.updated", {
-        primary: {
-          usedPercent: 5,
-          resetsAt: new Date(resetMs).toISOString(),
-          windowDurationMins: 10080,
+      makeActivity(
+        "activity-early",
+        "account.rate-limits.updated",
+        {
+          primary: {
+            usedPercent: 5,
+            resetsAt: new Date(resetMs).toISOString(),
+            windowDurationMins: 10080,
+          },
         },
-      }),
+        new Date(nowMs).toISOString(),
+      ),
     ]);
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
