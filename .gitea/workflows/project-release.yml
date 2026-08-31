@@ -1,4 +1,4 @@
-name: Project Release
+name: CI
 
 on:
   push:
@@ -8,8 +8,64 @@ on:
 permissions:
   contents: read
 
+env:
+  NIX_CONFIG: experimental-features = nix-command flakes
+
 jobs:
+  qa:
+    name: Repository QA
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Add Nix to PATH
+        run: |
+          set -euo pipefail
+          if [ -x /run/current-system/sw/bin/nix ]; then
+            echo /run/current-system/sw/bin >> "$GITHUB_PATH"
+            export PATH="/run/current-system/sw/bin:$PATH"
+          fi
+          nix --version
+
+      - name: Install dependencies and run QA
+        run: |
+          set -euo pipefail
+          nix develop .#default --command bash -s <<'BASH'
+            set -euo pipefail
+            pnpm install --frozen-lockfile
+            pnpm exec vp run --filter @t3tools/desktop ensure:electron
+            pnpm exec vp check
+            pnpm exec vpr typecheck
+            pnpm exec vp run -r test
+            pnpm run release:smoke
+            pnpm run fork:lockfile:check
+          BASH
+
+  release_check:
+    name: Release contract
+    needs: qa
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Verify release contract
+        run: |
+          set -euo pipefail
+          if [ -x /run/current-system/sw/bin/nix ]; then
+            export PATH="/run/current-system/sw/bin:$PATH"
+          fi
+          system="$(nix eval --impure --raw --expr builtins.currentSystem)"
+          nix build ".#checks.${system}.projectReleaseGate" --no-link --print-build-logs
+
   release:
+    name: Release
+    needs: release_check
     uses: schnau/nix-infra-modules/.gitea/workflows/project-release.yml@main
-    with:
-      verification_check: projectReleaseGate
