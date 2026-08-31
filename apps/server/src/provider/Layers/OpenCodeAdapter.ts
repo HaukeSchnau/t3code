@@ -21,9 +21,16 @@ import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
-import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
+import type {
+  OpencodeClient,
+  Part,
+  PermissionRequest,
+  ProviderListResponse,
+  QuestionRequest,
+} from "@opencode-ai/sdk/v2";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -54,8 +61,11 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
+import { fetchZaiUsageLimits, type ZaiUsageSource, zaiQuotaUrlForApiUrl } from "../zaiUsage.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
+const OPENCODE_ZAI_USAGE_MIN_REFRESH_INTERVAL_MS = 60 * 1000;
+const OPENCODE_ZAI_USAGE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 /**
  * Version tag stamped into the OpenCode resume cursor. Bump if the cursor
@@ -182,6 +192,34 @@ function trimText(value: string | undefined | null): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
+const decodeStringOption = Schema.decodeUnknownOption(Schema.String);
+
+/** Resolves Z.AI quota access from OpenCode's provider inventory for one selected model. */
+export function openCodeZaiUsageSource(
+  providerList: ProviderListResponse,
+  modelSlug: string | null | undefined,
+): ZaiUsageSource | null {
+  const parsed = parseOpenCodeModelSlug(modelSlug);
+  if (!parsed) return null;
+
+  const provider = providerList.all.find((candidate) => candidate.id === parsed.providerID);
+  const model = provider?.models[parsed.modelID];
+  if (!provider || !model) return null;
+
+  const quotaUrl = zaiQuotaUrlForApiUrl(model.api.url);
+  if (!quotaUrl) return null;
+
+  const optionsApiKey = Option.getOrUndefined(decodeStringOption(provider.options.apiKey));
+  const apiKey = trimText(provider.key) ?? trimText(optionsApiKey);
+  if (!apiKey) return null;
+
+  return {
+    apiKey,
+    limitId: provider.id,
+    quotaUrl,
+  };
+}
+
 function openCodeEventSessionId(event: OpenCodeSubscribedEvent): string | undefined {
   const properties = "properties" in event ? event.properties : undefined;
   if (!properties || typeof properties !== "object") {
@@ -262,6 +300,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
+  readonly fetchZaiUsageLimits?: typeof fetchZaiUsageLimits;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -605,8 +644,15 @@ export function makeOpenCodeAdapter(
     const managedNativeEventLogger =
       options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
     const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const zaiUsageRefreshQueue = yield* Queue.unbounded<ThreadId>();
     const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
+    const readZaiUsageLimits = options?.fetchZaiUsageLimits ?? fetchZaiUsageLimits;
     const sessions = new Map<ThreadId, OpenCodeSessionContext>();
+    const zaiUsageEligibility = new Map<
+      ThreadId,
+      { readonly model: string | undefined; readonly isZai: boolean }
+    >();
+    let nextZaiUsageRefreshAtMs = 0;
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
       Effect.mapError(
         (cause) =>
@@ -652,6 +698,7 @@ export function makeOpenCodeAdapter(
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
         sessions.clear();
+        zaiUsageEligibility.clear();
         // `ignoreCause` swallows both typed failures (none here) and defects
         // from throwing scope finalizers so a sibling's death can't interrupt
         // the remaining cleanups.
@@ -667,7 +714,10 @@ export function makeOpenCodeAdapter(
         if (managedNativeEventLogger !== undefined) {
           yield* managedNativeEventLogger.close();
         }
-      }).pipe(Effect.ensuring(Queue.shutdown(runtimeEvents))),
+      }).pipe(
+        Effect.ensuring(Queue.shutdown(zaiUsageRefreshQueue)),
+        Effect.ensuring(Queue.shutdown(runtimeEvents)),
+      ),
     );
 
     const emit = (event: ProviderRuntimeEvent) =>
@@ -676,6 +726,109 @@ export function makeOpenCodeAdapter(
           accepted ? Queue.offer(runtimeEvents, event).pipe(Effect.asVoid) : Effect.void,
         ),
       );
+
+    const refreshZaiUsageLimits = Effect.fn("refreshZaiUsageLimits")(function* (
+      context: OpenCodeSessionContext,
+    ) {
+      const providerListResponse = yield* runOpenCodeSdk("provider.list", () =>
+        context.client.provider.list(),
+      );
+      const providerList = providerListResponse.data;
+      if (!providerList) {
+        return yield* new OpenCodeRuntimeError({
+          operation: "provider.list",
+          detail: "OpenCode provider list was empty while refreshing GLM usage.",
+        });
+      }
+
+      const source = openCodeZaiUsageSource(providerList, context.session.model);
+      if (!source) {
+        zaiUsageEligibility.set(context.session.threadId, {
+          model: context.session.model,
+          isZai: false,
+        });
+        return;
+      }
+      zaiUsageEligibility.set(context.session.threadId, {
+        model: context.session.model,
+        isZai: true,
+      });
+
+      const rateLimits = yield* readZaiUsageLimits(source);
+      yield* emit({
+        ...(yield* buildEventBase({ threadId: context.session.threadId })),
+        type: "account.rate-limits.updated",
+        payload: { rateLimits },
+      });
+    });
+
+    const selectZaiUsageContext = (threadId: ThreadId) => {
+      const requested = sessions.get(threadId);
+      if (requested) return requested;
+
+      for (const [candidateThreadId, eligibility] of zaiUsageEligibility) {
+        if (!eligibility.isZai) continue;
+        const candidate = sessions.get(candidateThreadId);
+        if (candidate) return candidate;
+      }
+      return undefined;
+    };
+
+    const waitForZaiUsageCooldown = Effect.fn("waitForZaiUsageCooldown")(function* (
+      initialThreadId: ThreadId,
+    ) {
+      let threadId = initialThreadId;
+      while (true) {
+        const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
+        const waitMs = nextZaiUsageRefreshAtMs - nowMs;
+        if (waitMs <= 0) return threadId;
+
+        const outcome = yield* Effect.race(
+          Effect.sleep(waitMs).pipe(Effect.as({ _tag: "Ready" as const })),
+          Queue.take(zaiUsageRefreshQueue).pipe(
+            Effect.map((queued) => ({ _tag: "Queued" as const, queued })),
+          ),
+        );
+        if (outcome._tag === "Ready") return threadId;
+        const queued = yield* Queue.takeBetween(zaiUsageRefreshQueue, 0, Number.POSITIVE_INFINITY);
+        threadId = queued.at(-1) ?? outcome.queued;
+      }
+    });
+
+    const runZaiUsageRefresh = Effect.gen(function* () {
+      const queued = yield* Queue.takeAll(zaiUsageRefreshQueue);
+      const threadId = queued.at(-1);
+      if (!threadId) return;
+
+      const context = selectZaiUsageContext(yield* waitForZaiUsageCooldown(threadId));
+      if (!context) return;
+
+      nextZaiUsageRefreshAtMs =
+        DateTime.toEpochMillis(yield* DateTime.now) + OPENCODE_ZAI_USAGE_MIN_REFRESH_INTERVAL_MS;
+      yield* refreshZaiUsageLimits(context);
+    }).pipe(
+      Effect.catchCause(() =>
+        Effect.logWarning("opencode.zai-usage-limits.refresh-failed", {
+          detail: "The GLM Coding Plan quota could not be refreshed.",
+        }),
+      ),
+    );
+
+    yield* runZaiUsageRefresh.pipe(Effect.forever, Effect.forkScoped);
+    yield* Effect.sleep(OPENCODE_ZAI_USAGE_POLL_INTERVAL_MS).pipe(
+      Effect.andThen(
+        Effect.suspend(() => {
+          for (const [threadId, eligibility] of zaiUsageEligibility) {
+            if (eligibility.isZai && sessions.has(threadId)) {
+              return Queue.offer(zaiUsageRefreshQueue, threadId).pipe(Effect.asVoid);
+            }
+          }
+          return Effect.void;
+        }),
+      ),
+      Effect.forever,
+      Effect.forkScoped,
+    );
     const writeNativeEvent = (
       threadId: ThreadId,
       event: {
@@ -704,6 +857,7 @@ export function makeOpenCodeAdapter(
       }
       const turnId = context.activeTurnId;
       sessions.delete(context.session.threadId);
+      zaiUsageEligibility.delete(context.session.threadId);
       // Emit lifecycle events BEFORE tearing down the scope. Both call sites
       // run this inside a fiber forked via `Effect.forkIn(context.sessionScope)`;
       // closing that scope triggers the fiber-interrupt finalizer, so any
@@ -1095,6 +1249,10 @@ export function makeOpenCodeAdapter(
                 state: "completed",
               },
             });
+            const eligibility = zaiUsageEligibility.get(context.session.threadId);
+            if (!eligibility || eligibility.model !== context.session.model || eligibility.isZai) {
+              yield* Queue.offer(zaiUsageRefreshQueue, context.session.threadId);
+            }
           }
           break;
         }
@@ -1220,6 +1378,7 @@ export function makeOpenCodeAdapter(
         if (existing) {
           yield* stopOpenCodeContext(existing);
           sessions.delete(input.threadId);
+          zaiUsageEligibility.delete(input.threadId);
         }
 
         const started = yield* Effect.gen(function* () {
@@ -1430,6 +1589,9 @@ export function makeOpenCodeAdapter(
             providerThreadId: started.openCodeSession.id,
           },
         });
+        if (session.model) {
+          yield* Queue.offer(zaiUsageRefreshQueue, input.threadId);
+        }
 
         return session;
       },
@@ -1636,6 +1798,7 @@ export function makeOpenCodeAdapter(
         }
         const stopped = yield* stopOpenCodeContext(context);
         sessions.delete(threadId);
+        zaiUsageEligibility.delete(threadId);
         if (!stopped) {
           return;
         }
@@ -1712,6 +1875,7 @@ export function makeOpenCodeAdapter(
       Effect.gen(function* () {
         const contexts = [...sessions.values()];
         sessions.clear();
+        zaiUsageEligibility.clear();
         // `stopOpenCodeContext` is typed as never-failing — SDK aborts are
         // already `Effect.ignore`'d inside it. `ignoreCause` here also
         // swallows defects from throwing finalizers so one bad close can't

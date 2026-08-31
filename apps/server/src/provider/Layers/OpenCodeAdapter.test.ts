@@ -13,6 +13,8 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
+import { FetchHttpClient } from "effect/unstable/http";
+import type { ProviderListResponse } from "@opencode-ai/sdk/v2";
 import { beforeEach } from "vite-plus/test";
 
 import {
@@ -37,7 +39,9 @@ import {
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
   mergeOpenCodeAssistantText,
+  openCodeZaiUsageSource,
 } from "./OpenCodeAdapter.ts";
+import type { ZaiUsageLimits, ZaiUsageSource } from "../zaiUsage.ts";
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
 class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterShape>()(
@@ -45,6 +49,72 @@ class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterSh
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
+
+const zaiProviderList: ProviderListResponse = {
+  all: [
+    {
+      id: "zai-coding-plan",
+      name: "Z.AI Coding Plan",
+      source: "config",
+      env: [],
+      options: { apiKey: "test-zai-api-key" },
+      models: {
+        "glm-5.2": {
+          id: "glm-5.2",
+          providerID: "zai-coding-plan",
+          api: {
+            id: "glm-5.2",
+            url: "https://api.z.ai/api/coding/paas/v4",
+            npm: "@ai-sdk/openai-compatible",
+          },
+          name: "GLM-5.2",
+          capabilities: {
+            temperature: true,
+            reasoning: true,
+            attachment: true,
+            toolcall: true,
+            input: { text: true, audio: false, image: true, video: false, pdf: true },
+            output: { text: true, audio: false, image: false, video: false, pdf: false },
+            interleaved: true,
+          },
+          cost: { input: 0, output: 0, cache: { read: 0, write: 0 } },
+          limit: { context: 200_000, output: 128_000 },
+          status: "active",
+          options: {},
+          headers: {},
+          release_date: "2026-01-01",
+        },
+      },
+    },
+  ],
+  default: {},
+  connected: ["zai-coding-plan"],
+};
+
+const testZaiUsageLimits: ZaiUsageLimits = {
+  limitId: "zai-coding-plan",
+  limitName: "GLM Coding Plan",
+  planType: "Pro",
+  rateLimitReachedType: null,
+  credits: null,
+  primary: {
+    key: "zai:tokens:3:5",
+    label: "Current window",
+    usedPercent: 6,
+    resetsAt: "2026-08-31T14:21:41.938Z",
+    windowDurationMins: 300,
+  },
+  secondary: null,
+  windows: [
+    {
+      key: "zai:tokens:3:5",
+      label: "Current window",
+      usedPercent: 6,
+      resetsAt: "2026-08-31T14:21:41.938Z",
+      windowDurationMins: 300,
+    },
+  ],
+};
 
 type MessageEntry = {
   info: {
@@ -74,6 +144,9 @@ const runtimeMock = {
     sessionDirectoryById: new Map<string, string>(),
     sessionUpdateCalls: [] as Array<{ sessionID: string; permission: unknown }>,
     forkCalls: [] as Array<{ sessionID: string; directory?: string }>,
+    providerList: { all: [], default: {}, connected: [] } as ProviderListResponse,
+    providerListCalls: 0,
+    zaiUsageSources: [] as ZaiUsageSource[],
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -94,6 +167,9 @@ const runtimeMock = {
     this.state.sessionDirectoryById.clear();
     this.state.sessionUpdateCalls.length = 0;
     this.state.forkCalls.length = 0;
+    this.state.providerList = { all: [], default: {}, connected: [] };
+    this.state.providerListCalls = 0;
+    this.state.zaiUsageSources.length = 0;
   },
 };
 
@@ -212,6 +288,12 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           })(),
         }),
       },
+      provider: {
+        list: async () => {
+          runtimeMock.state.providerListCalls += 1;
+          return { data: runtimeMock.state.providerList };
+        },
+      },
     }) as unknown as ReturnType<OpenCodeRuntimeShape["createOpenCodeSdkClient"]>,
   loadOpenCodeInventory: () =>
     Effect.fail(
@@ -254,7 +336,13 @@ const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
 
 const OpenCodeAdapterTestLayer = Layer.effect(
   OpenCodeAdapter,
-  makeOpenCodeAdapter(openCodeAdapterTestSettings),
+  makeOpenCodeAdapter(openCodeAdapterTestSettings, {
+    fetchZaiUsageLimits: (source) =>
+      Effect.sync(() => {
+        runtimeMock.state.zaiUsageSources.push(source);
+        return testZaiUsageLimits;
+      }),
+  }),
 ).pipe(
   Layer.provideMerge(Layer.succeed(OpenCodeRuntime, OpenCodeRuntimeTestDouble)),
   Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -271,6 +359,7 @@ const OpenCodeAdapterTestLayer = Layer.effect(
   ),
   Layer.provideMerge(providerSessionDirectoryTestLayer),
   Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(FetchHttpClient.layer),
 );
 
 beforeEach(() => {
@@ -281,6 +370,55 @@ const advanceTestClock = (ms: number) =>
   TestClock.adjust(`${ms} millis`).pipe(Effect.andThen(Effect.yieldNow));
 
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
+  it.effect("discovers Z.AI credentials only for a matching configured model", () =>
+    Effect.sync(() => {
+      NodeAssert.deepEqual(openCodeZaiUsageSource(zaiProviderList, "zai-coding-plan/glm-5.2"), {
+        apiKey: "test-zai-api-key",
+        limitId: "zai-coding-plan",
+        quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
+      });
+      NodeAssert.equal(openCodeZaiUsageSource(zaiProviderList, "anthropic/sonnet"), null);
+    }),
+  );
+
+  it.effect("publishes and periodically refreshes GLM Coding Plan usage", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.providerList = zaiProviderList;
+      const adapter = yield* OpenCodeAdapter;
+      const usageEventFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.type === "account.rate-limits.updated"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId: asThreadId("thread-zai-usage"),
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "zai-coding-plan/glm-5.2",
+        ),
+      });
+
+      const event = Option.getOrThrow(yield* Fiber.join(usageEventFiber));
+      NodeAssert.equal(event.type, "account.rate-limits.updated");
+      if (event.type !== "account.rate-limits.updated") return;
+      NodeAssert.deepEqual(event.payload.rateLimits, testZaiUsageLimits);
+      NodeAssert.deepEqual(runtimeMock.state.zaiUsageSources, [
+        {
+          apiKey: "test-zai-api-key",
+          limitId: "zai-coding-plan",
+          quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
+        },
+      ]);
+
+      yield* advanceTestClock(5 * 60 * 1000);
+      NodeAssert.equal(runtimeMock.state.zaiUsageSources.length, 2);
+      yield* adapter.stopSession(asThreadId("thread-zai-usage"));
+    }),
+  );
+
   it.effect("reuses a configured OpenCode server URL instead of spawning a local server", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -674,6 +812,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           Layer.provideMerge(ServerSettingsService.layerTest()),
           Layer.provideMerge(providerSessionDirectoryTestLayer),
           Layer.provideMerge(NodeServices.layer),
+          Layer.provideMerge(FetchHttpClient.layer),
         );
         const context = yield* Layer.buildWithScope(adapterLayer, scope);
         const adapter = yield* Effect.service(OpenCodeAdapter).pipe(Effect.provide(context));
@@ -820,6 +959,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -867,6 +1007,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -909,6 +1050,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -1332,6 +1474,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         ),
         Layer.provideMerge(providerSessionDirectoryTestLayer),
         Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(FetchHttpClient.layer),
       );
 
       const session = yield* Effect.gen(function* () {
@@ -1414,6 +1557,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         ),
         Layer.provideMerge(providerSessionDirectoryTestLayer),
         Layer.provideMerge(NodeServices.layer),
+        Layer.provideMerge(FetchHttpClient.layer),
       );
 
       // Capture closeCalls *inside* the provided layer scope: the adapter's

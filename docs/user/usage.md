@@ -11,21 +11,27 @@ headline and chart, and refreshing rescans every connected environment.
 
 ## Understand limit forecasts
 
-The usage meter beside the composer supports Codex and Claude. It forecasts how much of each limit
-window you are likely to use by its reset. It learns from the changing percentage during recent
-completed windows, so shifts in your working pattern gradually change future forecasts. The current
-window affects the estimate immediately.
+The usage meter beside the composer supports Codex, Claude, and GLM models used through a Z.AI
+Coding Plan in OpenCode. It forecasts how much of each limit window you are likely to use by its
+reset. It learns from the changing percentage during recent completed windows, so shifts in your
+working pattern gradually change future forecasts. The current window affects the estimate
+immediately.
+
+For GLM, T3 Code uses the API key and API endpoint already resolved by OpenCode for the selected
+model. The meter appears only while that matching GLM model is selected. It shows the coding-token
+allowance; the separate monthly MCP allowance is not included. GLM activity is not yet included in
+the historical Usage page.
 
 For Claude, open the meter to see every limit Claude reports, including the current session, the
 weekly all-model limit, and model-specific weekly limits. Claude does not always return a plan name,
 so T3 Code shows the limit data without guessing one. The meter appears only when the connected
 Claude account reports subscription rate limits; API-billed setups may not provide them.
 
-While a Claude session is active, T3 Code checks the account after completed turns and at least every
-five minutes. Open the meter to see when its values were last updated. If the last successful check
-is more than ten minutes old, the meter marks the values as stale and pauses its forecast. An expired
-window stays visible as the previous observation while T3 Code waits for refreshed limits instead of
-presenting it as current.
+While a Claude or matching GLM session is active, T3 Code checks the account after completed turns
+and at least every five minutes. Open the meter to see when its values were last updated. If the last
+successful check is more than ten minutes old, the meter marks the values as stale and pauses its
+forecast. An expired window stays visible as the previous observation while T3 Code waits for
+refreshed limits instead of presenting it as current.
 
 Before enough completed history exists, the meter shows an early estimate that keeps the opening
 hours of a weekly window from dominating the entire forecast. After three completed windows, its

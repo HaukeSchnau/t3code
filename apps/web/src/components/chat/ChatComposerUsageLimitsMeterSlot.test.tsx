@@ -97,6 +97,60 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     expect(html).toBe("");
   });
 
+  it("renders GLM Coding Plan usage for the matching OpenCode model", () => {
+    const glmUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      limitId: "zai-coding-plan",
+      limitName: "GLM Coding Plan",
+      planType: "Pro",
+      primary: {
+        key: "zai:tokens:3:5",
+        label: "Current window",
+        usedPercent: 6,
+        resetsAt: "2099-01-01T05:00:00.000Z",
+        windowDurationMins: 300,
+      },
+    };
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("opencode")}
+        selectedModel="zai-coding-plan/glm-5.2"
+        activeUsageLimits={glmUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("GLM Coding Plan");
+    expect(html).toContain("6%");
+  });
+
+  it("hides GLM usage for a different OpenCode provider or model family", () => {
+    const glmUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      limitId: "zai-coding-plan",
+      limitName: "GLM Coding Plan",
+    };
+    const mismatchedProvider = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("opencode")}
+        selectedModel="other-zai/glm-5.2"
+        activeUsageLimits={glmUsageLimits}
+      />,
+    );
+    const nonGlmModel = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("opencode")}
+        selectedModel="zai-coding-plan/deepseek-v3"
+        activeUsageLimits={glmUsageLimits}
+      />,
+    );
+
+    expect(mismatchedProvider).toBe("");
+    expect(nonGlmModel).toBe("");
+  });
+
   it("explains forecasts learned from recent windows", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-13T10:10:00.000Z"));
