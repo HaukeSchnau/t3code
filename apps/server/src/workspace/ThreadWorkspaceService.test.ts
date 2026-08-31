@@ -92,6 +92,49 @@ function makeProcessOutput(
 }
 
 layer("ThreadWorkspaceService", (it) => {
+  it("builds stable semantic workspace names for paths and URLs", () => {
+    const threadId = ThreadId.make("4d44933151b04b2088313360ae3f5157");
+    const name = ThreadWorkspaceService.__testing.workspaceName({
+      semanticSeed: "Generate fitting workspace URLs",
+      fallbackSeed: "studienbuch",
+      threadId,
+    });
+
+    assert.match(name, /^generate-fitting-workspace-urls-[a-f0-9]{6}$/);
+    assert.equal(name.length <= 48, true);
+    assert.equal(
+      ThreadWorkspaceService.__testing.workspaceName({
+        semanticSeed: "Generate fitting workspace URLs",
+        fallbackSeed: "studienbuch",
+        threadId,
+      }),
+      name,
+    );
+  });
+
+  it("normalizes international and oversized workspace titles", () => {
+    const name = ThreadWorkspaceService.__testing.workspaceName({
+      semanticSeed:
+        "Übermäßig große Änderung für langlebige, projektübergreifende Entwicklungsumgebungen",
+      fallbackSeed: "studienbuch",
+      threadId: ThreadId.make("thread-semantic-workspace-name"),
+    });
+
+    assert.match(name, /^ubermassig-grosse-anderung-fur-langlebige-[a-f0-9]{6}$/);
+    assert.equal(name.length, 48);
+  });
+
+  it("falls back to the project name when no semantic title is available", () => {
+    assert.match(
+      ThreadWorkspaceService.__testing.workspaceName({
+        semanticSeed: undefined,
+        fallbackSeed: "Studienbuch",
+        threadId: ThreadId.make("thread-workspace-fallback"),
+      }),
+      /^studienbuch-[a-f0-9]{6}$/,
+    );
+  });
+
   it.effect("reconciles an interrupted deterministic git workspace before retry", () =>
     Effect.gen(function* () {
       const baseDir = makeTempDir("t3-workspace-restart-base-");

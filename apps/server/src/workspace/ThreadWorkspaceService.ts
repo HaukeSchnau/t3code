@@ -3,6 +3,7 @@
 // @effect-diagnostics globalTimers:off
 // @effect-diagnostics preferSchemaOverJson:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -153,6 +154,9 @@ function slug(value: string): string {
   const normalized = value
     .trim()
     .toLowerCase()
+    .replace(/ß/g, "ss")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return normalized.length > 0 ? normalized : "workspace";
@@ -164,6 +168,31 @@ function shortId(value: string): string {
       .replace(/[^a-z0-9]/g, "")
       .slice(0, 12) || "workspace"
   );
+}
+
+const WORKSPACE_NAME_MAX_LENGTH = 48;
+const WORKSPACE_NAME_SUFFIX_LENGTH = 6;
+
+/**
+ * Builds the stable filesystem, VCS workspace, and downstream URL identity for a thread workspace.
+ * The semantic seed is fixed at creation time because renaming a live checkout would invalidate
+ * paths already held by terminals, setup scripts, and external development tooling.
+ */
+function workspaceName(input: {
+  readonly semanticSeed: string | undefined;
+  readonly fallbackSeed: string;
+  readonly threadId: ThreadId;
+}): string {
+  const suffix = NodeCrypto.createHash("sha256")
+    .update(input.threadId)
+    .digest("hex")
+    .slice(0, WORKSPACE_NAME_SUFFIX_LENGTH);
+  const semanticLimit = WORKSPACE_NAME_MAX_LENGTH - suffix.length - 1;
+  const semanticName = slug(input.semanticSeed?.trim() || input.fallbackSeed)
+    .replace(/[._]+/g, "-")
+    .slice(0, semanticLimit)
+    .replace(/-+$/g, "");
+  return `${semanticName || "workspace"}-${suffix}`;
 }
 
 function makeWorkspaceId(threadId: ThreadId): ThreadWorkspaceId {
@@ -1197,8 +1226,12 @@ export const make = Effect.gen(function* () {
     }
 
     const repoName = slug(NodePath.basename(root.sourcePath));
-    const workspaceName = shortId(input.threadId);
-    const checkoutPath = NodePath.join(workspacesDir, repoName, workspaceName);
+    const checkoutName = workspaceName({
+      semanticSeed: input.displayNameSeed,
+      fallbackSeed: repoName,
+      threadId: input.threadId,
+    });
+    const checkoutPath = NodePath.join(workspacesDir, repoName, checkoutName);
     yield* persistWorkspace(
       makeWorkspace({
         request: input,
@@ -1241,8 +1274,12 @@ export const make = Effect.gen(function* () {
   ) {
     const root = primaryRoot(input);
     const repoName = slug(NodePath.basename(root.sourcePath));
-    const workspaceName = `t3code-${shortId(input.threadId)}`;
-    const checkoutPath = NodePath.join(workspacesDir, repoName, workspaceName);
+    const checkoutName = workspaceName({
+      semanticSeed: input.displayNameSeed,
+      fallbackSeed: repoName,
+      threadId: input.threadId,
+    });
+    const checkoutPath = NodePath.join(workspacesDir, repoName, checkoutName);
     const resolvedBaseRevision = resolveJjRevision(root.sourcePath, root.baseRevision);
     yield* persistWorkspace(
       makeWorkspace({
@@ -1253,7 +1290,7 @@ export const make = Effect.gen(function* () {
         lifecycle: "preparing",
         baseRevision: resolvedBaseRevision,
         metadata: { provisioner: "jj-workspace", preparationStatus: "preparing" },
-        rootMetadata: { jjWorkspaceName: workspaceName },
+        rootMetadata: { jjWorkspaceName: checkoutName },
       }),
     );
     NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
@@ -1263,7 +1300,7 @@ export const make = Effect.gen(function* () {
           "workspace",
           "add",
           "--name",
-          workspaceName,
+          checkoutName,
           "-m",
           `wip: ${input.displayNameSeed?.trim() || "t3 workspace"}`,
           ...(resolvedBaseRevision ? ["--revision", resolvedBaseRevision] : []),
@@ -1274,7 +1311,7 @@ export const make = Effect.gen(function* () {
         } catch (cause) {
           cleanupFailedJjWorkspace({
             sourcePath: root.sourcePath,
-            workspaceName,
+            workspaceName: checkoutName,
             checkoutPath,
           });
           throw cause;
@@ -1307,7 +1344,7 @@ export const make = Effect.gen(function* () {
       baseRevision: resolvedBaseRevision,
       metadata: { provisioner: "jj-workspace" },
       rootMetadata: {
-        jjWorkspaceName: workspaceName,
+        jjWorkspaceName: checkoutName,
         initialChangeId,
         automaticChangePolicy: "per-turn",
         ...(root.baseRevision && root.baseRevision !== resolvedBaseRevision
@@ -1329,7 +1366,12 @@ export const make = Effect.gen(function* () {
   )(function* (input: PrepareThreadWorkspaceInput) {
     const root = primaryRoot(input);
     const projectName = slug(NodePath.basename(root.sourcePath));
-    const checkoutPath = NodePath.join(workspacesDir, projectName, shortId(input.threadId));
+    const checkoutName = workspaceName({
+      semanticSeed: input.displayNameSeed,
+      fallbackSeed: projectName,
+      threadId: input.threadId,
+    });
+    const checkoutPath = NodePath.join(workspacesDir, projectName, checkoutName);
     const startedAt = nowIso();
     const preparingWorkspace = makeWorkspace({
       request: input,
@@ -1659,4 +1701,5 @@ export const __testing = {
   copyOnWriteKindForCapabilities,
   fileSystemTypeFromStatfsType,
   primaryDirectoryCopyCommand,
+  workspaceName,
 };
