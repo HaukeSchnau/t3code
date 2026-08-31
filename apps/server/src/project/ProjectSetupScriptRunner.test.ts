@@ -84,6 +84,7 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     getFullThreadDiffContext: () => Effect.die("unused"),
     getThreadShellById: () => Effect.die("unused"),
     getThreadResultContextById: () => Effect.die("unused"),
+    listThreadRelationshipActivities: () => Effect.die("unused"),
     getThreadDetailById: () => Effect.die("unused"),
     getThreadDetailSnapshot: () => Effect.die("unused"),
     getTurnActivitiesSnapshot: () => Effect.die("unused"),

@@ -99,6 +99,7 @@ const baseProjectionQuery = {
   getFullThreadDiffContext: () => Effect.die("unexpected diff read"),
   getThreadShellById: () => Effect.die("unexpected thread shell read"),
   getThreadResultContextById: () => Effect.die("unexpected result read"),
+  listThreadRelationshipActivities: () => Effect.die("unused"),
   getThreadDetailById: () => Effect.die("unexpected thread detail read"),
   getThreadDetailSnapshot: () => Effect.die("unexpected detail snapshot read"),
   getTurnActivitiesSnapshot: () => Effect.die("unexpected activity read"),

@@ -7,7 +7,6 @@ import {
   type ModelSelection,
   ThreadId,
   ThreadOrchestrationError,
-  type OrchestrationProject,
   type OrchestrationProjectShell,
   type OrchestrationThread,
   type OrchestrationThreadActivity,
@@ -199,7 +198,7 @@ const makeId = <A>(crypto: Crypto.Crypto, prefix: string, make: (value: string) 
   );
 
 type ThreadSummarySource = OrchestrationThread | OrchestrationThreadShell;
-type ProjectSummarySource = OrchestrationProject | OrchestrationProjectShell;
+type ProjectSummarySource = OrchestrationProjectShell;
 
 function statusForThread(thread: ThreadSummarySource): string {
   if ("deletedAt" in thread && thread.deletedAt !== null) return "deleted";
@@ -209,11 +208,10 @@ function statusForThread(thread: ThreadSummarySource): string {
   return "idle";
 }
 
-function forkSourceBusyReason(thread: OrchestrationThread): string | null {
-  if (thread.deletedAt !== null) return "deleted";
+function forkSourceBusyReason(context: ProjectionThreadResultContext): string | null {
+  const thread = context.thread;
   if (thread.archivedAt !== null) return "archived";
-  const queuedMessageCount = thread.queuedMessages?.length ?? 0;
-  if (queuedMessageCount > 0) return `${queuedMessageCount} queued message(s)`;
+  if (context.queuedMessageCount > 0) return `${context.queuedMessageCount} queued message(s)`;
   if (thread.session?.status === "starting" || thread.session?.status === "running") {
     return `session is ${thread.session.status}`;
   }
@@ -246,20 +244,6 @@ function summaryForThread(
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
   };
-}
-
-function findProject(
-  projects: ReadonlyArray<OrchestrationProject>,
-  projectId: string,
-): OrchestrationProject | undefined {
-  return projects.find((project) => project.id === projectId && project.deletedAt === null);
-}
-
-function findThread(
-  threads: ReadonlyArray<OrchestrationThread>,
-  threadId: ThreadId,
-): OrchestrationThread | undefined {
-  return threads.find((thread) => thread.id === threadId && thread.deletedAt === null);
 }
 
 function trimMessagesForTurns(
@@ -419,9 +403,6 @@ const make = Effect.gen(function* () {
   const remoteClient = yield* RemoteThreadOrchestrationClient;
   const crypto = yield* Crypto.Crypto;
 
-  const snapshot = snapshotQuery
-    .getSnapshot()
-    .pipe(Effect.mapError(toThreadOrchestrationError("snapshot")));
   const shellSnapshot = snapshotQuery
     .getShellSnapshot()
     .pipe(Effect.mapError(toThreadOrchestrationError("shell_snapshot")));
@@ -452,7 +433,7 @@ const make = Effect.gen(function* () {
 
   const resolveCreateInput = (
     scope: McpInvocationContext.McpInvocationScope,
-    sourceThread: OrchestrationThread | undefined,
+    sourceThread: OrchestrationThreadShell | undefined,
     input: ThreadOrchestrationCreateThreadInput,
   ): Effect.Effect<ResolvedCreateThreadInput, ThreadOrchestrationError> =>
     Effect.gen(function* () {
@@ -514,15 +495,28 @@ const make = Effect.gen(function* () {
 
   const resolveThreadSummary = (targetThreadId: ThreadId) =>
     Effect.gen(function* () {
-      const model = yield* snapshot;
-      const thread = findThread(model.threads, targetThreadId);
-      if (!thread) {
+      const threadOption = yield* snapshotQuery.getThreadShellById(targetThreadId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("thread.resolve.thread", {
+            threadId: targetThreadId,
+          }),
+        ),
+      );
+      if (Option.isNone(threadOption)) {
         return yield* notFoundError("thread.resolve", "thread", targetThreadId, {
           threadId: targetThreadId,
         });
       }
-      const project = findProject(model.projects, thread.projectId);
-      if (!project) {
+      const thread = threadOption.value;
+      const projectOption = yield* snapshotQuery.getProjectShellById(thread.projectId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("thread.resolve.project", {
+            threadId: targetThreadId,
+            projectId: thread.projectId,
+          }),
+        ),
+      );
+      if (Option.isNone(projectOption)) {
         return yield* new ThreadOrchestrationError({
           operation: "thread.resolve",
           code: "not_found",
@@ -533,7 +527,7 @@ const make = Effect.gen(function* () {
           resourceId: thread.projectId,
         });
       }
-      return summaryForThread(thread, project, yield* localEnvironmentId);
+      return summaryForThread(thread, projectOption.value, yield* localEnvironmentId);
     });
 
   const threadResultFromContext = (
@@ -710,15 +704,28 @@ const make = Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
         return yield* remoteClient.readThread(scopeForRemote(scope), input);
       }
-      const model = yield* snapshot;
-      const thread = findThread(model.threads, input.threadId);
-      if (!thread) {
+      const threadOption = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("read_thread.thread", {
+            threadId: input.threadId,
+          }),
+        ),
+      );
+      if (Option.isNone(threadOption)) {
         return yield* notFoundError("read_thread", "thread", input.threadId, {
           threadId: input.threadId,
         });
       }
-      const project = findProject(model.projects, thread.projectId);
-      if (!project) {
+      const thread = threadOption.value;
+      const projectOption = yield* snapshotQuery.getProjectShellById(thread.projectId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("read_thread.project", {
+            threadId: input.threadId,
+            projectId: thread.projectId,
+          }),
+        ),
+      );
+      if (Option.isNone(projectOption)) {
         return yield* new ThreadOrchestrationError({
           operation: "read_thread",
           code: "not_found",
@@ -740,7 +747,7 @@ const make = Effect.gen(function* () {
         });
       }
       return {
-        thread: summaryForThread(thread, project, yield* localEnvironmentId),
+        thread: summaryForThread(thread, projectOption.value, yield* localEnvironmentId),
         messages: trimMessagesForTurns(thread, input.turnLimit),
         activities: thread.activities,
         queuedMessageCount: thread.queuedMessages?.length ?? 0,
@@ -789,15 +796,24 @@ const make = Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
         return yield* remoteClient.getThreadGraph(scopeForRemote(scope), input);
       }
-      const model = yield* snapshot;
+      const [model, relationshipActivities] = yield* Effect.all(
+        [
+          shellSnapshot,
+          snapshotQuery
+            .listThreadRelationshipActivities()
+            .pipe(Effect.mapError(toThreadOrchestrationError("get_thread_graph.relationships"))),
+        ],
+        { concurrency: "unbounded" },
+      );
       const currentEnvironmentId = yield* localEnvironmentId;
       const includeReadEdges = input.includeReadEdges ?? false;
       const edgeLimit = Math.min(input.limit ?? MAX_THREAD_LIMIT, MAX_THREAD_LIMIT);
       const depthLimit = input.depth ?? Number.POSITIVE_INFINITY;
       const summaries = new Map<ThreadId, ThreadOrchestrationThreadSummary>();
+      const projects = new Map(model.projects.map((project) => [project.id, project]));
       for (const thread of model.threads) {
-        const project = findProject(model.projects, thread.projectId);
-        if (project && thread.deletedAt === null) {
+        const project = projects.get(thread.projectId);
+        if (project) {
           summaries.set(thread.id, summaryForThread(thread, project, currentEnvironmentId));
         }
       }
@@ -807,10 +823,8 @@ const make = Effect.gen(function* () {
         });
       }
 
-      const allEdges = model.threads
-        .flatMap((thread) =>
-          thread.activities.flatMap((activity) => relationshipFromActivity(activity) ?? []),
-        )
+      const allEdges = relationshipActivities
+        .flatMap((activity) => relationshipFromActivity(activity) ?? [])
         .filter((edge) => includeReadEdges || edge.kind !== "readBy")
         .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt));
       const includedThreadIds = new Set<ThreadId>();
@@ -861,8 +875,14 @@ const make = Effect.gen(function* () {
     options: { readonly modelSelectionIntent: "explicit" | "inherited" },
   ) =>
     Effect.gen(function* () {
-      const model = yield* snapshot;
-      const sourceThread = findThread(model.threads, scope.threadId);
+      const sourceThreadOption = yield* snapshotQuery.getThreadShellById(scope.threadId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("create_thread.source", {
+            threadId: scope.threadId,
+          }),
+        ),
+      );
+      const sourceThread = Option.getOrUndefined(sourceThreadOption);
       const resolvedInput = yield* resolveCreateInput(scope, sourceThread, input);
       if (options.modelSelectionIntent === "explicit") {
         yield* assertExplicitModelSelectionAllowed("create_thread", input.modelSelection);
@@ -886,12 +906,15 @@ const make = Effect.gen(function* () {
           threadId: scope.threadId,
         });
       }
-      const project = findProject(model.projects, projectId);
-      if (!project) {
+      const projectOption = yield* snapshotQuery
+        .getProjectShellById(projectId)
+        .pipe(Effect.mapError(toThreadOrchestrationError("create_thread.project", { projectId })));
+      if (Option.isNone(projectOption)) {
         return yield* notFoundError("create_thread", "project", projectId, {
           projectId,
         });
       }
+      const project = projectOption.value;
 
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("thread");
@@ -928,10 +951,7 @@ const make = Effect.gen(function* () {
         prepared === undefined
           ? Effect.void
           : workspaceService
-              .deleteWorkspace({
-                workspaceId: prepared.workspace.id,
-                force: true,
-              })
+              .deleteWorkspace({ workspaceId: prepared.workspace.id, force: true })
               .pipe(Effect.ignoreCause({ log: true }));
 
       yield* engine
@@ -1036,14 +1056,10 @@ const make = Effect.gen(function* () {
   ) =>
     Effect.gen(function* () {
       const sourceThreadId = input.threadId ?? scope.threadId;
-      const model = yield* snapshot;
-      const sourceThread = findThread(model.threads, sourceThreadId);
-      if (!sourceThread) {
-        return yield* notFoundError("fork_thread", "thread", sourceThreadId, {
-          threadId: sourceThreadId,
-        });
-      }
-      const busyReason = forkSourceBusyReason(sourceThread);
+      const sourceContext = yield* readThreadResultContext(sourceThreadId, "fork_thread");
+      const sourceThread = sourceContext.thread;
+      const project = sourceContext.project;
+      const busyReason = forkSourceBusyReason(sourceContext);
       if (busyReason !== null) {
         return yield* new ThreadOrchestrationError({
           operation: "fork_thread",
@@ -1051,18 +1067,6 @@ const make = Effect.gen(function* () {
           message: `Thread '${sourceThreadId}' cannot be forked right now because ${busyReason}. Wait until it is idle, then try again.`,
           threadId: sourceThreadId,
           projectId: sourceThread.projectId,
-        });
-      }
-      const project = findProject(model.projects, sourceThread.projectId);
-      if (!project) {
-        return yield* new ThreadOrchestrationError({
-          operation: "fork_thread",
-          code: "not_found",
-          message: `Project '${sourceThread.projectId}' for thread '${sourceThreadId}' was not found.`,
-          threadId: sourceThreadId,
-          projectId: sourceThread.projectId,
-          resourceType: "project",
-          resourceId: sourceThread.projectId,
         });
       }
       const createdAt = yield* nowIso;
@@ -1098,7 +1102,10 @@ const make = Effect.gen(function* () {
         prepared === undefined
           ? Effect.void
           : workspaceService
-              .deleteWorkspace({ workspaceId: prepared.workspace.id, force: true })
+              .deleteWorkspace({
+                workspaceId: prepared.workspace.id,
+                force: true,
+              })
               .pipe(Effect.catch(() => Effect.void));
 
       const codexFork = yield* codexThreadForkImporter
@@ -1195,13 +1202,19 @@ const make = Effect.gen(function* () {
         return yield* remoteClient.sendMessageToThread(scopeForRemote(scope), input);
       }
       yield* assertExplicitModelSelectionAllowed("send_message_to_thread", input.modelSelection);
-      const model = yield* snapshot;
-      const targetThread = findThread(model.threads, input.threadId);
-      if (!targetThread) {
+      const targetThreadOption = yield* snapshotQuery.getThreadShellById(input.threadId).pipe(
+        Effect.mapError(
+          toThreadOrchestrationError("send_message_to_thread.thread", {
+            threadId: input.threadId,
+          }),
+        ),
+      );
+      if (Option.isNone(targetThreadOption)) {
         return yield* notFoundError("send_message_to_thread", "thread", input.threadId, {
           threadId: input.threadId,
         });
       }
+      const targetThread = targetThreadOption.value;
       const createdAt = yield* nowIso;
       yield* engine
         .dispatch({

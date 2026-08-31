@@ -523,7 +523,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               checkpointTurnCount: 1,
               checkpointRef: asCheckpointRef("checkpoint-1"),
               status: "ready",
-              files: [{ path: "README.md", kind: "modified", additions: 2, deletions: 1 }],
+              files: [
+                {
+                  path: "README.md",
+                  kind: "modified",
+                  additions: 2,
+                  deletions: 1,
+                },
+              ],
               assistantMessageId: asMessageId("message-1"),
               completedAt: "2026-02-24T00:00:08.000Z",
             },
@@ -535,6 +542,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("turn-1"),
             lastError: null,
+            lastErrorClass: null,
+            turnRetry: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
         },
@@ -617,6 +626,8 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             runtimeMode: "approval-required",
             activeTurnId: asTurnId("turn-1"),
             lastError: null,
+            lastErrorClass: null,
+            turnRetry: null,
             updatedAt: "2026-02-24T00:00:07.000Z",
           },
           latestUserMessageAt: "2026-02-24T00:00:04.000Z",
@@ -1809,7 +1820,14 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
               [asEventId("activity-rate-latest"), { usedPercent: 20 }],
               [
                 asEventId("activity-historical-plan"),
-                { plan: [{ step: "Verify production semantics", status: "completed" }] },
+                {
+                  plan: [
+                    {
+                      step: "Verify production semantics",
+                      status: "completed",
+                    },
+                  ],
+                },
               ],
               [
                 asEventId("activity-historical-subagent"),
@@ -2544,17 +2562,23 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
         )
       `;
 
-      const literalPercent = yield* snapshotQuery.searchThreads({ query: "100%" });
+      const literalPercent = yield* snapshotQuery.searchThreads({
+        query: "100%",
+      });
       assert.deepStrictEqual(
         literalPercent.matches.map((match) => [match.threadId, match.source]),
         [[ThreadId.make("thread-active"), "user"]],
       );
 
-      const user = yield* snapshotQuery.searchThreads({ query: "user needle" });
+      const user = yield* snapshotQuery.searchThreads({
+        query: "user needle",
+      });
       assert.equal(user.matches[0]?.source, "user");
       assert.match(user.matches[0]?.snippet ?? "", /USER needle/);
 
-      const assistant = yield* snapshotQuery.searchThreads({ query: "FINAL NEEDLE" });
+      const assistant = yield* snapshotQuery.searchThreads({
+        query: "FINAL NEEDLE",
+      });
       assert.equal(assistant.matches[0]?.source, "assistant");
 
       const deduped = yield* snapshotQuery.searchThreads({ query: "needle" });
@@ -2732,11 +2756,31 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
       pendingMessage: string | null;
       at: string;
     }> = [
-      { turn: "turn-1", pendingMessage: "user-msg-1", at: "2026-03-01T00:00:00.000Z" },
-      { turn: "turn-2", pendingMessage: null, at: "2026-03-01T00:01:00.000Z" },
-      { turn: "turn-3", pendingMessage: null, at: "2026-03-01T00:02:00.000Z" },
-      { turn: "turn-4", pendingMessage: "user-msg-4", at: "2026-03-01T00:03:00.000Z" },
-      { turn: "turn-5", pendingMessage: "user-msg-5", at: "2026-03-01T00:04:00.000Z" },
+      {
+        turn: "turn-1",
+        pendingMessage: "user-msg-1",
+        at: "2026-03-01T00:00:00.000Z",
+      },
+      {
+        turn: "turn-2",
+        pendingMessage: null,
+        at: "2026-03-01T00:01:00.000Z",
+      },
+      {
+        turn: "turn-3",
+        pendingMessage: null,
+        at: "2026-03-01T00:02:00.000Z",
+      },
+      {
+        turn: "turn-4",
+        pendingMessage: "user-msg-4",
+        at: "2026-03-01T00:03:00.000Z",
+      },
+      {
+        turn: "turn-5",
+        pendingMessage: "user-msg-5",
+        at: "2026-03-01T00:04:00.000Z",
+      },
     ];
     for (const { turn, pendingMessage, at } of turns) {
       yield* sql`
@@ -3208,6 +3252,42 @@ projectionSnapshotLayer("ProjectionSnapshotQuery windowed thread detail", (it) =
         assert.equal(snapshot.value.page?.hasMore, false);
         assert.equal(snapshot.value.page?.beforeCursor, null);
       }
+    }),
+  );
+
+  it.effect("reads only thread-orchestration relationship activities", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+
+      yield* sql`DELETE FROM projection_thread_activities`;
+      yield* sql`
+        INSERT INTO projection_thread_activities (
+          activity_id, thread_id, turn_id, tone, kind, summary, payload_json, created_at
+        ) VALUES
+          (
+            'relationship-later', 'thread-target', NULL, 'tool',
+            'thread-orchestration.relationship', 'later relationship',
+            '{"kind":"messagedBy","actorThreadId":"thread-actor","targetThreadId":"thread-target","createdAt":"2026-08-31T00:00:02.000Z"}',
+            '2026-08-31T00:00:02.000Z'
+          ),
+          (
+            'unrelated', 'thread-target', NULL, 'info', 'runtime.note', 'not a relationship',
+            '{}', '2026-08-31T00:00:01.000Z'
+          ),
+          (
+            'relationship-earlier', 'thread-target', NULL, 'tool',
+            'thread-orchestration.relationship', 'earlier relationship',
+            '{"kind":"createdBy","actorThreadId":"thread-actor","targetThreadId":"thread-target","createdAt":"2026-08-31T00:00:00.000Z"}',
+            '2026-08-31T00:00:00.000Z'
+          )
+      `;
+
+      const activities = yield* snapshotQuery.listThreadRelationshipActivities();
+      assert.deepStrictEqual(
+        activities.map((activity) => activity.id),
+        [EventId.make("relationship-earlier"), EventId.make("relationship-later")],
+      );
     }),
   );
 });

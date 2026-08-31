@@ -71,6 +71,8 @@ import Migration0055 from "./Migrations/042_ProjectionThreadLinkedPullRequest.ts
 import Migration0056 from "./Migrations/043_ProjectionThreadsUnsettledAt.ts";
 import Migration0057 from "./Migrations/057_ProviderTranscriptJournalBatches.ts";
 import Migration0058 from "./Migrations/058_ProjectionThreadTurnRetry.ts";
+import Migration0059 from "./Migrations/059_ProjectionThreadActivityKindIndex.ts";
+import Migration0060 from "./Migrations/060_ProjectionThreadRecentActivityIndex.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -141,6 +143,8 @@ export const migrationEntries = [
   [56, "ProjectionThreadsUnsettledAt", Migration0056],
   [57, "ProviderTranscriptJournalBatches", Migration0057],
   [58, "ProjectionThreadTurnRetry", Migration0058],
+  [59, "ProjectionThreadActivityKindIndex", Migration0059],
+  [60, "ProjectionThreadRecentActivityIndex", Migration0060],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
