@@ -1907,6 +1907,66 @@ describe("OrchestrationEngine", () => {
     await NodeFSP.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("reloads durable projections when another engine created the command target", async () => {
+    const tempDir = await NodeFSP.mkdtemp(
+      NodePath.join(NodeOS.tmpdir(), "t3-command-read-model-refresh-"),
+    );
+    const dbPath = NodePath.join(tempDir, "state.sqlite");
+    const staleSystem = await createPersistentOrchestrationSystem(dbPath);
+    const writerSystem = await createPersistentOrchestrationSystem(dbPath);
+    const projectId = asProjectId("project-created-by-another-engine");
+    const threadId = ThreadId.make("thread-created-by-another-engine");
+
+    await writerSystem.run(
+      writerSystem.engine.dispatch({
+        type: "project.create",
+        commandId: CommandId.make("cmd-external-project-create"),
+        projectId,
+        title: "External Project",
+        workspaceRoot: "/tmp/external-project",
+        createdAt: now(),
+      }),
+    );
+    await writerSystem.run(
+      writerSystem.engine.dispatch({
+        type: "thread.create",
+        commandId: CommandId.make("cmd-external-thread-create"),
+        threadId,
+        projectId,
+        title: "External Thread",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "full-access",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        branch: null,
+        worktreePath: null,
+        workspaceId: null,
+        createdAt: now(),
+      }),
+    );
+
+    await expect(
+      staleSystem.run(
+        staleSystem.engine.dispatch({
+          type: "project.delete",
+          commandId: CommandId.make("cmd-external-project-delete"),
+          projectId,
+          force: true,
+        }),
+      ),
+    ).resolves.toEqual({ sequence: 4 });
+
+    const snapshot = await staleSystem.readModel();
+    expect(snapshot.projects.find((project) => project.id === projectId)?.deletedAt).not.toBeNull();
+    expect(snapshot.threads.find((thread) => thread.id === threadId)?.deletedAt).not.toBeNull();
+
+    await staleSystem.dispose();
+    await writerSystem.dispose();
+    await NodeFSP.rm(tempDir, { recursive: true, force: true });
+  });
+
   it("stamps the dispatching client's origin onto persisted event metadata", async () => {
     const createdAt = now();
     const system = await createOrchestrationSystem();
