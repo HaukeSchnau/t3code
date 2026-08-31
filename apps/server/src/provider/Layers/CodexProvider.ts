@@ -65,17 +65,17 @@ const DEFAULT_SERVICE_TIER_ID = "default";
 const CODEX_REASONING_DEFAULT_OVERRIDES: Readonly<Record<string, string>> = {
   "gpt-5.5": "high",
 };
- const CURRENT_CODEX_MODELS = new Set([
-   "gpt-5.6-luna",
-   "gpt-5.6-terra",
-   "gpt-5.6-sol",
-   "gpt-daybreak-blue-latest",
-   "gpt-daybreak-red-latest",
- ]);
+const CURRENT_CODEX_MODELS = new Set([
+  "gpt-5.6-luna",
+  "gpt-5.6-terra",
+  "gpt-5.6-sol",
+  "gpt-daybreak-blue-latest",
+  "gpt-daybreak-red-latest",
+]);
 
- export function isLegacyCodexModel(model: string): boolean {
-   return !CURRENT_CODEX_MODELS.has(model);
- }
+export function isLegacyCodexModel(model: string): boolean {
+  return !CURRENT_CODEX_MODELS.has(model);
+}
 
 function reasoningEffortLabel(reasoningEffort: string): string {
   return REASONING_EFFORT_LABELS[reasoningEffort] ?? reasoningEffort;
