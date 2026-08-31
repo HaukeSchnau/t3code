@@ -1,7 +1,7 @@
-import { createRequire } from "node:module";
+import * as NodeModule from "node:module";
 import { describe, expect, it } from "vitest";
 
-const require = createRequire(import.meta.url);
+const require = NodeModule.createRequire(import.meta.url);
 const { syncWidgetBuildVersions } = require("./syncWidgetBuildVersions.cjs") as {
   syncWidgetBuildVersions: (
     project: unknown,
