@@ -93,23 +93,13 @@ function makeProcessOutput(
 
 layer("ThreadWorkspaceService", (it) => {
   it("builds stable semantic workspace names for paths and URLs", () => {
-    const threadId = ThreadId.make("4d44933151b04b2088313360ae3f5157");
     const name = ThreadWorkspaceService.__testing.workspaceName({
       semanticSeed: "Generate fitting workspace URLs",
       fallbackSeed: "studienbuch",
-      threadId,
     });
 
-    assert.match(name, /^generate-fitting-workspace-urls-[a-f0-9]{6}$/);
+    assert.equal(name, "generate-fitting-workspace-urls");
     assert.equal(name.length <= 48, true);
-    assert.equal(
-      ThreadWorkspaceService.__testing.workspaceName({
-        semanticSeed: "Generate fitting workspace URLs",
-        fallbackSeed: "studienbuch",
-        threadId,
-      }),
-      name,
-    );
   });
 
   it("normalizes international and oversized workspace titles", () => {
@@ -117,22 +107,66 @@ layer("ThreadWorkspaceService", (it) => {
       semanticSeed:
         "Übermäßig große Änderung für langlebige, projektübergreifende Entwicklungsumgebungen",
       fallbackSeed: "studienbuch",
-      threadId: ThreadId.make("thread-semantic-workspace-name"),
     });
 
-    assert.match(name, /^ubermassig-grosse-anderung-fur-langlebige-[a-f0-9]{6}$/);
+    assert.equal(name, "ubermassig-grosse-anderung-fur-langlebige-projek");
     assert.equal(name.length, 48);
   });
 
   it("falls back to the project name when no semantic title is available", () => {
-    assert.match(
+    assert.equal(
       ThreadWorkspaceService.__testing.workspaceName({
         semanticSeed: undefined,
         fallbackSeed: "Studienbuch",
-        threadId: ThreadId.make("thread-workspace-fallback"),
       }),
-      /^studienbuch-[a-f0-9]{6}$/,
+      "studienbuch",
     );
+  });
+
+  it("uses numeric suffixes only for live name collisions", () => {
+    const parentPath = makeTempDir("t3-workspace-name-collision-");
+    const first = ThreadWorkspaceService.__testing.reserveCheckout({
+      parentPath,
+      semanticSeed: "Improve workspace URL naming",
+      fallbackSeed: "studienbuch",
+    });
+    const second = ThreadWorkspaceService.__testing.reserveCheckout({
+      parentPath,
+      semanticSeed: "Improve workspace URL naming",
+      fallbackSeed: "studienbuch",
+    });
+
+    assert.equal(first.checkoutName, "improve-workspace-url-naming");
+    assert.equal(second.checkoutName, "improve-workspace-url-naming-2");
+    first.release();
+    second.release();
+  });
+
+  it("does not reuse a persisted checkout path that disappeared from disk", () => {
+    const parentPath = makeTempDir("t3-workspace-name-persisted-collision-");
+    const unavailablePath = NodePath.join(parentPath, "improve-workspace-url-naming");
+    const reservation = ThreadWorkspaceService.__testing.reserveCheckout({
+      parentPath,
+      semanticSeed: "Improve workspace URL naming",
+      fallbackSeed: "studienbuch",
+      unavailablePaths: new Set([unavailablePath]),
+    });
+
+    assert.equal(reservation.checkoutName, "improve-workspace-url-naming-2");
+    reservation.release();
+  });
+
+  it("avoids names already registered by the VCS", () => {
+    const parentPath = makeTempDir("t3-workspace-vcs-name-collision-");
+    const reservation = ThreadWorkspaceService.__testing.reserveCheckout({
+      parentPath,
+      semanticSeed: "Improve workspace URL naming",
+      fallbackSeed: "studienbuch",
+      unavailableNames: new Set(["improve-workspace-url-naming"]),
+    });
+
+    assert.equal(reservation.checkoutName, "improve-workspace-url-naming-2");
+    reservation.release();
   });
 
   it.effect("reconciles an interrupted deterministic git workspace before retry", () =>

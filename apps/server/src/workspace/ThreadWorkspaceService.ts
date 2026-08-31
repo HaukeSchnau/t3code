@@ -163,36 +163,101 @@ function slug(value: string): string {
 }
 
 function shortId(value: string): string {
-  return (
-    slug(value)
-      .replace(/[^a-z0-9]/g, "")
-      .slice(0, 12) || "workspace"
-  );
+  return NodeCrypto.createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
 const WORKSPACE_NAME_MAX_LENGTH = 48;
-const WORKSPACE_NAME_SUFFIX_LENGTH = 6;
+const WORKSPACE_NAME_COLLISION_LIMIT = 10_000;
+
+interface CheckoutReservation {
+  readonly checkoutName: string;
+  readonly checkoutPath: string;
+  readonly release: () => void;
+}
 
 /**
- * Builds the stable filesystem, VCS workspace, and downstream URL identity for a thread workspace.
- * The semantic seed is fixed at creation time because renaming a live checkout would invalidate
- * paths already held by terminals, setup scripts, and external development tooling.
+ * Builds the human-readable portion of a workspace path. Numeric suffixes only appear when the
+ * same project has already claimed the semantic name.
  */
 function workspaceName(input: {
   readonly semanticSeed: string | undefined;
   readonly fallbackSeed: string;
-  readonly threadId: ThreadId;
+  readonly collisionIndex?: number;
 }): string {
-  const suffix = NodeCrypto.createHash("sha256")
-    .update(input.threadId)
-    .digest("hex")
-    .slice(0, WORKSPACE_NAME_SUFFIX_LENGTH);
-  const semanticLimit = WORKSPACE_NAME_MAX_LENGTH - suffix.length - 1;
+  const collisionIndex = input.collisionIndex ?? 1;
+  const suffix = collisionIndex > 1 ? `-${collisionIndex}` : "";
+  const semanticLimit = WORKSPACE_NAME_MAX_LENGTH - suffix.length;
   const semanticName = slug(input.semanticSeed?.trim() || input.fallbackSeed)
     .replace(/[._]+/g, "-")
     .slice(0, semanticLimit)
     .replace(/-+$/g, "");
-  return `${semanticName || "workspace"}-${suffix}`;
+  return `${semanticName || "workspace"}${suffix}`;
+}
+
+function reserveCheckout(input: {
+  readonly parentPath: string;
+  readonly semanticSeed: string | undefined;
+  readonly fallbackSeed: string;
+  readonly unavailableNames?: ReadonlySet<string>;
+  readonly unavailablePaths?: ReadonlySet<string>;
+}): CheckoutReservation {
+  NodeFS.mkdirSync(input.parentPath, { recursive: true });
+  for (let collisionIndex = 1; collisionIndex <= WORKSPACE_NAME_COLLISION_LIMIT; collisionIndex++) {
+    const checkoutName = workspaceName({
+      semanticSeed: input.semanticSeed,
+      fallbackSeed: input.fallbackSeed,
+      collisionIndex,
+    });
+    const checkoutPath = NodePath.join(input.parentPath, checkoutName);
+    if (
+      input.unavailableNames?.has(checkoutName) ||
+      input.unavailablePaths?.has(checkoutPath) ||
+      NodeFS.existsSync(checkoutPath)
+    ) {
+      continue;
+    }
+    const reservationPath = NodePath.join(input.parentPath, `.${checkoutName}.t3-reservation`);
+    try {
+      NodeFS.writeFileSync(reservationPath, "", { flag: "wx" });
+    } catch (cause) {
+      if (
+        typeof cause === "object" &&
+        cause !== null &&
+        "code" in cause &&
+        cause.code === "EEXIST"
+      ) {
+        continue;
+      }
+      throw cause;
+    }
+    if (NodeFS.existsSync(checkoutPath)) {
+      NodeFS.rmSync(reservationPath, { force: true });
+      continue;
+    }
+    return {
+      checkoutName,
+      checkoutPath,
+      release: () => NodeFS.rmSync(reservationPath, { force: true }),
+    };
+  }
+  throw new ThreadWorkspaceError({
+    operation: "ThreadWorkspaceService.reserveCheckout",
+    detail: `Could not allocate a workspace name below '${input.parentPath}'.`,
+  });
+}
+
+function withCheckoutReservation<A, E, R>(
+  input: Parameters<typeof reserveCheckout>[0],
+  use: (reservation: CheckoutReservation) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | ThreadWorkspaceError, R> {
+  return Effect.acquireUseRelease(
+    Effect.try({
+      try: () => reserveCheckout(input),
+      catch: mapWorkspaceError("ThreadWorkspaceService.reserveCheckout"),
+    }),
+    use,
+    (reservation) => Effect.sync(reservation.release),
+  );
 }
 
 function makeWorkspaceId(threadId: ThreadId): ThreadWorkspaceId {
@@ -757,6 +822,26 @@ export const make = Effect.gen(function* () {
 
   const workspacesDir = NodePath.join(config.baseDir, "workspaces");
 
+  const withWorkspaceCheckout = <A, E, R>(
+    input: Omit<Parameters<typeof reserveCheckout>[0], "unavailablePaths">,
+    use: (reservation: CheckoutReservation) => Effect.Effect<A, E, R>,
+  ): Effect.Effect<A, E | ThreadWorkspaceError, R> =>
+    sql<{ readonly checkoutPath: string }>`
+      SELECT checkout_path AS "checkoutPath"
+      FROM projection_thread_workspace_roots
+    `.pipe(
+      Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.listReservedCheckoutPaths")),
+      Effect.flatMap((rows) =>
+        withCheckoutReservation(
+          {
+            ...input,
+            unavailablePaths: new Set(rows.map((row) => row.checkoutPath)),
+          },
+          use,
+        ),
+      ),
+    );
+
   const readWorkspace = Effect.fn("ThreadWorkspaceService.readWorkspace")(function* (
     workspaceId: ThreadWorkspaceId,
   ) {
@@ -1226,47 +1311,50 @@ export const make = Effect.gen(function* () {
     }
 
     const repoName = slug(NodePath.basename(root.sourcePath));
-    const checkoutName = workspaceName({
-      semanticSeed: input.displayNameSeed,
-      fallbackSeed: repoName,
-      threadId: input.threadId,
-    });
-    const checkoutPath = NodePath.join(workspacesDir, repoName, checkoutName);
-    yield* persistWorkspace(
-      makeWorkspace({
-        request: input,
-        kind: "git-detached",
-        checkoutPath,
-        vcsKind: "git",
-        lifecycle: "preparing",
-        headRevision: baseRevision,
-        metadata: { provisioner: "git-detached", preparationStatus: "preparing" },
-        rootMetadata: { gitDetached: true },
-      }),
+    return yield* withWorkspaceCheckout(
+      {
+        parentPath: NodePath.join(workspacesDir, repoName),
+        semanticSeed: input.displayNameSeed,
+        fallbackSeed: repoName,
+      },
+      ({ checkoutPath }) =>
+        Effect.gen(function* () {
+          yield* persistWorkspace(
+            makeWorkspace({
+              request: input,
+              kind: "git-detached",
+              checkoutPath,
+              vcsKind: "git",
+              lifecycle: "preparing",
+              headRevision: baseRevision,
+              metadata: { provisioner: "git-detached", preparationStatus: "preparing" },
+              rootMetadata: { gitDetached: true },
+            }),
+          );
+          const worktree = yield* gitWorkflow.createWorktree({
+            cwd: root.sourcePath,
+            refName: baseRevision,
+            detached: true,
+            path: checkoutPath,
+          });
+          const workspace = makeWorkspace({
+            request: input,
+            kind: "git-detached",
+            checkoutPath: worktree.worktree.path,
+            vcsKind: "git",
+            headRevision: baseRevision,
+            metadata: { provisioner: "git-detached" },
+            rootMetadata: { gitDetached: true },
+          });
+          yield* persistWorkspace(workspace);
+          return {
+            workspace,
+            primaryCwd: worktree.worktree.path,
+            compatibilityWorktreePath: worktree.worktree.path,
+            compatibilityBranch: null,
+          } satisfies PreparedThreadWorkspace;
+        }),
     );
-    NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
-    const worktree = yield* gitWorkflow.createWorktree({
-      cwd: root.sourcePath,
-      refName: baseRevision,
-      detached: true,
-      path: checkoutPath,
-    });
-    const workspace = makeWorkspace({
-      request: input,
-      kind: "git-detached",
-      checkoutPath: worktree.worktree.path,
-      vcsKind: "git",
-      headRevision: baseRevision,
-      metadata: { provisioner: "git-detached" },
-      rootMetadata: { gitDetached: true },
-    });
-    yield* persistWorkspace(workspace);
-    return {
-      workspace,
-      primaryCwd: worktree.worktree.path,
-      compatibilityWorktreePath: worktree.worktree.path,
-      compatibilityBranch: null,
-    } satisfies PreparedThreadWorkspace;
   });
 
   const prepareJjWorkspace = Effect.fn("ThreadWorkspaceService.prepareJjWorkspace")(function* (
@@ -1274,91 +1362,115 @@ export const make = Effect.gen(function* () {
   ) {
     const root = primaryRoot(input);
     const repoName = slug(NodePath.basename(root.sourcePath));
-    const checkoutName = workspaceName({
-      semanticSeed: input.displayNameSeed,
-      fallbackSeed: repoName,
-      threadId: input.threadId,
-    });
-    const checkoutPath = NodePath.join(workspacesDir, repoName, checkoutName);
-    const resolvedBaseRevision = resolveJjRevision(root.sourcePath, root.baseRevision);
-    yield* persistWorkspace(
-      makeWorkspace({
-        request: input,
-        kind: "jj-workspace",
-        checkoutPath,
-        vcsKind: "jj",
-        lifecycle: "preparing",
-        baseRevision: resolvedBaseRevision,
-        metadata: { provisioner: "jj-workspace", preparationStatus: "preparing" },
-        rootMetadata: { jjWorkspaceName: checkoutName },
-      }),
-    );
-    NodeFS.mkdirSync(NodePath.dirname(checkoutPath), { recursive: true });
-    yield* Effect.try({
-      try: () => {
-        const args = [
-          "workspace",
-          "add",
-          "--name",
-          checkoutName,
-          "-m",
-          `wip: ${input.displayNameSeed?.trim() || "t3 workspace"}`,
-          ...(resolvedBaseRevision ? ["--revision", resolvedBaseRevision] : []),
-          checkoutPath,
-        ];
-        try {
-          runCommand({ command: "jj", args, cwd: root.sourcePath });
-        } catch (cause) {
-          cleanupFailedJjWorkspace({
-            sourcePath: root.sourcePath,
-            workspaceName: checkoutName,
-            checkoutPath,
-          });
-          throw cause;
-        }
-      },
+    const unavailableNames = yield* Effect.try({
+      try: () =>
+        new Set(
+          runCommand({
+            command: "jj",
+            args: ["workspace", "list", "-T", 'self.name() ++ "\\n"'],
+            cwd: root.sourcePath,
+          })
+            .split("\n")
+            .map((name) => name.trim())
+            .filter((name) => name.length > 0),
+        ),
       catch: (cause) =>
         new ThreadWorkspaceError({
-          operation: "ThreadWorkspaceService.prepareJjWorkspace",
-          detail: "Failed to create JJ workspace.",
+          operation: "ThreadWorkspaceService.prepareJjWorkspace.listWorkspaces",
+          detail: "Failed to list existing JJ workspaces.",
           cause,
         }),
     });
-    const initialChangeId = yield* Effect.sync(() => {
-      try {
-        return runCommand({
-          command: "jj",
-          args: ["log", "-r", "@", "--no-graph", "-T", "change_id.short()"],
-          cwd: checkoutPath,
-        });
-      } catch {
-        return "";
-      }
-    });
-    const workspace = makeWorkspace({
-      request: input,
-      kind: "jj-workspace",
-      checkoutPath,
-      vcsKind: "jj",
-      headRevision: initialChangeId || null,
-      baseRevision: resolvedBaseRevision,
-      metadata: { provisioner: "jj-workspace" },
-      rootMetadata: {
-        jjWorkspaceName: checkoutName,
-        initialChangeId,
-        automaticChangePolicy: "per-turn",
-        ...(root.baseRevision && root.baseRevision !== resolvedBaseRevision
-          ? { requestedBaseRevision: root.baseRevision, baseRevisionSkipped: true }
-          : {}),
+    return yield* withWorkspaceCheckout(
+      {
+        parentPath: NodePath.join(workspacesDir, repoName),
+        semanticSeed: input.displayNameSeed,
+        fallbackSeed: repoName,
+        unavailableNames,
       },
-    });
-    yield* persistWorkspace(workspace);
-    return {
-      workspace,
-      primaryCwd: checkoutPath,
-      compatibilityWorktreePath: checkoutPath,
-      compatibilityBranch: null,
-    } satisfies PreparedThreadWorkspace;
+      ({ checkoutName, checkoutPath }) =>
+        Effect.gen(function* () {
+          const jjWorkspaceName = checkoutName;
+          const resolvedBaseRevision = resolveJjRevision(root.sourcePath, root.baseRevision);
+          yield* persistWorkspace(
+            makeWorkspace({
+              request: input,
+              kind: "jj-workspace",
+              checkoutPath,
+              vcsKind: "jj",
+              lifecycle: "preparing",
+              baseRevision: resolvedBaseRevision,
+              metadata: { provisioner: "jj-workspace", preparationStatus: "preparing" },
+              rootMetadata: { jjWorkspaceName },
+            }),
+          );
+          yield* Effect.try({
+            try: () => {
+              const args = [
+                "workspace",
+                "add",
+                "--name",
+                jjWorkspaceName,
+                "-m",
+                `wip: ${input.displayNameSeed?.trim() || "t3 workspace"}`,
+                ...(resolvedBaseRevision ? ["--revision", resolvedBaseRevision] : []),
+                checkoutPath,
+              ];
+              try {
+                runCommand({ command: "jj", args, cwd: root.sourcePath });
+              } catch (cause) {
+                cleanupFailedJjWorkspace({
+                  sourcePath: root.sourcePath,
+                  workspaceName: jjWorkspaceName,
+                  checkoutPath,
+                });
+                throw cause;
+              }
+            },
+            catch: (cause) =>
+              new ThreadWorkspaceError({
+                operation: "ThreadWorkspaceService.prepareJjWorkspace",
+                detail: "Failed to create JJ workspace.",
+                cause,
+              }),
+          });
+          const initialChangeId = yield* Effect.sync(() => {
+            try {
+              return runCommand({
+                command: "jj",
+                args: ["log", "-r", "@", "--no-graph", "-T", "change_id.short()"],
+                cwd: checkoutPath,
+              });
+            } catch {
+              return "";
+            }
+          });
+          const workspace = makeWorkspace({
+            request: input,
+            kind: "jj-workspace",
+            checkoutPath,
+            vcsKind: "jj",
+            headRevision: initialChangeId || null,
+            baseRevision: resolvedBaseRevision,
+            metadata: { provisioner: "jj-workspace" },
+            rootMetadata: {
+              jjWorkspaceName,
+              initialChangeId,
+              automaticChangePolicy: "per-turn",
+              ...(root.baseRevision && root.baseRevision !== resolvedBaseRevision
+                ? { requestedBaseRevision: root.baseRevision, baseRevisionSkipped: true }
+                : {}),
+            },
+          });
+          yield* persistWorkspace(workspace);
+          return {
+            workspace,
+            primaryCwd: checkoutPath,
+            compatibilityWorktreePath: checkoutPath,
+            compatibilityBranch: null,
+          } satisfies PreparedThreadWorkspace;
+        }),
+    );
   });
 
   const prepareDirectoryCopyWorkspace = Effect.fn(
@@ -1366,217 +1478,221 @@ export const make = Effect.gen(function* () {
   )(function* (input: PrepareThreadWorkspaceInput) {
     const root = primaryRoot(input);
     const projectName = slug(NodePath.basename(root.sourcePath));
-    const checkoutName = workspaceName({
-      semanticSeed: input.displayNameSeed,
-      fallbackSeed: projectName,
-      threadId: input.threadId,
-    });
-    const checkoutPath = NodePath.join(workspacesDir, projectName, checkoutName);
-    const startedAt = nowIso();
-    const preparingWorkspace = makeWorkspace({
-      request: input,
-      kind: "directory-copy",
-      checkoutPath,
-      vcsKind: "unknown",
-      lifecycle: "preparing",
-      createdAt: startedAt,
-      updatedAt: startedAt,
-      metadata: {
-        provisioner: "directory-copy",
-        preparationStatus: "preparing",
-        preparationStartedAt: startedAt,
+    return yield* withWorkspaceCheckout(
+      {
+        parentPath: NodePath.join(workspacesDir, projectName),
+        semanticSeed: input.displayNameSeed,
+        fallbackSeed: projectName,
       },
-    });
-    yield* persistWorkspace(preparingWorkspace);
-    const preflightExit = yield* Effect.exit(
-      preflightDirectoryCopy({
-        sourcePath: root.sourcePath,
-        checkoutPath,
-      }),
-    );
-    if (Exit.isFailure(preflightExit)) {
-      const cause = Cause.squash(preflightExit.cause);
-      const failedAt = nowIso();
-      yield* persistWorkspace(
-        makeWorkspace({
-          request: input,
-          kind: "directory-copy",
-          checkoutPath,
-          vcsKind: "unknown",
-          lifecycle: "failed",
-          createdAt: startedAt,
-          updatedAt: failedAt,
-          failureDetail: failureDetailFromCause(cause),
-          metadata: {
-            provisioner: "directory-copy",
-            preparationStatus: "failed",
-            preparationStartedAt: startedAt,
-            preparationFailedAt: failedAt,
-          },
-        }),
-      );
-      return yield* new ThreadWorkspaceError({
-        operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
-        detail: failureDetailFromCause(cause),
-        cause,
-      });
-    }
-
-    const preflight = preflightExit.value;
-    const primaryCopyCommand = primaryDirectoryCopyCommand(
-      root.sourcePath,
-      checkoutPath,
-      preflight.copyOnWriteKind,
-    );
-    const copyingAt = nowIso();
-    yield* persistWorkspace(
-      makeWorkspace({
-        request: input,
-        kind: "directory-copy",
-        checkoutPath,
-        vcsKind: "unknown",
-        lifecycle: "preparing",
-        createdAt: startedAt,
-        updatedAt: copyingAt,
-        metadata: {
-          provisioner: "directory-copy",
-          preparationStatus: "copying",
-          preparationStartedAt: startedAt,
-          copyStartedAt: copyingAt,
-          copyStrategy: primaryCopyCommand.strategy,
-          diskSpacePolicy: preflight.diskSpacePolicy,
-          copyOnWriteSupported: preflight.copyOnWriteSupported,
-          copyOnWriteKind: preflight.copyOnWriteKind,
-          sourceDevice: preflight.sourceDevice,
-          destinationDevice: preflight.destinationDevice,
-          sourceFileSystemType: preflight.sourceFileSystemType,
-          destinationFileSystemType: preflight.destinationFileSystemType,
-          maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
-          sourceBytes: preflight.sourceBytes,
-          maxSourceBytes: preflight.maxSourceBytes,
-          availableBytes: preflight.availableBytes,
-          requiredAvailableBytes: preflight.requiredAvailableBytes,
-        },
-      }),
-    );
-
-    const copyDirectory = runDirectoryCopyCommand({
-      copyCommand: primaryCopyCommand,
-      checkoutPath,
-      preflight,
-    }).pipe(
-      Effect.catch((cause) => {
-        const fullCopyRequiredBytes = fullCopyRequiredAvailableBytes(preflight.sourceBytes);
-        if (
-          preflight.copyOnWriteSupported &&
-          (preflight.sourceBytes > preflight.maxSourceBytes ||
-            preflight.availableBytes < fullCopyRequiredBytes)
-        ) {
-          return Effect.fail(
-            new ThreadWorkspaceError({
-              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.fallback",
-              detail:
-                "Directory-copy copy-on-write failed and full-copy fallback is not safe for this source.",
-              cause,
+      ({ checkoutPath }) =>
+        Effect.gen(function* () {
+          const startedAt = nowIso();
+          const preparingWorkspace = makeWorkspace({
+            request: input,
+            kind: "directory-copy",
+            checkoutPath,
+            vcsKind: "unknown",
+            lifecycle: "preparing",
+            createdAt: startedAt,
+            updatedAt: startedAt,
+            metadata: {
+              provisioner: "directory-copy",
+              preparationStatus: "preparing",
+              preparationStartedAt: startedAt,
+            },
+          });
+          yield* persistWorkspace(preparingWorkspace);
+          const preflightExit = yield* Effect.exit(
+            preflightDirectoryCopy({
+              sourcePath: root.sourcePath,
+              checkoutPath,
             }),
           );
-        }
-        NodeFS.mkdirSync(checkoutPath, { recursive: true });
-        return runDirectoryCopyCommand({
-          copyCommand: rsyncDirectoryCopyCommand(root.sourcePath, checkoutPath),
-          checkoutPath,
-          preflight: {
-            ...preflight,
-            copyOnWriteSupported: false,
-            diskSpacePolicy: "full-copy",
-            copyOnWriteKind: null,
-          },
-        });
-      }),
-    );
-    const copyExit = yield* Effect.exit(copyDirectory);
-    if (Exit.isFailure(copyExit)) {
-      const cause = Cause.squash(copyExit.cause);
-      const failedAt = nowIso();
-      yield* Effect.sync(() => removeWorkspaceDirectory(checkoutPath)).pipe(Effect.ignore);
-      yield* persistWorkspace(
-        makeWorkspace({
-          request: input,
-          kind: "directory-copy",
-          checkoutPath,
-          vcsKind: "unknown",
-          lifecycle: "failed",
-          createdAt: startedAt,
-          updatedAt: failedAt,
-          failureDetail: failureDetailFromCause(cause),
-          metadata: {
-            provisioner: "directory-copy",
-            preparationStatus: "failed",
-            preparationStartedAt: startedAt,
-            copyStartedAt: copyingAt,
-            preparationFailedAt: failedAt,
-            attemptedCopyStrategy: primaryCopyCommand.strategy,
-            diskSpacePolicy: preflight.diskSpacePolicy,
-            copyOnWriteSupported: preflight.copyOnWriteSupported,
-            copyOnWriteKind: preflight.copyOnWriteKind,
-            sourceDevice: preflight.sourceDevice,
-            destinationDevice: preflight.destinationDevice,
-            sourceFileSystemType: preflight.sourceFileSystemType,
-            destinationFileSystemType: preflight.destinationFileSystemType,
-            maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
-            sourceBytes: preflight.sourceBytes,
-            maxSourceBytes: preflight.maxSourceBytes,
-            availableBytes: preflight.availableBytes,
-            requiredAvailableBytes: preflight.requiredAvailableBytes,
-          },
+          if (Exit.isFailure(preflightExit)) {
+            const cause = Cause.squash(preflightExit.cause);
+            const failedAt = nowIso();
+            yield* persistWorkspace(
+              makeWorkspace({
+                request: input,
+                kind: "directory-copy",
+                checkoutPath,
+                vcsKind: "unknown",
+                lifecycle: "failed",
+                createdAt: startedAt,
+                updatedAt: failedAt,
+                failureDetail: failureDetailFromCause(cause),
+                metadata: {
+                  provisioner: "directory-copy",
+                  preparationStatus: "failed",
+                  preparationStartedAt: startedAt,
+                  preparationFailedAt: failedAt,
+                },
+              }),
+            );
+            return yield* new ThreadWorkspaceError({
+              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
+              detail: failureDetailFromCause(cause),
+              cause,
+            });
+          }
+
+          const preflight = preflightExit.value;
+          const primaryCopyCommand = primaryDirectoryCopyCommand(
+            root.sourcePath,
+            checkoutPath,
+            preflight.copyOnWriteKind,
+          );
+          const copyingAt = nowIso();
+          yield* persistWorkspace(
+            makeWorkspace({
+              request: input,
+              kind: "directory-copy",
+              checkoutPath,
+              vcsKind: "unknown",
+              lifecycle: "preparing",
+              createdAt: startedAt,
+              updatedAt: copyingAt,
+              metadata: {
+                provisioner: "directory-copy",
+                preparationStatus: "copying",
+                preparationStartedAt: startedAt,
+                copyStartedAt: copyingAt,
+                copyStrategy: primaryCopyCommand.strategy,
+                diskSpacePolicy: preflight.diskSpacePolicy,
+                copyOnWriteSupported: preflight.copyOnWriteSupported,
+                copyOnWriteKind: preflight.copyOnWriteKind,
+                sourceDevice: preflight.sourceDevice,
+                destinationDevice: preflight.destinationDevice,
+                sourceFileSystemType: preflight.sourceFileSystemType,
+                destinationFileSystemType: preflight.destinationFileSystemType,
+                maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
+                sourceBytes: preflight.sourceBytes,
+                maxSourceBytes: preflight.maxSourceBytes,
+                availableBytes: preflight.availableBytes,
+                requiredAvailableBytes: preflight.requiredAvailableBytes,
+              },
+            }),
+          );
+
+          const copyDirectory = runDirectoryCopyCommand({
+            copyCommand: primaryCopyCommand,
+            checkoutPath,
+            preflight,
+          }).pipe(
+            Effect.catch((cause) => {
+              const fullCopyRequiredBytes = fullCopyRequiredAvailableBytes(preflight.sourceBytes);
+              if (
+                preflight.copyOnWriteSupported &&
+                (preflight.sourceBytes > preflight.maxSourceBytes ||
+                  preflight.availableBytes < fullCopyRequiredBytes)
+              ) {
+                return Effect.fail(
+                  new ThreadWorkspaceError({
+                    operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace.fallback",
+                    detail:
+                      "Directory-copy copy-on-write failed and full-copy fallback is not safe for this source.",
+                    cause,
+                  }),
+                );
+              }
+              NodeFS.mkdirSync(checkoutPath, { recursive: true });
+              return runDirectoryCopyCommand({
+                copyCommand: rsyncDirectoryCopyCommand(root.sourcePath, checkoutPath),
+                checkoutPath,
+                preflight: {
+                  ...preflight,
+                  copyOnWriteSupported: false,
+                  diskSpacePolicy: "full-copy",
+                  copyOnWriteKind: null,
+                },
+              });
+            }),
+          );
+          const copyExit = yield* Effect.exit(copyDirectory);
+          if (Exit.isFailure(copyExit)) {
+            const cause = Cause.squash(copyExit.cause);
+            const failedAt = nowIso();
+            yield* Effect.sync(() => removeWorkspaceDirectory(checkoutPath)).pipe(Effect.ignore);
+            yield* persistWorkspace(
+              makeWorkspace({
+                request: input,
+                kind: "directory-copy",
+                checkoutPath,
+                vcsKind: "unknown",
+                lifecycle: "failed",
+                createdAt: startedAt,
+                updatedAt: failedAt,
+                failureDetail: failureDetailFromCause(cause),
+                metadata: {
+                  provisioner: "directory-copy",
+                  preparationStatus: "failed",
+                  preparationStartedAt: startedAt,
+                  copyStartedAt: copyingAt,
+                  preparationFailedAt: failedAt,
+                  attemptedCopyStrategy: primaryCopyCommand.strategy,
+                  diskSpacePolicy: preflight.diskSpacePolicy,
+                  copyOnWriteSupported: preflight.copyOnWriteSupported,
+                  copyOnWriteKind: preflight.copyOnWriteKind,
+                  sourceDevice: preflight.sourceDevice,
+                  destinationDevice: preflight.destinationDevice,
+                  sourceFileSystemType: preflight.sourceFileSystemType,
+                  destinationFileSystemType: preflight.destinationFileSystemType,
+                  maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
+                  sourceBytes: preflight.sourceBytes,
+                  maxSourceBytes: preflight.maxSourceBytes,
+                  availableBytes: preflight.availableBytes,
+                  requiredAvailableBytes: preflight.requiredAvailableBytes,
+                },
+              }),
+            );
+            return yield* new ThreadWorkspaceError({
+              operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
+              detail: "Failed to copy project directory.",
+              cause,
+            });
+          }
+          const copyResult = copyExit.value;
+          const completedAt = nowIso();
+          const workspace = makeWorkspace({
+            request: input,
+            kind: "directory-copy",
+            checkoutPath,
+            vcsKind: "unknown",
+            createdAt: startedAt,
+            updatedAt: completedAt,
+            metadata: {
+              provisioner: "directory-copy",
+              preparationStatus: "ready",
+              preparationStartedAt: startedAt,
+              preparationCompletedAt: completedAt,
+              copyStartedAt: copyingAt,
+              copyStrategy: primaryCopyCommand.strategy,
+              diskSpacePolicy: preflight.diskSpacePolicy,
+              copyOnWriteSupported: preflight.copyOnWriteSupported,
+              copyOnWriteKind: preflight.copyOnWriteKind,
+              sourceDevice: preflight.sourceDevice,
+              destinationDevice: preflight.destinationDevice,
+              sourceFileSystemType: preflight.sourceFileSystemType,
+              destinationFileSystemType: preflight.destinationFileSystemType,
+              maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
+              copyInitialAvailableBytes: copyResult.initialAvailableBytes,
+              copyFinalAvailableBytes: copyResult.finalAvailableBytes,
+              copyPeakConsumedBytes: copyResult.peakConsumedBytes,
+              sourceBytes: preflight.sourceBytes,
+              maxSourceBytes: preflight.maxSourceBytes,
+              availableBytes: preflight.availableBytes,
+              requiredAvailableBytes: preflight.requiredAvailableBytes,
+            },
+          });
+          yield* persistWorkspace(workspace);
+          return {
+            workspace,
+            primaryCwd: checkoutPath,
+            compatibilityWorktreePath: checkoutPath,
+            compatibilityBranch: null,
+          } satisfies PreparedThreadWorkspace;
         }),
-      );
-      return yield* new ThreadWorkspaceError({
-        operation: "ThreadWorkspaceService.prepareDirectoryCopyWorkspace",
-        detail: "Failed to copy project directory.",
-        cause,
-      });
-    }
-    const copyResult = copyExit.value;
-    const completedAt = nowIso();
-    const workspace = makeWorkspace({
-      request: input,
-      kind: "directory-copy",
-      checkoutPath,
-      vcsKind: "unknown",
-      createdAt: startedAt,
-      updatedAt: completedAt,
-      metadata: {
-        provisioner: "directory-copy",
-        preparationStatus: "ready",
-        preparationStartedAt: startedAt,
-        preparationCompletedAt: completedAt,
-        copyStartedAt: copyingAt,
-        copyStrategy: primaryCopyCommand.strategy,
-        diskSpacePolicy: preflight.diskSpacePolicy,
-        copyOnWriteSupported: preflight.copyOnWriteSupported,
-        copyOnWriteKind: preflight.copyOnWriteKind,
-        sourceDevice: preflight.sourceDevice,
-        destinationDevice: preflight.destinationDevice,
-        sourceFileSystemType: preflight.sourceFileSystemType,
-        destinationFileSystemType: preflight.destinationFileSystemType,
-        maxTransientBytes: DIRECTORY_COPY_COW_MAX_TRANSIENT_BYTES,
-        copyInitialAvailableBytes: copyResult.initialAvailableBytes,
-        copyFinalAvailableBytes: copyResult.finalAvailableBytes,
-        copyPeakConsumedBytes: copyResult.peakConsumedBytes,
-        sourceBytes: preflight.sourceBytes,
-        maxSourceBytes: preflight.maxSourceBytes,
-        availableBytes: preflight.availableBytes,
-        requiredAvailableBytes: preflight.requiredAvailableBytes,
-      },
-    });
-    yield* persistWorkspace(workspace);
-    return {
-      workspace,
-      primaryCwd: checkoutPath,
-      compatibilityWorktreePath: checkoutPath,
-      compatibilityBranch: null,
-    } satisfies PreparedThreadWorkspace;
+    );
   });
 
   const resolveKind = (
@@ -1701,5 +1817,6 @@ export const __testing = {
   copyOnWriteKindForCapabilities,
   fileSystemTypeFromStatfsType,
   primaryDirectoryCopyCommand,
+  reserveCheckout,
   workspaceName,
 };
