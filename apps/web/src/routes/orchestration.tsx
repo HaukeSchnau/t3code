@@ -1,13 +1,13 @@
 /**
  * `/orchestration` — the batch dashboard.
  *
- * The batch contract is not served yet, so this route feeds the dashboard the
- * development fixture and says so on the page. It is deliberately the only
- * place that knows the data is fake: the dashboard itself renders a real
- * snapshot shape and will not change when the server starts sending one.
+ * The dashboard's aggregate snapshot endpoint is not wired yet, so this route
+ * feeds it the development fixture and says so on the page. It is deliberately
+ * the only place that knows the data is fake: the dashboard itself renders the
+ * same snapshot shape the live query will provide.
  *
- * TODO: replace `buildSampleOrchestrationSnapshot` with the served snapshot and
- * drop the sample-data banner once `ThreadOrchestrationBatch` is on the wire.
+ * TODO: replace `buildSampleOrchestrationSnapshot` with the served aggregate
+ * snapshot and drop the sample-data banner once that query is wired.
  */
 import { createFileRoute } from "@tanstack/react-router";
 import { FlaskConicalIcon } from "lucide-react";
@@ -45,8 +45,8 @@ function SampleDataNotice() {
       <div className="flex min-w-0 flex-col gap-0.5">
         <span className="font-medium text-sm text-warning-foreground">Sample data</span>
         <span className="text-muted-foreground text-xs">
-          Batches are not on the wire yet. Everything below is a fixture pushed through the real
-          adapter, so the layout matches what a served snapshot will render.
+          This preview uses representative batches pushed through the real adapter, including
+          blocked, nested, cross-host, and mixed-result work.
         </span>
       </div>
     </Card>
