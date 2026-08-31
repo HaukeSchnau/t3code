@@ -1,21 +1,22 @@
-# Dormant Codex thread orchestration tools
+# Codex thread orchestration CLI
 
 T3 Code retains its Desktop-style thread orchestration implementation, but does
 not register those MCP tools or advertise them to Codex-backed agents. The
-implementation and focused tests remain so we can reconsider the feature
-without rebuilding it.
+operations are exposed through `t3 thread` commands instead. Codex provider
+processes receive `T3CODE_THREAD_ID`, which supplies caller identity and normal
+inheritance when the agent runs the CLI.
 
-When enabled, `list_projects` is the normal discovery entrypoint. It returns
-local and registered remote environments plus their projects. `create_thread`
-can omit both `target` and `modelSelection`; it then defaults to a sibling thread
-in the caller's current project and environment with the current provider,
-model, options, runtime mode, and interaction mode.
+`t3 thread projects` is the normal discovery entrypoint. It returns local and
+registered remote environments plus their projects. `t3 thread create` can
+omit target and model flags. It then defaults to a sibling thread in the
+caller's current project and environment with the current provider, model,
+options, runtime mode, and interaction mode.
 
-Provider and model discovery lives in `list_thread_models`. That dormant tool
-returns curated model choices with exact `modelSelection` objects that
-can be passed to `create_thread.modelSelection`, plus compact reasoning metadata
-when a provider exposes a reasoning selector. When the toolkit is enabled, its
-instructions tell agents not to call this tool for ordinary child threads.
+Provider and model discovery lives in `t3 thread models`. That command returns
+curated choices with provider instance ids, model slugs, and compact reasoning
+metadata. Those values map to `--provider-instance`, `--model`, and `--option`
+on `create` and `send`. Agent instructions say not to call this command for
+ordinary child threads.
 Hidden orchestration models such as small, stale, or internal models are omitted
 from explicit selection. Existing threads may still inherit their current model
 settings.
@@ -25,25 +26,29 @@ The local T3 server owns a backend-to-backend remote orchestration registry,
 persisting non-secret remote metadata in `remote-orchestration-environments.json`
 and storing bearer access tokens in `ServerSecretStore`. `t3 remote register`
 can exchange a one-time remote pairing token for an orchestration-scoped bearer
-session and register the remote host. `list_projects` returns both the current
-environment and registered remotes; agents pass the returned `environmentId` to the
-existing thread tools rather than using a separate remote-only tool family. Omitting
-`environmentId` preserves the current host/current project/current provider defaults.
+session and register the remote host. `t3 thread projects` returns both the
+current environment and registered remotes. Agents pass the returned id through
+`--environment`. Omitting that flag preserves the current host, project, and
+provider defaults.
 
-The retained MCP thread toolkit includes compact passive observability tools:
+The CLI mapping is documented in `patches/desktop-thread-orchestration.md` and
+the user guide. The dormant MCP toolkit stays compiled and tested, but the CLI
+is the supported agent entrypoint.
 
-- `read_thread_result` returns thread status, queue count, and latest messages without
-  loading the full transcript.
-- `await_thread` waits for a thread to become idle, complete its latest turn, or drain its
-  queued messages.
-- `get_thread_graph` returns automatic relationship edges between threads without mutating
-  the graph being inspected.
+The CLI includes compact passive observability commands:
 
-Full `read_thread` still records `readBy` activity when one thread reads another. The compact
-tools are intentionally passive so orchestration agents can poll and inspect cheaply without
-contaminating the relationship graph.
+- `t3 thread result` returns thread status, queue count, and latest messages
+  without loading the full transcript.
+- `t3 thread await` waits for a thread to become idle, complete its latest
+  turn, or drain its queued messages.
+- `t3 thread graph` returns automatic relationship edges without mutating the
+  graph being inspected.
 
-The patch also routes Codex-backed agent `fork_thread` calls through Codex App Server.
+Full `t3 thread read` still records `readBy` activity when one thread reads
+another. The compact commands are passive, so polling does not add relationship
+edges.
+
+The patch routes Codex-backed `t3 thread fork` calls through Codex App Server.
 Forking asks Codex App Server to run `thread/fork`, then imports the returned copied
 history into T3 Code and binds the new T3 thread to the forked Codex provider thread.
 This keeps transcript cloning semantics owned by Codex App Server instead of
@@ -73,7 +78,7 @@ The message-level fork action is destination-aware. The fork button opens a menu
 The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
 archived sources, running latest turns, active provider turns, streaming messages, queued messages,
 pending approvals, and pending user-input requests before preparing any workspace or forking provider
-history. The dormant agent-facing `fork_thread` path also rejects busy sources before
+history. The CLI and dormant MCP `fork_thread` paths also reject busy sources before
 preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
 "source must be idle" rule. The public RPC accepts `auto` and `directory-copy`, defaulting to
 `auto` so repository-backed projects avoid copying dependency directories and other ignored payloads.

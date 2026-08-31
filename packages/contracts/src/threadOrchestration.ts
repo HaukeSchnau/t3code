@@ -318,6 +318,13 @@ export const ThreadOrchestrationScopedCreateThreadInput = Schema.Struct({
 export type ThreadOrchestrationScopedCreateThreadInput =
   typeof ThreadOrchestrationScopedCreateThreadInput.Type;
 
+export const ThreadOrchestrationScopedForkThreadInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationForkThreadInput,
+});
+export type ThreadOrchestrationScopedForkThreadInput =
+  typeof ThreadOrchestrationScopedForkThreadInput.Type;
+
 export const ThreadOrchestrationScopedSendMessageInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,
   input: ThreadOrchestrationSendMessageInput,

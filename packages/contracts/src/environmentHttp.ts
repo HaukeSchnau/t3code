@@ -44,11 +44,13 @@ import {
   ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationCreateThreadResult,
   ThreadOrchestrationError,
+  ThreadOrchestrationForkThreadResult,
   ThreadOrchestrationListProjectsResult,
   ThreadOrchestrationListThreadModelsResult,
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationScopedAwaitThreadInput,
   ThreadOrchestrationScopedCreateThreadInput,
+  ThreadOrchestrationScopedForkThreadInput,
   ThreadOrchestrationScopedListThreadsInput,
   ThreadOrchestrationScopedReadThreadInput,
   ThreadOrchestrationScopedReadThreadResultInput,
@@ -631,6 +633,20 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
+    HttpApiEndpoint.get("listAllProjects", "/api/thread-orchestration/all-projects", {
+      headers: OptionalBearerHeaders,
+      success: ThreadOrchestrationListProjectsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("listAllThreadModels", "/api/thread-orchestration/all-thread-models", {
+      headers: OptionalBearerHeaders,
+      success: ThreadOrchestrationListThreadModelsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
     HttpApiEndpoint.post("listThreads", "/api/thread-orchestration/list-threads", {
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedListThreadsInput,
@@ -675,6 +691,14 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedCreateThreadInput,
       success: ThreadOrchestrationCreateThreadResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("forkThread", "/api/thread-orchestration/fork-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedForkThreadInput,
+      success: ThreadOrchestrationForkThreadResult,
       error: EnvironmentThreadOrchestrationOperateErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

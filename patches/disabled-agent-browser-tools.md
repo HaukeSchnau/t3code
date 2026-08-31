@@ -13,6 +13,7 @@ spend time probing a capability that cannot be used in many environments.
 - Codex collaboration-mode instructions must not advertise or prioritize T3 Code browser tools.
 - Settings must not claim that agent browser access can be enabled.
 - Other agent-facing MCP toolkits stay disabled.
+- Thread orchestration remains available through `t3 thread`; its MCP toolkit stays disabled.
 - The preview toolkit implementation stays dormant so focused tests keep covering it and the
   feature can be restored without reconstructing the browser protocol.
 - This patch does not remove the user-facing preview panel or the read-only workspace file viewer.

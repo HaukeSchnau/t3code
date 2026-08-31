@@ -174,6 +174,27 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     runCliWithRuntime(["--no-log-websocket-events", "--version"]),
   );
 
+  it.effect("lists every thread orchestration CLI command", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(runCli(["thread", "--help"]));
+      for (const command of [
+        "projects",
+        "models",
+        "list",
+        "read",
+        "result",
+        "await",
+        "graph",
+        "create",
+        "fork",
+        "send",
+        "rename",
+      ]) {
+        assert.match(output, new RegExp(`\\b${command}\\b`));
+      }
+    }),
+  );
+
   it.effect("rejects invalid log-level casing before launching the server", () =>
     Effect.gen(function* () {
       const error = yield* runCliWithRuntime(["--log-level", "Debug"]).pipe(Effect.flip);

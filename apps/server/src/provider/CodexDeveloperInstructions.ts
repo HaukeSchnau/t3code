@@ -1,5 +1,14 @@
 import type { ProviderInteractionMode } from "@t3tools/contracts";
 
+const T3_CODE_THREAD_CLI_INSTRUCTIONS = `
+
+## T3 Code thread orchestration CLI
+
+T3 Code exposes durable thread orchestration through the local CLI rather than MCP tools. Run \`t3 thread --help\` to discover the commands. The commands are \`projects\`, \`models\`, \`list\`, \`read\`, \`result\`, \`await\`, \`graph\`, \`create\`, \`fork\`, \`send\`, and \`rename\`. Use \`--json\` when consuming output programmatically.
+
+Provider sessions set \`T3CODE_THREAD_ID\`, so \`t3 thread create\` inherits the current project, provider, model, options, runtime mode, and interaction mode. Use durable T3 threads for independently queued work that should remain visible in T3. Use provider subagents for short-lived internal parallel work.
+`;
+
 export const codexPlanModeDeveloperInstructions = `<collaboration_mode># Plan Mode (Conversational)
 
 You work in 3 phases, and you should *chat your way* to a great plan before finalizing it. A great plan is very detailed-intent- and implementation-wise-so that it can be handed to another engineer or agent to be implemented right away. It must be **decision complete**, where the implementer does not need to make any decisions.
@@ -128,6 +137,7 @@ Do not ask "should I proceed?" in the final output. The user can easily switch o
 Only produce at most one \`<proposed_plan>\` block per turn, and only when you are presenting a complete spec.
 
 If the user stays in Plan mode and asks for revisions after a prior \`<proposed_plan>\`, any new \`<proposed_plan>\` must be a complete replacement. If the user indicates that the prior plan is not acceptable but does not provide enough information to produce a complete replacement, address the concern and continue planning without producing a \`<proposed_plan>\` block. If the follow-up neither requires changes nor calls the plan into question (e.g. clarifying question), answer it before the block, then reproduce the prior \`<proposed_plan>\` unchanged.
+${T3_CODE_THREAD_CLI_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export const codexDefaultModeDeveloperInstructions = `<collaboration_mode># Collaboration Mode: Default
@@ -141,6 +151,7 @@ Your active mode changes only when new developer instructions with a different \
 Use the \`request_user_input\` tool only when it is listed in the available tools for this turn.
 
 In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.
+${T3_CODE_THREAD_CLI_INSTRUCTIONS}
 </collaboration_mode>`;
 
 export interface CodexRuntimeInfo {

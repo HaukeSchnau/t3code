@@ -407,10 +407,10 @@ const make = Effect.gen(function* () {
     .getShellSnapshot()
     .pipe(Effect.mapError(toThreadOrchestrationError("shell_snapshot")));
 
-  const commandId = (tag: string) => makeId(crypto, `mcp:${tag}`, CommandId.make);
-  const eventId = (tag: string) => makeId(crypto, `mcp:${tag}`, EventId.make);
-  const messageId = (tag: string) => makeId(crypto, `mcp:${tag}`, MessageId.make);
-  const threadId = (tag: string) => makeId(crypto, `mcp:${tag}`, ThreadId.make);
+  const commandId = (tag: string) => makeId(crypto, `thread-orchestration:${tag}`, CommandId.make);
+  const eventId = (tag: string) => makeId(crypto, `thread-orchestration:${tag}`, EventId.make);
+  const messageId = (tag: string) => makeId(crypto, `thread-orchestration:${tag}`, MessageId.make);
+  const threadId = (tag: string) => makeId(crypto, `thread-orchestration:${tag}`, ThreadId.make);
   const localEnvironmentId = serverEnvironment.getDescriptor.pipe(
     Effect.map((descriptor) => descriptor.environmentId),
     Effect.mapError(toThreadOrchestrationError("environment.resolve")),

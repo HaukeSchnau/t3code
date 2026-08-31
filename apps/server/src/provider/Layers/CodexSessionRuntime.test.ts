@@ -531,14 +531,16 @@ describe("T3 browser developer instructions", () => {
 });
 
 describe("T3 orchestration developer instructions", () => {
-  it("does not advertise disabled thread orchestration tools", () => {
+  it("advertises the CLI without advertising disabled MCP tools", () => {
     for (const instructions of [
       codexDefaultModeDeveloperInstructions,
       codexPlanModeDeveloperInstructions,
     ]) {
-      NodeAssert.doesNotMatch(instructions, /T3 Code thread orchestration/);
+      NodeAssert.doesNotMatch(instructions, /Desktop-style thread orchestration tools/);
       NodeAssert.doesNotMatch(instructions, /create_thread/);
       NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
+      NodeAssert.match(instructions, /t3 thread --help/);
+      NodeAssert.match(instructions, /T3CODE_THREAD_ID/);
     }
   });
 });
