@@ -40,6 +40,11 @@ The rest of this document is meant to help you navigate the codebase and make ch
 
 Of note: Most T3 Code contributions will come from T3 Code itself, often controlled remotely. This means you should be careful about accessing data, killing dev servers, and other things that may damage the T3 Code instance that the contributor is using.
 
+## Product references
+
+- [Traycer](https://github.com/traycerai/traycer) is a useful reference when designing agent orchestration, shared context, collaboration, remote hosts, and multi-agent workflows. Inspect its current source and documentation for product concepts and interaction ideas when relevant.
+- Treat Traycer as research, not architectural authority. Evaluate its ideas against T3 Code's openness, performance, remote-ready, and multi-surface requirements. Prefer the smallest design that fits T3 Code rather than copying Traycer's product model.
+
 ## A small glossary
 
 We need to be on the same page with terminology. When communicating, use this language:
