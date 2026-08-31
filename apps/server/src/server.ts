@@ -638,7 +638,10 @@ export const makeServerLayer = Layer.unwrap(
           );
         }),
         () =>
-          clearPersistedServerRuntimeState(config.serverRuntimeStatePath).pipe(
+          clearPersistedServerRuntimeState({
+            path: config.serverRuntimeStatePath,
+            ownerPid: process.pid,
+          }).pipe(
             Effect.catchCause((cause) =>
               Effect.logWarning("Failed to clear server runtime state", { cause }),
             ),

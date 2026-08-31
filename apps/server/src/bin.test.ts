@@ -18,6 +18,7 @@ import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as DateTime from "effect/DateTime";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as HttpRouter from "effect/unstable/http/HttpRouter";
 import * as HttpServer from "effect/unstable/http/HttpServer";
 import * as HttpApi from "effect/unstable/httpapi/HttpApi";
@@ -38,6 +39,7 @@ import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolve
 import {
   makePersistedServerRuntimeState,
   persistServerRuntimeState,
+  readPersistedServerRuntimeState,
 } from "./serverRuntimeState.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as ServerSecretStore from "./auth/ServerSecretStore.ts";
@@ -576,6 +578,33 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
           assert.isTrue(addedProject !== undefined);
           assert.equal(addedProject?.title, "Live Project");
         }),
+      );
+    }),
+  );
+
+  it.effect("preserves runtime discovery when a project command falls back offline", () =>
+    Effect.gen(function* () {
+      const baseDir = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-stale-server-test-"),
+      );
+      const workspaceRoot = NodeFS.mkdtempSync(
+        NodePath.join(NodeOS.tmpdir(), "t3-cli-projects-stale-server-workspace-"),
+      );
+      const config = yield* makeCliTestServerConfig(baseDir);
+      const runtimeState = yield* makePersistedServerRuntimeState({
+        config: { host: "127.0.0.1", devUrl: undefined },
+        port: 1,
+      });
+      yield* persistServerRuntimeState({
+        path: config.serverRuntimeStatePath,
+        state: runtimeState,
+      });
+
+      yield* runCliWithRuntime(["project", "add", workspaceRoot, "--base-dir", baseDir]);
+
+      assert.deepEqual(
+        yield* readPersistedServerRuntimeState(config.serverRuntimeStatePath),
+        Option.some(runtimeState),
       );
     }),
   );

@@ -79,15 +79,23 @@ export const persistServerRuntimeState = (input: {
     ),
   );
 
-export const clearPersistedServerRuntimeState = (path: string) =>
+export const clearPersistedServerRuntimeState = (input: {
+  readonly path: string;
+  readonly ownerPid: number;
+}) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
-    yield* fs.remove(path, { force: true }).pipe(
+    const state = yield* readPersistedServerRuntimeState(input.path);
+    if (Option.isNone(state) || state.value.pid !== input.ownerPid) {
+      return;
+    }
+
+    yield* fs.remove(input.path, { force: true }).pipe(
       Effect.mapError(
         (cause) =>
           new ServerRuntimeStateError({
             operation: "clear",
-            statePath: path,
+            statePath: input.path,
             cause,
           }),
       ),
