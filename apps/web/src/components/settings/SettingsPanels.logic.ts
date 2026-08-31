@@ -111,10 +111,7 @@ export function getChangedTypographySettingLabels(settings: TypographySettings):
 
 export type BrowserDefaultSettings = Pick<
   UnifiedSettings,
-  | "browserDefaultViewport"
-  | "browserDefaultZoomFactor"
-  | "browserDefaultAppearance"
-  | "browserAutoShowFloatingPreview"
+  "browserDefaultViewport" | "browserDefaultZoomFactor" | "browserDefaultAppearance"
 >;
 
 /**
@@ -150,10 +147,6 @@ export function getChangedBrowserSettingLabels(settings: BrowserDefaultSettings)
       : []),
     ...(settings.browserDefaultAppearance !== DEFAULT_UNIFIED_SETTINGS.browserDefaultAppearance
       ? ["Browser appearance"]
-      : []),
-    ...(settings.browserAutoShowFloatingPreview !==
-    DEFAULT_UNIFIED_SETTINGS.browserAutoShowFloatingPreview
-      ? ["Floating preview"]
       : []),
   ];
 }

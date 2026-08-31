@@ -214,12 +214,6 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/providers",
   },
   {
-    id: "agent-browser-access",
-    title: "Agent browser access",
-    to: "/settings/integrations",
-    targetId: "browser",
-  },
-  {
     id: "browser-default-viewport",
     title: "Default browser viewport",
     to: "/settings/integrations",
@@ -234,12 +228,6 @@ export const SETTINGS_SEARCH_ITEMS = [
   {
     id: "browser-default-appearance",
     title: "Default browser appearance",
-    to: "/settings/integrations",
-    targetId: "browser",
-  },
-  {
-    id: "browser-auto-show-floating-preview",
-    title: "Auto-show floating preview",
     to: "/settings/integrations",
     targetId: "browser",
   },
