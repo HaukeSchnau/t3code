@@ -19,7 +19,7 @@ env:
 jobs:
   static:
     name: Format and lint
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 15
     steps:
       - name: Checkout exact revision
@@ -38,7 +38,7 @@ jobs:
 
   typecheck:
     name: Type-check ${{ matrix.group }}
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -61,7 +61,7 @@ jobs:
 
   test_non_server:
     name: Test packages and clients
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 15
     steps:
       - name: Checkout exact revision
@@ -80,7 +80,7 @@ jobs:
 
   test_server:
     name: Test server ${{ matrix.shard }}/3
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -103,7 +103,7 @@ jobs:
 
   release_smoke:
     name: Release smoke
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 10
     steps:
       - name: Checkout exact revision
@@ -123,7 +123,7 @@ jobs:
   release_check:
     name: Release contract
     needs: [static, typecheck, test_non_server, test_server, release_smoke]
-    runs-on: ubuntu-22.04
+    runs-on: t3code-ci
     timeout-minutes: 30
     steps:
       - name: Checkout exact revision
@@ -142,3 +142,5 @@ jobs:
     name: Release
     needs: release_check
     uses: schnau/nix-infra-modules/.gitea/workflows/project-release.yml@main
+    with:
+      runner_label: t3code-ci

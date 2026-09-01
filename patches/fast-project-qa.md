@@ -29,7 +29,11 @@ and fork lockfile check.
 - Workflow steps `exec` the Nix development command. The workspace runner supervises a dedicated
   project-command process group and terminates it even when Gitea kills the outer runner before
   shell traps can run. It also captures descendants before cancellation so helpers that create
-  their own sessions do not escape cleanup.
+  their own sessions do not escape cleanup. Cancellation reads the process table once rather than
+  spawning one `ps` command per descendant, which keeps it responsive when a job reaches its memory
+  limit.
+- T3 Code jobs request the `t3code-ci` runner pool. Its two instances have separate stable workspace
+  slots, so they can run concurrently without claiming the runner reserved for another project.
 
 The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
 keeps a matching shim until its existing infrastructure input can be upgraded independently; the
