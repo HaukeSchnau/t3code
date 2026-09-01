@@ -22,7 +22,7 @@ qa-typecheck-clients:
 
 qa-typecheck-rest:
     ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
-    ./node_modules/.bin/vp run -r --cache --concurrency-limit 1 --filter '!@t3tools/web' --filter '!@t3tools/mobile' typecheck
+    ./node_modules/.bin/vp run --cache --concurrency-limit 1 --filter './apps/*' --filter './packages/*' --filter './infra/*' --filter './scripts' --filter './oxlint-plugin-t3code' --filter '!@t3tools/web' --filter '!@t3tools/mobile' typecheck
 
 qa-test-non-server:
     ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
