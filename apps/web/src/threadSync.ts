@@ -21,3 +21,7 @@ export function resolveThreadSyncPhase(input: {
       return null;
   }
 }
+
+export function threadSyncLabel(_phase: ThreadSyncPhase): string {
+  return "Loading messages...";
+}

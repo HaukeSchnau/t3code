@@ -80,8 +80,8 @@ import {
   IconX,
   type Icon,
 } from "@tabler/icons-react-native";
-import { Platform } from "react-native";
-import { SymbolView as ExpoSymbolView, type SFSymbol, type SymbolViewProps } from "expo-symbols";
+import { type SFSymbol, type SymbolViewProps } from "expo-symbols";
+import { withUniwind } from "uniwind";
 
 const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.branch": IconGitBranch,
@@ -192,11 +192,7 @@ const ANDROID_ICON_BY_MATERIAL_NAME: Record<string, Icon> = {
 export type { SFSymbol } from "expo-symbols";
 export type AppSymbolName = SymbolViewProps["name"];
 
-export function SymbolView(props: SymbolViewProps) {
-  if (Platform.OS !== "android") {
-    return <ExpoSymbolView {...props} />;
-  }
-
+function AppSymbolView(props: SymbolViewProps) {
   const materialName = typeof props.name === "string" ? undefined : props.name.android;
   const sfSymbol = typeof props.name === "string" ? props.name : props.name.ios;
   const AndroidIcon =
@@ -218,3 +214,10 @@ export function SymbolView(props: SymbolViewProps) {
     />
   );
 }
+
+/**
+ * expo-symbols and the Android Tabler fallback both expose tint as a native
+ * prop. Keep that third-party boundary here so callers can use Uniwind's
+ * `tintColorClassName` without subscribing to theme variables themselves.
+ */
+export const SymbolView = withUniwind(AppSymbolView);

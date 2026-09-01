@@ -29,6 +29,7 @@ import * as FiberMap from "effect/FiberMap";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
@@ -325,13 +326,15 @@ function isUnknownPendingApprovalRequestError(cause: Cause.Cause<ProviderService
     const detail = error.detail.toLowerCase();
     return (
       detail.includes("unknown pending approval request") ||
-      detail.includes("unknown pending permission request")
+      detail.includes("unknown pending permission request") ||
+      detail.includes("unknown pending codex approval request")
     );
   }
-  const message = Cause.pretty(cause);
+  const message = Cause.pretty(cause).toLowerCase();
   return (
     message.includes("unknown pending approval request") ||
-    message.includes("unknown pending permission request")
+    message.includes("unknown pending permission request") ||
+    message.includes("unknown pending codex approval request")
   );
 }
 
@@ -570,7 +573,7 @@ const make = Effect.gen(function* () {
 
   const resolveThread = Effect.fnUntraced(function* (threadId: ThreadId) {
     return yield* projectionSnapshotQuery
-      .getThreadDetailById(threadId)
+      .getThreadDetailById(threadId, { activityKinds: [] })
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
@@ -1100,13 +1103,20 @@ const make = Effect.gen(function* () {
         }
 
         const previousTitle = thread.title;
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd,
-          message: context.message,
-          ...(input.firstUserTurn ? {} : { previousTitle, automaticRefresh: true }),
-          ...(context.attachments.length > 0 ? { attachments: context.attachments } : {}),
-          modelSelection: settings.textGenerationModelSelection,
-        });
+        const generated = yield* textGeneration
+          .generateThreadTitle({
+            cwd,
+            message: context.message,
+            ...(input.firstUserTurn ? {} : { previousTitle, automaticRefresh: true }),
+            ...(context.attachments.length > 0 ? { attachments: context.attachments } : {}),
+            modelSelection: settings.textGenerationModelSelection,
+          })
+          .pipe(
+            Effect.retry({
+              times: 2,
+              schedule: Schedule.exponential("2 seconds"),
+            }),
+          );
         if (
           generated.title === DEFAULT_THREAD_TITLE ||
           (!input.firstUserTurn && generated.title === previousTitle)

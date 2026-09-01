@@ -1,7 +1,7 @@
 import { type MessageId } from "@t3tools/contracts";
 import { randomHex } from "~/lib/utils";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
-import { type ChatMessage, type Thread } from "../../types";
+import { isImageAttachment, type ChatMessage, type Thread } from "../../types";
 import { revokeBlobPreviewUrl } from "../ChatView.logic";
 
 export function editableTextFromUserMessage(text: string): string {
@@ -48,6 +48,9 @@ export async function hydrateMessageImagesForEdit(
   const images: ComposerImageAttachment[] = [];
   try {
     for (const [index, attachment] of attachments.entries()) {
+      if (!isImageAttachment(attachment)) {
+        continue;
+      }
       if (!attachment.previewUrl) {
         throw new Error(`Image attachment '${attachment.name}' is missing a preview URL.`);
       }

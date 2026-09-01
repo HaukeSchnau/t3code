@@ -27,35 +27,35 @@ const threadOutboxShellStatusesAtom = Atom.make(
  * back yet (delivering those would send stale content). Editing sessions hold
  * their message id here and release it once the queued payload is current.
  */
-const manualEditingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, true>>>({}).pipe(
+export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, true>>>({}).pipe(
   Atom.keepAlive,
-  Atom.withLabel("mobile:thread-outbox:manual-editing-message-ids"),
+  Atom.withLabel("mobile:thread-outbox:editing-message-ids"),
 );
 
-export const editingQueuedMessageIdsAtom = Atom.make((get) => {
+export const effectiveEditingQueuedMessageIdsAtom = Atom.make((get) => {
   const editing: Record<MessageId, true> = {
-    ...get(manualEditingQueuedMessageIdsAtom),
+    ...get(editingQueuedMessageIdsAtom),
     ...get(persistedQueuedEditIdsAtom),
   };
   return editing as Readonly<Record<MessageId, true>>;
-}).pipe(Atom.withLabel("mobile:thread-outbox:editing-message-ids"));
+}).pipe(Atom.withLabel("mobile:thread-outbox:effective-editing-message-ids"));
 
 export function holdEditingQueuedMessage(messageId: MessageId): void {
-  const current = appAtomRegistry.get(manualEditingQueuedMessageIdsAtom);
+  const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (current[messageId]) {
     return;
   }
-  appAtomRegistry.set(manualEditingQueuedMessageIdsAtom, { ...current, [messageId]: true });
+  appAtomRegistry.set(editingQueuedMessageIdsAtom, { ...current, [messageId]: true });
 }
 
 export function releaseEditingQueuedMessage(messageId: MessageId): void {
-  const current = appAtomRegistry.get(manualEditingQueuedMessageIdsAtom);
+  const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (!current[messageId]) {
     return;
   }
   const next = { ...current };
   delete next[messageId];
-  appAtomRegistry.set(manualEditingQueuedMessageIdsAtom, next);
+  appAtomRegistry.set(editingQueuedMessageIdsAtom, next);
 }
 
 export function useThreadOutboxMessages() {

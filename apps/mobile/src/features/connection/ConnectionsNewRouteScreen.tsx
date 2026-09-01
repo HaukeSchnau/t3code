@@ -5,7 +5,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Linking, Platform, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
@@ -52,7 +52,7 @@ export function ConnectionsNewRouteScreen({
       : undefined,
   });
 
-  const headerIconColor = useThemeColor("--color-icon");
+  const headerIconColor = useUniwindTheme()["--color-icon"];
 
   const connectDisabled = isSubmitting || hostInput.trim().length === 0;
 

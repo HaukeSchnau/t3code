@@ -16,6 +16,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
@@ -60,6 +61,13 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
   correlationId: Schema.NullOr(CommandId),
   payload: UnknownFromJsonString,
   metadata: EventMetadataFromJsonString,
+});
+
+const HasEventAfterRequestSchema = Schema.Struct({
+  aggregateKind: Schema.String,
+  aggregateId: Schema.String,
+  type: Schema.String,
+  sequenceExclusive: NonNegativeInt,
 });
 
 const ReadFromSequenceRequestSchema = Schema.Struct({
@@ -446,14 +454,41 @@ const makeEventStore = Effect.gen(function* () {
     );
   };
 
+  const findEventAfter = SqlSchema.findOneOption({
+    Request: HasEventAfterRequestSchema,
+    Result: Schema.Struct({ sequence: Schema.Number }),
+    execute: (request) =>
+      sql`
+        SELECT sequence
+        FROM orchestration_events
+        WHERE aggregate_kind = ${request.aggregateKind}
+          AND stream_id = ${request.aggregateId}
+          AND event_type = ${request.type}
+          AND sequence > ${request.sequenceExclusive}
+        LIMIT 1
+      `,
+  });
+
+  const hasEventAfter: OrchestrationEventStoreShape["hasEventAfter"] = (input) =>
+    findEventAfter(input).pipe(
+      Effect.map(Option.isSome),
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "OrchestrationEventStore.hasEventAfter:query",
+          "OrchestrationEventStore.hasEventAfter:decodeRow",
+        ),
+      ),
+    );
+
   return {
-    append,
-    readFromSequence,
-    readAggregateFromSequence,
-    probeFromSequence,
-    probeAggregateFromSequence,
-    readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
-  } satisfies OrchestrationEventStoreShape;
+  append,
+  readFromSequence,
+  readAggregateFromSequence,
+  probeFromSequence,
+  probeAggregateFromSequence,
+  readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
+  hasEventAfter,
+} satisfies OrchestrationEventStoreShape;
 });
 
 export const OrchestrationEventStoreLive = Layer.effect(OrchestrationEventStore, makeEventStore);
