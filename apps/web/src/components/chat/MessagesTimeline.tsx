@@ -36,6 +36,7 @@ import { FileDiff } from "@pierre/diffs/react";
 import {
   deriveTimelineEntries,
   workEntryDisplayIndicatesToolFailure,
+  workEntrySignalsSevereFailure,
   workLogEntryIsToolLike,
 } from "../../session-logic";
 import {
@@ -1207,7 +1208,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     }}
                   >
                     {isOpening ? (
-                      <span className="text-[11px]">Loading...</span>
+                      <span className="text-[11px]">Loading…</span>
                     ) : (
                       <PlayIcon className="size-8 fill-current" />
                     )}
@@ -1816,7 +1817,7 @@ function LiveActivityContent({
 
 function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "work-live" }> }) {
   const ctx = use(TimelineRowCtx);
-  const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot);
+  const label = liveWorkEntryLabel(row.entry, ctx.workspaceRoot, row.active);
   const failed = workEntryDisplayIndicatesToolFailure(row.entry);
 
   return (
@@ -1866,7 +1867,7 @@ function WorkGroupToggleTimelineRow({
   row: Extract<TimelineRow, { kind: "work-toggle" }>;
 }) {
   const ctx = use(TimelineRowCtx);
-  if (row.onlyToolEntries && row.summary) {
+  if (row.summary && (row.onlyToolEntries || !row.expanded)) {
     return (
       <button
         type="button"
@@ -1876,15 +1877,12 @@ function WorkGroupToggleTimelineRow({
         onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
       >
         <span
-          className={cn(
-            "flex size-6 shrink-0 items-center justify-center",
-            row.hasFailure ? "text-destructive" : "text-icon-muted",
-          )}
+          className="flex size-6 shrink-0 items-center justify-center text-icon-muted"
           role={row.hasFailure ? "img" : undefined}
           aria-label={row.hasFailure ? "Tool call failed" : undefined}
         >
           <WorkEntryIconSvg
-            name={row.hasFailure ? "x" : toolGroupSummaryIconName(row.summaryKind)}
+            name={toolGroupSummaryIconName(row.summaryKind)}
             className="size-4 shrink-0 stroke-[1.8] opacity-70"
           />
         </span>
@@ -2743,14 +2741,21 @@ function commandProgramName(command: string, depth = 0): string | null {
 function liveWorkEntryLabel(
   workEntry: TimelineWorkEntry,
   workspaceRoot: string | undefined,
+  active: boolean,
 ): string {
   const command = workEntry.command?.trim();
   if (command) {
-    // This row describes the active parent turn, not the command lifecycle.
-    // Keep its live "Running" copy until the turn or contiguous tool run settles.
     const program = commandProgramName(command);
-    if (program) return `Running ${program}`;
-    return "Running command";
+    const lifecycleVerb = active
+      ? "Running"
+      : workEntry.toolLifecycleStatus === "declined"
+        ? "Declined"
+        : workEntry.toolLifecycleStatus === "failed"
+          ? "Failed"
+          : workEntry.toolLifecycleStatus === "stopped"
+            ? "Stopped"
+            : "Ran";
+    return program ? `${lifecycleVerb} ${program}` : `${lifecycleVerb} command`;
   }
 
   return workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry);
@@ -2981,19 +2986,24 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const showFailedIndicator = workEntryDisplayIndicatesToolFailure(workEntry);
-  const entryIconName =
-    showWarningIndicator || showFailedIndicator ? "x" : workEntryIconName(workEntry);
+  const severeFailure = workEntrySignalsSevereFailure(workEntry);
+  const entryIconName = showWarningIndicator
+    ? "x"
+    : severeFailure
+      ? "circle-alert"
+      : showFailedIndicator
+        ? "x"
+        : workEntryIconName(workEntry);
   const displayText = workEntryPreview(workEntry, workspaceRoot) ?? toolWorkEntryHeading(workEntry);
   const expandedBody = buildToolCallExpandedBody(workEntry, workspaceRoot);
   const hasObservedMediaPreviews = observedMediaPreviews.length > 0;
   const canExpand = expandedBody !== null || hasObservedMediaPreviews;
   const showDestructiveRowStyle =
-    showFailedIndicator &&
-    (workEntry.sourceActivityKind === "runtime.error" || !workLogEntryIsToolLike(workEntry));
+    showFailedIndicator && (severeFailure || !workLogEntryIsToolLike(workEntry));
   const iconWrapperClass = cn(
     "flex size-6 shrink-0 items-center justify-center",
-    showWarningIndicator || showFailedIndicator
-      ? "text-destructive"
+    showWarningIndicator
+      ? "text-warning"
       : showDestructiveRowStyle
         ? "text-destructive"
         : workEntry.tone === "tool" || showFailedIndicator
