@@ -44,6 +44,8 @@ Of note: Most T3 Code contributions will come from T3 Code itself, often control
 
 - [Traycer](https://github.com/traycerai/traycer) is a useful reference when designing agent orchestration, shared context, collaboration, remote hosts, and multi-agent workflows. Inspect its current source and documentation for product concepts and interaction ideas when relevant.
 - Treat Traycer as research, not architectural authority. Evaluate its ideas against T3 Code's openness, performance, remote-ready, and multi-surface requirements. Prefer the smallest design that fits T3 Code rather than copying Traycer's product model.
+- [Orca](https://github.com/stablyai/orca) is a direct product reference for worktree-centric agent workflows, terminal and session lifecycle, remote execution, mobile supervision, integrated review and task flows, and agent-operable UI and CLI features. Inspect its current source and documentation when working in those areas.
+- Orca is primarily terminal-first, with structured chat layered over PTYs. Borrow its interaction ideas selectively without pulling T3 Code away from provider-native structured threads, server-owned durable state, performance, or consistent web, desktop, and mobile behavior.
 
 ## A small glossary
 
