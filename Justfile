@@ -38,6 +38,7 @@ qa-test-server-shard shard total:
 qa-release:
     node scripts/release-smoke.ts
     node scripts/fork-lockfile.ts --check
+    node scripts/sync-pnpm-deploy-lock.mjs --check
 
 # Print the pnpmDeps SRI for flake.nix by forcing a fake-hash Nix build and extracting the "got" value.
 prefetch-pnpm-deps:
