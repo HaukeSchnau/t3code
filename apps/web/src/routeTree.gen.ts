@@ -12,7 +12,6 @@ import { Route as rootRouteImport } from './routes/__root'
 import { Route as UsageRouteImport } from './routes/usage'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as PairRouteImport } from './routes/pair'
-import { Route as OrchestrationRouteImport } from './routes/orchestration'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
@@ -26,6 +25,7 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as FixturesDelegationRouteImport } from './routes/fixtures.delegation'
 import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatMonitorRouteImport } from './routes/_chat.monitor'
@@ -45,11 +45,6 @@ const SettingsRoute = SettingsRouteImport.update({
 const PairRoute = PairRouteImport.update({
   id: '/pair',
   path: '/pair',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const OrchestrationRoute = OrchestrationRouteImport.update({
-  id: '/orchestration',
-  path: '/orchestration',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ConnectRoute = ConnectRouteImport.update({
@@ -116,6 +111,11 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const FixturesDelegationRoute = FixturesDelegationRouteImport.update({
+  id: '/fixtures/delegation',
+  path: '/fixtures/delegation',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
   id: '/connect_/callback',
   path: '/connect/callback',
@@ -146,13 +146,13 @@ const ChatEnvironmentIdThreadIdRoute =
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
   '/connect': typeof ConnectRoute
-  '/orchestration': typeof OrchestrationRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/fixtures/delegation': typeof FixturesDelegationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -168,13 +168,13 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
-  '/orchestration': typeof OrchestrationRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
+  '/fixtures/delegation': typeof FixturesDelegationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -193,13 +193,13 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
   '/connect': typeof ConnectRoute
-  '/orchestration': typeof OrchestrationRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
   '/usage': typeof UsageRoute
   '/_chat/monitor': typeof ChatMonitorRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
+  '/fixtures/delegation': typeof FixturesDelegationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -219,13 +219,13 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/connect'
-    | '/orchestration'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/monitor'
     | '/pull-requests'
     | '/connect/callback'
+    | '/fixtures/delegation'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -241,13 +241,13 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/connect'
-    | '/orchestration'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/monitor'
     | '/pull-requests'
     | '/connect/callback'
+    | '/fixtures/delegation'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -265,13 +265,13 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_chat'
     | '/connect'
-    | '/orchestration'
     | '/pair'
     | '/settings'
     | '/usage'
     | '/_chat/monitor'
     | '/_chat/pull-requests'
     | '/connect_/callback'
+    | '/fixtures/delegation'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -290,11 +290,11 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
   ConnectRoute: typeof ConnectRoute
-  OrchestrationRoute: typeof OrchestrationRoute
   PairRoute: typeof PairRoute
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   ConnectCallbackRoute: typeof ConnectCallbackRoute
+  FixturesDelegationRoute: typeof FixturesDelegationRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
@@ -319,13 +319,6 @@ declare module '@tanstack/react-router' {
       path: '/pair'
       fullPath: '/pair'
       preLoaderRoute: typeof PairRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/orchestration': {
-      id: '/orchestration'
-      path: '/orchestration'
-      fullPath: '/orchestration'
-      preLoaderRoute: typeof OrchestrationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/connect': {
@@ -419,6 +412,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/fixtures/delegation': {
+      id: '/fixtures/delegation'
+      path: '/fixtures/delegation'
+      fullPath: '/fixtures/delegation'
+      preLoaderRoute: typeof FixturesDelegationRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/connect_/callback': {
       id: '/connect_/callback'
       path: '/connect/callback'
@@ -506,11 +506,11 @@ const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
   ConnectRoute: ConnectRoute,
-  OrchestrationRoute: OrchestrationRoute,
   PairRoute: PairRoute,
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   ConnectCallbackRoute: ConnectCallbackRoute,
+  FixturesDelegationRoute: FixturesDelegationRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }
 export const routeTree = rootRouteImport
