@@ -58,10 +58,7 @@ export function updateThreadOutboxMessage(
   replacementOrRevision?: QueuedThreadMessage | number,
 ): Promise<boolean> {
   return typeof replacementOrRevision === "object"
-    ? threadOutboxManager.update(
-        previousOrMessage,
-        freezeDeliveryIdentity(replacementOrRevision),
-      )
+    ? threadOutboxManager.update(previousOrMessage, freezeDeliveryIdentity(replacementOrRevision))
     : threadOutboxManager.update(previousOrMessage, replacementOrRevision);
 }
 

@@ -870,16 +870,16 @@ export function makeOpenCodeAdapter(
       return current;
     });
     const randomUUIDv4 = crypto.randomUUIDv4.pipe(
-    Effect.mapError(
-      (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "crypto/randomUUIDv4",
-          detail: "Failed to generate OpenCode runtime identifier.",
-          cause,
-        }),
-    ),
-  );
+      Effect.mapError(
+        (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "crypto/randomUUIDv4",
+            detail: "Failed to generate OpenCode runtime identifier.",
+            cause,
+          }),
+      ),
+    );
     let messageIdEpochMillis = -1;
     let messageIdCounter = 0;
     // T3 supplies the message ID to match prompt admission events. Keep OpenCode's sortable native shape so equal-time messages retain their upstream order.

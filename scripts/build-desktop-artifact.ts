@@ -3175,11 +3175,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       options.mockUpdates,
       options.mockUpdateServerPort,
       macPasskeySigning && macEntitlementsPath
-         ? {
-             entitlementsPath: macEntitlementsPath,
-             provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
-           }
-         : undefined,
+        ? {
+            entitlementsPath: macEntitlementsPath,
+            provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+          }
+        : undefined,
       bundlesWslRuntime({ arch: options.arch, prebuildPath: options.wslPrebuild }),
     ),
     dependencies: stageDependencies,
