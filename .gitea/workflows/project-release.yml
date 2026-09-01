@@ -24,8 +24,6 @@ jobs:
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Run checks
         run: |
@@ -45,8 +43,6 @@ jobs:
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Run tests
         run: |
@@ -70,8 +66,6 @@ jobs:
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Run server test shard
         run: |
@@ -91,8 +85,6 @@ jobs:
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Exercise release-only steps
         run: |
@@ -113,8 +105,6 @@ jobs:
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
-        with:
-          persist-credentials: false
 
       - name: Verify release contract
         run: |
