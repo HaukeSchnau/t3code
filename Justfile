@@ -27,7 +27,7 @@ qa-typecheck-rest:
 
 qa-test-non-server:
     ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
-    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test -- --maxWorkers {{ quote(non_server_test_workers) }}
+    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test --maxWorkers {{ quote(non_server_test_workers) }}
 
 qa-test-server:
     cd apps/server && ../../node_modules/.bin/vp test run
