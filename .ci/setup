@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${CI_CACHE_ROOT:?ci-workspace-run must provide CI_CACHE_ROOT}"
+
+dependency_key="$({
+  printf 'node=%s\npnpm=%s\n' "$(node --version)" "$(pnpm --version)"
+  sha256sum flake.lock
+  find . \
+    \( -path './.git' -o -path './.jj' -o -path './node_modules' -o -path './.vite-plus' \) -prune -o \
+    -type f \
+    \( -name package.json \
+      -o -name pnpm-lock.yaml \
+      -o -name pnpm-workspace.yaml \
+      -o -name .npmrc \
+      -o -name .pnpmfile.cjs \
+      -o -name pnpmfile.cjs \
+      -o -path './patches/*.patch' \
+    \) -print0 \
+    | sort -z \
+    | xargs -0 sha256sum
+} | sha256sum | cut -d' ' -f1)"
+stamp_file="$CI_CACHE_ROOT/dependencies.sha256"
+
+if [[ -f node_modules/.modules.yaml && -f "$stamp_file" ]] \
+  && [[ "$(<"$stamp_file")" == "$dependency_key" ]]; then
+  echo "Dependencies match the persistent install ($dependency_key)"
+  exit 0
+fi
+
+pnpm install --frozen-lockfile
+printf '%s\n' "$dependency_key" > "$stamp_file.next"
+mv "$stamp_file.next" "$stamp_file"
