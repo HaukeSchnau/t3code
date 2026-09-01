@@ -12,7 +12,7 @@ import { SymbolView } from "../../components/AppSymbol";
 import { T3Wordmark } from "../../components/T3Wordmark";
 import { HOME_HORIZONTAL_INSET } from "../../lib/layoutMetrics";
 import { resolveMobileStageLabel } from "../../lib/mobileBranding";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { useHardwareKeyboardCommand } from "../keyboard/hardwareKeyboardCommands";
 import { withNativeGlassHeaderItem } from "../layout/native-glass-header-items";
@@ -67,8 +67,9 @@ function checkedMenuState(checked: boolean) {
 
 function AndroidHomeHeader(props: HomeHeaderProps) {
   const insets = useSafeAreaInsets();
-  const iconColor = useThemeColor("--color-icon");
-  const mutedColor = useThemeColor("--color-foreground-muted");
+  const theme = useUniwindTheme();
+  const iconColor = theme["--color-icon"];
+  const mutedColor = theme["--color-foreground-muted"];
   const stageLabel = resolveMobileStageLabel(Constants.expoConfig?.extra?.appVariant);
   // The default list has one opinionated attention order, so the legacy
   // sort/group filter controls would be ignored. Hide them and
@@ -300,7 +301,7 @@ function AndroidHomeHeader(props: HomeHeaderProps) {
 
 function IosHomeHeader(props: HomeHeaderProps) {
   const searchBarRef = useRef<SearchBarCommands>(null);
-  const iconColor = useThemeColor("--color-icon");
+  const iconColor = useUniwindTheme()["--color-icon"];
   // The default list has one opinionated attention order, so the legacy
   // sort/group filter controls would be ignored. Hide them and
   // key the "customized" icon state off the environment filter alone.

@@ -13,7 +13,7 @@ import {
   useKeyboardState,
 } from "react-native-keyboard-controller";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
 
@@ -69,7 +69,7 @@ function NewTaskWorkspaceIcon(props: {
   readonly workspaceMode: "local" | "worktree";
   readonly worktreePath: string | null;
 }) {
-  const iconColor = useThemeColor("--color-icon-muted");
+  const iconColor = useUniwindTheme()["--color-icon-muted"];
 
   if (props.workspaceMode === "local" && props.worktreePath === null) {
     return <SymbolView name="folder" size={16} tintColor={iconColor} type="monochrome" />;
@@ -288,9 +288,10 @@ export function NewTaskDraftScreen(props: {
     };
   }, [props.pendingTaskId, cancelEditingPendingTask]);
 
-  const foregroundColor = useThemeColor("--color-foreground");
-  const sheetColor = String(useThemeColor("--color-sheet"));
-  const projectUnderlineColor = useThemeColor("--color-foreground-muted");
+  const theme = useUniwindTheme();
+  const foregroundColor = theme["--color-foreground"];
+  const sheetColor = String(theme["--color-sheet"]);
+  const projectUnderlineColor = theme["--color-foreground-muted"];
   const regularFontFamily = useFontFamily("regular");
   const bodyText = useScaledTextRole("body");
   const sheetFadeOpaque = sheetColor;

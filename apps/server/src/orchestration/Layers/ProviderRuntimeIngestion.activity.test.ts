@@ -122,7 +122,7 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
     expect(JSON.stringify(data).length).toBeLessThan(1_000);
   });
 
-  it("persists the full terminal payload on tool.completed", () => {
+  it("bounds terminal payload values while preserving their structure", () => {
     const event = {
       ...base,
       type: "item.completed",
@@ -139,6 +139,18 @@ describe("runtimeEventToActivities tool streaming persistence", () => {
 
     expect(activities).toHaveLength(1);
     const payload = activities[0]?.payload as Record<string, unknown>;
-    expect(payload.data).toEqual(streamingData);
+    const data = payload.data as Record<string, unknown>;
+    const rawOutput = data.rawOutput as Record<string, unknown>;
+    const content = data.content as ReadonlyArray<{
+      readonly content: { readonly text: string };
+    }>;
+    expect(data.toolCallId).toBe("tool-call-1");
+    expect(data.command).toBe("blender --render");
+    expect(rawOutput.stdout).toMatch(/^first line of output/);
+    expect(rawOutput.stdout).toMatch(/\[truncated \d+ chars\]$/);
+    expect(String(rawOutput.stdout).length).toBeLessThan(12_100);
+    expect(content[0]?.content.text).toMatch(/^first line of output/);
+    expect(content[0]?.content.text).toMatch(/\[truncated \d+ chars\]$/);
+    expect(content[0]?.content.text.length).toBeLessThan(12_100);
   });
 });

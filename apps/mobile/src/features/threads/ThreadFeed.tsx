@@ -4,7 +4,6 @@ import { type LegendListRef } from "@legendapp/list/react-native";
 import type { EnvironmentId, MessageId, ThreadId, TurnId } from "@t3tools/contracts";
 import { classifyMarkdownImageSource } from "@t3tools/client-runtime/markdown-images";
 import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
-import { formatElapsed } from "@t3tools/shared/orchestrationTiming";
 import { resolveInlineCodeWebLink } from "@t3tools/shared/markdownLinks";
 import { SymbolView } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
@@ -47,7 +46,6 @@ import { TouchableOpacity } from "react-native-gesture-handler";
 import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
-import { useThemeColor } from "../../lib/useThemeColor";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
@@ -86,9 +84,7 @@ import {
 import {
   resolveMarkdownFontSizes,
   resolveNativeMarkdownTypography,
-  scaledTypographyLineHeight,
 } from "../../lib/appearancePreferences";
-import { MOBILE_TYPOGRAPHY } from "../../lib/typography";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
@@ -136,10 +132,6 @@ function formatMessageTime(input: string): string {
 // so its height is a constant; a drifted value costs one correction on
 // measure, not a persistent offset.
 const TURN_FOLD_HEIGHT = 56; // min-h-11 (44) + mb-3 (12)
-// The working row has no min-height clamp — its height follows the scaled
-// text-xs line height (see workingRowHeight in ThreadFeed).
-const WORKING_ROW_VERTICAL_EXTRAS = 24; // py-1 (8) + mb-4 (16)
-
 // Entering animations must only play for rows born just now — LegendList
 // remounts rows when they scroll back into view, and replaying an entrance for
 // old content would be its own kind of jank.
@@ -211,7 +203,7 @@ function ThreadMarkdownImageView(props: {
   readonly alt: string | null;
   readonly onPressImage: (uri: string) => void;
 }) {
-  const codeBackground = useThemeColor("--color-md-code-bg");
+  const codeBackground = useUniwindTheme()["--color-md-code-bg"];
   const [availableWidth, setAvailableWidth] = useState(0);
   const [sourceSize, setSourceSize] = useState<{ width: number; height: number } | null>(null);
   const [failedUri, setFailedUri] = useState<string | null>(null);
@@ -558,12 +550,13 @@ function MarkdownCodeBlock(props: {
 }
 
 function useReviewCommentColors(): ReviewCommentColors {
-  const background = useThemeColor("--color-card");
-  const border = useThemeColor("--color-border");
-  const mutedBackground = useThemeColor("--color-subtle");
-  const text = useThemeColor("--color-foreground");
-  const mutedText = useThemeColor("--color-foreground-muted");
-  const codeBackground = useThemeColor("--color-md-code-bg");
+  const theme = useUniwindTheme();
+  const background = theme["--color-card"];
+  const border = theme["--color-border"];
+  const mutedBackground = theme["--color-subtle"];
+  const text = theme["--color-foreground"];
+  const mutedText = theme["--color-foreground-muted"];
+  const codeBackground = theme["--color-md-code-bg"];
 
   return useMemo(
     () => ({
@@ -592,25 +585,26 @@ function useMarkdownStyles(
     [appearance.baseFontSize],
   );
   const themeMode = themeAppearance;
-  const markdownBodyColor = String(useThemeColor("--color-md-body"));
-  const markdownStrongColor = String(useThemeColor("--color-md-strong"));
-  const markdownLinkColor = String(useThemeColor("--color-md-link"));
-  const markdownBlockquoteBg = String(useThemeColor("--color-md-blockquote-bg"));
-  const markdownBlockquoteBorder = String(useThemeColor("--color-md-blockquote-border"));
-  const markdownCodeBg = String(useThemeColor("--color-md-code-bg"));
-  const markdownCodeText = String(useThemeColor("--color-md-code-text"));
-  const markdownInlineCodeText = String(useThemeColor("--color-foreground-secondary"));
-  const markdownHrColor = String(useThemeColor("--color-md-hr"));
-  const markdownUserBodyColor = String(useThemeColor("--color-user-bubble-foreground"));
-  const markdownUserCodeBg = String(useThemeColor("--color-md-user-code-bg"));
-  const markdownUserCodeText = String(useThemeColor("--color-md-user-code-text"));
-  const markdownUserInlineCodeText = String(useThemeColor("--color-user-bubble-foreground-muted"));
-  const markdownUserFenceBg = String(useThemeColor("--color-md-user-fence-bg"));
-  const markdownUserFenceText = String(useThemeColor("--color-md-user-fence-text"));
-  const iconSubtleColor = String(useThemeColor("--color-icon-subtle"));
-  const inlineSkillForeground = String(useThemeColor("--color-inline-skill-foreground"));
-  const userBubbleSkillForeground = String(useThemeColor("--color-user-bubble-skill-foreground"));
-  const userBubbleForegroundMuted = String(useThemeColor("--color-user-bubble-foreground-muted"));
+  const theme = useUniwindTheme();
+  const markdownBodyColor = String(theme["--color-md-body"]);
+  const markdownStrongColor = String(theme["--color-md-strong"]);
+  const markdownLinkColor = String(theme["--color-md-link"]);
+  const markdownBlockquoteBg = String(theme["--color-md-blockquote-bg"]);
+  const markdownBlockquoteBorder = String(theme["--color-md-blockquote-border"]);
+  const markdownCodeBg = String(theme["--color-md-code-bg"]);
+  const markdownCodeText = String(theme["--color-md-code-text"]);
+  const markdownInlineCodeText = String(theme["--color-foreground-secondary"]);
+  const markdownHrColor = String(theme["--color-md-hr"]);
+  const markdownUserBodyColor = String(theme["--color-user-bubble-foreground"]);
+  const markdownUserCodeBg = String(theme["--color-md-user-code-bg"]);
+  const markdownUserCodeText = String(theme["--color-md-user-code-text"]);
+  const markdownUserInlineCodeText = String(theme["--color-user-bubble-foreground-muted"]);
+  const markdownUserFenceBg = String(theme["--color-md-user-fence-bg"]);
+  const markdownUserFenceText = String(theme["--color-md-user-fence-text"]);
+  const iconSubtleColor = String(theme["--color-icon-subtle"]);
+  const inlineSkillForeground = String(theme["--color-inline-skill-foreground"]);
+  const userBubbleSkillForeground = String(theme["--color-user-bubble-skill-foreground"]);
+  const userBubbleForegroundMuted = String(theme["--color-user-bubble-foreground-muted"]);
   const regularFontFamily = useFontFamily("regular");
   const boldFontFamily = useFontFamily("bold");
 
@@ -1009,7 +1003,7 @@ function renderFeedEntry(
         accessibilityState={{ expanded: entry.expanded }}
         onPress={() => props.onToggleTurnFold(entry.turnId)}
         hitSlop={4}
-        className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-neutral-200/80 px-2 dark:border-white/[0.08]"
+        className="mb-3 min-h-11 flex-row items-center gap-2 border-b border-border px-2"
       >
         <Text className="font-t3-medium text-sm tabular-nums text-foreground-muted">
           {entry.label}
@@ -1104,7 +1098,7 @@ function renderFeedEntry(
             })}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+            <Text className="font-t3-medium text-xs tabular-nums text-foreground-muted">
               {timestampLabel}
             </Text>
             {message.text.trim().length > 0 ? (
@@ -1159,7 +1153,7 @@ function renderFeedEntry(
               key={attachment.id}
               environmentId={props.environmentId}
               attachmentId={attachment.id}
-              className="mt-1.5 aspect-[1.3] w-full rounded-[18px] bg-neutral-200 dark:bg-neutral-800"
+              className="mt-1.5 aspect-[1.3] w-full rounded-[18px] bg-subtle"
               onPressImage={props.onPressImage}
             />
           );
@@ -1173,7 +1167,7 @@ function renderFeedEntry(
               buttonSize={28}
               iconSize={13}
             />
-            <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
+            <Text className="font-t3-medium text-xs tabular-nums text-foreground-muted">
               {timestampLabel}
             </Text>
           </View>
@@ -1194,32 +1188,6 @@ function renderFeedEntry(
     />
   );
 }
-
-const WorkingTimelineRow = memo(function WorkingTimelineRow(props: { readonly startedAt: string }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const intervalId = setInterval(() => {
-      setNowMs(Date.now());
-    }, 1_000);
-    return () => clearInterval(intervalId);
-  }, [props.startedAt]);
-
-  const durationLabel = formatElapsed(props.startedAt, new Date(nowMs).toISOString()) ?? "0s";
-
-  return (
-    <View className="mb-4 flex-row items-center gap-2 px-1.5 py-1">
-      <View className="flex-row items-center gap-1">
-        <View className="h-1 w-1 rounded-full bg-neutral-400 dark:bg-neutral-500" />
-        <View className="h-1 w-1 rounded-full bg-neutral-400/80 dark:bg-neutral-500/80" />
-        <View className="h-1 w-1 rounded-full bg-neutral-400/60 dark:bg-neutral-500/60" />
-      </View>
-      <Text className="font-t3-medium text-xs tabular-nums text-neutral-600 dark:text-neutral-400">
-        Working for {durationLabel}
-      </Text>
-    </View>
-  );
-});
 
 function UserMessageContent(props: {
   readonly text: string;
@@ -1501,7 +1469,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   const previousLatestTurnRef = useRef(props.latestTurn);
   const userScrollSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { width: windowWidth } = useWindowDimensions();
-  const { appearance } = useAppearancePreferences();
   const [viewportWidth, setViewportWidth] = useState(() =>
     props.layoutVariant === "split" ? 0 : windowWidth,
   );
@@ -1582,8 +1549,9 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     ? navigationHeaderHeight || insets.top + IOS_NAV_BAR_HEIGHT
     : topContentInset;
 
-  const iconSubtleColor = useThemeColor("--color-icon-subtle");
-  const userBubbleColor = useThemeColor("--color-user-bubble");
+  const appTheme = useUniwindTheme();
+  const iconSubtleColor = appTheme["--color-icon-subtle"];
+  const userBubbleColor = appTheme["--color-user-bubble"];
   const onMarkdownLinkPress = useCallback(
     (href: string) => {
       const presentation = resolveMarkdownLinkPresentation(href);
@@ -1989,11 +1957,7 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
   // scrolling up through unmeasured content corrects each row's height as it
   // mounts — the feed visibly jumps. Fixed sizes make the small chrome rows
   // exact; message rows stay undefined and use LegendList's per-type running
-  // average once one of their type has been measured. Text-driven heights
-  // follow the configurable base font size via scaledTypographyLineHeight.
-  const workingRowHeight =
-    WORKING_ROW_VERTICAL_EXTRAS +
-    scaledTypographyLineHeight(MOBILE_TYPOGRAPHY.label, appearance.baseFontSize);
+  // average once one of their type has been measured.
   const getFixedItemSize = useCallback(
     (entry: ThreadFeedEntry) => {
       switch (entry.type) {

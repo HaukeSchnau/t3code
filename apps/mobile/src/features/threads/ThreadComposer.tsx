@@ -36,7 +36,7 @@ import Animated, {
   LinearTransition,
 } from "react-native-reanimated";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
-import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { armAgentAwarenessLiveActivityForLocalWork } from "../agent-awareness/remoteRegistration";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 
@@ -308,7 +308,7 @@ const LocalIntentRow = memo(function LocalIntentRow(props: {
 }) {
   const toneClass = props.presentation.tone === "danger" ? "text-danger" : "text-foreground";
   return (
-    <View className="mt-2 rounded-xl border border-neutral-200/80 bg-white/90 px-3 py-2 dark:border-white/[0.08] dark:bg-neutral-900/90">
+    <View className="mt-2 rounded-xl border border-border bg-card px-3 py-2">
       <Text accessibilityLiveRegion="polite" className={`text-xs font-t3-bold ${toneClass}`}>
         {props.presentation.label}
       </Text>
@@ -368,7 +368,7 @@ const LocalIntentRow = memo(function LocalIntentRow(props: {
 export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposerProps) {
   const navigation = useNavigation();
   const isDarkMode = useColorScheme() === "dark";
-  const foregroundColor = useThemeColor("--color-foreground");
+  const foregroundColor = useUniwindTheme()["--color-foreground"];
   const bodyText = useScaledTextRole("body");
   const fallbackInputRef = useRef<ComposerEditorHandle>(null);
   const inputRef = props.editorRef ?? fallbackInputRef;
@@ -432,7 +432,6 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.connectionState !== "connected" || props.queueCount > 0 ? "Queue" : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
-  const currentInteractionMode = props.selectedThread.interactionMode ?? "default";
   const fallbackConnectionStatus = useMemo(
     () =>
       composerConnectionStatus({
@@ -451,11 +450,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       hasThreadContent: props.hasThreadContent,
       remoteQueueCount: props.remoteQueueCount,
     });
-  const toolbarSurface = String(useThemeColor("--color-card"));
-  const backdropSurface = String(useThemeColor("--color-screen"));
+  const theme = useUniwindTheme();
+  const toolbarSurface = String(theme["--color-card"]);
   const toolbarFadeOpaque = themeColorWithAlpha(toolbarSurface, 0.95);
   const toolbarFadeTransparent = themeColorWithAlpha(toolbarSurface, 0);
-  const backdropGradient = `linear-gradient(to bottom, ${themeColorWithAlpha(backdropSurface, 0)} 0%, ${themeColorWithAlpha(backdropSurface, 0.6)} 55%, ${themeColorWithAlpha(backdropSurface, 0.9)} 100%)`;
   const selectedProviderStatus = useMemo(() => {
     if (!props.serverConfig) return null;
     return (

@@ -902,7 +902,7 @@ export function runtimeEventToActivities(
       // call into both the event store and the projection table. No reader
       // needs it: ws.ts and http.ts apply `projectActivityPayload` before any
       // payload reaches a client. Persist the projected form for non-terminal
-      // updates; `item.completed` below still persists the full payload.
+      // updates; terminal payloads retain their structure with bounded values.
       return [
         projectActivityPayload({
           id: event.eventId,

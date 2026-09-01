@@ -71,10 +71,13 @@ export function runVcsDriverContractSuite<R, E>(input: VcsDriverContractSuiteInp
           yield* input.fixture.writeFile(cwd, "src/index.ts", "export const value = 1;\n");
           const identity = yield* driver.detectRepository(cwd);
           assert.equal(identity?.kind, input.kind);
-          assert.isTrue(
-            normalizePathForComparison(identity?.rootPath ?? "").endsWith(
-              normalizePathForComparison(cwd),
-            ),
+          const fileSystem = yield* FileSystem.FileSystem;
+          const canonicalCwd = yield* fileSystem.realPath(cwd);
+          const canonicalRoot =
+            identity?.rootPath === undefined ? "" : yield* fileSystem.realPath(identity.rootPath);
+          assert.equal(
+            normalizePathForComparison(canonicalRoot),
+            normalizePathForComparison(canonicalCwd),
           );
           assert.equal(identity?.freshness.source, "live-local");
           assert.isTrue(DateTime.isDateTime(identity?.freshness.observedAt));
