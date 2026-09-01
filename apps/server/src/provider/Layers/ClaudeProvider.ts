@@ -460,6 +460,7 @@ export function normalizeClaudeCliEffort(
   if (
     effort === "xhigh" &&
     model?.startsWith("claude-") &&
+    model !== "claude-fable-5-1" &&
     model !== "claude-fable-5" &&
     model !== "claude-opus-5" &&
     model !== "claude-opus-4-8" &&
