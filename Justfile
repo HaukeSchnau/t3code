@@ -4,6 +4,7 @@ mobile_device := env_var_or_default("T3CODE_IOS_DEVICE", "iPhone von Hauke")
 apple_team_id := env_var_or_default("T3CODE_APPLE_TEAM_ID", "2243J9RD68")
 desktop_output_dir := env_var_or_default("T3CODE_DESKTOP_INSTALL_OUTPUT_DIR", "release/local-desktop-install")
 agent_device_session := env_var_or_default("T3CODE_AGENT_DEVICE_SESSION", "t3dev-physical")
+non_server_test_workers := env_var_or_default("T3CODE_NON_SERVER_TEST_WORKERS", "3")
 agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID", "dev.schnau.agentdevice.runner")
 
 default:
@@ -26,7 +27,7 @@ qa-typecheck-rest:
 
 qa-test-non-server:
     ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
-    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test
+    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 1 --filter '!t3' --filter '!@t3tools/monorepo' test -- --maxWorkers {{ quote(non_server_test_workers) }}
 
 qa-test-server:
     cd apps/server && ../../node_modules/.bin/vp test run
