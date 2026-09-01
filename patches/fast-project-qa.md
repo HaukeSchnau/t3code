@@ -24,8 +24,8 @@ and fork lockfile check.
   can be replayed on later runs.
 - Package tests use two-way outer concurrency. Each package's Vitest process owns its own worker
   pool, so higher outer fan-out oversubscribes the 12-core runner and crosses its soft memory limit.
-- Workflow steps `exec` the Nix development command so cancellation signals reach the job process
-  instead of stopping at the workflow shell.
+- Workflow steps `exec` the Nix development command, and the workspace runner forwards cancellation
+  signals to a dedicated project-command process group so nested task workers terminate too.
 
 The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
 keeps a matching shim until its existing infrastructure input can be upgraded independently; the
