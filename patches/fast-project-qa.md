@@ -13,10 +13,12 @@ and fork lockfile check.
   treats project setup and QA commands as opaque executables and contains no Node or TypeScript
   behavior.
 - `.ci/` owns T3 Code's retained paths, environment, and dependency fingerprint.
-- `Justfile` owns the QA tasks. The Gitea workflow runs independent tasks as separate jobs and shards
-  the serial server test suite across three jobs.
+- `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
+  non-server tests, release smoke, and server shards as independent jobs. The serial server test
+  suite is split across three jobs.
 - TypeScript package checks run one at a time on the memory-constrained runners. Separate Gitea jobs
   provide cross-host parallelism without making two large `tsgo` processes page inside one cgroup.
 
-The generic workspace runner is intentionally kept separate from the T3 Code hooks so it can move to
-the shared infrastructure modules once Studienbuch uses the same command contract.
+The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
+keeps a matching shim until its existing infrastructure input can be upgraded independently; the
+project hooks and command contract are already compatible with the shared package.
