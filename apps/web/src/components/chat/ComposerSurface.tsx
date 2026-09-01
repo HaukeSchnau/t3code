@@ -4,10 +4,12 @@ import { cn } from "~/lib/utils";
 
 /** One glass backdrop until a top attachment needs the composer to cover its overlap. */
 function Shell({
+  attached = false,
   contextStrip = false,
   className,
+  children,
   ...props
-}: ComponentProps<"div"> & { contextStrip?: boolean }) {
+}: ComponentProps<"div"> & { attached?: boolean; contextStrip?: boolean }) {
   return (
     <div
       data-slot="composer-shell"
@@ -32,7 +34,11 @@ function Shell({
         className,
       )}
       {...props}
-    />
+    >
+      {/* TODO: Remove this marker once every attached notice renders inside the shell. */}
+      {attached ? <span hidden data-composer-banner-surface="attached" /> : null}
+      {children}
+    </div>
   );
 }
 

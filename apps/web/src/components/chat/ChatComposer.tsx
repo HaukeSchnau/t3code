@@ -65,6 +65,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { ComposerSurface } from "./ComposerSurface";
 import {
   ComposerTasksBadge,
   ComposerTasksDrawer,
@@ -2950,10 +2951,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       data-chat-composer-form="true"
       data-chat-composer-variant={variant}
     >
-      <div
-        data-chat-composer-main-surface="true"
+      <ComposerSurface.Main
         className={cn(
-          "group relative z-10 rounded-[22px] p-px transition-colors duration-200",
           isInlineComposer && "rounded-xl",
           composerProviderState.composerFrameClassName,
         )}
@@ -3191,6 +3190,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           >
             <ComposerStashBadge
               count={stashQueue.length}
+              placement="tab"
               pulseKey={stashPulse.key}
               pulsing={stashPulse.active}
               menuOpen={isStashMenuOpen}
@@ -3617,7 +3617,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             </div>
           )}
         </div>
-      </div>
+      </ComposerSurface.Main>
     </form>
   );
 });
