@@ -21,8 +21,9 @@ import {
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import { DraftComposerImageAttachmentSchema } from "../lib/composer-image-schema";
-import type { DraftComposerImageAttachment } from "../lib/composerImages";
+import type { UploadedMobileAttachment } from "../lib/attachmentUpload";
+import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
+import { toUploadChatImageAttachments, type DraftComposerAttachment } from "../lib/composerImages";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";
 
@@ -48,7 +49,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
-  attachments: Schema.Array(DraftComposerImageAttachmentSchema),
+  attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
@@ -84,7 +85,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
-  readonly attachments: ReadonlyArray<DraftComposerImageAttachment>;
+  readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
@@ -100,6 +101,7 @@ export interface QueuedThreadMessage {
 export function makeQueuedThreadDeliveryPlan(
   message: QueuedThreadMessage,
 ): DurableCommandDeliveryPlan {
+  const attachments = queuedMessageWireAttachments(message.attachments);
   const settings = {
     modelSelection: message.modelSelection,
     runtimeMode: message.runtimeMode ?? "full-access",
@@ -117,6 +119,7 @@ export function makeQueuedThreadDeliveryPlan(
           createdAt: message.createdAt,
           text: message.text.trim(),
           attachments: message.attachments,
+          uploadedAttachments: attachments,
           modelSelection: message.modelSelection!,
           runtimeMode: settings.runtimeMode,
           interactionMode: settings.interactionMode,
@@ -135,7 +138,7 @@ export function makeQueuedThreadDeliveryPlan(
           messageId: message.messageId,
           role: "user" as const,
           text: message.text,
-          attachments: message.attachments,
+          attachments,
         },
         ...settings,
         createdAt: message.createdAt,
@@ -145,6 +148,29 @@ export function makeQueuedThreadDeliveryPlan(
     enqueuedAt: message.createdAt,
     command,
   });
+}
+
+function queuedMessageWireAttachments(
+  attachments: ReadonlyArray<DraftComposerAttachment>,
+): ReadonlyArray<UploadedMobileAttachment> {
+  const wireAttachments: Array<UploadedMobileAttachment> = [];
+  for (const attachment of attachments) {
+    if (attachment.type === "image") {
+      wireAttachments.push(...toUploadChatImageAttachments([attachment]));
+      continue;
+    }
+    if (attachment.uploadedAttachmentId === undefined) {
+      continue;
+    }
+    wireAttachments.push({
+      type: "file",
+      id: attachment.uploadedAttachmentId,
+      name: attachment.name,
+      mimeType: attachment.mimeType,
+      sizeBytes: attachment.sizeBytes,
+    });
+  }
+  return wireAttachments;
 }
 
 export interface ThreadSettingsSnapshot {

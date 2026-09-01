@@ -69,10 +69,14 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     ((message: string, error: unknown) => {
       console.warn(message, error);
     });
-  let loadPromise: Promise<void> | null = null;
+  let loadPromise: Promise<boolean> | null = null;
   let mutationQueue: Promise<void> = Promise.resolve();
   let outboxPromise: Promise<CommandOutboxService> | null = null;
   let fallbackDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
+  const revisions = new Map<MessageId, number>();
+  const bumpRevision = (messageId: MessageId): void => {
+    revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
+  };
 
   const commandStorage = CommandOutboxStorage.of({
     load: Effect.tryPromise({
@@ -128,7 +132,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     );
   };
 
-  const load = (): Promise<void> => {
+  const load = (): Promise<boolean> => {
     if (loadPromise !== null) {
       return loadPromise;
     }
@@ -231,12 +235,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       // also the crash reconciliation for a message file written immediately
       // before its shared lifecycle record.
       for (const message of messages) {
+        if (!revisions.has(message.messageId)) {
+          revisions.set(message.messageId, 1);
+        }
         if (!queuedIds.has(message.commandId)) {
           await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
         }
       }
       await refreshDeliveryStates(service);
       setMessages(messages);
+      return true;
     }).catch((cause) => {
       loadPromise = null;
       warn(
@@ -249,6 +257,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         }),
       );
+      return false;
     });
     return loadPromise;
   };
@@ -258,6 +267,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   // the message back out if it fails (durability only matters for crash
   // recovery, not for the in-session queue).
   const enqueue = (message: QueuedThreadMessage): Promise<void> => {
+    bumpRevision(message.messageId);
     const previousMessage = currentMessages().find(
       (candidate) => candidate.messageId === message.messageId,
     );
@@ -325,27 +335,42 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const confirmQueued = (message: QueuedThreadMessage): Promise<boolean> =>
     serialize(async () => currentMessages().some((candidate) => candidate === message));
 
-  // Rewrites an already-queued message. A no-op when the message has been
-  // removed in the meantime (e.g. deleted or delivered), so a trailing editor
-  // flush can never resurrect it. Returns whether the message was updated.
-  const update = (previous: QueuedThreadMessage, message: QueuedThreadMessage): Promise<boolean> =>
+  // Rewrites an already-queued message. Passing a message as the second
+  // argument replaces its command identity for an editor save. Passing a
+  // revision updates attachment upload references under the same identity.
+  const update = (
+    previousOrMessage: QueuedThreadMessage,
+    replacementOrRevision?: QueuedThreadMessage | number,
+  ): Promise<boolean> =>
     serialize(async () => {
+      const previous = previousOrMessage;
+      const message =
+        typeof replacementOrRevision === "object" ? replacementOrRevision : previousOrMessage;
+      const expectedRevision =
+        typeof replacementOrRevision === "number" ? replacementOrRevision : undefined;
       const exists = currentMessages().some(
         (candidate) => candidate.messageId === previous.messageId,
       );
-      if (!exists) {
+      if (
+        !exists ||
+        (expectedRevision !== undefined &&
+          (revisions.get(previous.messageId) ?? 0) !== expectedRevision)
+      ) {
         return false;
       }
       const service = await outbox();
-      const replacement: QueuedThreadMessage = {
-        ...message,
-        replacesCommandId: previous.commandId,
-        supersedesCommandIds: [
-          previous.commandId,
-          ...(previous.supersedesCommandIds ?? []),
-          ...(previous.replacesCommandId ? [previous.replacesCommandId] : []),
-        ],
-      };
+      const replacingIdentity = message.commandId !== previous.commandId;
+      const replacement: QueuedThreadMessage = replacingIdentity
+        ? {
+            ...message,
+            replacesCommandId: previous.commandId,
+            supersedesCommandIds: [
+              previous.commandId,
+              ...(previous.supersedesCommandIds ?? []),
+              ...(previous.replacesCommandId ? [previous.replacesCommandId] : []),
+            ],
+          }
+        : message;
       try {
         await options.storage.write(replacement);
       } catch (cause) {
@@ -358,9 +383,14 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         });
       }
       try {
-        await Effect.runPromise(
-          service.replacePending(previous.commandId, makeQueuedThreadDeliveryPlan(replacement)),
-        );
+        if (replacingIdentity) {
+          await Effect.runPromise(
+            service.replacePending(previous.commandId, makeQueuedThreadDeliveryPlan(replacement)),
+          );
+        } else {
+          await Effect.runPromise(service.cancelPending(previous.commandId));
+          await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(replacement)));
+        }
       } catch (cause) {
         await options.storage.remove(replacement).catch(() => undefined);
         throw cause;
@@ -373,11 +403,25 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         ...currentMessages().filter((candidate) => candidate.messageId !== previous.messageId),
         replacement,
       ]);
+      bumpRevision(previous.messageId);
       return true;
     });
 
-  const remove = (message: QueuedThreadMessage): Promise<void> =>
+  const remove = (
+    message: QueuedThreadMessage,
+    expectedRevision?: number,
+    canRemove?: () => boolean,
+  ): Promise<QueuedThreadMessage | null> =>
     serialize(async () => {
+      if (
+        (expectedRevision !== undefined &&
+          (revisions.get(message.messageId) ?? 0) !== expectedRevision) ||
+        canRemove?.() === false
+      ) {
+        return null;
+      }
+      const removed =
+        currentMessages().find((candidate) => candidate.messageId === message.messageId) ?? message;
       const service = await outbox();
       await Effect.runPromise(service.cancelPending(message.commandId));
       await refreshDeliveryStates(service);
@@ -396,12 +440,31 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       }
+      if (
+        (expectedRevision !== undefined &&
+          (revisions.get(message.messageId) ?? 0) !== expectedRevision) ||
+        canRemove?.() === false
+      ) {
+        const retained = currentMessages().find(
+          (candidate) => candidate.messageId === message.messageId,
+        );
+        if (retained !== undefined) {
+          await options.storage.write(retained);
+          await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(retained)));
+          await refreshDeliveryStates(service);
+        }
+        return null;
+      }
       setMessages(
         currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       );
+      bumpRevision(message.messageId);
+      return removed;
     });
 
-  const clearEnvironment = (environmentId: EnvironmentId): Promise<void> =>
+  const clearEnvironment = (
+    environmentId: EnvironmentId,
+  ): Promise<ReadonlyArray<QueuedThreadMessage>> =>
     serialize(async () => {
       const persisted = await options.storage.load().catch((cause) => {
         warn(
@@ -445,7 +508,12 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       );
 
       setMessages(allMessages.filter((message) => !removedMessageIds.has(message.messageId)));
+      const removed = allMessages.filter((message) => removedMessageIds.has(message.messageId));
+      for (const message of removed) {
+        bumpRevision(message.messageId);
+      }
       await refreshDeliveryStates(await outbox());
+      return removed;
     });
 
   const ready = (at: string): Promise<ReadonlyArray<QueuedThreadMessage>> =>
@@ -475,6 +543,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       setMessages(
         currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       );
+      bumpRevision(message.messageId);
       await refreshDeliveryStates(service);
     });
 
@@ -505,6 +574,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       setMessages(
         currentMessages().filter((candidate) => candidate.messageId !== message.messageId),
       );
+      bumpRevision(message.messageId);
       await refreshDeliveryStates(service);
     });
 
@@ -515,6 +585,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     load,
     enqueue,
     confirmQueued,
+    revisionOf: (messageId: MessageId): number => revisions.get(messageId) ?? 0,
     update,
     remove,
     clearEnvironment,

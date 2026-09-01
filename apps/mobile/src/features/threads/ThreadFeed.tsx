@@ -48,6 +48,7 @@ import ImageViewing from "react-native-image-viewing";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, { FadeIn, FadeInUp, type SharedValue } from "react-native-reanimated";
 import { useThemeColor } from "../../lib/useThemeColor";
+import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -1001,10 +1002,6 @@ function renderFeedEntry(
   const entry = info.item;
   const { markdownStyles, iconSubtleColor, userBubbleColor } = props;
 
-  if (entry.type === "working") {
-    return <WorkingTimelineRow startedAt={entry.createdAt} />;
-  }
-
   if (entry.type === "turn-fold") {
     return (
       <Pressable
@@ -1033,7 +1030,10 @@ function renderFeedEntry(
         expanded={entry.expanded}
         hiddenCount={entry.hiddenCount}
         iconSubtleColor={iconSubtleColor}
-        onlyToolActivities={entry.onlyToolActivities}
+        summary={entry.summary}
+        summaryKind={entry.summaryKind}
+        hasFailure={entry.hasFailure}
+        shimmer={entry.shimmer}
         onToggle={() => props.onToggleWorkGroup(entry.groupId)}
       />
     );
@@ -1190,6 +1190,7 @@ function renderFeedEntry(
       iconSubtleColor={iconSubtleColor}
       onCopyRow={props.onCopyWorkRow}
       onToggleRow={props.onToggleWorkRow}
+      renderImage={props.renderMarkdownImage}
     />
   );
 }
@@ -1305,6 +1306,7 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
 }) {
   const { codeSurface, nativeReviewDiffStyle } = useAppearanceCodeSurface();
   const { themeAppearance: appearanceScheme, themeId } = useAppearancePreferences();
+  const appTheme = useUniwindTheme();
   const NativeReviewDiffView = resolveNativeReviewDiffView();
   const patch = useMemo(() => buildReviewCommentPatch(props.comment), [props.comment]);
   const parsedDiff = useMemo(
@@ -1317,8 +1319,8 @@ const ReviewCommentCard = memo(function ReviewCommentCard(props: {
     [nativeReviewDiffData.rows],
   );
   const nativeReviewDiffTheme = useMemo(
-    () => createNativeReviewDiffTheme(appearanceScheme, themeId),
-    [appearanceScheme, themeId],
+    () => createNativeReviewDiffTheme(appearanceScheme, themeId, appTheme),
+    [appTheme, appearanceScheme, themeId],
   );
   const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
   const nativeThemeJson = useMemo(
@@ -1999,19 +2001,17 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
           return TURN_FOLD_HEIGHT;
         case "work-toggle":
           return WORK_GROUP_TOGGLE_HEIGHT;
-        case "working":
-          return workingRowHeight;
         case "activity-group":
           // Expanded rows append a variable detail block — fall back to
           // measurement for those groups.
           return entry.activities.some((activity) => expandedWorkRows[activity.id])
             ? undefined
-            : collapsedWorkLogHeight(entry.activities, appearance.baseFontSize);
+            : collapsedWorkLogHeight(entry.activities);
         default:
           return undefined;
       }
     },
-    [expandedWorkRows, workingRowHeight, appearance.baseFontSize],
+    [expandedWorkRows],
   );
 
   const renderItem = useCallback(

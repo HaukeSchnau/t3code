@@ -9,16 +9,18 @@ import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { toUploadChatImageAttachments } from "../lib/composerImageAttachments";
-import { scopedThreadKey } from "../lib/scopedEntities";
+import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
+import { scopedProjectKey, scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
 import { useProjects, useThreadShells } from "./entities";
 import {
   confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
-  removeThreadOutboxMessage,
+  threadOutboxRevision,
   threadOutboxManager,
+  updateThreadOutboxMessage,
 } from "./thread-outbox";
+import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   isQueuedThreadCreationSendable,
   resolveThreadOutboxDeliveryAction,
@@ -32,11 +34,27 @@ import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
   editingQueuedMessageIdsAtom,
+  effectiveEditingQueuedMessageIdsAtom,
   useThreadOutboxMessages,
   useThreadOutboxShellStatuses,
 } from "./use-thread-outbox";
-import { composerDraftsReadyAtom, ensureComposerDraftsLoaded } from "./use-composer-drafts";
-import { useRemoteConnectionStatus } from "./use-remote-environment-registry";
+import {
+  appendComposerDraftAttachments,
+  composerDraftsReadyAtom,
+  ensureComposerDraftsLoaded,
+  flushComposerDrafts,
+  getComposerDraftSnapshot,
+  mergeComposerDraftContent,
+  removeDeliveredCloudQueuedMessage,
+  undoComposerDraftMerge,
+  updateComposerDraftSettings,
+  waitForComposerDraftsLoaded,
+  type ComposerDraft,
+} from "./use-composer-drafts";
+import {
+  setPendingConnectionError,
+  useRemoteConnectionStatus,
+} from "./use-remote-environment-registry";
 
 export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
   Atom.keepAlive,
@@ -73,11 +91,209 @@ function findCreationProject(
   );
 }
 
+export async function prepareQueuedMessageAttachments(
+  queuedMessage: QueuedThreadMessage,
+  supportsImageUploads = false,
+): Promise<
+  | {
+      readonly status: "ready";
+      readonly prepared: PreparedTurnAttachments;
+      readonly persistedMessage: QueuedThreadMessage;
+      readonly deliveryRevision: number;
+    }
+  | { readonly status: "abandoned" }
+> {
+  if (!(await confirmThreadOutboxMessageQueued(queuedMessage))) {
+    return { status: "abandoned" };
+  }
+  const revision = threadOutboxRevision(queuedMessage.messageId);
+  if (!isQueuedMessagePayloadCurrent(queuedMessage, revision)) {
+    return { status: "abandoned" };
+  }
+  let persistedMessage = queuedMessage;
+  let deliveryRevision = revision;
+  const prepared = await prepareTurnAttachments({
+    environmentId: queuedMessage.environmentId,
+    attachments: queuedMessage.attachments,
+    supportsImageUploads,
+    persistUploadedReferences: async (attachments) => {
+      if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
+        return "abandon";
+      }
+      const updated = { ...queuedMessage, attachments };
+      if (!(await updateThreadOutboxMessage(updated, revision))) {
+        return "abandon";
+      }
+      persistedMessage = updated;
+      deliveryRevision = revision + 1;
+      return "persisted";
+    },
+  });
+  if (
+    prepared.status === "abandoned" ||
+    !isQueuedMessagePayloadCurrent(persistedMessage, deliveryRevision)
+  ) {
+    return { status: "abandoned" };
+  }
+  return { status: "ready", prepared, persistedMessage, deliveryRevision };
+}
+
+function isQueuedMessagePayloadCurrent(
+  message: QueuedThreadMessage,
+  expectedRevision: number,
+): boolean {
+  return (
+    threadOutboxRevision(message.messageId) === expectedRevision &&
+    Object.values(appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom))
+      .flat()
+      .some((candidate) => candidate === message)
+  );
+}
+
+export async function completeQueuedMessageDelivery(
+  queuedMessage: QueuedThreadMessage,
+  deliveryRevision: number,
+): Promise<"removed" | "edited" | "failed"> {
+  try {
+    await removeDeliveredCloudQueuedMessage(queuedMessage).catch((error) => {
+      console.warn("[thread-outbox] could not update sign-out snapshot after delivery", error);
+    });
+    if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
+      return "edited";
+    }
+    const removed = await removeThreadOutboxMessage(
+      queuedMessage,
+      deliveryRevision,
+      () => !appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId],
+    );
+    return removed ? "removed" : "edited";
+  } catch {
+    return "failed";
+  }
+}
+
+export async function removeAcknowledgedExistingThreadMessage(
+  queuedMessage: QueuedThreadMessage,
+  acknowledgedMessageIds: Set<MessageId>,
+): Promise<boolean> {
+  try {
+    await removeDeliveredCloudQueuedMessage(queuedMessage).catch((error) => {
+      console.warn("[thread-outbox] could not update sign-out snapshot after delivery", error);
+    });
+    const removed = await removeThreadOutboxMessage(queuedMessage);
+    if (removed) acknowledgedMessageIds.delete(queuedMessage.messageId);
+    return removed;
+  } catch {
+    return false;
+  }
+}
+
+export async function recoverEditedCreationAfterDelivery(
+  queuedMessage: QueuedThreadMessage,
+): Promise<boolean> {
+  const kept = Object.values(appAtomRegistry.get(threadOutboxManager.queuedMessagesByThreadKeyAtom))
+    .flat()
+    .find((candidate) => candidate.messageId === queuedMessage.messageId);
+  if (!kept || appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
+    return true;
+  }
+  const revision = threadOutboxRevision(kept.messageId);
+  const draftKey = scopedThreadKey(kept.environmentId, kept.threadId);
+  try {
+    await mergeComposerDraftContent(draftKey, { text: kept.text, attachments: [] });
+    if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[kept.messageId]) return true;
+    if (threadOutboxRevision(kept.messageId) !== revision) return false;
+    const existingAttachmentIds = new Set(
+      getComposerDraftSnapshot(draftKey).attachments.map((attachment) => attachment.id),
+    );
+    appendComposerDraftAttachments(
+      draftKey,
+      kept.attachments.filter((attachment) => !existingAttachmentIds.has(attachment.id)),
+      { allowOverflow: true },
+    );
+    await flushComposerDrafts();
+    if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[kept.messageId]) return true;
+    if (threadOutboxRevision(kept.messageId) !== revision) return false;
+    return await removeThreadOutboxMessage(
+      kept,
+      revision,
+      () => !appAtomRegistry.get(editingQueuedMessageIdsAtom)[kept.messageId],
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function restoreRejectedQueuedMessage(
+  queuedMessage: QueuedThreadMessage,
+  message: string,
+): Promise<"restored" | "deferred" | "blocked" | "retry"> {
+  if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId]) {
+    return "deferred";
+  }
+  const draftKey = queuedMessage.creation
+    ? `new-task:${scopedProjectKey(queuedMessage.environmentId, queuedMessage.creation.projectId)}`
+    : scopedThreadKey(queuedMessage.environmentId, queuedMessage.threadId);
+  let rollback: { readonly snapshot: ComposerDraft; readonly merged: ComposerDraft } | null = null;
+  try {
+    if (!(await confirmThreadOutboxMessageQueued(queuedMessage))) return "deferred";
+    const revision = threadOutboxRevision(queuedMessage.messageId);
+    await waitForComposerDraftsLoaded();
+    const snapshot = getComposerDraftSnapshot(draftKey);
+    let merged: ComposerDraft;
+    try {
+      await mergeComposerDraftContent(draftKey, {
+        text: queuedMessage.text,
+        attachments: queuedMessage.attachments,
+      });
+    } finally {
+      merged = getComposerDraftSnapshot(draftKey);
+      rollback = { snapshot, merged };
+    }
+    updateComposerDraftSettings(draftKey, {
+      ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
+      ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
+      ...(queuedMessage.interactionMode
+        ? { interactionMode: queuedMessage.interactionMode }
+        : {}),
+      ...(queuedMessage.creation
+        ? {
+            workspaceSelection: {
+              mode: queuedMessage.creation.workspaceMode,
+              branch: queuedMessage.creation.branch,
+              worktreePath: queuedMessage.creation.worktreePath,
+            },
+          }
+        : {}),
+    });
+    merged = getComposerDraftSnapshot(draftKey);
+    rollback = { snapshot, merged };
+    await flushComposerDrafts();
+    if (
+      appAtomRegistry.get(editingQueuedMessageIdsAtom)[queuedMessage.messageId] ||
+      !(await removeThreadOutboxMessage(queuedMessage, revision))
+    ) {
+      await undoComposerDraftMerge(draftKey, snapshot, merged);
+      return "deferred";
+    }
+    rollback = null;
+    setPendingConnectionError(message);
+    return "restored";
+  } catch {
+    if (rollback !== null) {
+      await undoComposerDraftMerge(draftKey, rollback.snapshot, rollback.merged).catch(
+        () => undefined,
+      );
+    }
+    return "retry";
+  }
+}
+
 export function useThreadOutboxDrain(): void {
   const startTurn = useAtomCommand(threadEnvironment.startTurn, { reportFailure: false });
   const dispatchingQueuedMessageId = useAtomValue(dispatchingQueuedMessageIdAtom);
   const deliveryStates = useAtomValue(threadOutboxManager.deliveryStatesAtom);
-  const editingQueuedMessageIds = useAtomValue(editingQueuedMessageIdsAtom);
+  const editingQueuedMessageIds = useAtomValue(effectiveEditingQueuedMessageIdsAtom);
   const composerDraftsReady = useAtomValue(composerDraftsReadyAtom);
   const queuedMessagesByThreadKey = useThreadOutboxMessages();
   const shellStatuses = useThreadOutboxShellStatuses();
@@ -161,20 +377,21 @@ export function useThreadOutboxDrain(): void {
   const sendQueuedMessage = useCallback(
     async (queuedMessage: QueuedThreadMessage, _thread: EnvironmentThreadShell) => {
       const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const begun = await threadOutboxManager.begin(queuedMessage, new Date().toISOString());
+      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
+      if (attachmentPreparation.status === "abandoned") return true;
+      const begun = await threadOutboxManager.begin(
+        attachmentPreparation.persistedMessage,
+        new Date().toISOString(),
+      );
       const command = begun.plan.command;
       const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
-        input: {
-          ...input,
-          message: {
-            ...input.message,
-            attachments: toUploadChatImageAttachments(queuedMessage.attachments),
-          },
-        },
+        input,
       });
-      return completeDelivery(deliveryResult);
+      const completed = await completeDelivery(deliveryResult);
+      if (completed) await attachmentPreparation.prepared.releaseUploads();
+      return completed;
     },
     [makeDeliveryHelpers, startTurn],
   );
@@ -190,14 +407,21 @@ export function useThreadOutboxDrain(): void {
         return false;
       }
       const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const begun = await threadOutboxManager.begin(queuedMessage, new Date().toISOString());
+      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
+      if (attachmentPreparation.status === "abandoned") return true;
+      const begun = await threadOutboxManager.begin(
+        attachmentPreparation.persistedMessage,
+        new Date().toISOString(),
+      );
       const command = begun.plan.command;
       const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
         environmentId: queuedMessage.environmentId,
         input,
       });
-      return completeDelivery(deliveryResult);
+      const completed = await completeDelivery(deliveryResult);
+      if (completed) await attachmentPreparation.prepared.releaseUploads();
+      return completed;
     },
     [makeDeliveryHelpers, startTurn],
   );

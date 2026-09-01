@@ -20,6 +20,7 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { statusCommand } from "./cli/status.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
+import { themeCommand } from "./cli/theme.ts";
 import { triageCommand } from "./cli/triage.ts";
 import { threadCommand } from "./cli/thread.ts";
 
@@ -64,6 +65,7 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       statusCommand,
       serviceCommand,
       servicePreflightCommand,
+      themeCommand,
       triageCommand,
       threadCommand,
       cloudEnabled ? connectCommand : connectUnavailableCommand,

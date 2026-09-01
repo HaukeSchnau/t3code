@@ -48,8 +48,25 @@ function freezeDeliveryIdentity(message: QueuedThreadMessage): QueuedThreadMessa
 export function updateThreadOutboxMessage(
   previous: QueuedThreadMessage,
   replacement: QueuedThreadMessage,
+): Promise<boolean>;
+export function updateThreadOutboxMessage(
+  message: QueuedThreadMessage,
+  expectedRevision?: number,
+): Promise<boolean>;
+export function updateThreadOutboxMessage(
+  previousOrMessage: QueuedThreadMessage,
+  replacementOrRevision?: QueuedThreadMessage | number,
 ): Promise<boolean> {
-  return threadOutboxManager.update(previous, freezeDeliveryIdentity(replacement));
+  return typeof replacementOrRevision === "object"
+    ? threadOutboxManager.update(
+        previousOrMessage,
+        freezeDeliveryIdentity(replacementOrRevision),
+      )
+    : threadOutboxManager.update(previousOrMessage, replacementOrRevision);
+}
+
+export function threadOutboxRevision(messageId: QueuedThreadMessage["messageId"]): number {
+  return threadOutboxManager.revisionOf(messageId);
 }
 
 /** Waits for pending writes to settle; false if the message was rolled back. */
@@ -57,10 +74,6 @@ export function confirmThreadOutboxMessageQueued(message: QueuedThreadMessage): 
   return threadOutboxManager.confirmQueued(message);
 }
 
-export function removeThreadOutboxMessage(message: QueuedThreadMessage): Promise<void> {
-  return threadOutboxManager.remove(message);
-}
-
 export function clearThreadOutboxEnvironment(environmentId: EnvironmentId): Promise<void> {
-  return threadOutboxManager.clearEnvironment(environmentId);
+  return threadOutboxManager.clearEnvironment(environmentId).then(() => undefined);
 }

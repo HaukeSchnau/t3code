@@ -1,5 +1,6 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Schema from "effect/Schema";
 
 import {
@@ -23,6 +24,8 @@ import {
   OrchestrationThread,
   OrchestrationThreadShell,
   ProjectCreateCommand,
+  OrchestrationMessage,
+  ThreadMessageSentPayload,
   ThreadMetaUpdatedPayload,
   ThreadMessageQueueCommand,
   ThreadTurnStartCommand,
@@ -31,6 +34,7 @@ import {
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
   isProviderSendTurnSupportedImageMimeType,
+  PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 
@@ -44,6 +48,8 @@ const decodeThreadTurnStartCommand = Schema.decodeUnknownEffect(ThreadTurnStartC
 const decodeThreadTurnResumeCommand = Schema.decodeUnknownEffect(ThreadTurnResumeCommand);
 const decodeThreadMessageQueueCommand = Schema.decodeUnknownEffect(ThreadMessageQueueCommand);
 const decodeClientOrchestrationCommand = Schema.decodeUnknownEffect(ClientOrchestrationCommand);
+const decodeOrchestrationMessage = Schema.decodeUnknownEffect(OrchestrationMessage);
+const decodeThreadMessageSentPayload = Schema.decodeUnknownEffect(ThreadMessageSentPayload);
 const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
   ThreadTurnStartRequestedPayload,
 );
@@ -375,7 +381,7 @@ it.effect("decodes thread.message.queue defaults for runtime and interaction mod
   }),
 );
 
-it.effect("accepts both inline and uploaded image attachments from clients", () =>
+it.effect("accepts inline images, uploaded images, and uploaded files from clients", () =>
   Effect.gen(function* () {
     const command = yield* decodeClientOrchestrationCommand({
       type: "thread.turn.start",
@@ -400,6 +406,13 @@ it.effect("accepts both inline and uploaded image attachments from clients", () 
             mimeType: "image/png",
             sizeBytes: 3,
           },
+          {
+            type: "file",
+            id: "pending-00000000-0000-4000-8000-000000000002-pdf",
+            name: "report.pdf",
+            mimeType: "application/pdf",
+            sizeBytes: 3,
+          },
         ],
       },
       runtimeMode: "full-access",
@@ -410,9 +423,85 @@ it.effect("accepts both inline and uploaded image attachments from clients", () 
     if (command.type !== "thread.turn.start") {
       assert.fail(`Expected thread.turn.start, received ${command.type}.`);
     }
-    assert.strictEqual(command.message.attachments.length, 2);
+    assert.strictEqual(command.message.attachments.length, 3);
     assert.strictEqual("dataUrl" in command.message.attachments[0]!, true);
     assert.strictEqual("id" in command.message.attachments[1]!, true);
+    assert.strictEqual(command.message.attachments[2]!.type, "file");
+  }),
+);
+
+// Attachments ride on persisted events and thread streams with no client
+// version negotiation. A type this build does not know must decode instead of
+// failing the whole message.
+it.effect("tolerates attachment types from newer builds when decoding messages", () =>
+  Effect.gen(function* () {
+    const futureAttachment = {
+      type: "somethingnew",
+      id: "thread-1-00000000-0000-4000-8000-000000000003-glb",
+      name: "scene.glb",
+      mimeType: "model/gltf-binary",
+      sizeBytes: 12,
+    };
+
+    const message = yield* decodeOrchestrationMessage({
+      id: "message-1",
+      role: "user",
+      text: "look at this",
+      attachments: [futureAttachment],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(message.attachments?.length, 1);
+    assert.strictEqual(message.attachments?.[0]!.type, "somethingnew");
+
+    const payload = yield* decodeThreadMessageSentPayload({
+      threadId: "thread-1",
+      messageId: "message-1",
+      role: "user",
+      text: "look at this",
+      attachments: [futureAttachment],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    assert.strictEqual(payload.attachments?.[0]!.type, "somethingnew");
+  }),
+);
+
+// The tolerant member must not catch malformed known attachments: a file over
+// the size cap or an image with a bad mime has to fail its own schema, not
+// slide through the open one with those constraints unchecked.
+it.effect("rejects malformed known attachment types instead of tolerating them", () =>
+  Effect.gen(function* () {
+    const base = {
+      id: "thread-1-00000000-0000-4000-8000-000000000003-pdf",
+      name: "report.pdf",
+      mimeType: "application/pdf",
+    };
+    const decode = (attachment: unknown) =>
+      decodeOrchestrationMessage({
+        id: "message-1",
+        role: "user",
+        text: "look at this",
+        attachments: [attachment],
+        turnId: null,
+        streaming: false,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      });
+
+    const oversizedFile = yield* Effect.exit(
+      decode({ ...base, type: "file", sizeBytes: PROVIDER_SEND_TURN_MAX_FILE_BYTES + 1 }),
+    );
+    assert.strictEqual(Exit.isFailure(oversizedFile), true);
+
+    const badMimeImage = yield* Effect.exit(
+      decode({ ...base, type: "image", mimeType: "application/pdf", sizeBytes: 12 }),
+    );
+    assert.strictEqual(Exit.isFailure(badMimeImage), true);
   }),
 );
 

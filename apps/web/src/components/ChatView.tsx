@@ -114,6 +114,10 @@ import {
 } from "../pendingUserInput";
 import { useUiStateStore } from "../uiStateStore";
 import {
+  latestWorkspaceMutationId,
+  useWorkspaceMutationRefresh,
+} from "../hooks/useWorkspaceMutationRefresh";
+import {
   buildPlanImplementationThreadTitle,
   buildPlanImplementationPrompt,
   resolvePlanFollowUpSubmission,
@@ -124,6 +128,7 @@ import {
   DEFAULT_THREAD_TERMINAL_ID,
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
+  isImageAttachment,
   type SessionPhase,
   type Thread,
   type TurnDiffSummary,
@@ -378,7 +383,6 @@ import { useComposerHandleContext } from "../composerHandleContext";
 import {
   awaitAttachmentUploads,
   getUploadedAttachments,
-  releaseAttachmentUploads,
   startAttachmentUpload,
 } from "../lib/attachmentUploadQueue";
 import { sanitizeThreadErrorMessage } from "~/rpc/transportError";
@@ -2246,7 +2250,7 @@ function ChatViewContent(props: ChatViewProps) {
           id: `environment-unavailable:${activeEnvironmentUnavailableState.environmentId}`,
           variant: "default",
           // Live connection status: calm styling, but it must front the stack.
-          urgent: true,
+          priority: "urgent",
           icon: (
             <span
               className="size-1.5 animate-status-pulse rounded-full bg-foreground"
@@ -2299,7 +2303,7 @@ function ChatViewContent(props: ChatViewProps) {
         variant: updateFailed ? "error" : "default",
         // A running update is live progress the user is waiting on; only the
         // idle "update available" offer is calm enough to stack behind.
-        urgent: updateInProgress,
+        ...(updateInProgress ? { priority: "urgent" as const } : {}),
         // In-flight and failed states carry their own status dot inside
         // ServerUpdateProgress; only the idle offer needs an icon.
         icon:
@@ -2394,6 +2398,13 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
+  const workspaceMutationId = useMemo(() => {
+    const activityId = latestWorkspaceMutationId(threadActivities);
+    return activityId === null && latestCheckpointCompletedAt === null
+      ? null
+      : JSON.stringify([activityId, latestCheckpointCompletedAt]);
+  }, [latestCheckpointCompletedAt, threadActivities]);
   const activeContextWindow = useMemo(
     () => deriveLatestContextWindowSnapshot(threadActivities),
     [threadActivities],
@@ -2647,7 +2658,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
 
       const serverPreviewUrls = serverMessage.attachments.flatMap((attachment) =>
-        attachment.type === "image" && attachment.previewUrl ? [attachment.previewUrl] : [],
+        isImageAttachment(attachment) && attachment.previewUrl ? [attachment.previewUrl] : [],
       );
       if (
         serverPreviewUrls.length === 0 ||
@@ -2730,7 +2741,7 @@ function ChatViewContent(props: ChatViewProps) {
             let changed = false;
             let imageIndex = 0;
             const attachments = message.attachments.map((attachment) => {
-              if (attachment.type !== "image") {
+              if (!isImageAttachment(attachment)) {
                 return attachment;
               }
               const handoffPreviewUrl = handoffPreviewUrls[imageIndex];
@@ -2872,6 +2883,12 @@ function ChatViewContent(props: ChatViewProps) {
           input: { cwd: gitStatusCwd },
         }),
   );
+  useWorkspaceMutationRefresh({
+    enabled: gitStatusCwd !== null,
+    mutationId: workspaceMutationId,
+    refresh: gitStatusQuery.refresh,
+    resourceKey: `git-status:${activeThreadKey ?? ""}:${gitStatusCwd ?? ""}`,
+  });
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   // Prefer an instance-id match so a custom Codex instance (e.g.
@@ -5037,7 +5054,7 @@ function ChatViewContent(props: ChatViewProps) {
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
     const isUrgentSystemItem = (item: ComposerBannerStackItem) =>
-      item.urgent === true || item.variant === "error" || item.variant === "warning";
+      item.priority === "urgent" || item.variant === "error" || item.variant === "warning";
     const urgentSystemItems = systemComposerBannerItems.filter(isUrgentSystemItem);
     const calmSystemItems = systemComposerBannerItems.filter((item) => !isUrgentSystemItem(item));
     const backgroundLivenessItems =
@@ -6777,6 +6794,7 @@ function ChatViewContent(props: ChatViewProps) {
           mode="embedded"
           composerDraftTarget={composerDraftTarget}
           initialGitScope={initialDiffPanelGitScope}
+          workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
@@ -6845,6 +6863,10 @@ function ChatViewContent(props: ChatViewProps) {
           revealRequestId={activeFileSurface?.revealRequestId ?? 0}
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
+          selectedFilePending={
+            activeFileSurface !== null && pendingFileSurfaceIds.has(activeFileSurface.id)
+          }
+          workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
     ) : null

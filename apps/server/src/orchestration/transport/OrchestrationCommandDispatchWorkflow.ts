@@ -22,6 +22,7 @@ import {
   prepareDispatchCommand,
 } from "../Normalizer.ts";
 import type * as OrchestrationEngine from "../Services/OrchestrationEngine.ts";
+import type { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import {
   type CommandPreprocessingProgress,
   CommandPreprocessingCoordinator,
@@ -85,6 +86,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
   readonly projectSetupScriptRunner: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   readonly terminalManager: TerminalManager.TerminalManager["Service"];
   readonly vcsStatusBroadcaster: VcsStatusBroadcaster.VcsStatusBroadcaster["Service"];
+  readonly threadDeletionReactor: ThreadDeletionReactor["Service"];
   readonly dispatchCommand?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
   readonly onCommandDispatched?: (
     command: OrchestrationCommand,
@@ -305,7 +307,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread && !progress.threadCreated) {
-          yield* dispatchCommand({
+          const created = yield* dispatchCommand({
             type: "thread.create",
             commandId: preprocessingCommandId(command, "thread-create"),
             threadId: command.threadId,
@@ -319,6 +321,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             workspaceId: bootstrap.createThread.workspaceId ?? null,
             createdAt: bootstrap.createThread.createdAt,
           });
+          yield* input.threadDeletionReactor.drainThrough(created.sequence);
           progress = yield* input.commandPreprocessing.markCompleted(command, "thread-created");
         }
 
@@ -437,6 +440,11 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           onSome: Effect.succeed,
           onNone: () => dispatchAfterInitialMiss,
         }),
+      ),
+      Effect.tap(({ sequence }) =>
+        normalizedCommand.type === "thread.create"
+          ? input.threadDeletionReactor.drainThrough(sequence)
+          : Effect.void,
       ),
       Effect.mapError((cause) =>
         toDispatchCommandError(cause, "Failed to dispatch orchestration command"),

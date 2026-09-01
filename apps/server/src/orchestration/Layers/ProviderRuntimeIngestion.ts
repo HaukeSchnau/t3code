@@ -66,6 +66,7 @@ export { subagentActivityIdForRuntime } from "../ProviderSubagentActivityProject
 
 const providerTurnKey = (threadId: ThreadId, turnId: TurnId) => `${threadId}:${turnId}`;
 const providerTaskKey = (threadId: ThreadId, taskId: string) => `${threadId}:${taskId}`;
+const TASK_TITLE_ACTIVITY_KINDS = ["task.started", "task.progress"] as const;
 
 function isMeaningfulTurnProgress(event: ProviderRuntimeEvent) {
   switch (event.type) {
@@ -1066,9 +1067,12 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (threadId: ThreadId) {
+  const resolveThreadDetail = Effect.fn("resolveThreadDetail")(function* (
+    threadId: ThreadId,
+    activityKinds: ReadonlyArray<string> = [],
+  ) {
     return yield* projectionSnapshotQuery
-      .getThreadDetailById(threadId)
+      .getThreadDetailById(threadId, { activityKinds })
       .pipe(Effect.map(Option.getOrUndefined));
   });
 
@@ -2387,7 +2391,7 @@ const make = Effect.gen(function* () {
       if (event.type === "task.completed") {
         taskTitle = yield* lookupTaskDescription(thread.id, event.payload.taskId);
         if (!taskTitle) {
-          const threadDetail = yield* getLoadedThreadDetail();
+          const threadDetail = yield* resolveThreadDetail(thread.id, TASK_TITLE_ACTIVITY_KINDS);
           taskTitle = findTaskTitleInActivities(threadDetail?.activities, event.payload.taskId);
         }
       }
