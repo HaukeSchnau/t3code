@@ -29,10 +29,10 @@ qa-test-non-server:
     ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 2 --filter '!t3' --filter '!@t3tools/monorepo' test
 
 qa-test-server:
-    ./node_modules/.bin/vp run --cache --filter t3 test
+    cd apps/server && ../../node_modules/.bin/vp test run
 
 qa-test-server-shard shard total:
-    ./node_modules/.bin/vp run --cache --filter t3 test --shard {{ quote(shard + "/" + total) }}
+    cd apps/server && ../../node_modules/.bin/vp test run --shard {{ quote(shard + "/" + total) }}
 
 qa-release:
     node scripts/release-smoke.ts
