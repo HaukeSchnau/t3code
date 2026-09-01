@@ -10,6 +10,7 @@ Run `t3 thread --help` for the full command reference. Every command accepts
 ```bash
 t3 thread projects --json
 t3 thread models --json
+t3 thread models --include-legacy --json
 t3 thread list --json
 t3 thread read <thread-id> --json
 t3 thread result <thread-id> --json
@@ -35,6 +36,12 @@ an unrelated shell, pass `--from-thread <thread-id>` if the command needs caller
 identity. `create` requires caller identity because it inherits the caller's
 project, provider, model, runtime mode, and interaction mode unless those
 choices are overridden.
+
+Model discovery lists current models by default. Pass `--include-legacy` to inspect models that
+the provider manifest marks as legacy. Thread creation, batch creation, and model-changing sends
+reject legacy selections, including a model inherited from the calling thread. Use
+`--allow-legacy-model` only for an intentional compatibility or model-evaluation run. Existing
+threads can continue using their selected model without that flag.
 
 ## Durable batches
 

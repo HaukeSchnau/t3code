@@ -20,7 +20,12 @@ const handlers = {
   list_thread_models: () =>
     requireThreadScope.pipe(
       Effect.flatMap(() =>
-        ThreadOrchestrationService.pipe(Effect.flatMap((service) => service.listThreadModels())),
+        ThreadOrchestrationService.pipe(
+          Effect.flatMap((service) => service.listThreadModels()),
+          Effect.map((result) => ({
+            models: result.models.filter((model) => model.isLegacy !== true),
+          })),
+        ),
       ),
     ),
   list_projects: () =>
