@@ -38,6 +38,7 @@ import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProviderTranscriptJournalLive } from "../../persistence/Layers/ProviderTranscriptJournal.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import {
   ProviderService,
@@ -61,6 +62,8 @@ import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { TranscriptJournalTrackerLive } from "../../observability/TranscriptJournalObservability.ts";
+import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
+import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -141,6 +144,7 @@ function createProviderServiceHarness(options?: {
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
+    subscribeEvents: PubSub.subscribe(runtimeEventPubSub),
   };
 
   const setSession = (session: ProviderSession): void => {
@@ -167,13 +171,12 @@ function createProviderServiceHarness(options?: {
     return event as ProviderRuntimeEvent;
   };
 
-  const emit = (event: LegacyProviderRuntimeEvent): void => {
-    Effect.runSync(PubSub.publish(runtimeEventPubSub, normalizeLegacyEvent(event)));
-  };
+  const publish = (event: ProviderRuntimeEvent) => PubSub.publish(runtimeEventPubSub, event);
 
   return {
     service,
-    emit,
+    normalizeLegacyEvent,
+    publish,
     setSession,
   };
 }
@@ -225,7 +228,10 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProviderTranscriptJournal,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -283,6 +289,9 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
       Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(
+        ProviderTranscriptJournalLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+      ),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
@@ -293,9 +302,25 @@ describe("ProviderRuntimeIngestion", () => {
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const transcriptJournal = await runtime.runPromise(Effect.service(ProviderTranscriptJournal));
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
-    const drain = () => Effect.runPromise(ingestion.drain);
+    let pendingEmits = Promise.resolve();
+    const emit = (legacyEvent: LegacyProviderRuntimeEvent): void => {
+      const event = provider.normalizeLegacyEvent(legacyEvent);
+      pendingEmits = pendingEmits.then(() =>
+        runtime!.runPromise(
+          (isTranscriptDurabilityEvent(event)
+            ? transcriptJournal.append(event).pipe(Effect.asVoid)
+            : Effect.void
+          ).pipe(Effect.andThen(provider.publish(event)), Effect.asVoid),
+        ),
+      );
+    };
+    const drain = async () => {
+      await pendingEmits;
+      await runtime!.runPromise(Effect.yieldNow.pipe(Effect.andThen(ingestion.drain)));
+    };
     const dispatch = (command: OrchestrationCommand) => Effect.runPromise(engine.dispatch(command));
 
     const createdAt = "2026-01-01T00:00:00.000Z";
@@ -354,8 +379,11 @@ describe("ProviderRuntimeIngestion", () => {
     return {
       engine,
       dispatch,
-      readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
-      emit: provider.emit,
+      readModel: async () => {
+        await drain();
+        return Effect.runPromise(snapshotQuery.getSnapshot());
+      },
+      emit,
       setProviderSession: provider.setSession,
       drain,
     };

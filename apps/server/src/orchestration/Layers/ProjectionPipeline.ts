@@ -141,6 +141,7 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
 
     case ORCHESTRATION_PROJECTOR_NAMES.threadMessages:
       return (
+        event.type === "thread.created" ||
         event.type === "thread.message-sent" ||
         event.type === "thread.reverted" ||
         event.type === "thread.history-pruned"
@@ -156,6 +157,7 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
 
     case ORCHESTRATION_PROJECTOR_NAMES.threadProposedPlans:
       return (
+        event.type === "thread.created" ||
         event.type === "thread.proposed-plan-upserted" ||
         event.type === "thread.reverted" ||
         event.type === "thread.history-pruned"
@@ -163,6 +165,7 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
 
     case ORCHESTRATION_PROJECTOR_NAMES.threadActivities:
       return (
+        event.type === "thread.created" ||
         (event.type === "thread.activity-appended" &&
           event.payload.activity.kind !== "account.rate-limits.updated") ||
         event.type === "thread.reverted" ||
@@ -170,10 +173,11 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
       );
 
     case ORCHESTRATION_PROJECTOR_NAMES.threadSessions:
-      return event.type === "thread.session-set";
+      return event.type === "thread.created" || event.type === "thread.session-set";
 
     case ORCHESTRATION_PROJECTOR_NAMES.threadTurns:
       return (
+        event.type === "thread.created" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.session-set" ||
         (event.type === "thread.message-sent" &&
@@ -191,6 +195,7 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
 
     case ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals:
       return (
+        event.type === "thread.created" ||
         (event.type === "thread.activity-appended" &&
           (event.payload.activity.kind === "approval.requested" ||
             event.payload.activity.kind === "approval.resolved" ||
@@ -1154,9 +1159,15 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
+          const userInputActivities =
+            yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
+              threadId: event.payload.threadId,
+            });
+          incrementWorkloadCounter("projection.full_history_reads");
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             updatedAt: event.occurredAt,
+            pendingUserInputCount: derivePendingUserInputCountFromActivities(userInputActivities),
             latestUserMessageAt:
               existingRow.value.latestUserMessageAt === null ||
               event.payload.createdAt > existingRow.value.latestUserMessageAt
@@ -1182,9 +1193,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             event.payload.activity.kind === "user-input.resolved" ||
             event.payload.activity.kind === "provider.user-input.respond.failed"
           ) {
-            const activities = yield* projectionThreadActivityRepository.listByThreadId({
-              threadId: event.payload.threadId,
-            });
+            const activities =
+              yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
+                threadId: event.payload.threadId,
+              });
             incrementWorkloadCounter("projection.full_history_reads");
             yield* projectionThreadRepository.upsert({
               ...existingRow.value,
@@ -1376,21 +1388,34 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.message-sent": {
+          if (event.payload.streaming) {
+            const attachments =
+              event.payload.attachments !== undefined
+                ? yield* materializeAttachmentsForProjection({
+                    attachments: event.payload.attachments,
+                  })
+                : undefined;
+            yield* projectionThreadMessageRepository.appendStreaming({
+              messageId: event.payload.messageId,
+              threadId: event.payload.threadId,
+              turnId: event.payload.turnId,
+              role: event.payload.role,
+              text: event.payload.text,
+              ...(attachments !== undefined ? { attachments: [...attachments] } : {}),
+              createdAt: event.payload.createdAt,
+              updatedAt: event.payload.updatedAt,
+            });
+            return;
+          }
+
           const existingMessage = yield* projectionThreadMessageRepository.getByMessageId({
             messageId: event.payload.messageId,
           });
           const previousMessage = Option.getOrUndefined(existingMessage);
           const nextText = Option.match(existingMessage, {
             onNone: () => event.payload.text,
-            onSome: (message) => {
-              if (event.payload.streaming) {
-                return `${message.text}${event.payload.text}`;
-              }
-              if (event.payload.text.length === 0) {
-                return message.text;
-              }
-              return event.payload.text;
-            },
+            onSome: (message) =>
+              event.payload.text.length === 0 ? message.text : event.payload.text,
           });
           const nextAttachments =
             event.payload.attachments !== undefined
@@ -1399,7 +1424,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
                 })
               : previousMessage?.attachments;
           const preservesExistingCreatedAt =
-            event.payload.streaming || (previousMessage !== undefined && event.payload.text === "");
+            previousMessage !== undefined && event.payload.text === "";
           yield* projectionThreadMessageRepository.upsert({
             messageId: event.payload.messageId,
             threadId: event.payload.threadId,
@@ -1407,7 +1432,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
-            isStreaming: event.payload.streaming,
+            isStreaming: false,
             createdAt: preservesExistingCreatedAt
               ? (previousMessage?.createdAt ?? event.payload.createdAt)
               : event.payload.createdAt,
