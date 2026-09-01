@@ -145,40 +145,42 @@ it("ignores custom models that shadow a preferred slug", () => {
   assert.deepStrictEqual(models.find((model) => model.isDefault)?.slug, "gpt-5.4");
 });
 
-it("uses high reasoning as the Codex GPT-5.5 default", () => {
-  const capabilities = mapCodexModelCapabilities({
-    additionalSpeedTiers: [],
-    defaultReasoningEffort: "medium",
-    defaultServiceTier: null,
-    description: "Test model",
-    displayName: "GPT-5.5",
-    hidden: false,
-    id: "gpt-5.5",
-    isDefault: true,
-    model: "gpt-5.5",
-    serviceTiers: [],
-    supportedReasoningEfforts: [
-      {
-        description: "Medium reasoning",
-        reasoningEffort: "medium",
-      },
-      {
-        description: "High reasoning",
-        reasoningEffort: "high",
-      },
-    ],
-  });
-
-  assert.deepStrictEqual(capabilities.optionDescriptors, [
-    {
-      id: "reasoningEffort",
-      label: "Reasoning",
-      type: "select",
-      options: [
-        { id: "medium", label: "Medium" },
-        { id: "high", label: "High", isDefault: true },
+for (const model of ["gpt-5.5", "gpt-5.6-sol"]) {
+  it(`uses high reasoning as the Codex ${model} default`, () => {
+    const capabilities = mapCodexModelCapabilities({
+      additionalSpeedTiers: [],
+      defaultReasoningEffort: "medium",
+      defaultServiceTier: null,
+      description: "Test model",
+      displayName: model,
+      hidden: false,
+      id: model,
+      isDefault: true,
+      model,
+      serviceTiers: [],
+      supportedReasoningEfforts: [
+        {
+          description: "Medium reasoning",
+          reasoningEffort: "medium",
+        },
+        {
+          description: "High reasoning",
+          reasoningEffort: "high",
+        },
       ],
-      currentValue: "high",
-    },
-  ]);
-});
+    });
+
+    assert.deepStrictEqual(capabilities.optionDescriptors, [
+      {
+        id: "reasoningEffort",
+        label: "Reasoning",
+        type: "select",
+        options: [
+          { id: "medium", label: "Medium" },
+          { id: "high", label: "High", isDefault: true },
+        ],
+        currentValue: "high",
+      },
+    ]);
+  });
+}
