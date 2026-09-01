@@ -1,0 +1,23 @@
+# Project-owned caches retained when the generic runner refreshes the source tree.
+/.git/
+/.jj/
+/.repos/
+/.t3/
+/.pnpm-store/
+/node_modules/
+/.vite-plus/
+/release/
+/apps/*/node_modules/
+/apps/*/.vite-plus/
+/apps/*/.expo/
+/apps/*/dist/
+/apps/*/dist-electron/
+/apps/*/build/
+/packages/*/node_modules/
+/packages/*/.vite-plus/
+/packages/*/dist/
+/scripts/node_modules/
+/scripts/.vite-plus/
+/oxlint-plugin-t3code/node_modules/
+/oxlint-plugin-t3code/.vite-plus/
+*.tsbuildinfo
