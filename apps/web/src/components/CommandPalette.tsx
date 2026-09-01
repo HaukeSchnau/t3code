@@ -1636,6 +1636,7 @@ function OpenCommandPaletteDialog(props: {
     searchTerms: ["settings", "preferences", "configuration", "keybindings"],
     title: "Open settings",
     icon: <SettingsIcon className={ITEM_ICON_CLASS} />,
+    shortcutCommand: "settings.open",
     run: async () => {
       await navigate({ to: "/settings" });
     },

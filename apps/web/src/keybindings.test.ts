@@ -122,6 +122,7 @@ const DEFAULT_BINDINGS = compile([
     command: "commandPalette.toggle",
     whenAst: whenNot(whenIdentifier("terminalFocus")),
   },
+  { shortcut: modShortcut(",", { shiftKey: true }), command: "settings.open" },
   {
     shortcut: modShortcut("g", { altKey: true }),
     command: "monitor.toggle",
@@ -505,6 +506,19 @@ describe("reasoning effort shortcut", () => {
         { platform: "MacIntel", context: { terminalFocus: false } },
       ),
       "reasoningEffort.cycle",
+    );
+  });
+});
+
+describe("open settings shortcut", () => {
+  it("matches the shifted comma key by physical key code", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "<", code: "Comma", metaKey: true, shiftKey: true }),
+        DEFAULT_BINDINGS,
+        { platform: "MacIntel" },
+      ),
+      "settings.open",
     );
   });
 });

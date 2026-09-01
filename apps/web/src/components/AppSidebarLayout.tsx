@@ -165,6 +165,7 @@ function ProjectProjectionRetention() {
 
 export function AppSidebarLayout({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const legacySidebarEnabled = useLegacySidebarEnabled();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
@@ -214,6 +215,31 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     setIsWindowFullscreen(getWindowFullscreenState());
     return unsubscribe;
   }, [isMacosDesktop]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.repeat || isCommandPaletteOpen()) return;
+      if (
+        event.target instanceof HTMLElement &&
+        event.target.closest("[data-keybinding-capture]")
+      ) {
+        return;
+      }
+      const command = resolveShortcutCommand(event, keybindings, {
+        context: { terminalFocus: isTerminalFocused() },
+      });
+      if (command !== "settings.open") return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      if (!isOnSettings) {
+        void navigate({ to: "/settings" });
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [isOnSettings, keybindings, navigate]);
 
   useEffect(() => {
     const onMenuAction = window.desktopBridge?.onMenuAction;
