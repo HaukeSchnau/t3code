@@ -40,9 +40,9 @@ hours of a weekly window from dominating the entire forecast. After three comple
 details show how many recent windows informed the estimate and the range those windows produced.
 The server retains only a compact history of the eight newest windows for each distinct limit.
 
-When the forecast exceeds 100%, the compact meter estimates how long the remaining usage will last.
-Open the meter for the approximate date and time. If recent windows disagree, the details show a
-likely timing range or say that usage may still last until reset. These estimates use the same sleep
-and weekend weighting as the percentage forecast and update as new usage arrives. A forecast is
-anchored to the time its usage percentage was observed; only the reset countdown advances between
-provider updates.
+When the forecast exceeds 100%, the compact meter estimates how long before the reset you will run
+out. Open the meter for the approximate date and time. If recent windows disagree, the details show
+a likely range before reset or say that usage may still last until reset. These estimates use the
+same sleep and weekend weighting as the percentage forecast and update as new usage arrives. A
+forecast is anchored to the time its usage percentage was observed; only the reset countdown
+advances between provider updates.
