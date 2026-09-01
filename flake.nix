@@ -626,6 +626,7 @@
             assert normalizedProjectDescriptor.release.executable == "project-release-runtime";
             assert normalizedProjectDescriptor.release.action == "web";
             assert normalizedProjectDescriptor.release.health.paths == [ "/healthz" ];
+            assert normalizedProjectDescriptor.release.health.startupTimeoutSec == 300;
             assert normalizedProjectDescriptor.release.preDeployTasks.wait-for-idle.failureMode == "defer";
             assert normalizedProjectDescriptor.release.ingress.streamCloseDelaySec == 300;
             pkgs.runCommand "t3code-project-descriptor-check" { } ''
