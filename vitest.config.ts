@@ -4,9 +4,18 @@ import "vite-plus/test/config";
 
 export default defineConfig({
   resolve: {
-    alias: {
-      "~": NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
-    },
+    alias: [
+      {
+        find: /^expo-crypto$/,
+        replacement: NodeURL.fileURLToPath(
+          new URL("./apps/mobile/src/test-support/expo-crypto.ts", import.meta.url),
+        ),
+      },
+      {
+        find: "~",
+        replacement: NodeURL.fileURLToPath(new URL("./apps/web/src", import.meta.url)),
+      },
+    ],
   },
   test: {
     environment: "node",

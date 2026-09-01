@@ -99,6 +99,8 @@ vi.mock("./thread-outbox", async () => {
     confirmThreadOutboxMessageQueued: vi.fn(async () => true),
     ensureThreadOutboxLoaded: vi.fn(),
     removeThreadOutboxMessage: vi.fn(),
+    threadOutboxRevision: vi.fn(() => 0),
+    updateThreadOutboxMessage: vi.fn(async () => true),
     threadOutboxManager: {
       ...atoms,
       begin: mocks.begin,
@@ -107,6 +109,16 @@ vi.mock("./thread-outbox", async () => {
     },
   };
 });
+
+vi.mock("../lib/attachmentUpload", () => ({
+  prepareTurnAttachments: async () => ({
+    status: "ready" as const,
+    attachments: [],
+    draftAttachments: [],
+    pendingAttachmentIds: [],
+    releaseUploads: async () => undefined,
+  }),
+}));
 
 vi.mock("./use-atom-command", () => ({
   useAtomCommand: () => mocks.startTurn,
