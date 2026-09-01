@@ -176,10 +176,20 @@ function formatEstimatedMoment(targetMs: number, nowMs: number): string {
   }).format(new Date(targetMs));
 }
 
-function buildInlineWindowStats(
+function formatTimeBeforeReset(
   windowSnapshot: DerivedUsageLimitWindowSnapshot,
-  nowMs: number,
-): { readonly trailingLabel: string | null } {
+  estimatedAtMs: number,
+): { readonly compact: string; readonly long: string } | null {
+  const resetAtMs = windowSnapshot.resetsAt ? Date.parse(windowSnapshot.resetsAt) : Number.NaN;
+  if (!Number.isFinite(resetAtMs) || estimatedAtMs >= resetAtMs) {
+    return null;
+  }
+  return formatApproximateDurationUntil(resetAtMs, estimatedAtMs);
+}
+
+function buildInlineWindowStats(windowSnapshot: DerivedUsageLimitWindowSnapshot): {
+  readonly trailingLabel: string | null;
+} {
   if (windowSnapshot.resetExpired) {
     return { trailingLabel: "update pending" };
   }
@@ -196,12 +206,12 @@ function buildInlineWindowStats(
   }
 
   if (windowSnapshot.depletionForecast.kind === "beforeReset") {
-    const duration = formatApproximateDurationUntil(
+    const timeBeforeReset = formatTimeBeforeReset(
+      windowSnapshot,
       windowSnapshot.depletionForecast.estimatedAtMs,
-      nowMs,
     );
     return {
-      trailingLabel: `out ~${duration.compact}`,
+      trailingLabel: timeBeforeReset ? `~${timeBeforeReset.compact} early` : "at risk",
     };
   }
 
@@ -276,27 +286,36 @@ function formatDepletionLine(
   }
 
   const duration = formatApproximateDurationUntil(forecast.estimatedAtMs, nowMs);
+  const timeBeforeReset = formatTimeBeforeReset(windowSnapshot, forecast.estimatedAtMs);
   const moment = formatEstimatedMoment(forecast.estimatedAtMs, nowMs);
+  if (timeBeforeReset) {
+    return windowSnapshot.projectionBasis === "regularized"
+      ? `Early estimate: may run out around ${moment}, about ${timeBeforeReset.long} before reset.`
+      : `Likely to run out around ${moment}, about ${timeBeforeReset.long} before reset.`;
+  }
   return windowSnapshot.projectionBasis === "regularized"
     ? `Early estimate: may run out in about ${duration.long}, around ${moment}.`
     : `Likely out in about ${duration.long}, around ${moment}.`;
 }
 
-function formatProjectionRange(
-  windowSnapshot: DerivedUsageLimitWindowSnapshot,
-  nowMs: number,
-): string | null {
+function formatProjectionRange(windowSnapshot: DerivedUsageLimitWindowSnapshot): string | null {
   if (windowSnapshot.isStale || windowSnapshot.resetExpired) {
     return null;
   }
   const depletion = windowSnapshot.depletionForecast;
   if (depletion.kind === "beforeReset" && depletion.range) {
-    const earliest = formatApproximateDurationUntil(depletion.range.earliestAtMs, nowMs);
-    if (depletion.range.latestAtMs === null) {
-      return `Could run out as early as ${earliest.long}, but may last until reset.`;
+    const longestShortfall = formatTimeBeforeReset(windowSnapshot, depletion.range.earliestAtMs);
+    if (!longestShortfall) {
+      return null;
     }
-    const latest = formatApproximateDurationUntil(depletion.range.latestAtMs, nowMs);
-    return `Typical timing: ${earliest.long} to ${latest.long}.`;
+    if (depletion.range.latestAtMs === null) {
+      return `Could run out up to ${longestShortfall.long} before reset, but may last until reset.`;
+    }
+    const shortestShortfall = formatTimeBeforeReset(windowSnapshot, depletion.range.latestAtMs);
+    if (!shortestShortfall || shortestShortfall.long === longestShortfall.long) {
+      return `Recent windows suggest about ${longestShortfall.long} before reset.`;
+    }
+    return `Recent windows suggest ${shortestShortfall.long} to ${longestShortfall.long} before reset.`;
   }
 
   const range = windowSnapshot.projectedPercentRange;
@@ -378,7 +397,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
                     : null,
                 formatDepletionLine(snapshot, nowMs),
                 formatProjectionBasis(snapshot),
-                formatProjectionRange(snapshot, nowMs),
+                formatProjectionRange(snapshot),
               ]
                 .filter((part) => part && part.length > 0)
                 .join(" ");
@@ -406,7 +425,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
           >
             <span className="min-w-0 flex flex-col gap-0.5 overflow-hidden text-[11px] leading-none tabular-nums">
               {compactWindows.map(({ key, label, snapshot }) => {
-                const stats = buildInlineWindowStats(snapshot, nowMs);
+                const stats = buildInlineWindowStats(snapshot);
                 const projectedPercent = readInlineProjectedPercent(snapshot);
                 const normalizedPercentage = Math.max(0, Math.min(100, projectedPercent));
                 const severityColor = projectedSeverityColor(snapshot);
@@ -476,7 +495,7 @@ export function UsageLimitsMeter(props: { usageLimits: UsageLimitsSnapshot; comp
             const projectedUsage = formatProjectedUsage(windowSnapshot.projectedPercentAtReset);
             const projectionBasis = formatProjectionBasis(windowSnapshot);
             const depletionLine = formatDepletionLine(windowSnapshot, nowMs);
-            const projectionRange = formatProjectionRange(windowSnapshot, nowMs);
+            const projectionRange = formatProjectionRange(windowSnapshot);
             const assessment = windowSnapshot.resetExpired
               ? "Waiting for refreshed limits."
               : windowSnapshot.isStale

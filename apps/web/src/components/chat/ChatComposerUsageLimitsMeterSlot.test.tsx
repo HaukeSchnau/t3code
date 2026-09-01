@@ -237,8 +237,50 @@ describe("ComposerUsageLimitsMeterSlot", () => {
       />,
     );
 
-    expect(html).toContain("out ~1h45m");
-    expect(html).toContain("Early estimate: may run out in about 1h 45m");
+    expect(html).toContain("~45m early");
+    expect(html).toContain("Early estimate: may run out around");
+    expect(html).toContain("about 45m before reset.");
+  });
+
+  it("describes a historical depletion range as time before reset", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-23T12:30:00.000Z"));
+    const currentResetMs = Date.parse("2026-03-23T15:00:00.000Z");
+    const durationMs = 5 * 60 * 60 * 1000;
+    const atRiskUsageLimits: UsageLimitsSnapshot = {
+      ...usageLimits,
+      primary: {
+        usedPercent: 60,
+        resetsAt: new Date(currentResetMs).toISOString(),
+        windowDurationMins: 300,
+      },
+      updatedAt: "2026-03-23T12:30:00.000Z",
+      history: [120, 130, 140].map((finalUsed, index) => {
+        const resetMs = currentResetMs - (index + 1) * durationMs;
+        return {
+          resetsAt: new Date(resetMs).toISOString(),
+          windowDurationMins: 300,
+          points: [
+            {
+              observedAt: new Date(resetMs - durationMs / 2).toISOString(),
+              usedPercent: 60,
+            },
+            { observedAt: new Date(resetMs - 60 * 1000).toISOString(), usedPercent: finalUsed },
+          ],
+        };
+      }),
+    };
+
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact
+        selectedProvider={ProviderDriverKind.make("codex")}
+        activeUsageLimits={atRiskUsageLimits}
+      />,
+    );
+
+    expect(html).toContain("~1h early");
+    expect(html).toContain("Recent windows suggest 45m to 1h 15m before reset.");
   });
 
   it("labels stale, expired observations as awaiting a refresh", () => {
