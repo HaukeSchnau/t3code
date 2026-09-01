@@ -37,9 +37,13 @@ jobs:
             "$source_workspace" just qa-static
 
   typecheck:
-    name: Type-check
+    name: Type-check ${{ matrix.group }}
     runs-on: ubuntu-22.04
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [clients, rest]
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
@@ -53,7 +57,7 @@ jobs:
           source_workspace="$GITHUB_WORKSPACE"
           nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
-            "$source_workspace" just qa-typecheck
+            "$source_workspace" just 'qa-typecheck-${{ matrix.group }}'
 
   test_non_server:
     name: Test packages and clients

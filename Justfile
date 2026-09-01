@@ -11,29 +11,32 @@ default:
 
 # CI calls the individual tasks in parallel jobs. `just qa` remains the complete,
 # resource-bounded local gate and deliberately runs the groups in order.
-qa: qa-static qa-typecheck qa-test-non-server qa-test-server qa-release
+qa: qa-static qa-typecheck-clients qa-typecheck-rest qa-test-non-server qa-test-server qa-release
 
 qa-static:
-    pnpm exec vp fmt --check
-    pnpm exec vp lint --report-unused-disable-directives --threads 1
+    ./node_modules/.bin/vp fmt --check
+    ./node_modules/.bin/vp lint --report-unused-disable-directives --threads 1
 
-qa-typecheck:
-    pnpm exec vp run --filter @t3tools/desktop ensure:electron
-    pnpm exec vp run -r --concurrency-limit 1 typecheck
+qa-typecheck-clients:
+    ./node_modules/.bin/vp run --cache --concurrency-limit 1 --filter @t3tools/web --filter @t3tools/mobile typecheck
+
+qa-typecheck-rest:
+    ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
+    ./node_modules/.bin/vp run -r --cache --concurrency-limit 1 --filter '!@t3tools/web' --filter '!@t3tools/mobile' typecheck
 
 qa-test-non-server:
-    pnpm exec vp run --filter @t3tools/desktop ensure:electron
-    pnpm exec vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+    ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
+    ./node_modules/.bin/vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
 
 qa-test-server:
-    pnpm exec vp run --filter t3 test
+    ./node_modules/.bin/vp run --filter t3 test
 
 qa-test-server-shard shard total:
-    pnpm exec vp run --filter t3 test --shard {{ quote(shard + "/" + total) }}
+    ./node_modules/.bin/vp run --filter t3 test --shard {{ quote(shard + "/" + total) }}
 
 qa-release:
-    pnpm run release:smoke
-    pnpm run fork:lockfile:check
+    node scripts/release-smoke.ts
+    node scripts/fork-lockfile.ts --check
 
 # Print the pnpmDeps SRI for flake.nix by forcing a fake-hash Nix build and extracting the "got" value.
 prefetch-pnpm-deps:

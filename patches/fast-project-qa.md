@@ -16,8 +16,9 @@ and fork lockfile check.
 - `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
   non-server tests, release smoke, and server shards as independent jobs. The serial server test
   suite is split across three jobs.
-- TypeScript package checks run one at a time on the memory-constrained runners. Separate Gitea jobs
-  provide cross-host parallelism without making two large `tsgo` processes page inside one cgroup.
+- TypeScript package checks run one at a time inside each runner. Client and remaining package checks
+  use separate Gitea jobs for cross-host parallelism without making two large `tsgo` processes page
+  inside one cgroup. Successful package checks use Vite+'s persistent task cache.
 
 The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
 keeps a matching shim until its existing infrastructure input can be upgraded independently; the

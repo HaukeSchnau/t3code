@@ -32,6 +32,7 @@ import {
   findInlinedExternalPackages,
   selectCliRuntimeExternalDependencies,
 } from "./lib/cli-external-packages.ts";
+import { loadRepoEnv } from "./lib/public-config.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -3124,6 +3125,34 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   // electron-builder is filtering out stageResourcesDir directory in the AppImage for production
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
+
+  const configuredMacPasskeySigning =
+    options.platform === "mac" && options.signed
+      ? yield* Effect.try({
+          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          catch: MacPasskeySigningConfigurationResolutionError.fromCause,
+        })
+      : undefined;
+  const macPasskeySigning = configuredMacPasskeySigning
+    ? {
+        ...configuredMacPasskeySigning,
+        provisioningProfilePath: path.resolve(
+          repoRoot,
+          configuredMacPasskeySigning.provisioningProfilePath,
+        ),
+      }
+    : undefined;
+  const macEntitlementsPath = macPasskeySigning
+    ? path.join(stageAppDir, "entitlements.mac.plist")
+    : undefined;
+  if (macPasskeySigning && macEntitlementsPath) {
+    if (!(yield* fs.exists(macPasskeySigning.provisioningProfilePath))) {
+      return yield* new MacProvisioningProfileNotFoundError({
+        provisioningProfilePath: macPasskeySigning.provisioningProfilePath,
+      });
+    }
+    yield* fs.writeFileString(macEntitlementsPath, renderMacPasskeyEntitlements(macPasskeySigning));
+  }
 
   // Windows splits dependencies per process: app.asar carries only the
   // desktop main-process runtime deps, while the server bundle's deps live in
