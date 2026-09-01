@@ -2405,22 +2405,23 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       yield* Stream.runForEach(
         eventStore.readFromSequence(firstSequence, Number.MAX_SAFE_INTEGER),
         (event) => {
-        const laggingProjectors = projectors.filter(
-          (projector) => (sequenceByProjector.get(projector.name) ?? 0) < event.sequence,
-        );
-        if (laggingProjectors.length === 0) {
-          return Effect.void;
-        }
-        return runProjectorsForEvent(event, laggingProjectors).pipe(
-          Effect.tap(() =>
-            Effect.sync(() => {
-              for (const projector of laggingProjectors) {
-                sequenceByProjector.set(projector.name, event.sequence);
-              }
-            }),
-          ),
-        );
-      });
+          const laggingProjectors = projectors.filter(
+            (projector) => (sequenceByProjector.get(projector.name) ?? 0) < event.sequence,
+          );
+          if (laggingProjectors.length === 0) {
+            return Effect.void;
+          }
+          return runProjectorsForEvent(event, laggingProjectors).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                for (const projector of laggingProjectors) {
+                  sequenceByProjector.set(projector.name, event.sequence);
+                }
+              }),
+            ),
+          );
+        },
+      );
     });
 
     const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>

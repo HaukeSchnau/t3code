@@ -28,7 +28,9 @@ import {
   DpopFailureReason,
   AuthSessionId,
   ThreadId,
-  TrimmedNonEmptyString, TurnId, } from "./baseSchemas.ts";
+  TrimmedNonEmptyString,
+  TurnId,
+} from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   EnergyDiagnosticsCaptureRequestInput,

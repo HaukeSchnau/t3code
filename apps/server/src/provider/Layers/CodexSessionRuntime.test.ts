@@ -898,7 +898,7 @@ describe("paginated Codex thread revert", () => {
           raw: {
             request: (method) => {
               rawCalls.push(method);
-              return Effect.succeed(undefined);
+              return Effect.void;
             },
           },
         },

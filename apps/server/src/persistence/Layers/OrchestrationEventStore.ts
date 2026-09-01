@@ -481,14 +481,14 @@ const makeEventStore = Effect.gen(function* () {
     );
 
   return {
-  append,
-  readFromSequence,
-  readAggregateFromSequence,
-  probeFromSequence,
-  probeAggregateFromSequence,
-  readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
-  hasEventAfter,
-} satisfies OrchestrationEventStoreShape;
+    append,
+    readFromSequence,
+    readAggregateFromSequence,
+    probeFromSequence,
+    probeAggregateFromSequence,
+    readAll: () => readFromSequence(0, Number.MAX_SAFE_INTEGER),
+    hasEventAfter,
+  } satisfies OrchestrationEventStoreShape;
 });
 
 export const OrchestrationEventStoreLive = Layer.effect(OrchestrationEventStore, makeEventStore);

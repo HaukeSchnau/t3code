@@ -253,9 +253,7 @@ export async function restoreRejectedQueuedMessage(
     updateComposerDraftSettings(draftKey, {
       ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
       ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
-      ...(queuedMessage.interactionMode
-        ? { interactionMode: queuedMessage.interactionMode }
-        : {}),
+      ...(queuedMessage.interactionMode ? { interactionMode: queuedMessage.interactionMode } : {}),
       ...(queuedMessage.creation
         ? {
             workspaceSelection: {
