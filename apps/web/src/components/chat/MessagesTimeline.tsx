@@ -56,6 +56,7 @@ import {
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
+  BrainIcon,
   CheckIcon,
   ChevronDownIcon,
   ChevronRightIcon,
@@ -1083,7 +1084,8 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "work" ||
                   row.kind === "work-live" ||
                   row.kind === "work-toggle" ||
-                  row.kind === "turn-plan"
+                  row.kind === "turn-plan" ||
+                  row.kind === "thinking"
                 ? "pb-2"
                 : "pb-4",
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
@@ -1769,7 +1771,7 @@ function LiveActivityRow({
 }
 
 function ThinkingActivityRow() {
-  return <LiveActivityRow label="Thinking" />;
+  return <LiveActivityRow label="Thinking" iconName="brain" />;
 }
 
 function LiveActivityContent({
@@ -1828,7 +1830,18 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
       aria-expanded={row.expanded}
       onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
     >
-      <LiveActivityRow label={label} iconName={workEntryIconName(row.entry)} failed={failed} />
+      {row.active ? (
+        <LiveActivityRow label={label} iconName={workEntryIconName(row.entry)} failed={failed} />
+      ) : (
+        <div className="min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed">
+          <LiveActivityContent
+            label={label}
+            iconName={workEntryIconName(row.entry)}
+            failed={failed}
+            announceFailure={failed}
+          />
+        </div>
+      )}
     </button>
   );
 }
@@ -2465,6 +2478,7 @@ function formatWorkingTimerNow(startIso: string): string {
 
 type WorkEntryIconName =
   | "bot"
+  | "brain"
   | "check"
   | "circle-alert"
   | "eye"
@@ -2482,6 +2496,8 @@ function WorkEntryIconSvg({ name, className }: { name: WorkEntryIconName; classN
   switch (name) {
     case "bot":
       return <BotIcon className={className} aria-hidden />;
+    case "brain":
+      return <BrainIcon className={className} aria-hidden />;
     case "check":
       return <CheckIcon className={className} aria-hidden />;
     case "circle-alert":
@@ -2521,7 +2537,7 @@ function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   }
   if (tone === "thinking") {
     return {
-      iconName: "bot",
+      iconName: "brain",
       className: "text-foreground",
     };
   }
