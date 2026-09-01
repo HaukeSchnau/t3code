@@ -28,7 +28,8 @@ and fork lockfile check.
   pool, so higher outer fan-out oversubscribes the 12-core runner and crosses its soft memory limit.
 - Workflow steps `exec` the Nix development command. The workspace runner supervises a dedicated
   project-command process group and terminates it even when Gitea kills the outer runner before
-  shell traps can run.
+  shell traps can run. It also captures descendants before cancellation so helpers that create
+  their own sessions do not escape cleanup.
 
 The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
 keeps a matching shim until its existing infrastructure input can be upgraded independently; the

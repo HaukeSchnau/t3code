@@ -564,6 +564,7 @@
             pkgs.just
             pkgs.pkg-config
             pkgs.python3
+            pkgs.procps
             pkgs.rsync
             pkgs.util-linux
           ];
