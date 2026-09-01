@@ -53,7 +53,7 @@ export const ListProjectsTool = readonlyTool(
 export const ListThreadModelsTool = readonlyTool(
   Tool.make("list_thread_models", {
     description:
-      "List curated provider/model choices and exact modelSelection values for creating T3 Code threads. Most agents should not call this for ordinary child threads: omit create_thread.modelSelection to inherit the current provider, model, and reasoning/options. Use this only when the user asks for a specific provider/model or when intentionally doing provider/model fanout such as comparing Codex, Cursor, and OpenCode. When using a model choice from another environment, also pass that choice's environmentId as create_thread.target.environmentId. Reasoning metadata is advisory; omit modelSelection options to use the listed model's default reasoning, or include a supported option only when intentionally overriding.",
+      "List current provider/model choices and exact modelSelection values for creating T3 Code threads. Most agents should not call this for ordinary child threads: omit create_thread.modelSelection to inherit the current provider, model, and reasoning/options. Use this only when the user asks for a specific provider/model or when intentionally doing provider/model fanout such as comparing Codex, Cursor, and OpenCode. When using a model choice from another environment, also pass that choice's environmentId as create_thread.target.environmentId. Reasoning metadata is advisory; omit modelSelection options to use the listed model's default reasoning, or include a supported option only when intentionally overriding.",
     success: ThreadOrchestrationListThreadModelsResult,
     failure: ThreadOrchestrationError,
     dependencies,
@@ -120,7 +120,7 @@ export const GetThreadGraphTool = readonlyTool(
 export const CreateThreadTool = mutatingTool(
   Tool.make("create_thread", {
     description:
-      "Create a durable T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model/options, runtime mode, and interaction mode. Do not specify modelSelection unless the user explicitly requests a provider/model or you are deliberately doing provider/model fanout; otherwise omit it so the child inherits the current model and reasoning/options. Set target.environmentId from list_projects to create on a registered remote host, target.projectId for another project, or target.environment.type='worktree' for an isolated managed workspace on that host. Use list_thread_models only when intentionally choosing another provider/model such as Codex, Cursor, or OpenCode.",
+      "Create a durable T3 Code thread and submit its first prompt. By default this creates a sibling thread in the calling thread's current project, current host, and current provider/model/options, runtime mode, and interaction mode. Do not specify modelSelection unless the user explicitly requests a provider/model or you are deliberately doing provider/model fanout; otherwise omit it so the child inherits the current model and reasoning/options. Legacy models are rejected, including inherited legacy models. Set allowLegacyModel=true only for an intentional compatibility run. Set target.environmentId from list_projects to create on a registered remote host, target.projectId for another project, or target.environment.type='worktree' for an isolated managed workspace on that host. Use list_thread_models only when intentionally choosing another provider/model such as Codex, Cursor, or OpenCode.",
     parameters: ThreadOrchestrationCreateThreadInput,
     success: ThreadOrchestrationCreateThreadResult,
     failure: ThreadOrchestrationError,
@@ -142,7 +142,7 @@ export const ForkThreadTool = mutatingTool(
 export const SendMessageToThreadTool = mutatingTool(
   Tool.make("send_message_to_thread", {
     description:
-      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. Omit modelSelection, runtimeMode, and interactionMode to keep the target thread's current settings. Do not use this to switch providers; create a new thread for provider/model fanout.",
+      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. Omit modelSelection, runtimeMode, and interactionMode to keep the target thread's current settings. A model-changing send rejects legacy models unless allowLegacyModel=true. Do not use this to switch providers; create a new thread for provider/model fanout.",
     parameters: ThreadOrchestrationSendMessageInput,
     success: ThreadOrchestrationSendMessageResult,
     failure: ThreadOrchestrationError,

@@ -47,7 +47,7 @@ const projectDefaultModelSelection = {
 };
 const actorModelSelection = {
   instanceId: ProviderInstanceId.make("codex"),
-  model: "gpt-5.5",
+  model: "gpt-5.6-sol",
   options: [{ id: "reasoningEffort", value: "high" }] as const,
 };
 const actorRuntimeMode = "auto-accept-edits" as const;
@@ -284,9 +284,16 @@ const providerSnapshots: ServerProvider[] = [
     checkedAt: "2026-01-01T00:00:00.000Z",
     models: [
       {
+        slug: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        isCustom: false,
+        capabilities: null,
+      },
+      {
         slug: "gpt-5.4",
         name: "GPT-5.4",
         isCustom: false,
+        isLegacy: true,
         capabilities: {
           optionDescriptors: [
             {
@@ -453,8 +460,21 @@ it.effect("lists thread model choices with curated model selections and reasonin
         provider: "Codex",
         providerInstanceId: ProviderInstanceId.make("codex"),
         driver: "codex",
+        model: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5.6-sol",
+        },
+      },
+      {
+        environmentId: scope.environmentId,
+        provider: "Codex",
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        driver: "codex",
         model: "gpt-5.4",
         name: "GPT-5.4",
+        isLegacy: true,
         reasoning: {
           optionId: "reasoningEffort",
           values: ["low", "medium", "high", "xhigh"],
@@ -671,8 +691,10 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
       scope.environmentId,
       scope.environmentId,
       scope.environmentId,
+      scope.environmentId,
     ]);
     expect(aggregateModels.models.map((model) => model.environmentId)).toEqual([
+      scope.environmentId,
       scope.environmentId,
       scope.environmentId,
       scope.environmentId,
@@ -743,6 +765,25 @@ it.effect("queues cross-thread messages and records relationship activities", ()
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
+    const legacyModelSelection = {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    };
+    const legacyError = yield* service
+      .sendMessageToThread(scope, {
+        threadId: targetThreadId,
+        prompt: "Please switch to the legacy model.",
+        modelSelection: legacyModelSelection,
+      })
+      .pipe(Effect.flip);
+
+    expect(legacyError).toMatchObject({
+      operation: "send_message_to_thread",
+      code: "legacy_model_not_allowed",
+      resourceId: "gpt-5.4",
+    });
+    expect(dispatched).toHaveLength(0);
+
     const result = yield* service.sendMessageToThread(scope, {
       threadId: targetThreadId,
       prompt: "Please review the plan.",
@@ -775,10 +816,23 @@ it.effect("queues cross-thread messages and records relationship activities", ()
     expect((dispatched[0] as { commandId: CommandId }).commandId).not.toBe(
       (dispatched[1] as { commandId: CommandId }).commandId,
     );
+
+    yield* service.sendMessageToThread(scope, {
+      threadId: targetThreadId,
+      prompt: "Please run the compatibility check.",
+      modelSelection: legacyModelSelection,
+      allowLegacyModel: true,
+    });
+
+    expect(dispatched[2]).toMatchObject({
+      type: "thread.message.queue",
+      threadId: targetThreadId,
+      modelSelection: legacyModelSelection,
+    });
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("rejects explicitly hidden models while allowing implicit inheritance", () => {
+it.effect("rejects hidden and legacy models unless legacy use is explicit", () => {
   const dispatched: OrchestrationCommand[] = [];
   const hiddenModelSelection = {
     instanceId: ProviderInstanceId.make("codex"),
@@ -787,6 +841,10 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
   const providerQualifiedHiddenModelSelection = {
     instanceId: ProviderInstanceId.make("opencode"),
     model: "openai/gpt-5.4-mini-fast",
+  };
+  const legacyModelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.4",
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
@@ -865,12 +923,50 @@ it.effect("rejects explicitly hidden models while allowing implicit inheritance"
       resourceId: "openai/gpt-5.4-mini-fast",
     });
 
+    const explicitLegacyError = yield* service
+      .createThread(scope, {
+        prompt: "Please review with the legacy model.",
+        modelSelection: legacyModelSelection,
+      })
+      .pipe(Effect.flip);
+
+    expect(explicitLegacyError).toMatchObject({
+      operation: "create_thread",
+      code: "legacy_model_not_allowed",
+      resourceType: "model",
+      resourceId: "gpt-5.4",
+    });
+
+    const inheritedLegacyError = yield* service
+      .createThread(
+        { ...scope, threadId: targetThreadId },
+        { prompt: "Please review with inherited legacy settings." },
+      )
+      .pipe(Effect.flip);
+
+    expect(inheritedLegacyError).toMatchObject({
+      operation: "create_thread",
+      code: "legacy_model_not_allowed",
+      resourceId: "gpt-5.4",
+    });
+
+    const allowedLegacyResult = yield* service.createThread(scope, {
+      prompt: "Please run the compatibility check.",
+      modelSelection: legacyModelSelection,
+      allowLegacyModel: true,
+    });
+
+    expect(allowedLegacyResult.thread.modelSelection).toEqual(legacyModelSelection);
+
     const result = yield* service.createThread(scope, {
       prompt: "Please review with inherited settings.",
     });
 
     expect(result.thread.modelSelection).toEqual(actorModelSelection);
     expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.create",
+      "thread.turn.start",
+      "thread.activity.append",
       "thread.create",
       "thread.turn.start",
       "thread.activity.append",

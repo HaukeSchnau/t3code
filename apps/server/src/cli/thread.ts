@@ -122,6 +122,14 @@ const modelFlag = Flag.string("model").pipe(
   Flag.withDescription("Provider model slug from `t3 thread models`."),
   Flag.optional,
 );
+const includeLegacyModelsFlag = Flag.boolean("include-legacy").pipe(
+  Flag.withDescription("Include models marked legacy."),
+  Flag.withDefault(false),
+);
+const allowLegacyModelFlag = Flag.boolean("allow-legacy-model").pipe(
+  Flag.withDescription("Allow an intentional legacy model selection."),
+  Flag.withDefault(false),
+);
 const modelOptionFlag = Flag.keyValuePair("option").pipe(
   Flag.withDescription("Provider option as key=value. Repeat for more options."),
   Flag.optional,
@@ -280,7 +288,10 @@ const projectsCommand = Command.make("projects", commonFlags).pipe(
   ),
 );
 
-const modelsCommand = Command.make("models", commonFlags).pipe(
+const modelsCommand = Command.make("models", {
+  ...commonFlags,
+  includeLegacy: includeLegacyModelsFlag,
+}).pipe(
   Command.withDescription("List provider and model choices for new threads."),
   Command.withHandler((flags) =>
     withThreadCliSession(flags, ({ origin, authorization }) =>
@@ -289,7 +300,14 @@ const modelsCommand = Command.make("models", commonFlags).pipe(
         const result = yield* client.threadOrchestration.listAllThreadModels({
           headers: { authorization },
         });
-        yield* Console.log(render(result, flags.json));
+        yield* Console.log(
+          render(
+            flags.includeLegacy
+              ? result
+              : { models: result.models.filter((model) => model.isLegacy !== true) },
+            flags.json,
+          ),
+        );
       }),
     ),
   ),
@@ -486,6 +504,7 @@ const createCommand = Command.make("create", {
   providerInstance: providerInstanceFlag,
   model: modelFlag,
   modelOptions: modelOptionFlag,
+  allowLegacyModel: allowLegacyModelFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
   title: Flag.string("title").pipe(Flag.withDescription("Initial thread title."), Flag.optional),
@@ -521,6 +540,7 @@ const createCommand = Command.make("create", {
                   }
                 : {}),
               ...(modelSelection !== undefined ? { modelSelection } : {}),
+              ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
               ...(Option.isSome(flags.runtimeMode) ? { runtimeMode: flags.runtimeMode.value } : {}),
               ...(Option.isSome(flags.interactionMode)
                 ? { interactionMode: flags.interactionMode.value }
@@ -577,6 +597,7 @@ const sendCommand = Command.make("send", {
   providerInstance: providerInstanceFlag,
   model: modelFlag,
   modelOptions: modelOptionFlag,
+  allowLegacyModel: allowLegacyModelFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
 }).pipe(
@@ -598,6 +619,7 @@ const sendCommand = Command.make("send", {
                 ? { environmentId: EnvironmentId.make(flags.environment.value) }
                 : {}),
               ...(modelSelection !== undefined ? { modelSelection } : {}),
+              ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
               ...(Option.isSome(flags.runtimeMode) ? { runtimeMode: flags.runtimeMode.value } : {}),
               ...(Option.isSome(flags.interactionMode)
                 ? { interactionMode: flags.interactionMode.value }
@@ -653,6 +675,7 @@ const batchCreateCommand = Command.make("create", {
     Flag.withDescription("Give each worker a managed workspace."),
     Flag.withDefault(false),
   ),
+  allowLegacyModel: allowLegacyModelFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
   title: Flag.string("title").pipe(Flag.withDescription("Batch title."), Flag.optional),
@@ -706,6 +729,7 @@ const batchCreateCommand = Command.make("create", {
             input: {
               prompt: flags.prompt,
               workers,
+              ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
               ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
               ...(Option.isSome(flags.timeoutMs) ? { timeoutMs: flags.timeoutMs.value } : {}),
             },

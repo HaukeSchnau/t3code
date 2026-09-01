@@ -482,6 +482,7 @@ function modelChoiceForProvider(
     model: model.slug,
     name: model.name,
     ...(model.shortName !== undefined ? { shortName: model.shortName } : {}),
+    ...(model.isLegacy === true ? { isLegacy: true } : {}),
     ...(reasoning !== undefined ? { reasoning } : {}),
     modelSelection: {
       instanceId: provider.instanceId,
@@ -598,6 +599,31 @@ const make = Effect.gen(function* () {
       if (environmentId === undefined) return false;
       return environmentId !== (yield* localEnvironmentId);
     });
+
+  const assertLegacyModelSelectionAllowed = Effect.fn(
+    "ThreadOrchestrationService.assertLegacyModelSelectionAllowed",
+  )(function* (
+    operation: string,
+    modelSelection: ModelSelection | undefined,
+    allowLegacyModel: boolean | undefined,
+  ) {
+    if (modelSelection === undefined || allowLegacyModel === true) return;
+    const providers = yield* providerRegistry.getProviders.pipe(
+      Effect.mapError(toThreadOrchestrationError(`${operation}.models`)),
+    );
+    const provider = providers.find(
+      (candidate) => candidate.instanceId === modelSelection.instanceId,
+    );
+    const model = provider?.models.find((candidate) => candidate.slug === modelSelection.model);
+    if (model?.isLegacy !== true) return;
+    return yield* new ThreadOrchestrationError({
+      operation,
+      code: "legacy_model_not_allowed",
+      message: `Model '${modelSelection.model}' is marked legacy. Choose a current model returned by thread model discovery, or set allowLegacyModel=true for an intentional compatibility run.`,
+      resourceType: "model",
+      resourceId: modelSelection.model,
+    });
+  });
 
   const resolveCreateInput = (
     scope: McpInvocationContext.McpInvocationScope,
@@ -1093,6 +1119,11 @@ const make = Effect.gen(function* () {
       if (options.modelSelectionIntent === "explicit") {
         yield* assertExplicitModelSelectionAllowed("create_thread", input.modelSelection);
       }
+      yield* assertLegacyModelSelectionAllowed(
+        "create_thread",
+        resolvedInput.modelSelection,
+        input.allowLegacyModel,
+      );
       if (yield* shouldRouteRemote(input.target?.environmentId)) {
         return yield* remoteClient.createThread(scopeForRemote(scope), resolvedInput);
       }
@@ -1603,6 +1634,7 @@ const make = Effect.gen(function* () {
               ...(worker.modelSelection !== undefined
                 ? { modelSelection: worker.modelSelection }
                 : {}),
+              ...(input.allowLegacyModel === true ? { allowLegacyModel: true } : {}),
               ...(worker.runtimeMode !== undefined ? { runtimeMode: worker.runtimeMode } : {}),
               ...(worker.interactionMode !== undefined
                 ? { interactionMode: worker.interactionMode }
@@ -1939,6 +1971,11 @@ const make = Effect.gen(function* () {
         return yield* remoteClient.sendMessageToThread(scopeForRemote(scope), input);
       }
       yield* assertExplicitModelSelectionAllowed("send_message_to_thread", input.modelSelection);
+      yield* assertLegacyModelSelectionAllowed(
+        "send_message_to_thread",
+        input.modelSelection,
+        input.allowLegacyModel,
+      );
       const targetThreadOption = yield* snapshotQuery.getThreadShellById(input.threadId).pipe(
         Effect.mapError(
           toThreadOrchestrationError("send_message_to_thread.thread", {

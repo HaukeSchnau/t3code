@@ -73,6 +73,7 @@ export const ThreadOrchestrationThreadModelChoice = Schema.Struct({
   model: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
   shortName: Schema.optional(TrimmedNonEmptyString),
+  isLegacy: Schema.optional(Schema.Boolean),
   reasoning: Schema.optional(ThreadOrchestrationReasoningOption),
   modelSelection: ModelSelection,
 });
@@ -194,6 +195,7 @@ export const ThreadOrchestrationCreateThreadInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   target: Schema.optional(ThreadOrchestrationCreateTarget),
   modelSelection: Schema.optional(ModelSelection),
+  allowLegacyModel: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   title: Schema.optional(TrimmedNonEmptyString),
@@ -222,6 +224,7 @@ export const ThreadOrchestrationCreateBatchInput = Schema.Struct({
   prompt: TrimmedNonEmptyString,
   title: Schema.optional(TrimmedNonEmptyString),
   workers: Schema.Array(ThreadOrchestrationBatchWorkerInput).check(Schema.isMinLength(1)),
+  allowLegacyModel: Schema.optional(Schema.Boolean),
   timeoutMs: Schema.optional(PositiveInt),
 });
 export type ThreadOrchestrationCreateBatchInput = typeof ThreadOrchestrationCreateBatchInput.Type;
@@ -332,6 +335,7 @@ export const ThreadOrchestrationSendMessageInput = Schema.Struct({
   threadId: ThreadId,
   prompt: TrimmedNonEmptyString,
   modelSelection: Schema.optional(ModelSelection),
+  allowLegacyModel: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
 });
