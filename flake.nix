@@ -553,6 +553,20 @@
           pkgs = mkPkgs system;
           nodejs = pkgs.nodejs_24;
           pnpm = mkPnpm pkgs nodejs;
+          ciPackages = [
+            nodejs
+            pnpm
+            pkgs.coreutils
+            pkgs.findutils
+            pkgs.gcc
+            pkgs.git
+            pkgs.gnumake
+            pkgs.just
+            pkgs.pkg-config
+            pkgs.python3
+            pkgs.rsync
+            pkgs.util-linux
+          ];
         in
         {
           default = pkgs.mkShell {
@@ -565,6 +579,14 @@
               pkgs.pkg-config
               pkgs.python3
             ];
+
+            shellHook = ''
+              export npm_config_nodedir="${nodejs}"
+            '';
+          };
+
+          ci = pkgs.mkShellNoCC {
+            packages = ciPackages;
 
             shellHook = ''
               export npm_config_nodedir="${nodejs}"

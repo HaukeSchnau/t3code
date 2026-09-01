@@ -9,6 +9,29 @@ agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE
 default:
     @just --list
 
+# CI calls the individual tasks in parallel jobs. `just qa` remains the complete,
+# resource-bounded local gate and deliberately runs the groups in order.
+qa: qa-check qa-test-non-server qa-test-server qa-release
+
+qa-check:
+    pnpm exec vp run --filter @t3tools/desktop ensure:electron
+    pnpm exec vp check
+    pnpm exec vp run -r --concurrency-limit 1 typecheck
+
+qa-test-non-server:
+    pnpm exec vp run --filter @t3tools/desktop ensure:electron
+    pnpm exec vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+
+qa-test-server:
+    pnpm exec vp run --filter t3 test
+
+qa-test-server-shard shard total:
+    pnpm exec vp run --filter t3 test --shard {{ quote(shard + "/" + total) }}
+
+qa-release:
+    pnpm run release:smoke
+    pnpm run fork:lockfile:check
+
 # Print the pnpmDeps SRI for flake.nix by forcing a fake-hash Nix build and extracting the "got" value.
 prefetch-pnpm-deps:
     ./scripts/prefetch-pnpm-deps.sh
