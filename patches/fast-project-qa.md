@@ -19,6 +19,9 @@ and fork lockfile check.
 - TypeScript package checks run one at a time inside each runner. Client and remaining package checks
   use separate Gitea jobs for cross-host parallelism without making two large `tsgo` processes page
   inside one cgroup. Successful package checks use Vite+'s persistent task cache.
+- Successful test tasks and server shards also use Vite+'s persistent task cache. Forwarded shard
+  arguments are part of its cache fingerprint, so each shard remains isolated while unchanged work
+  can be replayed on later runs.
 - Workflow steps `exec` the Nix development command so cancellation signals reach the job process
   instead of stopping at the workflow shell.
 
