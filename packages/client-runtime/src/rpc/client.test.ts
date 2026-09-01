@@ -1,9 +1,8 @@
 import {
+  DEFAULT_SERVER_SETTINGS,
   EnvironmentId,
-  ORCHESTRATION_WS_METHODS,
-  ThreadId,
-  type OrchestrationThreadStreamItem,
   type RelayClientInstallProgressEvent,
+  type ServerConfigStreamEvent,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
@@ -28,13 +27,7 @@ import {
 import * as EnvironmentSupervisor from "../connection/supervisor.ts";
 import * as RpcSession from "../rpc/session.ts";
 import type { WsRpcProtocolClient } from "../rpc/protocol.ts";
-import {
-  EnvironmentRpcRequestObserver,
-  request,
-  runStream,
-  subscribe,
-  subscribeWithSessionDynamic,
-} from "./client.ts";
+import { EnvironmentRpcRequestObserver, request, runStream, subscribe } from "./client.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -52,36 +45,11 @@ const INSTALL_DOWNLOADING: RelayClientInstallProgressEvent = {
   stage: "downloading",
 };
 
-type TestThreadStreamItem = OrchestrationThreadStreamItem | Error;
-
-const synchronized: OrchestrationThreadStreamItem = { kind: "synchronized" };
-
-function testThreadStream(queue: Queue.Queue<TestThreadStreamItem>) {
-  return Stream.fromQueue(queue).pipe(
-    Stream.mapEffect((item) => (item instanceof Error ? Effect.fail(item) : Effect.succeed(item))),
-  );
-}
-
-function threadQueue(
-  queues: ReadonlyMap<ThreadId, Queue.Queue<TestThreadStreamItem>>,
-  threadId: ThreadId | undefined,
-): Queue.Queue<TestThreadStreamItem> {
-  const queue = threadId === undefined ? undefined : queues.get(threadId);
-  if (queue === undefined)
-    throw new Error(`Missing test queue for ${threadId ?? "unknown thread"}.`);
-  return queue;
-}
-
-const threadCatchUpAdmission = {
-  group: "test-thread-detail-catch-up",
-  maxConcurrent: 3,
-  releaseWhen: (item: OrchestrationThreadStreamItem) => item.kind === "synchronized",
-};
-
 function session(client: WsRpcProtocolClient): RpcSession.RpcSession {
   return {
     client,
     initialConfig: Effect.never,
+    subscribeServerConfig: (input) => client.subscribeServerConfig(input),
     ready: Effect.void,
     probe: Effect.void,
     closed: Effect.never,
@@ -112,397 +80,36 @@ const makeHarness = Effect.fn("TestEnvironmentRpc.makeHarness")(function* () {
 });
 
 describe("environment RPC", () => {
-  it.effect("bounds catch-up admission while keeping synchronized subscriptions live", () =>
+  it.effect("reuses the session config stream instead of opening a duplicate subscription", () =>
     Effect.gen(function* () {
-      const ids = Array.from({ length: 8 }, (_, index) => ThreadId.make(`thread-${index}`));
-      const queues = new Map(
-        yield* Effect.forEach(ids, (id) =>
-          Queue.unbounded<TestThreadStreamItem>().pipe(Effect.map((queue) => [id, queue] as const)),
-        ),
-      );
-      const starts = yield* Queue.unbounded<ThreadId>();
-      const active = yield* Ref.make(0);
+      const event: ServerConfigStreamEvent = {
+        version: 1,
+        type: "settingsUpdated",
+        payload: { settings: DEFAULT_SERVER_SETTINGS },
+      };
+      let duplicateSubscriptions = 0;
       const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              yield* Ref.update(active, (count) => count + 1);
-              yield* Queue.offer(starts, input.threadId);
-              return testThreadStream(threadQueue(queues, input.threadId)).pipe(
-                Stream.ensuring(Ref.update(active, (count) => count - 1)),
-              );
-            }),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-
-      const fibers = yield* Effect.forEach(ids, (threadId) =>
-        subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Effect.succeed({ threadId, includeSynchronizationItems: true }),
-          { admission: threadCatchUpAdmission },
-        ).pipe(
-          Stream.runDrain,
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.forkChild,
-        ),
-      );
-
-      const firstWave = yield* Effect.all([
-        Queue.take(starts),
-        Queue.take(starts),
-        Queue.take(starts),
-      ]);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Effect.forEach(firstWave, (id) => Queue.offer(threadQueue(queues, id), synchronized), {
-        discard: true,
-      });
-      const secondWave = yield* Effect.all([
-        Queue.take(starts),
-        Queue.take(starts),
-        Queue.take(starts),
-      ]);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Effect.forEach(
-        secondWave,
-        (id) => Queue.offer(threadQueue(queues, id), synchronized),
-        {
-          discard: true,
+        [WS_METHODS.subscribeServerConfig]: () => {
+          duplicateSubscriptions += 1;
+          return Stream.never;
         },
-      );
-      const thirdWave = yield* Effect.all([Queue.take(starts), Queue.take(starts)]);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Effect.forEach(thirdWave, (id) => Queue.offer(threadQueue(queues, id), synchronized), {
-        discard: true,
-      });
-      expect(new Set([...firstWave, ...secondWave, ...thirdWave])).toEqual(new Set(ids));
-      expect(yield* Ref.get(active)).toBe(8);
-      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
-    }),
-  );
-
-  it.effect("releases catch-up permits after failure and interruption", () =>
-    Effect.gen(function* () {
-      const ids = Array.from({ length: 5 }, (_, index) => ThreadId.make(`release-${index}`));
-      const queues = new Map(
-        yield* Effect.forEach(ids, (id) =>
-          Queue.unbounded<TestThreadStreamItem>().pipe(Effect.map((queue) => [id, queue] as const)),
-        ),
-      );
-      const starts = yield* Queue.unbounded<ThreadId>();
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-          Stream.fromEffect(Queue.offer(starts, input.threadId)).pipe(
-            Stream.drain,
-            Stream.concat(testThreadStream(threadQueue(queues, input.threadId))),
-          ),
       } as unknown as WsRpcProtocolClient;
       const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      const fibers = yield* Effect.forEach(ids, (threadId) =>
-        subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Effect.succeed({ threadId, includeSynchronizationItems: true }),
-          { admission: threadCatchUpAdmission },
-        ).pipe(
-          Stream.runDrain,
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.forkChild,
-        ),
+      yield* SubscriptionRef.set(
+        activeSession,
+        Option.some({
+          ...session(client),
+          subscribeServerConfig: () => Stream.succeed(event),
+        }),
       );
 
-      const firstWave = yield* Effect.all([
-        Queue.take(starts),
-        Queue.take(starts),
-        Queue.take(starts),
-      ]);
-      expect(firstWave).toEqual(ids.slice(0, 3));
-      yield* Queue.offer(threadQueue(queues, firstWave[0]), new Error("catch-up failed"));
-      expect(yield* Queue.take(starts)).toBe(ids[3]);
-      const interruptedFiber = fibers[1];
-      if (interruptedFiber === undefined) return yield* Effect.die("Missing subscription fiber.");
-      yield* Fiber.interrupt(interruptedFiber);
-      expect(yield* Queue.take(starts)).toBe(ids[4]);
-      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
-    }),
-  );
-
-  it.effect("uses a fresh admission gate for a replacement session", () =>
-    Effect.gen(function* () {
-      const ids = Array.from({ length: 4 }, (_, index) => ThreadId.make(`session-${index}`));
-      const firstStarts = yield* Queue.unbounded<ThreadId>();
-      const secondStarts = yield* Queue.unbounded<ThreadId>();
-      const makeClient = (starts: Queue.Queue<ThreadId>) =>
-        ({
-          [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-            Stream.fromEffect(Queue.offer(starts, input.threadId)).pipe(
-              Stream.drain,
-              Stream.concat(Stream.never),
-            ),
-        }) as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(makeClient(firstStarts))));
-      const fibers = yield* Effect.forEach(ids, (threadId) =>
-        subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Effect.succeed({ threadId, includeSynchronizationItems: true }),
-          { admission: threadCatchUpAdmission },
-        ).pipe(
-          Stream.runDrain,
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.forkChild,
-        ),
-      );
-
-      yield* Effect.all([
-        Queue.take(firstStarts),
-        Queue.take(firstStarts),
-        Queue.take(firstStarts),
-      ]);
-      expect(Option.isNone(yield* Queue.poll(firstStarts))).toBe(true);
-      yield* SubscriptionRef.set(activeSession, Option.some(session(makeClient(secondStarts))));
-      const replacementWave = yield* Effect.all([
-        Queue.take(secondStarts),
-        Queue.take(secondStarts),
-        Queue.take(secondStarts),
-      ]);
-      expect(new Set(replacementWave).size).toBe(3);
-      expect(Option.isNone(yield* Queue.poll(secondStarts))).toBe(true);
-      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
-    }),
-  );
-
-  it.effect("rejects invalid admission limits before starting a subscription", () =>
-    Effect.gen(function* () {
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: () => Stream.never,
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-
-      for (const maxConcurrent of [0, -1, 1.5, Number.POSITIVE_INFINITY]) {
-        const exit = yield* subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Effect.succeed({ threadId: ThreadId.make("invalid-limit") }),
-          {
-            admission: {
-              ...threadCatchUpAdmission,
-              maxConcurrent,
-            },
-          },
-        ).pipe(
-          Stream.runDrain,
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.exit,
-        );
-        expect(Exit.isFailure(exit)).toBe(true);
-        if (Exit.isFailure(exit)) {
-          expect(Cause.pretty(exit.cause)).toContain(
-            "Subscription admission maxConcurrent must be a positive safe integer",
-          );
-        }
-      }
-    }),
-  );
-
-  it.effect("rejects conflicting limits for one session admission group", () =>
-    Effect.gen(function* () {
-      const starts = yield* Queue.unbounded<ThreadId>();
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-          Stream.fromEffect(Queue.offer(starts, input.threadId)).pipe(
-            Stream.drain,
-            Stream.concat(Stream.never),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      const firstFiber = yield* subscribeWithSessionDynamic(
-        ORCHESTRATION_WS_METHODS.subscribeThread,
-        () => Effect.succeed({ threadId: ThreadId.make("limit-one") }),
-        { admission: { ...threadCatchUpAdmission, maxConcurrent: 1 } },
-      ).pipe(
-        Stream.runDrain,
+      const received = yield* subscribe(WS_METHODS.subscribeServerConfig, {}).pipe(
+        Stream.runHead,
         Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        Effect.forkChild,
-      );
-      yield* Queue.take(starts);
-
-      const exit = yield* subscribeWithSessionDynamic(
-        ORCHESTRATION_WS_METHODS.subscribeThread,
-        () => Effect.succeed({ threadId: ThreadId.make("limit-two") }),
-        { admission: { ...threadCatchUpAdmission, maxConcurrent: 2 } },
-      ).pipe(
-        Stream.runDrain,
-        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        Effect.exit,
       );
 
-      expect(Exit.isFailure(exit)).toBe(true);
-      if (Exit.isFailure(exit)) {
-        expect(Cause.pretty(exit.cause)).toContain(
-          'group "test-thread-detail-catch-up" already uses maxConcurrent 1; received conflicting 2',
-        );
-      }
-      yield* Fiber.interrupt(firstFiber);
-    }),
-  );
-
-  it.effect("releases admission before an expected-failure retry becomes live", () =>
-    Effect.gen(function* () {
-      const domainError = new Error("retry catch-up");
-      const attemptCount = yield* Ref.make(0);
-      const active = yield* Ref.make(0);
-      const attempts = yield* Queue.unbounded<{
-        readonly attempt: number;
-        readonly events: Queue.Queue<TestThreadStreamItem>;
-      }>();
-      const failures = yield* Queue.unbounded<void>();
-      const observed = yield* Queue.unbounded<OrchestrationThreadStreamItem>();
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: () =>
-          Stream.unwrap(
-            Effect.gen(function* () {
-              const attempt = yield* Ref.updateAndGet(attemptCount, (count) => count + 1);
-              const events = yield* Queue.unbounded<TestThreadStreamItem>();
-              yield* Ref.update(active, (count) => count + 1);
-              yield* Queue.offer(attempts, { attempt, events });
-              const stream = attempt === 1 ? Stream.fail(domainError) : testThreadStream(events);
-              return stream.pipe(Stream.ensuring(Ref.update(active, (count) => count - 1)));
-            }),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      const fiber = yield* subscribeWithSessionDynamic(
-        ORCHESTRATION_WS_METHODS.subscribeThread,
-        () => Effect.succeed({ threadId: ThreadId.make("retry-live") }),
-        {
-          admission: { ...threadCatchUpAdmission, maxConcurrent: 1 },
-          onExpectedFailure: () => Queue.offer(failures, undefined),
-          retryExpectedFailureAfter: "100 millis",
-        },
-      ).pipe(
-        Stream.runForEach((item) => Queue.offer(observed, item.value)),
-        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-        Effect.forkChild,
-      );
-
-      expect((yield* Queue.take(attempts)).attempt).toBe(1);
-      yield* Queue.take(failures);
-      expect(yield* Ref.get(active)).toBe(0);
-      yield* TestClock.adjust("100 millis");
-      const retry = yield* Queue.take(attempts);
-      expect(retry.attempt).toBe(2);
-      yield* Queue.offer(retry.events, synchronized);
-      expect(yield* Queue.take(observed)).toEqual(synchronized);
-      expect(yield* Ref.get(active)).toBe(1);
-      yield* Fiber.interrupt(fiber);
-    }),
-  );
-
-  it.effect("cancels a queued fourth waiter without granting a ghost permit", () =>
-    Effect.gen(function* () {
-      const ids = Array.from({ length: 5 }, (_, index) => ThreadId.make(`cancel-${index}`));
-      const queues = new Map(
-        yield* Effect.forEach(ids, (id) =>
-          Queue.unbounded<TestThreadStreamItem>().pipe(Effect.map((queue) => [id, queue] as const)),
-        ),
-      );
-      const starts = yield* Queue.unbounded<ThreadId>();
-      const attempts = yield* Queue.unbounded<ThreadId>();
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-          Stream.fromEffect(Queue.offer(starts, input.threadId)).pipe(
-            Stream.drain,
-            Stream.concat(testThreadStream(threadQueue(queues, input.threadId))),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      const fibers = yield* Effect.forEach(ids, (threadId) =>
-        subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Queue.offer(attempts, threadId).pipe(Effect.as({ threadId })),
-          { admission: threadCatchUpAdmission },
-        ).pipe(
-          Stream.runDrain,
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.forkChild,
-        ),
-      );
-      const firstWave = yield* Effect.all([
-        Queue.take(starts),
-        Queue.take(starts),
-        Queue.take(starts),
-      ]);
-      expect(firstWave).toEqual(ids.slice(0, 3));
-      const attempted = yield* Effect.all([
-        Queue.take(attempts),
-        Queue.take(attempts),
-        Queue.take(attempts),
-        Queue.take(attempts),
-        Queue.take(attempts),
-      ]);
-      expect(attempted).toEqual(ids);
-      const fourthFiber = fibers[3];
-      if (fourthFiber === undefined) return yield* Effect.die("Missing fourth waiter.");
-      yield* Fiber.interrupt(fourthFiber);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Queue.offer(threadQueue(queues, firstWave[0]), synchronized);
-      expect(yield* Queue.take(starts)).toBe(ids[4]);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
-    }),
-  );
-
-  it.effect("releases exactly once when synchronization is duplicated", () =>
-    Effect.gen(function* () {
-      const ids = Array.from({ length: 3 }, (_, index) => ThreadId.make(`duplicate-${index}`));
-      const queues = new Map(
-        yield* Effect.forEach(ids, (id) =>
-          Queue.unbounded<TestThreadStreamItem>().pipe(Effect.map((queue) => [id, queue] as const)),
-        ),
-      );
-      const starts = yield* Queue.unbounded<ThreadId>();
-      const consumed = yield* Queue.unbounded<{
-        readonly threadId: ThreadId;
-        readonly item: OrchestrationThreadStreamItem;
-      }>();
-      const client = {
-        [ORCHESTRATION_WS_METHODS.subscribeThread]: (input: { readonly threadId: ThreadId }) =>
-          Stream.fromEffect(Queue.offer(starts, input.threadId)).pipe(
-            Stream.drain,
-            Stream.concat(testThreadStream(threadQueue(queues, input.threadId))),
-          ),
-      } as unknown as WsRpcProtocolClient;
-      const { activeSession, supervisor } = yield* makeHarness();
-      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
-      const fibers = yield* Effect.forEach(ids, (threadId) =>
-        subscribeWithSessionDynamic(
-          ORCHESTRATION_WS_METHODS.subscribeThread,
-          () => Effect.succeed({ threadId }),
-          { admission: { ...threadCatchUpAdmission, maxConcurrent: 1 } },
-        ).pipe(
-          Stream.runForEach((item) => Queue.offer(consumed, { threadId, item: item.value })),
-          Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
-          Effect.forkChild,
-        ),
-      );
-
-      expect(yield* Queue.take(starts)).toBe(ids[0]);
-      yield* Queue.offer(threadQueue(queues, ids[0]), synchronized);
-      yield* Queue.offer(threadQueue(queues, ids[0]), synchronized);
-      expect(yield* Queue.take(starts)).toBe(ids[1]);
-      expect(yield* Effect.all([Queue.take(consumed), Queue.take(consumed)])).toEqual([
-        { threadId: ids[0], item: synchronized },
-        { threadId: ids[0], item: synchronized },
-      ]);
-      expect(Option.isNone(yield* Queue.poll(starts))).toBe(true);
-      yield* Queue.offer(threadQueue(queues, ids[1]), synchronized);
-      expect(yield* Queue.take(starts)).toBe(ids[2]);
-      yield* Effect.forEach(fibers, Fiber.interrupt, { discard: true });
+      expect(received).toEqual(Option.some(event));
+      expect(duplicateSubscriptions).toBe(0);
     }),
   );
 
