@@ -64,6 +64,7 @@ const REASONING_EFFORT_LABELS: Readonly<Record<string, string>> = {
 const DEFAULT_SERVICE_TIER_ID = "default";
 const CODEX_REASONING_DEFAULT_OVERRIDES: Readonly<Record<string, string>> = {
   "gpt-5.5": "high",
+  "gpt-5.6-sol": "high",
 };
 const CURRENT_CODEX_MODELS = new Set([
   "gpt-5.6-luna",
