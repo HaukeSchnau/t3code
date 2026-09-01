@@ -222,6 +222,15 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
     }),
   );
 
+  it.effect("documents immediate thread sends and explicit queueing", () =>
+    Effect.gen(function* () {
+      const { output } = yield* captureStdout(runCli(["thread", "send", "--help"]));
+      assert.match(output, /Deliver a message to another thread now/);
+      assert.match(output, /--queue/);
+      assert.match(output, /Wait behind active work instead of steering it/);
+    }),
+  );
+
   it.effect("rejects invalid log-level casing before launching the server", () =>
     Effect.gen(function* () {
       const error = yield* runCliWithRuntime(["--log-level", "Debug"]).pipe(Effect.flip);

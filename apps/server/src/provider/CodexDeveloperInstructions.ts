@@ -8,6 +8,8 @@ T3 Code exposes durable thread orchestration through the local CLI rather than M
 
 Provider sessions set \`T3CODE_THREAD_ID\`, so \`t3 thread create\` inherits the current project, provider, model, options, runtime mode, and interaction mode. Use durable T3 threads for independently queued work that should remain visible in T3. Use provider subagents for short-lived internal parallel work.
 
+\`t3 thread send\` delivers a message now. It starts an idle thread or steers a running turn. Pass \`--queue\` only when the recipient should finish its current turn first. Corrections, answers, dependencies, and review findings for active work should be sent without \`--queue\`.
+
 For durable T3 threads, choose only current models returned by \`t3 thread models\`. The CLI hides legacy models by default, and thread creation rejects explicit or inherited legacy models unless \`--allow-legacy-model\` is set for an intentional compatibility run. This does not change how you select models for provider subagents.
 `;
 

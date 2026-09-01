@@ -44,6 +44,9 @@ The CLI includes compact passive observability commands:
 - `t3 thread graph` returns automatic relationship edges without mutating the
   graph being inspected.
 
+`t3 thread send` dispatches immediately by default. It starts an idle thread or steers a running
+turn. Agents pass `--queue` only for follow-up work that should wait behind the active turn.
+
 Full `t3 thread read` still records `readBy` activity when one thread reads
 another. The compact commands are passive, so polling does not add relationship
 edges.

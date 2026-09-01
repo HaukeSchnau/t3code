@@ -142,7 +142,7 @@ export const ForkThreadTool = mutatingTool(
 export const SendMessageToThreadTool = mutatingTool(
   Tool.make("send_message_to_thread", {
     description:
-      "Send or queue a user message to another T3 Code thread. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. The target thread decides whether the turn starts immediately or waits behind active work. Omit modelSelection, runtimeMode, and interactionMode to keep the target thread's current settings. A model-changing send rejects legacy models unless allowLegacyModel=true. Do not use this to switch providers; create a new thread for provider/model fanout.",
+      "Send a user message to another T3 Code thread. Delivery defaults to immediate: an idle thread starts and a running turn is steered. Set delivery='queued' only when the recipient should finish its current turn first. Omit environmentId for the current host, or pass the target thread's environmentId for a registered remote host. Omit modelSelection, runtimeMode, and interactionMode to keep the target thread's current settings. A model-changing send rejects legacy models unless allowLegacyModel=true. Do not use this to switch providers; create a new thread for provider/model fanout.",
     parameters: ThreadOrchestrationSendMessageInput,
     success: ThreadOrchestrationSendMessageResult,
     failure: ThreadOrchestrationError,

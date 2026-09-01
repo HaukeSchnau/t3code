@@ -703,8 +703,9 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("queues cross-thread messages and records relationship activities", () => {
+it.effect("delivers cross-thread messages with explicit queue control", () => {
   const dispatched: OrchestrationCommand[] = [];
+  let queuedMessageCount = 0;
   const model: OrchestrationReadModel = {
     ...readModel,
     threads: [
@@ -725,6 +726,9 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         dispatch: (command) =>
           Effect.sync(() => {
             dispatched.push(command);
+            if (command.type === "thread.message.queue" && command.delivery === "queued") {
+              queuedMessageCount += 1;
+            }
             return { sequence: dispatched.length };
           }),
         latestSequence: Effect.succeed(0),
@@ -745,7 +749,15 @@ it.effect("queues cross-thread messages and records relationship activities", ()
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: getThreadShellById(model),
-        getThreadResultContextById: getThreadResultContextById(model),
+        getThreadResultContextById: (threadId) =>
+          getThreadResultContextById(model)(threadId).pipe(
+            Effect.map(
+              Option.map((context) => ({
+                ...context,
+                queuedMessageCount,
+              })),
+            ),
+          ),
         listThreadRelationshipActivities: listThreadRelationshipActivities(model),
         getThreadDetailById: getThreadDetailById(model),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
@@ -790,6 +802,11 @@ it.effect("queues cross-thread messages and records relationship activities", ()
     });
 
     expect(result.thread.threadId).toBe(targetThreadId);
+    expect(result.messageId).toBe(
+      dispatched[0]?.type === "thread.message.queue" ? dispatched[0].message.messageId : undefined,
+    );
+    expect(result.disposition).toBe("dispatched");
+    expect(result.queued).toBe(false);
     expect(dispatched.map((command) => command.type)).toEqual([
       "thread.message.queue",
       "thread.activity.append",
@@ -800,6 +817,7 @@ it.effect("queues cross-thread messages and records relationship activities", ()
       message: { text: "Please review the plan." },
       runtimeMode: "approval-required",
       interactionMode: "default",
+      delivery: "immediate",
     });
     expect(dispatched[1]).toMatchObject({
       type: "thread.activity.append",
@@ -817,6 +835,20 @@ it.effect("queues cross-thread messages and records relationship activities", ()
       (dispatched[1] as { commandId: CommandId }).commandId,
     );
 
+    const queuedResult = yield* service.sendMessageToThread(scope, {
+      threadId: targetThreadId,
+      prompt: "After the implementation, update the docs.",
+      delivery: "queued",
+    });
+
+    expect(queuedResult.disposition).toBe("queued");
+    expect(queuedResult.queued).toBe(true);
+    expect(dispatched[2]).toMatchObject({
+      type: "thread.message.queue",
+      threadId: targetThreadId,
+      delivery: "queued",
+    });
+
     yield* service.sendMessageToThread(scope, {
       threadId: targetThreadId,
       prompt: "Please run the compatibility check.",
@@ -824,10 +856,11 @@ it.effect("queues cross-thread messages and records relationship activities", ()
       allowLegacyModel: true,
     });
 
-    expect(dispatched[2]).toMatchObject({
+    expect(dispatched[4]).toMatchObject({
       type: "thread.message.queue",
       threadId: targetThreadId,
       modelSelection: legacyModelSelection,
+      delivery: "immediate",
     });
   }).pipe(Effect.provide(testLayer));
 });

@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import {
   IsoDateTime,
   EnvironmentId,
+  MessageId,
   NonNegativeInt,
   PositiveInt,
   ProjectId,
@@ -16,6 +17,7 @@ import {
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
+  ThreadMessageDelivery,
 } from "./orchestration.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 
@@ -334,6 +336,7 @@ export const ThreadOrchestrationSendMessageInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId),
   threadId: ThreadId,
   prompt: TrimmedNonEmptyString,
+  delivery: Schema.optional(ThreadMessageDelivery),
   modelSelection: Schema.optional(ModelSelection),
   allowLegacyModel: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
@@ -343,6 +346,8 @@ export type ThreadOrchestrationSendMessageInput = typeof ThreadOrchestrationSend
 
 export const ThreadOrchestrationSendMessageResult = Schema.Struct({
   thread: ThreadOrchestrationThreadSummary,
+  messageId: MessageId,
+  disposition: Schema.Literals(["dispatched", "queued"]),
   queued: Schema.Boolean,
 });
 export type ThreadOrchestrationSendMessageResult = typeof ThreadOrchestrationSendMessageResult.Type;

@@ -30,6 +30,10 @@ inherit and record their caller. Direct shell use can pass `--from-thread`.
 The CLI issues a short-lived administrative session and calls the running T3
 server. It never opens live state directly.
 
+`t3 thread send` dispatches immediately by default, steering a running turn through the same
+provider path as the client queue's "Send now" action. `--queue` retains a durable follow-up until
+active work completes successfully.
+
 Thread relationship facts are recorded automatically as
 `thread.activity.append` entries with kind
 `thread-orchestration.relationship`. This currently captures create, fork,

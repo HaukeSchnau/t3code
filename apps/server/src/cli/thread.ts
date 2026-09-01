@@ -130,6 +130,10 @@ const allowLegacyModelFlag = Flag.boolean("allow-legacy-model").pipe(
   Flag.withDescription("Allow an intentional legacy model selection."),
   Flag.withDefault(false),
 );
+const queueMessageFlag = Flag.boolean("queue").pipe(
+  Flag.withDescription("Wait behind active work instead of steering it."),
+  Flag.withDefault(false),
+);
 const modelOptionFlag = Flag.keyValuePair("option").pipe(
   Flag.withDescription("Provider option as key=value. Repeat for more options."),
   Flag.optional,
@@ -598,10 +602,11 @@ const sendCommand = Command.make("send", {
   model: modelFlag,
   modelOptions: modelOptionFlag,
   allowLegacyModel: allowLegacyModelFlag,
+  queue: queueMessageFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
 }).pipe(
-  Command.withDescription("Send or queue a message for another thread."),
+  Command.withDescription("Deliver a message to another thread now."),
   Command.withHandler((flags) =>
     withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
       Effect.gen(function* () {
@@ -615,6 +620,7 @@ const sendCommand = Command.make("send", {
             input: {
               threadId: target,
               prompt: flags.prompt,
+              delivery: flags.queue ? "queued" : "immediate",
               ...(Option.isSome(flags.environment)
                 ? { environmentId: EnvironmentId.make(flags.environment.value) }
                 : {}),

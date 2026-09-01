@@ -544,6 +544,8 @@ describe("T3 orchestration developer instructions", () => {
       NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
       NodeAssert.match(instructions, /t3 thread --help/);
       NodeAssert.match(instructions, /T3CODE_THREAD_ID/);
+      NodeAssert.match(instructions, /t3 thread send.*delivers a message now/);
+      NodeAssert.match(instructions, /Pass `--queue` only/);
     }
   });
 });
