@@ -112,7 +112,10 @@ export function ComposerBannerStack({ className, items }: ComposerBannerStackPro
 
   return (
     <ComposerBanner.Attachment
-      className={className}
+      className={cn(
+        "max-w-[calc(48rem-2*var(--chat-composer-drawer-inset))] [--chat-composer-drawer-inset:1.375rem]",
+        className,
+      )}
       data-composer-banner-drawer="true"
       data-chat-composer-collapsed-controls="true"
     >
