@@ -66,7 +66,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useParams, useRouter } from "@tanstack/react-router";
+import { useLocation, useParams, useRouter } from "@tanstack/react-router";
 
 import {
   isAtomCommandInterrupted,
@@ -183,6 +183,7 @@ import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./u
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { SidebarThreadDetailPrewarmer } from "./sidebar/SidebarThreadDetailPrewarmer";
+import { DelegationSidebarFixture } from "./delegation-fixture/DelegationSidebarFixture";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import {
@@ -1713,6 +1714,9 @@ export default function Sidebar() {
   const projects = useProjects();
   const threads = useThreadShells();
   const router = useRouter();
+  const showDelegationFixture = useLocation({
+    select: (location) => location.pathname === "/fixtures/delegation",
+  });
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
@@ -3765,6 +3769,16 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
+                    showDelegationFixture ? (
+                      <DelegationSidebarFixture key="delegation-fixture" />
+                    ) : null,
+                    showDelegationFixture ? (
+                      <li
+                        key="delegation-fixture-divider"
+                        aria-hidden
+                        className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
+                      />
+                    ) : null,
                     pinnedThreads.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
