@@ -11,11 +11,14 @@ default:
 
 # CI calls the individual tasks in parallel jobs. `just qa` remains the complete,
 # resource-bounded local gate and deliberately runs the groups in order.
-qa: qa-check qa-test-non-server qa-test-server qa-release
+qa: qa-static qa-typecheck qa-test-non-server qa-test-server qa-release
 
-qa-check:
+qa-static:
+    pnpm exec vp fmt --check
+    pnpm exec vp lint --report-unused-disable-directives --threads 1
+
+qa-typecheck:
     pnpm exec vp run --filter @t3tools/desktop ensure:electron
-    pnpm exec vp check
     pnpm exec vp run -r --concurrency-limit 1 typecheck
 
 qa-test-non-server:
