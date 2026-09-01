@@ -15,6 +15,7 @@ import { ComposerBanner } from "./ComposerBanner";
 export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   count: number;
   menuOpen: boolean;
+  placement?: "dock" | "tab";
   pulseKey: number;
   pulsing: boolean;
   onToggleMenu: () => void;
@@ -34,7 +35,15 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   );
 
   return (
-    <ComposerBanner.Root width="content" data-composer-shoulder-tab className="ml-auto">
+    <ComposerBanner.Root
+      width="content"
+      data-composer-shoulder-tab
+      className={cn(
+        "ml-auto",
+        props.placement === "tab" &&
+          "absolute -top-7 right-4 z-0 ml-0 h-8 p-0 pb-1 [--chat-composer-attachment-overlap:0px] before:rounded-t-xl before:border-b-0",
+      )}
+    >
       <ComposerBanner.Row
         render={<button type="button" />}
         data-prompt-stash-badge="true"
