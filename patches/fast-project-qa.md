@@ -22,6 +22,8 @@ and fork lockfile check.
 - Successful test tasks and server shards also use Vite+'s persistent task cache. Forwarded shard
   arguments are part of its cache fingerprint, so each shard remains isolated while unchanged work
   can be replayed on later runs.
+- Package tests use two-way outer concurrency. Each package's Vitest process owns its own worker
+  pool, so higher outer fan-out oversubscribes the 12-core runner and crosses its soft memory limit.
 - Workflow steps `exec` the Nix development command so cancellation signals reach the job process
   instead of stopping at the workflow shell.
 
