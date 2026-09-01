@@ -61,7 +61,7 @@ jobs:
 
   test_non_server:
     name: Test packages and clients
-    runs-on: t3code-ci
+    runs-on: t3code-ci-non-server
     timeout-minutes: 15
     steps:
       - name: Checkout exact revision
