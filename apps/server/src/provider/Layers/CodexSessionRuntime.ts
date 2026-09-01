@@ -149,6 +149,19 @@ const CodexChildResumeMetadata = Schema.Struct({
 });
 const decodeCodexChildResumeMetadata = Schema.decodeUnknownEffect(CodexChildResumeMetadata);
 
+// TODO: Remove these protocol shims after effect-codex-app-server is regenerated
+// from a Codex version that includes thread/turns/list and thread/revert.
+const CodexThreadTurnsListResponse = Schema.Struct({
+  data: Schema.Array(Schema.Struct({ id: Schema.String })),
+  nextCursor: Schema.NullOr(Schema.String),
+});
+const CodexThreadRevertResponse = Schema.Struct({
+  thread: Schema.Struct({ id: Schema.String }),
+});
+const decodeCodexThreadTurnsListResponse = Schema.decodeUnknownEffect(CodexThreadTurnsListResponse);
+const decodeCodexThreadRevertResponse = Schema.decodeUnknownEffect(CodexThreadRevertResponse);
+const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
 export type CodexTurnStartParamsWithCollaborationMode =
   typeof CodexTurnStartParamsWithCollaborationMode.Type;
 
@@ -241,7 +254,8 @@ export type CodexSessionRuntimeError =
   | CodexSessionRuntimePendingApprovalNotFoundError
   | CodexSessionRuntimePendingUserInputNotFoundError
   | CodexSessionRuntimeInvalidUserInputAnswersError
-  | CodexSessionRuntimeThreadIdMissingError;
+  | CodexSessionRuntimeThreadIdMissingError
+  | CodexSessionRuntimeHistoryBoundaryNotFoundError;
 
 export class CodexSessionRuntimePendingApprovalNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimePendingApprovalNotFoundError>()(
   "CodexSessionRuntimePendingApprovalNotFoundError",
@@ -286,6 +300,134 @@ export class CodexSessionRuntimeThreadIdMissingError extends Schema.TaggedErrorC
     return `Codex session is missing a provider thread id for ${this.threadId}`;
   }
 }
+
+export class CodexSessionRuntimeHistoryBoundaryNotFoundError extends Schema.TaggedErrorClass<CodexSessionRuntimeHistoryBoundaryNotFoundError>()(
+  "CodexSessionRuntimeHistoryBoundaryNotFoundError",
+  {
+    threadId: Schema.String,
+    numTurns: Schema.Number,
+    availableTurns: Schema.Number,
+  },
+) {
+  override get message(): string {
+    return `Cannot remove ${this.numTurns} Codex turns from ${this.threadId}; only ${this.availableTurns} turns are available.`;
+  }
+}
+
+interface CodexRawRequestClient {
+  readonly request: (
+    method: string,
+    payload?: unknown,
+  ) => Effect.Effect<unknown, CodexErrors.CodexAppServerError>;
+}
+
+interface CodexThreadRollbackClient {
+  readonly request: (
+    method: "thread/rollback",
+    payload: CodexRpc.ClientRequestParamsByMethod["thread/rollback"],
+  ) => Effect.Effect<
+    CodexRpc.ClientRequestResponsesByMethod["thread/rollback"],
+    CodexErrors.CodexAppServerError
+  >;
+  readonly raw: CodexRawRequestClient;
+}
+
+export function isPaginatedCodexThreadRollbackError(error: unknown): boolean {
+  return (
+    isCodexAppServerRequestError(error) &&
+    error.errorMessage.toLowerCase().includes("paginated threads do not support thread/rollback")
+  );
+}
+
+export const revertPaginatedCodexThread = Effect.fn(
+  "CodexSessionRuntime.revertPaginatedCodexThread",
+)(function* (input: {
+  readonly client: CodexRawRequestClient;
+  readonly threadId: string;
+  readonly numTurns: number;
+}) {
+  let cursor: string | null = null;
+  let remainingTurns = input.numTurns;
+  let availableTurns = 0;
+
+  while (remainingTurns > 0) {
+    const rawPage: unknown = yield* input.client.request("thread/turns/list", {
+      threadId: input.threadId,
+      ...(cursor === null ? {} : { cursor }),
+      limit: Math.min(remainingTurns, 100),
+      sortDirection: "desc",
+      itemsView: "notLoaded",
+    });
+    const page: typeof CodexThreadTurnsListResponse.Type =
+      yield* decodeCodexThreadTurnsListResponse(rawPage).pipe(
+        Effect.mapError((cause) =>
+          CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+            "decode-response-payload",
+            cause,
+            { method: "thread/turns/list" },
+          ),
+        ),
+      );
+    availableTurns += page.data.length;
+
+    if (page.data.length >= remainingTurns) {
+      const beforeTurnId = page.data[remainingTurns - 1]!.id;
+      const rawRevert = yield* input.client.request("thread/revert", {
+        threadId: input.threadId,
+        beforeTurnId,
+      });
+      const reverted = yield* decodeCodexThreadRevertResponse(rawRevert).pipe(
+        Effect.mapError((cause) =>
+          CodexErrors.CodexAppServerProtocolParseError.fromSchemaError(
+            "decode-response-payload",
+            cause,
+            { method: "thread/revert" },
+          ),
+        ),
+      );
+      return {
+        threadId: reverted.thread.id,
+        turns: [],
+      } satisfies CodexThreadSnapshot;
+    }
+
+    remainingTurns -= page.data.length;
+    if (page.data.length === 0 || page.nextCursor === null) {
+      break;
+    }
+    cursor = page.nextCursor;
+  }
+
+  return yield* new CodexSessionRuntimeHistoryBoundaryNotFoundError({
+    threadId: input.threadId,
+    numTurns: input.numTurns,
+    availableTurns,
+  });
+});
+
+export const rollbackCodexThread = Effect.fn("CodexSessionRuntime.rollbackCodexThread")(
+  function* (input: {
+    readonly client: CodexThreadRollbackClient;
+    readonly threadId: string;
+    readonly numTurns: number;
+  }) {
+    return yield* input.client
+      .request("thread/rollback", {
+        threadId: input.threadId,
+        numTurns: input.numTurns,
+      })
+      .pipe(
+        Effect.map(parseThreadSnapshot),
+        Effect.catchIf(isPaginatedCodexThreadRollbackError, () =>
+          revertPaginatedCodexThread({
+            client: input.client.raw,
+            threadId: input.threadId,
+            numTurns: input.numTurns,
+          }),
+        ),
+      );
+  },
+);
 
 interface PendingApproval {
   readonly requestId: ApprovalRequestId;
@@ -2739,16 +2881,17 @@ export const makeCodexSessionRuntime = (
       rollbackThread: (numTurns) =>
         Effect.gen(function* () {
           const providerThreadId = yield* readProviderThreadId;
-          const response = yield* client.request("thread/rollback", {
+          const snapshot = yield* rollbackCodexThread({
+            client,
             threadId: providerThreadId,
             numTurns,
           });
           yield* updateSession(sessionRef, {
             status: "ready",
             activeTurnId: undefined,
-            resumeCursor: { threadId: response.thread.id },
+            resumeCursor: { threadId: snapshot.threadId },
           });
-          return parseThreadSnapshot(response);
+          return snapshot;
         }),
       uploadFeedback: (reason) =>
         Effect.gen(function* () {
