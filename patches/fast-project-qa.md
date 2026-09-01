@@ -13,6 +13,8 @@ and fork lockfile check.
   treats project setup and QA commands as opaque executables and contains no Node or TypeScript
   behavior.
 - `.ci/` owns T3 Code's retained paths, environment, and dependency fingerprint.
+- Server-test temporary files live below T3 Code's persistent CI cache. The runner's private `/tmp`
+  is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
   non-server tests, release smoke, and server shards as independent jobs. The serial server test
   suite is split across three jobs.

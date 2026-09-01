@@ -1,1 +1,6 @@
 export PATH="$PWD/node_modules/.bin:$PATH"
+
+# The runner service deliberately gives jobs a small private /tmp. Server tests
+# copy real workspaces, so keep their temporary files on the persistent CI disk.
+export TMPDIR="$CI_CACHE_ROOT/tmp"
+install -d "$TMPDIR"
