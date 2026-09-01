@@ -140,13 +140,13 @@
             pname = "t3code-web-deps";
             src = manifestSource;
             workspaces = [ "@t3tools/web..." ];
-            hash = "sha256-KP5z6x6qVe9kezJEaqYBDEKlsCvpIGAhECqR9gBRDSs=";
+            hash = "sha256-Hzs26CvJa82ebGq/71zaf1I69BEycVkmQfI/tNCLGCw=";
           };
           serverPnpmDeps = mkPnpmDeps {
             pname = "t3code-server-deps";
             src = manifestSource;
             workspaces = [ "t3..." ];
-            hash = "sha256-VlSYDb3/xDuJWFqK1AA8LAb9n8yxPDCMWwsRas0fcZo=";
+            hash = "sha256-Zv/ac21E4AiY6FEXfHBuIcJcKx6T0klsBfByCGtNe9M=";
           };
           runtimePnpmDeps = mkPnpmDeps {
             pname = "t3code-runtime-deps";
@@ -154,9 +154,10 @@
             workspaces = [ "t3" ];
             prePnpmInstall = ''
               cp pnpm-deploy-lock.yaml pnpm-lock.yaml
-              printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
+              grep -q '^injectWorkspacePackages: true$' pnpm-workspace.yaml \
+                || printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
             '';
-            hash = "sha256-HA4NG6mQFcnFWH3QeD/7sRqKzZZ1rWpqUhGhWUb3pzk=";
+            hash = "sha256-rrXPeJDA0D5M9dPrfIm+FRe8nug18fD09Q3jKGTWXeI=";
           };
 
           commonNativeBuildInputs = [
@@ -251,7 +252,8 @@
               fi
               export pnpm_config_store_dir="$STORE_PATH"
               cp pnpm-deploy-lock.yaml pnpm-lock.yaml
-              printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
+              grep -q '^injectWorkspacePackages: true$' pnpm-workspace.yaml \
+                || printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
               mkdir -p apps/server/dist
               pnpm_config_ignore_scripts=true pnpm --offline --frozen-lockfile --filter t3 --prod deploy "$out"
               npm_config_build_from_source=true pnpm --dir "$out" rebuild node-pty
