@@ -1,6 +1,10 @@
 "use client";
 
-import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import {
+  scopedThreadKey,
+  scopeProjectRef,
+  scopeThreadRef,
+} from "@t3tools/client-runtime/environment";
 /* oxlint-disable react/no-unstable-nested-components -- command item renderers close over the active palette context. */
 import {
   canCreateProjectInEnvironment,
