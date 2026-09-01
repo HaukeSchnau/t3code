@@ -26,13 +26,13 @@ qa-typecheck-rest:
 
 qa-test-non-server:
     ./node_modules/.bin/vp run --filter @t3tools/desktop ensure:electron
-    ./node_modules/.bin/vp run --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
+    ./node_modules/.bin/vp run --cache --parallel --concurrency-limit 4 --filter '!t3' --filter '!@t3tools/monorepo' test
 
 qa-test-server:
-    ./node_modules/.bin/vp run --filter t3 test
+    ./node_modules/.bin/vp run --cache --filter t3 test
 
 qa-test-server-shard shard total:
-    ./node_modules/.bin/vp run --filter t3 test --shard {{ quote(shard + "/" + total) }}
+    ./node_modules/.bin/vp run --cache --filter t3 test --shard {{ quote(shard + "/" + total) }}
 
 qa-release:
     node scripts/release-smoke.ts
