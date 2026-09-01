@@ -16,6 +16,9 @@
 /packages/*/node_modules/
 /packages/*/.vite-plus/
 /packages/*/dist/
+/infra/*/node_modules/
+/infra/*/.vite-plus/
+/infra/*/dist/
 /scripts/node_modules/
 /scripts/.vite-plus/
 /oxlint-plugin-t3code/node_modules/

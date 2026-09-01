@@ -6,6 +6,7 @@ set -euo pipefail
 dependency_key="$({
   printf 'node=%s\npnpm=%s\n' "$(node --version)" "$(pnpm --version)"
   sha256sum flake.lock
+  sha256sum .ci/environment .ci/preserve .ci/setup
   find . \
     \( -path './.git' -o -path './.jj' -o -path './node_modules' -o -path './.vite-plus' \) -prune -o \
     -type f \

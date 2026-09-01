@@ -32,7 +32,7 @@ jobs:
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
           source_workspace="$GITHUB_WORKSPACE"
-          nix develop .#ci --command \
+          exec nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
             "$source_workspace" just qa-static
 
@@ -55,7 +55,7 @@ jobs:
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
           source_workspace="$GITHUB_WORKSPACE"
-          nix develop .#ci --command \
+          exec nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
             "$source_workspace" just 'qa-typecheck-${{ matrix.group }}'
 
@@ -74,7 +74,7 @@ jobs:
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
           source_workspace="$GITHUB_WORKSPACE"
-          nix develop .#ci --command \
+          exec nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
             "$source_workspace" just qa-test-non-server
 
@@ -97,7 +97,7 @@ jobs:
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
           source_workspace="$GITHUB_WORKSPACE"
-          nix develop .#ci --command \
+          exec nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
             "$source_workspace" just qa-test-server-shard '${{ matrix.shard }}' 3
 
@@ -116,7 +116,7 @@ jobs:
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
           source_workspace="$GITHUB_WORKSPACE"
-          nix develop .#ci --command \
+          exec nix develop .#ci --command \
             "$source_workspace/scripts/ci-workspace-run.sh" \
             "$source_workspace" just qa-release
 
