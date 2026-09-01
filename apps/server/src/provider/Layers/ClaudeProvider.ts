@@ -760,7 +760,8 @@ function waitForAbortSignal(signal: AbortSignal): Promise<void> {
  * message is ever written to the subprocess stdin. This means the Claude
  * Code subprocess completes its local initialization IPC (returning
  * account info and slash commands) but never starts an API request to
- * Anthropic. We read the init data and then abort the subprocess.
+ * Anthropic. We read the init data and then close the SDK query so its
+ * subprocess cannot outlive the probe.
  *
  * This is used as a fallback when `claude auth status` does not include
  * subscription type information.
@@ -792,22 +793,26 @@ const probeClaudeCapabilities = (
           cwd,
         }),
       });
-      const init = await q.initializationResult();
-      const account = init.account as
-        | {
-            readonly email?: string;
-            readonly subscriptionType?: string;
-            readonly tokenSource?: string;
-            readonly apiProvider?: string;
-          }
-        | undefined;
-      return {
-        email: account?.email,
-        subscriptionType: account?.subscriptionType,
-        tokenSource: account?.tokenSource,
-        apiProvider: account?.apiProvider,
-        slashCommands: parseClaudeInitializationCommands(init.commands),
-      } satisfies ClaudeCapabilitiesProbe;
+      try {
+        const init = await q.initializationResult();
+        const account = init.account as
+          | {
+              readonly email?: string;
+              readonly subscriptionType?: string;
+              readonly tokenSource?: string;
+              readonly apiProvider?: string;
+            }
+          | undefined;
+        return {
+          email: account?.email,
+          subscriptionType: account?.subscriptionType,
+          tokenSource: account?.tokenSource,
+          apiProvider: account?.apiProvider,
+          slashCommands: parseClaudeInitializationCommands(init.commands),
+        } satisfies ClaudeCapabilitiesProbe;
+      } finally {
+        q.close();
+      }
     });
   }).pipe(
     Effect.ensuring(
