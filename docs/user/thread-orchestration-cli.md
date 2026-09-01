@@ -27,8 +27,13 @@ t3 thread batch cleanup <batch-id> --json
 t3 thread create "Review the parser" --worktree --json
 t3 thread fork --worktree --json
 t3 thread send <thread-id> "Please run the focused tests" --json
+t3 thread send <thread-id> "After that, update the docs" --queue --json
 t3 thread rename <thread-id> "Parser review" --json
 ```
+
+`send` delivers the message immediately. It starts an idle thread or steers a running turn. Add
+`--queue` when the message should wait behind active work. Corrections and review findings that
+affect the current implementation should normally be sent immediately.
 
 Provider sessions set `T3CODE_THREAD_ID`, which lets `create`, `read`, `send`,
 and `rename` record the calling thread automatically. When running the CLI from

@@ -1177,6 +1177,9 @@ const ClientThreadTurnStartCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadMessageDelivery = Schema.Literals(["immediate", "queued"]);
+export type ThreadMessageDelivery = typeof ThreadMessageDelivery.Type;
+
 export const ThreadMessageQueueCommand = Schema.Struct({
   type: Schema.Literal("thread.message.queue"),
   commandId: CommandId,
@@ -1193,6 +1196,10 @@ export const ThreadMessageQueueCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  // Server-owned callers can request the same immediate dispatch used by the
+  // queued-message "Send now" action. Client composer submissions omit this
+  // field and retain their current queue-while-busy behavior.
+  delivery: Schema.optional(ThreadMessageDelivery),
   sourceProposedPlan: Schema.optional(SourceProposedPlanReference),
   createdAt: IsoDateTime,
 });

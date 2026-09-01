@@ -1196,7 +1196,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       const hasOlderQueuedMessages = (targetThread.queuedMessages ?? []).length > 0;
       const sessionIsBusy =
         targetThread.session?.status === "starting" || targetThread.session?.status === "running";
-      if (hasOlderQueuedMessages || sessionIsBusy) {
+      if (command.delivery !== "immediate" && (hasOlderQueuedMessages || sessionIsBusy)) {
         return queuedEvent;
       }
       const dispatchedEvent: Omit<OrchestrationEvent, "sequence"> = {

@@ -1990,13 +1990,15 @@ const make = Effect.gen(function* () {
       }
       const targetThread = targetThreadOption.value;
       const createdAt = yield* nowIso;
+      const sentMessageId = yield* messageId("thread-message");
+      const delivery = input.delivery ?? "immediate";
       yield* engine
         .dispatch({
           type: "thread.message.queue",
           commandId: yield* commandId("thread-message-queue"),
           threadId: input.threadId,
           message: {
-            messageId: yield* messageId("thread-message"),
+            messageId: sentMessageId,
             role: "user",
             text: input.prompt,
             attachments: [],
@@ -2004,6 +2006,7 @@ const make = Effect.gen(function* () {
           ...(input.modelSelection !== undefined ? { modelSelection: input.modelSelection } : {}),
           runtimeMode: input.runtimeMode ?? targetThread.runtimeMode,
           interactionMode: input.interactionMode ?? targetThread.interactionMode,
+          delivery,
           createdAt,
         })
         .pipe(
@@ -2022,8 +2025,32 @@ const make = Effect.gen(function* () {
           createdAt,
         });
       }
-      const thread = yield* resolveThreadSummary(input.threadId);
-      return { thread, queued: true };
+      const resultContextOption = yield* snapshotQuery
+        .getThreadResultContextById(input.threadId)
+        .pipe(
+          Effect.mapError(
+            toThreadOrchestrationError("send_message_to_thread.result", {
+              threadId: input.threadId,
+            }),
+          ),
+        );
+      if (Option.isNone(resultContextOption)) {
+        return yield* notFoundError("send_message_to_thread", "thread", input.threadId, {
+          threadId: input.threadId,
+        });
+      }
+      const queued = delivery === "queued" && resultContextOption.value.queuedMessageCount > 0;
+      const thread = summaryForThread(
+        resultContextOption.value.thread,
+        resultContextOption.value.project,
+        yield* localEnvironmentId,
+      );
+      return {
+        thread,
+        messageId: sentMessageId,
+        disposition: queued ? ("queued" as const) : ("dispatched" as const),
+        queued,
+      };
     });
 
   const setThreadTitle = (
