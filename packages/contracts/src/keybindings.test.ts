@@ -66,6 +66,12 @@ it.effect("parses keybinding rules", () =>
     });
     assert.strictEqual(parsedCommandPalette.command, "commandPalette.toggle");
 
+    const parsedSettingsOpen = yield* decode(KeybindingRule, {
+      key: "mod+shift+,",
+      command: "settings.open",
+    });
+    assert.strictEqual(parsedSettingsOpen.command, "settings.open");
+
     const parsedMonitorToggle = yield* decode(KeybindingRule, {
       key: "mod+alt+g",
       command: "monitor.toggle",
