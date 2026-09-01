@@ -282,6 +282,14 @@ export function workEntryDisplayIndicatesToolFailure(entry: WorkLogEntry): boole
   return workEntryIndicatesToolFailureFromOutput(entry, false);
 }
 
+/** Runtime-level failures keep the destructive treatment that ordinary tool failures avoid. */
+export function workEntrySignalsSevereFailure(entry: WorkLogEntry): boolean {
+  return (
+    entry.sourceActivityKind === "runtime.error" ||
+    entry.sourceActivityKind === "provider.turn.start.failed"
+  );
+}
+
 /** Tool/command row completed without failure (blue check affordance). */
 export function workEntryIndicatesToolSuccess(entry: WorkLogEntry): boolean {
   if (!workLogEntryIsToolLike(entry)) {

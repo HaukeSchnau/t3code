@@ -42,7 +42,10 @@ describe("resolveSnoozePresets", () => {
     const tomorrow = presets.find((preset) => preset.id === "tomorrow");
     expect(tomorrow!.whenLabel).toMatch(/9/);
     const nextWeek = presets.find((preset) => preset.id === "next-week");
-    expect(nextWeek!.whenLabel).toMatch(/Mon/);
+    const expectedWeekday = new Date(nextWeek!.snoozedUntil).toLocaleDateString(undefined, {
+      weekday: "short",
+    });
+    expect(nextWeek!.whenLabel).toContain(expectedWeekday);
   });
 
   it("drops the evening preset once evening is near or past", () => {
@@ -80,8 +83,10 @@ describe("snoozeWakeDescription", () => {
     expect(snoozeWakeDescription(localDate(2026, 4, 9, 9).toISOString(), now, "locale")).toContain(
       "tomorrow",
     );
-    expect(snoozeWakeDescription(localDate(2026, 4, 13, 9).toISOString(), now, "locale")).toMatch(
-      /Mon/,
+    const nextMonday = localDate(2026, 4, 13, 9);
+    const expectedWeekday = nextMonday.toLocaleDateString(undefined, { weekday: "short" });
+    expect(snoozeWakeDescription(nextMonday.toISOString(), now, "locale")).toContain(
+      expectedWeekday,
     );
   });
 
