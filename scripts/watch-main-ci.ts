@@ -185,7 +185,8 @@ function optionValue(args: ReadonlyArray<string>, name: string, fallback: string
   return value;
 }
 
-function parseOptions(args: ReadonlyArray<string>): WatchOptions {
+export function parseOptions(args: ReadonlyArray<string>): WatchOptions {
+  const optionArgs = args[0] === "--" ? args.slice(1) : args;
   const known = new Set([
     "--repository",
     "--branch",
@@ -194,22 +195,22 @@ function parseOptions(args: ReadonlyArray<string>): WatchOptions {
     "--workflow",
     "--poll-seconds",
   ]);
-  for (let index = 0; index < args.length; index += 2) {
-    if (!known.has(args[index] ?? "")) {
-      throw new Error(`Unknown argument: ${args[index] ?? ""}`);
+  for (let index = 0; index < optionArgs.length; index += 2) {
+    if (!known.has(optionArgs[index] ?? "")) {
+      throw new Error(`Unknown argument: ${optionArgs[index] ?? ""}`);
     }
   }
-  const pollSeconds = Number(optionValue(args, "--poll-seconds", "30"));
+  const pollSeconds = Number(optionValue(optionArgs, "--poll-seconds", "30"));
   if (!Number.isFinite(pollSeconds) || pollSeconds <= 0) {
     throw new Error("--poll-seconds must be a positive number.");
   }
   return {
     rootDir: scriptRoot,
-    repository: optionValue(args, "--repository", "schnau/t3code"),
-    branch: optionValue(args, "--branch", "main"),
-    remote: optionValue(args, "--remote", "origin"),
-    revision: optionValue(args, "--revision", "main@origin"),
-    workflow: optionValue(args, "--workflow", "project-release.yml"),
+    repository: optionValue(optionArgs, "--repository", "schnau/t3code"),
+    branch: optionValue(optionArgs, "--branch", "main"),
+    remote: optionValue(optionArgs, "--remote", "origin"),
+    revision: optionValue(optionArgs, "--revision", "main@origin"),
+    workflow: optionValue(optionArgs, "--workflow", "project-release.yml"),
     pollMilliseconds: pollSeconds * 1_000,
     log: console.log,
   };

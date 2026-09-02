@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests the standalone repository CLI.
 import { assert, describe, it } from "@effect/vitest";
 
-import { newestRunForCommit, parseWorkflowRuns } from "./watch-main-ci.ts";
+import { newestRunForCommit, parseOptions, parseWorkflowRuns } from "./watch-main-ci.ts";
 
 describe("main CI watcher", () => {
   it("selects the newest matching workflow run for the current commit", () => {
@@ -55,5 +55,12 @@ describe("main CI watcher", () => {
 
   it("rejects malformed API responses", () => {
     assert.throws(() => parseWorkflowRuns({ workflow_runs: [{ id: "wrong" }] }), /invalid/);
+  });
+
+  it("accepts the argument separator forwarded by the workspace runner", () => {
+    const options = parseOptions(["--", "--revision", "abc123", "--poll-seconds", "15"]);
+
+    assert.strictEqual(options.revision, "abc123");
+    assert.strictEqual(options.pollMilliseconds, 15_000);
   });
 });
