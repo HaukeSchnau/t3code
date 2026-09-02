@@ -64,6 +64,11 @@ shortcut is `mod+shift+s`, and it does not run while the terminal has focus.
 already pinned. Its default shortcut is `mod+shift+p`, and it does not run while the terminal has
 focus. See [Organizing threads](./thread-sidebar.md) for how pinned threads are ordered.
 
+Thread navigation uses client-specific defaults so the browser keeps its tab shortcuts. The desktop
+app uses `mod+1` through `mod+9` to jump to visible threads and `mod+shift+[` / `mod+shift+]` to move
+between threads. In a browser on macOS, use `ctrl` instead of `mod`. In a browser on Windows or
+Linux, use `alt` instead. The model picker's numbered shortcuts follow the same rule.
+
 The command palette searches settings, active thread titles, projects, branches, user messages, and
 final agent responses across connected environments. A setting result opens its exact control or
 section. Message matches show one labeled excerpt while keeping the thread's project, branch, and
@@ -87,9 +92,10 @@ but the new thread does not reuse the worktree created for the thread that just 
 ## `when` Conditions
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
-the app supplies today are `terminalFocus`, `terminalOpen`, `previewFocus`, `previewOpen`, and
-`modelPickerOpen`. The set is open and grows over time, so treat that as the current list rather
-than a fixed one. Any key the running app does not supply evaluates to `false`.
+the app supplies today are `desktop`, `browser`, `mac`, `terminalFocus`, `terminalOpen`,
+`previewFocus`, `previewOpen`, and `modelPickerOpen`. The set is open and grows over time, so treat
+that as the current list rather than a fixed one. Any key the running app does not supply evaluates
+to `false`.
 
 Operators: `!` (not), `&&` (and), `||` (or), and parentheses.
 

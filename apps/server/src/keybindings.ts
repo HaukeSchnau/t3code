@@ -13,8 +13,10 @@ import {
   KeybindingShortcut,
   KeybindingWhenNode,
   MAX_KEYBINDINGS_COUNT,
+  MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
   ResolvedKeybindingRule,
   ResolvedKeybindingsConfig,
+  THREAD_JUMP_KEYBINDING_COMMANDS,
   type ServerRemoveKeybindingInput,
   type ServerUpsertKeybindingInput,
   type ServerConfigIssue,
@@ -102,6 +104,56 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
     left.key === right.key &&
     (left.when ?? undefined) === (right.when ?? undefined)
   );
+}
+
+const LEGACY_CLIENT_AGNOSTIC_NAVIGATION_DEFAULTS: ReadonlyArray<KeybindingRule> = [
+  { key: "mod+shift+[", command: "thread.previous" },
+  { key: "mod+shift+]", command: "thread.next" },
+  ...THREAD_JUMP_KEYBINDING_COMMANDS.map(
+    (command, index): KeybindingRule => ({ key: `mod+${index + 1}`, command }),
+  ),
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map(
+    (command, index): KeybindingRule => ({
+      key: `mod+${index + 1}`,
+      command,
+      when: "modelPickerOpen",
+    }),
+  ),
+];
+
+// Built-in defaults are persisted in the user's config. Exact matching keeps
+// intentional custom bindings out of this startup migration.
+function migrateLegacyNavigationDefaults(config: readonly KeybindingRule[]): {
+  readonly keybindings: ReadonlyArray<KeybindingRule>;
+  readonly changed: boolean;
+} {
+  const migrated: KeybindingRule[] = [];
+  let changed = false;
+
+  for (const rule of config) {
+    const isLegacyDefault = LEGACY_CLIENT_AGNOSTIC_NAVIGATION_DEFAULTS.some((legacy) =>
+      isSameKeybindingRule(rule, legacy),
+    );
+    if (!isLegacyDefault) {
+      migrated.push(rule);
+      continue;
+    }
+
+    changed = true;
+    for (const replacement of DEFAULT_KEYBINDINGS) {
+      if (
+        replacement.command === rule.command &&
+        !config.some((entry) => isSameKeybindingRule(entry, replacement)) &&
+        !migrated.some((entry) => isSameKeybindingRule(entry, replacement))
+      ) {
+        migrated.push(replacement);
+      }
+    }
+  }
+
+  return migrated.length <= MAX_KEYBINDINGS_COUNT
+    ? { keybindings: migrated, changed }
+    : { keybindings: config, changed: false };
 }
 
 function keybindingShortcutContext(rule: KeybindingRule): string | null {
@@ -488,7 +540,8 @@ const make = Effect.gen(function* () {
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
-      const customConfig = runtimeConfig.keybindings;
+      const migration = migrateLegacyNavigationDefaults(runtimeConfig.keybindings);
+      const customConfig = migration.keybindings;
       const existingCommands = new Set(customConfig.map((entry) => entry.command));
       const missingDefaults: KeybindingRule[] = [];
       const shortcutConflictWarnings: Array<{
@@ -526,6 +579,9 @@ const make = Effect.gen(function* () {
         });
       }
       if (missingDefaults.length === 0) {
+        if (migration.changed) {
+          yield* writeConfigAtomically(customConfig);
+        }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }
@@ -555,6 +611,9 @@ const make = Effect.gen(function* () {
         });
       }
       if (defaultsToAppend.length === 0) {
+        if (migration.changed) {
+          yield* writeConfigAtomically(customConfig);
+        }
         yield* Cache.invalidate(resolvedConfigCache, resolvedConfigCacheKey);
         return;
       }

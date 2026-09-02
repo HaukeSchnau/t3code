@@ -189,17 +189,35 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
 
   it.effect("ships configurable thread navigation defaults", () =>
     Effect.sync(() => {
+      const hasDefault = (rule: KeybindingRule) =>
+        Keybindings.DEFAULT_KEYBINDINGS.some(
+          (binding) =>
+            binding.key === rule.key &&
+            binding.command === rule.command &&
+            binding.when === rule.when,
+        );
       const defaultsByCommand = new Map(
         Keybindings.DEFAULT_KEYBINDINGS.map((binding) => [binding.command, binding.key] as const),
       );
 
-      assert.equal(defaultsByCommand.get("thread.previous"), "mod+shift+[");
-      assert.equal(defaultsByCommand.get("thread.next"), "mod+shift+]");
+      assert.isTrue(
+        hasDefault({ key: "mod+shift+[", command: "thread.previous", when: "desktop" }),
+      );
+      assert.isTrue(
+        hasDefault({ key: "ctrl+shift+[", command: "thread.previous", when: "browser && mac" }),
+      );
+      assert.isTrue(
+        hasDefault({ key: "alt+shift+]", command: "thread.next", when: "browser && !mac" }),
+      );
       assert.equal(defaultsByCommand.get("thread.copyReference"), "mod+shift+c");
       assert.equal(defaultsByCommand.get("thread.settle"), "mod+shift+s");
       assert.equal(defaultsByCommand.get("thread.pin"), "mod+shift+p");
-      assert.equal(defaultsByCommand.get("thread.jump.1"), "mod+1");
-      assert.equal(defaultsByCommand.get("thread.jump.9"), "mod+9");
+      assert.isTrue(
+        hasDefault({ key: "ctrl+1", command: "thread.jump.1", when: "browser && mac" }),
+      );
+      assert.isTrue(
+        hasDefault({ key: "alt+9", command: "thread.jump.9", when: "browser && !mac" }),
+      );
       assert.equal(defaultsByCommand.get("sidebar.toggle"), "mod+b");
       assert.equal(defaultsByCommand.get("monitor.toggle"), "mod+alt+g");
       assert.equal(defaultsByCommand.get("modelPicker.toggle"), "mod+shift+m");
@@ -211,9 +229,66 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       assert.equal(defaultsByCommand.get("rightPanel.toggle"), "mod+alt+b");
       assert.isFalse(defaultsByCommand.has("rightPanel.toggleMaximized"));
       assert.equal(defaultsByCommand.get("terminal.splitVertical"), "mod+shift+d");
-      assert.equal(defaultsByCommand.get("modelPicker.jump.1"), "mod+1");
-      assert.equal(defaultsByCommand.get("modelPicker.jump.9"), "mod+9");
+      assert.isTrue(
+        hasDefault({
+          key: "mod+1",
+          command: "modelPicker.jump.1",
+          when: "desktop && modelPickerOpen",
+        }),
+      );
+      assert.isTrue(
+        hasDefault({
+          key: "alt+9",
+          command: "modelPicker.jump.9",
+          when: "browser && !mac && modelPickerOpen",
+        }),
+      );
     }),
+  );
+
+  it.effect("migrates the previous navigation defaults without changing custom bindings", () =>
+    Effect.gen(function* () {
+      const { keybindingsConfigPath } = yield* ServerConfig.ServerConfig;
+      const customRule = { key: "mod+shift+t", command: "terminal.toggle" } as const;
+      yield* writeKeybindingsConfig(keybindingsConfigPath, [
+        { key: "mod+shift+[", command: "thread.previous" },
+        { key: "mod+1", command: "thread.jump.1" },
+        { key: "mod+1", command: "modelPicker.jump.1", when: "modelPickerOpen" },
+        customRule,
+      ]);
+
+      yield* Effect.gen(function* () {
+        const keybindings = yield* Keybindings.Keybindings;
+        yield* keybindings.syncDefaultKeybindingsOnStartup;
+      });
+
+      const persisted = yield* readKeybindingsConfig(keybindingsConfigPath);
+      assert.isFalse(
+        persisted.some(
+          (binding) =>
+            binding.command === "thread.jump.1" &&
+            binding.key === "mod+1" &&
+            binding.when === undefined,
+        ),
+      );
+      for (const expected of Keybindings.DEFAULT_KEYBINDINGS.filter((binding) =>
+        ["thread.previous", "thread.jump.1", "modelPicker.jump.1"].includes(binding.command),
+      )) {
+        assert.isTrue(
+          persisted.some(
+            (binding) =>
+              binding.key === expected.key &&
+              binding.command === expected.command &&
+              binding.when === expected.when,
+          ),
+        );
+      }
+      assert.isTrue(
+        persisted.some(
+          (binding) => binding.key === customRule.key && binding.command === customRule.command,
+        ),
+      );
+    }).pipe(Effect.provide(makeKeybindingsLayer())),
   );
 
   it.effect("uses defaults in runtime when config is malformed without overriding file", () =>
