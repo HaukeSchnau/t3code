@@ -291,9 +291,35 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
     );
   };
 
+  const coordinationUpdate = (
+    sequence: number,
+  ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> => {
+    const read = input.projectionSnapshotQuery.getThreadCoordinationShell;
+    if (read === undefined) {
+      return Effect.succeed(Option.some({ kind: "cursor" as const, sequence }));
+    }
+    return read().pipe(
+      Effect.retry({ times: 1 }),
+      Effect.map((coordination) =>
+        Option.some<ShellLiveItem>({ kind: "coordination-updated", sequence, coordination }),
+      ),
+      Effect.tapError((error) =>
+        Effect.logWarning("thread coordination shell refetch failed", { error, sequence }),
+      ),
+      Effect.orElseSucceed(() => Option.some({ kind: "cursor" as const, sequence })),
+    );
+  };
+
+  const isCoordinationActivity = (event: OrchestrationEvent): boolean =>
+    event.type === "thread.activity-appended" &&
+    event.payload.activity.kind.startsWith("thread-orchestration.");
+
   const toShellStreamEvent = (
     event: OrchestrationEvent,
   ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> => {
+    if (isCoordinationActivity(event)) {
+      return coordinationUpdate(event.sequence);
+    }
     switch (event.type) {
       case "project.created":
       case "project.meta-updated":

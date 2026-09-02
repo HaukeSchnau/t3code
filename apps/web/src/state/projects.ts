@@ -5,6 +5,7 @@ import { WS_METHODS } from "@t3tools/contracts";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { withFixtureCatalog } from "../components/orchestration-fixture/fixtureEnvironment";
 import { environmentSnapshotAtom } from "./shell";
 
 export const projectEnvironment = createProjectEnvironmentAtoms(connectionAtomRuntime);
@@ -19,7 +20,10 @@ export const projectContentSearch = createEnvironmentRpcQueryAtomFamily(connecti
   staleTimeMs: 5_000,
   idleTtlMs: 60_000,
 });
+const projectCatalogValueAtom = import.meta.env.DEV
+  ? withFixtureCatalog(environmentCatalog.catalogValueAtom)
+  : environmentCatalog.catalogValueAtom;
 export const environmentProjects = createEnvironmentProjectAtoms({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
+  catalogValueAtom: projectCatalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
 });

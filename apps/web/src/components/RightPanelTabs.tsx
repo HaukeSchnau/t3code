@@ -2,6 +2,7 @@ import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
+  Network,
   FileDiff,
   Files,
   GitPullRequest,
@@ -74,12 +75,15 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddWork?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  /** True only while the thread takes part in coordination; ordinary threads never show Work. */
+  workAvailable?: boolean | undefined;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
@@ -101,6 +105,7 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   agents: "Agents are only available from a thread.",
+  work: "Work appears when this thread delegates to or was delegated by another thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -123,6 +128,7 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   agents: "Available from a thread.",
+  work: "Appears when this thread coordinates other threads.",
 } as const;
 
 type TabContextMenuAction =
@@ -252,12 +258,15 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
+  onAddWork?: (() => void) | undefined;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
+  /** True only while the thread takes part in coordination; ordinary threads never show Work. */
+  workAvailable?: boolean | undefined;
   liveAgentCount: number;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
@@ -324,6 +333,20 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
+    ...(props.workAvailable === true
+      ? [
+          {
+            label: "Work",
+            description: "Threads this thread delegates to or belongs with.",
+            icon: Network,
+            shortcut: "W",
+            available: true,
+            disabledReason: SURFACE_UNAVAILABLE_HINTS.work,
+            onClick: () => props.onAddWork?.(),
+            badgeCount: 0,
+          } as const,
+        ]
+      : []),
   ] as const;
 
   type SurfaceAction = (typeof actions)[number];
@@ -510,6 +533,8 @@ function surfaceTitle(
       return `#${surface.number}`;
     case "agents":
       return "Agents";
+    case "work":
+      return "Work";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -595,6 +620,8 @@ function SurfaceIcon({
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "work":
+      return <Network className="size-3 shrink-0" />;
   }
 }
 
@@ -653,6 +680,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
     },
+    ...(props.workAvailable === true
+      ? [
+          {
+            label: "Work",
+            icon: Network,
+            shortcut: "W",
+            available: true,
+            disabledReason: SURFACE_DISABLED_REASONS.work,
+            onClick: () => props.onAddWork?.(),
+          } as const,
+        ]
+      : []),
   ] as const;
 
   const handleAddSurfaceMenuKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
@@ -946,6 +985,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             agentsAvailable={props.agentsAvailable}
+            onAddWork={props.onAddWork}
+            workAvailable={props.workAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (

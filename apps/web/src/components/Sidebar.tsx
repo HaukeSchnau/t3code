@@ -56,6 +56,7 @@ import {
   XIcon,
 } from "lucide-react";
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -197,6 +198,18 @@ import { SidebarContent, SidebarGroup, SidebarMenuButton, useSidebar } from "./u
 import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { SidebarThreadDetailPrewarmer } from "./sidebar/SidebarThreadDetailPrewarmer";
+import {
+  FIXTURE_ENVIRONMENT_ID,
+  FIXTURE_ENVIRONMENT_LABEL,
+} from "./orchestration-fixture/environmentId";
+import { SidebarLineageGroup } from "./sidebar/SidebarLineageGroup";
+import { useSidebarLineageLayout, useThreadLineage } from "../state/coordination";
+import {
+  coordinationCountsLabel,
+  countWorkers,
+  descendantKeys,
+  resolveWorkerState,
+} from "@t3tools/client-runtime/state/threads";
 import { DelegationSidebarFixture } from "./delegation-fixture/DelegationSidebarFixture";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -768,6 +781,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadKey: string,
     snapshot: ThreadChangeRequestSnapshot | null,
   ) => void;
+  summaryOverride?: string | null;
+  /** Rendered under a parent row: the slim row shows live status instead of the time. */
+  nested?: boolean;
 }) {
   const {
     isRenaming,
@@ -1324,9 +1340,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </Tooltip>
                 ) : (
                   <span className="text-xs">
-                    {variantAction === "unsettle"
-                      ? settledTimeLabel(thread)
-                      : threadTimeLabel(thread)}
+                    {props.nested && topStatus ? (
+                      // A nested worker's row is read for its state, not
+                      // its age: the parent card already anchors the time.
+                      <span className={cn("font-medium", topStatus.className)}>
+                        {topStatus.label}
+                      </span>
+                    ) : variantAction === "unsettle" ? (
+                      settledTimeLabel(thread)
+                    ) : (
+                      threadTimeLabel(thread)
+                    )}
                   </span>
                 )}
               </span>
@@ -1747,6 +1771,33 @@ export default function Sidebar() {
   const showDelegationFixture = useLocation({
     select: (location) => location.pathname === "/fixtures/delegation",
   });
+  const threadLineage = useThreadLineage();
+  const lineageLayout = useSidebarLineageLayout();
+  // Coordinator rows trade their branch line for a roll-up of every worker
+  // below them, e.g. `2 working · 1 needs you`. Empty for ordinary threads.
+  const coordinationSummaryByKey = useMemo(() => {
+    const summaries = new Map<string, string>();
+    if (lineageLayout.childrenByParentKey.size === 0) return summaries;
+    const shellsByKey = new Map(
+      threads.map((thread) => [
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        thread,
+      ]),
+    );
+    for (const parentKey of lineageLayout.childrenByParentKey.keys()) {
+      const counts = countWorkers(
+        threadLineage,
+        descendantKeys(threadLineage, parentKey),
+        (key) => {
+          const shell = shellsByKey.get(key);
+          return shell === undefined ? null : resolveWorkerState(shell);
+        },
+      );
+      const label = coordinationCountsLabel(counts);
+      if (label !== null) summaries.set(parentKey, label);
+    }
+    return summaries;
+  }, [lineageLayout, threadLineage, threads]);
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
@@ -1864,13 +1915,13 @@ export default function Sidebar() {
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
 
-  const environmentLabelById = useMemo(
-    () =>
-      new Map(
-        environments.map((environment) => [environment.environmentId, environment.label] as const),
-      ),
-    [environments],
-  );
+  const environmentLabelById = useMemo(() => {
+    const labels = new Map(
+      environments.map((environment) => [environment.environmentId, environment.label] as const),
+    );
+    if (import.meta.env.DEV) labels.set(FIXTURE_ENVIRONMENT_ID, FIXTURE_ENVIRONMENT_LABEL);
+    return labels;
+  }, [environments]);
   const unsortedProjectGroups = useMemo(
     () =>
       buildSidebarProjectSnapshots({
@@ -2081,7 +2132,15 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    const visible = threads.filter((thread) => thread.archivedAt === null);
+    // Nested children render under their parent row instead of at the top
+    // level; the layout only nests while the parent is itself visible, so a
+    // child never disappears when its parent is archived.
+    const visible = threads.filter((thread) => {
+      if (thread.archivedAt !== null) return false;
+      return !lineageLayout.nestedKeys.has(
+        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+      );
+    });
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -2176,6 +2235,7 @@ export default function Sidebar() {
     snoozeWakeTick,
     threadLastVisitedAtById,
     threads,
+    lineageLayout,
   ]);
   usePublishSidebarCardThreads(sidebarCardThreads);
   const projectGroups = useMemo(
@@ -3780,6 +3840,8 @@ export default function Sidebar() {
                     thread: EnvironmentThreadShell,
                     section: "pinned" | "active" | "snoozed" | "settled",
                     sortable?: SortablePinnedRowBag,
+                    forceVariant?: "card" | "slim",
+                    nested?: boolean,
                   ) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
@@ -3880,7 +3942,48 @@ export default function Sidebar() {
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
                         onChangeRequestSnapshot={setThreadChangeRequestSnapshot}
+                        summaryOverride={coordinationSummaryByKey.get(threadKey) ?? null}
+                        nested={nested === true}
                       />
+                    );
+                  };
+                  const threadsByKey = new Map(
+                    threads.map((thread) => [
+                      scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                      thread,
+                    ]),
+                  );
+                  // Children nest under their parent's ordinary row as slim
+                  // rows that still navigate, rename and settle like any other.
+                  const renderLineageGroup = (thread: EnvironmentThreadShell) => {
+                    const threadKey = scopedThreadKey(
+                      scopeThreadRef(thread.environmentId, thread.id),
+                    );
+                    if (!lineageLayout.childrenByParentKey.has(threadKey)) return null;
+                    return (
+                      <li key={`${threadKey}:lineage`} className="list-none">
+                        <SidebarLineageGroup
+                          parentKey={threadKey}
+                          lineage={threadLineage}
+                          layout={lineageLayout}
+                          renderRow={(childKey) => {
+                            const child = threadsByKey.get(childKey);
+                            return child === undefined
+                              ? null
+                              : renderThreadRow(child, "active", undefined, "slim", true);
+                          }}
+                          effortSummary={(memberKeys) => {
+                            const counts = countWorkers(threadLineage, memberKeys, (key) => {
+                              const shell = threadsByKey.get(key);
+                              return shell === undefined ? null : resolveWorkerState(shell);
+                            });
+                            return {
+                              label: coordinationCountsLabel(counts),
+                              attention: counts.blocked > 0 || counts.failed > 0,
+                            };
+                          }}
+                        />
+                      </li>
                     );
                   };
                   // Draft block above everything, then the pinned block:
@@ -3936,12 +4039,20 @@ export default function Sidebar() {
                                   scopeThreadRef(thread.environmentId, thread.id),
                                 );
                                 if (!reorderablePinnedKeys.has(threadKey)) {
-                                  return renderThreadRow(thread, "pinned");
+                                  return (
+                                    <Fragment key={threadKey}>
+                                      {renderThreadRow(thread, "pinned")}
+                                      {renderLineageGroup(thread)}
+                                    </Fragment>
+                                  );
                                 }
                                 return (
-                                  <SortablePinnedThreadRow key={threadKey} id={threadKey}>
-                                    {(bag) => renderThreadRow(thread, "pinned", bag)}
-                                  </SortablePinnedThreadRow>
+                                  <Fragment key={threadKey}>
+                                    <SortablePinnedThreadRow id={threadKey}>
+                                      {(bag) => renderThreadRow(thread, "pinned", bag)}
+                                    </SortablePinnedThreadRow>
+                                    {renderLineageGroup(thread)}
+                                  </Fragment>
                                 );
                               })}
                             </ul>
@@ -3962,6 +4073,8 @@ export default function Sidebar() {
                   }
                   for (const thread of activeThreads) {
                     items.push(renderThreadRow(thread, "active"));
+                    const lineageGroup = renderLineageGroup(thread);
+                    if (lineageGroup !== null) items.push(lineageGroup);
                   }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
