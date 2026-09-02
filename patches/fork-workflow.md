@@ -28,7 +28,9 @@ merge conflicts easier to reason about.
 - Resolve `package.json` manifests and `pnpm-workspace.yaml` before resolving the canonical
   lockfile. `pnpm-lock.yaml` is derived output: regenerate it with `pnpm run fork:lockfile` instead of
   hand-merging it. The command enforces the exact pnpm version pinned by the root `packageManager`,
-  runs without lifecycle scripts, and accepts the result only after frozen-lockfile validation.
+  runs without lifecycle scripts, and accepts the result only after frozen-lockfile validation. It
+  then regenerates the deploy lock, refreshes all three Nix dependency hashes concurrently, and
+  verifies the Nix release contract.
 - Use `pnpm run fork:lockfile:check` for a non-mutating lockfile check. It restores the original
   lockfile on success, staleness, and command failure.
 - For large upstream merge conflicts, delegate investigation/resolution to a subagent and then
@@ -66,9 +68,8 @@ merge conflicts easier to reason about.
   `jj log` and `jj diff`; it never mutates Jujutsu state.
 - `pnpm run fork:lockfile:check` verifies that the canonical lockfile can be reproduced and passes a
   frozen validation.
-- After a canonical lockfile change, run
-  `node scripts/sync-pnpm-deploy-lock.mjs --check`. If the deploy lock is stale, regenerate it using
-  the documented Nix-shell workflow in `patches/nix-flake-packaging.md`. Then check the fixed-output
-  pnpm dependency hashes in `flake.nix` (`just prefetch-pnpm-deps` updates them when needed).
+- `pnpm run fork:lockfile` keeps the canonical lockfile, deploy lock, and fixed-output Nix hashes in
+  one workflow. `just qa-nix-deps` provides the fast, non-mutating dependency-store check used
+  near the start of CI.
 - Run focused tests, lint, and package typechecks for the paths reconciled by the sync. CI owns the
   repository-wide suite unless a maintainer explicitly requests it.

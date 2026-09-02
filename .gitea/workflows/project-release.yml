@@ -17,6 +17,22 @@ env:
   CI_PROJECT_ID: t3code
 
 jobs:
+  dependency_hashes:
+    name: Nix dependency hashes
+    runs-on: t3code-ci
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      - name: Build filtered dependency stores
+        run: |
+          set -euo pipefail
+          if [ -x /run/current-system/sw/bin/nix ]; then
+            export PATH="/run/current-system/sw/bin:$PATH"
+          fi
+          exec just qa-nix-deps
+
   static:
     name: Format and lint
     runs-on: t3code-ci
@@ -122,7 +138,7 @@ jobs:
 
   release_check:
     name: Release contract
-    needs: [static, typecheck, test_non_server, test_server, release_smoke]
+    needs: [dependency_hashes, static, typecheck, test_non_server, test_server, release_smoke]
     runs-on: t3code-ci
     timeout-minutes: 30
     steps:

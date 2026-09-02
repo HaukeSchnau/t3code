@@ -12,7 +12,7 @@ default:
 
 # CI calls the individual tasks in parallel jobs. `just qa` remains the complete,
 # resource-bounded local gate and deliberately runs the groups in order.
-qa: qa-static qa-typecheck-clients qa-typecheck-rest qa-test-non-server qa-test-server qa-release
+qa: qa-nix-deps qa-static qa-typecheck-clients qa-typecheck-rest qa-test-non-server qa-test-server qa-release
 
 qa-static:
     ./node_modules/.bin/vp fmt --check
@@ -40,9 +40,19 @@ qa-release:
     node scripts/fork-lockfile.ts --check
     node scripts/sync-pnpm-deploy-lock.mjs --check
 
-# Print the pnpmDeps SRI for flake.nix by forcing a fake-hash Nix build and extracting the "got" value.
-prefetch-pnpm-deps:
-    ./scripts/prefetch-pnpm-deps.sh
+qa-nix-deps:
+    ./node_modules/.bin/vp run --workspace-root deps:nix-check
+
+# Refresh all filtered pnpm stores and verify the release contract.
+deps-nix-refresh:
+    ./node_modules/.bin/vp run --workspace-root deps:nix-refresh
+
+# Compatibility alias for the old task name.
+prefetch-pnpm-deps: deps-nix-refresh
+
+# Follow CI for the newest descendant of a revision on origin/main.
+ci-watch revision="main@origin":
+    ./node_modules/.bin/vp run --workspace-root ci:watch -- --revision {{ quote(revision) }}
 
 # Build and install the iOS development app on the configured device.
 mobile-dev:

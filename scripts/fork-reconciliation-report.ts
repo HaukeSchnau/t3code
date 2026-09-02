@@ -90,7 +90,7 @@ function warningsFor(paths: ReadonlyArray<string>): ReadonlyArray<string> {
   }
   if (pathSet.has("pnpm-deploy-lock.yaml") || pathSet.has("pnpm-lock.yaml")) {
     warnings.push(
-      "Check pnpm-deploy-lock.yaml with `node scripts/sync-pnpm-deploy-lock.mjs --check` after canonical lockfile changes.",
+      "Regenerate the canonical lockfile, deploy lock, and Nix dependency hashes together with `pnpm run fork:lockfile`.",
     );
   }
   if (
@@ -100,7 +100,7 @@ function warningsFor(paths: ReadonlyArray<string>): ReadonlyArray<string> {
     pathSet.has("pnpm-deploy-lock.yaml")
   ) {
     warnings.push(
-      "Check the fixed-output pnpm dependency hashes in flake.nix after lockfile changes.",
+      "Check the fixed-output pnpm dependency hashes with `just qa-nix-deps` after packaging changes.",
     );
   }
   if (
