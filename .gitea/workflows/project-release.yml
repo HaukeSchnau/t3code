@@ -31,10 +31,12 @@ jobs:
           if [ -x /run/current-system/sw/bin/nix ]; then
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
-          source_workspace="$GITHUB_WORKSPACE"
-          exec nix develop .#ci --command \
-            "$source_workspace/scripts/ci-workspace-run.sh" \
-            "$source_workspace" just qa-nix-deps
+          exec nix build \
+            .#t3code.pnpmDeps.web \
+            .#t3code.pnpmDeps.server \
+            .#t3code.pnpmDeps.runtime \
+            --no-link \
+            --print-build-logs
 
   static:
     name: Format and lint
