@@ -243,8 +243,8 @@ export function resolveMarkdownFileLinkTarget(
     return pathWithPosition;
   }
 
-  if (!cwd) return null;
-  return resolvePathLinkTarget(pathWithPosition, cwd);
+  if (!baseDir) return null;
+  return resolvePathLinkTarget(pathWithPosition, baseDir);
 }
 
 function hasMarkdownImageExtension(path: string): boolean {
