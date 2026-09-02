@@ -1879,8 +1879,12 @@ code {
 }
 
 .chat-markdown[data-wide-tables] > .chat-markdown-table-container:has(tr > :nth-child(3)) {
-  width: 100cqw;
-  margin-inline: calc((100% - 100cqw) / 2);
+  position: relative;
+  left: 50%;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100cqw;
+  transform: translateX(-50%);
 }
 
 .chat-markdown table {
