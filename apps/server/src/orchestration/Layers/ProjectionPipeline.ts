@@ -229,7 +229,11 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
         case "thread.message-sent":
           return event.payload.role === "user";
         case "thread.activity-appended":
-          return isShellSummaryActivity(event.payload.activity);
+          return (
+            isShellSummaryActivity(event.payload.activity) ||
+            event.payload.activity.kind === "command" ||
+            event.payload.activity.kind === "provider.user-input.respond.failed"
+          );
         default:
           return false;
       }
@@ -1159,32 +1163,32 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (Option.isNone(existingRow)) {
             return;
           }
-          const userInputActivities =
-            yield* projectionThreadActivityRepository.listUserInputLifecycleByThreadId({
-              threadId: event.payload.threadId,
-            });
-          incrementWorkloadCounter("projection.full_history_reads");
+          const previousLatest = existingRow.value.latestUserMessageAt;
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             updatedAt: event.occurredAt,
-            pendingUserInputCount: derivePendingUserInputCountFromActivities(userInputActivities),
             latestUserMessageAt:
-              existingRow.value.latestUserMessageAt === null ||
-              event.payload.createdAt > existingRow.value.latestUserMessageAt
+              event.payload.role === "user" &&
+              (previousLatest === null || event.payload.createdAt > previousLatest)
                 ? event.payload.createdAt
-                : existingRow.value.latestUserMessageAt,
+                : previousLatest,
           });
           return;
         }
 
         case "thread.activity-appended": {
-          if (!shouldRefreshThreadShellSummary(event)) {
-            return;
-          }
           const existingRow = yield* projectionThreadRepository.getById({
             threadId: event.payload.threadId,
           });
           if (Option.isNone(existingRow)) {
+            return;
+          }
+
+          if (!shouldRefreshThreadShellSummary(event)) {
+            yield* projectionThreadRepository.upsert({
+              ...existingRow.value,
+              updatedAt: event.occurredAt,
+            });
             return;
           }
 
@@ -1200,7 +1204,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             incrementWorkloadCounter("projection.full_history_reads");
             yield* projectionThreadRepository.upsert({
               ...existingRow.value,
-              updatedAt: event.occurredAt,
+              updatedAt: isShellSummaryActivity(event.payload.activity)
+                ? event.occurredAt
+                : existingRow.value.updatedAt,
               pendingUserInputCount: derivePendingUserInputCountFromActivities(activities),
             });
             return;
@@ -1405,6 +1411,17 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               createdAt: event.payload.createdAt,
               updatedAt: event.payload.updatedAt,
             });
+            if (event.payload.role === "assistant") {
+              const thread = yield* projectionThreadRepository.getById({
+                threadId: event.payload.threadId,
+              });
+              if (Option.isSome(thread)) {
+                yield* projectionThreadRepository.upsert({
+                  ...thread.value,
+                  updatedAt: event.occurredAt,
+                });
+              }
+            }
             return;
           }
 
@@ -2398,7 +2415,26 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         cursorProjectors.length - relevantProjectors.length,
       );
 
-      return runAttachmentSideEffects(attachmentSideEffects).pipe(
+      // The caller may keep its surrounding transaction open after projection.
+      // Re-read attachment references when cleanup actually runs so later writes
+      // in that transaction cannot be mistaken for orphaned files.
+      return Effect.gen(function* () {
+        const prunedThreadRelativePaths = new Map<string, Set<string>>();
+        for (const threadId of attachmentSideEffects.prunedThreadRelativePaths.keys()) {
+          const messages = yield* projectionThreadMessageRepository.listByThreadId({
+            threadId: ThreadId.make(threadId),
+          });
+          prunedThreadRelativePaths.set(
+            threadId,
+            collectThreadAttachmentRelativePaths(threadId, messages),
+          );
+        }
+
+        yield* runAttachmentSideEffects({
+          deletedThreadIds: attachmentSideEffects.deletedThreadIds,
+          prunedThreadRelativePaths,
+        });
+      }).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.provideService(ServerConfig, serverConfig),
