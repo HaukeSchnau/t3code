@@ -721,7 +721,6 @@ export function usePreviousMessageEditing({
         providerStatuses={composerProviderStatuses}
         activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
         activeThreadModelSelection={activeThread?.modelSelection}
-        activeThreadActivities={activeThread?.activities}
         usageLimitsSources={usageLimitsSources}
         resolvedTheme={resolvedTheme}
         settings={settings}

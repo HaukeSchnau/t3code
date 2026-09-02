@@ -25,6 +25,10 @@ type InlineMessageEditorProps = Omit<
   | "respondingRequestIds"
   | "showPlanFollowUpPrompt"
   | "activeProposedPlan"
+  | "bannerItems"
+  | "activeTasksProgress"
+  | "activeTaskSteps"
+  | "threadSyncPhase"
   | "activePlan"
   | "sidebarProposedPlan"
   | "variant"
@@ -51,6 +55,7 @@ export function InlineMessageEditor({
       isLocalDraftThread={false}
       isSendBusy={isSendBusy || isSubmitting || isPreparing || isRevertingCheckpoint}
       isPreparingWorktree={false}
+      bannerItems={[]}
       activePendingApproval={null}
       pendingApprovals={EMPTY_PENDING_APPROVALS}
       pendingUserInputs={EMPTY_PENDING_USER_INPUTS}
@@ -63,6 +68,9 @@ export function InlineMessageEditor({
       respondingRequestIds={EMPTY_APPROVAL_REQUEST_IDS}
       showPlanFollowUpPrompt={false}
       activeProposedPlan={null}
+      activeTasksProgress={null}
+      activeTaskSteps={null}
+      threadSyncPhase={null}
       variant="inline"
       inlineEdit={{
         onCancel,
