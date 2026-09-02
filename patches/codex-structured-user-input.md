@@ -17,6 +17,9 @@ requests must not leave a stale question blocking the composer.
 - Treat `isBlocking: false` as optional user input. Web, desktop, iOS, and Android label these
   prompts and offer **Skip**, which answers with an empty result so Codex can use its best judgment.
   Missing metadata remains blocking for compatibility with older Codex versions.
+- Keep the web and desktop prompt inside the composer's `ComposerBanner` attachment stack. The
+  question card uses that root's grid and spacing variables, so rendering it directly inside the
+  main input surface breaks its header, body alignment, and neighboring stash tab.
 - Correlate `serverRequest/resolved` with the pending prompt. Provider resolution, a new or completed
   turn, interruption, process exit, and runtime close all settle and remove pending input.
 - Return an empty answer immediately when Codex sends no renderable question, preventing an
@@ -36,3 +39,4 @@ When updating Codex protocol bindings, keep the raw request context until genera
 - Adapter and ingestion tests cover optional metadata normalization and persistence.
 - Web and mobile state tests cover optional prompt derivation; package typechecks cover the shared
   Skip controls on every client surface.
+- Exercise a live Codex prompt at desktop and narrow viewport widths after composer or banner syncs.

@@ -1116,6 +1116,7 @@ function MonitorThreadActions({
                 isConnecting={false}
                 isSendBusy={busy}
                 isPreparingWorktree={false}
+                bannerItems={[]}
                 environmentUnavailable={null}
                 activePendingApproval={null}
                 pendingApprovals={[]}
@@ -1128,13 +1129,15 @@ function MonitorThreadActions({
                 respondingRequestIds={EMPTY_RESPONDING_REQUEST_IDS}
                 showPlanFollowUpPrompt={false}
                 activeProposedPlan={null}
+                activeTasksProgress={null}
+                activeTaskSteps={null}
+                threadSyncPhase={null}
                 runtimeMode={runtimeMode}
                 interactionMode={interactionMode}
                 lockedProvider={null}
                 providerStatuses={providerStatuses}
                 activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                 activeThreadModelSelection={thread.modelSelection}
-                activeThreadActivities={thread.activities}
                 usageLimitsSources={usageLimitsSources}
                 resolvedTheme={resolvedTheme}
                 settings={settings}
