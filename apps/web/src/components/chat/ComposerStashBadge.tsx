@@ -36,6 +36,7 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
 
   return (
     <ComposerBanner.Root
+      density="comfortable"
       width="content"
       data-composer-shoulder-tab
       className={cn(

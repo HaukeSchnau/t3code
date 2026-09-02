@@ -74,6 +74,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import type { ClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
@@ -514,6 +515,7 @@ export interface ClaudeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
+  readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
 }
 
 function isUuid(value: string): boolean {
@@ -3773,11 +3775,16 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // Inner protocol/UX details with no T3 surface today — consumed
       // deliberately so they don't masquerade as unknown-subtype warnings.
       case "model_refusal_fallback":
+      case "model_refusal_no_fallback":
       case "local_command_output":
       case "plugin_install":
       case "commands_changed":
       case "memory_recall":
       case "elicitation_complete":
+      case "background_tasks_changed":
+      case "control_request_progress":
+      case "informational":
+      case "worker_shutting_down":
         return;
       case "permission_denied":
         yield* offerRuntimeEvent({
@@ -3931,6 +3938,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         return;
       // Composer prompt suggestions have no T3 surface; consumed deliberately.
       case "prompt_suggestion":
+      case "conversation_reset":
         return;
       default: {
         // Exhaustiveness guard (see handleSystemMessage): new SDK top-level

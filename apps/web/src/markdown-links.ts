@@ -1,3 +1,8 @@
+import {
+  inlineCodeFilePathCandidate,
+  isConventionalFilePosition,
+} from "@t3tools/client-runtime/markdown-links";
+
 import { formatWorkspaceRelativePath } from "./filePathDisplay";
 import {
   isTerminalLinkActivation,
@@ -199,13 +204,19 @@ function hasExternalScheme(path: string): boolean {
   return !POSITION_ONLY_PATTERN.test(rest);
 }
 
+/**
+ * `baseDir` anchors relative links; it defaults to the workspace root and is the
+ * file's own directory when rendering a markdown file. `cwd` stays the workspace
+ * root so the result still knows whether the target is inside it.
+ */
 export function resolveMarkdownFileLinkTarget(
   href: string | undefined,
   cwd?: string,
+  baseDir: string | undefined = cwd,
 ): string | null {
   if (!href) return null;
   const rawHref = normalizeMarkdownLinkDestination(href);
-  if (rawHref.length === 0 || rawHref.startsWith("#")) return null;
+  if (rawHref.length === 0 || rawHref.startsWith("#") || rawHref.startsWith("//")) return null;
 
   const fileUrlTarget = rawHref.toLowerCase().startsWith("file:")
     ? parseFileUrlHref(rawHref)
@@ -404,47 +415,19 @@ function looksLikeHostname(segment: string, hasPosition: boolean): boolean {
 export function resolveInlineCodeFileLinkMeta(
   codeText: string,
   cwd?: string,
+  baseDir: string | undefined = cwd,
 ): MarkdownFileLinkMeta | null {
-  const trimmed = codeText.trim();
-  if (trimmed.length === 0 || INLINE_CODE_DISQUALIFIER_PATTERN.test(trimmed)) return null;
+  const candidate = inlineCodeFilePathCandidate(codeText);
+  if (candidate === null) return null;
 
-  // Windows drive/UNC paths keep their backslashes; any other backslashes are
-  // relative Windows-style paths, which neither the shape checks nor the
-  // downstream resolver understand — normalize them to forward slashes.
-  const candidate =
-    WINDOWS_DRIVE_PATH_PATTERN.test(trimmed) || WINDOWS_UNC_PATH_PATTERN.test(trimmed)
-      ? trimmed
-      : trimmed.replaceAll("\\", "/");
-
-  const hasPosition = POSITION_SUFFIX_PATTERN.test(candidate);
-  if (!hasPosition && !PATH_SEPARATOR_PATTERN.test(candidate)) return null;
-
-  const hasExplicitPathShape =
-    RELATIVE_PATH_PREFIX_PATTERN.test(candidate) ||
-    candidate.startsWith("/") ||
-    WINDOWS_DRIVE_PATH_PATTERN.test(candidate) ||
-    WINDOWS_UNC_PATH_PATTERN.test(candidate);
-  if (!hasExplicitPathShape) {
-    const withoutPosition = candidate.replace(POSITION_SUFFIX_PATTERN, "");
-    const firstSegment = withoutPosition.split("/")[0] ?? withoutPosition;
-    if (looksLikeHostname(firstSegment, hasPosition)) return null;
-    if (!hasPosition && !FILE_EXTENSION_PATTERN.test(basenameOfPath(withoutPosition))) {
-      return null;
-    }
-  }
-
-  const resolved = resolveMarkdownFileLinkMeta(candidate, cwd);
+  const resolved = resolveMarkdownFileLinkMeta(candidate, cwd, baseDir);
   if (resolved) return resolved;
 
   // `Makefile:12` — conventional extensionless names fail the generic
   // markdown-link candidate patterns, but here the :line suffix already
   // marked the span as a file reference.
-  if (
-    cwd &&
-    BARE_EXTENSIONLESS_POSITION_PATTERN.test(candidate) &&
-    EXTENSIONLESS_FILE_NAMES.has(candidate.replace(POSITION_SUFFIX_PATTERN, ""))
-  ) {
-    return buildFileLinkMetaFromTarget(resolvePathLinkTarget(candidate, cwd), cwd);
+  if (baseDir && isConventionalFilePosition(candidate)) {
+    return buildFileLinkMetaFromTarget(resolvePathLinkTarget(candidate, baseDir), cwd);
   }
   return null;
 }
@@ -474,8 +457,9 @@ function workspaceRelativePath(path: string, workspaceRoot: string | undefined):
 export function resolveMarkdownFileLinkMeta(
   href: string | undefined,
   cwd?: string,
+  baseDir: string | undefined = cwd,
 ): MarkdownFileLinkMeta | null {
-  const targetPath = resolveMarkdownFileLinkTarget(href, cwd);
+  const targetPath = resolveMarkdownFileLinkTarget(href, cwd, baseDir);
   if (!targetPath) return null;
   return buildFileLinkMetaFromTarget(targetPath, cwd);
 }

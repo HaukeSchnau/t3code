@@ -119,6 +119,10 @@ import type {
   SourceControlRepositoryInfo,
   SourceControlRepositoryLookupInput,
 } from "./sourceControl.ts";
+import type {
+  DesktopAppActivationRequest,
+  DesktopAppActivationResponse,
+} from "./desktopAppActivation.ts";
 
 export interface ContextMenuItem<T extends string = string> {
   id: T;
@@ -229,6 +233,7 @@ export interface DesktopUpdateState {
   availableVersion: string | null;
   downloadedVersion: string | null;
   releaseNotes: ReadonlyArray<DesktopUpdateReleaseNote>;
+  omittedReleaseCount: number;
   downloadPercent: number | null;
   checkedAt: string | null;
   message: string | null;
@@ -239,11 +244,13 @@ export interface DesktopUpdateState {
 export interface DesktopUpdateReleaseNote {
   version: string;
   items: ReadonlyArray<string>;
+  totalItems: number;
 }
 
 export const DesktopUpdateReleaseNoteSchema = Schema.Struct({
   version: Schema.String,
   items: Schema.Array(Schema.String),
+  totalItems: Schema.Number,
 });
 
 export const DesktopUpdateStateSchema = Schema.Struct({
@@ -257,6 +264,7 @@ export const DesktopUpdateStateSchema = Schema.Struct({
   availableVersion: Schema.NullOr(Schema.String),
   downloadedVersion: Schema.NullOr(Schema.String),
   releaseNotes: Schema.Array(DesktopUpdateReleaseNoteSchema),
+  omittedReleaseCount: Schema.Number,
   downloadPercent: Schema.NullOr(Schema.Number),
   checkedAt: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),
@@ -1297,6 +1305,12 @@ export interface DesktopBridge {
   downloadUpdate: () => Promise<DesktopUpdateActionResult>;
   installUpdate: () => Promise<DesktopUpdateActionResult>;
   onUpdateState: (listener: (state: DesktopUpdateState) => void) => () => void;
+  /** Present when the desktop shell accepts `t3 app` activation requests. */
+  appActivation?: {
+    setReady: (ready: boolean) => Promise<void>;
+    complete: (response: DesktopAppActivationResponse) => Promise<void>;
+    onRequest: (listener: (request: DesktopAppActivationRequest) => void) => () => void;
+  };
   energyDiagnostics?: DesktopEnergyDiagnosticsBridge;
   /**
    * Desktop-only preview surface. Present iff the renderer is hosted by the

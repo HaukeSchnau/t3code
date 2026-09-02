@@ -310,12 +310,14 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
 
               const committedEvents: OrchestrationEvent[] = [];
+              const attachmentCleanups: Effect.Effect<void>[] = [];
               let nextCommandReadModel = commandReadModel;
 
               for (const nextEvent of eventBases) {
                 const savedEvent = yield* eventStore.append(nextEvent);
                 nextCommandReadModel = yield* projectEvent(nextCommandReadModel, savedEvent);
-                yield* projectionPipeline.projectEvent(savedEvent);
+                const cleanup = yield* projectionPipeline.projectEventDeferred(savedEvent);
+                attachmentCleanups.push(cleanup);
                 committedEvents.push(savedEvent);
               }
 
@@ -342,6 +344,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               return {
                 _tag: "accepted" as const,
                 committedEvents,
+                attachmentCleanups,
                 lastSequence: lastSavedEvent.sequence,
                 nextCommandReadModel,
               } as const;
@@ -360,6 +363,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         }
 
         commandReadModel = committedCommand.nextCommandReadModel;
+        for (const cleanup of committedCommand.attachmentCleanups) {
+          yield* cleanup;
+        }
         incrementWorkloadCounter(
           "orchestration.events.durable",
           committedCommand.committedEvents.length,
@@ -550,6 +556,9 @@ const makeOrchestrationEngine = Effect.gen(function* () {
     },
     dispatch,
     resolveReceipt,
+    subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
+      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
+    ),
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)
     // each independently receive all domain events.

@@ -398,6 +398,7 @@ const makeTestThreadDiscoveryDependencies = (
       getProviders: Effect.succeed(providerSnapshots),
       refresh: () => Effect.succeed(providerSnapshots),
       refreshInstance: () => Effect.succeed(providerSnapshots),
+      refreshWorkspaceSnapshot: () => Effect.succeed(providerSnapshots),
       getProviderMaintenanceCapabilitiesForInstance: () =>
         Effect.die("unused provider maintenance capabilities"),
       setProviderMaintenanceActionState: () => Effect.succeed(providerSnapshots),

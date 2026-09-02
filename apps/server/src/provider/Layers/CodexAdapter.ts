@@ -2070,6 +2070,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
     capabilities: {
       sessionModelSwitch: "in-session",
       assistantTranscriptRecovery: "none",
+      promptlessTurnContinuation: true,
       turnContinuation: "prompt",
     },
     startSession,
