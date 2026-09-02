@@ -630,12 +630,14 @@ export const ProviderRegistryLive = Layer.effect(
         // or HTTP server construction path.
         yield* Effect.forEach(
           newlyAdded,
-          ([, instance]) =>
+          ([instanceId, instance]) =>
             Effect.gen(function* () {
               const source = buildSnapshotSource(instance);
               const provider = yield* source.getSnapshot;
               yield* correlateSnapshotWithSource(source, provider).pipe(
-                Effect.flatMap(syncProvider),
+                Effect.flatMap((provider) =>
+                  upsertProviders([provider], { replace: previousSubs.has(instanceId) }),
+                ),
               );
             }).pipe(Effect.ignoreCause({ log: true })),
           { concurrency: "unbounded", discard: true },

@@ -36,4 +36,17 @@ describe("resolveDesktopAppControlAddress", () => {
     expect(result.directory).toBeNull();
     expect(result.address).toMatch(/^\\\\\.\\pipe\\t3code-app-[a-f0-9]{24}$/);
   });
+
+  it("falls back to /tmp when the configured Unix temp directory is too long", () => {
+    const result = resolveDesktopAppControlAddress({
+      stateDir: "/home/user/.t3/userdata",
+      platform: "linux",
+      tempDir: `/${"long/".repeat(30)}tmp`,
+      userId: 1000,
+      joinPath: (...segments) => segments.join("/"),
+    });
+
+    expect(result.directory).toBe("/tmp/t3code-1000");
+    expect(new TextEncoder().encode(result.address).length).toBeLessThanOrEqual(103);
+  });
 });

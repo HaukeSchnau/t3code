@@ -74,6 +74,7 @@ import Migration0058 from "./Migrations/058_ProjectionThreadTurnRetry.ts";
 import Migration0059 from "./Migrations/059_ProjectionThreadActivityKindIndex.ts";
 import Migration0060 from "./Migrations/060_ProjectionThreadRecentActivityIndex.ts";
 import Migration0061 from "./Migrations/061_UpgradeCodexProjectDefaults.ts";
+import Migration0062 from "./Migrations/062_ClearAutomaticProjectModelDefaults.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -147,6 +148,7 @@ export const migrationEntries = [
   [59, "ProjectionThreadActivityKindIndex", Migration0059],
   [60, "ProjectionThreadRecentActivityIndex", Migration0060],
   [61, "UpgradeCodexProjectDefaults", Migration0061],
+  [62, "ClearAutomaticProjectModelDefaults", Migration0062],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

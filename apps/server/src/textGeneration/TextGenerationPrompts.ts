@@ -233,6 +233,7 @@ Editorial rules:
 - Capture the umbrella goal when the request lists several symptoms or steps.
 - Name the product change, not the mock, plan, report, branch, or PR used to produce it.
 - Models, subagents, tools, output formats, and monitoring instructions do not belong in the title unless they are themselves the topic.
+- Local git history is not evidence of what a linked PR or issue is about. Do not fall back to URL-shaped titles such as "Take Over PR 8588".
 - For reviews, name what is being reviewed and the relevant concern. Avoid generic titles such as "Review PR 123" when linked or attached context reveals the subject.
 - For research, name the question domain rather than the requested research process.
 - Do not claim the work is complete.
@@ -259,6 +260,7 @@ Editorial rules:
 - A thread progressing through research, planning, implementation, review, CI, merge, and monitoring has usually not changed subjects.
 - Ignore deliverables and operations such as mocks, plans, HTML, branches, PRs, tests, CI, commits, merging, and monitoring unless they are the actual topic.
 - Models, subagents, tools, output formats, and monitoring instructions do not belong in the title unless they are themselves the topic.
+- Local git history is not evidence of what a linked PR or issue is about. Do not fall back to URL-shaped titles such as "Take Over PR 8588".
 - Treat final operational follow-ups and assistant completion summaries as weak evidence of subject.
 - For reviews, name the reviewed feature or system and its durable concern, not one finding from the review.
 - For research, name the question domain rather than the research process.
