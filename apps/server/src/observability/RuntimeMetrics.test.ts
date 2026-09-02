@@ -1,10 +1,9 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { assert, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Metric from "effect/Metric";
+import * as Path from "effect/Path";
 
 import { recordRuntimeMetrics } from "./RuntimeMetrics.ts";
 
@@ -15,13 +14,14 @@ const gaugeValue = (snapshots: ReadonlyArray<Metric.Metric.Snapshot>, id: string
 
 it.effect("records event-loop delay and SQLite file sizes", () =>
   Effect.gen(function* () {
-    const directory = mkdtempSync(join(tmpdir(), "t3-runtime-metrics-"));
-    yield* Effect.addFinalizer(() =>
-      Effect.sync(() => rmSync(directory, { recursive: true, force: true })),
-    );
-    const dbPath = join(directory, "state.sqlite");
-    writeFileSync(dbPath, "database");
-    writeFileSync(`${dbPath}-wal`, "wal");
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const directory = yield* fileSystem.makeTempDirectoryScoped({
+      prefix: "t3-runtime-metrics-",
+    });
+    const dbPath = path.join(directory, "state.sqlite");
+    yield* fileSystem.writeFileString(dbPath, "database");
+    yield* fileSystem.writeFileString(`${dbPath}-wal`, "wal");
 
     yield* recordRuntimeMetrics({ dbPath, eventLoopDelayNanoseconds: 2_500_000 });
 
@@ -34,13 +34,13 @@ it.effect("records event-loop delay and SQLite file sizes", () =>
     const normalizedSnapshots = yield* Metric.snapshot;
     assert.equal(gaugeValue(normalizedSnapshots, "t3_event_loop_delay_milliseconds"), 0);
 
-    rmSync(`${dbPath}-wal`);
+    yield* fileSystem.remove(`${dbPath}-wal`);
     yield* recordRuntimeMetrics({ dbPath, eventLoopDelayNanoseconds: 1 });
     const missingWalSnapshots = yield* Metric.snapshot;
     assert.equal(gaugeValue(missingWalSnapshots, "t3_sqlite_wal_size_bytes"), 0);
 
     yield* recordRuntimeMetrics({
-      dbPath: join(directory, "missing.sqlite"),
+      dbPath: path.join(directory, "missing.sqlite"),
       eventLoopDelayNanoseconds: 1,
     });
     const missingDatabaseSnapshots = yield* Metric.snapshot;
@@ -51,5 +51,5 @@ it.effect("records event-loop delay and SQLite file sizes", () =>
     if (errors?.type === "Counter") {
       assert.equal(errors.state.count, 1);
     }
-  }),
+  }).pipe(Effect.provide(NodeServices.layer)),
 );
