@@ -54,6 +54,11 @@
         {
           pkgs,
           preferLocalWebBuild ? false,
+          pnpmDepsHashes ? {
+            web = "sha256-3JWUONmz8/e+9u/Gq+GI3FSQj3vEH/OoAnpNm8cUlEw=";
+            server = "sha256-m3+zPfAffihqH6iDrYqNZTtF4WYCrceMmNpu4q0SlPk=";
+            runtime = "sha256-gXK7wz1LowdDFhjgSvLtJia17uesqpAdLoKh2Ffc0CE=";
+          },
         }:
         let
           nodejs = pkgs.nodejs_24;
@@ -140,13 +145,13 @@
             pname = "t3code-web-deps";
             src = manifestSource;
             workspaces = [ "@t3tools/web..." ];
-            hash = "sha256-3JWUONmz8/e+9u/Gq+GI3FSQj3vEH/OoAnpNm8cUlEw=";
+            hash = pnpmDepsHashes.web;
           };
           serverPnpmDeps = mkPnpmDeps {
             pname = "t3code-server-deps";
             src = manifestSource;
             workspaces = [ "t3..." ];
-            hash = "sha256-m3+zPfAffihqH6iDrYqNZTtF4WYCrceMmNpu4q0SlPk=";
+            hash = pnpmDepsHashes.server;
           };
           runtimePnpmDeps = mkPnpmDeps {
             pname = "t3code-runtime-deps";
@@ -157,7 +162,7 @@
               grep -q '^injectWorkspacePackages: true$' pnpm-workspace.yaml \
                 || printf '\ninjectWorkspacePackages: true\n' >> pnpm-workspace.yaml
             '';
-            hash = "sha256-gXK7wz1LowdDFhjgSvLtJia17uesqpAdLoKh2Ffc0CE=";
+            hash = pnpmDepsHashes.runtime;
           };
 
           commonNativeBuildInputs = [
@@ -293,6 +298,11 @@
             nativeBuildInputs = [ pkgs.makeWrapper ];
             passthru = {
               inherit web server runtimeDependencies;
+              pnpmDeps = {
+                web = webPnpmDeps;
+                server = serverPnpmDeps;
+                runtime = runtimePnpmDeps;
+              };
             };
             meta = {
               description = "Minimal web GUI for using coding agents like Codex and Claude";
@@ -531,6 +541,26 @@
           default = t3code;
           projectRuntime = projectRuntimes.${system}.package;
           projectRelease = projectReleases.${system}.package;
+        }
+      );
+
+      # Kept outside `packages` so `nix flake check` does not try to build deliberately
+      # mismatched fixed-output derivations.
+      legacyPackages = forAllSystems (
+        system:
+        let
+          pkgs = mkPkgs system;
+          package = mkT3CodePackageWith {
+            inherit pkgs;
+            pnpmDepsHashes = {
+              web = lib.fakeHash;
+              server = lib.fakeHash;
+              runtime = lib.fakeHash;
+            };
+          };
+        in
+        {
+          pnpmDepsForHashRefresh = package.pnpmDeps;
         }
       );
 

@@ -64,8 +64,8 @@ describe("fork reconciliation report", () => {
       "pnpm-lock.yaml",
     ]);
     assert.ok(report.warnings.some((warning) => warning.includes("instead of hand-merging")));
-    assert.ok(report.warnings.some((warning) => warning.includes("pnpm-deploy-lock.yaml")));
-    assert.ok(report.warnings.some((warning) => warning.includes("flake.nix")));
+    assert.ok(report.warnings.some((warning) => warning.includes("pnpm run fork:lockfile")));
+    assert.ok(report.warnings.some((warning) => warning.includes("just qa-nix-deps")));
     assert.ok(report.warnings.some((warning) => warning.includes("Generated source")));
     assert.ok(
       commands.every(

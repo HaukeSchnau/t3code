@@ -37,11 +37,11 @@ Claude and native prebuilds from entering the result. `node-pty` is rebuilt expl
 platform-specific native module and its generic install script cannot run during the broad script-free
 production install.
 
-`pnpm-deploy-lock.yaml` is generated, not hand-edited. After changing a workspace manifest or the canonical
-lockfile, run `nix develop -c node scripts/sync-pnpm-deploy-lock.mjs`, review both lockfiles, and commit them
-together. CI or a local gate can append `--check`; it regenerates the deploy lock in memory and fails when the
-committed copy has drifted. The script requires the flake's pinned pnpm 11.10 and restores the canonical
-lockfile and workspace file even when pnpm fails.
+`pnpm-deploy-lock.yaml` is generated, not hand-edited. After changing a workspace manifest, run
+`pnpm run fork:lockfile`; it regenerates and validates the canonical lockfile, derives the deploy lock,
+refreshes the three fixed-output Nix hashes, and verifies `projectReleaseGate`. Review and commit the
+generated files together. The scripts require the flake's pinned pnpm 11.10 and restore temporary edits even
+when pnpm fails.
 
 The three derivations deliberately have separate source filters. Web-only edits do not invalidate the server
 bundle or runtime dependencies; server-only edits do not invalidate the web bundle; documentation changes do
@@ -63,13 +63,13 @@ Nix builds can inherit `/no-cert-file.crt` and abort before the web bundle is pr
 
 ## Hash refresh workflow
 
-When either lockfile changes, the fixed-output `pnpmDeps` hashes in `flake.nix` can drift. First synchronize
-the deploy lock as described above, then use:
+When either lockfile changes, the fixed-output `pnpmDeps` hashes in `flake.nix` can drift. The lockfile
+workflow above refreshes them automatically. To refresh them directly, use:
 
-- `just prefetch-pnpm-deps`
+- `vp run --workspace-root deps:nix-refresh`
 
-The helper intentionally runs the derivation with `lib.fakeHash`, then prints the new `sha256-...` value from
-the Nix error output so the hash refresh stays reproducible and copy/paste-free.
+The command builds the web, server, and runtime dependency stores concurrently with `lib.fakeHash`, rewrites
+their defaults in `flake.nix`, and verifies `projectReleaseGate`. `just qa-nix-deps` is its non-mutating check.
 
 ## Service behavior
 
