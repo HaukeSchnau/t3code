@@ -6,6 +6,7 @@ import type {
 const MAX_HISTORY_WINDOWS_PER_LIMIT = 8;
 const MAX_POINTS_PER_WINDOW = 24;
 const RESET_MATCH_TOLERANCE_MS = 5 * 60 * 1000;
+const UNCHANGED_OBSERVATION_INTERVAL_MS = 60 * 60 * 1000;
 
 export interface UsageLimitObservationInput {
   readonly windowKey?: string;
@@ -53,7 +54,7 @@ export function appendUsageLimitObservation(
   observation: UsageLimitObservationInput,
 ): ReadonlyArray<OrchestrationUsageLimitHistoryWindow> {
   if (
-    observation.usedPercent <= 0 ||
+    observation.usedPercent < 0 ||
     observation.windowDurationMins <= 0 ||
     !Number.isFinite(Date.parse(observation.resetsAt)) ||
     !Number.isFinite(Date.parse(observation.observedAt))
@@ -69,8 +70,17 @@ export function appendUsageLimitObservation(
       Math.abs(Date.parse(window.resetsAt) - resetMs) <= RESET_MATCH_TOLERANCE_MS,
   );
   const lastPoint = existing?.points.at(-1);
-  if (lastPoint && observation.usedPercent <= lastPoint.usedPercent) {
-    return history;
+  if (lastPoint) {
+    if (observation.usedPercent < lastPoint.usedPercent) {
+      return history;
+    }
+    if (
+      observation.usedPercent === lastPoint.usedPercent &&
+      Date.parse(observation.observedAt) - Date.parse(lastPoint.observedAt) <
+        UNCHANGED_OBSERVATION_INTERVAL_MS
+    ) {
+      return history;
+    }
   }
 
   const point = {

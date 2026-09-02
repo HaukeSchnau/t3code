@@ -115,6 +115,11 @@ export interface UsageLimitsActivitySource {
   activities?: ReadonlyArray<OrchestrationThreadActivity> | null | undefined;
 }
 
+export interface UsageLimitForecastOptions {
+  /** Used by walk-forward evaluation to compare history against the regularized baseline. */
+  historyMaxProjectionWeight?: number | undefined;
+}
+
 export type UsageLimitWindowStatus = "ok" | "atRisk" | "reached" | "unknown";
 
 export type UsageDepletionForecast =
@@ -452,6 +457,7 @@ function deriveHistoricalProjection(input: {
   readonly history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>;
   readonly elapsedPercent: number | null;
   readonly regularizedProjection: number | null;
+  readonly historyMaxProjectionWeight: number;
 }): {
   readonly projectedPercentAtReset: number | null;
   readonly projectedPercentRange: { readonly low: number; readonly high: number } | null;
@@ -574,7 +580,7 @@ function deriveHistoricalProjection(input: {
     effectiveHistoricalWindows / HISTORY_FULL_CONFIDENCE_WINDOWS,
   );
   const historyProjectionWeight = Math.min(
-    HISTORY_MAX_PROJECTION_WEIGHT,
+    input.historyMaxProjectionWeight,
     historyCoverageConfidence,
   );
   const blendWithRegularizedProjection = (historicalValue: number) =>
@@ -714,6 +720,7 @@ function deriveWindowDisplay(
   observedAtMs: number,
   nowMs: number,
   isStale: boolean,
+  options: UsageLimitForecastOptions,
 ): DerivedUsageLimitWindowSnapshot | null {
   if (!window) {
     return null;
@@ -728,6 +735,10 @@ function deriveWindowDisplay(
     history,
     elapsedPercent,
     regularizedProjection,
+    historyMaxProjectionWeight: Math.max(
+      0,
+      Math.min(1, options.historyMaxProjectionWeight ?? HISTORY_MAX_PROJECTION_WEIGHT),
+    ),
   });
   const status =
     isStale || resetExpired
@@ -1016,6 +1027,7 @@ export function deriveLatestUsageLimitsSnapshotForSources(
 export function deriveDisplayedUsageLimitsSnapshot(
   snapshot: UsageLimitsSnapshot | null,
   nowMs: number = Date.now(),
+  options: UsageLimitForecastOptions = {},
 ): DerivedUsageLimitsSnapshot | null {
   if (!snapshot) {
     return null;
@@ -1041,6 +1053,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
     observedAtMs,
     nowMs,
     isStale,
+    options,
   );
   const secondary = deriveWindowDisplay(
     snapshot.secondary,
@@ -1049,6 +1062,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
     observedAtMs,
     nowMs,
     isStale,
+    options,
   );
   const windows = (snapshot.windows ?? []).flatMap((window) => {
     const derived = deriveWindowDisplay(
@@ -1058,6 +1072,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
       observedAtMs,
       nowMs,
       isStale,
+      options,
     );
     return derived ? [derived] : [];
   });
