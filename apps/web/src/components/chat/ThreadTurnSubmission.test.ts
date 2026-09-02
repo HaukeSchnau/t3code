@@ -258,6 +258,29 @@ describe("ThreadTurnSubmission", () => {
     assert.isFalse(cleared);
   });
 
+  it("keeps queued messages out of the transcript until dispatch", async () => {
+    const optimisticPhases: string[] = [];
+    await submitThreadTurn({
+      draft: draft(),
+      target: target({ queue: true }),
+      title: "Ship it",
+      delivery: createDurableThreadTurnDeliveryAdapter({ enqueue: async () => undefined }),
+      composer: {
+        clearOnSuccess: "if-current",
+        readCurrentRevision: emptyRevision,
+        clear: () => undefined,
+      },
+      lifecycle: {
+        addOptimistic: (_message, phase) => optimisticPhases.push(phase),
+      },
+      makeCommandId: () => CommandId.make("command-1"),
+      makeMessageId: () => MessageId.make("message-1"),
+      now: () => "2026-08-09T10:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(optimisticPhases, []);
+  });
+
   it("restores an emptied composer and removes its optimistic row after delivery failure", async () => {
     const events: string[] = [];
     let restored: ThreadTurnDraft | null = null;

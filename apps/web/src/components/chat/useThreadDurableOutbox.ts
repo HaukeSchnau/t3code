@@ -100,7 +100,7 @@ export function projectThreadDurableOptimisticMessages(
     (thread.queuedMessages ?? []).map((message) => message.messageId),
   );
   return selectDurableOutboxMessages(
-    entries,
+    entries.filter((entry) => entry.plan.command.type === "thread.turn.start"),
     thread.environmentId,
     thread.id,
     alreadyVisibleMessageIds,

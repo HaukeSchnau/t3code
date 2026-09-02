@@ -497,7 +497,9 @@ export async function submitThreadTurn(
     await input.lifecycle?.beforeTransaction?.(prepared);
     input.lifecycle?.begin?.({ preparingWorkspace: input.target.prepareWorkspace });
     input.lifecycle?.prepared?.(prepared);
-    input.lifecycle?.addOptimistic?.(optimisticMessage, "prepared");
+    if (!input.target.queue) {
+      input.lifecycle?.addOptimistic?.(optimisticMessage, "prepared");
+    }
     if (analysis.expiredTerminalContextCount > 0) {
       input.lifecycle?.expiredContextsOmitted?.(analysis.expiredTerminalContextCount);
     }
