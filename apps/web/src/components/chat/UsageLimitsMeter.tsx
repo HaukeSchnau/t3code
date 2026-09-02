@@ -261,7 +261,11 @@ function formatProjectionBasis(windowSnapshot: DerivedUsageLimitWindowSnapshot):
     return null;
   }
   const suffix = windowSnapshot.historicalWindowCount === 1 ? "window" : "windows";
-  return `Based on ${windowSnapshot.historicalWindowCount} recent ${suffix}`;
+  return `Uses observed portions of ${windowSnapshot.historicalWindowCount} recent ${suffix}`;
+}
+
+function isEarlyProjection(windowSnapshot: DerivedUsageLimitWindowSnapshot): boolean {
+  return windowSnapshot.projectionConfidence === "early";
 }
 
 function formatDepletionLine(
@@ -277,7 +281,7 @@ function formatDepletionLine(
     return resetLabel ? `Available again in ${resetLabel}.` : null;
   }
   if (forecast.kind === "untilReset") {
-    return windowSnapshot.projectionBasis === "regularized"
+    return isEarlyProjection(windowSnapshot)
       ? "Early estimate: expected to last until reset."
       : "Expected to last until reset.";
   }
@@ -289,11 +293,11 @@ function formatDepletionLine(
   const timeBeforeReset = formatTimeBeforeReset(windowSnapshot, forecast.estimatedAtMs);
   const moment = formatEstimatedMoment(forecast.estimatedAtMs, nowMs);
   if (timeBeforeReset) {
-    return windowSnapshot.projectionBasis === "regularized"
+    return isEarlyProjection(windowSnapshot)
       ? `Early estimate: may run out around ${moment}, about ${timeBeforeReset.long} before reset.`
       : `Likely to run out around ${moment}, about ${timeBeforeReset.long} before reset.`;
   }
-  return windowSnapshot.projectionBasis === "regularized"
+  return isEarlyProjection(windowSnapshot)
     ? `Early estimate: may run out in about ${duration.long}, around ${moment}.`
     : `Likely out in about ${duration.long}, around ${moment}.`;
 }

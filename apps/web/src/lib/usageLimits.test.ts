@@ -661,12 +661,112 @@ describe("usageLimits", () => {
     expect(displayed?.depletionForecast).toEqual({ kind: "untilReset" });
   });
 
+  it("uses only the observed portion of an interrupted historical window", () => {
+    const currentResetMs = new Date(2026, 2, 24, 15).getTime();
+    const historicalResetMs = new Date(2026, 2, 23, 15).getTime();
+    const nowMs = new Date(2026, 2, 24, 12, 30).getTime();
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources([
+      {
+        provider: "codex",
+        usageHistory: [
+          {
+            resetsAt: new Date(historicalResetMs).toISOString(),
+            windowDurationMins: 300,
+            points: [
+              {
+                observedAt: new Date(2026, 2, 23, 12).toISOString(),
+                usedPercent: 20,
+              },
+              {
+                observedAt: new Date(2026, 2, 23, 13, 30).toISOString(),
+                usedPercent: 35,
+              },
+            ],
+          },
+        ],
+        usageLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "pro",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: {
+              usedPercent: 40,
+              resetsAt: new Date(currentResetMs).toISOString(),
+              windowDurationMins: 300,
+            },
+            secondary: null,
+            updatedAt: new Date(nowMs).toISOString(),
+          },
+        ],
+      },
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
+
+    expect(displayed?.projectedPercentAtReset).toBeCloseTo(79.87, 1);
+    expect(displayed?.projectionBasis).toBe("history");
+    expect(displayed?.projectionConfidence).toBe("early");
+    expect(displayed?.historicalWindowCount).toBe(1);
+    expect(displayed?.projectedPercentRange).toBeNull();
+  });
+
+  it("does not interpret history that ends before the current point as zero future usage", () => {
+    const currentResetMs = new Date(2026, 2, 24, 15).getTime();
+    const historicalResetMs = new Date(2026, 2, 23, 15).getTime();
+    const nowMs = new Date(2026, 2, 24, 12, 30).getTime();
+    const snapshot = deriveLatestUsageLimitsSnapshotForSources([
+      {
+        provider: "codex",
+        usageHistory: [
+          {
+            resetsAt: new Date(historicalResetMs).toISOString(),
+            windowDurationMins: 300,
+            points: [
+              {
+                observedAt: new Date(2026, 2, 23, 11).toISOString(),
+                usedPercent: 10,
+              },
+              {
+                observedAt: new Date(2026, 2, 23, 12).toISOString(),
+                usedPercent: 20,
+              },
+            ],
+          },
+        ],
+        usageLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "pro",
+            rateLimitReachedType: null,
+            credits: null,
+            primary: {
+              usedPercent: 40,
+              resetsAt: new Date(currentResetMs).toISOString(),
+              windowDurationMins: 300,
+            },
+            secondary: null,
+            updatedAt: new Date(nowMs).toISOString(),
+          },
+        ],
+      },
+    ]);
+
+    const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
+
+    expect(displayed?.projectedPercentAtReset).toBe(80);
+    expect(displayed?.projectionBasis).toBe("regularized");
+    expect(displayed?.historicalWindowCount).toBe(0);
+  });
+
   it("turns a historical forecast range into a depletion time range", () => {
     const durationMs = 5 * 60 * 60 * 1000;
     const currentResetMs = new Date(2026, 2, 23, 15).getTime();
     const nowMs = new Date(2026, 2, 23, 12, 30).getTime();
     const history = [120, 130, 140].map((finalUsed, index) => {
-      const resetMs = currentResetMs - (index + 1) * durationMs;
+      const resetMs = currentResetMs - (index + 1) * 24 * 60 * 60 * 1000;
       return {
         resetsAt: new Date(resetMs).toISOString(),
         windowDurationMins: 300,

@@ -11,16 +11,19 @@ extrapolation is unstable, and adapt it to the user's changing usage over time.
   duration, compacted to at most 24 points per window.
 - Migration 53 backfills that bounded history from existing provider usage-limit events. New live
   updates extend it transactionally with the latest usage projection.
-- Forecasts use the typical remaining usage from equivalent points in completed recent windows.
-  Recent windows receive more weight, and the model reaches full historical confidence after three
-  completed windows.
+- Forecasts compare equivalent effective-usage points in recent windows. An interrupted window
+  contributes only the observed portion after that point; the regularized forecast fills its
+  unobserved tail instead of treating missing observations as zero usage. Recent windows receive
+  more weight, and full historical confidence requires the equivalent of three fully covered
+  windows.
 - Before enough history exists, raw pace is regularized toward a 100% neutral prior. The current
   window still affects the forecast immediately and joins history only after its reset passes.
 - Forecast time is anchored to the provider observation timestamp rather than the client's wall
   clock. After ten minutes without a successful observation, the meter pauses forecasts and reports
   the snapshot as stale; an expired observed window is shown as awaiting refresh.
 - The compact meter remains forecast-first. Its details identify early estimates, state how many
-  recent windows informed an adaptive estimate, and show the observed range after three windows.
+  recent windows contributed observed coverage, and show the observed range once history reaches
+  full confidence.
 - Forecasts above 100% also derive an exhaustion time from the same projected usage. The estimate
   follows the existing sleep and weekend weighting, and historical percentage ranges become timing
   ranges. This calculation stays in the web client and adds no persistence or contract state.

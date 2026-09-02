@@ -139,6 +139,7 @@ export interface DerivedUsageLimitWindowSnapshot extends UsageLimitWindowSnapsho
   projectedPercentAtReset: number | null;
   projectedPercentRange: { readonly low: number; readonly high: number } | null;
   projectionBasis: "history" | "regularized" | null;
+  projectionConfidence: "early" | "established" | null;
   historicalWindowCount: number;
   depletionForecast: UsageDepletionForecast;
   status: UsageLimitWindowStatus;
@@ -448,32 +449,40 @@ function weightedMedian(
 function deriveHistoricalProjection(input: {
   readonly window: UsageLimitWindowSnapshot;
   readonly history: ReadonlyArray<OrchestrationUsageLimitHistoryWindow>;
-  readonly nowMs: number;
+  readonly elapsedPercent: number | null;
   readonly regularizedProjection: number | null;
 }): {
   readonly projectedPercentAtReset: number | null;
   readonly projectedPercentRange: { readonly low: number; readonly high: number } | null;
   readonly projectionBasis: "history" | "regularized" | null;
+  readonly projectionConfidence: "early" | "established" | null;
   readonly historicalWindowCount: number;
 } {
   const durationMins = input.window.windowDurationMins;
   const resetMs = parseTimestampMs(input.window.resetsAt);
-  if (!durationMins || durationMins <= 0 || resetMs === null) {
+  if (
+    !durationMins ||
+    durationMins <= 0 ||
+    resetMs === null ||
+    input.elapsedPercent === null ||
+    input.elapsedPercent >= 100
+  ) {
     return {
       projectedPercentAtReset: input.regularizedProjection,
       projectedPercentRange: null,
       projectionBasis: input.regularizedProjection === null ? null : "regularized",
+      projectionConfidence: input.regularizedProjection === null ? null : "early",
       historicalWindowCount: 0,
     };
   }
 
+  const elapsedPercent = input.elapsedPercent;
   const durationMs = durationMins * 60 * 1000;
   const windowStartMs = resetMs - durationMs;
-  const elapsedMs = Math.min(durationMs, Math.max(0, input.nowMs - windowStartMs));
   const completed = input.history
     .filter(
       (window) =>
-        (input.window.key === undefined || window.windowKey === input.window.key) &&
+        window.windowKey === input.window.key &&
         window.windowDurationMins === durationMins &&
         Date.parse(window.resetsAt) <= windowStartMs + RESET_WINDOW_TOLERANCE_MS &&
         window.points.length > 0,
@@ -482,23 +491,64 @@ function deriveHistoricalProjection(input: {
 
   const estimates = completed.flatMap((window, index) => {
     const historicalResetMs = Date.parse(window.resetsAt);
-    const historicalCutoffMs = historicalResetMs - durationMs + elapsedMs;
+    const historicalStartMs = historicalResetMs - durationMs;
+    const historicalExpectedDurationMs = deriveExpectedUsageDurationMs(
+      historicalStartMs,
+      historicalResetMs,
+      durationMins,
+    );
+    const historicalCutoffMs = deriveExpectedUsageTimestampMs(
+      historicalStartMs,
+      historicalResetMs,
+      durationMins,
+      historicalExpectedDurationMs * (elapsedPercent / 100),
+    );
+    if (historicalCutoffMs === null) {
+      return [];
+    }
     const points = window.points
       .filter((point) => Number.isFinite(Date.parse(point.observedAt)))
       .toSorted((left, right) => Date.parse(left.observedAt) - Date.parse(right.observedAt));
-    const finalUsed = points.at(-1)?.usedPercent;
-    if (finalUsed === undefined) {
+    const finalPoint = points.at(-1);
+    if (finalPoint === undefined) {
       return [];
     }
     const usedAtCutoff = points.findLast(
       (point) => Date.parse(point.observedAt) <= historicalCutoffMs,
     )?.usedPercent;
-    const remaining = Math.max(0, finalUsed - (usedAtCutoff ?? 0));
+    if (usedAtCutoff === undefined) {
+      return [];
+    }
+
+    // A reset can interrupt a window days before its advertised end. Its
+    // observed prefix is still useful, but the missing tail is not zero usage.
+    // Fill only that unobserved tail with the regularized forecast.
+    const finalObservedAtMs = Date.parse(finalPoint.observedAt);
+    const observedCoverageEnd =
+      finalPoint.usedPercent >= 100 ||
+      finalObservedAtMs >= historicalResetMs - RESET_WINDOW_TOLERANCE_MS
+        ? 100
+        : deriveExpectedUsageElapsedPercent(
+            historicalResetMs,
+            durationMs,
+            durationMins,
+            finalObservedAtMs,
+          );
+    if (observedCoverageEnd === null || observedCoverageEnd <= elapsedPercent) {
+      return [];
+    }
+    const coverage = Math.min(1, (observedCoverageEnd - elapsedPercent) / (100 - elapsedPercent));
+    const observedRemaining = Math.max(0, finalPoint.usedPercent - usedAtCutoff);
+    const regularizedRemaining = Math.max(
+      0,
+      (input.regularizedProjection ?? input.window.usedPercent) - input.window.usedPercent,
+    );
     const age = completed.length - index - 1;
     return [
       {
-        value: input.window.usedPercent + remaining,
-        weight: 2 ** (-age / HISTORY_RECENCY_HALF_LIFE_WINDOWS),
+        value: input.window.usedPercent + observedRemaining + regularizedRemaining * (1 - coverage),
+        coverage,
+        weight: 2 ** (-age / HISTORY_RECENCY_HALF_LIFE_WINDOWS) * coverage,
       },
     ];
   });
@@ -508,12 +558,20 @@ function deriveHistoricalProjection(input: {
       projectedPercentAtReset: input.regularizedProjection,
       projectedPercentRange: null,
       projectionBasis: input.regularizedProjection === null ? null : "regularized",
+      projectionConfidence: input.regularizedProjection === null ? null : "early",
       historicalWindowCount: 0,
     };
   }
 
   const historicalProjection = weightedMedian(estimates);
-  const historyConfidence = Math.min(1, estimates.length / HISTORY_FULL_CONFIDENCE_WINDOWS);
+  const effectiveHistoricalWindows = estimates.reduce(
+    (total, estimate) => total + estimate.coverage,
+    0,
+  );
+  const historyConfidence = Math.min(
+    1,
+    effectiveHistoricalWindows / HISTORY_FULL_CONFIDENCE_WINDOWS,
+  );
   const projectedPercentAtReset =
     input.regularizedProjection === null
       ? historicalProjection
@@ -524,10 +582,11 @@ function deriveHistoricalProjection(input: {
   return {
     projectedPercentAtReset,
     projectedPercentRange:
-      estimates.length >= HISTORY_FULL_CONFIDENCE_WINDOWS
+      effectiveHistoricalWindows >= HISTORY_FULL_CONFIDENCE_WINDOWS
         ? { low: Math.min(...estimateValues), high: Math.max(...estimateValues) }
         : null,
     projectionBasis: "history",
+    projectionConfidence: historyConfidence >= 1 ? "established" : "early",
     historicalWindowCount: estimates.length,
   };
 }
@@ -658,7 +717,7 @@ function deriveWindowDisplay(
   const projection = deriveHistoricalProjection({
     window,
     history,
-    nowMs: observedAtMs,
+    elapsedPercent,
     regularizedProjection,
   });
   const status =
