@@ -34,6 +34,7 @@ import Animated, {
   FadeOut,
   FadeOutDown,
   LinearTransition,
+  ReduceMotion,
 } from "react-native-reanimated";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
@@ -155,8 +156,16 @@ export interface ThreadComposerProps {
 // KeyboardStickyView (frame-synced to the IME), and a time-based morph
 // running alongside that translate reads as jitter. Snapping the layout and
 // letting the keyboard-synced slide be the only motion looks native there.
-const COMPOSER_LAYOUT_TRANSITION =
-  Platform.OS === "android" ? undefined : LinearTransition.duration(220);
+export const COMPOSER_TRANSITION_DURATION_MS = 220;
+export const COMPOSER_LAYOUT_TRANSITION =
+  Platform.OS === "android"
+    ? undefined
+    : LinearTransition.duration(COMPOSER_TRANSITION_DURATION_MS).reduceMotion(ReduceMotion.System);
+
+const COMPOSER_ATTACHMENT_ENTERING =
+  Platform.OS === "android"
+    ? FadeIn.duration(160)
+    : FadeIn.delay(COMPOSER_TRANSITION_DURATION_MS).duration(160).reduceMotion(ReduceMotion.System);
 
 export function ComposerSurface(props: {
   readonly children: ReactNode;
@@ -888,10 +897,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           }
         >
           {/* Attachment strip — inside the card, above the text input */}
-          {isExpanded ? (
+          {isExpanded && props.draftAttachments.length > 0 ? (
             <Animated.View
-              className={props.draftAttachments.length > 0 ? "pb-2.5" : undefined}
-              entering={FadeIn.duration(160)}
+              className="pb-2.5"
+              entering={COMPOSER_ATTACHMENT_ENTERING}
               exiting={FadeOut.duration(120)}
             >
               <ComposerAttachmentStrip

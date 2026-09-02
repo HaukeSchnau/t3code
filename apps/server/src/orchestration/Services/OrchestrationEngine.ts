@@ -100,6 +100,13 @@ export interface OrchestrationEngineShape {
    */
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
 
+  /** Acquire a live domain-event subscription before starting a consumer. */
+  readonly subscribeDomainEvents?: Effect.Effect<
+    Stream.Stream<OrchestrationEvent>,
+    never,
+    Scope.Scope
+  >;
+
   /**
    * The latest sequence reflected in the engine's authoritative command read
    * model (0 if none). Used to gauge how far behind a resuming client is before

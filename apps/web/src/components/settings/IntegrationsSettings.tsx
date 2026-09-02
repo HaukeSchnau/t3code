@@ -6,6 +6,9 @@
  * @module IntegrationsSettings
  */
 import {
+  BROWSER_RECORDING_FRAME_RATES,
+  DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
+  DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_VIEWPORT,
   DEFAULT_PREVIEW_APPEARANCE,
   DEFAULT_PREVIEW_ZOOM_FACTOR,
@@ -35,6 +38,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { useClientSettings, useUpdatePrimarySettings } from "~/hooks/useSettings";
 
@@ -347,6 +351,85 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
+function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boolean }) {
+  const frameRate = useClientSettings((settings) => settings.browserRecordingFrameRate);
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsRow
+      {...searchableSetting("browser-recording-frame-rate")}
+      description="Maximum frame rate for browser recordings. 30 fps is the default and uses less CPU and storage; 60 fps captures smoother motion."
+      resetAction={
+        !disabled && frameRate !== DEFAULT_BROWSER_RECORDING_FRAME_RATE ? (
+          <SettingResetButton
+            label="browser recording frame rate"
+            onClick={() =>
+              updateSettings({ browserRecordingFrameRate: DEFAULT_BROWSER_RECORDING_FRAME_RATE })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Select
+          disabled={disabled}
+          value={String(frameRate)}
+          onValueChange={(value) => {
+            const next = BROWSER_RECORDING_FRAME_RATES.find((rate) => String(rate) === value);
+            if (next !== undefined) {
+              updateSettings({ browserRecordingFrameRate: next });
+            }
+          }}
+        >
+          <SelectTrigger className="w-full sm:w-40" aria-label="Browser recording frame rate">
+            <SelectValue>{frameRate} fps</SelectValue>
+          </SelectTrigger>
+          <SelectPopup align="end" alignItemWithTrigger={false}>
+            {BROWSER_RECORDING_FRAME_RATES.map((rate) => (
+              <SelectItem hideIndicator key={rate} value={String(rate)}>
+                {rate} fps
+              </SelectItem>
+            ))}
+          </SelectPopup>
+        </Select>
+      }
+    />
+  );
+}
+
+function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
+  const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsRow
+      {...searchableSetting("browser-auto-show-floating-preview")}
+      description="Pop the floating preview into view when an agent opens a browser. An agent that explicitly asks to show or hide its preview still gets what it asked for."
+      resetAction={
+        !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
+          <SettingResetButton
+            label="auto-show floating preview"
+            onClick={() =>
+              updateSettings({
+                browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          disabled={disabled}
+          checked={autoShow}
+          onCheckedChange={(checked) =>
+            updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
+          }
+          aria-label="Auto-show floating preview"
+        />
+      }
+    />
+  );
+}
+
 /**
  * Frames the client-local preview defaults as one unavailable block.
  *
@@ -381,6 +464,8 @@ export function IntegrationsSettingsPanel() {
       <BrowserViewportSetting disabled={previewDefaultsDisabled} />
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
+      <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
+      <BrowserAutoShowFloatingPreviewSetting disabled={previewDefaultsDisabled} />
     </>
   );
 

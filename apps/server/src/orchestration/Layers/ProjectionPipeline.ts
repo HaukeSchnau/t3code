@@ -2360,7 +2360,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       },
     ];
 
-    const runProjectorsForEvent = Effect.fn("runProjectorsForEvent")(function* (
+    const projectEventDeferredFor = Effect.fn("projectEventDeferredFor")(function* (
       event: OrchestrationEvent,
       cursorProjectors: ReadonlyArray<ProjectorDefinition> = projectors,
     ) {
@@ -2398,7 +2398,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         cursorProjectors.length - relevantProjectors.length,
       );
 
-      yield* runAttachmentSideEffects(attachmentSideEffects).pipe(
+      return runAttachmentSideEffects(attachmentSideEffects).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+        Effect.provideService(ServerConfig, serverConfig),
         Effect.catch((cause) =>
           Effect.logWarning("failed to apply projected attachment side-effects", {
             projectors: relevantProjectors.map((projector) => projector.name),
@@ -2436,7 +2439,8 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           if (laggingProjectors.length === 0) {
             return Effect.void;
           }
-          return runProjectorsForEvent(event, laggingProjectors).pipe(
+          return projectEventDeferredFor(event, laggingProjectors).pipe(
+            Effect.flatten,
             Effect.tap(() =>
               Effect.sync(() => {
                 for (const projector of laggingProjectors) {
@@ -2449,8 +2453,10 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       );
     });
 
-    const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
-      runProjectorsForEvent(event).pipe(
+    const projectEventDeferred: OrchestrationProjectionPipelineShape["projectEventDeferred"] = (
+      event,
+    ) =>
+      projectEventDeferredFor(event).pipe(
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
         Effect.provideService(ServerConfig, serverConfig),
@@ -2458,6 +2464,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           Effect.fail(toPersistenceSqlError("ProjectionPipeline.projectEvent:query")(sqlError)),
         ),
       );
+
+    const projectEvent: OrchestrationProjectionPipelineShape["projectEvent"] = (event) =>
+      projectEventDeferred(event).pipe(Effect.flatten);
 
     const bootstrap: OrchestrationProjectionPipelineShape["bootstrap"] = bootstrapProjectors.pipe(
       Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -2476,6 +2485,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     return {
       bootstrap,
       projectEvent,
+      projectEventDeferred,
     } satisfies OrchestrationProjectionPipelineShape;
   },
 );

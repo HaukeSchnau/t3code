@@ -302,6 +302,25 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     revealCaptureArtifact: (path) =>
       invoke(IpcChannels.ENERGY_REVEAL_CAPTURE_ARTIFACT_CHANNEL, path),
   },
+  appActivation: {
+    setReady: (ready) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
+    complete: (response) =>
+      ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_COMPLETE_CHANNEL, response),
+    onRequest: (listener) => {
+      const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
+        if (typeof request !== "object" || request === null) return;
+        listener(request as Parameters<typeof listener>[0]);
+      };
+      ipcRenderer.on(IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL, wrappedListener);
+      return () => {
+        ipcRenderer.removeListener(
+          IpcChannels.DESKTOP_APP_ACTIVATION_REQUEST_CHANNEL,
+          wrappedListener,
+        );
+      };
+    },
+  },
   preview: {
     createTab: (tabId, defaults) =>
       invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {

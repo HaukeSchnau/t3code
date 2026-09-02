@@ -42,9 +42,11 @@ export interface ProviderAdapterCapabilities {
    * transcripts, including parent and subagent messages, before live runtime events resume. Only adapters with an
    * integration-tested replay cursor or recovered snapshot may opt in.
    */
-  readonly assistantTranscriptRecovery: ProviderAssistantTranscriptRecoveryMode;
+  readonly assistantTranscriptRecovery?: ProviderAssistantTranscriptRecoveryMode;
   /** How the provider continues an interrupted thread without a user-visible message. */
   readonly turnContinuation?: ProviderTurnContinuationMode;
+  /** Starts a resumed turn with no synthetic user prompt. */
+  readonly promptlessTurnContinuation?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

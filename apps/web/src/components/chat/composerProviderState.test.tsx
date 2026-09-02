@@ -117,7 +117,7 @@ describe("getComposerProviderState", () => {
     );
   });
 
-  it("returns descriptor defaults when no selections are provided", () => {
+  it("uses descriptor defaults for display without dispatching them as overrides", () => {
     const state = getComposerProviderState({
       provider: PROVIDER,
       model: MODEL,
@@ -134,7 +134,7 @@ describe("getComposerProviderState", () => {
     expect(state).toEqual({
       provider: PROVIDER,
       promptEffort: "high",
-      modelOptionsForDispatch: selections(["effort", "high"]),
+      modelOptionsForDispatch: undefined,
     });
   });
 
@@ -213,9 +213,7 @@ describe("getComposerProviderState", () => {
     });
 
     expect(state.promptEffort).toBe("high");
-    expect(state.modelOptionsForDispatch).toEqual(
-      selections(["effort", "high"], ["contextWindow", "200k"], ["agent", "plan"]),
-    );
+    expect(state.modelOptionsForDispatch).toEqual(selections(["agent", "plan"]));
   });
 
   it("drops the plan agent from dispatch when legacy plan mode is disabled", () => {
@@ -267,7 +265,7 @@ describe("getComposerProviderState", () => {
       planModeEnabled: false,
     });
 
-    expect(state.modelOptionsForDispatch).toEqual(selections(["agent", "research"]));
+    expect(state.modelOptionsForDispatch).toBeUndefined();
   });
 
   it("returns undefined dispatch options when the model declares no descriptors", () => {
@@ -339,11 +337,12 @@ describe("getComposerProviderState", () => {
   it("validates options for a known model selected through a legacy alias", () => {
     const state = getComposerProviderState({
       provider: ProviderDriverKind.make("claudeAgent"),
-      model: "opus",
+      model: "legacy-test-model",
       models: [
         {
-          slug: "claude-opus-5",
-          name: "Claude Opus 5",
+          slug: "test-model",
+          name: "Test Model",
+          aliases: ["legacy-test-model"],
           isCustom: false,
           capabilities: {
             optionDescriptors: [

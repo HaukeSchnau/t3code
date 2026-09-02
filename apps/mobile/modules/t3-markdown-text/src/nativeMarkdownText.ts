@@ -2,7 +2,11 @@ import type { MarkdownNode } from "react-native-nitro-markdown/headless";
 import { resolveInlineCodeWebLink } from "@t3tools/shared/markdownLinks";
 
 import type { SelectableMarkdownSkill } from "./SelectableMarkdownText.types";
-import { resolveMarkdownLinkPresentation, type MarkdownFileIcon } from "./markdownLinks";
+import {
+  resolveMarkdownInlineCodePresentation,
+  resolveMarkdownLinkPresentation,
+  type MarkdownFileIcon,
+} from "./markdownLinks";
 
 export interface NativeMarkdownTextRun {
   readonly text: string;
@@ -285,9 +289,17 @@ function appendNode(
     case "html_inline":
       return appendRun(runs, inlineHtmlText(nodeTextContent(node)), context);
     case "code_inline": {
-      const value = nodeTextContent(node);
-      const link = resolveInlineCodeWebLink(value);
-      return appendRun(runs, value, {
+      const content = nodeTextContent(node);
+      const presentation = context.href ? null : resolveMarkdownInlineCodePresentation(content);
+      if (presentation) {
+        return appendRun(runs, presentation.label, {
+          ...context,
+          href: presentation.href,
+          fileIcon: presentation.icon,
+        });
+      }
+      const link = context.href ? null : resolveInlineCodeWebLink(content);
+      return appendRun(runs, content, {
         ...context,
         code: true,
         ...(link ? { href: link.href, externalHost: link.host } : {}),
