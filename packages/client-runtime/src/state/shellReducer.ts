@@ -61,9 +61,16 @@ export function applyShellStreamEvent(
         snapshotSequence: event.sequence,
       };
     case "usage-limits-updated": {
+      const current = snapshot.usageLimits.find(
+        (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
+      );
+      const nextUsageLimits =
+        current?.history !== undefined && event.usageLimits.history === undefined
+          ? { ...event.usageLimits, history: current.history }
+          : event.usageLimits;
       const usageLimits = upsertBy(
         snapshot.usageLimits,
-        event.usageLimits,
+        nextUsageLimits,
         (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
       );
       return { ...snapshot, usageLimits, snapshotSequence: event.sequence };

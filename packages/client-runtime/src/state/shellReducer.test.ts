@@ -209,6 +209,58 @@ describe("applyShellStreamEvent", () => {
       expect(next.threads).toEqual([]);
       expect(next.snapshotSequence).toBe(9);
     });
+
+    it("preserves history when a live update omits the optional field", () => {
+      const history = [
+        {
+          resetsAt: "2026-03-31T05:00:00.000Z",
+          windowDurationMins: 300,
+          points: [{ observedAt: "2026-03-31T04:00:00.000Z", usedPercent: 75 }],
+        },
+      ];
+      const current = {
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        usageLimits: {
+          updatedAt: "2026-04-01T00:00:00.000Z",
+          limitId: "codex",
+          limitName: "Codex",
+          planType: "plus",
+          rateLimitReachedType: null,
+          credits: null,
+          primary: {
+            usedPercent: 41,
+            resetsAt: "2026-04-01T05:00:00.000Z",
+            windowDurationMins: 300,
+          },
+          secondary: null,
+        },
+        history,
+      };
+      const snapshot: OrchestrationShellSnapshot = {
+        ...baseSnapshot,
+        snapshotSequence: 8,
+        usageLimits: [current],
+      };
+      const event: OrchestrationShellStreamEvent = {
+        kind: "usage-limits-updated",
+        sequence: 9,
+        usageLimits: {
+          ...current,
+          usageLimits: {
+            ...current.usageLimits,
+            updatedAt: "2026-04-01T00:05:00.000Z",
+            primary: { ...current.usageLimits.primary, usedPercent: 42 },
+          },
+          history: undefined,
+        },
+      };
+
+      const next = applyShellStreamEvent(snapshot, event);
+
+      expect(next.usageLimits[0]?.usageLimits.primary?.usedPercent).toBe(42);
+      expect(next.usageLimits[0]?.history).toEqual(history);
+    });
   });
 
   it("returns original snapshot for unrecognized event kinds", () => {

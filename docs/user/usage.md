@@ -16,9 +16,8 @@ headline and chart, and refreshing rescans every connected environment.
 
 The usage meter beside the composer supports Codex, Claude, and GLM models used through a Z.AI
 Coding Plan in OpenCode. It forecasts how much of each limit window you are likely to use by its
-reset. It learns from the changing percentage during recent completed windows, so shifts in your
-working pattern gradually change future forecasts. The current window affects the estimate
-immediately.
+reset. It learns from the observed portions of recent windows, so shifts in your working pattern
+gradually change future forecasts. The current window affects the estimate immediately.
 
 For GLM, T3 Code uses the API key and API endpoint already resolved by OpenCode for the selected
 model. The meter appears only while that matching GLM model is selected. Its compact rows show the
@@ -38,10 +37,12 @@ successful check is more than ten minutes old, the meter marks the values as sta
 forecast. An expired window stays visible as the previous observation while T3 Code waits for
 refreshed limits instead of presenting it as current.
 
-Before enough completed history exists, the meter shows an early estimate that keeps the opening
-hours of a weekly window from dominating the entire forecast. After three completed windows, its
-details show how many recent windows informed the estimate and the range those windows produced.
-The server retains only a compact history of the eight newest windows for each distinct limit.
+Before enough history coverage exists, the meter shows an early estimate that keeps the opening
+hours of a weekly window from dominating the entire forecast. A window reset ahead of schedule can
+still contribute the usage observed before its reset, but the forecast does not treat its missing
+tail as zero usage. Once recent history covers the equivalent remaining span often enough, the
+details show its observed range. The server retains only a compact history of the eight newest
+windows for each distinct limit.
 
 When the forecast exceeds 100%, the compact meter estimates how long before the reset you will run
 out. Open the meter for the approximate date and time. If recent windows disagree, the details show

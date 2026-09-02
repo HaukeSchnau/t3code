@@ -211,7 +211,7 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     );
 
     expect(html).toContain("forecast");
-    expect(html).toContain("Based on 3 recent windows");
+    expect(html).toContain("Uses observed portions of 3 recent windows");
     expect(html).toContain("Typical range");
     expect(html).toContain("Expected to last until reset");
   });
@@ -256,7 +256,7 @@ describe("ComposerUsageLimitsMeterSlot", () => {
       },
       updatedAt: "2026-03-23T12:30:00.000Z",
       history: [120, 130, 140].map((finalUsed, index) => {
-        const resetMs = currentResetMs - (index + 1) * durationMs;
+        const resetMs = currentResetMs - (index + 1) * 24 * 60 * 60 * 1000;
         return {
           resetsAt: new Date(resetMs).toISOString(),
           windowDurationMins: 300,
