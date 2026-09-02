@@ -130,6 +130,15 @@ rl.on("line", (line) => {
     }
     for (const request of script.serverRequests ?? []) {
       write({ jsonrpc: "2.0", id: request.id, method: request.method, params: request.params });
+      if (request.resolveOutOfBand === true) {
+        setImmediate(() => {
+          write({
+            jsonrpc: "2.0",
+            method: "serverRequest/resolved",
+            params: { threadId: rootThreadId, requestId: request.id },
+          });
+        });
+      }
     }
     if (script.holdTurnOpen !== true) {
       write({

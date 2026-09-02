@@ -66,6 +66,7 @@ export interface PendingUserInputCardProps {
     customAnswer: string,
   ) => void;
   readonly onSubmit: () => Promise<unknown>;
+  readonly onSkip: () => Promise<unknown>;
 }
 
 /**
@@ -177,6 +178,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
         <Text className="font-sans text-xs text-adaptive-neutral-500-400">
           {questionCount} question{questionCount === 1 ? "" : "s"}
         </Text>
+        {props.pendingUserInput.optional ? (
+          <Text className="font-t3-bold text-2xs uppercase tracking-[1px] text-adaptive-neutral-500-400">
+            Optional
+          </Text>
+        ) : null}
         <View className="flex-1" />
         <SymbolView
           name="chevron.up"
@@ -233,6 +239,11 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-sky-700-300">
             User input needed
           </Text>
+          {props.pendingUserInput.optional ? (
+            <Text className="font-t3-bold text-2xs uppercase tracking-[1.1px] text-adaptive-neutral-500-400">
+              Optional
+            </Text>
+          ) : null}
           <Text className="font-t3-bold text-lg text-adaptive-neutral-950-50">
             Fill in the pending answers
           </Text>
@@ -322,18 +333,30 @@ export function PendingUserInputCard(props: PendingUserInputCardProps) {
           );
         })}
       </ScrollView>
-      <Pressable
-        className={cn(
-          "items-center justify-center rounded-2xl px-4 py-3.5",
-          props.answers ? "bg-blue-500" : "bg-adaptive-neutral-200-700-a60",
-        )}
-        disabled={
-          props.answers === null || props.respondingUserInputId === props.pendingUserInput.requestId
-        }
-        onPress={() => void props.onSubmit()}
-      >
-        <Text className="font-t3-extrabold text-sm text-white">Submit answers</Text>
-      </Pressable>
+      <View className="flex-row gap-2">
+        {props.pendingUserInput.optional ? (
+          <Pressable
+            className="items-center justify-center rounded-2xl border border-adaptive-neutral-200-white-a8 px-4 py-3.5"
+            disabled={props.respondingUserInputId === props.pendingUserInput.requestId}
+            onPress={() => void props.onSkip()}
+          >
+            <Text className="font-t3-bold text-sm text-adaptive-neutral-600-300">Skip</Text>
+          </Pressable>
+        ) : null}
+        <Pressable
+          className={cn(
+            "flex-1 items-center justify-center rounded-2xl px-4 py-3.5",
+            props.answers ? "bg-blue-500" : "bg-adaptive-neutral-200-700-a60",
+          )}
+          disabled={
+            props.answers === null ||
+            props.respondingUserInputId === props.pendingUserInput.requestId
+          }
+          onPress={() => void props.onSubmit()}
+        >
+          <Text className="font-t3-extrabold text-sm text-white">Submit answers</Text>
+        </Pressable>
+      </View>
     </Animated.View>
   ) : null;
   return (

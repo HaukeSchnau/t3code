@@ -1151,6 +1151,7 @@ function MonitorThreadActions({
                 onRespondToApproval={async () => undefined}
                 onSelectActivePendingUserInputOption={() => undefined}
                 onAdvanceActivePendingUserInput={() => undefined}
+                onSkipActivePendingUserInput={() => undefined}
                 onPreviousActivePendingUserInputQuestion={() => undefined}
                 onChangeActivePendingUserInputCustomAnswer={() => undefined}
                 onProviderModelSelect={onProviderModelSelect}
@@ -1384,6 +1385,9 @@ function MonitorUserInputPrompt({
       <div className="flex items-center gap-1.5 text-[11px] font-medium text-amber-800 dark:text-amber-100">
         <MessageSquareTextIcon className="size-3.5" />
         {question.header}
+        {prompt.optional ? (
+          <span className="text-[10px] text-muted-foreground">Optional</span>
+        ) : null}
         {isMultiQuestion ? (
           <span className="text-[10px] text-muted-foreground">1/{prompt.questions.length}</span>
         ) : null}
@@ -1429,34 +1433,47 @@ function MonitorUserInputPrompt({
             ? "This prompt needs the full thread form."
             : "Select an option, then submit."}
         </span>
-        {requiresFullThread ? (
-          <Button
-            render={
-              <Link
-                to="/$environmentId/$threadId"
-                params={{
-                  environmentId: threadRef.environmentId,
-                  threadId: threadRef.threadId,
-                }}
-              />
-            }
-            size="xs"
-            variant="outline"
-          >
-            Open
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            size="xs"
-            disabled={disabled || !completeAnswers}
-            onClick={() => {
-              if (completeAnswers) void onRespond(prompt.requestId, completeAnswers);
-            }}
-          >
-            Submit
-          </Button>
-        )}
+        <div className="flex items-center gap-1">
+          {prompt.optional ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="ghost"
+              disabled={disabled}
+              onClick={() => void onRespond(prompt.requestId, {})}
+            >
+              Skip
+            </Button>
+          ) : null}
+          {requiresFullThread ? (
+            <Button
+              render={
+                <Link
+                  to="/$environmentId/$threadId"
+                  params={{
+                    environmentId: threadRef.environmentId,
+                    threadId: threadRef.threadId,
+                  }}
+                />
+              }
+              size="xs"
+              variant="outline"
+            >
+              Open
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="xs"
+              disabled={disabled || !completeAnswers}
+              onClick={() => {
+                if (completeAnswers) void onRespond(prompt.requestId, completeAnswers);
+              }}
+            >
+              Submit
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

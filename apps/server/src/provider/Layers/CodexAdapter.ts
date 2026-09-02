@@ -144,6 +144,11 @@ const ApprovalDecisionPayload = Schema.Struct({
   decision: ProviderApprovalDecision,
 });
 
+const CodexUserInputRequestMetadata = Schema.Struct({
+  isBlocking: Schema.optionalKey(Schema.Boolean),
+});
+const isCodexUserInputRequestMetadata = Schema.is(CodexUserInputRequestMetadata);
+
 function readPayload<A>(
   schema: Schema.Schema<A>,
   payload: ProviderEvent["payload"],
@@ -822,12 +827,14 @@ function mapToRuntimeEvents(
       if (!questions) {
         return [];
       }
+      const metadata = isCodexUserInputRequestMetadata(event.payload) ? event.payload : undefined;
       return [
         {
           ...runtimeEventBase(event, canonicalThreadId),
           type: "user-input.requested",
           payload: {
             questions,
+            ...(metadata?.isBlocking === false ? { optional: true } : {}),
           },
         },
       ];

@@ -17,6 +17,7 @@ interface PendingUserInputPanelProps {
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  onSkip: () => void;
 }
 
 export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserInputPanel({
@@ -26,6 +27,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
   questionIndex,
   onToggleOption,
   onAdvance,
+  onSkip,
 }: PendingUserInputPanelProps) {
   if (pendingUserInputs.length === 0) return null;
   const activePrompt = pendingUserInputs[0];
@@ -40,6 +42,7 @@ export const ComposerPendingUserInputPanel = memo(function ComposerPendingUserIn
       questionIndex={questionIndex}
       onToggleOption={onToggleOption}
       onAdvance={onAdvance}
+      onSkip={onSkip}
     />
   );
 });
@@ -51,6 +54,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex,
   onToggleOption,
   onAdvance,
+  onSkip,
 }: {
   prompt: PendingUserInput;
   isResponding: boolean;
@@ -58,6 +62,7 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
   questionIndex: number;
   onToggleOption: (questionId: string, optionLabel: string) => void;
   onAdvance: () => void;
+  onSkip: () => void;
 }) {
   const progress = derivePendingUserInputProgress(prompt.questions, answers, questionIndex);
   const activeQuestion = progress.activeQuestion;
@@ -185,6 +190,11 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
           <span className="shrink-0 font-medium text-muted-foreground">
             {activeQuestion.header}
           </span>
+          {prompt.optional ? (
+            <span className="shrink-0 text-[10px] font-medium uppercase tracking-wide text-secondary-label">
+              Optional
+            </span>
+          ) : null}
           {isCollapsed ? (
             <span className="min-w-0 flex-1 truncate text-secondary-label">
               {activeQuestion.question}
@@ -259,6 +269,18 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
               );
             })}
           </div>
+          {prompt.optional ? (
+            <div className="mt-2 flex justify-end">
+              <button
+                type="button"
+                disabled={isResponding}
+                onClick={onSkip}
+                className="rounded-md px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Skip
+              </button>
+            </div>
+          ) : null}
         </ComposerBanner.Body>
       </CollapsiblePanel>
     </Collapsible>

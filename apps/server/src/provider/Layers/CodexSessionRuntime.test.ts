@@ -467,6 +467,12 @@ describe("Codex MCP elicitation approvals", () => {
 });
 
 describe("buildCodexDeveloperInstructions", () => {
+  it("offers optional structured questions in default mode", () => {
+    NodeAssert.match(codexDefaultModeDeveloperInstructions, /request_user_input tool/);
+    NodeAssert.match(codexDefaultModeDeveloperInstructions, /questions are optional/);
+    NodeAssert.match(codexDefaultModeDeveloperInstructions, /continue with your best judgment/);
+  });
+
   it("appends runtime info after the mode instructions", () => {
     const instructions = buildCodexDeveloperInstructions("default", {
       model: "gpt-5.3-codex",
@@ -823,6 +829,11 @@ describe("openCodexThread", () => {
         calls.map((call) => call.method),
         ["thread/resume", "thread/start"],
       );
+      for (const call of calls) {
+        NodeAssert.deepEqual((call.payload as { config?: unknown }).config, {
+          "features.default_mode_request_user_input": true,
+        });
+      }
     }),
   );
 

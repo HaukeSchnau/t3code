@@ -128,6 +128,18 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.questions[0]?.id).toBe("sandbox_mode");
     expect(parsed.payload.questions[0]?.options).toHaveLength(2);
+    expect(parsed.payload.optional).toBeUndefined();
+
+    const optional = decodeRuntimeEvent({
+      ...parsed,
+      eventId: "event-optional-user-input",
+      payload: { ...parsed.payload, optional: true },
+    });
+    expect(optional.type).toBe("user-input.requested");
+    if (optional.type !== "user-input.requested") {
+      throw new Error("expected optional user-input.requested");
+    }
+    expect(optional.payload.optional).toBe(true);
   });
 
   it("decodes user-input.resolved with answer map", () => {

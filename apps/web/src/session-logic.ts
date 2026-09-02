@@ -142,6 +142,7 @@ export interface PendingUserInput {
   requestId: ApprovalRequestId;
   createdAt: string;
   questions: ReadonlyArray<UserInputQuestion>;
+  optional: boolean;
 }
 
 export interface ActivePlanState {
@@ -568,6 +569,7 @@ export function derivePendingUserInputs(
         requestId,
         createdAt: activity.createdAt,
         questions,
+        optional: payload?.optional === true,
       });
       continue;
     }

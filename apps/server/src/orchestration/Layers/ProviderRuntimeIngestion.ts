@@ -620,6 +620,7 @@ export function runtimeEventToActivities(
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
+            ...(event.payload.optional ? { optional: true } : {}),
             ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,

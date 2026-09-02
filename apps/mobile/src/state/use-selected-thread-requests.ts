@@ -152,30 +152,42 @@ export function useSelectedThreadRequests() {
     [respondToApproval, selectedThreadShell],
   );
 
+  const respondToActiveUserInput = useCallback(
+    async (answers: Record<string, unknown>) => {
+      if (!selectedThreadShell || !activePendingUserInput) {
+        return;
+      }
+
+      setRespondingUserInputId(activePendingUserInput.requestId);
+      const result = await respondToUserInput({
+        environmentId: selectedThreadShell.environmentId,
+        input: {
+          threadId: selectedThreadShell.id,
+          requestId: activePendingUserInput.requestId,
+          answers,
+        },
+      });
+      setRespondingUserInputId((current) =>
+        current === activePendingUserInput.requestId ? null : current,
+      );
+      return result;
+    },
+    [activePendingUserInput, respondToUserInput, selectedThreadShell],
+  );
+
   const onSubmitUserInput = useCallback(async () => {
-    if (!selectedThreadShell || !activePendingUserInput || !activePendingUserInputAnswers) {
+    if (!activePendingUserInputAnswers) {
       return;
     }
+    return respondToActiveUserInput(activePendingUserInputAnswers);
+  }, [activePendingUserInputAnswers, respondToActiveUserInput]);
 
-    setRespondingUserInputId(activePendingUserInput.requestId);
-    const result = await respondToUserInput({
-      environmentId: selectedThreadShell.environmentId,
-      input: {
-        threadId: selectedThreadShell.id,
-        requestId: activePendingUserInput.requestId,
-        answers: activePendingUserInputAnswers,
-      },
-    });
-    setRespondingUserInputId((current) =>
-      current === activePendingUserInput.requestId ? null : current,
-    );
-    return result;
-  }, [
-    activePendingUserInput,
-    activePendingUserInputAnswers,
-    respondToUserInput,
-    selectedThreadShell,
-  ]);
+  const onSkipUserInput = useCallback(async () => {
+    if (!activePendingUserInput?.optional) {
+      return;
+    }
+    return respondToActiveUserInput({});
+  }, [activePendingUserInput, respondToActiveUserInput]);
 
   return {
     activePendingApproval,
@@ -188,5 +200,6 @@ export function useSelectedThreadRequests() {
     onSelectUserInputOption,
     onChangeUserInputCustomAnswer,
     onSubmitUserInput,
+    onSkipUserInput,
   };
 }

@@ -6374,6 +6374,13 @@ function ChatViewContent(props: ChatViewProps) {
     setActivePendingUserInputQuestionIndex,
   ]);
 
+  const onSkipActivePendingUserInput = useCallback(() => {
+    if (!activePendingUserInput?.optional) {
+      return;
+    }
+    void onRespondToUserInput(activePendingUserInput.requestId, {});
+  }, [activePendingUserInput, onRespondToUserInput]);
+
   const onPreviousActivePendingUserInputQuestion = useCallback(() => {
     if (!activePendingProgress) {
       return;
@@ -7411,6 +7418,7 @@ function ChatViewContent(props: ChatViewProps) {
                               onSelectActivePendingUserInputOption
                             }
                             onAdvanceActivePendingUserInput={onAdvanceActivePendingUserInput}
+                            onSkipActivePendingUserInput={onSkipActivePendingUserInput}
                             onPreviousActivePendingUserInputQuestion={
                               onPreviousActivePendingUserInputQuestion
                             }
