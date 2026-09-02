@@ -13,6 +13,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { withFixtureCatalog } from "../components/orchestration-fixture/fixtureEnvironment";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
@@ -22,8 +23,12 @@ export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAt
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );
+/** The catalog the thread shells read; dev builds add the orchestration fixture's environment. */
+export const threadCatalogValueAtom = import.meta.env.DEV
+  ? withFixtureCatalog(environmentCatalog.catalogValueAtom)
+  : environmentCatalog.catalogValueAtom;
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
-  catalogValueAtom: environmentCatalog.catalogValueAtom,
+  catalogValueAtom: threadCatalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
 });
 

@@ -75,6 +75,12 @@ export function applyShellStreamEvent(
       );
       return { ...snapshot, usageLimits, snapshotSequence: event.sequence };
     }
+    case "coordination-updated":
+      return {
+        ...snapshot,
+        coordination: event.coordination,
+        snapshotSequence: event.sequence,
+      };
     default:
       return snapshot;
   }

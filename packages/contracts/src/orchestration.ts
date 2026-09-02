@@ -9,6 +9,7 @@ import {
   CheckpointRef,
   ClientSurface,
   CommandId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -17,6 +18,8 @@ import {
   ProjectId,
   ProviderItemId,
   ThreadId,
+  ThreadOrchestrationEffortId,
+  ThreadOrchestrationWaitId,
   ThreadWorkspaceId,
   TrimmedNonEmptyString,
   TrimmedString,
@@ -739,6 +742,77 @@ export const OrchestrationThreadShell = Schema.Struct({
 });
 export type OrchestrationThreadShell = typeof OrchestrationThreadShell.Type;
 
+export const OrchestrationThreadRef = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
+  threadId: ThreadId,
+});
+export type OrchestrationThreadRef = typeof OrchestrationThreadRef.Type;
+
+export const OrchestrationThreadRelationshipShell = Schema.Struct({
+  kind: Schema.Literals(["createdBy", "forkedFrom", "replaces"]),
+  actor: OrchestrationThreadRef,
+  target: OrchestrationThreadRef,
+  label: Schema.optional(TrimmedNonEmptyString),
+  effortId: Schema.optional(ThreadOrchestrationEffortId),
+  launchTurnId: Schema.optional(Schema.NullOr(TurnId)),
+  createdAt: IsoDateTime,
+});
+export type OrchestrationThreadRelationshipShell = typeof OrchestrationThreadRelationshipShell.Type;
+
+export const OrchestrationEffortMemberShell = Schema.Struct({
+  thread: OrchestrationThreadRef,
+  label: TrimmedNonEmptyString,
+  joinedAt: IsoDateTime,
+});
+export type OrchestrationEffortMemberShell = typeof OrchestrationEffortMemberShell.Type;
+
+export const OrchestrationEffortShell = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+  coordinator: OrchestrationThreadRef,
+  title: TrimmedNonEmptyString,
+  members: Schema.Array(OrchestrationEffortMemberShell),
+  openedAt: IsoDateTime,
+  closedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationEffortShell = typeof OrchestrationEffortShell.Type;
+
+export const OrchestrationWaitMemberShell = Schema.Struct({
+  thread: OrchestrationThreadRef,
+  outcome: Schema.optional(
+    Schema.Literals([
+      "unknown",
+      "queued",
+      "running",
+      "completed",
+      "failed",
+      "interrupted",
+      "blocked-approval",
+      "blocked-input",
+    ]),
+  ),
+});
+export type OrchestrationWaitMemberShell = typeof OrchestrationWaitMemberShell.Type;
+
+export const OrchestrationWaitShell = Schema.Struct({
+  waitId: ThreadOrchestrationWaitId,
+  coordinator: OrchestrationThreadRef,
+  effortId: Schema.optional(ThreadOrchestrationEffortId),
+  members: Schema.Array(OrchestrationWaitMemberShell),
+  mode: Schema.Literals(["all", "any"]),
+  state: Schema.Literals(["open", "satisfied", "cancelled", "deadline-exceeded"]),
+  openedAt: IsoDateTime,
+  deadlineAt: Schema.NullOr(IsoDateTime),
+  resolvedAt: Schema.NullOr(IsoDateTime),
+});
+export type OrchestrationWaitShell = typeof OrchestrationWaitShell.Type;
+
+export const OrchestrationCoordinationShell = Schema.Struct({
+  relationships: Schema.Array(OrchestrationThreadRelationshipShell),
+  efforts: Schema.Array(OrchestrationEffortShell),
+  waits: Schema.Array(OrchestrationWaitShell),
+});
+export type OrchestrationCoordinationShell = typeof OrchestrationCoordinationShell.Type;
+
 export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProjectShell),
@@ -746,6 +820,7 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   usageLimits: Schema.Array(OrchestrationProviderUsageLimits).pipe(
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
+  coordination: Schema.optional(OrchestrationCoordinationShell),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationShellSnapshot = typeof OrchestrationShellSnapshot.Type;
@@ -775,6 +850,11 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     kind: Schema.Literal("usage-limits-updated"),
     sequence: NonNegativeInt,
     usageLimits: OrchestrationProviderUsageLimits,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("coordination-updated"),
+    sequence: NonNegativeInt,
+    coordination: OrchestrationCoordinationShell,
   }),
 ]);
 export type OrchestrationShellStreamEvent = typeof OrchestrationShellStreamEvent.Type;

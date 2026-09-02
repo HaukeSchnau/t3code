@@ -13,10 +13,14 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
+import { withFixtureSnapshot } from "../components/orchestration-fixture/fixtureEnvironment";
 
 export const shellEnvironment = createShellEnvironmentAtoms(connectionAtomRuntime);
 export const environmentShell = createEnvironmentShellAtoms(connectionAtomRuntime);
-export const environmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
+const serverEnvironmentSnapshotAtom = createEnvironmentSnapshotAtom(environmentShell.stateAtom);
+export const environmentSnapshotAtom = import.meta.env.DEV
+  ? withFixtureSnapshot(serverEnvironmentSnapshotAtom)
+  : serverEnvironmentSnapshotAtom;
 export const environmentShellSummaryAtom = createEnvironmentShellSummaryAtom({
   catalogValueAtom: environmentCatalog.catalogValueAtom,
   shellStateValueAtom: environmentShell.stateValueAtom,

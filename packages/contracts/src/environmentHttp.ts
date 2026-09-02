@@ -41,10 +41,12 @@ import {
   ClientOrchestrationCommand,
   DispatchResult,
   OrchestrationReadModel,
+  OrchestrationEffortShell,
   OrchestrationShellSnapshot,
   OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
   OrchestrationTurnActivitiesSnapshot,
+  OrchestrationWaitShell,
 } from "./orchestration.ts";
 import {
   ThreadOrchestrationAwaitBatchResult,
@@ -58,10 +60,25 @@ import {
   ThreadOrchestrationListProjectsResult,
   ThreadOrchestrationListThreadModelsResult,
   ThreadOrchestrationListThreadsResult,
+  ThreadOrchestrationListEffortsResult,
+  ThreadOrchestrationListWaitsResult,
   ThreadOrchestrationScopedAwaitThreadInput,
   ThreadOrchestrationScopedAwaitBatchInput,
   ThreadOrchestrationScopedCancelBatchInput,
   ThreadOrchestrationScopedCleanupBatchInput,
+  ThreadOrchestrationScopedCreateEffortInput,
+  ThreadOrchestrationScopedReadEffortInput,
+  ThreadOrchestrationScopedListEffortsInput,
+  ThreadOrchestrationScopedRenameEffortInput,
+  ThreadOrchestrationScopedCloseEffortInput,
+  ThreadOrchestrationScopedReopenEffortInput,
+  ThreadOrchestrationScopedAddEffortMemberInput,
+  ThreadOrchestrationScopedRemoveEffortMemberInput,
+  ThreadOrchestrationScopedCreateWaitInput,
+  ThreadOrchestrationScopedReadWaitInput,
+  ThreadOrchestrationScopedListWaitsInput,
+  ThreadOrchestrationScopedCancelWaitInput,
+  ThreadOrchestrationScopedStopThreadInput,
   ThreadOrchestrationScopedCreateBatchInput,
   ThreadOrchestrationScopedCreateThreadInput,
   ThreadOrchestrationScopedForkThreadInput,
@@ -748,6 +765,110 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedCleanupBatchInput,
       success: ThreadOrchestrationCleanupBatchResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createEffort", "/api/thread-orchestration/efforts/create", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCreateEffortInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readEffort", "/api/thread-orchestration/efforts/read", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadEffortInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("listEfforts", "/api/thread-orchestration/efforts/list", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedListEffortsInput,
+      success: ThreadOrchestrationListEffortsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("renameEffort", "/api/thread-orchestration/efforts/rename", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedRenameEffortInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("closeEffort", "/api/thread-orchestration/efforts/close", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCloseEffortInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("reopenEffort", "/api/thread-orchestration/efforts/reopen", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReopenEffortInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("addEffortMember", "/api/thread-orchestration/efforts/add-member", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedAddEffortMemberInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("removeEffortMember", "/api/thread-orchestration/efforts/remove-member", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedRemoveEffortMemberInput,
+      success: OrchestrationEffortShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createWait", "/api/thread-orchestration/waits/create", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCreateWaitInput,
+      success: OrchestrationWaitShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readWait", "/api/thread-orchestration/waits/read", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadWaitInput,
+      success: OrchestrationWaitShell,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("listWaits", "/api/thread-orchestration/waits/list", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedListWaitsInput,
+      success: ThreadOrchestrationListWaitsResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cancelWait", "/api/thread-orchestration/waits/cancel", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCancelWaitInput,
+      success: OrchestrationWaitShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("stopThread", "/api/thread-orchestration/stop-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedStopThreadInput,
+      success: ThreadOrchestrationThreadSummary,
       error: EnvironmentThreadOrchestrationOperateErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

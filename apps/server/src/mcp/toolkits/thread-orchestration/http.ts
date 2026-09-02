@@ -162,6 +162,125 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "createEffort",
+        Effect.fn("environment.threadOrchestration.createEffort")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.createEffort(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
+        "readEffort",
+        Effect.fn("environment.threadOrchestration.readEffort")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.readEffort(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "listEfforts",
+        Effect.fn("environment.threadOrchestration.listEfforts")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.listEfforts(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "renameEffort",
+        Effect.fn("environment.threadOrchestration.renameEffort")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.renameEffort(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
+        "closeEffort",
+        Effect.fn("environment.threadOrchestration.closeEffort")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.closeEffort(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "reopenEffort",
+        Effect.fn("environment.threadOrchestration.reopenEffort")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.reopenEffort(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
+        "addEffortMember",
+        Effect.fn("environment.threadOrchestration.addEffortMember")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.addEffortMember(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
+        "removeEffortMember",
+        Effect.fn("environment.threadOrchestration.removeEffortMember")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.removeEffortMember(
+            scopeFromActor(args.payload.scope),
+            args.payload.input,
+          );
+        }),
+      )
+      .handle(
+        "createWait",
+        Effect.fn("environment.threadOrchestration.createWait")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.createWait(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "readWait",
+        Effect.fn("environment.threadOrchestration.readWait")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.readWait(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "listWaits",
+        Effect.fn("environment.threadOrchestration.listWaits")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.listWaits(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "cancelWait",
+        Effect.fn("environment.threadOrchestration.cancelWait")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.cancelWait(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "stopThread",
+        Effect.fn("environment.threadOrchestration.stopThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.stopThread(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
         "forkThread",
         Effect.fn("environment.threadOrchestration.forkThread")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

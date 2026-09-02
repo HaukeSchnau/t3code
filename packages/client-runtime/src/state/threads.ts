@@ -1008,5 +1008,6 @@ export * from "./threadCommands.ts";
 export * from "./threadFeedback.ts";
 export * from "./threadDetail.ts";
 export * from "./threadReducer.ts";
+export * from "./threadCoordination.ts";
 export * from "./threadShell.ts";
 export * from "./threadState.ts";

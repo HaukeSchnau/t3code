@@ -7,6 +7,8 @@ import {
   ProviderInstanceId,
   ThreadId,
   ThreadOrchestrationBatchId,
+  ThreadOrchestrationEffortId,
+  ThreadOrchestrationWaitId,
   type ThreadOrchestrationActorScope,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
@@ -156,6 +158,12 @@ const promptArgument = Argument.string("prompt").pipe(
 );
 const batchIdArgument = Argument.string("batch-id").pipe(
   Argument.withDescription("Orchestration batch id."),
+);
+const effortIdArgument = Argument.string("effort-id").pipe(
+  Argument.withDescription("Orchestration effort id."),
+);
+const waitIdArgument = Argument.string("wait-id").pipe(
+  Argument.withDescription("Durable wait id."),
 );
 
 const render = (value: unknown, compact: boolean) =>
@@ -512,6 +520,22 @@ const createCommand = Command.make("create", {
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
   title: Flag.string("title").pipe(Flag.withDescription("Initial thread title."), Flag.optional),
+  effort: Flag.string("effort").pipe(
+    Flag.withDescription("Add the new thread to this effort."),
+    Flag.optional,
+  ),
+  label: Flag.string("label").pipe(
+    Flag.withDescription("Worker label inside the effort."),
+    Flag.optional,
+  ),
+  replaces: Flag.string("replaces").pipe(
+    Flag.withDescription("Thread this new worker replaces."),
+    Flag.optional,
+  ),
+  noEffort: Flag.boolean("no-effort").pipe(
+    Flag.withDescription("Do not inherit the coordinator's sole open effort."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withDescription("Create a thread and submit its first prompt."),
   Command.withHandler((flags) =>
@@ -524,6 +548,11 @@ const createCommand = Command.make("create", {
         const modelSelection = yield* modelSelectionFromFlags(flags);
         const hasTarget =
           Option.isSome(flags.environment) || Option.isSome(flags.project) || flags.worktree;
+        const hasCoordination =
+          Option.isSome(flags.effort) ||
+          Option.isSome(flags.label) ||
+          Option.isSome(flags.replaces) ||
+          flags.noEffort;
         const result = yield* client.threadOrchestration.createThread({
           headers,
           payload: {
@@ -550,6 +579,20 @@ const createCommand = Command.make("create", {
                 ? { interactionMode: flags.interactionMode.value }
                 : {}),
               ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+              ...(hasCoordination
+                ? {
+                    coordination: {
+                      ...(Option.isSome(flags.effort)
+                        ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
+                        : {}),
+                      ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+                      ...(Option.isSome(flags.replaces)
+                        ? { replaces: { threadId: ThreadId.make(flags.replaces.value) } }
+                        : {}),
+                      ...(flags.noEffort ? { excludeInheritedEffort: true } : {}),
+                    },
+                  }
+                : {}),
             },
           },
         });
@@ -657,6 +700,366 @@ const renameCommand = Command.make("rename", {
             input: {
               threadId: target,
               title: flags.title,
+              ...(Option.isSome(flags.environment)
+                ? { environmentId: EnvironmentId.make(flags.environment.value) }
+                : {}),
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortCreateCommand = Command.make("create", {
+  ...scopedFlags,
+  title: Argument.string("title").pipe(Argument.withDescription("Effort title.")),
+}).pipe(
+  Command.withDescription("Open an effort owned by the calling thread."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
+      Effect.gen(function* () {
+        const caller = currentCallerThreadId(flags.fromThread);
+        if (caller === undefined) return yield* new ThreadCliCallerRequiredError();
+        const result = yield* client.threadOrchestration.createEffort({
+          headers,
+          payload: { scope: actorScope(environmentId, caller), input: { title: flags.title } },
+        });
+        yield* Console.log(render(result, flags.json));
+      }),
+    ),
+  ),
+);
+
+const effortReadCommand = Command.make("read", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+}).pipe(
+  Command.withDescription("Read one effort."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .readEffort({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { effortId: ThreadOrchestrationEffortId.make(flags.effortId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortListCommand = Command.make("list", {
+  ...scopedFlags,
+  includeClosed: Flag.boolean("include-closed").pipe(
+    Flag.withDescription("Include closed efforts."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("List efforts owned by the calling thread."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .listEfforts({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: flags.includeClosed ? { includeClosed: true } : {},
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortRenameCommand = Command.make("rename", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+  title: Argument.string("title").pipe(Argument.withDescription("New effort title.")),
+}).pipe(
+  Command.withDescription("Rename an effort."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .renameEffort({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              effortId: ThreadOrchestrationEffortId.make(flags.effortId),
+              title: flags.title,
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortCloseCommand = Command.make("close", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+  stopMembers: Flag.boolean("stop-members").pipe(
+    Flag.withDescription("Interrupt live local member threads too."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("Close an effort without deleting its threads."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .closeEffort({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              effortId: ThreadOrchestrationEffortId.make(flags.effortId),
+              ...(flags.stopMembers ? { stopMembers: true } : {}),
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortReopenCommand = Command.make("reopen", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+}).pipe(
+  Command.withDescription("Reopen a closed effort."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .reopenEffort({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { effortId: ThreadOrchestrationEffortId.make(flags.effortId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortAddCommand = Command.make("add", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+  threadId: threadIdArgument,
+  label: Argument.string("label").pipe(Argument.withDescription("Worker label.")),
+}).pipe(
+  Command.withDescription("Add a thread to an effort."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .addEffortMember({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              effortId: ThreadOrchestrationEffortId.make(flags.effortId),
+              thread: { threadId: ThreadId.make(flags.threadId) },
+              label: flags.label,
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortRemoveCommand = Command.make("remove", {
+  ...scopedFlags,
+  effortId: effortIdArgument,
+  threadId: threadIdArgument,
+}).pipe(
+  Command.withDescription("Remove a thread from an effort."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .removeEffortMember({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              effortId: ThreadOrchestrationEffortId.make(flags.effortId),
+              thread: { threadId: ThreadId.make(flags.threadId) },
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const effortCommand = Command.make("effort").pipe(
+  Command.withDescription("Group related threads without changing their identity."),
+  Command.withSubcommands([
+    effortCreateCommand,
+    effortReadCommand,
+    effortListCommand,
+    effortRenameCommand,
+    effortCloseCommand,
+    effortReopenCommand,
+    effortAddCommand,
+    effortRemoveCommand,
+  ]),
+);
+
+const waitCreateCommand = Command.make("create", {
+  ...scopedFlags,
+  effort: Flag.string("effort").pipe(
+    Flag.withDescription("Wait on effort members."),
+    Flag.optional,
+  ),
+  members: Flag.string("members").pipe(
+    Flag.withDescription("Comma-separated thread ids to wait on."),
+    Flag.optional,
+  ),
+  mode: Flag.choice("mode", ["all", "any"] as const).pipe(
+    Flag.withDescription("Resolve after all or any member settles."),
+    Flag.withDefault("all"),
+  ),
+  deadlineMs: Flag.integer("deadline-ms").pipe(
+    Flag.withDescription("Server-owned deadline in milliseconds."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Register a durable server-owned wait and return immediately."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
+      Effect.gen(function* () {
+        const caller = currentCallerThreadId(flags.fromThread);
+        if (caller === undefined) return yield* new ThreadCliCallerRequiredError();
+        const rawMembers = Option.getOrUndefined(flags.members);
+        const members = rawMembers
+          ?.split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .map((value) => ({ threadId: ThreadId.make(value) }));
+        const result = yield* client.threadOrchestration.createWait({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              ...(Option.isSome(flags.effort)
+                ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
+                : {}),
+              ...(members === undefined ? {} : { members }),
+              mode: flags.mode,
+              ...(Option.isSome(flags.deadlineMs) ? { deadlineMs: flags.deadlineMs.value } : {}),
+            },
+          },
+        });
+        yield* Console.log(render(result, flags.json));
+      }),
+    ),
+  ),
+);
+
+const waitReadCommand = Command.make("read", {
+  ...scopedFlags,
+  waitId: waitIdArgument,
+}).pipe(
+  Command.withDescription("Read a durable wait and current member outcomes."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .readWait({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { waitId: ThreadOrchestrationWaitId.make(flags.waitId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const waitListCommand = Command.make("list", {
+  ...scopedFlags,
+  effort: Flag.string("effort").pipe(Flag.withDescription("Filter by effort."), Flag.optional),
+  includeResolved: Flag.boolean("include-resolved").pipe(
+    Flag.withDescription("Include resolved waits."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("List waits owned by the calling thread."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .listWaits({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              ...(Option.isSome(flags.effort)
+                ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
+                : {}),
+              ...(flags.includeResolved ? { includeResolved: true } : {}),
+            },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const waitCancelCommand = Command.make("cancel", {
+  ...scopedFlags,
+  waitId: waitIdArgument,
+}).pipe(
+  Command.withDescription("Cancel a durable wait without stopping its threads."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .cancelWait({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { waitId: ThreadOrchestrationWaitId.make(flags.waitId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const waitCommand = Command.make("wait").pipe(
+  Command.withDescription("Create and inspect durable orchestration waits."),
+  Command.withSubcommands([waitCreateCommand, waitReadCommand, waitListCommand, waitCancelCommand]),
+);
+
+const stopCommand = Command.make("stop", {
+  ...scopedFlags,
+  threadId: threadIdArgument,
+}).pipe(
+  Command.withDescription("Interrupt a live thread."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const target = ThreadId.make(flags.threadId);
+      const caller = currentCallerThreadId(flags.fromThread) ?? target;
+      return client.threadOrchestration
+        .stopThread({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              threadId: target,
               ...(Option.isSome(flags.environment)
                 ? { environmentId: EnvironmentId.make(flags.environment.value) }
                 : {}),
@@ -861,9 +1264,12 @@ export const threadCommand = Command.make("thread").pipe(
     awaitCommand,
     graphCommand,
     batchCommand,
+    effortCommand,
+    waitCommand,
     createCommand,
     forkCommand,
     sendCommand,
     renameCommand,
+    stopCommand,
   ]),
 );

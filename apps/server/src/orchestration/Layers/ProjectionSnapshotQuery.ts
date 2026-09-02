@@ -63,6 +63,7 @@ import {
   make as makeThreadPlanProgress,
   ThreadPlanProgressService,
 } from "../ThreadPlanProgress.ts";
+import { deriveThreadCoordinationShell } from "../ThreadCoordinationProjection.ts";
 import { ProjectionProject } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionState } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadProposedPlan } from "../../persistence/Services/ProjectionThreadProposedPlans.ts";
@@ -703,6 +704,28 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE kind LIKE 'thread-orchestration.batch.%'
+        ORDER BY created_at ASC, activity_id ASC
+      `,
+  });
+
+  const listThreadCoordinationActivityRows = SqlSchema.findAll({
+    Request: Schema.Void,
+    Result: ProjectionThreadActivityDbRowSchema,
+    execute: () =>
+      sql`
+        SELECT
+          activity_id AS "activityId",
+          thread_id AS "threadId",
+          turn_id AS "turnId",
+          tone,
+          kind,
+          summary,
+          payload_json AS "payload",
+          activity_revision AS "activityRevision",
+          sequence,
+          created_at AS "createdAt"
+        FROM projection_thread_activities
+        WHERE kind LIKE 'thread-orchestration.%'
         ORDER BY created_at ASC, activity_id ASC
       `,
   });
@@ -1858,7 +1881,6 @@ pending_approval_requests AS (
               for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
-
               for (const row of messageRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
                 const threadMessages = messagesByThread.get(row.threadId) ?? [];
@@ -2382,11 +2404,27 @@ pending_approval_requests AS (
               ),
             ),
           ),
+          listThreadCoordinationActivityRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getShellSnapshot:listCoordination:query",
+                "ProjectionSnapshotQuery.getShellSnapshot:listCoordination:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
         Effect.flatMap(
-          ([projectRows, threadRows, sessionRows, latestTurnRows, stateRows, usageLimitRows]) =>
+          ([
+            projectRows,
+            threadRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+            usageLimitRows,
+            coordinationRows,
+          ]) =>
             Effect.gen(function* () {
               let updatedAt: string | null = null;
               for (const row of projectRows) {
@@ -2412,6 +2450,9 @@ pending_approval_requests AS (
               }
               for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of coordinationRows) {
+                updatedAt = maxIso(updatedAt, row.createdAt);
               }
 
               const repositoryIdentities =
@@ -2478,6 +2519,9 @@ pending_approval_requests AS (
                   usageLimits: row.usageLimits,
                   history: row.history,
                 })),
+                coordination: deriveThreadCoordinationShell(
+                  coordinationRows.map(mapProjectionActivityRow),
+                ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -2550,11 +2594,27 @@ pending_approval_requests AS (
               ),
             ),
           ),
+          listThreadCoordinationActivityRows(undefined).pipe(
+            Effect.mapError(
+              toPersistenceSqlOrDecodeError(
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listCoordination:query",
+                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listCoordination:decodeRows",
+              ),
+            ),
+          ),
         ]),
       )
       .pipe(
         Effect.flatMap(
-          ([projectRows, threadRows, sessionRows, latestTurnRows, stateRows, usageLimitRows]) =>
+          ([
+            projectRows,
+            threadRows,
+            sessionRows,
+            latestTurnRows,
+            stateRows,
+            usageLimitRows,
+            coordinationRows,
+          ]) =>
             Effect.gen(function* () {
               let updatedAt: string | null = null;
               for (const row of projectRows) {
@@ -2580,6 +2640,9 @@ pending_approval_requests AS (
               }
               for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
+              }
+              for (const row of coordinationRows) {
+                updatedAt = maxIso(updatedAt, row.createdAt);
               }
 
               const activeProjectIds = new Set(threadRows.map((row) => row.projectId));
@@ -2646,6 +2709,9 @@ pending_approval_requests AS (
                   usageLimits: row.usageLimits,
                   history: row.history,
                 })),
+                coordination: deriveThreadCoordinationShell(
+                  coordinationRows.map(mapProjectionActivityRow),
+                ),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -2695,7 +2761,6 @@ pending_approval_requests AS (
       ),
   });
   const { getCounts, searchThreads } = makeProjectionSnapshotReads({ sql });
-
   const getEventReplayStats: NonNullable<ProjectionSnapshotQueryShape["getEventReplayStats"]> = (
     input,
   ) =>
@@ -2974,6 +3039,19 @@ pending_approval_requests AS (
         ),
       ),
       Effect.map((rows) => rows.map(mapProjectionActivityRow)),
+    );
+
+  const getThreadCoordinationShell: NonNullable<
+    ProjectionSnapshotQueryShape["getThreadCoordinationShell"]
+  > = () =>
+    listThreadCoordinationActivityRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getThreadCoordinationShell:query",
+          "ProjectionSnapshotQuery.getThreadCoordinationShell:decodeRows",
+        ),
+      ),
+      Effect.map((rows) => deriveThreadCoordinationShell(rows.map(mapProjectionActivityRow))),
     );
 
   interface ThreadDetailBounds {
@@ -3448,6 +3526,7 @@ pending_approval_requests AS (
     getThreadResultContextById,
     listThreadRelationshipActivities,
     listThreadOrchestrationBatchActivities,
+    getThreadCoordinationShell,
     getThreadDetailById,
     getThreadDetailSnapshot,
     getTurnActivitiesSnapshot,

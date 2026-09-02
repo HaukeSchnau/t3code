@@ -9,11 +9,18 @@ import {
   ProjectId,
   ThreadId,
   ThreadOrchestrationBatchId,
+  ThreadOrchestrationEffortId,
+  ThreadOrchestrationWaitId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
   ModelSelection,
+  OrchestrationEffortMemberShell,
+  OrchestrationEffortShell,
   OrchestrationMessage,
+  OrchestrationThreadRef,
+  OrchestrationWaitMemberShell,
+  OrchestrationWaitShell,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
@@ -201,12 +208,33 @@ export const ThreadOrchestrationCreateThreadInput = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   title: Schema.optional(TrimmedNonEmptyString),
+  coordination: Schema.optional(
+    Schema.Struct({
+      effortId: Schema.optional(ThreadOrchestrationEffortId),
+      label: Schema.optional(TrimmedNonEmptyString),
+      replaces: Schema.optional(
+        Schema.Struct({
+          environmentId: Schema.optional(EnvironmentId),
+          threadId: ThreadId,
+        }),
+      ),
+      excludeInheritedEffort: Schema.optional(Schema.Boolean),
+    }),
+  ),
 });
 export type ThreadOrchestrationCreateThreadInput = typeof ThreadOrchestrationCreateThreadInput.Type;
 
 export const ThreadOrchestrationCreateThreadResult = Schema.Struct({
   thread: ThreadOrchestrationThreadSummary,
   promptSubmitted: Schema.Boolean,
+  membership: Schema.optional(
+    Schema.Struct({
+      effortId: ThreadOrchestrationEffortId,
+      thread: OrchestrationThreadRef,
+      label: TrimmedNonEmptyString,
+      joinedAt: IsoDateTime,
+    }),
+  ),
 });
 export type ThreadOrchestrationCreateThreadResult =
   typeof ThreadOrchestrationCreateThreadResult.Type;
@@ -315,6 +343,158 @@ export const ThreadOrchestrationCleanupBatchResult = Schema.Struct({
 export type ThreadOrchestrationCleanupBatchResult =
   typeof ThreadOrchestrationCleanupBatchResult.Type;
 
+export const ThreadOrchestrationCreateEffortInput = Schema.Struct({
+  title: TrimmedNonEmptyString,
+});
+export type ThreadOrchestrationCreateEffortInput = typeof ThreadOrchestrationCreateEffortInput.Type;
+
+export const ThreadOrchestrationReadEffortInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+});
+export type ThreadOrchestrationReadEffortInput = typeof ThreadOrchestrationReadEffortInput.Type;
+
+export const ThreadOrchestrationListEffortsInput = Schema.Struct({
+  includeClosed: Schema.optional(Schema.Boolean),
+});
+export type ThreadOrchestrationListEffortsInput = typeof ThreadOrchestrationListEffortsInput.Type;
+
+export const ThreadOrchestrationListEffortsResult = Schema.Struct({
+  efforts: Schema.Array(OrchestrationEffortShell),
+});
+export type ThreadOrchestrationListEffortsResult = typeof ThreadOrchestrationListEffortsResult.Type;
+
+export const ThreadOrchestrationRenameEffortInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+  title: TrimmedNonEmptyString,
+});
+export type ThreadOrchestrationRenameEffortInput = typeof ThreadOrchestrationRenameEffortInput.Type;
+
+export const ThreadOrchestrationCloseEffortInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+  stopMembers: Schema.optional(Schema.Boolean),
+});
+export type ThreadOrchestrationCloseEffortInput = typeof ThreadOrchestrationCloseEffortInput.Type;
+
+export const ThreadOrchestrationReopenEffortInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+});
+export type ThreadOrchestrationReopenEffortInput = typeof ThreadOrchestrationReopenEffortInput.Type;
+
+export const ThreadOrchestrationEffortMemberTarget = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
+  threadId: ThreadId,
+});
+export type ThreadOrchestrationEffortMemberTarget =
+  typeof ThreadOrchestrationEffortMemberTarget.Type;
+
+export const ThreadOrchestrationAddEffortMemberInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+  thread: ThreadOrchestrationEffortMemberTarget,
+  label: TrimmedNonEmptyString,
+});
+export type ThreadOrchestrationAddEffortMemberInput =
+  typeof ThreadOrchestrationAddEffortMemberInput.Type;
+
+export const ThreadOrchestrationRemoveEffortMemberInput = Schema.Struct({
+  effortId: ThreadOrchestrationEffortId,
+  thread: ThreadOrchestrationEffortMemberTarget,
+});
+export type ThreadOrchestrationRemoveEffortMemberInput =
+  typeof ThreadOrchestrationRemoveEffortMemberInput.Type;
+
+export const ThreadOrchestrationCreateWaitInput = Schema.Struct({
+  effortId: Schema.optional(ThreadOrchestrationEffortId),
+  members: Schema.optional(Schema.Array(ThreadOrchestrationEffortMemberTarget)),
+  mode: Schema.optional(Schema.Literals(["all", "any"])),
+  deadlineMs: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationCreateWaitInput = typeof ThreadOrchestrationCreateWaitInput.Type;
+
+export const ThreadOrchestrationReadWaitInput = Schema.Struct({
+  waitId: ThreadOrchestrationWaitId,
+});
+export type ThreadOrchestrationReadWaitInput = typeof ThreadOrchestrationReadWaitInput.Type;
+
+export const ThreadOrchestrationListWaitsInput = Schema.Struct({
+  effortId: Schema.optional(ThreadOrchestrationEffortId),
+  includeResolved: Schema.optional(Schema.Boolean),
+});
+export type ThreadOrchestrationListWaitsInput = typeof ThreadOrchestrationListWaitsInput.Type;
+
+export const ThreadOrchestrationListWaitsResult = Schema.Struct({
+  waits: Schema.Array(OrchestrationWaitShell),
+});
+export type ThreadOrchestrationListWaitsResult = typeof ThreadOrchestrationListWaitsResult.Type;
+
+export const ThreadOrchestrationCancelWaitInput = Schema.Struct({
+  waitId: ThreadOrchestrationWaitId,
+});
+export type ThreadOrchestrationCancelWaitInput = typeof ThreadOrchestrationCancelWaitInput.Type;
+
+export const ThreadOrchestrationStopThreadInput = Schema.Struct({
+  environmentId: Schema.optional(EnvironmentId),
+  threadId: ThreadId,
+});
+export type ThreadOrchestrationStopThreadInput = typeof ThreadOrchestrationStopThreadInput.Type;
+
+export const ThreadOrchestrationEffortActivityPayload = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("opened"),
+    effort: OrchestrationEffortShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("renamed"),
+    effortId: ThreadOrchestrationEffortId,
+    title: TrimmedNonEmptyString,
+    changedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("member-joined"),
+    effortId: ThreadOrchestrationEffortId,
+    member: OrchestrationEffortMemberShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("member-left"),
+    effortId: ThreadOrchestrationEffortId,
+    thread: OrchestrationThreadRef,
+    changedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("closed"),
+    effortId: ThreadOrchestrationEffortId,
+    closedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("reopened"),
+    effortId: ThreadOrchestrationEffortId,
+    reopenedAt: IsoDateTime,
+  }),
+]);
+export type ThreadOrchestrationEffortActivityPayload =
+  typeof ThreadOrchestrationEffortActivityPayload.Type;
+
+export const ThreadOrchestrationWaitActivityPayload = Schema.Union([
+  Schema.Struct({
+    kind: Schema.Literal("opened"),
+    wait: OrchestrationWaitShell,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("attention"),
+    waitId: ThreadOrchestrationWaitId,
+    member: OrchestrationWaitMemberShell,
+    changedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("resolved"),
+    waitId: ThreadOrchestrationWaitId,
+    state: Schema.Literals(["satisfied", "cancelled", "deadline-exceeded"]),
+    members: Schema.Array(OrchestrationWaitMemberShell),
+    resolvedAt: IsoDateTime,
+  }),
+]);
+export type ThreadOrchestrationWaitActivityPayload =
+  typeof ThreadOrchestrationWaitActivityPayload.Type;
+
 export const ThreadOrchestrationForkThreadInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
   environment: Schema.optional(
@@ -363,6 +543,7 @@ export type ThreadOrchestrationSetThreadTitleInput =
 export const ThreadOrchestrationRelationshipKind = Schema.Literals([
   "createdBy",
   "forkedFrom",
+  "replaces",
   "readBy",
   "messagedBy",
   "renamedBy",
@@ -376,6 +557,10 @@ export const ThreadOrchestrationRelationship = Schema.Struct({
   targetEnvironmentId: Schema.optional(EnvironmentId),
   targetThreadId: ThreadId,
   batchId: Schema.optional(ThreadOrchestrationBatchId),
+  effortId: Schema.optional(ThreadOrchestrationEffortId),
+  label: Schema.optional(TrimmedNonEmptyString),
+  launchTurnId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  wakeCoordinator: Schema.optional(Schema.Boolean),
   createdAt: IsoDateTime,
 });
 export type ThreadOrchestrationRelationship = typeof ThreadOrchestrationRelationship.Type;
@@ -479,6 +664,59 @@ export const ThreadOrchestrationScopedCleanupBatchInput = Schema.Struct({
 });
 export type ThreadOrchestrationScopedCleanupBatchInput =
   typeof ThreadOrchestrationScopedCleanupBatchInput.Type;
+
+export const ThreadOrchestrationScopedCreateEffortInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCreateEffortInput,
+});
+export const ThreadOrchestrationScopedReadEffortInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReadEffortInput,
+});
+export const ThreadOrchestrationScopedListEffortsInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationListEffortsInput,
+});
+export const ThreadOrchestrationScopedRenameEffortInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationRenameEffortInput,
+});
+export const ThreadOrchestrationScopedCloseEffortInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCloseEffortInput,
+});
+export const ThreadOrchestrationScopedReopenEffortInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReopenEffortInput,
+});
+export const ThreadOrchestrationScopedAddEffortMemberInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationAddEffortMemberInput,
+});
+export const ThreadOrchestrationScopedRemoveEffortMemberInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationRemoveEffortMemberInput,
+});
+export const ThreadOrchestrationScopedCreateWaitInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCreateWaitInput,
+});
+export const ThreadOrchestrationScopedReadWaitInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReadWaitInput,
+});
+export const ThreadOrchestrationScopedListWaitsInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationListWaitsInput,
+});
+export const ThreadOrchestrationScopedCancelWaitInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCancelWaitInput,
+});
+export const ThreadOrchestrationScopedStopThreadInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationStopThreadInput,
+});
 
 export const ThreadOrchestrationScopedForkThreadInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,
