@@ -5,6 +5,8 @@
 Runtime stalls previously had to be inferred from browser symptoms, process resource usage, and direct
 SQLite inspection. This fork exposes bounded production measurements for the two durable catch-up paths
 that can delay visible work: orchestration replay and provider transcript journal ingestion.
+It also reports SQLite transaction duration, event-loop delay, and SQLite database/WAL size so host
+storage pressure can be separated from provider or replay backlog without direct process inspection.
 
 ## Behavior
 
@@ -31,6 +33,13 @@ that can delay visible work: orchestration replay and provider transcript journa
 - Individual batch completion logs are limited to unsuccessful outcomes and batches taking at least 250 ms.
   Recovery emits one bounded summary (at most eight failed event ids), so startup does not create another
   high-frequency logging path. The hot observation helpers deliberately create no per-event tracing spans.
+- SQLite transaction timing starts after the connection semaphore is acquired and ends after commit or
+  rollback. A scoped sampler records mean event-loop delay plus database and WAL file sizes every 30 seconds.
+  A missing WAL is reported as zero because SQLite removes it normally; a missing or unreadable database and
+  other stat failures increment `t3_runtime_metrics_collection_errors_total` instead of publishing a false
+  zero-byte database measurement.
+- Production sends metrics and traces to the host-local OTLP collector. The collector owns buffering and
+  fleet forwarding, so a remote telemetry outage does not become a T3 request-path dependency.
 
 `oldest_event_lag` measures elapsed time from the canonical provider event's `createdAt` timestamp to the
 observation. It is clamped to zero under clock skew and is not presented as exact SQLite residence time.
@@ -42,3 +51,5 @@ observation with 500 source events, exact character counts, a 25 ms duration, an
 Failure coverage proves instrumentation does not swallow the original failure. Concurrency tests cover stale
 hydration, accepted-append/removal interleavings, oldest-event deletion, shared Layer identity, heap compaction,
 and a 4,000-entry recovery with one summary and bounded work. Replay tests cover process-local duration totals.
+SQLite tests cover successful and rolled-back transaction timing, present database/WAL files, normal WAL
+absence, invalid event-loop samples, and missing-database collection errors.

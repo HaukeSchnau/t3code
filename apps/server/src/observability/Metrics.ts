@@ -66,6 +66,29 @@ export const gitCommandDuration = Metric.timer("t3_git_command_duration", {
   description: "Git command execution duration.",
 });
 
+export const sqliteTransactionDuration = Metric.timer("t3_sqlite_transaction_duration", {
+  description: "Duration of SQLite transactions, including commit or rollback.",
+});
+
+export const eventLoopDelayMilliseconds = Metric.gauge("t3_event_loop_delay_milliseconds", {
+  description: "Mean Node.js event-loop delay during the latest collection interval.",
+});
+
+export const sqliteDatabaseSizeBytes = Metric.gauge("t3_sqlite_database_size_bytes", {
+  description: "Current size of the primary SQLite database file.",
+});
+
+export const sqliteWalSizeBytes = Metric.gauge("t3_sqlite_wal_size_bytes", {
+  description: "Current size of the primary SQLite write-ahead log file.",
+});
+
+export const runtimeMetricsCollectionErrors = Metric.counter(
+  "t3_runtime_metrics_collection_errors_total",
+  {
+    description: "Runtime metric file inspections that could not produce a measurement.",
+  },
+);
+
 export const terminalSessionsTotal = Metric.counter("t3_terminal_sessions_total", {
   description: "Total terminal sessions started.",
 });

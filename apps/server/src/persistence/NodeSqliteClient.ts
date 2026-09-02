@@ -7,12 +7,14 @@
 import * as NodeSqlite from "node:sqlite";
 
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import { identity } from "effect/Function";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
@@ -23,6 +25,8 @@ import * as Client from "effect/unstable/sql/SqlClient";
 import type { Connection } from "effect/unstable/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/unstable/sql/SqlError";
 import * as Statement from "effect/unstable/sql/Statement";
+
+import { sqliteTransactionDuration } from "../observability/Metrics.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -269,7 +273,22 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
     const fiber = Fiber.getCurrent()!;
     const scope = Context.getUnsafe(fiber.context, Scope.Scope);
     return Effect.as(
-      Effect.tap(restore(semaphore.take(1)), () => Scope.addFinalizer(scope, semaphore.release(1))),
+      Effect.tap(restore(semaphore.take(1)), () =>
+        Clock.currentTimeNanos.pipe(
+          Effect.flatMap((startedAt) =>
+            Scope.addFinalizer(
+              scope,
+              Effect.gen(function* () {
+                const endedAt = yield* Clock.currentTimeNanos;
+                yield* Metric.update(
+                  sqliteTransactionDuration,
+                  Duration.nanos(endedAt > startedAt ? endedAt - startedAt : 0n),
+                );
+              }).pipe(Effect.ensuring(semaphore.release(1))),
+            ),
+          ),
+        ),
+      ),
       connection,
     );
   });

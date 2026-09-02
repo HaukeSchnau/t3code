@@ -13,6 +13,7 @@ import * as ServerConfig from "../../config.ts";
 import * as ResourceAttribution from "../../resourceTelemetry/ResourceAttribution.ts";
 import { ServerLoggerLive } from "../../serverLogger.ts";
 import * as BrowserTraceCollector from "../BrowserTraceCollector.ts";
+import * as RuntimeMetrics from "../RuntimeMetrics.ts";
 
 export const otlpTraceSerializationLayer = OtlpSerialization.layerJson;
 export const otlpMetricsSerializationLayer = OtlpSerialization.layerProtobuf;
@@ -93,6 +94,12 @@ export const ObservabilityLive = Layer.unwrap(
             },
           }).pipe(Layer.provideMerge(otlpMetricsSerializationLayer));
 
-    return Layer.mergeAll(ServerLoggerLive, traceReferencesLayer, tracerLayer, metricsLayer);
+    return Layer.mergeAll(
+      ServerLoggerLive,
+      traceReferencesLayer,
+      tracerLayer,
+      metricsLayer,
+      RuntimeMetrics.layer(config.dbPath),
+    );
   }),
 );
