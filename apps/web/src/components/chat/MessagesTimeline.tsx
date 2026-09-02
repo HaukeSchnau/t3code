@@ -3117,9 +3117,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
     (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||
     Boolean(
       workEntryRawCommand(workEntry) ||
-        workEntry.command?.trim() ||
-        workEntry.detail?.trim() ||
-        workEntry.changedFiles?.length,
+      workEntry.command?.trim() ||
+      workEntry.detail?.trim() ||
+      workEntry.changedFiles?.length,
     );
   const showDestructiveRowStyle =
     showFailedIndicator && (severeFailure || !workLogEntryIsToolLike(workEntry));
@@ -3247,7 +3247,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
               />
             </div>
           ) : null}
-          {expandedBody ? <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre> : null}
+          {expandedBody ? (
+            <pre className={toolCallExpandedBodyClassName}>{expandedBody}</pre>
+          ) : null}
         </div>
       ) : null}
     </div>
