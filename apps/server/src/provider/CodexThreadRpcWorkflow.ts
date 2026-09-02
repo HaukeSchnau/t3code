@@ -522,7 +522,7 @@ export const makeCodexThreadRpcWorkflow = (input: {
                 request: {
                   ...(request.workspace.kind !== undefined ? { kind: request.workspace.kind } : {}),
                   roots: [{ projectId: project.id, sourcePath: sourceCwd, role: "primary" }],
-                  displayNameSeed: `Fork of ${sourceThread.title}`,
+                  displayNameSeed: sourceThread.title,
                 },
               }).pipe(
                 Effect.mapError(

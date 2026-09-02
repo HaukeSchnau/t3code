@@ -26,6 +26,8 @@ import { OrchestrationEngineService } from "../../../orchestration/Services/Orch
 import { OrchestrationCommandInvariantError } from "../../../orchestration/Errors.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as TextGeneration from "../../../textGeneration/TextGeneration.ts";
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
@@ -383,6 +385,16 @@ const makeTestThreadDiscoveryDependencies = (
 ) =>
   Layer.mergeAll(
     NodeServices.layer,
+    ServerSettings.layerTest(),
+    Layer.succeed(
+      TextGeneration.TextGeneration,
+      TextGeneration.TextGeneration.of({
+        generateCommitMessage: () => Effect.die("unused commit message generation"),
+        generatePrContent: () => Effect.die("unused change request generation"),
+        generateBranchName: () => Effect.die("unused branch name generation"),
+        generateThreadTitle: () => Effect.die("unused thread title generation"),
+      }),
+    ),
     remoteClientLayer,
     Layer.succeed(ServerEnvironment.ServerEnvironment, {
       getEnvironmentId: Effect.succeed(scope.environmentId),
@@ -1110,8 +1122,11 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("creates threads before starting their initial turn", () => {
+it.effect("uses generated names for worktree threads before starting their initial turn", () => {
   const dispatched: OrchestrationCommand[] = [];
+  const preparedInputs: Parameters<
+    ThreadWorkspaceService.ThreadWorkspaceService["Service"]["prepareWorkspace"]
+  >[0][] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
@@ -1151,9 +1166,38 @@ it.effect("creates threads before starting their initial turn", () => {
     ),
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
-        prepareWorkspace: () => Effect.die("unused"),
+        prepareWorkspace: (input) =>
+          Effect.sync(() => {
+            preparedInputs.push(input);
+            return {
+              workspace: {
+                id: workspaceId,
+                kind: "jj-workspace",
+                lifecycle: "active",
+                displayName: input.displayNameSeed ?? "Workspace",
+                managed: true,
+                primaryRootId: workspaceRootId,
+                roots: [],
+                createdForThreadId: input.threadId,
+                retentionPolicy: "explicit-delete",
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
+                deletedAt: null,
+                failureDetail: null,
+                metadata: {},
+              },
+              primaryCwd: "/repo/project-worktree",
+              compatibilityWorktreePath: "/repo/project-worktree",
+              compatibilityBranch: "feature/review",
+            };
+          }),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(
+      Layer.mock(TextGeneration.TextGeneration)({
+        generateThreadTitle: () => Effect.succeed({ title: "Implementation Review" }),
       }),
     ),
     Layer.provide(testThreadDiscoveryDependencies),
@@ -1163,7 +1207,7 @@ it.effect("creates threads before starting their initial turn", () => {
     const service = yield* ThreadOrchestrationService;
     const result = yield* service.createThread(scope, {
       prompt: "Please review the implementation.",
-      title: "Reviewer",
+      target: { environment: { type: "worktree" } },
     });
 
     expect(result.promptSubmitted).toBe(true);
@@ -1176,11 +1220,21 @@ it.effect("creates threads before starting their initial turn", () => {
       type: "thread.create",
       threadId: result.thread.threadId,
       projectId,
-      title: "Reviewer",
+      title: "Implementation Review",
       modelSelection: actorModelSelection,
       runtimeMode: actorRuntimeMode,
       interactionMode: actorInteractionMode,
+      branch: "feature/review",
+      worktreePath: "/repo/project-worktree",
+      workspaceId,
     });
+    expect(preparedInputs).toMatchObject([
+      {
+        threadId: result.thread.threadId,
+        roots: [{ projectId, sourcePath: "/repo/project", role: "primary" }],
+        displayNameSeed: "Implementation Review",
+      },
+    ]);
     expect(dispatched[1]).toMatchObject({
       type: "thread.turn.start",
       threadId: result.thread.threadId,
@@ -1412,7 +1466,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
       {
         kind: "auto",
         roots: [{ projectId, sourcePath: "/repo/project", role: "primary" }],
-        displayNameSeed: "Fork of Target",
+        displayNameSeed: "Target",
         retentionPolicy: "explicit-delete",
       },
     ]);

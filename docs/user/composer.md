@@ -223,3 +223,7 @@ On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from
 start it in the background. T3 Code opens another new thread and shows an Open action for the
 thread that started. The new thread keeps the selected workspace mode and base branch. If New
 worktree is selected, each background thread creates its own worktree.
+
+New worktrees use the generated thread title for their directory and development-instance name.
+The name stays fixed after creation even if the thread is renamed later. If naming is unavailable,
+T3 Code uses a short `task-…` name instead of copying part of the prompt.

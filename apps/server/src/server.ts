@@ -498,6 +498,7 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryRuntimeLayerLive),
+  Layer.provideMerge(TextGenerationLayerLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // drivers (native stream, written from inside each `<X>Adapter`) and
   // `ProviderService` (canonical stream, written after event normalization).
