@@ -15,6 +15,7 @@ const RESET_WINDOW_TOLERANCE_MS = 60 * 1000;
 const REGULARIZED_PACE_CONFIDENCE_PERCENT = 50;
 const HISTORY_FULL_CONFIDENCE_WINDOWS = 3;
 const HISTORY_RECENCY_HALF_LIFE_WINDOWS = 3;
+const HISTORY_MAX_PROJECTION_WEIGHT = 0.25;
 const USAGE_LIMITS_STALE_AFTER_MS = 10 * 60 * 1000;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -568,25 +569,33 @@ function deriveHistoricalProjection(input: {
     (total, estimate) => total + estimate.coverage,
     0,
   );
-  const historyConfidence = Math.min(
+  const historyCoverageConfidence = Math.min(
     1,
     effectiveHistoricalWindows / HISTORY_FULL_CONFIDENCE_WINDOWS,
   );
-  const projectedPercentAtReset =
+  const historyProjectionWeight = Math.min(
+    HISTORY_MAX_PROJECTION_WEIGHT,
+    historyCoverageConfidence,
+  );
+  const blendWithRegularizedProjection = (historicalValue: number) =>
     input.regularizedProjection === null
-      ? historicalProjection
-      : input.regularizedProjection * (1 - historyConfidence) +
-        historicalProjection * historyConfidence;
+      ? historicalValue
+      : input.regularizedProjection * (1 - historyProjectionWeight) +
+        historicalValue * historyProjectionWeight;
+  const projectedPercentAtReset = blendWithRegularizedProjection(historicalProjection);
   const estimateValues = estimates.map((estimate) => estimate.value);
 
   return {
     projectedPercentAtReset,
     projectedPercentRange:
       effectiveHistoricalWindows >= HISTORY_FULL_CONFIDENCE_WINDOWS
-        ? { low: Math.min(...estimateValues), high: Math.max(...estimateValues) }
+        ? {
+            low: blendWithRegularizedProjection(Math.min(...estimateValues)),
+            high: blendWithRegularizedProjection(Math.max(...estimateValues)),
+          }
         : null,
     projectionBasis: "history",
-    projectionConfidence: historyConfidence >= 1 ? "established" : "early",
+    projectionConfidence: historyCoverageConfidence >= 1 ? "established" : "early",
     historicalWindowCount: estimates.length,
   };
 }

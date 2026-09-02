@@ -654,11 +654,13 @@ describe("usageLimits", () => {
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
 
-    expect(displayed?.projectedPercentAtReset).toBeCloseTo(93);
+    expect(displayed?.projectedPercentAtReset).toBeCloseTo(103);
     expect(displayed?.projectionBasis).toBe("history");
+    expect(displayed?.projectionConfidence).toBe("established");
     expect(displayed?.historicalWindowCount).toBe(3);
-    expect(displayed?.projectedPercentRange).toEqual({ low: 83, high: 99 });
-    expect(displayed?.depletionForecast).toEqual({ kind: "untilReset" });
+    expect(displayed?.projectedPercentRange?.low).toBeCloseTo(100.5);
+    expect(displayed?.projectedPercentRange?.high).toBeCloseTo(104.5);
+    expect(displayed?.depletionForecast.kind).toBe("beforeReset");
   });
 
   it("uses only the observed portion of an interrupted historical window", () => {
@@ -761,7 +763,7 @@ describe("usageLimits", () => {
     expect(displayed?.historicalWindowCount).toBe(0);
   });
 
-  it("turns a historical forecast range into a depletion time range", () => {
+  it("caps historical influence while preserving the depletion range", () => {
     const durationMs = 5 * 60 * 60 * 1000;
     const currentResetMs = new Date(2026, 2, 23, 15).getTime();
     const nowMs = new Date(2026, 2, 23, 12, 30).getTime();
@@ -804,17 +806,20 @@ describe("usageLimits", () => {
 
     const displayed = deriveDisplayedUsageLimitsSnapshot(snapshot, nowMs)?.primary;
 
-    expect(displayed?.projectedPercentAtReset).toBe(130);
+    expect(displayed?.projectedPercentAtReset).toBe(122.5);
     expect(displayed?.depletionForecast.kind).toBe("beforeReset");
     if (displayed?.depletionForecast.kind === "beforeReset") {
       expect(displayed.depletionForecast.estimatedAtMs).toBeCloseTo(
-        new Date(2026, 2, 23, 13, 55, 43).getTime(),
+        new Date(2026, 2, 23, 14, 6).getTime(),
         -3,
       );
-      expect(displayed.depletionForecast.range).toEqual({
-        earliestAtMs: new Date(2026, 2, 23, 13, 45).getTime(),
-        latestAtMs: new Date(2026, 2, 23, 14, 10).getTime(),
-      });
+      expect(displayed.depletionForecast.range?.earliestAtMs).toBeCloseTo(
+        new Date(2026, 2, 23, 14, 2, 18).getTime(),
+        -3,
+      );
+      expect(displayed.depletionForecast.range?.latestAtMs).toBe(
+        new Date(2026, 2, 23, 14, 10).getTime(),
+      );
     }
   });
 

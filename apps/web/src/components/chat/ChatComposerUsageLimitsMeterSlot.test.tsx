@@ -212,8 +212,8 @@ describe("ComposerUsageLimitsMeterSlot", () => {
 
     expect(html).toContain("forecast");
     expect(html).toContain("Uses observed portions of 3 recent windows");
-    expect(html).toContain("Typical range");
-    expect(html).toContain("Expected to last until reset");
+    expect(html).toContain("Could run out up to");
+    expect(html).toContain("Likely to run out around");
   });
 
   it("shows depletion timing in the compact meter when usage is at risk", () => {
@@ -280,7 +280,7 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     );
 
     expect(html).toContain("~1h early");
-    expect(html).toContain("Recent windows suggest 45m to 1h 15m before reset.");
+    expect(html).toContain("Recent windows suggest 45m to 1h before reset.");
   });
 
   it("labels stale, expired observations as awaiting a refresh", () => {
