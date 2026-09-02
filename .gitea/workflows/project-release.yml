@@ -31,7 +31,10 @@ jobs:
           if [ -x /run/current-system/sw/bin/nix ]; then
             export PATH="/run/current-system/sw/bin:$PATH"
           fi
-          exec just qa-nix-deps
+          source_workspace="$GITHUB_WORKSPACE"
+          exec nix develop .#ci --command \
+            "$source_workspace/scripts/ci-workspace-run.sh" \
+            "$source_workspace" just qa-nix-deps
 
   static:
     name: Format and lint
