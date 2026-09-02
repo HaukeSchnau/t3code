@@ -42,6 +42,24 @@ function provider(input: {
 }
 
 describe("shouldShowInstanceBadge", () => {
+  it("keeps the unnamed default Codex instance unbadged beside a named account", () => {
+    const entries = deriveProviderInstanceEntries([
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex",
+        displayName: "Codex",
+      }),
+      provider({
+        provider: ProviderDriverKind.make("codex"),
+        instanceId: "codex_personal",
+        displayName: "Personal",
+      }),
+    ]);
+
+    expect(shouldShowInstanceBadge(entries[0]!, entries)).toBe(false);
+    expect(shouldShowInstanceBadge(entries[1]!, entries)).toBe(true);
+  });
+
   it("keeps native Claude unbadged when Claudex has its own icon", () => {
     const entries = deriveProviderInstanceEntries([
       provider({
