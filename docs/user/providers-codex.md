@@ -10,6 +10,17 @@ Common reasons:
 - switch to another account when one account hits limits
 - keep one shared Codex history instead of maintaining two separate Codex setups
 
+## Answer Codex Questions
+
+Codex can show a structured question in the composer when it needs a decision that it
+cannot safely infer. Choose one of the suggested answers or enter a custom answer, then select
+**Submit answers**. The same question is available on web, desktop, iOS, and Android, including
+when you connect to the environment remotely.
+
+Questions asked while a thread is in Build mode are optional. Select **Skip** to let Codex continue
+with its best judgment. Plan Mode questions remain blocking because the answer may determine the
+plan.
+
 ## Pause And Resume A Turn
 
 While Codex is working, use the Pause button in the composer to interrupt the current response.

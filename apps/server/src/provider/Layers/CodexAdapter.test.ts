@@ -1475,6 +1475,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           method: "item/tool/requestUserInput",
           requestId: ApprovalRequestId.make("req-user-input-1"),
           payload: {
+            isBlocking: false,
             itemId: "item-user-input-1",
             threadId: "thread-1",
             turnId: "turn-1",
@@ -1516,6 +1517,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           NodeAssert.equal(events[0].requestId, "req-user-input-1");
           NodeAssert.equal(events[0].payload.questions[0]?.id, "sandbox_mode");
           NodeAssert.equal(events[0].payload.questions[0]?.multiSelect, false);
+          NodeAssert.equal(events[0].payload.optional, true);
         }
 
         NodeAssert.equal(events[1]?.type, "user-input.resolved");

@@ -16,6 +16,7 @@ import {
   buildPendingUserInputAnswers,
   buildThreadFeed,
   derivePendingApprovals,
+  derivePendingUserInputs,
   deriveThreadFeedPresentation,
   isPendingUserInputOptionSelected,
   setPendingUserInputCustomAnswer,
@@ -75,6 +76,29 @@ const multiSelectQuestion = {
 } as const;
 
 describe("pending user input answers", () => {
+  it("preserves whether a provider question is optional", () => {
+    const requested = makeActivity({
+      id: EventId.make("optional-user-input"),
+      kind: "user-input.requested",
+      summary: "User input requested",
+      createdAt: "2026-08-24T00:00:00.000Z",
+      payload: {
+        requestId: "req-optional",
+        optional: true,
+        questions: [singleSelectQuestion],
+      },
+    });
+
+    expect(derivePendingUserInputs([requested])).toEqual([
+      {
+        requestId: "req-optional",
+        createdAt: "2026-08-24T00:00:00.000Z",
+        optional: true,
+        questions: [singleSelectQuestion],
+      },
+    ]);
+  });
+
   it("replaces single-select options and toggles multi-select options", () => {
     expect(
       togglePendingUserInputOptionSelection(

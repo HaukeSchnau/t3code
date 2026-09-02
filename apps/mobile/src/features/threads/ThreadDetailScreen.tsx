@@ -695,6 +695,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onSelectOption={requests.onSelectUserInputOption}
                       onChangeCustomAnswer={requests.onChangeUserInputCustomAnswer}
                       onSubmit={requests.onSubmitUserInput}
+                      onSkip={requests.onSkipUserInput}
                     />
                   ) : null}
                 </Animated.View>

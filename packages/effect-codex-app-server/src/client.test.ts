@@ -32,6 +32,7 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
   it.effect("initializes, handles typed server requests, and reads account and skills data", () =>
     Effect.gen(function* () {
       const userInputRequests = yield* Ref.make<Array<unknown>>([]);
+      const userInputRequestContexts = yield* Ref.make<Array<unknown>>([]);
       const messageDeltas = yield* Ref.make<Array<unknown>>([]);
       const handle = yield* makeHandle();
       const scope = yield* Scope.make();
@@ -41,8 +42,11 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
       const result = yield* Effect.gen(function* () {
         const client = yield* CodexClient.CodexAppServerClient;
 
-        yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
+        yield* client.handleServerRequest("item/tool/requestUserInput", (payload, context) =>
           Ref.update(userInputRequests, (current) => [...current, payload]).pipe(
+            Effect.andThen(
+              Ref.update(userInputRequestContexts, (current) => [...current, context]),
+            ),
             Effect.as({
               answers: {
                 approved: {
@@ -111,6 +115,30 @@ it.layer(NodeServices.layer)("effect-codex-app-server client", (it) => {
               ],
             },
           ],
+        },
+      ]);
+      assert.deepEqual(yield* Ref.get(userInputRequestContexts), [
+        {
+          requestId: 10_000,
+          rawParams: {
+            isBlocking: false,
+            itemId: "item-approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            questions: [
+              {
+                id: "approved",
+                header: "Approve",
+                question: "Continue with the mock skills request?",
+                options: [
+                  {
+                    label: "yes",
+                    description: "Approve the request",
+                  },
+                ],
+              },
+            ],
+          },
         },
       ]);
       assert.deepEqual(yield* Ref.get(messageDeltas), [

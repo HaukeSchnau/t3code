@@ -759,4 +759,82 @@ describe("CodexSessionRuntime collab integration", () => {
       }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
     );
   }
+
+  it.effect("settles optional user input when Codex resolves the request out of band", () =>
+    Effect.gen(function* () {
+      const scriptedRequest = {
+        id: 7301,
+        method: "item/tool/requestUserInput",
+        resolveOutOfBand: true,
+        params: {
+          threadId: ROOT,
+          turnId: wireFixture.responses.turnStart.turn.id,
+          itemId: "item-user-input-1",
+          isBlocking: false,
+          questions: [
+            {
+              id: "scope",
+              header: "Scope",
+              question: "Which scope should be implemented?",
+              options: [
+                {
+                  label: "Focused",
+                  description: "Implement the smallest complete slice",
+                },
+              ],
+            },
+          ],
+        },
+      };
+      const script = {
+        rootThreadId: ROOT,
+        holdTurnOpen: true,
+        notifications: [],
+        serverRequests: [scriptedRequest],
+      };
+      const responsesPath = `${scriptPath}.responses`;
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      NodeFS.writeFileSync(scriptPath, JSON.stringify(script), "utf8");
+      NodeFS.rmSync(responsesPath, { force: true });
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          NodeFS.rmSync(scriptPath, { force: true });
+          NodeFS.rmSync(responsesPath, { force: true });
+        }),
+      );
+
+      const runtime = yield* makeCodexSessionRuntime({
+        threadId: ThreadId.make("thread-codex-optional-user-input"),
+        binaryPath: peerPath,
+        cwd: "/tmp",
+        runtimeMode: "auto",
+        environment: { ...process.env, T3_CODEX_COLLAB_SCRIPT: scriptPath },
+      });
+      const eventsFiber = yield* runtime.events.pipe(
+        Stream.filter(
+          (event) =>
+            event.method === "item/tool/requestUserInput" ||
+            event.method === "item/tool/requestUserInput/answered",
+        ),
+        Stream.take(2),
+        Stream.runCollect,
+        Effect.forkScoped,
+      );
+
+      yield* runtime.start();
+      yield* runtime.sendTurn({ input: "Ask if the scope is unclear" });
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      const requested = events[0];
+      const answered = events[1];
+
+      assert.equal(requested?.kind, "request");
+      assert.isDefined(requested?.requestId);
+      assert.deepInclude(requested?.payload, { isBlocking: false });
+      assert.equal(answered?.method, "item/tool/requestUserInput/answered");
+      assert.equal(answered?.requestId, requested?.requestId);
+      assert.deepEqual(answered?.payload, { answers: {} });
+
+      yield* runtime.close;
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });

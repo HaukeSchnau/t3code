@@ -8,6 +8,7 @@ import type { PendingUserInput } from "../../session-logic";
 const prompt: PendingUserInput = {
   requestId: ApprovalRequestId.make("request-1"),
   createdAt: "2026-08-15T00:00:00.000Z",
+  optional: false,
   questions: [
     {
       id: "question-1",
@@ -31,6 +32,7 @@ function renderPanel() {
       questionIndex={0}
       onToggleOption={() => {}}
       onAdvance={() => {}}
+      onSkip={() => {}}
     />,
   );
 }

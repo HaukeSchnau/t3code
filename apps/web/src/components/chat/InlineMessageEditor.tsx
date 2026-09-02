@@ -21,6 +21,7 @@ type InlineMessageEditorProps = Omit<
   | "activePendingIsResponding"
   | "activePendingDraftAnswers"
   | "activePendingQuestionIndex"
+  | "onSkipActivePendingUserInput"
   | "respondingRequestIds"
   | "showPlanFollowUpPrompt"
   | "activeProposedPlan"
@@ -58,6 +59,7 @@ export function InlineMessageEditor({
       activePendingIsResponding={false}
       activePendingDraftAnswers={EMPTY_PENDING_USER_INPUT_ANSWERS}
       activePendingQuestionIndex={0}
+      onSkipActivePendingUserInput={() => undefined}
       respondingRequestIds={EMPTY_APPROVAL_REQUEST_IDS}
       showPlanFollowUpPrompt={false}
       activeProposedPlan={null}
