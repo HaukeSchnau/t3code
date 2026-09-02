@@ -6,6 +6,7 @@ import {
   type KeybindingWhenNode,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
+import { DEFAULT_RESOLVED_KEYBINDINGS } from "@t3tools/shared/keybindings";
 import {
   formatShortcutLabel,
   isChatNewShortcut,
@@ -545,6 +546,81 @@ describe("sidebar toggle shortcut", () => {
 });
 
 describe("thread navigation helpers", () => {
+  it("uses browser-safe thread shortcuts without claiming browser tab shortcuts", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "1", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+      }),
+      "thread.jump.1",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "1", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+      }),
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "{", code: "BracketLeft", ctrlKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel" },
+      ),
+      "thread.previous",
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ key: "{", code: "BracketLeft", metaKey: true, shiftKey: true }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel" },
+      ),
+    );
+  });
+
+  it("uses Alt for browser navigation outside macOS", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "2", altKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+      }),
+      "thread.jump.2",
+    );
+    assert.isNull(
+      resolveShortcutCommand(event({ key: "2", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "Linux",
+      }),
+    );
+  });
+
+  it("keeps the native shortcuts in the desktop client", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "3", metaKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { desktop: true },
+      }),
+      "thread.jump.3",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "thread.next", {
+        platform: "MacIntel",
+        context: { desktop: true },
+      }),
+      "⇧⌘]",
+    );
+  });
+
+  it("shows the active browser shortcut in labels", () => {
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "thread.jump.3", {
+        platform: "MacIntel",
+      }),
+      "⌃3",
+    );
+    assert.strictEqual(
+      shortcutLabelForCommand(DEFAULT_RESOLVED_KEYBINDINGS, "thread.jump.3", {
+        platform: "Linux",
+      }),
+      "Alt+3",
+    );
+  });
+
   it("maps jump commands to visible thread indices", () => {
     assert.strictEqual(threadJumpCommandForIndex(0), "thread.jump.1");
     assert.strictEqual(threadJumpCommandForIndex(2), "thread.jump.3");
@@ -596,6 +672,16 @@ describe("thread navigation helpers", () => {
 });
 
 describe("model picker navigation helpers", () => {
+  it("uses the same client-safe modifiers and keeps picker precedence", () => {
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "1", ctrlKey: true }), DEFAULT_RESOLVED_KEYBINDINGS, {
+        platform: "MacIntel",
+        context: { modelPickerOpen: true },
+      }),
+      "modelPicker.jump.1",
+    );
+  });
+
   it("maps jump commands to visible model indices", () => {
     assert.strictEqual(modelPickerJumpCommandForIndex(0), "modelPicker.jump.1");
     assert.strictEqual(modelPickerJumpCommandForIndex(2), "modelPicker.jump.3");

@@ -18,6 +18,19 @@ type WhenToken =
   | { type: "lparen" }
   | { type: "rparen" };
 
+function clientSpecificKeybindings(
+  command: KeybindingRule["command"],
+  keys: { readonly desktop: string; readonly macBrowser: string; readonly browser: string },
+  when?: string,
+): ReadonlyArray<KeybindingRule> {
+  const inContext = (context: string) => (when ? `${context} && ${when}` : context);
+  return [
+    { key: keys.desktop, command, when: inContext("desktop") },
+    { key: keys.macBrowser, command, when: inContext("browser && mac") },
+    { key: keys.browser, command, when: inContext("browser && !mac") },
+  ];
+}
+
 export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+b", command: "sidebar.toggle", when: "!terminalFocus" },
   { key: "mod+j", command: "terminal.toggle" },
@@ -47,20 +60,37 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+m", command: "modelPicker.toggle", when: "!terminalFocus" },
   { key: "mod+shift+.", command: "reasoningEffort.cycle", when: "!terminalFocus" },
   { key: "mod+o", command: "editor.openFavorite" },
-  { key: "mod+shift+[", command: "thread.previous" },
-  { key: "mod+shift+]", command: "thread.next" },
+  ...clientSpecificKeybindings("thread.previous", {
+    desktop: "mod+shift+[",
+    macBrowser: "ctrl+shift+[",
+    browser: "alt+shift+[",
+  }),
+  ...clientSpecificKeybindings("thread.next", {
+    desktop: "mod+shift+]",
+    macBrowser: "ctrl+shift+]",
+    browser: "alt+shift+]",
+  }),
   { key: "mod+shift+c", command: "thread.copyReference", when: "!terminalFocus" },
   { key: "mod+shift+s", command: "thread.settle", when: "!terminalFocus" },
   { key: "mod+shift+p", command: "thread.pin", when: "!terminalFocus" },
-  ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
-    key: `mod+${index + 1}`,
-    command,
-  })),
-  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map((command, index) => ({
-    key: `mod+${index + 1}`,
-    command,
-    when: "modelPickerOpen",
-  })),
+  ...THREAD_JUMP_KEYBINDING_COMMANDS.flatMap((command, index) =>
+    clientSpecificKeybindings(command, {
+      desktop: `mod+${index + 1}`,
+      macBrowser: `ctrl+${index + 1}`,
+      browser: `alt+${index + 1}`,
+    }),
+  ),
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.flatMap((command, index) =>
+    clientSpecificKeybindings(
+      command,
+      {
+        desktop: `mod+${index + 1}`,
+        macBrowser: `ctrl+${index + 1}`,
+        browser: `alt+${index + 1}`,
+      },
+      "modelPickerOpen",
+    ),
+  ),
 ];
 
 function normalizeKeyToken(token: string): string {

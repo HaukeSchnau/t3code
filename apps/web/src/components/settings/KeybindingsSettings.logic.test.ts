@@ -144,7 +144,16 @@ describe("KeybindingsSettings.logic", () => {
     const options = buildWhenVariableOptions();
 
     expect(options).toEqual(
-      expect.arrayContaining(["terminalFocus", "terminalOpen", "modelPickerOpen", "true", "false"]),
+      expect.arrayContaining([
+        "browser",
+        "desktop",
+        "mac",
+        "terminalFocus",
+        "terminalOpen",
+        "modelPickerOpen",
+        "true",
+        "false",
+      ]),
     );
     expect(options).not.toContain("customModeActive");
   });
