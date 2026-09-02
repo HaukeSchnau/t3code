@@ -14,8 +14,8 @@ extrapolation is unstable, and adapt it to the user's changing usage over time.
 - Forecasts compare equivalent effective-usage points in recent windows. An interrupted window
   contributes only the observed portion after that point; the regularized forecast fills its
   unobserved tail instead of treating missing observations as zero usage. Recent windows receive
-  more weight, and full historical confidence requires the equivalent of three fully covered
-  windows.
+  more weight, but history can move the regularized forecast by at most 25% of the gap between them.
+  Full historical confidence requires the equivalent of three fully covered windows.
 - Before enough history exists, raw pace is regularized toward a 100% neutral prior. The current
   window still affects the forecast immediately and joins history only after its reset passes.
 - Forecast time is anchored to the provider observation timestamp rather than the client's wall

@@ -40,9 +40,10 @@ refreshed limits instead of presenting it as current.
 Before enough history coverage exists, the meter shows an early estimate that keeps the opening
 hours of a weekly window from dominating the entire forecast. A window reset ahead of schedule can
 still contribute the usage observed before its reset, but the forecast does not treat its missing
-tail as zero usage. Once recent history covers the equivalent remaining span often enough, the
-details show its observed range. The server retains only a compact history of the eight newest
-windows for each distinct limit.
+tail as zero usage. History adjusts the current-window estimate conservatively instead of replacing
+it outright. Once recent history covers the equivalent remaining span often enough, the details
+show its observed range. The server retains only a compact history of the eight newest windows for
+each distinct limit.
 
 When the forecast exceeds 100%, the compact meter estimates how long before the reset you will run
 out. Open the meter for the approximate date and time. If recent windows disagree, the details show
