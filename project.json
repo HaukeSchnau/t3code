@@ -18,6 +18,7 @@
     "apnsKeyId": { "description": "APNs key identifier", "required": false },
     "apnsTeamId": { "description": "Apple developer team identifier", "required": false },
     "otlpMetricsUrl": { "description": "OpenTelemetry metrics endpoint", "required": false },
+    "otlpTracesUrl": { "description": "OpenTelemetry traces endpoint", "required": false },
     "otlpServiceName": { "description": "OpenTelemetry service identity", "required": false }
   },
   "development": {

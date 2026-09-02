@@ -485,8 +485,9 @@
             T3CODE_APNS_KEY_ID="$(project-context parameter apnsKeyId)"
             T3CODE_APNS_PRIVATE_KEY_FILE="$(project-context secret-file apnsPrivateKey --required)"
             T3CODE_APNS_TEAM_ID="$(project-context parameter apnsTeamId)"
-            export T3CODE_OTLP_METRICS_URL T3CODE_OTLP_SERVICE_NAME
+            export T3CODE_OTLP_METRICS_URL T3CODE_OTLP_TRACES_URL T3CODE_OTLP_SERVICE_NAME
             T3CODE_OTLP_METRICS_URL="$(project-context parameter otlpMetricsUrl)"
+            T3CODE_OTLP_TRACES_URL="$(project-context parameter otlpTracesUrl)"
             T3CODE_OTLP_SERVICE_NAME="$(project-context parameter otlpServiceName)"
           '';
           webAction = pkgs.writeShellApplication {

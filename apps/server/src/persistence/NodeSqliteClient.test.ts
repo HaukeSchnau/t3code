@@ -1,6 +1,7 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import * as SqliteClient from "./NodeSqliteClient.ts";
@@ -40,6 +41,64 @@ layer("NodeSqliteClient", (it) => {
 
       assert.equal(error._tag, "SqlError");
       assert.equal(error.reason.operation, "prepare");
+    }),
+  );
+
+  it.effect("records the full SQLite transaction duration", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+
+      yield* sql.withTransaction(sql`SELECT 1`);
+
+      const snapshots = yield* Metric.snapshot;
+      const transactionDuration = snapshots.find(
+        (snapshot) =>
+          snapshot.type === "Histogram" && snapshot.id === "t3_sqlite_transaction_duration",
+      );
+
+      assert.equal(transactionDuration?.type, "Histogram");
+      if (transactionDuration?.type === "Histogram") {
+        assert.equal(transactionDuration.state.count, 1);
+      }
+    }),
+  );
+
+  it.effect("records rolled-back SQLite transactions", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`CREATE TABLE rollback_metric (value INTEGER)`;
+      const beforeSnapshots = yield* Metric.snapshot;
+      const beforeTransactionDuration = beforeSnapshots.find(
+        (snapshot) =>
+          snapshot.type === "Histogram" && snapshot.id === "t3_sqlite_transaction_duration",
+      );
+      const beforeCount =
+        beforeTransactionDuration?.type === "Histogram" ? beforeTransactionDuration.state.count : 0;
+
+      const exit = yield* Effect.exit(
+        sql.withTransaction(
+          Effect.gen(function* () {
+            yield* sql`INSERT INTO rollback_metric (value) VALUES (1)`;
+            return yield* Effect.fail("rollback");
+          }),
+        ),
+      );
+
+      assert.isTrue(exit._tag === "Failure");
+      const rows = yield* sql<{
+        readonly count: number;
+      }>`SELECT count(*) AS count FROM rollback_metric`;
+      assert.equal(rows[0]?.count, 0);
+
+      const snapshots = yield* Metric.snapshot;
+      const transactionDuration = snapshots.find(
+        (snapshot) =>
+          snapshot.type === "Histogram" && snapshot.id === "t3_sqlite_transaction_duration",
+      );
+      assert.equal(transactionDuration?.type, "Histogram");
+      if (transactionDuration?.type === "Histogram") {
+        assert.equal(transactionDuration.state.count, beforeCount + 1);
+      }
     }),
   );
 });
