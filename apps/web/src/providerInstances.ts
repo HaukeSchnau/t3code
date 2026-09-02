@@ -117,6 +117,7 @@ function driverKindLabel(driverKind: ProviderDriverKind): string {
 /**
  * Whether an instance's icon carries the account badge: accent color set, or
  * several instances sharing a driver so the brand glyph alone is ambiguous.
+ * The unnamed default Codex instance keeps the plain OpenAI logo.
  * Shared by the composer trigger, the picker rail, and sidebar rows.
  */
 export function shouldShowInstanceBadge(
@@ -125,6 +126,13 @@ export function shouldShowInstanceBadge(
 ): boolean {
   if (isClaudexInstance(entry.instanceId)) return false;
   if (entry.accentColor) return true;
+  if (
+    entry.driverKind === "codex" &&
+    entry.isDefault &&
+    entry.displayName === driverKindLabel(entry.driverKind)
+  ) {
+    return false;
+  }
   let sharedDriverCount = 0;
   for (const candidate of entries) {
     if (
