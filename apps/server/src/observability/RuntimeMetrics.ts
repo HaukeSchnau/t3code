@@ -1,9 +1,10 @@
-import { stat } from "node:fs/promises";
-import { monitorEventLoopDelay } from "node:perf_hooks";
+import * as NodePerfHooks from "node:perf_hooks";
 
 import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Metric from "effect/Metric";
+import * as PlatformError from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 
 import {
@@ -13,18 +14,15 @@ import {
   sqliteWalSizeBytes,
 } from "./Metrics.ts";
 
-const isMissingFile = (error: unknown) =>
-  typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+const isMissingFile = (error: PlatformError.PlatformError) => error.reason._tag === "NotFound";
 
 const fileSize = Effect.fn("RuntimeMetrics.fileSize")(function* (
   path: string,
   options: { readonly missingIsZero: boolean },
 ) {
-  return yield* Effect.tryPromise({
-    try: () => stat(path),
-    catch: (error) => error,
-  }).pipe(
-    Effect.map((file) => file.size),
+  const fileSystem = yield* FileSystem.FileSystem;
+  return yield* fileSystem.stat(path).pipe(
+    Effect.map((file) => Number(file.size)),
     Effect.catch((error) =>
       options.missingIsZero && isMissingFile(error)
         ? Effect.succeed(0)
@@ -61,7 +59,7 @@ export const recordRuntimeMetrics = Effect.fn("RuntimeMetrics.recordRuntimeMetri
 export const layer = (dbPath: string) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
-      const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 });
+      const eventLoopDelay = NodePerfHooks.monitorEventLoopDelay({ resolution: 20 });
       eventLoopDelay.enable();
       yield* Effect.addFinalizer(() => Effect.sync(() => eventLoopDelay.disable()));
 

@@ -1262,6 +1262,7 @@ it.effect("uses generated names for worktree threads before starting their initi
 it.effect("resolves actor defaults before routing remote thread creation", () => {
   const remoteEnvironmentId = EnvironmentId.make("environment-remote");
   const remoteProjectId = "remote-project" as OrchestrationProject["id"];
+  const dispatched: OrchestrationCommand[] = [];
   const remoteInputs: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[1][] =
     [];
   const remoteScopes: Parameters<RemoteThreadOrchestrationClient["Service"]["createThread"]>[0][] =
@@ -1306,7 +1307,11 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
         resolveReceipt: () => Effect.succeed(Option.none()),
-        dispatch: () => Effect.die("unused"),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
         latestSequence: Effect.succeed(0),
         streamDomainEvents: Stream.empty,
       }),
@@ -1376,6 +1381,20 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
         interactionMode: actorInteractionMode,
       },
     ]);
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]).toMatchObject({
+      type: "thread.activity.append",
+      threadId: scope.threadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "createdBy",
+          actorThreadId: scope.threadId,
+          targetEnvironmentId: remoteEnvironmentId,
+          targetThreadId: result.thread.threadId,
+        },
+      },
+    });
   }).pipe(Effect.provide(testLayer));
 });
 
