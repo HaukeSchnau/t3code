@@ -99,7 +99,7 @@ layer("ThreadWorkspaceService", (it) => {
     });
 
     assert.equal(name, "generate-fitting-workspace-urls");
-    assert.equal(name.length <= 48, true);
+    assert.equal(name.length <= 32, true);
   });
 
   it("normalizes international and oversized workspace titles", () => {
@@ -109,8 +109,8 @@ layer("ThreadWorkspaceService", (it) => {
       fallbackSeed: "studienbuch",
     });
 
-    assert.equal(name, "ubermassig-grosse-anderung-fur-langlebige-projek");
-    assert.equal(name.length, 48);
+    assert.equal(name, "ubermassig-grosse-anderung-fur");
+    assert.equal(name.length <= 32, true);
   });
 
   it("falls back to the project name when no semantic title is available", () => {

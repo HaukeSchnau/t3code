@@ -166,7 +166,7 @@ function shortId(value: string): string {
   return NodeCrypto.createHash("sha256").update(value).digest("hex").slice(0, 12);
 }
 
-const WORKSPACE_NAME_MAX_LENGTH = 48;
+const WORKSPACE_NAME_MAX_LENGTH = 32;
 const WORKSPACE_NAME_COLLISION_LIMIT = 10_000;
 
 interface CheckoutReservation {
@@ -187,10 +187,15 @@ function workspaceName(input: {
   const collisionIndex = input.collisionIndex ?? 1;
   const suffix = collisionIndex > 1 ? `-${collisionIndex}` : "";
   const semanticLimit = WORKSPACE_NAME_MAX_LENGTH - suffix.length;
-  const semanticName = slug(input.semanticSeed?.trim() || input.fallbackSeed)
-    .replace(/[._]+/g, "-")
-    .slice(0, semanticLimit)
-    .replace(/-+$/g, "");
+  const normalizedName = slug(input.semanticSeed?.trim() || input.fallbackSeed).replace(
+    /[._]+/g,
+    "-",
+  );
+  const truncatedName = normalizedName.slice(0, semanticLimit);
+  const wordBoundary = normalizedName.length > semanticLimit ? truncatedName.lastIndexOf("-") : -1;
+  const semanticName = (
+    wordBoundary > 0 ? truncatedName.slice(0, wordBoundary) : truncatedName
+  ).replace(/-+$/g, "");
   return `${semanticName || "workspace"}${suffix}`;
 }
 

@@ -29,9 +29,16 @@ import {
   preprocessingCommandId,
 } from "../Services/CommandPreprocessingCoordinator.ts";
 import type * as ProjectionSnapshotQuery from "../Services/ProjectionSnapshotQuery.ts";
+import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
+import type * as ServerSettings from "../../serverSettings.ts";
 import * as ServerRuntimeStartup from "../../serverRuntimeStartup.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
+import type * as TextGeneration from "../../textGeneration/TextGeneration.ts";
+import {
+  type BootstrapWorkspaceNaming,
+  generateBootstrapWorkspaceNaming,
+} from "../../workspace/BootstrapWorkspaceNaming.ts";
 import * as ThreadWorkspaceService from "../../workspace/ThreadWorkspaceService.ts";
 import * as VcsStatusBroadcaster from "../../vcs/VcsStatusBroadcaster.ts";
 
@@ -82,6 +89,8 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
   readonly commandPreprocessing: CommandPreprocessingCoordinator["Service"];
   readonly startup: ServerRuntimeStartup.ServerRuntimeStartup["Service"];
   readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
+  readonly textGeneration: TextGeneration.TextGeneration["Service"];
+  readonly serverSettings: ServerSettings.ServerSettingsService["Service"];
   readonly threadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService["Service"];
   readonly projectSetupScriptRunner: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
   readonly terminalManager: TerminalManager.TerminalManager["Service"];
@@ -169,6 +178,40 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
         bootstrap?.prepareWorkspace?.roots.find((root) => root.role === "primary")?.sourcePath ??
         bootstrap?.prepareWorktree?.projectCwd;
       let targetWorktreePath = bootstrap?.createThread?.worktreePath ?? null;
+      const prepareWorkspace =
+        bootstrap?.prepareWorkspace ??
+        (bootstrap?.prepareWorktree && targetProjectId
+          ? {
+              kind: "git-detached" as const,
+              roots: [
+                {
+                  projectId: targetProjectId,
+                  sourcePath: bootstrap.prepareWorktree.projectCwd,
+                  role: "primary" as const,
+                  baseRevision: bootstrap.prepareWorktree.baseBranch,
+                  ...(bootstrap.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
+                },
+              ],
+              retentionPolicy: "explicit-delete" as const,
+            }
+          : undefined);
+      const provisionalTitle =
+        bootstrap?.createThread?.title ?? command.titleSeed ?? DEFAULT_THREAD_TITLE;
+      const generateWorkspaceNaming = prepareWorkspace
+        ? generateBootstrapWorkspaceNaming({
+            threadId: command.threadId,
+            cwd:
+              prepareWorkspace.roots.find((root) => root.role === "primary")?.sourcePath ??
+              targetProjectCwd ??
+              process.cwd(),
+            message: command.message.text,
+            provisionalTitle,
+            attachments: command.message.attachments,
+            textGeneration: input.textGeneration,
+            serverSettings: input.serverSettings,
+          }).pipe(Effect.map((naming) => naming as BootstrapWorkspaceNaming | undefined))
+        : Effect.succeed<BootstrapWorkspaceNaming | undefined>(undefined);
+      let workspaceNaming: BootstrapWorkspaceNaming | undefined;
 
       const recordSetupScriptLaunchFailure = (failure: {
         readonly error: ProjectSetupScriptRunner.ProjectSetupScriptRunnerError;
@@ -307,50 +350,72 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread && !progress.threadCreated) {
-          const created = yield* dispatchCommand({
-            type: "thread.create",
-            commandId: preprocessingCommandId(command, "thread-create"),
-            threadId: command.threadId,
-            projectId: bootstrap.createThread.projectId,
-            title: bootstrap.createThread.title,
-            modelSelection: bootstrap.createThread.modelSelection,
-            runtimeMode: bootstrap.createThread.runtimeMode,
-            interactionMode: bootstrap.createThread.interactionMode,
-            branch: bootstrap.createThread.branch,
-            worktreePath: bootstrap.createThread.worktreePath,
-            workspaceId: bootstrap.createThread.workspaceId ?? null,
-            createdAt: bootstrap.createThread.createdAt,
-          });
-          yield* input.threadDeletionReactor.drainThrough(created.sequence);
+          const bootstrapStart = yield* Effect.all(
+            {
+              created: dispatchCommand({
+                type: "thread.create",
+                commandId: preprocessingCommandId(command, "thread-create"),
+                threadId: command.threadId,
+                projectId: bootstrap.createThread.projectId,
+                title: bootstrap.createThread.title,
+                modelSelection: bootstrap.createThread.modelSelection,
+                runtimeMode: bootstrap.createThread.runtimeMode,
+                interactionMode: bootstrap.createThread.interactionMode,
+                branch: bootstrap.createThread.branch,
+                worktreePath: bootstrap.createThread.worktreePath,
+                workspaceId: bootstrap.createThread.workspaceId ?? null,
+                createdAt: bootstrap.createThread.createdAt,
+              }),
+              naming: generateWorkspaceNaming,
+            },
+            {
+              concurrency: "unbounded",
+            },
+          );
+          workspaceNaming = bootstrapStart.naming;
+          yield* input.threadDeletionReactor.drainThrough(bootstrapStart.created.sequence);
           progress = yield* input.commandPreprocessing.markCompleted(command, "thread-created");
         }
 
-        const prepareWorkspace =
-          bootstrap?.prepareWorkspace ??
-          (bootstrap?.prepareWorktree && targetProjectId
-            ? {
-                kind: "git-detached" as const,
-                roots: [
-                  {
-                    projectId: targetProjectId,
-                    sourcePath: bootstrap.prepareWorktree.projectCwd,
-                    role: "primary" as const,
-                    baseRevision: bootstrap.prepareWorktree.baseBranch,
-                    ...(bootstrap.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
-                  },
-                ],
-                retentionPolicy: "explicit-delete" as const,
-              }
-            : undefined);
-
         if (prepareWorkspace) {
+          if (workspaceNaming === undefined) {
+            const thread = yield* input.projectionSnapshotQuery
+              .getThreadShellById(command.threadId)
+              .pipe(
+                Effect.mapError((cause) =>
+                  toDispatchCommandError(cause, "Failed to read thread before workspace naming"),
+                ),
+              );
+            workspaceNaming = Option.match(thread, {
+              onNone: () => undefined,
+              onSome: (currentThread) =>
+                canReplaceThreadTitle(currentThread.title, provisionalTitle)
+                  ? undefined
+                  : ({
+                      threadTitle: currentThread.title,
+                      workspaceNameSeed: currentThread.title,
+                      generated: false,
+                    } satisfies BootstrapWorkspaceNaming),
+            });
+            workspaceNaming ??= yield* generateWorkspaceNaming;
+          }
+
+          if (workspaceNaming?.generated) {
+            yield* dispatchCommand({
+              type: "thread.meta.update",
+              commandId: preprocessingCommandId(command, "thread-bootstrap-title"),
+              threadId: command.threadId,
+              title: workspaceNaming.threadTitle,
+              titleMode: "automatic",
+              expectedTitle: provisionalTitle,
+            });
+          }
+
           const preparedWorkspace = yield* prepareThreadWorkspace({
             threadId: command.threadId,
             request: {
               ...prepareWorkspace,
-              ...(bootstrap?.createThread?.title
-                ? { displayNameSeed: bootstrap.createThread.title }
-                : {}),
+              ...(workspaceNaming ? { displayNameSeed: workspaceNaming.workspaceNameSeed } : {}),
             },
           });
           targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;

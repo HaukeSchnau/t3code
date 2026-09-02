@@ -151,6 +151,7 @@ import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as PreviewManager from "./preview/Manager.ts";
 import * as PortScanner from "./preview/PortScanner.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
@@ -435,6 +436,7 @@ const buildAppUnderTest = (options?: {
       ProviderSessionDirectory.ProviderSessionDirectory["Service"]
     >;
     serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
+    textGeneration?: Partial<TextGeneration.TextGeneration["Service"]>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
     vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
     vcsDriverRegistry?: Partial<VcsDriverRegistry.VcsDriverRegistry["Service"]>;
@@ -788,6 +790,15 @@ const buildAppUnderTest = (options?: {
           updateSettings: () => Effect.succeed(DEFAULT_SERVER_SETTINGS),
           streamChanges: Stream.empty,
           ...options?.layers?.serverSettings,
+        }),
+      ),
+      Layer.provide(
+        Layer.mock(TextGeneration.TextGeneration)({
+          generateCommitMessage: () => Effect.die("Commit message generation is not stubbed"),
+          generatePrContent: () => Effect.die("PR content generation is not stubbed"),
+          generateBranchName: () => Effect.die("Branch name generation is not stubbed"),
+          generateThreadTitle: () => Effect.die("Thread title generation is not stubbed"),
+          ...options?.layers?.textGeneration,
         }),
       ),
       Layer.provide(
@@ -8845,6 +8856,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     () =>
       Effect.gen(function* () {
         const dispatchedCommands: Array<OrchestrationCommand> = [];
+        const threadCreationStarted = yield* Deferred.make<void>();
+        const titleGenerationStarted = yield* Deferred.make<void>();
         const receipts = new Map<
           string,
           { readonly envelope: string; readonly sequence: number }
@@ -8950,7 +8963,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   return Effect.succeed(Option.some({ sequence: receipt.sequence }));
                 }),
               dispatch: (command) =>
-                Effect.sync(() => {
+                Effect.gen(function* () {
+                  if (command.type === "thread.create") {
+                    yield* Deferred.succeed(threadCreationStarted, undefined);
+                    yield* Deferred.await(titleGenerationStarted);
+                  }
                   dispatchedCommands.push(command);
                   const result = { sequence: dispatchedCommands.length };
                   receipts.set(command.commandId, {
@@ -8963,6 +8980,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             },
             projectSetupScriptRunner: {
               runForThread,
+            },
+            textGeneration: {
+              generateThreadTitle: () =>
+                Effect.gen(function* () {
+                  yield* Deferred.succeed(titleGenerationStarted, undefined);
+                  yield* Deferred.await(threadCreationStarted);
+                  return { title: "Worktree Naming" };
+                }),
             },
           },
         });
@@ -9022,7 +9047,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           ),
         ).pipe(Effect.result);
 
-        assert.equal(response.sequence, 5);
+        assert.equal(response.sequence, 6);
         assert.deepEqual(replayed, response);
         assertTrue(changedReplay._tag === "Failure");
         assertInclude(String(changedReplay.failure), "payload-mismatch");
@@ -9030,6 +9055,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           dispatchedCommands.map((command) => command.type),
           [
             "thread.create",
+            "thread.meta.update",
             "thread.meta.update",
             "thread.activity.append",
             "thread.activity.append",
@@ -9048,9 +9074,23 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               startFromOrigin: true,
             },
           ],
-          displayNameSeed: "Bootstrap Thread",
+          displayNameSeed: "Worktree Naming",
           retentionPolicy: "explicit-delete",
         });
+        const titleCommand = dispatchedCommands[1];
+        assertTrue(titleCommand?.type === "thread.meta.update");
+        const { commandId: titleCommandId, ...titleCommandWithoutId } = titleCommand;
+        assert.deepEqual(titleCommandWithoutId, {
+          type: "thread.meta.update",
+          threadId: ThreadId.make("thread-bootstrap"),
+          title: "Worktree Naming",
+          titleMode: "automatic",
+          expectedTitle: "Bootstrap Thread",
+        });
+        assert.match(
+          titleCommandId,
+          /^preprocess:cmd-bootstrap-turn-start:[0-9a-f]{16}:thread-bootstrap-title$/,
+        );
         const setupInvocation = runForThread.mock.calls[0]?.[0];
         assert.ok(setupInvocation);
         const preferredTerminalId = setupInvocation.preferredTerminalId;
@@ -9085,7 +9125,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           setupActivities.map((command) => command.activity.kind),
           ["setup-script.requested", "setup-script.started"],
         );
-        const finalCommand = dispatchedCommands[4];
+        const finalCommand = dispatchedCommands[5];
         assertTrue(finalCommand?.type === "thread.turn.start");
         if (finalCommand?.type === "thread.turn.start") {
           assert.deepEqual(finalCommand.bootstrap, {

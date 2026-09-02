@@ -64,7 +64,10 @@ import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
+import { generateBootstrapWorkspaceNaming } from "../../../workspace/BootstrapWorkspaceNaming.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import * as TextGeneration from "../../../textGeneration/TextGeneration.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import {
   ProjectionSnapshotQuery,
@@ -566,6 +569,8 @@ const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
   const workspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+  const serverSettings = yield* ServerSettings.ServerSettingsService;
+  const textGeneration = yield* TextGeneration.TextGeneration;
   const codexThreadForkImporter = yield* CodexThreadForkImporter;
   const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
   const providerRegistry = yield* ProviderRegistry;
@@ -1155,9 +1160,20 @@ const make = Effect.gen(function* () {
 
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("thread");
-      const title = input.title ?? input.prompt.slice(0, 80);
-
       const environment = input.target?.environment ?? ({ type: "local" } as const);
+      const provisionalTitle = input.title ?? input.prompt.slice(0, 80);
+      const naming =
+        environment.type === "worktree" && input.title === undefined
+          ? yield* generateBootstrapWorkspaceNaming({
+              threadId: nextThreadId,
+              cwd: project.workspaceRoot,
+              message: input.prompt,
+              provisionalTitle,
+              textGeneration,
+              serverSettings,
+            })
+          : undefined;
+      const title = naming?.threadTitle ?? provisionalTitle;
       const prepared =
         environment.type === "worktree"
           ? yield* workspaceService
@@ -1171,7 +1187,7 @@ const make = Effect.gen(function* () {
                     role: "primary",
                   },
                 ],
-                displayNameSeed: title,
+                displayNameSeed: naming?.workspaceNameSeed ?? title,
                 retentionPolicy: "explicit-delete",
               })
               .pipe(
@@ -1852,7 +1868,7 @@ const make = Effect.gen(function* () {
                     role: "primary",
                   },
                 ],
-                displayNameSeed: title,
+                displayNameSeed: sourceThread.title,
                 retentionPolicy: "explicit-delete",
               })
               .pipe(

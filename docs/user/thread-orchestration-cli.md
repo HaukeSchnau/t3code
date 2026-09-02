@@ -42,6 +42,10 @@ identity. `create` requires caller identity because it inherits the caller's
 project, provider, model, runtime mode, and interaction mode unless those
 choices are overridden.
 
+For `create --worktree`, T3 Code generates one concise title and uses it for both the thread and
+worktree name. An explicit title remains authoritative. If automatic naming is unavailable, the
+worktree receives a short `task-…` name rather than a truncated copy of the prompt.
+
 Model discovery lists current models by default. Pass `--include-legacy` to inspect models that
 the provider manifest marks as legacy. Thread creation, batch creation, and model-changing sends
 reject legacy selections, including a model inherited from the calling thread. Use

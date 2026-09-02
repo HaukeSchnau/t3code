@@ -95,6 +95,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import {
   CodexThreadForkImporter,
@@ -450,6 +451,7 @@ const makeWsRpcLayer = (
       const config = yield* ServerConfig.ServerConfig;
       const lifecycleEvents = yield* ServerLifecycleEvents.ServerLifecycleEvents;
       const serverSettings = yield* ServerSettings.ServerSettingsService;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const commandPreprocessing = yield* CommandPreprocessingCoordinator;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
@@ -501,6 +503,8 @@ const makeWsRpcLayer = (
         commandPreprocessing,
         startup,
         projectionSnapshotQuery,
+        textGeneration,
+        serverSettings,
         threadWorkspaceService,
         projectSetupScriptRunner,
         terminalManager,
