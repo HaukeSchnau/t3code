@@ -1528,6 +1528,34 @@ describe("OrchestrationEngine", () => {
     });
   }
 
+  it("accepts an idempotent queued-message delete without emitting an event", async () => {
+    const system = await createOrchestrationSystem();
+    const threadId = ThreadId.make("thread-queued-delete-noop");
+    await createReceiptTestThreads(system, "queued-delete-noop", [threadId]);
+    const sequenceBefore = await system.run(system.engine.latestSequence);
+    const command = {
+      type: "thread.queued-message.delete" as const,
+      commandId: CommandId.make("cmd-queued-delete-noop"),
+      threadId,
+      messageId: MessageId.make("message-already-gone"),
+      createdAt: now(),
+    };
+
+    const accepted = await system.run(system.engine.dispatch(command));
+    const replayed = await system.run(system.engine.dispatch(command));
+    const resolved = await system.run(system.engine.resolveReceipt(command));
+    const laterEvents = await system.run(
+      Stream.runCollect(system.engine.readEvents(sequenceBefore)),
+    );
+
+    expect(accepted).toEqual({ sequence: sequenceBefore });
+    expect(replayed).toEqual(accepted);
+    expect(resolved).toEqual(Option.some(accepted));
+    expect(Array.from(laterEvents)).toEqual([]);
+
+    await system.dispose();
+  });
+
   it("keeps a rejected command id rejected after its original invariant becomes valid", async () => {
     const system = await createOrchestrationSystem();
     const commandId = CommandId.make("cmd-receipt-sticky-rejection");

@@ -17,6 +17,10 @@ On mobile, an empty composer shows an interrupt button while the agent is workin
 or an attachment replaces it with the send button. This applies to both compact and expanded
 composers.
 
+On web and desktop, sending while the agent is working adds the message to the queue controls
+above the composer. It enters the conversation only when T3 Code dispatches it. You can send a
+queued message immediately or remove it before dispatch.
+
 You can attach images up to 10 MB. On servers that support file uploads, you can also
 attach videos, text files, PDFs, ZIP archives, and other files. Each file can be up to the limit advertised
 by the server, capped at 50 MB. Each message can contain up to eight attachments in total. Files

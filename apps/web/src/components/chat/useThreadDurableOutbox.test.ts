@@ -18,14 +18,16 @@ const environmentId = EnvironmentId.make("env-1");
 const threadId = ThreadId.make("thread-1");
 const messageId = MessageId.make("message-1");
 
-function outboxEntry(): DurableCommandOutboxEntry {
+function outboxEntry(
+  type: "thread.turn.start" | "thread.message.queue" = "thread.message.queue",
+): DurableCommandOutboxEntry {
   return {
     plan: {
       schemaVersion: 1,
       environmentId,
       enqueuedAt: "2026-08-09T10:00:00.000Z",
       command: {
-        type: "thread.message.queue",
+        type,
         commandId: CommandId.make("command-1"),
         threadId,
         message: { messageId, role: "user", text: "Queued locally", attachments: [] },
@@ -66,13 +68,25 @@ describe("thread outbox", () => {
     ]);
   });
 
-  it("projects locally owned messages until the server queue owns them", () => {
+  it("does not project queued commands into the transcript", () => {
     const thread = {
       environmentId,
       id: threadId,
       queuedMessages: [],
     };
     const projected = projectThreadDurableOptimisticMessages([outboxEntry()], thread);
+
+    assert.deepStrictEqual(projected, []);
+  });
+
+  it("projects locally owned started turns until the server transcript owns them", () => {
+    const thread = {
+      environmentId,
+      id: threadId,
+      queuedMessages: [],
+    };
+    const entry = outboxEntry("thread.turn.start");
+    const projected = projectThreadDurableOptimisticMessages([entry], thread);
 
     assert.deepStrictEqual(projected, [
       {
@@ -86,7 +100,7 @@ describe("thread outbox", () => {
       },
     ]);
     assert.deepStrictEqual(
-      projectThreadDurableOptimisticMessages([outboxEntry()], {
+      projectThreadDurableOptimisticMessages([entry], {
         ...thread,
         queuedMessages: [
           {

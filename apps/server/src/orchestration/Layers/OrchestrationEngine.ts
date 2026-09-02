@@ -322,17 +322,15 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
 
               const lastSavedEvent = committedEvents.at(-1) ?? null;
-              if (lastSavedEvent === null) {
-                return yield* new OrchestrationCommandInvariantError({
-                  commandType: envelope.command.type,
-                  detail: "Command produced no events.",
-                });
-              }
+              // Idempotent commands can succeed without changing the event log. Their receipt
+              // points at the snapshot they observed so retries replay the same successful no-op.
+              const acceptedAt = lastSavedEvent?.occurredAt ?? (yield* nowIso);
+              const resultSequence = lastSavedEvent?.sequence ?? commandReadModel.snapshotSequence;
 
               const finalized = yield* commandReceiptRepository.finalizeAccepted({
                 commandId: receiptIdentity.commandId,
-                acceptedAt: lastSavedEvent.occurredAt,
-                resultSequence: lastSavedEvent.sequence,
+                acceptedAt,
+                resultSequence,
               });
               if (!finalized) {
                 return yield* new PersistenceSqlError({
@@ -345,7 +343,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 _tag: "accepted" as const,
                 committedEvents,
                 attachmentCleanups,
-                lastSequence: lastSavedEvent.sequence,
+                lastSequence: resultSequence,
                 nextCommandReadModel,
               } as const;
             }),
