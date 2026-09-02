@@ -25,8 +25,8 @@
                 "type": "select",
                 "options": [
                   { "id": "low", "label": "Low" },
-                  { "id": "medium", "label": "Medium" },
-                  { "id": "high", "label": "High", "isDefault": true },
+                  { "id": "medium", "label": "Medium", "isDefault": true },
+                  { "id": "high", "label": "High" },
                   { "id": "xhigh", "label": "Extra High" },
                   { "id": "max", "label": "Max" },
                   {
@@ -43,8 +43,8 @@
                 "label": "Context Window",
                 "type": "select",
                 "options": [
-                  { "id": "200k", "label": "200k" },
-                  { "id": "1m", "label": "1M", "isDefault": true }
+                  { "id": "200k", "label": "200k", "isDefault": true },
+                  { "id": "1m", "label": "1M" }
                 ]
               }
             ]
@@ -85,8 +85,8 @@
                 "label": "Context Window",
                 "type": "select",
                 "options": [
-                  { "id": "200k", "label": "200k" },
-                  { "id": "1m", "label": "1M", "isDefault": true }
+                  { "id": "200k", "label": "200k", "isDefault": true },
+                  { "id": "1m", "label": "1M" }
                 ]
               }
             ]
@@ -180,8 +180,8 @@
                 "label": "Context Window",
                 "type": "select",
                 "options": [
-                  { "id": "200k", "label": "200k" },
-                  { "id": "1m", "label": "1M", "isDefault": true }
+                  { "id": "200k", "label": "200k", "isDefault": true },
+                  { "id": "1m", "label": "1M" }
                 ]
               }
             ]
