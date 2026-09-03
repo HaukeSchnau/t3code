@@ -142,27 +142,25 @@ export const getServerIdleStatus = Effect.fn("getServerIdleStatus")(function* (o
     projectionSnapshotQuery.getRestartSafetyState !== undefined
       ? projectionSnapshotQuery.getRestartSafetyState()
       : projectionSnapshotQuery.getSnapshot().pipe(
-          Effect.map(
-            (snapshot): ProjectionRestartSafetyState => ({
-              threads: snapshot.threads
-                .filter((thread) => thread.deletedAt === null)
-                .map((thread) => ({
-                  threadId: thread.id,
-                  session: thread.session,
-                  latestTurnId: thread.latestTurn?.turnId ?? null,
-                  latestTurnState: thread.latestTurn?.state ?? null,
-                  latestTurnUpdatedAt:
-                    thread.latestTurn?.completedAt ??
-                    thread.latestTurn?.startedAt ??
-                    thread.latestTurn?.requestedAt ??
-                    null,
-                  queuedMessageCount: thread.queuedMessages?.length ?? 0,
-                  pendingApprovalCount: 0,
-                  pendingUserInputCount: 0,
-                  undeliveredTranscriptEventCount: 0,
-                })),
-            }),
-          ),
+          Effect.map((snapshot): ProjectionRestartSafetyState => ({
+            threads: snapshot.threads
+              .filter((thread) => thread.deletedAt === null)
+              .map((thread) => ({
+                threadId: thread.id,
+                session: thread.session,
+                latestTurnId: thread.latestTurn?.turnId ?? null,
+                latestTurnState: thread.latestTurn?.state ?? null,
+                latestTurnUpdatedAt:
+                  thread.latestTurn?.completedAt ??
+                  thread.latestTurn?.startedAt ??
+                  thread.latestTurn?.requestedAt ??
+                  null,
+                queuedMessageCount: thread.queuedMessages?.length ?? 0,
+                pendingApprovalCount: 0,
+                pendingUserInputCount: 0,
+                undeliveredTranscriptEventCount: 0,
+              })),
+          })),
         ),
     DateTime.now,
   ]);

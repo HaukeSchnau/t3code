@@ -109,16 +109,15 @@ function isSameKeybindingRule(left: KeybindingRule, right: KeybindingRule): bool
 const LEGACY_CLIENT_AGNOSTIC_NAVIGATION_DEFAULTS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+[", command: "thread.previous" },
   { key: "mod+shift+]", command: "thread.next" },
-  ...THREAD_JUMP_KEYBINDING_COMMANDS.map(
-    (command, index): KeybindingRule => ({ key: `mod+${index + 1}`, command }),
-  ),
-  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map(
-    (command, index): KeybindingRule => ({
-      key: `mod+${index + 1}`,
-      command,
-      when: "modelPickerOpen",
-    }),
-  ),
+  ...THREAD_JUMP_KEYBINDING_COMMANDS.map((command, index): KeybindingRule => ({
+    key: `mod+${index + 1}`,
+    command,
+  })),
+  ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS.map((command, index): KeybindingRule => ({
+    key: `mod+${index + 1}`,
+    command,
+    when: "modelPickerOpen",
+  })),
 ];
 
 // Built-in defaults are persisted in the user's config. Exact matching keeps

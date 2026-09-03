@@ -41,10 +41,10 @@ describe("compactShellCursorItems", () => {
 
   effectIt.effect("bounds cursor traffic and flushes the finite catch-up tail", () =>
     Effect.gen(function* () {
-      const cursors = Array.from(
-        { length: 9_200 },
-        (_, index): ShellDeltaItem => ({ kind: "cursor", sequence: index + 1 }),
-      );
+      const cursors = Array.from({ length: 9_200 }, (_, index): ShellDeltaItem => ({
+        kind: "cursor",
+        sequence: index + 1,
+      }));
       const output = yield* compactShellCursorItems(Stream.fromIterable(cursors)).pipe(
         Stream.runCollect,
       );
