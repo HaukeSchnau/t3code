@@ -73,13 +73,9 @@ export interface ProtoEffort {
 }
 
 export interface Scenario {
-  readonly id: ScenarioId;
-  readonly label: string;
   readonly threads: ReadonlyArray<ProtoThread>;
   readonly efforts: ReadonlyArray<ProtoEffort>;
 }
-
-export type ScenarioId = "crowded" | "calm";
 
 interface ThreadSeed {
   readonly id: string;
@@ -109,9 +105,8 @@ function thread(seed: ThreadSeed): ProtoThread {
   };
 }
 
-const CROWDED: Scenario = {
-  id: "crowded",
-  label: "Crowded",
+/** One crowded inbox modelled on the live sidebar. */
+export const SAMPLE: Scenario = {
   efforts: [
     { id: "e-rules", coordinatorId: "c-orch", title: "Sidebar rules debate", closed: false },
     { id: "e-adapters", coordinatorId: "c-orch", title: "Provider adapters", closed: true },
@@ -286,7 +281,7 @@ const CROWDED: Scenario = {
     thread({
       id: "orbit-fable",
       title: "Orbit · Fable 5.1",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -296,7 +291,7 @@ const CROWDED: Scenario = {
     thread({
       id: "orbit-opus",
       title: "Orbit · Claude Opus 5",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -306,7 +301,7 @@ const CROWDED: Scenario = {
     thread({
       id: "orbit-glm-1",
       title: "Orbit · GLM-5.3",
-      project: "demo",
+      project: "t3code",
       state: "failed",
       settled: true,
       parentId: "c-orch",
@@ -316,7 +311,7 @@ const CROWDED: Scenario = {
     thread({
       id: "orbit-glm",
       title: "Orbit · GLM-5.3-Flash",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -327,7 +322,7 @@ const CROWDED: Scenario = {
     thread({
       id: "orbit-sol",
       title: "Orbit · GPT-5.6-Sol",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -337,7 +332,7 @@ const CROWDED: Scenario = {
     thread({
       id: "cmp-1",
       title: "Compare Orbit Dashboard Variants",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -347,7 +342,7 @@ const CROWDED: Scenario = {
     thread({
       id: "cmp-2",
       title: "Compare Orbit Dashboard Designs",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -357,7 +352,7 @@ const CROWDED: Scenario = {
     thread({
       id: "prev-1",
       title: "Fix Orbit Preview Host Access",
-      project: "demo",
+      project: "t3code",
       state: "completed",
       settled: true,
       parentId: "c-orch",
@@ -367,7 +362,7 @@ const CROWDED: Scenario = {
     thread({
       id: "prev-2",
       title: "Fix Vite Preview Host Allowance",
-      project: "infra",
+      project: "t3code",
       state: "stopped",
       settled: true,
       parentId: "c-orch",
@@ -451,70 +446,3 @@ const CROWDED: Scenario = {
     }),
   ],
 };
-
-const CALM: Scenario = {
-  id: "calm",
-  label: "Calm",
-  efforts: [],
-  threads: [
-    thread({
-      id: "t-usage",
-      title: "Propagate provider usage limits",
-      project: "t3code",
-      state: "working",
-      age: "4m",
-    }),
-    thread({
-      id: "c-casa",
-      title: "Build Casa Crema Guest Website",
-      project: "casa",
-      state: "working",
-      age: "12m",
-    }),
-    thread({
-      id: "casa-fable",
-      title: "Casa Crema · Fable 5.1",
-      project: "casa",
-      state: "working",
-      parentId: "c-casa",
-      age: "3m",
-    }),
-    thread({
-      id: "casa-glm",
-      title: "Casa Crema · GLM-5.3-Flash",
-      project: "casa",
-      state: "completed",
-      unread: true,
-      parentId: "c-casa",
-      age: "9m",
-    }),
-    thread({
-      id: "t-strato",
-      title: "Assess Strato Server's Public Roles",
-      project: "infra",
-      age: "3h",
-    }),
-    thread({
-      id: "s-image",
-      title: "Fix Image Message Editing",
-      project: "t3code",
-      state: "completed",
-      settled: true,
-      age: "1d",
-    }),
-    thread({
-      id: "s-lid",
-      title: "Fix Mac Lid-Closed Power Handling",
-      project: "infra",
-      state: "completed",
-      settled: true,
-      age: "4d",
-    }),
-  ],
-};
-
-export const SCENARIOS: Record<ScenarioId, Scenario> = { crowded: CROWDED, calm: CALM };
-
-export function isScenarioId(value: string): value is ScenarioId {
-  return value in SCENARIOS;
-}

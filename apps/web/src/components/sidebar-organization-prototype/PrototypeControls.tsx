@@ -8,7 +8,7 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { isScenarioId, SCENARIOS, type ProtoThread } from "./data";
+import type { ProtoThread } from "./data";
 import { usePrototypeStore, type DeviceChoice, type ThemeChoice } from "./store";
 
 function Field({
@@ -160,10 +160,8 @@ function Events() {
 
 export function PrototypeControls({ className }: { readonly className?: string }) {
   const [open, setOpen] = useState(false);
-  const scenarioId = usePrototypeStore((s) => s.scenarioId);
   const device = usePrototypeStore((s) => s.device);
   const theme = usePrototypeStore((s) => s.theme);
-  const loadScenario = usePrototypeStore((s) => s.loadScenario);
   const setDevice = usePrototypeStore((s) => s.setDevice);
   const setTheme = usePrototypeStore((s) => s.setTheme);
   const reset = usePrototypeStore((s) => s.reset);
@@ -188,23 +186,6 @@ export function PrototypeControls({ className }: { readonly className?: string }
               <XIcon aria-hidden />
             </Button>
           </div>
-          <Field label="Scenario">
-            <ToggleGroup
-              aria-label="Scenario"
-              variant="segmented"
-              value={[scenarioId]}
-              onValueChange={(next) => {
-                const value = next[0];
-                if (typeof value === "string" && isScenarioId(value)) loadScenario(value);
-              }}
-            >
-              {Object.values(SCENARIOS).map((s) => (
-                <Toggle key={s.id} value={s.id}>
-                  {s.label}
-                </Toggle>
-              ))}
-            </ToggleGroup>
-          </Field>
           <Field label="Device">
             <ToggleGroup
               aria-label="Device"

@@ -6,14 +6,13 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-import { SCENARIOS, type ProtoEffort, type ProtoThread, type ScenarioId } from "./data";
+import { SAMPLE, type ProtoEffort, type ProtoThread } from "./data";
 
 export type DeviceKind = "desktop" | "phone";
 export type DeviceChoice = "auto" | DeviceKind;
 export type ThemeChoice = "system" | "light" | "dark";
 
 interface PrototypeState {
-  readonly scenarioId: ScenarioId;
   readonly threads: ReadonlyArray<ProtoThread>;
   readonly efforts: ReadonlyArray<ProtoEffort>;
   /** `thread:<id>` or `effort:<id>`; the thing the main area shows. */
@@ -31,7 +30,6 @@ interface PrototypeState {
   readonly setDevice: (device: DeviceChoice) => void;
   readonly setTheme: (theme: ThemeChoice) => void;
   readonly setSearchQuery: (query: string) => void;
-  readonly loadScenario: (id: ScenarioId) => void;
   readonly updateThread: (id: string, patch: Partial<ProtoThread>) => void;
   readonly updateEffort: (id: string, patch: Partial<ProtoEffort>) => void;
   readonly addThread: (thread: ProtoThread, afterId: string) => void;
@@ -40,12 +38,10 @@ interface PrototypeState {
 
 const EMPTY_EXPANSION: Record<DeviceKind, Record<string, boolean>> = { desktop: {}, phone: {} };
 
-function scenarioState(id: ScenarioId) {
-  const scenario = SCENARIOS[id];
+function sampleState() {
   return {
-    scenarioId: id,
-    threads: scenario.threads,
-    efforts: scenario.efforts,
+    threads: SAMPLE.threads,
+    efforts: SAMPLE.efforts,
     selectedId: null,
     dismissedReveals: [],
     searchQuery: "",
@@ -55,7 +51,7 @@ function scenarioState(id: ScenarioId) {
 export const usePrototypeStore = create<PrototypeState>()(
   persist(
     (set) => ({
-      ...scenarioState("crowded"),
+      ...sampleState(),
       device: "auto",
       theme: "system",
       expansion: EMPTY_EXPANSION,
@@ -74,7 +70,6 @@ export const usePrototypeStore = create<PrototypeState>()(
       setDevice: (device) => set({ device }),
       setTheme: (theme) => set({ theme }),
       setSearchQuery: (searchQuery) => set({ searchQuery }),
-      loadScenario: (id) => set(scenarioState(id)),
       updateThread: (id, patch) =>
         set((state) => ({
           threads: state.threads.map((t) => (t.id === id ? { ...t, ...patch } : t)),
@@ -92,28 +87,24 @@ export const usePrototypeStore = create<PrototypeState>()(
         }),
       reset: () =>
         set({
-          ...scenarioState("crowded"),
+          ...sampleState(),
           device: "auto",
           theme: "system",
           expansion: EMPTY_EXPANSION,
         }),
     }),
     {
-      name: "t3code:prototype:sidebar-organization:v1",
+      name: "t3code:prototype:sidebar-organization:v2",
       partialize: (state) => ({
         expansion: state.expansion,
         device: state.device,
         theme: state.theme,
-        scenarioId: state.scenarioId,
       }),
       merge: (persisted, current) => {
-        const stored = persisted as Partial<
-          Pick<PrototypeState, "expansion" | "device" | "theme" | "scenarioId">
-        >;
-        const scenarioId = stored.scenarioId ?? current.scenarioId;
+        const stored = persisted as Partial<Pick<PrototypeState, "expansion" | "device" | "theme">>;
         return {
           ...current,
-          ...scenarioState(scenarioId),
+          ...sampleState(),
           expansion: stored.expansion ?? current.expansion,
           device: stored.device ?? current.device,
           theme: stored.theme ?? current.theme,
@@ -123,9 +114,14 @@ export const usePrototypeStore = create<PrototypeState>()(
   ),
 );
 
-/** Defaults before the user has chosen: desktop opens current work, phone keeps it folded, history stays closed everywhere. */
+/**
+ * Defaults before the user has chosen: project groups open everywhere, desktop
+ * opens current delegated work, the phone keeps it folded, and history stays
+ * closed on both.
+ */
 export function defaultExpanded(containerId: string, device: DeviceKind): boolean {
+  if (containerId.startsWith("project:")) return true;
   if (containerId.startsWith("past:") || containerId.startsWith("attempts:")) return false;
-  if (containerId === "settled") return false;
+  if (containerId.startsWith("settled:")) return false;
   return device === "desktop";
 }

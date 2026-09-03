@@ -7,7 +7,6 @@
 import { ChevronLeftIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { PrototypeControls } from "./PrototypeControls";
 import { PrototypeDetail } from "./PrototypeDetail";
@@ -80,7 +79,7 @@ export function SidebarOrganizationPrototypePage() {
 
   return (
     <div className="flex h-dvh bg-background text-foreground">
-      <aside aria-label="Threads" className={cn("w-64 shrink-0 border-e border-sidebar-border/70")}>
+      <aside aria-label="Threads" className="w-72 shrink-0 border-e border-sidebar-border/70">
         <PrototypeSidebar model={model} />
       </aside>
       <main className="min-w-0 flex-1 overflow-y-auto">

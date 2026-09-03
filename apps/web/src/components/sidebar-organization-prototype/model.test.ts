@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { SCENARIOS, type ProtoThread } from "./data";
-import { buildIndex, coordinatorTray, countWork, isEffortCurrent, placeThread } from "./model";
+import { SAMPLE, type ProtoThread } from "./data";
+import {
+  buildIndex,
+  coordinatorTray,
+  countGroup,
+  countWork,
+  isEffortCurrent,
+  placeThread,
+  projectGroups,
+} from "./model";
 
-const index = buildIndex(SCENARIOS.crowded);
+const index = buildIndex(SAMPLE);
 
 describe("coordinatorTray", () => {
   it("nests bare children when a coordinator has no efforts, hiding superseded attempts", () => {
@@ -30,11 +38,8 @@ describe("coordinatorTray", () => {
 
   it("moves an effort to past efforts once every member has settled", () => {
     const settle = (t: ProtoThread) => (t.effortId === "e-adapters" ? { ...t, settled: true } : t);
-    const settled = buildIndex({
-      threads: SCENARIOS.crowded.threads.map(settle),
-      efforts: SCENARIOS.crowded.efforts,
-    });
-    const adapters = SCENARIOS.crowded.efforts.find((e) => e.id === "e-adapters")!;
+    const settled = buildIndex({ threads: SAMPLE.threads.map(settle), efforts: SAMPLE.efforts });
+    const adapters = SAMPLE.efforts.find((e) => e.id === "e-adapters")!;
     expect(isEffortCurrent(settled, adapters)).toBe(false);
     expect(coordinatorTray(settled, "c-orch")?.pastEfforts.map((e) => e.id)).toContain(
       "e-adapters",
@@ -52,25 +57,36 @@ describe("countWork", () => {
   });
 });
 
+describe("projectGroups", () => {
+  it("owns settled children through their root's project and rolls counts up recursively", () => {
+    const t3 = projectGroups(index).find((g) => g.project === "t3code")!;
+    expect(t3.roots.map((t) => t.id)).toEqual(["t-usage", "c-orch", "t-codex"]);
+    expect(t3.settled.map((t) => t.id)).toContain("orbit-fable");
+    // t-usage working + c-orch working + its 3 working descendants; 3 needs-you below c-orch.
+    expect(countGroup(index, t3)).toEqual({ threads: 3, working: 5, needsYou: 3, done: 3 });
+  });
+});
+
 describe("placeThread", () => {
-  it("puts a section member behind its tray and section", () => {
+  it("puts a section member behind its project, tray and section", () => {
     expect(placeThread(index, "sol-rules")).toEqual({
       coordinatorId: "c-orch",
-      containers: ["tray:c-orch", "effort:e-rules"],
+      containers: ["project:t3code", "tray:c-orch", "effort:e-rules"],
     });
   });
 
   it("puts a superseded attempt behind its replacement", () => {
     expect(placeThread(index, "casa-sol-1")?.containers).toEqual([
+      "project:casa",
       "tray:c-casa",
       "attempts:casa-sol-2",
     ]);
   });
 
-  it("puts settled children on the settled shelf", () => {
+  it("puts settled children on their project's settled shelf", () => {
     expect(placeThread(index, "orbit-fable")).toEqual({
       coordinatorId: null,
-      containers: ["settled"],
+      containers: ["project:t3code", "settled:t3code"],
     });
   });
 });

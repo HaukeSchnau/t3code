@@ -5,10 +5,11 @@
  *
  * Container ids are stable strings built from coordinator and effort ids so
  * expansion preferences can be stored against them:
- *   `tray:<coordinatorId>`, `effort:<effortId>`, `other:<coordinatorId>`,
- *   `past:<coordinatorId>`, `attempts:<threadId>`, `settled`.
+ *   `project:<key>`, `settled:<key>`, `tray:<coordinatorId>`,
+ *   `effort:<effortId>`, `other:<coordinatorId>`, `past:<coordinatorId>`,
+ *   `attempts:<threadId>`.
  */
-import type { ProtoEffort, ProtoThread, Scenario } from "./data";
+import type { ProjectKey, ProtoEffort, ProtoThread, Scenario } from "./data";
 
 export interface WorkIndex {
   readonly byId: ReadonlyMap<string, ProtoThread>;
@@ -212,29 +213,79 @@ export interface ThreadPlacement {
 export function placeThread(index: WorkIndex, threadId: string): ThreadPlacement | null {
   const thread = index.byId.get(threadId);
   if (thread === undefined) return null;
-  if (thread.settled) return { coordinatorId: null, containers: ["settled"] };
+  const project = `project:${rootOf(index, thread).project}`;
+  if (thread.settled) {
+    return {
+      coordinatorId: null,
+      containers: [project, `settled:${rootOf(index, thread).project}`],
+    };
+  }
   if (isSuperseded(index, thread)) {
     const latest = latestAttempt(index, thread);
     const base = placeThread(index, latest.id);
     if (base === null) return null;
     return { ...base, containers: [...base.containers, `attempts:${latest.id}`] };
   }
-  if (thread.parentId === null) return { coordinatorId: null, containers: [] };
+  if (thread.parentId === null) return { coordinatorId: null, containers: [project] };
   const tray = coordinatorTray(index, thread.parentId);
-  if (tray === null) return { coordinatorId: null, containers: [] };
+  if (tray === null) return { coordinatorId: null, containers: [project] };
   const section = tray.sections.find((s) => s.members.some((m) => m.id === threadId));
   return {
     coordinatorId: thread.parentId,
     containers:
-      section === undefined ? [tray.containerId] : [tray.containerId, section.containerId],
+      section === undefined
+        ? [project, tray.containerId]
+        : [project, tray.containerId, section.containerId],
   };
 }
 
-/** Threads that sit at the top level of the inbox: unsettled roots in scenario order. */
-export function topLevelThreads(index: WorkIndex): ReadonlyArray<ProtoThread> {
-  return [...index.byId.values()].filter((t) => t.parentId === null && !t.settled);
+/** The top-level thread a row descends from; itself for roots. */
+export function rootOf(index: WorkIndex, thread: ProtoThread): ProtoThread {
+  let cursor = thread;
+  for (let i = 0; i < 32 && cursor.parentId !== null; i += 1) {
+    const parent = index.byId.get(cursor.parentId);
+    if (parent === undefined) break;
+    cursor = parent;
+  }
+  return cursor;
 }
 
-export function settledThreads(index: WorkIndex): ReadonlyArray<ProtoThread> {
-  return [...index.byId.values()].filter((t) => t.settled);
+export interface ProjectGroup {
+  readonly project: ProjectKey;
+  readonly containerId: string;
+  readonly settledContainerId: string;
+  /** Unsettled top-level threads, in scenario order. */
+  readonly roots: ReadonlyArray<ProtoThread>;
+  /** Settled threads whose lineage roots in this project. */
+  readonly settled: ReadonlyArray<ProtoThread>;
+}
+
+/** Project groups in order of first appearance; a group owns every thread whose root is in it. */
+export function projectGroups(index: WorkIndex): ReadonlyArray<ProjectGroup> {
+  const groups = new Map<ProjectKey, { roots: ProtoThread[]; settled: ProtoThread[] }>();
+  for (const thread of index.byId.values()) {
+    const key = rootOf(index, thread).project;
+    const group = groups.get(key) ?? { roots: [], settled: [] };
+    if (thread.settled) group.settled.push(thread);
+    else if (thread.parentId === null) group.roots.push(thread);
+    groups.set(key, group);
+  }
+  return [...groups.entries()].map(([project, group]) => ({
+    project,
+    containerId: `project:${project}`,
+    settledContainerId: `settled:${project}`,
+    roots: group.roots,
+    settled: group.settled,
+  }));
+}
+
+export interface GroupCounts extends WorkCounts {
+  /** Top-level rows hidden while the group is collapsed. */
+  readonly threads: number;
+}
+
+/** Honest roll-up for a collapsed project group: the roots' own states plus everything beneath them. */
+export function countGroup(index: WorkIndex, group: ProjectGroup): GroupCounts {
+  const below = countMembers(index, group.roots);
+  return { ...below, threads: group.roots.length };
 }

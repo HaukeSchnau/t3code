@@ -1,7 +1,10 @@
 /**
- * The prototype inbox: ordinary thread cards, coordinator cards with one
- * collapsible delegated-work tray each, and the Settled shelf. Every thread
- * has exactly one canonical row; deeper lineage is reduced to counts.
+ * The prototype inbox. Project groups are the root disclosure; inside them
+ * every thread is the same row, coordinators carry one collapsible
+ * delegated-work tray, and settled threads sit on the group's Settled shelf.
+ * Every thread has exactly one canonical row; deeper lineage is reduced to
+ * counts. Collapsed containers that hide the selected row say so with a
+ * Viewing line instead of opening themselves.
  */
 import { SearchIcon } from "lucide-react";
 import { Fragment, useMemo } from "react";
@@ -10,36 +13,34 @@ import { cn } from "~/lib/utils";
 import { PROJECTS, type ProtoEffort, type ProtoThread } from "./data";
 import {
   coordinatorTray,
+  countGroup,
   countMembers,
   countWork,
   countsLabel,
   effortMembers,
   isSuperseded,
-  settledThreads,
+  projectGroups,
   supersededChain,
-  topLevelThreads,
+  type ProjectGroup,
   type Tray,
   type WorkIndex,
 } from "./model";
 import {
+  branchLabel,
   DisclosureSlot,
-  ProjectGlyph,
+  ProjectHeader,
   SectionHeader,
   ShelfHeader,
-  ThreadCardRow,
-  ThreadSlimRow,
+  ThreadRow,
+  ViewingRow,
 } from "./rows";
 import { usePrototypeStore } from "./store";
 import type { SidebarModel } from "./useSidebarModel";
 
-function ancestorCoordinator(index: WorkIndex, thread: ProtoThread): ProtoThread | null {
-  return thread.parentId === null ? null : (index.byId.get(thread.parentId) ?? null);
-}
-
 function searchContext(index: WorkIndex, thread: ProtoThread): string {
   const parts: string[] = [];
-  const coordinator = ancestorCoordinator(index, thread);
-  if (coordinator !== null) {
+  const coordinator = thread.parentId === null ? undefined : index.byId.get(thread.parentId);
+  if (coordinator !== undefined) {
     const effort = thread.effortId === null ? undefined : index.effortById.get(thread.effortId);
     parts.push(
       effort === undefined
@@ -52,6 +53,22 @@ function searchContext(index: WorkIndex, thread: ProtoThread): string {
   if (thread.settled) parts.push("Settled");
   if (isSuperseded(index, thread)) parts.push("Superseded");
   return parts.join(" · ");
+}
+
+/** Subtitle for a thread row in its canonical place: the branch, or a coordinator's delegated-work counts. */
+function rowSubtitle(
+  index: WorkIndex,
+  thread: ProtoThread,
+): { readonly text: string; readonly attention: boolean } {
+  if ((index.childrenOf.get(thread.id)?.length ?? 0) > 0) {
+    const counts = countWork(index, [thread.id]);
+    return {
+      text: countsLabel(counts, { includeDone: true }) ?? "No live delegated work",
+      attention: counts.needsYou > 0,
+    };
+  }
+  if (isSuperseded(index, thread)) return { text: "Earlier attempt", attention: false };
+  return { text: branchLabel(thread), attention: false };
 }
 
 function SearchResults({ model, query }: { readonly model: SidebarModel; readonly query: string }) {
@@ -68,16 +85,14 @@ function SearchResults({ model, query }: { readonly model: SidebarModel; readonl
     );
   }
   return (
-    <ul className="flex flex-col gap-px" role="list">
+    <ul className="flex flex-col" role="list">
       {results.map((thread) => (
-        <ThreadSlimRow
+        <ThreadRow
           key={thread.id}
           thread={thread}
           index={model.index}
           active={model.selectedThreadId === thread.id}
-          device={model.device}
-          context={searchContext(model.index, thread)}
-          dimmed={thread.settled || isSuperseded(model.index, thread)}
+          subtitle={searchContext(model.index, thread)}
           onSelect={() => select(`thread:${thread.id}`)}
         />
       ))}
@@ -94,19 +109,19 @@ function WorkerRow({
   readonly thread: ProtoThread;
 }) {
   const select = usePrototypeStore((s) => s.select);
-  const { index, device } = model;
+  const { index } = model;
   const attempts = supersededChain(index, thread);
   const attemptsId = `attempts:${thread.id}`;
   const attemptsOpen = attempts.length > 0 && model.isExpanded(attemptsId);
-  const childCounts = countWork(index, [thread.id]);
-  const nestedSummary = countsLabel(childCounts);
+  const subtitle = rowSubtitle(index, thread);
   return (
     <Fragment>
-      <ThreadSlimRow
+      <ThreadRow
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
-        device={device}
+        subtitle={subtitle.text}
+        subtitleAttention={subtitle.attention}
         onSelect={() => select(`thread:${thread.id}`)}
         {...(attempts.length === 0
           ? {}
@@ -117,33 +132,17 @@ function WorkerRow({
                 onToggle: () => model.toggle(attemptsId),
               },
             })}
-        trailing={
-          // One lineage hop: a nested coordinator shows its counts, never its own tray.
-          nestedSummary === null ? undefined : (
-            <span
-              className={cn(
-                "text-xs tabular-nums",
-                childCounts.needsYou > 0
-                  ? "text-amber-700 dark:text-amber-300"
-                  : "text-secondary-label",
-              )}
-            >
-              {nestedSummary}
-            </span>
-          )
-        }
       />
       {attemptsOpen ? (
         <li className="ms-3 list-none border-s border-sidebar-border/50 ps-2">
-          <ul className="flex flex-col gap-px" role="list">
+          <ul className="flex flex-col" role="list">
             {attempts.map((attempt) => (
-              <ThreadSlimRow
+              <ThreadRow
                 key={attempt.id}
                 thread={attempt}
                 index={index}
                 active={model.selectedThreadId === attempt.id}
-                device={device}
-                dimmed
+                subtitle={rowSubtitle(index, attempt).text}
                 onSelect={() => select(`thread:${attempt.id}`)}
               />
             ))}
@@ -177,13 +176,13 @@ function PastEffortRow({
           model.device === "phone" ? "h-11" : "h-9",
           active
             ? "bg-sidebar-row-active text-sidebar-foreground"
-            : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+            : "text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
         )}
       >
         <span
           className={cn(
             "min-w-0 flex-1 truncate text-sm",
-            active ? "font-medium text-foreground" : "text-secondary-label/70",
+            active ? "font-medium text-foreground" : "text-secondary-label",
           )}
         >
           {effort.title}
@@ -200,8 +199,8 @@ function TrayBody({ model, tray }: { readonly model: SidebarModel; readonly tray
   const { index, device } = model;
   const pastOpen = model.isExpanded(tray.pastContainerId);
   return (
-    <div className="ms-3 mt-0.5 border-s border-sidebar-border/70 ps-2">
-      <ul className="flex flex-col gap-px" role="list">
+    <div className="ms-2.5 border-s border-sidebar-border/70 ps-1.5">
+      <ul className="flex flex-col" role="list">
         {tray.bare.map((thread) => (
           <WorkerRow key={thread.id} model={model} thread={thread} />
         ))}
@@ -217,14 +216,16 @@ function TrayBody({ model, tray }: { readonly model: SidebarModel; readonly tray
                 onToggle={() => model.toggle(section.containerId)}
                 closed={section.effort?.closed === true}
                 summary={
-                  countsLabel(counts, { includeDone: !expanded }) ??
-                  (expanded ? null : `${section.members.length} idle`)
+                  expanded
+                    ? null
+                    : (countsLabel(counts, { includeDone: true }) ??
+                      `${section.members.length} idle`)
                 }
-                attention={counts.needsYou > 0}
+                attention={!expanded && counts.needsYou > 0}
               />
               {expanded ? (
-                <li className="ms-2 list-none">
-                  <ul className="flex flex-col gap-px" role="list">
+                <li className="ms-1.5 list-none">
+                  <ul className="flex flex-col" role="list">
                     {section.members.map((thread) => (
                       <WorkerRow key={thread.id} model={model} thread={thread} />
                     ))}
@@ -246,7 +247,7 @@ function TrayBody({ model, tray }: { readonly model: SidebarModel; readonly tray
             />
             {pastOpen ? (
               <li className="ms-2 list-none">
-                <ul className="flex flex-col gap-px" role="list">
+                <ul className="flex flex-col" role="list">
                   {tray.pastEfforts.map((effort) => (
                     <PastEffortRow key={effort.id} model={model} effort={effort} />
                   ))}
@@ -260,6 +261,14 @@ function TrayBody({ model, tray }: { readonly model: SidebarModel; readonly tray
   );
 }
 
+/** Title of the selected thread when it sits under `ownerId` but some container on its path is collapsed. */
+function hiddenSelectedTitle(model: SidebarModel, ownsSelection: boolean): string | null {
+  const placement = model.selectedPlacement;
+  if (!ownsSelection || placement === null || model.selectedThreadId === null) return null;
+  if (placement.containers.every((id) => model.isExpanded(id))) return null;
+  return model.index.byId.get(model.selectedThreadId)?.title ?? null;
+}
+
 function TopLevelRow({
   model,
   thread,
@@ -271,34 +280,28 @@ function TopLevelRow({
   const setExpanded = usePrototypeStore((s) => s.setExpanded);
   const { index, device } = model;
   const tray = coordinatorTray(index, thread.id);
+  const subtitle = rowSubtitle(index, thread);
   if (tray === null) {
     return (
-      <ThreadCardRow
+      <ThreadRow
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
+        subtitle={subtitle.text}
         onSelect={() => select(`thread:${thread.id}`)}
       />
     );
   }
   const trayOpen = model.isExpanded(tray.containerId);
-  const counts = countWork(index, [thread.id]);
-  // The selected thread lives in this tray but some container on its path is
-  // collapsed: say so on the coordinator instead of forcing the tray open.
-  const placement = model.selectedPlacement;
-  const hiddenSelected =
-    placement !== null &&
-    placement.coordinatorId === thread.id &&
-    model.selectedThreadId !== null &&
-    !placement.containers.every((id) => model.isExpanded(id))
-      ? (index.byId.get(model.selectedThreadId) ?? null)
-      : null;
+  const viewing = hiddenSelectedTitle(model, model.selectedPlacement?.coordinatorId === thread.id);
   return (
     <Fragment>
-      <ThreadCardRow
+      <ThreadRow
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
+        subtitle={subtitle.text}
+        subtitleAttention={subtitle.attention}
         onSelect={() => select(`thread:${thread.id}`)}
         leading={
           <DisclosureSlot
@@ -308,17 +311,101 @@ function TopLevelRow({
             label={trayOpen ? "Hide delegated work" : "Show delegated work"}
           />
         }
-        summary={countsLabel(counts, { includeDone: !trayOpen })}
-        summaryAttention={counts.needsYou > 0}
-        viewing={hiddenSelected?.title ?? null}
-        onRevealViewing={() => {
-          if (placement === null) return;
-          for (const id of placement.containers) setExpanded(device, id, true);
-        }}
       />
+      {viewing !== null ? (
+        <ViewingRow
+          title={viewing}
+          device={device}
+          onReveal={() => {
+            for (const id of model.selectedPlacement?.containers ?? [])
+              setExpanded(device, id, true);
+          }}
+        />
+      ) : null}
       {trayOpen ? (
         <li className="list-none">
           <TrayBody model={model} tray={tray} />
+        </li>
+      ) : null}
+    </Fragment>
+  );
+}
+
+function groupSummary(
+  index: WorkIndex,
+  group: ProjectGroup,
+): { readonly text: string; readonly attention: boolean } {
+  const counts = countGroup(index, group);
+  const parts = [`${counts.threads} thread${counts.threads === 1 ? "" : "s"}`];
+  const live = countsLabel(counts);
+  if (live !== null) parts.push(live);
+  return { text: parts.join(" · "), attention: counts.needsYou > 0 };
+}
+
+function ProjectGroupBlock({
+  model,
+  group,
+}: {
+  readonly model: SidebarModel;
+  readonly group: ProjectGroup;
+}) {
+  const select = usePrototypeStore((s) => s.select);
+  const setExpanded = usePrototypeStore((s) => s.setExpanded);
+  const { index, device } = model;
+  const expanded = model.isExpanded(group.containerId);
+  const settledOpen = model.isExpanded(group.settledContainerId);
+  const summary = groupSummary(index, group);
+  const ownsSelection = model.selectedPlacement?.containers[0] === group.containerId;
+  const viewing = expanded ? null : hiddenSelectedTitle(model, ownsSelection);
+  const visibleSettled = settledOpen
+    ? group.settled
+    : group.settled.filter((t) => t.id === model.selectedThreadId);
+  return (
+    <Fragment>
+      <ProjectHeader
+        project={group.project}
+        device={device}
+        expanded={expanded}
+        onToggle={() => model.toggle(group.containerId)}
+        summary={expanded ? null : summary.text}
+        attention={!expanded && summary.attention}
+      />
+      {viewing !== null ? (
+        <ViewingRow
+          title={viewing}
+          device={device}
+          onReveal={() => {
+            for (const id of model.selectedPlacement?.containers ?? []) {
+              if (!id.startsWith("settled:")) setExpanded(device, id, true);
+            }
+          }}
+        />
+      ) : null}
+      {expanded ? (
+        <li className="list-none">
+          <ul className="ms-2 flex flex-col border-s border-sidebar-border/70 ps-1" role="list">
+            {group.roots.map((thread) => (
+              <TopLevelRow key={thread.id} model={model} thread={thread} />
+            ))}
+            {group.settled.length > 0 ? (
+              <ShelfHeader
+                label="Settled"
+                count={group.settled.length}
+                expanded={settledOpen}
+                onToggle={() => model.toggle(group.settledContainerId)}
+              />
+            ) : null}
+            {visibleSettled.map((thread) => (
+              <ThreadRow
+                key={thread.id}
+                thread={thread}
+                index={index}
+                active={model.selectedThreadId === thread.id}
+                subtitle={rowSubtitle(index, thread).text}
+                onSelect={() => select(`thread:${thread.id}`)}
+              />
+            ))}
+          </ul>
         </li>
       ) : null}
     </Fragment>
@@ -332,16 +419,10 @@ export function PrototypeSidebar({
   readonly model: SidebarModel;
   readonly className?: string;
 }) {
-  const select = usePrototypeStore((s) => s.select);
   const searchQuery = usePrototypeStore((s) => s.searchQuery);
   const setSearchQuery = usePrototypeStore((s) => s.setSearchQuery);
   const { index, device } = model;
-  const active = useMemo(() => topLevelThreads(index), [index]);
-  const settled = useMemo(() => settledThreads(index), [index]);
-  const settledOpen = model.isExpanded("settled");
-  const visibleSettled = settledOpen
-    ? settled
-    : settled.filter((t) => t.id === model.selectedThreadId);
+  const groups = useMemo(() => projectGroups(index), [index]);
   const searching = searchQuery.trim().length > 0;
 
   return (
@@ -366,38 +447,15 @@ export function PrototypeSidebar({
         {searching ? (
           <SearchResults model={model} query={searchQuery} />
         ) : (
-          <ul className="flex flex-col" role="list">
-            {active.map((thread) => (
-              <TopLevelRow key={thread.id} model={model} thread={thread} />
-            ))}
-            {settled.length > 0 ? (
-              <ShelfHeader
-                label="Settled"
-                count={settled.length}
-                expanded={settledOpen}
-                onToggle={() => model.toggle("settled")}
-              />
-            ) : null}
-            {visibleSettled.map((thread) => (
-              <ThreadSlimRow
-                key={thread.id}
-                thread={thread}
-                index={index}
-                active={model.selectedThreadId === thread.id}
-                device={device}
-                dimmed
-                onSelect={() => select(`thread:${thread.id}`)}
-                trailing={
-                  <span className="text-xs tabular-nums text-secondary-label">{thread.age}</span>
-                }
-              />
+          <ul className="flex flex-col gap-1" role="list">
+            {groups.map((group) => (
+              <ProjectGroupBlock key={group.project} model={model} group={group} />
             ))}
           </ul>
         )}
       </div>
       {searching ? null : (
-        <div className="flex shrink-0 items-center gap-1.5 border-t border-sidebar-border/60 px-3 py-1.5 text-[11px] text-sidebar-muted-foreground/70">
-          <ProjectGlyph project="t3code" className="opacity-60" />
+        <div className="flex shrink-0 items-center border-t border-sidebar-border/60 px-3 py-1.5 text-[11px] text-sidebar-muted-foreground/70">
           {device === "phone" ? "Phone defaults" : "Desktop defaults"}
         </div>
       )}
