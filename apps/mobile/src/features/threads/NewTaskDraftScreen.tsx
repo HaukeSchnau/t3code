@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { themeColorWithAlpha } from "../../lib/mobileTheme";
 import { useFontFamily } from "../../lib/useFontFamily";
+import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 
 import { ComposerEditor, type ComposerEditorHandle } from "../../components/ComposerEditor";
 import {
@@ -26,6 +27,7 @@ import {
 } from "../../components/ComposerToolbar";
 import { AndroidScreenHeader } from "../../components/AndroidScreenHeader";
 import { ComposerAttachmentStrip } from "../../components/ComposerAttachmentStrip";
+import { EnvironmentMachineSymbol } from "../../components/EnvironmentMachineSymbol";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import { SymbolView } from "../../components/AppSymbol";
 import { AppText as Text } from "../../components/AppText";
@@ -832,7 +834,13 @@ export function NewTaskDraftScreen(props: {
         accessibilityLabel={`Environment: ${selectedEnvironmentLabel}`}
         chevronDirection="right"
         disabled={isIncomingShareTransferPending}
-        icon="desktopcomputer"
+        iconNode={
+          <EnvironmentMachineSymbol
+            kind={resolveEnvironmentMachineKind(selectedEnvironmentServerConfig)}
+            size={16}
+            tintColorClassName="accent-icon-muted"
+          />
+        }
         label={`on ${selectedEnvironmentLabel}`}
         maxWidth={260}
         onPress={

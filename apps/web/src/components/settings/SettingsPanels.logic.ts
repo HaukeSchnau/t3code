@@ -111,7 +111,10 @@ export function getChangedTypographySettingLabels(settings: TypographySettings):
 
 export type BrowserDefaultSettings = Pick<
   UnifiedSettings,
-  "browserDefaultViewport" | "browserDefaultZoomFactor" | "browserDefaultAppearance"
+  | "browserDefaultViewport"
+  | "browserDefaultZoomFactor"
+  | "browserDefaultAppearance"
+  | "browserLinkTarget"
 >;
 
 /**

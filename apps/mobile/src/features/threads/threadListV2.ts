@@ -14,6 +14,7 @@ import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   activeThreadAnchorTimestampMs,
+  resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
   sortThreadsByAttention,
   type SidebarAttentionBand,
@@ -200,17 +201,6 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** First VALID timestamp wins: a present-yet-malformed string falls through
-    to the next candidate rather than sinking the row to the epoch. */
-function firstValidTimestampMs(...candidates: ReadonlyArray<string | null | undefined>): number {
-  for (const candidate of candidates) {
-    if (candidate == null) continue;
-    const parsed = Date.parse(candidate);
-    if (!Number.isNaN(parsed)) return parsed;
-  }
-  return 0;
-}
-
 /** Attention-first ordering shared with the web sidebar. Without a band resolver, preserve upstream's re-entry ordering. */
 export function sortThreadsForListV2<
   T extends {
@@ -311,25 +301,21 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map(
-    (item): ThreadListV2ListItem => ({
-      type: "v2-thread",
-      key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
-      item,
-      snoozeWakeLabelText:
-        item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
-          ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
-          : undefined,
-    }),
-  );
-  const pendingItems = input.pendingTasks.map(
-    (pendingTask, index): ThreadListV2ListItem => ({
-      type: "v2-pending",
-      key: `v2-pending:${pendingTask.message.messageId}`,
-      pendingTask,
-      showPendingDivider: index === 0,
-    }),
-  );
+  const threadItems = input.items.map((item): ThreadListV2ListItem => ({
+    type: "v2-thread",
+    key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
+    item,
+    snoozeWakeLabelText:
+      item.snoozed && item.thread.snoozedUntil != null && input.snoozeLabelNow !== undefined
+        ? snoozeWakeLabel(item.thread.snoozedUntil, { now: input.snoozeLabelNow })
+        : undefined,
+  }));
+  const pendingItems = input.pendingTasks.map((pendingTask, index): ThreadListV2ListItem => ({
+    type: "v2-pending",
+    key: `v2-pending:${pendingTask.message.messageId}`,
+    pendingTask,
+    showPendingDivider: index === 0,
+  }));
   const snoozedCount = input.snoozedCount ?? 0;
   const snoozedShelfHeaderIndex = input.snoozedShelfHeaderIndex ?? null;
   const settledCount = input.settledCount ?? 0;
@@ -486,8 +472,8 @@ export function buildThreadListV2Items(input: {
         );
   const orderedSettled = [...settled].sort(
     (left, right) =>
-      firstValidTimestampMs(right.latestUserMessageAt, right.updatedAt) -
-      firstValidTimestampMs(left.latestUserMessageAt, left.updatedAt),
+      parseTimestampMs(resolveSettledThreadTimestamp(right) ?? "") -
+      parseTimestampMs(resolveSettledThreadTimestamp(left) ?? ""),
   );
   const settledLimit = input.settledLimit ?? Number.POSITIVE_INFINITY;
   const pagedSettled =

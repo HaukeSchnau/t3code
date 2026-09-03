@@ -268,6 +268,7 @@ describe("getChangedBrowserSettingLabels", () => {
         browserDefaultViewport: { _tag: "freeform", width: 900, height: 600 },
         browserDefaultZoomFactor: 1.5,
         browserDefaultAppearance: "dark",
+        browserLinkTarget: "app",
       }),
     ).toEqual(["Browser viewport", "Browser zoom", "Browser appearance"]);
   });
