@@ -295,6 +295,7 @@ function createTextGeneration(
       Effect.succeed({
         title: "Update workflow",
       }),
+    generateNotification: () => Effect.die("unused notification generation"),
     ...overrides,
   };
 
@@ -343,6 +344,7 @@ function createTextGeneration(
             }),
         ),
       ),
+    generateNotification: (input) => implementation.generateNotification(input),
   };
 }
 

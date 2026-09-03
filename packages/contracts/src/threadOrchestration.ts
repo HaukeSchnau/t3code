@@ -11,6 +11,7 @@ import {
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
 import {
@@ -21,6 +22,9 @@ import {
   OrchestrationThreadRef,
   OrchestrationWaitMemberShell,
   OrchestrationWaitShell,
+  OrchestrationWatchPolicy,
+  OrchestrationWatchShell,
+  OrchestrationWatchSource,
   OrchestrationThreadActivity,
   ProviderInteractionMode,
   RuntimeMode,
@@ -422,6 +426,15 @@ export const ThreadOrchestrationCreateWaitInput = Schema.Struct({
   members: Schema.optional(Schema.Array(ThreadOrchestrationEffortMemberTarget)),
   mode: Schema.optional(Schema.Literals(["all", "any"])),
   deadlineMs: Schema.optional(PositiveInt),
+  notificationPolicy: Schema.optional(
+    Schema.Union([
+      Schema.Struct({ type: Schema.Literal("raw") }),
+      Schema.Struct({
+        type: Schema.Literal("summarize"),
+        instruction: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ]),
+  ),
 });
 export type ThreadOrchestrationCreateWaitInput = typeof ThreadOrchestrationCreateWaitInput.Type;
 
@@ -445,6 +458,33 @@ export const ThreadOrchestrationCancelWaitInput = Schema.Struct({
   waitId: ThreadOrchestrationWaitId,
 });
 export type ThreadOrchestrationCancelWaitInput = typeof ThreadOrchestrationCancelWaitInput.Type;
+
+export const ThreadOrchestrationCreateWatchInput = Schema.Struct({
+  source: OrchestrationWatchSource,
+  policy: Schema.optional(OrchestrationWatchPolicy),
+  deadlineMs: Schema.optional(PositiveInt),
+});
+export type ThreadOrchestrationCreateWatchInput = typeof ThreadOrchestrationCreateWatchInput.Type;
+
+export const ThreadOrchestrationReadWatchInput = Schema.Struct({
+  watchId: ThreadOrchestrationWatchId,
+});
+export type ThreadOrchestrationReadWatchInput = typeof ThreadOrchestrationReadWatchInput.Type;
+
+export const ThreadOrchestrationListWatchesInput = Schema.Struct({
+  includeClosed: Schema.optional(Schema.Boolean),
+});
+export type ThreadOrchestrationListWatchesInput = typeof ThreadOrchestrationListWatchesInput.Type;
+
+export const ThreadOrchestrationListWatchesResult = Schema.Struct({
+  watches: Schema.Array(OrchestrationWatchShell),
+});
+export type ThreadOrchestrationListWatchesResult = typeof ThreadOrchestrationListWatchesResult.Type;
+
+export const ThreadOrchestrationCancelWatchInput = Schema.Struct({
+  watchId: ThreadOrchestrationWatchId,
+});
+export type ThreadOrchestrationCancelWatchInput = typeof ThreadOrchestrationCancelWatchInput.Type;
 
 export const ThreadOrchestrationStopThreadInput = Schema.Struct({
   environmentId: Schema.optional(EnvironmentId),
@@ -509,6 +549,36 @@ export const ThreadOrchestrationWaitActivityPayload = Schema.Union([
 ]);
 export type ThreadOrchestrationWaitActivityPayload =
   typeof ThreadOrchestrationWaitActivityPayload.Type;
+
+export const ThreadOrchestrationWatchActivityPayload = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("opened"), watch: OrchestrationWatchShell }),
+  Schema.Struct({
+    kind: Schema.Literal("started"),
+    watchId: ThreadOrchestrationWatchId,
+    generation: PositiveInt,
+    startedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("event"),
+    watchId: ThreadOrchestrationWatchId,
+    generation: PositiveInt,
+    sequence: PositiveInt,
+    events: Schema.NonEmptyArray(Schema.String),
+    decision: Schema.Literals(["ignore", "wake", "close"]),
+    summary: Schema.String,
+    observedAt: IsoDateTime,
+  }),
+  Schema.Struct({
+    kind: Schema.Literal("closed"),
+    watchId: ThreadOrchestrationWatchId,
+    generation: NonNegativeInt,
+    state: Schema.Literals(["completed", "cancelled", "failed"]),
+    reason: TrimmedNonEmptyString,
+    closedAt: IsoDateTime,
+  }),
+]);
+export type ThreadOrchestrationWatchActivityPayload =
+  typeof ThreadOrchestrationWatchActivityPayload.Type;
 
 export const ThreadOrchestrationForkThreadInput = Schema.Struct({
   threadId: Schema.optional(ThreadId),
@@ -727,6 +797,22 @@ export const ThreadOrchestrationScopedListWaitsInput = Schema.Struct({
 export const ThreadOrchestrationScopedCancelWaitInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,
   input: ThreadOrchestrationCancelWaitInput,
+});
+export const ThreadOrchestrationScopedCreateWatchInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCreateWatchInput,
+});
+export const ThreadOrchestrationScopedReadWatchInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationReadWatchInput,
+});
+export const ThreadOrchestrationScopedListWatchesInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationListWatchesInput,
+});
+export const ThreadOrchestrationScopedCancelWatchInput = Schema.Struct({
+  scope: ThreadOrchestrationActorScope,
+  input: ThreadOrchestrationCancelWatchInput,
 });
 export const ThreadOrchestrationScopedStopThreadInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,

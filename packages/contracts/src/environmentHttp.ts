@@ -47,6 +47,7 @@ import {
   OrchestrationThreadDetailSnapshot,
   OrchestrationTurnActivitiesSnapshot,
   OrchestrationWaitShell,
+  OrchestrationWatchShell,
 } from "./orchestration.ts";
 import {
   ThreadOrchestrationAwaitBatchResult,
@@ -62,6 +63,7 @@ import {
   ThreadOrchestrationListThreadsResult,
   ThreadOrchestrationListEffortsResult,
   ThreadOrchestrationListWaitsResult,
+  ThreadOrchestrationListWatchesResult,
   ThreadOrchestrationScopedAwaitThreadInput,
   ThreadOrchestrationScopedAwaitBatchInput,
   ThreadOrchestrationScopedCancelBatchInput,
@@ -78,6 +80,10 @@ import {
   ThreadOrchestrationScopedReadWaitInput,
   ThreadOrchestrationScopedListWaitsInput,
   ThreadOrchestrationScopedCancelWaitInput,
+  ThreadOrchestrationScopedCreateWatchInput,
+  ThreadOrchestrationScopedReadWatchInput,
+  ThreadOrchestrationScopedListWatchesInput,
+  ThreadOrchestrationScopedCancelWatchInput,
   ThreadOrchestrationScopedStopThreadInput,
   ThreadOrchestrationScopedCreateBatchInput,
   ThreadOrchestrationScopedCreateThreadInput,
@@ -861,6 +867,38 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedCancelWaitInput,
       success: OrchestrationWaitShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createWatch", "/api/thread-orchestration/watches/create", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCreateWatchInput,
+      success: OrchestrationWatchShell,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("readWatch", "/api/thread-orchestration/watches/read", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedReadWatchInput,
+      success: OrchestrationWatchShell,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("listWatches", "/api/thread-orchestration/watches/list", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedListWatchesInput,
+      success: ThreadOrchestrationListWatchesResult,
+      error: EnvironmentThreadOrchestrationReadErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("cancelWatch", "/api/thread-orchestration/watches/cancel", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationScopedCancelWatchInput,
+      success: OrchestrationWatchShell,
       error: EnvironmentThreadOrchestrationOperateErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

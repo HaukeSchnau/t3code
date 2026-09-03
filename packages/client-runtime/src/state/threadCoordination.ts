@@ -1,7 +1,7 @@
 /**
  * Thread coordination read model shared by web and mobile.
  *
- * The shell snapshot carries `coordination` (relationships, efforts, waits)
+ * The shell snapshot carries `coordination` (relationships, efforts, waits, watches)
  * per environment. This module turns those facts into a lineage keyed by
  * scoped thread key plus the small selectors the sidebar, thread header and
  * Work panel need. Nothing here reads transcripts; ordinary threads with no
@@ -13,6 +13,7 @@ import type {
   OrchestrationEffortShell,
   OrchestrationThreadRef,
   OrchestrationWaitShell,
+  OrchestrationWatchShell,
   ScopedThreadRef,
   ThreadOrchestrationEffortId,
 } from "@t3tools/contracts";
@@ -51,20 +52,29 @@ export interface ScopedWait extends OrchestrationWaitShell {
   readonly memberKeys: ReadonlyArray<string>;
 }
 
+export interface ScopedWatch extends OrchestrationWatchShell {
+  readonly environmentId: EnvironmentId;
+  readonly coordinatorKey: string;
+}
+
 export interface ThreadLineage {
   readonly entries: ReadonlyMap<string, ThreadLineageEntry>;
   readonly efforts: ReadonlyArray<ScopedEffort>;
   readonly waits: ReadonlyArray<ScopedWait>;
+  readonly watches: ReadonlyArray<ScopedWatch>;
   readonly effortsByCoordinatorKey: ReadonlyMap<string, ReadonlyArray<ScopedEffort>>;
   readonly waitsByCoordinatorKey: ReadonlyMap<string, ReadonlyArray<ScopedWait>>;
+  readonly watchesByCoordinatorKey: ReadonlyMap<string, ReadonlyArray<ScopedWatch>>;
 }
 
 export const EMPTY_THREAD_LINEAGE: ThreadLineage = Object.freeze({
   entries: new Map(),
   efforts: [],
   waits: [],
+  watches: [],
   effortsByCoordinatorKey: new Map(),
   waitsByCoordinatorKey: new Map(),
+  watchesByCoordinatorKey: new Map(),
 });
 
 /** A coordination ref without an environment belongs to the environment that carried it. */
@@ -120,6 +130,7 @@ export function buildThreadLineage(sources: ReadonlyArray<EnvironmentCoordinatio
 
   const efforts: ScopedEffort[] = [];
   const waits: ScopedWait[] = [];
+  const watches: ScopedWatch[] = [];
 
   for (const { environmentId, coordination } of sources) {
     const relationships = [...coordination.relationships].sort((left, right) =>
@@ -171,6 +182,13 @@ export function buildThreadLineage(sources: ReadonlyArray<EnvironmentCoordinatio
         memberKeys: wait.members.map((member) => coordinationRefKey(environmentId, member.thread)),
       });
     }
+    for (const watch of coordination.watches) {
+      watches.push({
+        ...watch,
+        environmentId,
+        coordinatorKey: coordinationRefKey(environmentId, watch.coordinator),
+      });
+    }
   }
 
   // Drop cycles defensively: a thread can never be its own ancestor.
@@ -193,6 +211,7 @@ export function buildThreadLineage(sources: ReadonlyArray<EnvironmentCoordinatio
 
   efforts.sort((left, right) => left.openedAt.localeCompare(right.openedAt));
   waits.sort((left, right) => left.openedAt.localeCompare(right.openedAt));
+  watches.sort((left, right) => left.openedAt.localeCompare(right.openedAt));
   const frozen = new Map<string, ThreadLineageEntry>();
   for (const entry of entries.values()) {
     frozen.set(entry.key, {
@@ -211,8 +230,10 @@ export function buildThreadLineage(sources: ReadonlyArray<EnvironmentCoordinatio
     entries: frozen,
     efforts,
     waits,
+    watches,
     effortsByCoordinatorKey: groupBy(efforts, (effort) => effort.coordinatorKey),
     waitsByCoordinatorKey: groupBy(waits, (wait) => wait.coordinatorKey),
+    watchesByCoordinatorKey: groupBy(watches, (watch) => watch.coordinatorKey),
   };
 }
 
@@ -220,7 +241,17 @@ function isEmptyCoordination(coordination: OrchestrationCoordinationShell): bool
   return (
     coordination.relationships.length === 0 &&
     coordination.efforts.length === 0 &&
-    coordination.waits.length === 0
+    coordination.waits.length === 0 &&
+    coordination.watches.length === 0
+  );
+}
+
+export function openWatchesOf(
+  lineage: ThreadLineage,
+  coordinatorKey: string,
+): ReadonlyArray<ScopedWatch> {
+  return (lineage.watchesByCoordinatorKey.get(coordinatorKey) ?? []).filter(
+    (watch) => watch.state === "open",
   );
 }
 
@@ -324,7 +355,8 @@ export function threadParticipatesInCoordination(lineage: ThreadLineage, key: st
   if (entry !== undefined && (entry.parentKey !== null || entry.childKeys.length > 0)) return true;
   return (
     (lineage.effortsByCoordinatorKey.get(key)?.length ?? 0) > 0 ||
-    (lineage.waitsByCoordinatorKey.get(key)?.length ?? 0) > 0
+    (lineage.waitsByCoordinatorKey.get(key)?.length ?? 0) > 0 ||
+    (lineage.watchesByCoordinatorKey.get(key)?.length ?? 0) > 0
   );
 }
 

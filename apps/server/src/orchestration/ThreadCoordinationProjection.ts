@@ -5,6 +5,7 @@ import {
   OrchestrationThreadRef,
   OrchestrationThreadRelationshipShell,
   OrchestrationWaitShell,
+  OrchestrationWatchShell,
   ThreadId,
   TurnId,
   ThreadOrchestrationBatchId,
@@ -13,6 +14,8 @@ import {
   ThreadOrchestrationRelationship,
   ThreadOrchestrationWaitActivityPayload,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchActivityPayload,
+  ThreadOrchestrationWatchId,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -21,6 +24,7 @@ import * as Schema from "effect/Schema";
 const decodeRelationship = Schema.decodeUnknownOption(ThreadOrchestrationRelationship);
 const decodeEffortActivity = Schema.decodeUnknownOption(ThreadOrchestrationEffortActivityPayload);
 const decodeWaitActivity = Schema.decodeUnknownOption(ThreadOrchestrationWaitActivityPayload);
+const decodeWatchActivity = Schema.decodeUnknownOption(ThreadOrchestrationWatchActivityPayload);
 
 const BatchCreatedPayload = Schema.Struct({
   batchId: ThreadOrchestrationBatchId,
@@ -64,6 +68,7 @@ export function deriveThreadCoordinationShell(
   const relationships = new Map<string, OrchestrationThreadRelationshipShell>();
   const efforts = new Map<ThreadOrchestrationEffortId, OrchestrationEffortShell>();
   const waits = new Map<ThreadOrchestrationWaitId, OrchestrationWaitShell>();
+  const watches = new Map<ThreadOrchestrationWatchId, OrchestrationWatchShell>();
 
   for (const activity of activities) {
     if (activity.kind === "thread-orchestration.relationship") {
@@ -176,6 +181,41 @@ export function deriveThreadCoordinationShell(
       continue;
     }
 
+    if (activity.kind.startsWith("thread-orchestration.watch.")) {
+      const decoded = decodeWatchActivity(activity.payload);
+      if (Option.isNone(decoded)) continue;
+      const payload = decoded.value;
+      if (payload.kind === "opened") {
+        watches.set(payload.watch.watchId, payload.watch);
+        continue;
+      }
+      const current = watches.get(payload.watchId);
+      if (current === undefined) continue;
+      if (payload.kind === "started") {
+        if (payload.generation <= current.generation) continue;
+        watches.set(payload.watchId, { ...current, generation: payload.generation });
+      } else if (payload.kind === "event") {
+        if (payload.generation !== current.generation || payload.sequence <= current.lastSequence) {
+          continue;
+        }
+        watches.set(payload.watchId, {
+          ...current,
+          lastSequence: payload.sequence,
+          eventCount: current.eventCount + payload.events.length,
+          lastEventAt: payload.observedAt,
+          lastSummary: payload.summary,
+        });
+      } else {
+        if (payload.generation !== current.generation) continue;
+        watches.set(payload.watchId, {
+          ...current,
+          state: payload.state,
+          closedAt: payload.closedAt,
+        });
+      }
+      continue;
+    }
+
     // Existing batches remain visible while agents migrate to independent
     // efforts and waits. This compatibility projection does not change their
     // persisted meaning.
@@ -246,5 +286,6 @@ export function deriveThreadCoordinationShell(
     ),
     efforts: [...efforts.values()].toSorted((a, b) => a.openedAt.localeCompare(b.openedAt)),
     waits: [...waits.values()].toSorted((a, b) => a.openedAt.localeCompare(b.openedAt)),
+    watches: [...watches.values()].toSorted((a, b) => a.openedAt.localeCompare(b.openedAt)),
   };
 }

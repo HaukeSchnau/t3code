@@ -3057,7 +3057,11 @@ function ChatViewContent(props: ChatViewProps) {
       return messageIds;
     }
     for (const entry of timelineEntries) {
-      if (entry.kind === "message" && entry.message.role === "user") {
+      if (
+        entry.kind === "message" &&
+        entry.message.role === "user" &&
+        entry.message.origin === undefined
+      ) {
         messageIds.add(entry.message.id);
       }
     }

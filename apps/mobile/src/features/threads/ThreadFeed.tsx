@@ -1587,6 +1587,35 @@ function renderFeedEntry(
       !assistantTurnStillInProgress &&
       !message.streaming;
 
+    if (message.origin !== undefined) {
+      const origin = message.origin;
+      const label = origin.type === "watch" ? "Watch event" : "Wait result";
+      const detail =
+        origin.type === "watch"
+          ? `${origin.eventCount} event${origin.eventCount === 1 ? "" : "s"} · ${origin.decision}`
+          : origin.state;
+      return (
+        <View className="mb-5 items-start">
+          <View className="max-w-[92%] gap-1 rounded-2xl border border-border bg-surface px-3.5 py-2.5">
+            <Text className="font-t3-medium text-xs text-foreground-muted">
+              {label} · {detail}
+            </Text>
+            <UserMessageContent
+              text={renderedText}
+              markdownStyles={markdownStyles.assistant}
+              reviewCommentColors={props.reviewCommentColors}
+              skills={props.skills}
+              linkHandlers={props.markdownLinkHandlers}
+              renderImage={props.renderMarkdownImage}
+            />
+          </View>
+          <Text className="mt-1 px-0.5 font-t3-medium text-xs tabular-nums text-adaptive-neutral-600-400">
+            {timestampLabel}
+          </Text>
+        </View>
+      );
+    }
+
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
       return (

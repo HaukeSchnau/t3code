@@ -403,6 +403,7 @@ const makeTestThreadDiscoveryDependencies = (
         generatePrContent: () => Effect.die("unused change request generation"),
         generateBranchName: () => Effect.die("unused branch name generation"),
         generateThreadTitle: () => Effect.die("unused thread title generation"),
+        generateNotification: () => Effect.die("unused notification generation"),
       }),
     ),
     remoteClientLayer,

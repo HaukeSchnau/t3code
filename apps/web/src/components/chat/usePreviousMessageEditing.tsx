@@ -180,7 +180,7 @@ export function usePreviousMessageEditing({
     () =>
       new Set(
         (activeThread?.messages ?? [])
-          .filter((message) => message.role === "user")
+          .filter((message) => message.role === "user" && message.origin === undefined)
           .map((message) => message.id),
       ),
     [activeThread?.messages],

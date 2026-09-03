@@ -20,6 +20,7 @@ import {
   ThreadId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
   ThreadWorkspaceId,
   TrimmedNonEmptyString,
   TrimmedString,
@@ -360,11 +361,31 @@ export type OrchestrationProject = typeof OrchestrationProject.Type;
 export const OrchestrationMessageRole = Schema.Literals(["user", "assistant", "system"]);
 export type OrchestrationMessageRole = typeof OrchestrationMessageRole.Type;
 
+export const OrchestrationNotificationOrigin = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("watch"),
+    watchId: ThreadOrchestrationWatchId,
+    generation: NonNegativeInt,
+    sequence: PositiveInt,
+    eventCount: PositiveInt,
+    decision: Schema.Literals(["wake", "close"]),
+    summary: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("wait"),
+    waitId: ThreadOrchestrationWaitId,
+    state: Schema.Literals(["attention", "satisfied", "deadline-exceeded"]),
+    summary: Schema.optional(TrimmedNonEmptyString),
+  }),
+]);
+export type OrchestrationNotificationOrigin = typeof OrchestrationNotificationOrigin.Type;
+
 export const OrchestrationMessage = Schema.Struct({
   id: MessageId,
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  origin: Schema.optional(OrchestrationNotificationOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
@@ -398,6 +419,7 @@ export const OrchestrationQueuedMessage = Schema.Struct({
   threadId: ThreadId,
   text: Schema.String,
   attachments: Schema.Array(ChatAttachment),
+  origin: Schema.optional(OrchestrationNotificationOrigin),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(Effect.succeed(DEFAULT_RUNTIME_MODE))),
@@ -858,13 +880,66 @@ export const OrchestrationWaitShell = Schema.Struct({
   openedAt: IsoDateTime,
   deadlineAt: Schema.NullOr(IsoDateTime),
   resolvedAt: Schema.NullOr(IsoDateTime),
+  notificationPolicy: Schema.optional(
+    Schema.Union([
+      Schema.Struct({ type: Schema.Literal("raw") }),
+      Schema.Struct({
+        type: Schema.Literal("summarize"),
+        instruction: Schema.optional(TrimmedNonEmptyString),
+      }),
+    ]),
+  ),
 });
 export type OrchestrationWaitShell = typeof OrchestrationWaitShell.Type;
+
+export const OrchestrationWatchSource = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("process"),
+    argv: Schema.NonEmptyArray(TrimmedNonEmptyString),
+    cwd: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("shell"),
+    command: TrimmedNonEmptyString,
+    cwd: Schema.optional(TrimmedNonEmptyString),
+  }),
+  Schema.Struct({
+    type: Schema.Literal("websocket"),
+    url: TrimmedNonEmptyString,
+  }),
+]);
+export type OrchestrationWatchSource = typeof OrchestrationWatchSource.Type;
+
+export const OrchestrationWatchPolicy = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("always") }),
+  Schema.Struct({ type: Schema.Literal("model"), instruction: TrimmedNonEmptyString }),
+]);
+export type OrchestrationWatchPolicy = typeof OrchestrationWatchPolicy.Type;
+
+export const OrchestrationWatchShell = Schema.Struct({
+  watchId: ThreadOrchestrationWatchId,
+  coordinator: OrchestrationThreadRef,
+  source: OrchestrationWatchSource,
+  policy: OrchestrationWatchPolicy,
+  state: Schema.Literals(["open", "completed", "cancelled", "failed"]),
+  generation: NonNegativeInt,
+  lastSequence: NonNegativeInt,
+  eventCount: NonNegativeInt,
+  openedAt: IsoDateTime,
+  deadlineAt: Schema.NullOr(IsoDateTime),
+  lastEventAt: Schema.NullOr(IsoDateTime),
+  closedAt: Schema.NullOr(IsoDateTime),
+  lastSummary: Schema.NullOr(Schema.String),
+});
+export type OrchestrationWatchShell = typeof OrchestrationWatchShell.Type;
 
 export const OrchestrationCoordinationShell = Schema.Struct({
   relationships: Schema.Array(OrchestrationThreadRelationshipShell),
   efforts: Schema.Array(OrchestrationEffortShell),
   waits: Schema.Array(OrchestrationWaitShell),
+  watches: Schema.Array(OrchestrationWatchShell).pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
 });
 export type OrchestrationCoordinationShell = typeof OrchestrationCoordinationShell.Type;
 
@@ -1286,6 +1361,7 @@ export const ThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    origin: Schema.optional(OrchestrationNotificationOrigin),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1307,6 +1383,7 @@ const ClientThreadTurnStartCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(Schema.Union([UploadChatAttachment, ChatAttachment])),
+    origin: Schema.optional(OrchestrationNotificationOrigin),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1329,6 +1406,7 @@ export const ThreadMessageQueueCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(ChatAttachment),
+    origin: Schema.optional(OrchestrationNotificationOrigin),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1353,6 +1431,7 @@ const ClientThreadMessageQueueCommand = Schema.Struct({
     role: Schema.Literal("user"),
     text: Schema.String,
     attachments: Schema.Array(UploadChatAttachment),
+    origin: Schema.optional(OrchestrationNotificationOrigin),
   }),
   modelSelection: Schema.optional(ModelSelection),
   titleSeed: Schema.optional(TrimmedNonEmptyString),
@@ -1826,6 +1905,7 @@ export const ThreadMessageSentPayload = Schema.Struct({
   role: OrchestrationMessageRole,
   text: Schema.String,
   attachments: Schema.optional(Schema.Array(ChatAttachment)),
+  origin: Schema.optional(OrchestrationNotificationOrigin),
   turnId: Schema.NullOr(TurnId),
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,

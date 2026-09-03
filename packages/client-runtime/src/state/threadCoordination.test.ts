@@ -4,6 +4,7 @@ import {
   ThreadId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
   type OrchestrationCoordinationShell,
 } from "@t3tools/contracts";
 
@@ -32,12 +33,13 @@ function coordination(
 ): EnvironmentCoordination {
   return {
     environmentId: ENV,
-    coordination: { relationships: [], efforts: [], waits: [], ...overrides },
+    coordination: { relationships: [], efforts: [], waits: [], watches: [], ...overrides },
   };
 }
 
 const EFFORT = ThreadOrchestrationEffortId.make("effort-auth");
 const WAIT = ThreadOrchestrationWaitId.make("wait-review");
+const WATCH = ThreadOrchestrationWatchId.make("watch-deploy");
 
 const SAMPLE = coordination({
   relationships: [
@@ -108,6 +110,23 @@ const SAMPLE = coordination({
       openedAt: at(3),
       deadlineAt: null,
       resolvedAt: null,
+    },
+  ],
+  watches: [
+    {
+      watchId: WATCH,
+      coordinator: ref("coord"),
+      source: { type: "websocket", url: "wss://deploy.example/events" },
+      policy: { type: "always" },
+      state: "open",
+      generation: 1,
+      lastSequence: 0,
+      eventCount: 0,
+      openedAt: at(4),
+      deadlineAt: null,
+      lastEventAt: null,
+      closedAt: null,
+      lastSummary: null,
     },
   ],
 });
@@ -238,6 +257,12 @@ describe("participation, waits and counts", () => {
       WAIT,
     ]);
     expect(openWaitsCovering(lineage, key("research"))).toEqual([]);
+  });
+
+  it("indexes open watches under their coordinator", () => {
+    expect(
+      lineage.watchesByCoordinatorKey.get(key("coord"))?.map((watch) => watch.watchId),
+    ).toEqual([WATCH]);
   });
 
   it("derives worker state from shell fields", () => {

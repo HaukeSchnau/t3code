@@ -11,6 +11,7 @@ import {
   OrchestrationSession,
   OrchestrationTurnRetry,
   OrchestrationQueuedMessage,
+  OrchestrationNotificationOrigin,
   OrchestrationUsageLimitsSnapshot,
   OrchestrationShellSnapshot,
   OrchestrationThread,
@@ -129,6 +130,7 @@ const ProjectionThreadQueuedMessageDbRowSchema = ProjectionThreadQueuedMessage.m
   Struct.assign({
     attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
     modelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    origin: Schema.NullOr(Schema.fromJsonString(OrchestrationNotificationOrigin)),
   }),
 );
 const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
@@ -378,6 +380,7 @@ function mapQueuedMessageRow(
     threadId: row.threadId,
     text: row.text,
     attachments: row.attachments,
+    ...(row.origin !== null ? { origin: row.origin } : {}),
     ...(row.modelSelection !== null ? { modelSelection: row.modelSelection } : {}),
     ...(row.titleSeed !== null ? { titleSeed: row.titleSeed } : {}),
     runtimeMode: row.runtimeMode,
@@ -605,6 +608,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -623,6 +627,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",
@@ -1126,6 +1131,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"
@@ -1145,6 +1151,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",
@@ -1482,6 +1489,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           role,
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           is_streaming AS "isStreaming",
           created_at AS "createdAt",
           updated_at AS "updatedAt"

@@ -93,7 +93,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateNotification",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -123,7 +124,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateNotification";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -381,10 +383,33 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateNotification: TextGeneration.TextGeneration["Service"]["generateNotification"] =
+    Effect.fn("ClaudeTextGeneration.generateNotification")(function* (input) {
+      if (input.kind === "watchDecision") {
+        const result = yield* runClaudeJson({
+          operation: "generateNotification",
+          cwd: input.cwd,
+          prompt: input.prompt,
+          outputSchemaJson: TextGeneration.WatchDecisionGenerationResult,
+          modelSelection: input.modelSelection,
+        });
+        return { kind: input.kind, result };
+      }
+      const result = yield* runClaudeJson({
+        operation: "generateNotification",
+        cwd: input.cwd,
+        prompt: input.prompt,
+        outputSchemaJson: TextGeneration.WaitSummaryGenerationResult,
+        modelSelection: input.modelSelection,
+      });
+      return { kind: input.kind, result };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateNotification,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

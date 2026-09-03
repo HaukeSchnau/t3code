@@ -22,6 +22,10 @@ import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessio
 import type { AcpSessionRuntime } from "../provider/acp/AcpSessionRuntime.ts";
 import type * as TextGeneration from "./TextGeneration.ts";
 import {
+  WaitSummaryGenerationResult,
+  WatchDecisionGenerationResult,
+} from "./TextGenerationSchemas.ts";
+import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
@@ -401,10 +405,31 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       return { title: sanitizeThreadTitle(generated.title) };
     });
 
+  const generateNotification: TextGeneration.TextGeneration["Service"]["generateNotification"] =
+    Effect.fn("AntigravityTextGeneration.generateNotification")(function* (input) {
+      if (input.kind === "watchDecision") {
+        const result = yield* runAntigravityJson({
+          operation: "generateNotification",
+          prompt: input.prompt,
+          outputSchema: WatchDecisionGenerationResult,
+          modelSelection: input.modelSelection,
+        });
+        return { kind: input.kind, result };
+      }
+      const result = yield* runAntigravityJson({
+        operation: "generateNotification",
+        prompt: input.prompt,
+        outputSchema: WaitSummaryGenerationResult,
+        modelSelection: input.modelSelection,
+      });
+      return { kind: input.kind, result };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateNotification,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

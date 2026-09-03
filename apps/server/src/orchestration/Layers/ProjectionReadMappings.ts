@@ -1,5 +1,6 @@
 import {
   ChatAttachment,
+  OrchestrationNotificationOrigin,
   NonNegativeInt,
   TurnId,
   type OrchestrationMessage,
@@ -16,6 +17,7 @@ export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFie
   Struct.assign({
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
+    origin: Schema.NullOr(Schema.fromJsonString(OrchestrationNotificationOrigin)),
   }),
 );
 
@@ -32,8 +34,9 @@ export function mapProjectionMessageRow(
     updatedAt: row.updatedAt,
   };
   if (row.attachments !== null) {
-    return Object.assign(message, { attachments: row.attachments });
+    Object.assign(message, { attachments: row.attachments });
   }
+  if (row.origin !== null) Object.assign(message, { origin: row.origin });
   return message;
 }
 

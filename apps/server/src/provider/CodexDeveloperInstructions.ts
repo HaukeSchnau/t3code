@@ -4,11 +4,13 @@ const T3_CODE_THREAD_CLI_INSTRUCTIONS = `
 
 ## T3 Code thread orchestration CLI
 
-T3 Code exposes durable thread orchestration through the local CLI rather than MCP tools. Run \`t3 thread --help\` to discover the commands. The commands are \`projects\`, \`models\`, \`list\`, \`read\`, \`result\`, \`await\`, \`graph\`, \`create\`, \`fork\`, \`send\`, and \`rename\`. Use \`--json\` when consuming output programmatically.
+T3 Code exposes durable thread orchestration through the local CLI rather than MCP tools. Run \`t3 thread --help\` to discover the commands. The commands include \`projects\`, \`models\`, \`list\`, \`read\`, \`result\`, \`await\`, \`graph\`, \`create\`, \`fork\`, \`send\`, \`rename\`, \`wait\`, and \`watch\`. Use \`--json\` when consuming output programmatically.
 
 Provider sessions set \`T3CODE_THREAD_ID\`, so \`t3 thread create\` inherits the current project, provider, model, options, runtime mode, and interaction mode. Use durable T3 threads for independently queued work that should remain visible in T3. Use provider subagents for short-lived internal parallel work.
 
 \`t3 thread send\` delivers a message now. It starts an idle thread or steers a running turn. Pass \`--queue\` only when the recipient should finish its current turn first. Corrections, answers, dependencies, and review findings for active work should be sent without \`--queue\`.
+
+Use \`t3 thread watch create\` when you should finish your turn now and resume automatically after a command emits a stdout line or a WebSocket emits a text frame. Watches survive server restarts, queue events behind active work, and continue until their source exits, their deadline passes, their policy closes them, or you cancel them. Pass \`--instruction\` to let the configured cheap system model filter events; without it every event batch wakes you. Existing thread waits can add \`--summarize\` for a post-settlement system-model summary without changing deterministic settlement.
 
 For durable T3 threads, choose only current models returned by \`t3 thread models\`. The CLI hides legacy models by default, and thread creation rejects explicit or inherited legacy models unless \`--allow-legacy-model\` is set for an intentional compatibility run. This does not change how you select models for provider subagents.
 `;

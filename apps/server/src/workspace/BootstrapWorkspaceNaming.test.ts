@@ -18,6 +18,7 @@ const textGeneration = (
     generatePrContent: () => Effect.die("unused change request generation"),
     generateBranchName: () => Effect.die("unused branch name generation"),
     generateThreadTitle,
+    generateNotification: () => Effect.die("unused notification generation"),
   });
 
 it.effect("uses one generated title for the thread and workspace", () =>

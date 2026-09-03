@@ -4,6 +4,7 @@ import {
   ThreadId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
   type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
@@ -15,6 +16,7 @@ const coordinatorThreadId = ThreadId.make("thread-parent");
 const workerThreadId = ThreadId.make("thread-worker");
 const effortId = ThreadOrchestrationEffortId.make("effort-1");
 const waitId = ThreadOrchestrationWaitId.make("wait-1");
+const watchId = ThreadOrchestrationWatchId.make("watch-1");
 
 const activity = (
   kind: string,
@@ -144,4 +146,99 @@ it("projects existing batches as compatibility efforts and waits", () => {
 
   assert.strictEqual(coordination.efforts[0]?.title, "Two approaches");
   assert.strictEqual(coordination.waits[0]?.state, "open");
+});
+
+it("reduces durable watch generations, events, and closure", () => {
+  const openedAt = "2026-09-02T12:00:00.000Z";
+  const eventAt = "2026-09-02T12:00:01.000Z";
+  const closedAt = "2026-09-02T12:00:02.000Z";
+  const coordinator = {
+    environmentId: coordinatorEnvironmentId,
+    threadId: coordinatorThreadId,
+  };
+  const coordination = deriveThreadCoordinationShell([
+    activity(
+      "thread-orchestration.watch.opened",
+      {
+        kind: "opened",
+        watch: {
+          watchId,
+          coordinator,
+          source: { type: "websocket", url: "wss://deploy.example/events" },
+          policy: { type: "always" },
+          state: "open",
+          generation: 0,
+          lastSequence: 0,
+          eventCount: 0,
+          openedAt,
+          deadlineAt: null,
+          lastEventAt: null,
+          closedAt: null,
+          lastSummary: null,
+        },
+      },
+      openedAt,
+    ),
+    activity(
+      "thread-orchestration.watch.started",
+      { kind: "started", watchId, generation: 1, startedAt: openedAt },
+      openedAt,
+    ),
+    activity(
+      "thread-orchestration.watch.event",
+      {
+        kind: "event",
+        watchId,
+        generation: 1,
+        sequence: 1,
+        events: ["deploy complete", "health check passed"],
+        decision: "wake",
+        summary: "Deployment completed successfully.",
+        observedAt: eventAt,
+      },
+      eventAt,
+    ),
+    activity(
+      "thread-orchestration.watch.event",
+      {
+        kind: "event",
+        watchId,
+        generation: 1,
+        sequence: 1,
+        events: ["late duplicate"],
+        decision: "wake",
+        summary: "This must not replace the accepted event.",
+        observedAt: eventAt,
+      },
+      eventAt,
+    ),
+    activity(
+      "thread-orchestration.watch.closed",
+      {
+        kind: "closed",
+        watchId,
+        generation: 1,
+        state: "completed",
+        reason: "notification policy closed it",
+        closedAt,
+      },
+      closedAt,
+    ),
+  ]);
+
+  assert.deepStrictEqual(coordination.watches[0], {
+    watchId,
+    coordinator,
+    source: { type: "websocket", url: "wss://deploy.example/events" },
+    policy: { type: "always" },
+    state: "completed",
+    generation: 1,
+    lastSequence: 1,
+    eventCount: 2,
+    openedAt,
+    deadlineAt: null,
+    lastEventAt: eventAt,
+    closedAt,
+    lastSummary: "Deployment completed successfully.",
+  });
 });
