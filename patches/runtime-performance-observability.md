@@ -38,9 +38,10 @@ storage pressure can be separated from provider or replay backlog without direct
   Every SQLite statement execution also records a bounded latency histogram with an exact two-second bucket,
   allowing the host to alert on pathological queries without attaching SQL text or parameters as labels.
   Managed Linux hosts may set `T3_PROVIDER_SYSTEMD_SCOPE=1` and provide the service user's
-  `XDG_RUNTIME_DIR` to place provider CLIs in `t3-provider-*.scope` user units. Each scope has a 15-second
-  stop timeout, and the host unit must stop remaining matching scopes in `ExecStopPost`. Desktop and normal
-  development installs intentionally remain opt-out.
+  `XDG_RUNTIME_DIR` to place provider CLIs in `t3-provider-*.scope` user units below the shared
+  `t3-providers.slice`. Each scope has a 15-second stop timeout; the host owns aggregate resource controls on
+  the slice and must stop remaining matching scopes in `ExecStopPost`. Desktop and normal development installs
+  intentionally remain opt-out.
   A missing WAL is reported as zero because SQLite removes it normally; a missing or unreadable database and
   other stat failures increment `t3_runtime_metrics_collection_errors_total` instead of publishing a false
   zero-byte database measurement.

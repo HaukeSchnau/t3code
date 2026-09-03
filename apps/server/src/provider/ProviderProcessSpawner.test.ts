@@ -55,6 +55,7 @@ it("preserves command options when adding the systemd scope boundary", () => {
       "--scope",
       "--quiet",
       "--collect",
+      "--slice=t3-providers.slice",
       "--unit=t3-provider-42-7",
       "--property=TimeoutStopSec=15s",
       "--property=MemoryAccounting=yes",
