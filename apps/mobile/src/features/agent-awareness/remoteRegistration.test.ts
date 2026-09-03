@@ -75,12 +75,15 @@ vi.mock("../../state/server", () => ({
   environmentServerConfigsAtom: Symbol("environmentServerConfigsAtom"),
 }));
 
+// The mock preserves the production runtime's Promise-returning boundary.
+// oxlint-disable t3code/no-manual-effect-runtime-in-tests
 vi.mock("../../lib/runtime", () => ({
   runtime: {
     runPromiseExit: (operation: Effect.Effect<unknown, unknown>) =>
       Effect.runPromiseExit(operation),
   },
 }));
+// oxlint-enable t3code/no-manual-effect-runtime-in-tests
 
 vi.mock("../../persistence/imperative", () => ({
   loadAgentAwarenessDeviceId: vi.fn(() => Promise.resolve("device-1")),
