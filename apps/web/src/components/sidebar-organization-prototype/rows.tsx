@@ -141,9 +141,10 @@ function gutterWidth(device: DeviceKind): string {
 }
 
 /**
- * The leading disclosure for a lineage root with descendants. It sits in
- * its own gutter beside the card, never on the navigation surface, and is
- * visible at rest on every device.
+ * The leading disclosure for a lineage root with descendants. It sits in a
+ * gutter beside the card's title and branch lines only, so the project line
+ * keeps the full card width and lines up with leaf roots. It is a sibling of
+ * the navigation surface, not a child, and is visible at rest everywhere.
  */
 export function RootDisclosure({
   device,
@@ -163,7 +164,9 @@ export function RootDisclosure({
       aria-label={label}
       onClick={onToggle}
       className={cn(
-        "flex shrink-0 items-center justify-center self-stretch rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        // Top clears the row padding, card inset, project line and title gap;
+        // bottom clears the card inset and row padding.
+        "absolute bottom-2.5 left-0 top-[2.125rem] z-20 flex items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
         gutterWidth(device),
       )}
     >
@@ -186,6 +189,7 @@ export function ThreadRow({
   active,
   onSelect,
   gutter,
+  device,
   branchLine,
   branchLineAttention = false,
   attemptsControl,
@@ -194,8 +198,9 @@ export function ThreadRow({
   readonly index: WorkIndex;
   readonly active: boolean;
   readonly onSelect: () => void;
-  /** Leading gutter beside the card: a root disclosure when the row owns descendants, otherwise nothing so leaves keep the full width. */
+  /** Root disclosure when the row owns descendants; it overlays the gutter beside the title and branch lines. */
   readonly gutter?: ReactNode;
+  readonly device: DeviceKind;
   /** Third line: the branch by default, or a collapsed root's recursive summary. */
   readonly branchLine?: string;
   readonly branchLineAttention?: boolean;
@@ -209,7 +214,7 @@ export function ThreadRow({
   // Quiet ready rows recede, as in production; live and attention states keep full weight.
   const recede = status === null && !thread.unread && !active;
   return (
-    <li className="flex list-none items-stretch py-0.5">
+    <li className="relative list-none py-0.5">
       {gutter}
       <div
         role="button"
@@ -238,60 +243,62 @@ export function ThreadRow({
               <StatusLabel status={status} age={thread.age} />
             </span>
           </div>
-          <div className="mt-1 flex min-w-0">
-            <span
-              className={cn(
-                "min-w-0 flex-1 truncate text-sm",
-                recede ? "font-normal text-secondary-label" : "font-medium",
-                active || thread.unread
-                  ? "text-foreground"
-                  : recede
-                    ? "text-secondary-label"
-                    : "text-foreground/90",
-              )}
-            >
-              {thread.title}
-            </span>
-          </div>
-          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-            {branchLine !== undefined ? (
+          <div className={cn(gutter !== undefined && (device === "phone" ? "ps-11" : "ps-5"))}>
+            <div className="mt-1 flex min-w-0">
               <span
                 className={cn(
-                  "min-w-0 flex-1 truncate whitespace-nowrap tabular-nums",
-                  branchLineAttention && "text-amber-700 dark:text-amber-300",
+                  "min-w-0 flex-1 truncate text-sm",
+                  recede ? "font-normal text-secondary-label" : "font-medium",
+                  active || thread.unread
+                    ? "text-foreground"
+                    : recede
+                      ? "text-secondary-label"
+                      : "text-foreground/90",
                 )}
               >
-                {branchLine}
+                {thread.title}
               </span>
-            ) : (
-              <>
-                <GitBranchIcon aria-hidden className="size-3 shrink-0" />
-                <span className="min-w-0 flex-1 truncate whitespace-nowrap">
-                  {branchLabel(thread)}
+            </div>
+            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+              {branchLine !== undefined ? (
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate whitespace-nowrap tabular-nums",
+                    branchLineAttention && "text-amber-700 dark:text-amber-300",
+                  )}
+                >
+                  {branchLine}
                 </span>
-              </>
-            )}
-            {attemptsControl !== undefined ? (
-              <button
-                type="button"
-                aria-expanded={attemptsControl.expanded}
-                aria-label={`${attemptsControl.count} earlier attempt${attemptsControl.count === 1 ? "" : "s"}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  attemptsControl.onToggle();
-                }}
-                className={cn(
-                  "inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                  attemptsControl.expanded && "text-sidebar-foreground",
-                )}
-              >
-                <RotateCcwIcon aria-hidden className="size-3" />
-                {attemptsControl.count}
-              </button>
-            ) : null}
-            <span className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1">
-              <ProviderMark provider={thread.provider} />
-            </span>
+              ) : (
+                <>
+                  <GitBranchIcon aria-hidden className="size-3 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                    {branchLabel(thread)}
+                  </span>
+                </>
+              )}
+              {attemptsControl !== undefined ? (
+                <button
+                  type="button"
+                  aria-expanded={attemptsControl.expanded}
+                  aria-label={`${attemptsControl.count} earlier attempt${attemptsControl.count === 1 ? "" : "s"}`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    attemptsControl.onToggle();
+                  }}
+                  className={cn(
+                    "inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                    attemptsControl.expanded && "text-sidebar-foreground",
+                  )}
+                >
+                  <RotateCcwIcon aria-hidden className="size-3" />
+                  {attemptsControl.count}
+                </button>
+              ) : null}
+              <span className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1">
+                <ProviderMark provider={thread.provider} />
+              </span>
+            </div>
           </div>
         </div>
       </div>

@@ -103,7 +103,7 @@ function WorkerRow({
   readonly thread: ProtoThread;
 }) {
   const select = usePrototypeStore((s) => s.select);
-  const { index } = model;
+  const { index, device } = model;
   const attempts = supersededChain(index, thread);
   const attemptsId = `attempts:${thread.id}`;
   const attemptsOpen = attempts.length > 0 && model.isExpanded(attemptsId);
@@ -111,6 +111,7 @@ function WorkerRow({
     <Fragment>
       <ThreadRow
         thread={thread}
+        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -131,6 +132,7 @@ function WorkerRow({
               <ThreadRow
                 key={attempt.id}
                 thread={attempt}
+                device={device}
                 index={index}
                 active={model.selectedThreadId === attempt.id}
                 onSelect={() => select(`thread:${attempt.id}`)}
@@ -268,6 +270,7 @@ function RootRow({
     return (
       <ThreadRow
         thread={thread}
+        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -290,6 +293,7 @@ function RootRow({
     <Fragment>
       <ThreadRow
         thread={thread}
+        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -384,6 +388,7 @@ export function PrototypeSidebar({
               <ThreadRow
                 key={thread.id}
                 thread={thread}
+                device={device}
                 index={index}
                 active={model.selectedThreadId === thread.id}
                 onSelect={() => select(`thread:${thread.id}`)}
