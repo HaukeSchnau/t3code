@@ -14,6 +14,7 @@ import {
   countWorkers,
   groupChildrenByEffort,
   openWaitsCovering,
+  orderEffortGroups,
   resolveSidebarLineage,
   resolveWorkerState,
   rootCoordinatorKey,
@@ -140,6 +141,36 @@ describe("buildThreadLineage", () => {
     expect(fork?.forkedFromKey).toBe(key("coord"));
   });
 
+  it("keeps fork creation ownership separate from its source", () => {
+    const lineage = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "createdBy", actor: ref("caller"), target: ref("fork"), createdAt: at(1) },
+          { kind: "forkedFrom", actor: ref("source"), target: ref("fork"), createdAt: at(1) },
+        ],
+      }),
+    ]);
+    expect(lineage.entries.get(key("fork"))).toMatchObject({
+      parentKey: key("caller"),
+      forkedFromKey: key("source"),
+    });
+  });
+
+  it("represents a self-fork with distinct creation and source facts", () => {
+    const lineage = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "createdBy", actor: ref("caller"), target: ref("fork"), createdAt: at(1) },
+          { kind: "forkedFrom", actor: ref("caller"), target: ref("fork"), createdAt: at(1) },
+        ],
+      }),
+    ]);
+    expect(lineage.entries.get(key("fork"))).toMatchObject({
+      parentKey: key("caller"),
+      forkedFromKey: key("caller"),
+    });
+  });
+
   it("scopes refs to the carrying environment unless the ref names one", () => {
     const remote = EnvironmentId.make("env-b");
     const lineage = buildThreadLineage([
@@ -207,6 +238,64 @@ describe("resolveSidebarLineage", () => {
       resolveSidebarLineage(lineage, new Set(all)),
     );
   });
+
+  it("places an explicit effort member under its coordinator instead of its fork source", () => {
+    const effortId = ThreadOrchestrationEffortId.make("effort-prototype");
+    const lineage = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "forkedFrom", actor: ref("source"), target: ref("fork"), createdAt: at(1) },
+        ],
+        efforts: [
+          {
+            effortId,
+            coordinator: ref("coord"),
+            title: "Prototype",
+            members: [{ thread: ref("fork"), label: "Prototype", joinedAt: at(2) }],
+            openedAt: at(0),
+            closedAt: null,
+          },
+        ],
+      }),
+    ]);
+    const layout = resolveSidebarLineage(
+      lineage,
+      new Set([key("coord"), key("source"), key("fork")]),
+    );
+    expect(layout.childrenByParentKey.get(key("coord"))).toEqual([key("fork")]);
+    expect(layout.childrenByParentKey.get(key("source"))).toBeUndefined();
+    expect(groupChildrenByEffort(lineage, key("coord"), [key("fork")])).toMatchObject([
+      { effort: { effortId }, memberKeys: [key("fork")] },
+    ]);
+  });
+
+  it("renders a cross-lineage effort member once under the effort coordinator", () => {
+    const effortId = ThreadOrchestrationEffortId.make("effort-cross-lineage");
+    const lineage = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "createdBy", actor: ref("creator"), target: ref("worker"), createdAt: at(1) },
+        ],
+        efforts: [
+          {
+            effortId,
+            coordinator: ref("coord"),
+            title: "Cross-lineage review",
+            members: [{ thread: ref("worker"), label: "Reviewer", joinedAt: at(2) }],
+            openedAt: at(0),
+            closedAt: null,
+          },
+        ],
+      }),
+    ]);
+    const layout = resolveSidebarLineage(
+      lineage,
+      new Set([key("creator"), key("coord"), key("worker")]),
+    );
+    expect(layout.childrenByParentKey.get(key("coord"))).toEqual([key("worker")]);
+    expect(layout.childrenByParentKey.get(key("creator"))).toBeUndefined();
+    expect([...layout.nestedKeys]).toEqual([key("worker")]);
+  });
 });
 
 describe("groupChildrenByEffort", () => {
@@ -220,6 +309,62 @@ describe("groupChildrenByEffort", () => {
     expect(groups.map((group) => group.effort?.title ?? null)).toEqual(["Auth migration", null]);
     expect(groups[0]?.memberKeys).toEqual([key("research"), key("impl"), key("impl-retry")]);
     expect(groups[1]?.memberKeys).toEqual([key("ghostty")]);
+  });
+
+  it("orders current work before completed and closed efforts without time-based sorting", () => {
+    const completedEffort = ThreadOrchestrationEffortId.make("effort-completed");
+    const activeEffort = ThreadOrchestrationEffortId.make("effort-active");
+    const closedEffort = ThreadOrchestrationEffortId.make("effort-closed");
+    const lineage = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "createdBy", actor: ref("coord"), target: ref("done"), createdAt: at(1) },
+          { kind: "createdBy", actor: ref("coord"), target: ref("active"), createdAt: at(2) },
+          { kind: "createdBy", actor: ref("coord"), target: ref("closed"), createdAt: at(3) },
+        ],
+        efforts: [
+          {
+            effortId: completedEffort,
+            coordinator: ref("coord"),
+            title: "Completed",
+            members: [{ thread: ref("done"), label: "Done", joinedAt: at(1) }],
+            openedAt: at(0),
+            closedAt: null,
+          },
+          {
+            effortId: activeEffort,
+            coordinator: ref("coord"),
+            title: "Active",
+            members: [{ thread: ref("active"), label: "Active", joinedAt: at(2) }],
+            openedAt: at(1),
+            closedAt: null,
+          },
+          {
+            effortId: closedEffort,
+            coordinator: ref("coord"),
+            title: "Closed",
+            members: [{ thread: ref("closed"), label: "Closed", joinedAt: at(3) }],
+            openedAt: at(2),
+            closedAt: at(4),
+          },
+        ],
+      }),
+    ]);
+    const groups = groupChildrenByEffort(lineage, key("coord"), [
+      key("done"),
+      key("active"),
+      key("closed"),
+    ]);
+    const states = new Map([
+      [key("done"), "completed" as const],
+      [key("active"), "blocked" as const],
+      [key("closed"), "completed" as const],
+    ]);
+    expect(
+      orderEffortGroups(lineage, groups, (threadKey) => states.get(threadKey) ?? null).map(
+        (group) => group.effort?.effortId,
+      ),
+    ).toEqual([activeEffort, completedEffort, closedEffort]);
   });
 });
 

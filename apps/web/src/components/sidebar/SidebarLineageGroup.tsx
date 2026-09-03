@@ -9,8 +9,10 @@
  */
 import {
   groupChildrenByEffort,
+  orderEffortGroups,
   type SidebarLineageLayout,
   type ThreadLineage,
+  type WorkerState,
 } from "@t3tools/client-runtime/state/threads";
 import { ChevronRight } from "lucide-react";
 import { Fragment, useState, type ReactNode } from "react";
@@ -68,6 +70,17 @@ function EffortHeaderRow({
   );
 }
 
+function OtherDelegatedWorkHeader() {
+  return (
+    <div
+      data-testid="sidebar-other-delegated-work-header"
+      className="flex h-7 items-center px-2 text-[11px] font-medium text-sidebar-muted-foreground"
+    >
+      Other delegated work
+    </div>
+  );
+}
+
 function NestedRows({
   keys,
   layout,
@@ -101,6 +114,7 @@ export function SidebarLineageGroup({
   lineage,
   layout,
   renderRow,
+  workerState,
   effortSummary,
   className,
 }: {
@@ -109,6 +123,7 @@ export function SidebarLineageGroup({
   readonly layout: SidebarLineageLayout;
   /** Must return an `<li>`; the real sidebar row already is one. */
   readonly renderRow: (threadKey: string) => ReactNode;
+  readonly workerState: (threadKey: string) => WorkerState | null;
   /** Roll-up for an effort header, e.g. `2 working · 1 needs you`. */
   readonly effortSummary: (memberKeys: ReadonlyArray<string>) => {
     readonly label: string | null;
@@ -119,7 +134,12 @@ export function SidebarLineageGroup({
   const [toggled, setToggled] = useState<ReadonlySet<string>>(new Set());
   const childKeys = layout.childrenByParentKey.get(parentKey);
   if (childKeys === undefined || childKeys.length === 0) return null;
-  const groups = groupChildrenByEffort(lineage, parentKey, childKeys);
+  const groups = orderEffortGroups(
+    lineage,
+    groupChildrenByEffort(lineage, parentKey, childKeys),
+    workerState,
+  );
+  const hasEffortSections = groups.some((group) => group.effort !== null);
 
   return (
     <div
@@ -131,6 +151,7 @@ export function SidebarLineageGroup({
           if (group.effort === null) {
             return (
               <li key="ungrouped" className="list-none">
+                {hasEffortSections ? <OtherDelegatedWorkHeader /> : null}
                 <NestedRows keys={group.memberKeys} layout={layout} renderRow={renderRow} />
               </li>
             );

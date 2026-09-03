@@ -27,7 +27,7 @@ export interface EnvironmentCoordination {
 export interface ThreadLineageEntry {
   readonly key: string;
   readonly ref: ScopedThreadRef;
-  /** The coordinator that created this thread; null for roots and forks. */
+  /** The coordinator that created this thread; null when no createdBy fact exists. */
   readonly parentKey: string | null;
   /** The label the coordinator chose at creation, when any. */
   readonly label: string | null;
@@ -141,7 +141,7 @@ export function buildThreadLineage(sources: ReadonlyArray<EnvironmentCoordinatio
           break;
         }
         case "forkedFrom":
-          // Actor is the fork's creator here as well; the target is the new thread.
+          // The actor is the source thread. Creation ownership is a separate edge.
           target.forkedFromKey = actor.key;
           break;
         case "replaces":
@@ -264,22 +264,72 @@ export function resolveSidebarLineage(
   visibleKeys: ReadonlySet<string>,
 ): SidebarLineageLayout {
   if (lineage.entries.size === 0) return EMPTY_SIDEBAR_LINEAGE_LAYOUT;
+  const parentByChildKey = new Map<string, string>();
+  for (const entry of lineage.entries.values()) {
+    if (entry.parentKey !== null) parentByChildKey.set(entry.key, entry.parentKey);
+  }
+
+  // Explicit effort membership owns sidebar placement. This keeps a member in
+  // its effort when its creation or fork source belongs to another lineage,
+  // without rendering a second copy under that lineage. Open efforts win the
+  // defensive tie-break when stale data puts one thread in multiple efforts.
+  const placementEfforts = [...lineage.efforts].sort(
+    (left, right) => Number(left.closedAt !== null) - Number(right.closedAt !== null),
+  );
+  const placedByEffort = new Set<string>();
+  for (const effort of placementEfforts) {
+    if (!visibleKeys.has(effort.coordinatorKey)) continue;
+    for (const memberKey of effort.memberKeys) {
+      if (
+        placedByEffort.has(memberKey) ||
+        memberKey === effort.coordinatorKey ||
+        !visibleKeys.has(memberKey)
+      ) {
+        continue;
+      }
+      parentByChildKey.set(memberKey, effort.coordinatorKey);
+      placedByEffort.add(memberKey);
+    }
+  }
+
+  // Cross-lineage membership can otherwise form a display-only cycle even
+  // when the durable createdBy graph is acyclic. Keep one participant at the
+  // top level instead of recursing forever.
+  for (const childKey of parentByChildKey.keys()) {
+    const seen = new Set([childKey]);
+    let cursor: string | undefined = parentByChildKey.get(childKey);
+    while (cursor !== undefined) {
+      if (seen.has(cursor)) {
+        parentByChildKey.delete(childKey);
+        break;
+      }
+      seen.add(cursor);
+      cursor = parentByChildKey.get(cursor);
+    }
+  }
+
   const nested = new Set<string>();
   const childrenByParent = new Map<string, string[]>();
   // A visible parent is always placed somewhere (nested or top level), so a
   // child nests exactly when both it and its parent are visible.
   for (const entry of lineage.entries.values()) {
-    if (entry.parentKey === null || !visibleKeys.has(entry.key)) continue;
-    if (!visibleKeys.has(entry.parentKey)) continue;
+    const parentKey = parentByChildKey.get(entry.key);
+    if (parentKey === undefined || !visibleKeys.has(entry.key)) continue;
+    if (!visibleKeys.has(parentKey)) continue;
     nested.add(entry.key);
-    const siblings = childrenByParent.get(entry.parentKey);
-    if (siblings === undefined) childrenByParent.set(entry.parentKey, [entry.key]);
+    const siblings = childrenByParent.get(parentKey);
+    if (siblings === undefined) childrenByParent.set(parentKey, [entry.key]);
     else siblings.push(entry.key);
   }
   if (nested.size === 0) return EMPTY_SIDEBAR_LINEAGE_LAYOUT;
   // Keep creation order as recorded on the parent entry.
   for (const [parentKey, keys] of childrenByParent) {
-    const order = lineage.entries.get(parentKey)?.childKeys ?? [];
+    const order = [
+      ...(lineage.entries.get(parentKey)?.childKeys ?? []),
+      ...(lineage.effortsByCoordinatorKey.get(parentKey) ?? []).flatMap(
+        (effort) => effort.memberKeys,
+      ),
+    ];
     keys.sort((left, right) => order.indexOf(left) - order.indexOf(right));
   }
   return { nestedKeys: nested, childrenByParentKey: childrenByParent };
@@ -313,6 +363,25 @@ export function groupChildrenByEffort(
   const ungrouped = childKeys.filter((key) => !placed.has(key));
   if (ungrouped.length > 0) groups.push({ effort: null, memberKeys: ungrouped });
   return groups;
+}
+
+/** Current effort work stays ahead of completed and closed history. */
+export function orderEffortGroups(
+  lineage: ThreadLineage,
+  groups: ReadonlyArray<LineageEffortGroup>,
+  stateOf: (key: string) => WorkerState | null,
+): ReadonlyArray<LineageEffortGroup> {
+  const lifecycleRank = (group: LineageEffortGroup) => {
+    if (group.effort === null) return 0;
+    if (group.effort.closedAt !== null) return 2;
+    const counts = countWorkers(lineage, group.memberKeys, stateOf);
+    const allDone = counts.total > 0 && counts.completed + counts.stopped === counts.total;
+    return allDone ? 1 : 0;
+  };
+  return groups
+    .map((group, index) => ({ group, index, rank: lifecycleRank(group) }))
+    .toSorted((left, right) => left.rank - right.rank || left.index - right.index)
+    .map(({ group }) => group);
 }
 
 // ---------------------------------------------------------------------------

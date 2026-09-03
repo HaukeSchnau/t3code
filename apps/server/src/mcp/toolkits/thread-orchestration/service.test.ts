@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   ProviderInstanceId,
   ThreadId,
+  ThreadOrchestrationEffortId,
   ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
@@ -40,6 +41,7 @@ import {
 
 const actorThreadId = ThreadId.make("thread-actor");
 const targetThreadId = ThreadId.make("thread-target");
+const forkEffortId = ThreadOrchestrationEffortId.make("effort-fork");
 const projectId = "project-1" as OrchestrationProject["id"];
 const workspaceId = ThreadWorkspaceId.make("workspace-fork");
 const workspaceRootId = ThreadWorkspaceRootId.make("workspace-root-fork");
@@ -1434,6 +1436,24 @@ it.effect("prepares requested worktrees for forked threads", () => {
         getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
         listThreadRelationshipActivities: listThreadRelationshipActivities(),
+        getThreadCoordinationShell: () =>
+          Effect.succeed({
+            relationships: [],
+            efforts: [
+              {
+                effortId: forkEffortId,
+                coordinator: {
+                  environmentId: scope.environmentId,
+                  threadId: scope.threadId,
+                },
+                title: "Fork implementation",
+                members: [],
+                openedAt: "2026-01-01T00:00:00.000Z",
+                closedAt: null,
+              },
+            ],
+            waits: [],
+          }),
         getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
         getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
@@ -1479,6 +1499,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
     const result = yield* service.forkThread(scope, {
       threadId: targetThreadId,
       environment: { type: "worktree" },
+      coordination: { excludeInheritedEffort: true },
     });
 
     expect(preparedInputs).toMatchObject([
@@ -1493,6 +1514,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
     expect(result.transcriptCloned).toBe(false);
     expect(dispatched.map((command) => command.type)).toEqual([
       "thread.create",
+      "thread.activity.append",
       "thread.activity.append",
     ]);
     expect(dispatched[0]).toMatchObject({
@@ -1509,9 +1531,65 @@ it.effect("prepares requested worktrees for forked threads", () => {
       activity: {
         kind: "thread-orchestration.relationship",
         payload: {
-          kind: "forkedFrom",
+          kind: "createdBy",
           actorThreadId,
           targetThreadId: result.thread.threadId,
+        },
+      },
+    });
+    expect(dispatched[2]).toMatchObject({
+      type: "thread.activity.append",
+      threadId: result.thread.threadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "forkedFrom",
+          actorThreadId: targetThreadId,
+          targetThreadId: result.thread.threadId,
+        },
+      },
+    });
+
+    const selfFork = yield* service.forkThread(scope, {
+      coordination: { excludeInheritedEffort: true },
+    });
+    expect(dispatched.slice(3, 6)).toMatchObject([
+      { type: "thread.create", threadId: selfFork.thread.threadId },
+      {
+        type: "thread.activity.append",
+        activity: { payload: { kind: "createdBy", actorThreadId } },
+      },
+      {
+        type: "thread.activity.append",
+        activity: { payload: { kind: "forkedFrom", actorThreadId } },
+      },
+    ]);
+
+    const effortFork = yield* service.forkThread(scope, {
+      threadId: targetThreadId,
+      coordination: { effortId: forkEffortId, label: "Prototype" },
+    });
+    expect(effortFork.membership).toMatchObject({
+      effortId: forkEffortId,
+      thread: { environmentId: scope.environmentId, threadId: effortFork.thread.threadId },
+      label: "Prototype",
+    });
+    expect(dispatched.slice(6).map((command) => command.type)).toEqual([
+      "thread.create",
+      "thread.activity.append",
+      "thread.activity.append",
+    ]);
+    expect(dispatched.at(-2)).toMatchObject({
+      type: "thread.activity.append",
+      threadId: effortFork.thread.threadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "createdBy",
+          effortId: forkEffortId,
+          label: "Prototype",
+          actorThreadId,
+          targetThreadId: effortFork.thread.threadId,
         },
       },
     });
@@ -1784,15 +1862,30 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
       },
     ]);
     expect(result.transcriptCloned).toBe(true);
-    expect(dispatched.map((command) => command.type)).toEqual(["thread.activity.append"]);
+    expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.activity.append",
+      "thread.activity.append",
+    ]);
     expect(dispatched[0]).toMatchObject({
       type: "thread.activity.append",
       threadId: result.thread.threadId,
       activity: {
         kind: "thread-orchestration.relationship",
         payload: {
-          kind: "forkedFrom",
+          kind: "createdBy",
           actorThreadId,
+          targetThreadId: result.thread.threadId,
+        },
+      },
+    });
+    expect(dispatched[1]).toMatchObject({
+      type: "thread.activity.append",
+      threadId: result.thread.threadId,
+      activity: {
+        kind: "thread-orchestration.relationship",
+        payload: {
+          kind: "forkedFrom",
+          actorThreadId: targetThreadId,
           targetThreadId: result.thread.threadId,
         },
       },

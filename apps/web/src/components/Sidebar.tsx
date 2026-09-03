@@ -3972,6 +3972,10 @@ export default function Sidebar() {
                               ? null
                               : renderThreadRow(child, "active", undefined, "slim", true);
                           }}
+                          workerState={(childKey) => {
+                            const shell = threadsByKey.get(childKey);
+                            return shell === undefined ? null : resolveWorkerState(shell);
+                          }}
                           effortSummary={(memberKeys) => {
                             const counts = countWorkers(threadLineage, memberKeys, (key) => {
                               const shell = threadsByKey.get(key);

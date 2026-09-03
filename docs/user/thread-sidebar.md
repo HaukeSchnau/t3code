@@ -7,6 +7,15 @@ response, and tool activity do not change its position.
 Project pickers follow the same order: the project containing the highest-ranked live thread appears
 first. Projects without live threads follow alphabetically.
 
+Threads created by a coordinator nest below it. Effort headers contain the threads that explicitly
+belong to that effort, including forks whose source is elsewhere. Explicit effort membership chooses
+the thread's one sidebar location, so the same thread does not also appear below a different creator.
+Current and attention-needed efforts appear before completed and closed effort history. T3 Code keeps
+their relative order stable within each lifecycle group; elapsed time does not reorder them.
+
+When a coordinator has efforts and unassigned children, those children appear under **Other delegated
+work**. A coordinator with no efforts continues to show its children without a section header.
+
 Pin a thread from its context menu to keep it in the pinned section above your active work.
 `mod+shift+p` pins or unpins the thread you have open. Pinned threads are shown independently of
 their project, including when you connect to more than one environment.
