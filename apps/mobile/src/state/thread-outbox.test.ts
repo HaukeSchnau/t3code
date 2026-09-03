@@ -309,6 +309,62 @@ describe("thread outbox", () => {
     });
   });
 
+  it("normalizes queued plan mode against the queued provider, not the current thread", () => {
+    const codex = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
+    const antigravity = {
+      instanceId: ProviderInstanceId.make("google-personal"),
+      model: "gemini-test-thinking",
+      options: [{ id: "native-option", value: "keep-this-choice" }],
+    };
+    const providers = [
+      { instanceId: codex.instanceId, showInteractionModeToggle: true },
+      { instanceId: antigravity.instanceId, showInteractionModeToggle: false },
+    ];
+    const message = {
+      ...queuedMessage({ messageId: "queued-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
+      text: "/plan inspect the project",
+      modelSelection: antigravity,
+      interactionMode: "plan",
+    } satisfies QueuedThreadMessage;
+
+    expect(
+      resolveQueuedThreadSettings(
+        message,
+        { modelSelection: codex, runtimeMode: "approval-required", interactionMode: "plan" },
+        providers,
+      ),
+    ).toEqual({
+      modelSelection: antigravity,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    });
+    expect(
+      resolveQueuedThreadSettings(
+        { ...message, modelSelection: codex },
+        {
+          modelSelection: antigravity,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+        },
+        providers,
+      ).interactionMode,
+    ).toBe("plan");
+  });
+
+  it("normalizes a legacy queued message that inherits unsupported plan mode", () => {
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("google-personal"),
+      model: "gemini-test-thinking",
+    };
+    expect(
+      resolveQueuedThreadSettings(
+        queuedMessage({ messageId: "legacy-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
+        { modelSelection, runtimeMode: "approval-required", interactionMode: "plan" },
+        [{ instanceId: modelSelection.instanceId, showInteractionModeToggle: false }],
+      ).interactionMode,
+    ).toBe("default");
+  });
+
   it("compares model options as part of the queued settings change", () => {
     const base = {
       instanceId: ProviderInstanceId.make("codex"),

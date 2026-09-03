@@ -4,15 +4,21 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
-import { type MessageId } from "@t3tools/contracts";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type MessageId,
+  type ServerConfig,
+} from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
+import { isModelSelectionUnavailable } from "../lib/modelOptions";
 import { scopedProjectKey, scopedThreadKey } from "../lib/scopedEntities";
 import { appAtomRegistry } from "./atom-registry";
-import { useProjects, useThreadShells } from "./entities";
+import { useProjects, useServerConfigs, useThreadShells } from "./entities";
 import {
   confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
@@ -23,6 +29,8 @@ import {
 import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   isQueuedThreadCreationSendable,
+  modelSelectionsEqual,
+  resolveQueuedThreadSettings,
   resolveThreadOutboxDeliveryAction,
   resolveThreadOutboxFailureAction,
   threadOutboxRetryDelayMs,
@@ -30,6 +38,7 @@ import {
   type QueuedThreadMessage,
   type ThreadOutboxCommandStage,
 } from "./thread-outbox-model";
+import { serverEnvironment } from "./server";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
 import {
@@ -89,6 +98,27 @@ function findCreationProject(
       candidate.environmentId === message.environmentId &&
       candidate.id === message.creation?.projectId,
   );
+}
+
+function queuedMessageWithResolvedSettings(
+  message: QueuedThreadMessage,
+  thread: {
+    readonly modelSelection: NonNullable<QueuedThreadMessage["modelSelection"]>;
+    readonly runtimeMode: NonNullable<QueuedThreadMessage["runtimeMode"]>;
+    readonly interactionMode: NonNullable<QueuedThreadMessage["interactionMode"]>;
+  },
+  config: ServerConfig,
+): QueuedThreadMessage {
+  const settings = resolveQueuedThreadSettings(message, thread, config.providers);
+  if (
+    message.modelSelection !== undefined &&
+    modelSelectionsEqual(message.modelSelection, settings.modelSelection) &&
+    message.runtimeMode === settings.runtimeMode &&
+    message.interactionMode === settings.interactionMode
+  ) {
+    return message;
+  }
+  return { ...message, ...settings };
 }
 
 export async function prepareQueuedMessageAttachments(
@@ -297,6 +327,7 @@ export function useThreadOutboxDrain(): void {
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
   const projects = useProjects();
+  const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
@@ -373,14 +404,52 @@ export function useThreadOutboxDrain(): void {
   }, []);
 
   const sendQueuedMessage = useCallback(
-    async (queuedMessage: QueuedThreadMessage, _thread: EnvironmentThreadShell) => {
-      const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
-      if (attachmentPreparation.status === "abandoned") return true;
-      const begun = await threadOutboxManager.begin(
-        attachmentPreparation.persistedMessage,
-        new Date().toISOString(),
+    async (queuedMessage: QueuedThreadMessage, thread: EnvironmentThreadShell) => {
+      const serverConfig = serverConfigs.get(queuedMessage.environmentId);
+      if (!serverConfig) return false;
+      let dispatchMessage = queuedMessageWithResolvedSettings(queuedMessage, thread, serverConfig);
+      if (isModelSelectionUnavailable(serverConfig, dispatchMessage.modelSelection)) {
+        return (await restoreRejectedQueuedMessage(
+          queuedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        )) !== "retry";
+      }
+      if (dispatchMessage !== queuedMessage) {
+        const updated = await updateThreadOutboxMessage(
+          dispatchMessage,
+          threadOutboxRevision(queuedMessage.messageId),
+        );
+        if (!updated) return true;
+      }
+      const attachmentPreparation = await prepareQueuedMessageAttachments(
+        dispatchMessage,
+        serverConfig.environment.capabilities.attachmentUploads === true,
       );
+      if (attachmentPreparation.status === "abandoned") return true;
+      const currentConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!currentConfig) return false;
+      dispatchMessage = queuedMessageWithResolvedSettings(
+        attachmentPreparation.persistedMessage,
+        thread,
+        currentConfig,
+      );
+      if (isModelSelectionUnavailable(currentConfig, dispatchMessage.modelSelection)) {
+        return (await restoreRejectedQueuedMessage(
+          attachmentPreparation.persistedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        )) !== "retry";
+      }
+      if (dispatchMessage !== attachmentPreparation.persistedMessage) {
+        const updated = await updateThreadOutboxMessage(
+          dispatchMessage,
+          attachmentPreparation.deliveryRevision,
+        );
+        if (!updated) return true;
+      }
+      const { completeDelivery } = makeDeliveryHelpers(dispatchMessage);
+      const begun = await threadOutboxManager.begin(dispatchMessage, new Date().toISOString());
       const command = begun.plan.command;
       const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
@@ -391,7 +460,7 @@ export function useThreadOutboxDrain(): void {
       if (completed) await attachmentPreparation.prepared.releaseUploads();
       return completed;
     },
-    [makeDeliveryHelpers, startTurn],
+    [makeDeliveryHelpers, serverConfigs, startTurn],
   );
 
   const sendQueuedCreation = useCallback(
@@ -404,13 +473,63 @@ export function useThreadOutboxDrain(): void {
       if (modelSelection === undefined) {
         return false;
       }
-      const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
-      if (attachmentPreparation.status === "abandoned") return true;
-      const begun = await threadOutboxManager.begin(
-        attachmentPreparation.persistedMessage,
-        new Date().toISOString(),
+      const serverConfig = serverConfigs.get(queuedMessage.environmentId);
+      if (!serverConfig) return false;
+      let dispatchMessage = queuedMessageWithResolvedSettings(
+        queuedMessage,
+        {
+          modelSelection,
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        },
+        serverConfig,
       );
+      if (isModelSelectionUnavailable(serverConfig, dispatchMessage.modelSelection)) {
+        return (await restoreRejectedQueuedMessage(
+          queuedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        )) !== "retry";
+      }
+      if (dispatchMessage !== queuedMessage) {
+        const updated = await updateThreadOutboxMessage(
+          dispatchMessage,
+          threadOutboxRevision(queuedMessage.messageId),
+        );
+        if (!updated) return true;
+      }
+      const attachmentPreparation = await prepareQueuedMessageAttachments(
+        dispatchMessage,
+        serverConfig.environment.capabilities.attachmentUploads === true,
+      );
+      if (attachmentPreparation.status === "abandoned") return true;
+      const currentConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!currentConfig) return false;
+      dispatchMessage = queuedMessageWithResolvedSettings(
+        attachmentPreparation.persistedMessage,
+        {
+          modelSelection,
+          runtimeMode: DEFAULT_RUNTIME_MODE,
+          interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        },
+        currentConfig,
+      );
+      if (isModelSelectionUnavailable(currentConfig, dispatchMessage.modelSelection)) {
+        return (await restoreRejectedQueuedMessage(
+          attachmentPreparation.persistedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        )) !== "retry";
+      }
+      if (dispatchMessage !== attachmentPreparation.persistedMessage) {
+        const updated = await updateThreadOutboxMessage(
+          dispatchMessage,
+          attachmentPreparation.deliveryRevision,
+        );
+        if (!updated) return true;
+      }
+      const { completeDelivery } = makeDeliveryHelpers(dispatchMessage);
+      const begun = await threadOutboxManager.begin(dispatchMessage, new Date().toISOString());
       const command = begun.plan.command;
       const { type: _, ...input } = command;
       const deliveryResult = await startTurn({
@@ -421,7 +540,7 @@ export function useThreadOutboxDrain(): void {
       if (completed) await attachmentPreparation.prepared.releaseUploads();
       return completed;
     },
-    [makeDeliveryHelpers, startTurn],
+    [makeDeliveryHelpers, serverConfigs, startTurn],
   );
 
   useEffect(() => {

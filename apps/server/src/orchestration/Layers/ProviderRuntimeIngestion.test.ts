@@ -126,6 +126,7 @@ function createProviderServiceHarness(options?: {
         sessionModelSwitch: "in-session",
         assistantTranscriptRecovery: options?.assistantTranscriptRecovery ?? "none",
       }),
+    assertConversationRollbackSupported: () => unsupported(),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
       return Effect.succeed({
