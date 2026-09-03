@@ -37,6 +37,7 @@ import { applyAppearanceFontVariables } from "~/appearanceFonts";
 import { applyAppearanceContrast } from "~/appearanceContrast";
 import { useClientSettings } from "../hooks/useSettings";
 import { PlanAgentSelectionHeal } from "../planAgentSelectionHeal";
+import { isPrototypePathname } from "../prototypeRoute";
 import {
   deriveLogicalProjectKeyFromSettings,
   derivePhysicalProjectKeyFromPath,
@@ -75,7 +76,7 @@ export const Route = createRootRoute({
     const currentUrl = new URL(location.href, window.location.origin);
     const browserUrl = new URL(window.location.href);
     // Prototypes are server-free; they render bare, outside the app shell.
-    if (location.pathname.startsWith("/prototypes/")) {
+    if (isPrototypePathname(location.pathname)) {
       return { authGateState: { status: "prototype" } as const };
     }
     if (
@@ -123,6 +124,12 @@ function RootRouteView() {
       window.cancelAnimationFrame(frame);
     };
   }, [pathname]);
+
+  // No title sync either: it reads the primary server atom, which would
+  // activate environment discovery.
+  if (authGateState.status === "prototype") {
+    return <Outlet />;
+  }
 
   if (pathname === "/pair") {
     return (
