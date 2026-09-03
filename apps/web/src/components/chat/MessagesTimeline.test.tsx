@@ -507,7 +507,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain('alt="report.pdf"');
   });
 
-  it("renders video attachments with the shared video player", () => {
+  it("renders video attachments as playable previews", () => {
     const entry = {
       ...buildUserTimelineEntry("Watch the demo."),
       message: {
@@ -529,10 +529,9 @@ describe("MessagesTimeline", () => {
       <MessagesTimeline {...buildProps()} timelineEntries={[entry]} />,
     );
 
-    expect(markup).toContain("<video");
-    expect(markup).toContain('aria-label="demo.mp4"');
-    expect(markup).toContain('controls=""');
-    expect(markup).not.toContain("Expand demo.mp4");
+    expect(markup).not.toContain("<video");
+    expect(markup).toContain('aria-label="Play demo.mp4"');
+    expect(markup).toContain(">demo.mp4</span>");
   });
 
   it("shows the filename while an optimistic video is unavailable", () => {
@@ -558,7 +557,8 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).not.toContain("<video");
-    expect(markup).toContain(">pending-demo.mp4</div>");
+    expect(markup).toContain('aria-label="Play pending-demo.mp4"');
+    expect(markup).toContain(">pending-demo.mp4</span>");
   });
   it("renders an ordinary file download button without creating its URL in advance", () => {
     const entry = {
