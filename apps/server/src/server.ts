@@ -78,6 +78,7 @@ import * as ApnsProvider from "./agentAwareness/ApnsProvider.ts";
 import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
+import * as ProviderProcessSpawner from "./provider/ProviderProcessSpawner.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
 import * as ProjectFaviconResolver from "./project/ProjectFaviconResolver.ts";
@@ -293,18 +294,21 @@ const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
 );
 
 const ProviderEventLoggersLayerLive = ProviderEventLoggers.ProviderEventLoggersLive;
-const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeLive;
+const ProviderProcessSpawnerLayerLive = ProviderProcessSpawner.layer;
+const OpenCodeRuntimeLayerLive = OpenCodeRuntime.OpenCodeRuntimeLive.pipe(
+  Layer.provide(ProviderProcessSpawnerLayerLive),
+);
 const ModelManifestLayerLive = ModelManifest.layer;
 const PersistenceLayerLive = Layer.empty.pipe(Layer.provideMerge(SqlitePersistenceLayerLive));
 const ProviderTranscriptJournalLayerLive = ProviderTranscriptJournalLive.pipe(
   Layer.provide(PersistenceLayerLive),
 );
-
 const ProviderInstanceRegistryLayerLive = ProviderInstanceRegistryHydrationLive.pipe(
   Layer.provideMerge(ProviderEventLoggersLayerLive),
   Layer.provideMerge(OpenCodeRuntimeLayerLive),
   Layer.provideMerge(ServerSettingsLayerLive),
   Layer.provide(ModelManifestLayerLive),
+  Layer.provide(ProviderProcessSpawnerLayerLive),
 );
 
 // Adapter acceptance and runtime ingestion must observe the same tracker.

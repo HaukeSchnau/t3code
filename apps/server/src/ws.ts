@@ -61,6 +61,7 @@ import {
 } from "@t3tools/contracts";
 import { resolveServerBackgroundActivitySettings } from "@t3tools/shared/backgroundActivitySettings";
 import { HttpRouter, HttpServerRequest, HttpServerRespondable } from "effect/unstable/http";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
@@ -90,6 +91,7 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
+import * as ProviderProcessSpawner from "./provider/ProviderProcessSpawner.ts";
 import { makeCodexThreadRpcWorkflow } from "./provider/CodexThreadRpcWorkflow.ts";
 import { ProviderAuthService } from "./provider/Services/ProviderAuthService.ts";
 import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRegistry.ts";
@@ -394,6 +396,7 @@ const makeWsRpcLayer = (
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
   energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
   replayLogPublisher: ReplayLogPublisher.ReplayLogPublisher["Service"],
+  providerProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -529,6 +532,7 @@ const makeWsRpcLayer = (
         serverSettings,
         threadWorkspaceService,
         codexThreadForkImporter,
+        childProcessSpawner: providerProcessSpawner,
         dispatchNormalizedCommand: commandDispatchWorkflow.dispatchNormalizedCommand,
       });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
@@ -1817,6 +1821,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const replayLogPublisher = yield* ReplayLogPublisher.ReplayLogPublisher;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const providerProcessSpawner = yield* ProviderProcessSpawner.configured;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -1851,6 +1856,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               previewAutomationBroker,
               energyCaptureRequests,
               replayLogPublisher,
+              providerProcessSpawner,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(CodexThreadForkImporterLive),

@@ -166,11 +166,9 @@ const makeWorkflow = (overrides: {
     serverSettings: baseServerSettings,
     threadWorkspaceService: overrides.threadWorkspaceService ?? baseThreadWorkspaceService,
     codexThreadForkImporter: overrides.codexThreadForkImporter ?? baseForkImporter,
+    childProcessSpawner: testSpawner,
     dispatchNormalizedCommand: () => Effect.die("unexpected normalized dispatch"),
-  }).pipe(
-    Effect.provideService(Crypto.Crypto, testCrypto),
-    Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, testSpawner),
-  );
+  }).pipe(Effect.provideService(Crypto.Crypto, testCrypto));
 
 const codexBinding = {
   threadId: sourceThreadId,

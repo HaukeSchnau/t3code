@@ -70,6 +70,11 @@ export const sqliteTransactionDuration = Metric.timer("t3_sqlite_transaction_dur
   description: "Duration of SQLite transactions, including commit or rollback.",
 });
 
+export const sqlExecuteDuration = Metric.timer("t3_sql_execute_duration", {
+  description: "Duration of individual SQLite statement executions.",
+  boundaries: [1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1_000, 2_000, 5_000, 10_000, 30_000],
+});
+
 export const eventLoopDelayMilliseconds = Metric.gauge("t3_event_loop_delay_milliseconds", {
   description: "Mean Node.js event-loop delay during the latest collection interval.",
 });
