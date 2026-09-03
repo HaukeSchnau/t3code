@@ -1,14 +1,17 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
   CodexThreadForkInput,
   CodexThreadForkResult,
+  resolveEnvironmentMachineKind,
   ServerConfig,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
+import { ServerSettings } from "./settings.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
 const decodeCodexThreadForkInput = Schema.decodeUnknownSync(CodexThreadForkInput);

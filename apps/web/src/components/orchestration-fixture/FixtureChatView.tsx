@@ -204,7 +204,11 @@ export function FixtureChatView({ threadId }: { readonly threadId: string }) {
           </aside>
         ) : null}
         {narrow ? (
-          <RightPanelSheet open={panelOpen} onClose={() => setPanelOpen(false)}>
+          <RightPanelSheet
+            animationDurationMs={0}
+            open={panelOpen}
+            onClose={() => setPanelOpen(false)}
+          >
             {panel}
           </RightPanelSheet>
         ) : null}

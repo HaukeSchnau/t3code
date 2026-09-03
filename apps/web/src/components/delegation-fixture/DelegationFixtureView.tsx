@@ -275,7 +275,11 @@ export function DelegationFixtureView() {
         </div>
       </div>
       {inlineLayout ? (
-        <RightPanelSheet open={panelOpen} onClose={() => setPanelOpen(false)}>
+        <RightPanelSheet
+          animationDurationMs={0}
+          open={panelOpen}
+          onClose={() => setPanelOpen(false)}
+        >
           {panelContent}
         </RightPanelSheet>
       ) : null}
