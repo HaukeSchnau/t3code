@@ -46,6 +46,9 @@ The CLI includes compact passive observability commands:
 
 `t3 thread send` dispatches immediately by default. It starts an idle thread or steers a running
 turn. Agents pass `--queue` only for follow-up work that should wait behind the active turn.
+Automatic worker failure, approval-blocked, and user-input-blocked notifications use the same
+immediate delivery path. Routine successful completion notifications remain queued while a
+coordinator is running, and all notifications retain the normal idle-thread wake behavior.
 
 Full `t3 thread read` still records `readBy` activity when one thread reads
 another. The compact commands are passive, so polling does not add relationship
