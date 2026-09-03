@@ -49,7 +49,10 @@ import {
   type ComposerDraft,
 } from "../../state/use-composer-drafts";
 import { useEnvironmentServerConfig, useProjects } from "../../state/entities";
-import { resolveSelectableModelSelection } from "../../lib/modelOptions";
+import {
+  isModelSelectionUnavailable,
+  resolveSelectableModelSelection,
+} from "../../lib/modelOptions";
 import { deriveThreadTitleFromPrompt } from "../../lib/projectThreadStartTurn";
 import { enqueueThreadOutboxMessage, updateThreadOutboxMessage } from "../../state/thread-outbox";
 import { useRemoteConnectionStatus } from "../../state/use-remote-environment-registry";
@@ -122,6 +125,7 @@ export function NewTaskDraftScreen(props: {
     connectedEnvironments.find(
       (environment) => environment.environmentId === selectedProject.environmentId,
     )?.connectionState === "connected";
+  const modelUnavailable = environmentConnected && flow.selectedModelOption?.isUnavailable === true;
   const promptInputRef = useRef<ComposerEditorHandle>(null);
   const loadedBranchesProjectKeyRef = useRef<string | null>(null);
   const [isComposerFocused, setIsComposerFocused] = useState(false);
@@ -643,9 +647,8 @@ export function NewTaskDraftScreen(props: {
       return;
     }
     const draft = getComposerDraftSnapshot(draftKey);
-    // Snapshot read keeps just-typed selector state; the availability gate
-    // still applies so a stored selection on a disabled provider falls back
-    // to the flow's resolved model.
+    // Read the latest explicit pick. Antigravity selections stay unchanged
+    // when setup or a catalog change makes them unavailable.
     const modelSelection =
       resolveSelectableModelSelection(
         selectedEnvironmentServerConfig,
@@ -661,6 +664,16 @@ export function NewTaskDraftScreen(props: {
       flow.submitting ||
       (workspaceMode === "worktree" && !selectedBranchName)
     ) {
+      return;
+    }
+    if (
+      environmentConnected &&
+      isModelSelectionUnavailable(selectedEnvironmentServerConfig, modelSelection)
+    ) {
+      Alert.alert(
+        "Antigravity model unavailable",
+        "Open model settings to finish setup or choose another model.",
+      );
       return;
     }
 
@@ -738,6 +751,7 @@ export function NewTaskDraftScreen(props: {
   const isAndroid = Platform.OS === "android";
   const isDarkMode = colorScheme === "dark";
   const canStart =
+    !modelUnavailable &&
     Boolean(flow.selectedProject) &&
     Boolean(flow.selectedModel) &&
     flow.prompt.trim().length > 0 &&
@@ -902,6 +916,17 @@ export function NewTaskDraftScreen(props: {
   const composerDock = (
     <View className="bg-sheet px-4 pt-1" style={{ paddingBottom: controlsBottomPadding }}>
       <View className="pb-1">{workspaceControls}</View>
+
+      {modelUnavailable ? (
+        <Pressable
+          accessibilityRole="button"
+          className="px-3 py-2"
+          disabled={isIncomingShareTransferPending}
+          onPress={settingsSheetPresentation.open}
+        >
+          <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
+        </Pressable>
+      ) : null}
 
       <ComposerSurface
         animateLayout={false}

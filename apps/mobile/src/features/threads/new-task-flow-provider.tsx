@@ -76,7 +76,10 @@ import {
   type HomeProjectScope,
 } from "../home/homeThreadList";
 import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
-import { resolvePendingTaskInteractionMode } from "./legacy-plan-mode";
+import {
+  resolvePendingTaskInteractionMode,
+  resolveProviderInteractionMode,
+} from "./legacy-plan-mode";
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
   resolveNewTaskBranchWorktreePath,
@@ -194,7 +197,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const threads = useThreadShells();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const groupingSettings = useMobileProjectGroupingSettings();
-  const { enabled: planModeEnabled, loaded: planModePreferenceLoaded } = useLegacyPlanModeState();
+  const { enabled: legacyPlanModeEnabled, loaded: planModePreferenceLoaded } =
+    useLegacyPlanModeState();
   const projectScopes = useMemo(
     () =>
       sortHomeProjectScopes({
@@ -401,15 +405,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedEnvironmentServerConfig?.settings.newWorktreesStartFromOrigin ??
     true;
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const interactionMode = planModeEnabled
-    ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
-    : DEFAULT_PROVIDER_INTERACTION_MODE;
 
-  // Stored selections only count while their provider is usable on the
-  // server; otherwise the server's default model wins instead of silently
-  // targeting a disabled provider. The draft selection is an explicit pick
-  // and passes through as-is; the project default (last used, possibly from
-  // desktop) is implicit and additionally never resolves to a legacy model.
+  // Antigravity keeps unavailable selections so sign-out or a catalog change
+  // cannot switch the user's model. Other providers retain their fallback
+  // rules. Implicit defaults also exclude legacy models for those providers.
   const draftModelSelection = resolveSelectableModelSelection(
     selectedEnvironmentServerConfig,
     selectedProjectDraft.modelSelection ?? null,
@@ -444,6 +443,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         option.selection.instanceId === selectedModel.instanceId &&
         option.selection.model === selectedModel.model,
     ) ?? null;
+  const selectedProviderStatus =
+    selectedEnvironmentServerConfig?.providers.find(
+      (provider) => provider.instanceId === selectedModel?.instanceId,
+    ) ?? null;
+  const planModeEnabled =
+    legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
+  const interactionMode = planModeEnabled
+    ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
+    : DEFAULT_PROVIDER_INTERACTION_MODE;
   const selectedProviderSkills = useMemo(
     () =>
       selectedEnvironmentServerConfig?.providers.find(
@@ -462,11 +470,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!option) {
         return;
       }
+      const selection = options ? { ...option.selection, options } : option.selection;
+      const provider = selectedEnvironmentServerConfig?.providers.find(
+        (candidate) => candidate.instanceId === selection.instanceId,
+      );
       updateComposerDraftSettings(selectedProjectDraftKey, {
-        modelSelection: options ? { ...option.selection, options } : option.selection,
+        modelSelection: selection,
+        ...(provider?.showInteractionModeToggle === false
+          ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
+          : {}),
       });
     },
-    [modelOptions, selectedProjectDraftKey],
+    [modelOptions, selectedEnvironmentServerConfig, selectedProjectDraftKey],
   );
   const setSelectedModelOptions = useCallback(
     (options: ReadonlyArray<ProviderOptionSelection> | undefined) => {
@@ -787,10 +802,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const setInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
       if (selectedProjectDraftKey) {
-        updateComposerDraftSettings(selectedProjectDraftKey, { interactionMode: value });
+        updateComposerDraftSettings(selectedProjectDraftKey, {
+          interactionMode: resolveProviderInteractionMode(selectedProviderStatus, value),
+        });
       }
     },
-    [selectedProjectDraftKey],
+    [selectedProjectDraftKey, selectedProviderStatus],
   );
 
   const beginEditingPendingTask = useCallback((messageId: string): boolean => {
@@ -832,8 +849,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       const draft = getComposerDraftSnapshot(selectedProjectDraftKey);
       const text = draft.text.trim();
-      // Same availability gate the composer display applies: a stored
-      // selection targeting a disabled provider must not ride into the queue.
+      // Use the displayed selection rules without substituting an unavailable
+      // Antigravity model while the task is queued.
       const draftModelSelection =
         resolveSelectableModelSelection(
           selectedEnvironmentServerConfig,
@@ -868,9 +885,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         runtimeMode: draft.runtimeMode ?? DEFAULT_RUNTIME_MODE,
         interactionMode: resolvePendingTaskInteractionMode({
           preferenceLoaded: planModePreferenceLoaded,
-          planModeEnabled,
+          planModeEnabled: legacyPlanModeEnabled,
           draftInteractionMode: draft.interactionMode,
           queuedInteractionMode: editingPendingTask?.interactionMode,
+          provider: selectedEnvironmentServerConfig?.providers.find(
+            (candidate) => candidate.instanceId === draftModelSelection.instanceId,
+          ),
         }),
         creation: {
           projectId: selectedProject.id,
@@ -900,7 +920,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModel,
       selectedProject,
       selectedProjectDraftKey,
-      planModeEnabled,
+      legacyPlanModeEnabled,
       planModePreferenceLoaded,
       startFromOrigin,
       workspaceMode,

@@ -62,6 +62,7 @@ import {
   TranscriptJournalTrackerLive,
 } from "../src/observability/TranscriptJournalObservability.ts";
 import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
+import { ProviderAuthService } from "../src/provider/Services/ProviderAuthService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
@@ -362,6 +363,11 @@ export const makeOrchestrationIntegrationHarness = (
       generateThreadTitle: () => Effect.succeed({ title: "New thread" }),
     } as unknown as TextGeneration["Service"]);
     const providerCommandReactorLayer = ProviderCommandReactorLive.pipe(
+      Layer.provide(
+        Layer.mock(ProviderAuthService)({
+          tryHandlePromptCommand: () => Effect.succeed(false),
+        }),
+      ),
       Layer.provideMerge(runtimeServicesLayer),
       Layer.provideMerge(ProjectionTurnRepositoryLive),
       Layer.provideMerge(gitWorkflowLayer),

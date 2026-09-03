@@ -58,7 +58,11 @@ import {
 import { ControlPill } from "../../components/ControlPill";
 import { ProviderIcon } from "../../components/ProviderIcon";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
-import { buildModelOptions, groupByProvider } from "../../lib/modelOptions";
+import {
+  buildModelOptions,
+  groupByProvider,
+  isModelSelectionUnavailable,
+} from "../../lib/modelOptions";
 import { useScaledTextRole } from "../settings/appearance/useScaledTextRole";
 import type { RemoteClientConnectionState } from "../../lib/connection";
 import type { EnvironmentConnectionFreshnessProjection } from "@t3tools/client-runtime/state/connection-freshness";
@@ -397,7 +401,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   // Opening and presentation count as active so the composer stays expanded
   // while focus moves between its native editor and the settings picker.
   const isExpanded = isFocused || settingsSheetPresentation.isActive;
-  const canSend = hasContent;
+  const modelUnavailable =
+    props.connectionState === "connected" &&
+    isModelSelectionUnavailable(props.serverConfig, props.selectedThread.modelSelection);
+  const canSend = hasContent && !modelUnavailable;
 
   // Notify the parent from the derived value, not focus events: the parent
   // sizes the feed inset from this, and blur-during-sheet would otherwise
@@ -518,20 +525,24 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           label: "/model",
           description: "Switch model",
         },
-        {
-          id: "cmd:plan",
-          type: "slash-command" as const,
-          command: "plan",
-          label: "/plan",
-          description: "Switch to plan mode",
-        },
-        {
-          id: "cmd:default",
-          type: "slash-command" as const,
-          command: "default",
-          label: "/default",
-          description: "Switch to default mode",
-        },
+        ...(selectedProviderStatus?.showInteractionModeToggle === false
+          ? []
+          : [
+              {
+                id: "cmd:plan",
+                type: "slash-command" as const,
+                command: "plan",
+                label: "/plan",
+                description: "Switch to plan mode",
+              },
+              {
+                id: "cmd:default",
+                type: "slash-command" as const,
+                command: "default",
+                label: "/default",
+                description: "Switch to default mode",
+              },
+            ]),
       ];
       const builtIn = allBuiltIn.filter((item) => item.command.includes(q));
 
@@ -765,6 +776,7 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     () => ({
       ownerId: settingsOwnerId,
       environmentId: props.environmentId,
+      providerInstanceId: currentModelSelection.instanceId,
       providerGroups: threadProviderGroups,
       selectedModel: currentModelSelection,
       onSelectModel: (option) => props.onUpdateModelSelection(option.selection),
@@ -871,6 +883,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
             status={visibleConnectionStatus}
             onPress={props.onReconnectEnvironment}
           />
+        ) : null}
+
+        {modelUnavailable ? (
+          <Pressable accessibilityRole="button" className="px-3 py-2" onPress={openSettings}>
+            <Text className="text-xs text-foreground">Model unavailable. Open model settings.</Text>
+          </Pressable>
         ) : null}
 
         <ComposerSurface
