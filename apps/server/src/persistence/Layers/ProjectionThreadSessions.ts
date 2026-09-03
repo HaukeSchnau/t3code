@@ -14,10 +14,11 @@ import {
   DeleteProjectionThreadSessionInput,
   GetProjectionThreadSessionInput,
 } from "../Services/ProjectionThreadSessions.ts";
-import { OrchestrationTurnRetry } from "@t3tools/contracts";
+import { OrchestrationTurnRetry, ProviderUnavailable } from "@t3tools/contracts";
 
 const ProjectionThreadSessionDbRow = ProjectionThreadSession.mapFields(
   Struct.assign({
+    providerUnavailable: Schema.NullOr(Schema.fromJsonString(ProviderUnavailable)),
     turnRetry: Schema.NullOr(Schema.fromJsonString(OrchestrationTurnRetry)),
   }),
 );
@@ -38,6 +39,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           active_turn_id,
           last_error,
           last_error_class,
+          provider_unavailable_json,
           turn_retry_json,
           updated_at
         )
@@ -50,6 +52,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           ${row.activeTurnId},
           ${row.lastError},
           ${row.lastErrorClass ?? null},
+          ${row.providerUnavailable === undefined || row.providerUnavailable === null ? null : JSON.stringify(row.providerUnavailable)},
           ${row.turnRetry === undefined || row.turnRetry === null ? null : JSON.stringify(row.turnRetry)},
           ${row.updatedAt}
         )
@@ -62,6 +65,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           active_turn_id = excluded.active_turn_id,
           last_error = excluded.last_error,
           last_error_class = excluded.last_error_class,
+          provider_unavailable_json = excluded.provider_unavailable_json,
           turn_retry_json = excluded.turn_retry_json,
           updated_at = excluded.updated_at
       `,
@@ -81,6 +85,7 @@ const makeProjectionThreadSessionRepository = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_error_class AS "lastErrorClass",
+          provider_unavailable_json AS "providerUnavailable",
           turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions

@@ -31,6 +31,7 @@ import {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  ProviderUnavailable,
   ThreadLinkedPullRequest,
   ThreadId,
   ThreadWorkspaceId,
@@ -109,6 +110,13 @@ const THREAD_DETAIL_ACTIVITY_LIMIT = 500;
 // Snapshot payloads are decoded and projected in small sequential batches so
 // one client read does not retain the raw payloads for the full activity window.
 const THREAD_DETAIL_ACTIVITY_PAYLOAD_BATCH_SIZE = 25;
+// SQLite's default case-insensitive LIKE cannot seek the binary `kind` index.
+// These adjacent ASCII bounds turn prefix reads into index range scans.
+const THREAD_ORCHESTRATION_KIND_RANGE = ["thread-orchestration.", "thread-orchestration/"] as const;
+const THREAD_ORCHESTRATION_BATCH_KIND_RANGE = [
+  "thread-orchestration.batch.",
+  "thread-orchestration.batch/",
+] as const;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
@@ -141,6 +149,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 });
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession.mapFields(
   Struct.assign({
+    providerUnavailable: Schema.NullOr(Schema.fromJsonString(ProviderUnavailable)),
     turnRetry: Schema.NullOr(Schema.fromJsonString(OrchestrationTurnRetry)),
   }),
 );
@@ -321,6 +330,7 @@ function mapSessionRow(
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
     lastErrorClass: row.lastErrorClass,
+    providerUnavailable: row.providerUnavailable,
     turnRetry: row.turnRetry,
     updatedAt: row.updatedAt,
   };
@@ -710,7 +720,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
-        WHERE kind LIKE 'thread-orchestration.batch.%'
+        WHERE kind >= ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[0]}
+          AND kind < ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[1]}
         ORDER BY created_at ASC, activity_id ASC
       `,
   });
@@ -732,7 +743,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
-        WHERE kind LIKE 'thread-orchestration.%'
+        WHERE kind >= ${THREAD_ORCHESTRATION_KIND_RANGE[0]}
+          AND kind < ${THREAD_ORCHESTRATION_KIND_RANGE[1]}
         ORDER BY created_at ASC, activity_id ASC
       `,
   });
@@ -753,6 +765,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_error_class AS "lastErrorClass",
+          provider_unavailable_json AS "providerUnavailable",
           turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -776,6 +789,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
           sessions.last_error_class AS "lastErrorClass",
+          sessions.provider_unavailable_json AS "providerUnavailable",
           sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -803,6 +817,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
           sessions.last_error_class AS "lastErrorClass",
+          sessions.provider_unavailable_json AS "providerUnavailable",
           sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -1305,6 +1320,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_error_class AS "lastErrorClass",
+          provider_unavailable_json AS "providerUnavailable",
           turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -2008,6 +2024,7 @@ pending_approval_requests AS (
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
                   lastErrorClass: row.lastErrorClass,
+                  providerUnavailable: row.providerUnavailable,
                   turnRetry: row.turnRetry,
                   updatedAt: row.updatedAt,
                 });
