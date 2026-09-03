@@ -196,6 +196,30 @@ function isInsideRoot(path: Path.Path, root: string, candidate: string): boolean
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
+/** Resolves symlinks in the existing prefix while preserving a path that has not been created yet. */
+const canonicalizeExistingPrefix = Effect.fn("AntigravityAdapter.canonicalizeExistingPrefix")(
+  function* (fileSystem: FileSystem.FileSystem, path: Path.Path, candidate: string) {
+    let ancestor = path.resolve(candidate);
+    const missingSegments: Array<string> = [];
+
+    while (true) {
+      const canonical = yield* fileSystem.realPath(ancestor).pipe(
+        Effect.map(Option.some),
+        Effect.orElseSucceed(() => Option.none<string>()),
+      );
+      if (Option.isSome(canonical)) {
+        return path.join(canonical.value, ...missingSegments);
+      }
+      const parent = path.dirname(ancestor);
+      if (parent === ancestor) {
+        return path.join(ancestor, ...missingSegments);
+      }
+      missingSegments.unshift(path.basename(ancestor));
+      ancestor = parent;
+    }
+  },
+);
+
 /** Resolves an agent-supplied path and rejects anything outside the session roots. */
 const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePath")(
   function* (input: {
@@ -205,14 +229,9 @@ const resolveClientFilePath = Effect.fn("AntigravityAdapter.resolveClientFilePat
     readonly requestPath: string;
   }) {
     const { path } = input;
-    const resolved = path.resolve(input.requestPath);
-    // Follow symlinks on the parent so a link out of the workspace cannot escape it.
-    const parent = yield* input.fileSystem
-      .realPath(path.dirname(resolved))
-      .pipe(Effect.orElseSucceed(() => path.dirname(resolved)));
-    const real = path.join(parent, path.basename(resolved));
+    const real = yield* canonicalizeExistingPrefix(input.fileSystem, path, input.requestPath);
     const roots = yield* Effect.forEach(input.allowedRoots, (root) =>
-      input.fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root)),
+      canonicalizeExistingPrefix(input.fileSystem, path, root),
     );
     if (!roots.some((root) => isInsideRoot(path, root, real))) {
       return yield* EffectAcpErrors.AcpRequestError.invalidParams(
