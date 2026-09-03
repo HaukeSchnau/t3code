@@ -94,7 +94,7 @@ export const usePrototypeStore = create<PrototypeState>()(
         }),
     }),
     {
-      name: "t3code:prototype:sidebar-organization:v2",
+      name: "t3code:prototype:sidebar-organization:v3",
       partialize: (state) => ({
         expansion: state.expansion,
         device: state.device,
@@ -115,13 +115,11 @@ export const usePrototypeStore = create<PrototypeState>()(
 );
 
 /**
- * Defaults before the user has chosen: project groups open everywhere, desktop
- * opens current delegated work, the phone keeps it folded, and history stays
- * closed on both.
+ * Defaults before the user has chosen: desktop opens current delegated work,
+ * the phone keeps it folded, and history stays closed on both.
  */
 export function defaultExpanded(containerId: string, device: DeviceKind): boolean {
-  if (containerId.startsWith("project:")) return true;
   if (containerId.startsWith("past:") || containerId.startsWith("attempts:")) return false;
-  if (containerId.startsWith("settled:")) return false;
+  if (containerId === "settled") return false;
   return device === "desktop";
 }

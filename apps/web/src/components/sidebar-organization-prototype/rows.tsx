@@ -2,8 +2,7 @@
  * Row primitives. Every thread row, top level or nested, live or settled,
  * uses the same two-line `ThreadRow`: title with a status slot, then a
  * subtitle. Hierarchy comes only from indentation, connector lines, and the
- * group headers around rows, never from a lighter row treatment. Project
- * identity lives on the group header, so rows do not repeat it.
+ * disclosure on a lineage root, never from a lighter row treatment.
  */
 import {
   ChevronDownIcon,
@@ -116,7 +115,7 @@ function rowSurfaceClass(active: boolean): string {
 }
 
 /**
- * The leading disclosure slot on a coordinator row. On the phone it is a
+ * The leading disclosure slot on a lineage-root row that has descendants. On the phone it is a
  * 44-point target that is always visible; on the desktop the same slot holds
  * a chevron that appears on hover, and stays faintly visible while collapsed
  * so a folded tray is still discoverable.
@@ -210,10 +209,11 @@ export function ThreadRow({
         {leading}
         <div
           className={cn(
-            "flex min-w-0 flex-1 items-center pe-2.5",
+            "flex min-w-0 flex-1 items-center gap-2.5 pe-2.5",
             leading === undefined ? "ps-2.5" : "ps-0.5",
           )}
         >
+          <ProjectGlyph project={thread.project} />
           <span className="flex min-w-0 flex-1 flex-col justify-center">
             <span className="flex min-w-0 items-center gap-2">
               <span
@@ -289,61 +289,6 @@ export function ViewingRow({
           <span className="text-sidebar-muted-foreground">Viewing: </span>
           {title}
         </span>
-      </button>
-    </li>
-  );
-}
-
-/**
- * Project group header: the root disclosure for every row beneath it. While
- * collapsed it grows to the thread-row height and carries the recursive
- * roll-up on its second line, so neither the title nor the counts truncate.
- */
-export function ProjectHeader({
-  project,
-  expanded,
-  onToggle,
-  device,
-  summary,
-  attention,
-}: {
-  readonly project: ProtoThread["project"];
-  readonly expanded: boolean;
-  readonly onToggle: () => void;
-  readonly device: DeviceKind;
-  /** Recursive roll-up shown while collapsed. */
-  readonly summary: string | null;
-  readonly attention: boolean;
-}) {
-  return (
-    <li className="list-none">
-      <button
-        type="button"
-        aria-expanded={expanded}
-        onClick={onToggle}
-        className={cn(
-          "flex w-full min-w-0 flex-col justify-center rounded-md px-2 text-left text-sm font-medium text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-          summary !== null ? "h-12" : device === "phone" ? "h-11" : "h-8",
-        )}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <ChevronRightIcon
-            aria-hidden
-            className={cn("size-3.5 shrink-0 transition-transform", expanded && "rotate-90")}
-          />
-          <ProjectGlyph project={project} />
-          <span className="min-w-0 truncate">{PROJECTS[project].title}</span>
-        </span>
-        {summary !== null ? (
-          <span
-            className={cn(
-              "truncate text-xs font-normal tabular-nums",
-              attention ? "text-amber-700 dark:text-amber-300" : "text-secondary-label",
-            )}
-          >
-            {summary}
-          </span>
-        ) : null}
       </button>
     </li>
   );

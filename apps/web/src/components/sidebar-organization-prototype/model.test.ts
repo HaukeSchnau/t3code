@@ -4,11 +4,11 @@ import { SAMPLE, type ProtoThread } from "./data";
 import {
   buildIndex,
   coordinatorTray,
-  countGroup,
+  countDescendants,
   countWork,
   isEffortCurrent,
   placeThread,
-  projectGroups,
+  topLevelThreads,
 } from "./model";
 
 const index = buildIndex(SAMPLE);
@@ -57,36 +57,38 @@ describe("countWork", () => {
   });
 });
 
-describe("projectGroups", () => {
-  it("owns settled children through their root's project and rolls counts up recursively", () => {
-    const t3 = projectGroups(index).find((g) => g.project === "t3code")!;
-    expect(t3.roots.map((t) => t.id)).toEqual(["t-usage", "c-orch", "t-codex"]);
-    expect(t3.settled.map((t) => t.id)).toContain("orbit-fable");
-    // t-usage working + c-orch working + its 3 working descendants; 3 needs-you below c-orch.
-    expect(countGroup(index, t3)).toEqual({ threads: 3, working: 5, needsYou: 3, done: 3 });
+describe("lineage roots", () => {
+  it("lists two independent roots inside one project and counts hidden descendants", () => {
+    const t3Roots = topLevelThreads(index)
+      .filter((t) => t.project === "t3code")
+      .map((t) => t.id);
+    expect(t3Roots).toEqual(["t-usage", "c-orch", "t-codex"]);
+    expect(countDescendants(index, "t-codex")).toBe(2);
+    // Six current direct children plus two under the nested coordinator.
+    expect(countDescendants(index, "c-orch")).toBe(9);
+    expect(countDescendants(index, "t-usage")).toBe(0);
   });
 });
 
 describe("placeThread", () => {
-  it("puts a section member behind its project, tray and section", () => {
+  it("puts a section member behind its root tray and section", () => {
     expect(placeThread(index, "sol-rules")).toEqual({
       coordinatorId: "c-orch",
-      containers: ["project:t3code", "tray:c-orch", "effort:e-rules"],
+      containers: ["tray:c-orch", "effort:e-rules"],
     });
   });
 
   it("puts a superseded attempt behind its replacement", () => {
     expect(placeThread(index, "casa-sol-1")?.containers).toEqual([
-      "project:casa",
       "tray:c-casa",
       "attempts:casa-sol-2",
     ]);
   });
 
-  it("puts settled children on their project's settled shelf", () => {
+  it("puts settled children on the settled shelf", () => {
     expect(placeThread(index, "orbit-fable")).toEqual({
       coordinatorId: null,
-      containers: ["project:t3code", "settled:t3code"],
+      containers: ["settled"],
     });
   });
 });

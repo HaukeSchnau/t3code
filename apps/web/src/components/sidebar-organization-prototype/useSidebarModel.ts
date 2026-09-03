@@ -49,9 +49,8 @@ export function useSidebarModel(): SidebarModel {
   // The Settled shelf never auto-opens: a collapsed shelf shows just the
   // selected row, as the real sidebar does.
   const revealed = useMemo(() => {
-    const set = new Set(
-      (selectedPlacement?.containers ?? []).filter((id) => !id.startsWith("settled:")),
-    );
+    const set = new Set(selectedPlacement?.containers ?? []);
+    set.delete("settled");
     for (const id of dismissedReveals) set.delete(id);
     return set;
   }, [dismissedReveals, selectedPlacement]);

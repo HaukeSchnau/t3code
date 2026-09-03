@@ -393,7 +393,31 @@ export const SAMPLE: Scenario = {
       age: "3h",
     }),
     thread({ id: "t-room", title: "Review Roominator Data Structures", project: "blx", age: "5h" }),
-    thread({ id: "t-codex", title: "Sync Codex Pause/Resume", project: "t3code", age: "6h" }),
+    // Second lineage root inside T3 Code, next to c-orch.
+    thread({
+      id: "t-codex",
+      title: "Sync Codex Pause/Resume",
+      project: "t3code",
+      state: "working",
+      age: "6h",
+    }),
+    thread({
+      id: "codex-pause-adapter",
+      title: "Codex pause · adapter",
+      project: "t3code",
+      state: "working",
+      parentId: "t-codex",
+      age: "12m",
+    }),
+    thread({
+      id: "codex-pause-tests",
+      title: "Codex pause · tests",
+      project: "t3code",
+      state: "completed",
+      unread: true,
+      parentId: "t-codex",
+      age: "30m",
+    }),
 
     // Settled top-level history.
     thread({
