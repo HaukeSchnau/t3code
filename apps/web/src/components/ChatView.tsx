@@ -2,6 +2,7 @@ import {
   type AssistantCitation,
   type ApprovalRequestId,
   type ChatFileAttachment,
+  type ChatImageAttachment,
   defaultInstanceIdForDriver,
   type EnvironmentId,
   type MessageId,
@@ -378,7 +379,7 @@ import {
   PullRequestDialogState,
   deriveLockedProvider,
   readFileAsDataUrl,
-  resolveFileAttachmentUrl,
+  resolveAttachmentUrl,
   isVideoPreviewRequestCurrent,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
@@ -2702,7 +2703,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (isVideo) setOpeningVideoAttachmentId(attachment.id);
 
       try {
-        const url = await resolveFileAttachmentUrl({
+        const url = await resolveAttachmentUrl({
           attachment,
           environmentId,
           httpBaseUrl: connection.httpBaseUrl,
@@ -2760,6 +2761,21 @@ function ChatViewContent(props: ChatViewProps) {
         }),
       ),
     [serverAttachmentIds, serverAttachmentUrls],
+  );
+  const resolveImageAttachmentUrl = useCallback(
+    async (attachment: ChatImageAttachment) => {
+      const connection = readPreparedConnection(environmentId);
+      if (!connection) {
+        throw new Error("The environment is not connected.");
+      }
+      return resolveAttachmentUrl({
+        attachment,
+        environmentId,
+        httpBaseUrl: connection.httpBaseUrl,
+        createAssetUrl: createAttachmentAssetUrl,
+      });
+    },
+    [createAttachmentAssetUrl, environmentId],
   );
   const displayServerMessages = useMemo<ReadonlyArray<ChatMessage>>(() => {
     if (!serverMessages) return [];
@@ -6960,6 +6976,7 @@ function ChatViewContent(props: ChatViewProps) {
     beginLocalDispatch,
     resetLocalDispatch,
     persistThreadSettingsForNextTurn: persistThreadSettingsForPreviousMessageEdit,
+    resolveImageAttachmentUrl,
     onExpandImage: onExpandTimelineImage,
   });
 
