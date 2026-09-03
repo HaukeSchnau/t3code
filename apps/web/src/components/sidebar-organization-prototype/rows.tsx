@@ -135,10 +135,11 @@ function ProviderMark({ provider }: { readonly provider: ProviderKind }) {
   );
 }
 
-/** Gutter widths: a 44-point target on the phone, a compact always-visible chevron on the desktop. */
-function gutterWidth(device: DeviceKind): string {
-  return device === "phone" ? "w-11" : "w-5";
-}
+/**
+ * The title and branch lines of a parent root indent by the project glyph
+ * plus its gap, so they start exactly where the project name starts.
+ */
+export const ROOT_INDENT_CLASS = "ps-[1.375rem]";
 
 /**
  * The leading disclosure for a lineage root with descendants. It sits in a
@@ -165,9 +166,11 @@ export function RootDisclosure({
       onClick={onToggle}
       className={cn(
         // Top clears the row padding, card inset, project line and title gap;
-        // bottom clears the card inset and row padding.
-        "absolute bottom-2.5 left-0 top-[2.125rem] z-20 flex items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
-        gutterWidth(device),
+        // bottom clears the card inset and row padding. The chevron centers
+        // under the project glyph: a 16px column at the card inset on the
+        // desktop, a 44px target centred on the same point on the phone.
+        "absolute bottom-2.5 top-[2.125rem] z-20 flex items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        device === "phone" ? "-left-1 w-11" : "left-[var(--sidebar-row-content-inset)] w-4",
       )}
     >
       <ChevronRightIcon
@@ -189,7 +192,6 @@ export function ThreadRow({
   active,
   onSelect,
   gutter,
-  device,
   branchLine,
   branchLineAttention = false,
   attemptsControl,
@@ -200,7 +202,6 @@ export function ThreadRow({
   readonly onSelect: () => void;
   /** Root disclosure when the row owns descendants; it overlays the gutter beside the title and branch lines. */
   readonly gutter?: ReactNode;
-  readonly device: DeviceKind;
   /** Third line: the branch by default, or a collapsed root's recursive summary. */
   readonly branchLine?: string;
   readonly branchLineAttention?: boolean;
@@ -243,7 +244,7 @@ export function ThreadRow({
               <StatusLabel status={status} age={thread.age} />
             </span>
           </div>
-          <div className={cn(gutter !== undefined && (device === "phone" ? "ps-11" : "ps-5"))}>
+          <div className={cn(gutter !== undefined && ROOT_INDENT_CLASS)}>
             <div className="mt-1 flex min-w-0">
               <span
                 className={cn(

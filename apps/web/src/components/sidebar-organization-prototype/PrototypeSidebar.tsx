@@ -27,6 +27,7 @@ import {
   type WorkIndex,
 } from "./model";
 import {
+  ROOT_INDENT_CLASS,
   RootDisclosure,
   SearchResultRow,
   SectionHeader,
@@ -103,7 +104,7 @@ function WorkerRow({
   readonly thread: ProtoThread;
 }) {
   const select = usePrototypeStore((s) => s.select);
-  const { index, device } = model;
+  const { index } = model;
   const attempts = supersededChain(index, thread);
   const attemptsId = `attempts:${thread.id}`;
   const attemptsOpen = attempts.length > 0 && model.isExpanded(attemptsId);
@@ -111,7 +112,6 @@ function WorkerRow({
     <Fragment>
       <ThreadRow
         thread={thread}
-        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -132,7 +132,6 @@ function WorkerRow({
               <ThreadRow
                 key={attempt.id}
                 thread={attempt}
-                device={device}
                 index={index}
                 active={model.selectedThreadId === attempt.id}
                 onSelect={() => select(`thread:${attempt.id}`)}
@@ -270,7 +269,6 @@ function RootRow({
     return (
       <ThreadRow
         thread={thread}
-        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -293,7 +291,6 @@ function RootRow({
     <Fragment>
       <ThreadRow
         thread={thread}
-        device={device}
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
@@ -310,7 +307,7 @@ function RootRow({
           : { branchLine: summary.text, branchLineAttention: summary.attention })}
       />
       {hiddenSelected !== null ? (
-        <li className={cn("flex list-none", device === "phone" ? "ps-11" : "ps-5")}>
+        <li className={cn("flex list-none", ROOT_INDENT_CLASS)}>
           <ul className="min-w-0 flex-1" role="list">
             <ViewingRow
               title={hiddenSelected}
@@ -323,7 +320,7 @@ function RootRow({
         </li>
       ) : null}
       {open ? (
-        <li className={cn("list-none", device === "phone" ? "ps-11" : "ps-5")}>
+        <li className={cn("list-none", ROOT_INDENT_CLASS)}>
           <LineageBody model={model} tray={tray} />
         </li>
       ) : null}
@@ -388,7 +385,6 @@ export function PrototypeSidebar({
               <ThreadRow
                 key={thread.id}
                 thread={thread}
-                device={device}
                 index={index}
                 active={model.selectedThreadId === thread.id}
                 onSelect={() => select(`thread:${thread.id}`)}
