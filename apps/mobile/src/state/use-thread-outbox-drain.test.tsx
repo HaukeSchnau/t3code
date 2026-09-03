@@ -56,6 +56,9 @@ const QUEUED_MESSAGE: QueuedThreadMessage = {
   commandId: COMMAND_ID,
   text: "Send this after the tunnel",
   attachments: [],
+  modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.4" },
+  runtimeMode: "full-access",
+  interactionMode: "default",
   createdAt: "2026-07-15T08:00:00.000Z",
 };
 const THREAD: EnvironmentThreadShell = {
@@ -143,8 +146,21 @@ vi.mock("./shell", async () => {
 
 vi.mock("./entities", () => ({
   useProjects: () => [],
+  useServerConfigs: () =>
+    new Map([
+      [
+        "environment-train",
+        { providers: [], environment: { capabilities: { attachmentUploads: false } } },
+      ],
+    ]),
   useThreadShells: () => [THREAD],
 }));
+
+vi.mock("./server", async () => {
+  const { Atom: TestAtom } = await import("effect/unstable/reactivity");
+  const config = { providers: [], environment: { capabilities: { attachmentUploads: false } } };
+  return { serverEnvironment: { configValueAtom: TestAtom.family(() => TestAtom.make(config)) } };
+});
 
 vi.mock("./use-remote-environment-registry", () => ({
   useRemoteConnectionStatus: () => ({
@@ -196,7 +212,6 @@ afterEach(() => {
 
 describe("useThreadOutboxDrain composer hydration gate", () => {
   it("holds a pending command until hydration and its persisted edit identity are atomically cleared", async () => {
-    let resolveComplete!: () => void;
     mocks.begin.mockResolvedValue({
       plan: {
         command: {
@@ -216,9 +231,9 @@ describe("useThreadOutboxDrain composer hydration gate", () => {
       },
     });
     mocks.startTurn.mockResolvedValue(AsyncResult.success(undefined));
-    mocks.complete.mockImplementation(
-      () => new Promise<void>((resolve) => (resolveComplete = resolve)),
-    );
+    mocks.complete.mockImplementation(async () => {
+      appAtomRegistry.set(testOutbox.queuedMessagesByThreadKeyAtom, {});
+    });
     appAtomRegistry.set(testOutbox.queuedMessagesByThreadKeyAtom, {
       [scopedThreadKey(ENVIRONMENT_ID, THREAD_ID)]: [QUEUED_MESSAGE],
     });
@@ -274,7 +289,6 @@ describe("useThreadOutboxDrain composer hydration gate", () => {
 
     await act(async () => {
       appAtomRegistry.set(testOutbox.queuedMessagesByThreadKeyAtom, {});
-      resolveComplete();
       await Promise.resolve();
     });
     await flushEffects();

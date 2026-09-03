@@ -1729,26 +1729,22 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             occurredAt: message.createdAt,
             commandId: command.commandId,
           }).pipe(
-            Effect.map(
-              (eventBase): PlannedOrchestrationEvent => ({
-                ...eventBase,
-                type: "thread.message-sent",
-                payload: {
-                  threadId: command.threadId,
-                  messageId: message.id,
-                  role: message.role,
-                  text: message.text,
-                  ...(message.attachments !== undefined
-                    ? { attachments: message.attachments }
-                    : {}),
-                  ...(message.origin !== undefined ? { origin: message.origin } : {}),
-                  turnId: message.turnId,
-                  streaming: message.streaming,
-                  createdAt: message.createdAt,
-                  updatedAt: message.updatedAt,
-                },
-              }),
-            ),
+            Effect.map((eventBase): PlannedOrchestrationEvent => ({
+              ...eventBase,
+              type: "thread.message-sent",
+              payload: {
+                threadId: command.threadId,
+                messageId: message.id,
+                role: message.role,
+                text: message.text,
+                ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
+                ...(message.origin !== undefined ? { origin: message.origin } : {}),
+                turnId: message.turnId,
+                streaming: message.streaming,
+                createdAt: message.createdAt,
+                updatedAt: message.updatedAt,
+              },
+            })),
           ),
         ),
       );

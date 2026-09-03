@@ -104,6 +104,7 @@ describe("pending user input answers", () => {
       {
         requestId: "interaction_1",
         createdAt: requested.createdAt,
+        optional: false,
         questions: [nativeQuestion, singleSelectQuestion],
       },
     ]);

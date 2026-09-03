@@ -409,10 +409,12 @@ export function useThreadOutboxDrain(): void {
       if (!serverConfig) return false;
       let dispatchMessage = queuedMessageWithResolvedSettings(queuedMessage, thread, serverConfig);
       if (isModelSelectionUnavailable(serverConfig, dispatchMessage.modelSelection)) {
-        return (await restoreRejectedQueuedMessage(
-          queuedMessage,
-          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
-        )) !== "retry";
+        return (
+          (await restoreRejectedQueuedMessage(
+            queuedMessage,
+            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+          )) !== "retry"
+        );
       }
       if (dispatchMessage !== queuedMessage) {
         const updated = await updateThreadOutboxMessage(
@@ -436,10 +438,12 @@ export function useThreadOutboxDrain(): void {
         currentConfig,
       );
       if (isModelSelectionUnavailable(currentConfig, dispatchMessage.modelSelection)) {
-        return (await restoreRejectedQueuedMessage(
-          attachmentPreparation.persistedMessage,
-          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
-        )) !== "retry";
+        return (
+          (await restoreRejectedQueuedMessage(
+            attachmentPreparation.persistedMessage,
+            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+          )) !== "retry"
+        );
       }
       if (dispatchMessage !== attachmentPreparation.persistedMessage) {
         const updated = await updateThreadOutboxMessage(
@@ -485,10 +489,12 @@ export function useThreadOutboxDrain(): void {
         serverConfig,
       );
       if (isModelSelectionUnavailable(serverConfig, dispatchMessage.modelSelection)) {
-        return (await restoreRejectedQueuedMessage(
-          queuedMessage,
-          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
-        )) !== "retry";
+        return (
+          (await restoreRejectedQueuedMessage(
+            queuedMessage,
+            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+          )) !== "retry"
+        );
       }
       if (dispatchMessage !== queuedMessage) {
         const updated = await updateThreadOutboxMessage(
@@ -516,10 +522,12 @@ export function useThreadOutboxDrain(): void {
         currentConfig,
       );
       if (isModelSelectionUnavailable(currentConfig, dispatchMessage.modelSelection)) {
-        return (await restoreRejectedQueuedMessage(
-          attachmentPreparation.persistedMessage,
-          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
-        )) !== "retry";
+        return (
+          (await restoreRejectedQueuedMessage(
+            attachmentPreparation.persistedMessage,
+            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+          )) !== "retry"
+        );
       }
       if (dispatchMessage !== attachmentPreparation.persistedMessage) {
         const updated = await updateThreadOutboxMessage(
