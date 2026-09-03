@@ -3,6 +3,10 @@ import type {
   EnvironmentThreadShell,
 } from "@t3tools/client-runtime/state/shell";
 import type { EnvironmentThreadSearchMatch } from "@t3tools/client-runtime/state/thread-search";
+import type {
+  SidebarOrchestrationItem,
+  SidebarOrchestrationThreadItem,
+} from "@t3tools/client-runtime/state/threads";
 import type { EnvironmentMachineKind } from "@t3tools/contracts";
 import { canSnooze, resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
 import { resolveSettledThreadTimestamp } from "@t3tools/client-runtime/state/thread-sort";
@@ -88,6 +92,89 @@ const LEGACY_MENU_ACTIONS: MenuAction[] = [
 
 /** Rounded-row radius shared with the v1 sidebar rows. */
 const SIDEBAR_V2_ROW_RADIUS = 12;
+
+export const ThreadListV2OrchestrationRow = memo(function ThreadListV2OrchestrationRow(props: {
+  readonly item: Exclude<SidebarOrchestrationItem, SidebarOrchestrationThreadItem>;
+  readonly selectedTitle?: string;
+  readonly pane?: "screen" | "sidebar";
+  readonly onToggle: (containerId: string) => void;
+  readonly onReveal: (containerIds: ReadonlyArray<string>) => void;
+}) {
+  const { item } = props;
+  const inset = item.depth * 12 + (props.pane === "sidebar" ? 12 : 20);
+  if (item.type === "viewing") {
+    return (
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Reveal ${props.selectedTitle ?? "selected thread"}`}
+        onPress={() => props.onReveal(item.containerIds)}
+        className="h-9 flex-row items-center gap-1.5"
+        style={{ paddingLeft: inset }}
+      >
+        <SymbolView
+          name="arrow.turn.down.right"
+          size={12}
+          tintColorClassName="accent-foreground-tertiary"
+          type="monochrome"
+        />
+        <Text className="flex-1 text-xs text-foreground" numberOfLines={1}>
+          <Text className="text-xs text-foreground-tertiary">Viewing: </Text>
+          {props.selectedTitle ?? "Selected thread"}
+        </Text>
+      </Pressable>
+    );
+  }
+  if (item.type === "history") {
+    return (
+      <View className="h-9 flex-row items-center gap-2" style={{ paddingLeft: inset }}>
+        <Text className="flex-1 text-xs text-foreground-muted" numberOfLines={1}>
+          {item.title}
+        </Text>
+        <Text className="mr-4 text-xs text-foreground-tertiary">{item.summary}</Text>
+      </View>
+    );
+  }
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityState={{ expanded: item.expanded }}
+      onPress={() => props.onToggle(item.containerId)}
+      className="h-9 flex-row items-center gap-1.5"
+      style={{ paddingLeft: inset }}
+    >
+      <SymbolView
+        name="chevron.right"
+        size={11}
+        style={{ transform: [{ rotate: item.expanded ? "90deg" : "0deg" }] }}
+        tintColorClassName="accent-foreground-tertiary"
+        type="monochrome"
+      />
+      <Text
+        className={cn(
+          "flex-1 text-xs font-t3-medium",
+          item.muted ? "text-foreground-tertiary" : "text-foreground-muted",
+        )}
+        numberOfLines={1}
+      >
+        {item.title}
+      </Text>
+      {item.closed ? (
+        <Text className="shrink-0 text-xs text-foreground-tertiary">Closed</Text>
+      ) : null}
+      {item.summary ? (
+        <Text
+          className={cn(
+            "mr-4 text-xs tabular-nums",
+            item.attention ? "text-adaptive-amber-700-300" : "text-foreground-tertiary",
+          )}
+          numberOfLines={1}
+        >
+          {item.summary}
+        </Text>
+      ) : null}
+    </Pressable>
+  );
+});
 
 /** Section label + rule: the only structure in an otherwise flat list. */
 export const ThreadListV2SectionDivider = memo(function ThreadListV2SectionDivider(props: {
@@ -275,7 +362,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
   );
 
   return (
-    <>
+    <View>
       {props.showPendingDivider ? (
         <ThreadListV2SectionDivider label="Pending" pane={props.pane} />
       ) : null}
@@ -312,7 +399,7 @@ export const ThreadListV2PendingRow = memo(function ThreadListV2PendingRow(props
           )}
         </Pressable>
       </ControlPillMenu>
-    </>
+    </View>
   );
 });
 
@@ -388,6 +475,8 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   readonly simultaneousSwipeGesture?: ComponentProps<
     typeof ThreadSwipeable
   >["simultaneousWithExternalGesture"];
+  readonly orchestration?: SidebarOrchestrationThreadItem;
+  readonly onToggleOrchestrationContainer?: (containerId: string) => void;
 }) {
   const { width: windowWidth } = useWindowDimensions();
   const {
@@ -675,7 +764,18 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
   // The sidebar pane fills selected rows with the theme's message surface, so
   // every piece of row text must use that surface's paired foreground.
   const cardContent = (
-    <>
+    <View
+      className={cn(
+        props.orchestration !== undefined &&
+          props.orchestration.depth > 0 &&
+          "border-l border-border-subtle pl-1.5",
+      )}
+      style={
+        props.orchestration !== undefined && props.orchestration.depth > 0
+          ? { marginLeft: props.orchestration.depth * 12 }
+          : undefined
+      }
+    >
       <View className="flex-row items-center gap-1.5">
         {props.project ? (
           <ProjectFavicon
@@ -708,10 +808,14 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             "text-xs tabular-nums",
             selected
               ? "text-user-bubble-foreground"
-              : (statusLabel?.className ?? "text-foreground-tertiary"),
+              : snoozedRow
+                ? "text-adaptive-blue-600-400"
+                : (statusLabel?.className ?? "text-foreground-tertiary"),
           )}
         >
-          {statusLabel?.label ?? timeLabel}
+          {snoozedRow && props.snoozeWakeLabelText !== undefined
+            ? props.snoozeWakeLabelText
+            : (statusLabel?.label ?? timeLabel)}
         </Text>
       </View>
       <Text
@@ -720,6 +824,7 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           selected ? "text-user-bubble-foreground" : "text-foreground",
         )}
         numberOfLines={2}
+        style={props.orchestration?.lineageContainer?.root ? { marginLeft: 21 } : undefined}
       >
         {thread.title}
       </Text>
@@ -732,8 +837,23 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
           />
         </View>
       ) : null}
-      <View className="mt-1 flex-row items-center gap-2">
-        {status === "failed" && thread.session?.lastError ? (
+      <View
+        className="mt-1 flex-row items-center gap-2"
+        style={props.orchestration?.lineageContainer?.root ? { marginLeft: 21 } : undefined}
+      >
+        {props.orchestration?.lineageContainer?.expanded === false ? (
+          <Text
+            className={cn(
+              "flex-1 text-xs tabular-nums",
+              props.orchestration.lineageContainer.attention
+                ? "text-adaptive-amber-700-300"
+                : "text-foreground-muted",
+            )}
+            numberOfLines={1}
+          >
+            {props.orchestration.lineageContainer.summary}
+          </Text>
+        ) : status === "failed" && thread.session?.lastError ? (
           <Text
             className={cn(
               "flex-1 text-xs",
@@ -803,135 +923,126 @@ export const ThreadListV2Row = memo(function ThreadListV2Row(props: {
             <ProviderIcon provider={props.providerDriver} size={14} />
           </View>
         ) : null}
+        {props.orchestration?.attemptsContainer ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${props.orchestration.attemptsContainer.count} earlier attempts`}
+            accessibilityState={{ expanded: props.orchestration.attemptsContainer.expanded }}
+            onPress={() =>
+              props.onToggleOrchestrationContainer?.(props.orchestration!.attemptsContainer!.id)
+            }
+            className="flex-row items-center gap-1 rounded px-1 py-0.5"
+          >
+            <SymbolView
+              name="arrow.clockwise"
+              size={11}
+              tintColorClassName="accent-foreground-tertiary"
+              type="monochrome"
+            />
+            <Text className="text-xs text-foreground-tertiary">
+              {props.orchestration.attemptsContainer.count}
+            </Text>
+          </Pressable>
+        ) : null}
+        {props.orchestration?.lineageContainer && !props.orchestration.lineageContainer.root ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={`${props.orchestration.lineageContainer.expanded ? "Hide" : "Show"} delegated work for ${thread.title}`}
+            accessibilityState={{ expanded: props.orchestration.lineageContainer.expanded }}
+            onPress={() =>
+              props.onToggleOrchestrationContainer?.(props.orchestration!.lineageContainer!.id)
+            }
+            className="size-6 items-center justify-center rounded"
+          >
+            <SymbolView
+              name="chevron.right"
+              size={11}
+              style={{
+                transform: [
+                  { rotate: props.orchestration.lineageContainer.expanded ? "90deg" : "0deg" },
+                ],
+              }}
+              tintColorClassName="accent-foreground-tertiary"
+              type="monochrome"
+            />
+          </Pressable>
+        ) : null}
       </View>
-    </>
+    </View>
   );
 
-  const rowContent = (close: () => void) =>
-    variant === "card" ? (
-      <Pressable
-        accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={thread.title}
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        onPress={() => {
-          close();
-          onSelectThread(thread);
-        }}
-        style={
-          sidebarPane
-            ? ({ pressed }) => ({
-                backgroundColor: selected
-                  ? selectedBackgroundColor
-                  : pressed
-                    ? pressedBackgroundColor
-                    : drawerColor,
-                borderRadius: SIDEBAR_V2_ROW_RADIUS,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-              })
-            : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
-        }
-      >
-        {sidebarPane ? (
-          cardContent
-        ) : (
-          /* Flat native list rows: no tonal containers — colored status
+  const rowContent = (close: () => void) => (
+    <Pressable
+      accessibilityHint={swipeAccessibilityHint}
+      accessibilityLabel={thread.title}
+      accessibilityRole="button"
+      accessibilityState={{ selected }}
+      onPress={() => {
+        close();
+        onSelectThread(thread);
+      }}
+      style={
+        sidebarPane
+          ? ({ pressed }) => ({
+              backgroundColor: selected
+                ? selectedBackgroundColor
+                : pressed
+                  ? pressedBackgroundColor
+                  : drawerColor,
+              borderRadius: SIDEBAR_V2_ROW_RADIUS,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+            })
+          : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
+      }
+    >
+      {sidebarPane ? (
+        cardContent
+      ) : (
+        /* Flat native list rows: no tonal containers — colored status
              labels and text hierarchy carry state, an inset hairline
              separates rows. The opaque screen background stays so swipe
              actions reveal behind the row. */
-          <View className="bg-screen">
-            <View className="px-5 py-2.5">{cardContent}</View>
-            {props.showTrailingDivider !== false ? (
-              <View className="ml-5 h-px bg-border-subtle" />
-            ) : null}
-          </View>
-        )}
-      </Pressable>
-    ) : (
-      <Pressable
-        accessibilityHint={swipeAccessibilityHint}
-        accessibilityLabel={thread.title}
-        accessibilityRole="button"
-        accessibilityState={{ selected }}
-        className={sidebarPane ? undefined : "bg-screen"}
-        onPress={() => {
-          close();
-          onSelectThread(thread);
-        }}
-        style={
-          sidebarPane
-            ? ({ pressed }) => ({
-                backgroundColor: selected
-                  ? selectedBackgroundColor
-                  : pressed
-                    ? pressedBackgroundColor
-                    : drawerColor,
-                borderRadius: SIDEBAR_V2_ROW_RADIUS,
-              })
-            : ({ pressed }) => ({ opacity: pressed ? 0.7 : 1 })
-        }
-      >
-        {/* Settled history recedes: dimmed favicon + muted title. */}
-        <View
-          className={cn(
-            "min-h-[44px] flex-row items-center gap-2.5 py-2",
-            sidebarPane ? "px-3" : "px-5",
-          )}
-        >
-          {props.project ? (
-            <View className="opacity-40">
-              <ProjectFavicon
-                environmentId={thread.environmentId}
-                faviconPath={props.project.faviconPath}
-                size={15}
-                projectTitle={props.projectTitle ?? props.project.title}
-                workspaceRoot={props.project.workspaceRoot}
-              />
-            </View>
+        <View className="bg-screen">
+          <View className="px-5 py-2.5">{cardContent}</View>
+          {props.showTrailingDivider !== false ? (
+            <View className="ml-5 h-px bg-border-subtle" />
           ) : null}
-          <View className="min-w-0 flex-1">
-            <Text
-              className={cn(
-                "text-base",
-                selected ? "text-user-bubble-foreground" : "text-foreground-muted",
-              )}
-              numberOfLines={1}
-            >
-              {thread.title}
-            </Text>
-            {props.searchMatch ? (
-              <ThreadSearchMatchExcerpt
-                match={props.searchMatch}
-                query={props.searchQuery ?? ""}
-                selected={selected}
-              />
-            ) : null}
-          </View>
-          <Text
-            className={cn(
-              "text-sm tabular-nums",
-              selected
-                ? "text-user-bubble-foreground-muted"
-                : snoozedRow
-                  ? "text-adaptive-blue-600-400"
-                  : "text-foreground-tertiary",
-            )}
-            style={{ fontFamily: MONO_FONT }}
-          >
-            {snoozedRow && props.snoozeWakeLabelText !== undefined
-              ? props.snoozeWakeLabelText
-              : timeLabel}
-          </Text>
         </View>
-      </Pressable>
-    );
+      )}
+      {props.orchestration?.lineageContainer?.root ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`${props.orchestration.lineageContainer.expanded ? "Hide" : "Show"} delegated work for ${thread.title}`}
+          accessibilityState={{ expanded: props.orchestration.lineageContainer.expanded }}
+          onPress={(event) => {
+            event.stopPropagation();
+            props.onToggleOrchestrationContainer?.(props.orchestration!.lineageContainer!.id);
+          }}
+          className="absolute bottom-2 top-10 w-11 items-center justify-center rounded"
+          style={{ left: sidebarPane ? -2 : 6 }}
+        >
+          <SymbolView
+            name="chevron.right"
+            size={15}
+            style={{
+              transform: [
+                { rotate: props.orchestration.lineageContainer.expanded ? "90deg" : "0deg" },
+              ],
+            }}
+            tintColorClassName="accent-foreground-tertiary"
+            type="monochrome"
+          />
+        </Pressable>
+      ) : null}
+    </Pressable>
+  );
 
   return (
     <>
       <ThreadSwipeable
         backgroundColor={sidebarPane ? drawerColor : screenColor}
-        compactActions={variant === "slim"}
+        compactActions={false}
         containerStyle={
           sidebarPane ? { borderRadius: SIDEBAR_V2_ROW_RADIUS, overflow: "hidden" } : undefined
         }

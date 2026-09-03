@@ -588,12 +588,27 @@ export const ThreadOrchestrationForkThreadInput = Schema.Struct({
       Schema.Struct({ type: Schema.Literal("worktree") }),
     ]),
   ),
+  coordination: Schema.optional(
+    Schema.Struct({
+      effortId: Schema.optional(ThreadOrchestrationEffortId),
+      label: Schema.optional(TrimmedNonEmptyString),
+      excludeInheritedEffort: Schema.optional(Schema.Boolean),
+    }),
+  ),
 });
 export type ThreadOrchestrationForkThreadInput = typeof ThreadOrchestrationForkThreadInput.Type;
 
 export const ThreadOrchestrationForkThreadResult = Schema.Struct({
   thread: ThreadOrchestrationThreadSummary,
   transcriptCloned: Schema.Boolean,
+  membership: Schema.optional(
+    Schema.Struct({
+      effortId: ThreadOrchestrationEffortId,
+      thread: OrchestrationThreadRef,
+      label: TrimmedNonEmptyString,
+      joinedAt: IsoDateTime,
+    }),
+  ),
 });
 export type ThreadOrchestrationForkThreadResult = typeof ThreadOrchestrationForkThreadResult.Type;
 

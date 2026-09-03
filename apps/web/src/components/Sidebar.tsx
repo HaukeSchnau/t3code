@@ -45,6 +45,7 @@ import {
   AlarmClockOffIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -54,6 +55,7 @@ import {
   GitBranchIcon,
   PinIcon,
   PlusIcon,
+  RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
   SquarePenIcon,
@@ -62,7 +64,6 @@ import {
   XIcon,
 } from "lucide-react";
 import {
-  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -208,14 +209,17 @@ import {
   FIXTURE_ENVIRONMENT_ID,
   FIXTURE_ENVIRONMENT_LABEL,
 } from "./orchestration-fixture/environmentId";
-import { SidebarLineageGroup } from "./sidebar/SidebarLineageGroup";
-import { useSidebarLineageLayout, useThreadLineage } from "../state/coordination";
 import {
-  coordinationCountsLabel,
-  countWorkers,
-  descendantKeys,
+  buildSidebarOrchestrationItems,
   resolveWorkerState,
+  type SidebarOrchestrationThreadItem,
 } from "@t3tools/client-runtime/state/threads";
+import {
+  SidebarOrchestrationHistoryRow,
+  SidebarOrchestrationSectionRow,
+  SidebarViewingRow,
+} from "./sidebar/SidebarLineageGroup";
+import { useThreadLineage } from "../state/coordination";
 import { DelegationSidebarFixture } from "./delegation-fixture/DelegationSidebarFixture";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -803,9 +807,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     threadKey: string,
     snapshot: ThreadChangeRequestSnapshot | null,
   ) => void;
-  summaryOverride?: string | null;
-  /** Rendered under a parent row: the slim row shows live status instead of the time. */
-  nested?: boolean;
+  orchestration?: SidebarOrchestrationThreadItem;
+  onToggleOrchestrationContainer?: (containerId: string) => void;
 }) {
   const {
     isRenaming,
@@ -835,6 +838,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     [thread.environmentId, thread.id],
   );
   const threadKey = scopedThreadKey(threadRef);
+  const orchestration = props.orchestration;
   const { leaseLiveStatus, rowRef } = useSidebarRowSubscriptionLease(props.isActive);
   const isRegeneratingTitle = thread.titleRegeneration != null;
   const lastVisitedAt = useUiStateStore((state) => state.threadLastVisitedAtById[threadKey]);
@@ -1136,7 +1140,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // Snooze is offered only where it can succeed: capability-gated and never
   // on blocked-on-you work or queued turns (the server rejects both).
   const showSnoozeButton =
-    props.snoozeSupported && canSnooze(thread, { now: new Date().toISOString() });
+    variantAction === "settle" &&
+    props.snoozeSupported &&
+    canSnooze(thread, { now: new Date().toISOString() });
   // If the thread becomes blocked while the popover is open, the button
   // unmounts without firing onOpenChange(false). Deriving the flag keeps a
   // stale true from permanently hiding the status label / pinning the
@@ -1368,17 +1374,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                   </Tooltip>
                 ) : (
                   <span className="text-xs">
-                    {props.nested && topStatus ? (
-                      // A nested worker's row is read for its state, not
-                      // its age: the parent card already anchors the time.
-                      <span className={cn("font-medium", topStatus.className)}>
-                        {topStatus.label}
-                      </span>
-                    ) : variantAction === "unsettle" ? (
-                      settledTimeLabel(thread)
-                    ) : (
-                      threadTimeLabel(thread)
-                    )}
+                    {variantAction === "unsettle"
+                      ? settledTimeLabel(thread)
+                      : threadTimeLabel(thread)}
                   </span>
                 )}
               </span>
@@ -1444,20 +1442,47 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     <li
       data-thread-item
       ref={sortable?.setNodeRef}
-      style={
-        sortable
+      style={{
+        ...(sortable
           ? {
               transform: CSS.Translate.toString(sortable.transform),
               transition: sortable.transition,
             }
-          : undefined
-      }
+          : {}),
+        ...(orchestration !== undefined && orchestration.depth > 0
+          ? { marginInlineStart: `${orchestration.depth * 0.75}rem` }
+          : {}),
+      }}
       {...(sortable?.listeners ?? {})}
       className={cn(
-        "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        "relative list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
+        orchestration !== undefined &&
+          orchestration.depth > 0 &&
+          "border-s border-sidebar-border/70 ps-1.5",
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
+      {orchestration?.lineageContainer?.root ? (
+        <button
+          type="button"
+          aria-expanded={orchestration.lineageContainer.expanded}
+          aria-label={`${orchestration.lineageContainer.expanded ? "Hide" : "Show"} delegated work for ${thread.title}`}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            props.onToggleOrchestrationContainer?.(orchestration.lineageContainer!.id);
+          }}
+          className="absolute bottom-2.5 top-[2.125rem] left-[var(--sidebar-row-content-inset)] z-20 flex w-4 items-center justify-center rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <ChevronRightIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 transition-transform",
+              orchestration.lineageContainer.expanded && "rotate-90",
+            )}
+          />
+        </button>
+      ) : null}
       <Tooltip>
         <TooltipTrigger
           render={
@@ -1559,11 +1584,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         ) : null}
                       </span>
                     )
+                  ) : variantAction === "unsnooze" && props.snoozeWakeLabelText !== null ? (
+                    <span className="text-blue-600 dark:text-blue-400">
+                      {props.snoozeWakeLabelText}
+                    </span>
+                  ) : variantAction === "unsettle" ? (
+                    settledTimeLabel(thread)
                   ) : (
                     threadTimeLabel(thread)
                   )}
                 </span>
-                {props.settlementSupported || showSnoozeButton ? (
+                {(variantAction === "unsnooze" && props.snoozeSupported) ||
+                props.settlementSupported ||
+                showSnoozeButton ? (
                   <span
                     className={cn(
                       // focus-visible, not focus-within: a mouse click leaves
@@ -1583,7 +1616,41 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                         timestampFormat={props.timestampFormat}
                       />
                     ) : null}
-                    {props.settlementSupported ? (
+                    {variantAction === "unsnooze" && props.snoozeSupported ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Wake thread now"
+                              onClick={handleUnsnoozeClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <AlarmClockOffIcon className="size-3.5" />
+                          Wake
+                        </TooltipTrigger>
+                        <TooltipPopup>Wake thread now</TooltipPopup>
+                      </Tooltip>
+                    ) : variantAction === "unsettle" && props.settlementSupported ? (
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <button
+                              type="button"
+                              aria-label="Un-settle thread"
+                              onClick={handleUnsettleClick}
+                              className="-mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground hover:text-foreground"
+                            />
+                          }
+                        >
+                          <Undo2Icon className="size-3.5" />
+                          Un-settle
+                        </TooltipTrigger>
+                        <TooltipPopup>Un-settle thread</TooltipPopup>
+                      </Tooltip>
+                    ) : variantAction === "settle" && props.settlementSupported ? (
                       <Tooltip>
                         <TooltipTrigger
                           render={
@@ -1605,66 +1672,119 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
                 ) : null}
               </span>
             </div>
-            <div className="mt-1 flex min-w-0">
-              {title}
-              {isRegeneratingTitle ? (
-                <span role="status" className="sr-only">
-                  Regenerating title
-                </span>
-              ) : null}
-            </div>
-            <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
-              {/* Always the branch. The plan step used to take this slot while
+            <div className={cn(orchestration?.lineageContainer?.root && "ps-[1.375rem]")}>
+              <div className="mt-1 flex min-w-0">
+                {title}
+                {isRegeneratingTitle ? (
+                  <span role="status" className="sr-only">
+                    Regenerating title
+                  </span>
+                ) : null}
+              </div>
+              <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+                {/* Always the branch. The plan step used to take this slot while
                   working, but it truncated to a half-sentence and dropped the
                   branch, so the row lost its most stable identifier. */}
-              {thread.branch ? (
-                <>
-                  <ThreadWorktreeIndicator thread={thread} />
-                  <span className="min-w-0 flex-1 truncate whitespace-nowrap">{thread.branch}</span>
-                </>
-              ) : (
-                <span className="flex-1" />
-              )}
-              {terminalStatusIcon}
-              {prBadge}
-              {diff ? (
-                <span className="shrink-0 font-mono">
-                  <span className="text-emerald-600 dark:text-emerald-400">+{diff.insertions}</span>{" "}
-                  <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
-                </span>
-              ) : null}
-              <span
-                aria-hidden
-                className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
-              >
-                {isRemote ? (
-                  <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
-                    <EnvironmentMachineIcon
+                {orchestration?.lineageContainer?.expanded === false ? (
+                  <span
+                    className={cn(
+                      "min-w-0 flex-1 truncate whitespace-nowrap tabular-nums",
+                      orchestration.lineageContainer.attention &&
+                        "text-amber-700 dark:text-amber-300",
+                    )}
+                  >
+                    {orchestration.lineageContainer.summary}
+                  </span>
+                ) : thread.branch ? (
+                  <>
+                    <ThreadWorktreeIndicator thread={thread} />
+                    <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                      {thread.branch}
+                    </span>
+                  </>
+                ) : (
+                  <span className="flex-1" />
+                )}
+                {terminalStatusIcon}
+                {prBadge}
+                {diff ? (
+                  <span className="shrink-0 font-mono">
+                    <span className="text-emerald-600 dark:text-emerald-400">
+                      +{diff.insertions}
+                    </span>{" "}
+                    <span className="text-red-600 dark:text-red-400">−{diff.deletions}</span>
+                  </span>
+                ) : null}
+                {orchestration?.attemptsContainer ? (
+                  <button
+                    type="button"
+                    aria-expanded={orchestration.attemptsContainer.expanded}
+                    aria-label={`${orchestration.attemptsContainer.count} earlier attempt${orchestration.attemptsContainer.count === 1 ? "" : "s"}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      props.onToggleOrchestrationContainer?.(orchestration.attemptsContainer!.id);
+                    }}
+                    className="inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    <RotateCcwIcon aria-hidden className="size-3" />
+                    {orchestration.attemptsContainer.count}
+                  </button>
+                ) : null}
+                {orchestration?.lineageContainer && !orchestration.lineageContainer.root ? (
+                  <button
+                    type="button"
+                    aria-expanded={orchestration.lineageContainer.expanded}
+                    aria-label={`${orchestration.lineageContainer.expanded ? "Hide" : "Show"} delegated work for ${thread.title}`}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      props.onToggleOrchestrationContainer?.(orchestration.lineageContainer!.id);
+                    }}
+                    className="inline-flex size-5 shrink-0 items-center justify-center rounded text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+                  >
+                    <ChevronRightIcon
                       aria-hidden
-                      kind={props.environmentMachine}
-                      className="size-3.5"
+                      className={cn(
+                        "size-3 transition-transform",
+                        orchestration.lineageContainer.expanded && "rotate-90",
+                      )}
                     />
-                  </span>
+                  </button>
                 ) : null}
-                {driverKind ? (
-                  <span className="inline-flex shrink-0 items-center">
-                    <ProviderInstanceIcon
-                      instanceId={modelInstanceId}
-                      driverKind={driverKind}
-                      displayName={
-                        providerEntry?.displayName ??
-                        thread.session?.providerName ??
-                        modelInstanceId
-                      }
-                      accentColor={providerEntry?.accentColor}
-                      showBadge={showInstanceBadge}
-                      // Glyph dims, badge stays saturated; offset matches the composer trigger.
-                      iconClassName="size-3.5 opacity-60"
-                      badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
-                    />
-                  </span>
-                ) : null}
-              </span>
+                <span
+                  aria-hidden
+                  className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1"
+                >
+                  {isRemote ? (
+                    <span className="inline-flex shrink-0 items-center text-sidebar-muted-foreground/70">
+                      <EnvironmentMachineIcon
+                        aria-hidden
+                        kind={props.environmentMachine}
+                        className="size-3.5"
+                      />
+                    </span>
+                  ) : null}
+                  {driverKind ? (
+                    <span className="inline-flex shrink-0 items-center">
+                      <ProviderInstanceIcon
+                        instanceId={modelInstanceId}
+                        driverKind={driverKind}
+                        displayName={
+                          providerEntry?.displayName ??
+                          thread.session?.providerName ??
+                          modelInstanceId
+                        }
+                        accentColor={providerEntry?.accentColor}
+                        showBadge={showInstanceBadge}
+                        // Glyph dims, badge stays saturated; offset matches the composer trigger.
+                        iconClassName="size-3.5 opacity-60"
+                        badgeClassName="right-[-0.1875rem] bottom-[-0.1875rem] h-3 min-w-3 px-0.5 text-[7px]"
+                      />
+                    </span>
+                  ) : null}
+                </span>
+              </div>
             </div>
           </div>
           {props.jumpLabel ? <JumpHintBadge label={props.jumpLabel} /> : null}
@@ -1811,32 +1931,6 @@ export default function Sidebar() {
     select: (location) => location.pathname === "/fixtures/delegation",
   });
   const threadLineage = useThreadLineage();
-  const lineageLayout = useSidebarLineageLayout();
-  // Coordinator rows trade their branch line for a roll-up of every worker
-  // below them, e.g. `2 working · 1 needs you`. Empty for ordinary threads.
-  const coordinationSummaryByKey = useMemo(() => {
-    const summaries = new Map<string, string>();
-    if (lineageLayout.childrenByParentKey.size === 0) return summaries;
-    const shellsByKey = new Map(
-      threads.map((thread) => [
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-        thread,
-      ]),
-    );
-    for (const parentKey of lineageLayout.childrenByParentKey.keys()) {
-      const counts = countWorkers(
-        threadLineage,
-        descendantKeys(threadLineage, parentKey),
-        (key) => {
-          const shell = shellsByKey.get(key);
-          return shell === undefined ? null : resolveWorkerState(shell);
-        },
-      );
-      const label = coordinationCountsLabel(counts);
-      if (label !== null) summaries.set(parentKey, label);
-    }
-    return summaries;
-  }, [lineageLayout, threadLineage, threads]);
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const autoSettleAfterDays = useClientSettings((s) => s.sidebarAutoSettleAfterDays);
@@ -2191,15 +2285,7 @@ export default function Sidebar() {
     // memo exactly at the next wake boundary.
     void snoozeWakeTick;
     const preciseNow = new Date().toISOString();
-    // Nested children render under their parent row instead of at the top
-    // level; the layout only nests while the parent is itself visible, so a
-    // child never disappears when its parent is archived.
-    const visible = threads.filter((thread) => {
-      if (thread.archivedAt !== null) return false;
-      return !lineageLayout.nestedKeys.has(
-        scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-      );
-    });
+    const visible = threads.filter((thread) => thread.archivedAt === null);
     const pinned: EnvironmentThreadShell[] = [];
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
@@ -2294,7 +2380,6 @@ export default function Sidebar() {
     snoozeWakeTick,
     threadLastVisitedAtById,
     threads,
-    lineageLayout,
   ]);
   usePublishSidebarCardThreads(sidebarCardThreads);
   const projectGroups = useMemo(
@@ -2780,6 +2865,67 @@ export default function Sidebar() {
       getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
     });
   }, [optimisticPinnedOrder, pinnedThreads]);
+  const [orchestrationExpansion, setOrchestrationExpansion] = useState<
+    ReadonlyMap<string, boolean>
+  >(() => new Map());
+  const isOrchestrationExpanded = useCallback(
+    (containerId: string) =>
+      orchestrationExpansion.get(containerId) ??
+      (!isMobile && !containerId.startsWith("history:") && !containerId.startsWith("attempts:")),
+    [isMobile, orchestrationExpansion],
+  );
+  const toggleOrchestrationContainer = useCallback(
+    (containerId: string) => {
+      setOrchestrationExpansion((current) => {
+        const next = new Map(current);
+        next.set(containerId, !isOrchestrationExpanded(containerId));
+        return next;
+      });
+    },
+    [isOrchestrationExpanded],
+  );
+  const revealOrchestrationContainers = useCallback((containerIds: ReadonlyArray<string>) => {
+    setOrchestrationExpansion((current) => {
+      const next = new Map(current);
+      for (const containerId of containerIds) next.set(containerId, true);
+      return next;
+    });
+  }, []);
+  const orchestrationThreadsByKey = useMemo(
+    () =>
+      new Map(
+        threads.map(
+          (thread) =>
+            [scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)), thread] as const,
+        ),
+      ),
+    [threads],
+  );
+  const sidebarOrchestration = useMemo(
+    () =>
+      buildSidebarOrchestrationItems({
+        lineage: threadLineage,
+        orderedThreadKeys: [...orderedPinnedThreads, ...activeThreads].map((thread) =>
+          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        ),
+        selectedThreadKey: routeThreadKey,
+        isExpanded: isOrchestrationExpanded,
+        stateOf: (threadKey) => {
+          const thread = orchestrationThreadsByKey.get(threadKey);
+          return thread === undefined ? null : resolveWorkerState(thread);
+        },
+        isPinned: (threadKey) =>
+          (orchestrationThreadsByKey.get(threadKey)?.pinnedAt ?? null) !== null,
+      }),
+    [
+      activeThreads,
+      isOrchestrationExpanded,
+      orchestrationThreadsByKey,
+      orderedPinnedThreads,
+      routeThreadKey,
+      threadLineage,
+    ],
+  );
   useEffect(() => {
     if (optimisticPinnedOrder === null) return;
     const canonical = pinnedThreads.filter((thread) =>
@@ -3912,29 +4058,18 @@ export default function Sidebar() {
                     thread: EnvironmentThreadShell,
                     section: "pinned" | "active" | "snoozed" | "settled",
                     sortable?: SortablePinnedRowBag,
-                    forceVariant?: "card" | "slim",
-                    nested?: boolean,
+                    orchestration?: SidebarOrchestrationThreadItem,
                   ) => {
                     const threadKey = scopedThreadKey(
                       scopeThreadRef(thread.environmentId, thread.id),
                     );
-                    // Settled and snoozed are the ONLY things that collapse a
-                    // row: every other thread is a full card. Density comes
-                    // from users (or the auto rules) actually parking work,
-                    // not from the sidebar second-guessing what still matters.
-                    const isCard = section === "active" || section === "pinned";
-                    const rowVariant = isCard ? "card" : "slim";
                     return (
                       <SidebarThreadRow
-                        // Keyed per variant on purpose: when a thread settles,
-                        // the card fades out in place and the slim row fades
-                        // in at its settled position instead of one element
-                        // FLIP-sliding through every row in between (rows here
-                        // are translucent, so a crossing row reads as text
-                        // painted over text).
-                        key={`${threadKey}:${rowVariant}`}
+                        // Every real thread keeps the production card. The
+                        // section only changes its lifecycle action.
+                        key={threadKey}
                         thread={thread}
-                        variant={rowVariant}
+                        variant="card"
                         // Snoozed rows wake; settled rows un-settle (explicit
                         // settles clear the override, auto-settled rows get
                         // pinned active); cards settle.
@@ -4021,48 +4156,64 @@ export default function Sidebar() {
                         onAcknowledgeWoke={acknowledgeWoke}
                         changeRequestSnapshot={changeRequestSnapshotByKey.get(threadKey) ?? null}
                         onChangeRequestSnapshot={setThreadChangeRequestSnapshot}
-                        summaryOverride={coordinationSummaryByKey.get(threadKey) ?? null}
-                        nested={nested === true}
+                        {...(orchestration === undefined ? {} : { orchestration })}
+                        onToggleOrchestrationContainer={toggleOrchestrationContainer}
                       />
                     );
                   };
-                  const threadsByKey = new Map(
-                    threads.map((thread) => [
+                  const pinnedThreadKeys = new Set(
+                    orderedPinnedThreads.map((thread) =>
                       scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                      thread,
-                    ]),
+                    ),
                   );
-                  // Children nest under their parent's ordinary row as slim
-                  // rows that still navigate, rename and settle like any other.
-                  const renderLineageGroup = (thread: EnvironmentThreadShell) => {
-                    const threadKey = scopedThreadKey(
-                      scopeThreadRef(thread.environmentId, thread.id),
-                    );
-                    if (!lineageLayout.childrenByParentKey.has(threadKey)) return null;
-                    return (
-                      <li key={`${threadKey}:lineage`} className="list-none">
-                        <SidebarLineageGroup
-                          parentKey={threadKey}
-                          lineage={threadLineage}
-                          layout={lineageLayout}
-                          renderRow={(childKey) => {
-                            const child = threadsByKey.get(childKey);
-                            return child === undefined
-                              ? null
-                              : renderThreadRow(child, "active", undefined, "slim", true);
-                          }}
-                          effortSummary={(memberKeys) => {
-                            const counts = countWorkers(threadLineage, memberKeys, (key) => {
-                              const shell = threadsByKey.get(key);
-                              return shell === undefined ? null : resolveWorkerState(shell);
-                            });
-                            return {
-                              label: coordinationCountsLabel(counts),
-                              attention: counts.blocked > 0 || counts.failed > 0,
-                            };
-                          }}
+                  const pinnedRootKeys = new Set(
+                    sidebarOrchestration.items.flatMap((item) =>
+                      item.type === "thread" &&
+                      item.depth === 0 &&
+                      pinnedThreadKeys.has(item.threadKey)
+                        ? [item.rootKey]
+                        : [],
+                    ),
+                  );
+                  const pinnedOrchestrationItems = sidebarOrchestration.items.filter((item) =>
+                    pinnedRootKeys.has(item.rootKey),
+                  );
+                  const activeOrchestrationItems = sidebarOrchestration.items.filter(
+                    (item) => !pinnedRootKeys.has(item.rootKey),
+                  );
+                  const renderOrchestrationItem = (
+                    item: (typeof sidebarOrchestration.items)[number],
+                    sortable?: SortablePinnedRowBag,
+                  ): ReactNode => {
+                    if (item.type === "section") {
+                      return (
+                        <SidebarOrchestrationSectionRow
+                          key={item.key}
+                          item={item}
+                          onToggle={toggleOrchestrationContainer}
                         />
-                      </li>
+                      );
+                    }
+                    if (item.type === "history") {
+                      return <SidebarOrchestrationHistoryRow key={item.key} item={item} />;
+                    }
+                    if (item.type === "viewing") {
+                      return (
+                        <SidebarViewingRow
+                          key={item.key}
+                          item={item}
+                          title={orchestrationThreadsByKey.get(item.threadKey)?.title ?? "Thread"}
+                          onReveal={revealOrchestrationContainers}
+                        />
+                      );
+                    }
+                    const thread = orchestrationThreadsByKey.get(item.threadKey);
+                    if (thread === undefined) return null;
+                    return renderThreadRow(
+                      thread,
+                      thread.pinnedAt !== null ? "pinned" : "active",
+                      sortable,
+                      item,
                     );
                   };
                   // Draft block above everything, then the pinned block:
@@ -4093,7 +4244,7 @@ export default function Sidebar() {
                         className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
                       />
                     ) : null,
-                    pinnedThreads.length > 0 ? (
+                    pinnedOrchestrationItems.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
                           sensors={pinnedDndSensors}
@@ -4102,11 +4253,9 @@ export default function Sidebar() {
                           onDragEnd={handlePinnedDragEnd}
                         >
                           <SortableContext
-                            items={orderedPinnedThreads
-                              .map((thread) =>
-                                scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
-                              )
-                              .filter((threadKey) => reorderablePinnedKeys.has(threadKey))}
+                            items={[...pinnedRootKeys].filter((threadKey) =>
+                              reorderablePinnedKeys.has(threadKey),
+                            )}
                             strategy={verticalListSortingStrategy}
                           >
                             <ul
@@ -4114,34 +4263,24 @@ export default function Sidebar() {
                               aria-label="Pinned threads"
                               className="flex flex-col gap-px"
                             >
-                              {orderedPinnedThreads.map((thread) => {
-                                const threadKey = scopedThreadKey(
-                                  scopeThreadRef(thread.environmentId, thread.id),
-                                );
-                                if (!reorderablePinnedKeys.has(threadKey)) {
-                                  return (
-                                    <Fragment key={threadKey}>
-                                      {renderThreadRow(thread, "pinned")}
-                                      {renderLineageGroup(thread)}
-                                    </Fragment>
-                                  );
-                                }
-                                return (
-                                  <Fragment key={threadKey}>
-                                    <SortablePinnedThreadRow id={threadKey}>
-                                      {(bag) => renderThreadRow(thread, "pinned", bag)}
-                                    </SortablePinnedThreadRow>
-                                    {renderLineageGroup(thread)}
-                                  </Fragment>
-                                );
-                              })}
+                              {pinnedOrchestrationItems.map((item) =>
+                                item.type === "thread" &&
+                                item.depth === 0 &&
+                                reorderablePinnedKeys.has(item.threadKey) ? (
+                                  <SortablePinnedThreadRow key={item.key} id={item.threadKey}>
+                                    {(bag) => renderOrchestrationItem(item, bag)}
+                                  </SortablePinnedThreadRow>
+                                ) : (
+                                  renderOrchestrationItem(item)
+                                ),
+                              )}
                             </ul>
                           </SortableContext>
                         </DndContext>
                       </li>
                     ) : null,
                   ];
-                  if (pinnedThreads.length > 0) {
+                  if (pinnedOrchestrationItems.length > 0) {
                     items.push(
                       <li
                         key="pinned-divider"
@@ -4151,11 +4290,9 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
-                    const lineageGroup = renderLineageGroup(thread);
-                    if (lineageGroup !== null) items.push(lineageGroup);
-                  }
+                  items.push(
+                    ...activeOrchestrationItems.map((item) => renderOrchestrationItem(item)),
+                  );
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when

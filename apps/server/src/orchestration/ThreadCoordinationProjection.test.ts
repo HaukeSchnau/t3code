@@ -73,15 +73,6 @@ it("reduces effort membership, relationships, and wait outcomes", () => {
       joinedAt,
     ),
     activity(
-      "thread-orchestration.effort.member-joined",
-      {
-        kind: "member-joined",
-        effortId,
-        member: { thread: worker, label: "Implementation", joinedAt },
-      },
-      joinedAt,
-    ),
-    activity(
       "thread-orchestration.wait.opened",
       {
         kind: "opened",
@@ -118,6 +109,55 @@ it("reduces effort membership, relationships, and wait outcomes", () => {
   ]);
   assert.strictEqual(coordination.waits[0]?.state, "satisfied");
   assert.strictEqual(coordination.waits[0]?.members[0]?.outcome, "completed");
+});
+
+it("does not restore relationship-backed membership after an explicit removal", () => {
+  const openedAt = "2026-09-02T10:00:00.000Z";
+  const joinedAt = "2026-09-02T10:00:01.000Z";
+  const leftAt = "2026-09-02T10:00:02.000Z";
+  const worker = { environmentId: coordinatorEnvironmentId, threadId: workerThreadId };
+  const coordinator = {
+    environmentId: coordinatorEnvironmentId,
+    threadId: coordinatorThreadId,
+  };
+  const coordination = deriveThreadCoordinationShell([
+    activity(
+      "thread-orchestration.effort.opened",
+      {
+        kind: "opened",
+        effort: {
+          effortId,
+          coordinator,
+          title: "Review implementation",
+          members: [],
+          openedAt,
+          closedAt: null,
+        },
+      },
+      openedAt,
+    ),
+    activity(
+      "thread-orchestration.relationship",
+      {
+        kind: "createdBy",
+        actorEnvironmentId: coordinatorEnvironmentId,
+        actorThreadId: coordinatorThreadId,
+        targetEnvironmentId: coordinatorEnvironmentId,
+        targetThreadId: workerThreadId,
+        effortId,
+        label: "Implementation",
+        createdAt: joinedAt,
+      },
+      joinedAt,
+    ),
+    activity(
+      "thread-orchestration.effort.member-left",
+      { kind: "member-left", effortId, thread: worker, changedAt: leftAt },
+      leftAt,
+    ),
+  ]);
+
+  assert.deepStrictEqual(coordination.efforts[0]?.members, []);
 });
 
 it("projects existing batches as compatibility efforts and waits", () => {

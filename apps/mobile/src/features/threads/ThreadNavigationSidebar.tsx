@@ -70,14 +70,18 @@ import {
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import {
+  ThreadListV2OrchestrationRow,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
+import { useThreadOrchestrationExpansion } from "./use-thread-orchestration-expansion";
+import { useThreadLineage } from "../../state/coordination";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
+  threadListV2OrchestrationItemsAreEqual,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
@@ -161,6 +165,8 @@ function ThreadNavigationSidebarPane(
     regenerateThreadTitle,
   } = useThreadListActions();
   const threadListV2Enabled = useThreadListV2Enabled();
+  const threadLineage = useThreadLineage();
+  const orchestrationExpansion = useThreadOrchestrationExpansion();
   const pendingTasks = usePendingNewTasks();
   const { openPendingTask, confirmDeletePendingTask } = usePendingTaskListActions();
   const environments = useMemo(
@@ -548,6 +554,14 @@ function ThreadNavigationSidebarPane(
       settledShelfExpanded,
       settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
       snoozeLabelNow: `${nowMinute}:00.000Z`,
+      orchestration:
+        v2SearchQuery.length > 0
+          ? undefined
+          : {
+              lineage: threadLineage,
+              selectedThreadKey: props.selectedThreadKey,
+              isExpanded: orchestrationExpansion.isExpanded,
+            },
     });
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
       items.push({
@@ -561,13 +575,16 @@ function ThreadNavigationSidebarPane(
     listLayout.items,
     nowMinute,
     options.selectedEnvironmentId,
+    orchestrationExpansion.isExpanded,
     pendingTasks,
     props.searchQuery,
+    props.selectedThreadKey,
     selectedProjectRefs,
     settledShelfExpanded,
     snoozedShelfExpanded,
     threadListV2Enabled,
     threadListV2Layout,
+    threadLineage,
   ]);
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -757,7 +774,8 @@ function ThreadNavigationSidebarPane(
           previous.item.variant === item.item.variant &&
           previous.item.snoozed === item.item.snoozed &&
           previous.item.pinned === item.item.pinned &&
-          previous.snoozeWakeLabelText === item.snoozeWakeLabelText
+          previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
+          threadListV2OrchestrationItemsAreEqual(previous.orchestration, item.orchestration)
         );
       }
       if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
@@ -775,13 +793,18 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-settled-shelf" && item.type === "v2-settled-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
+      if (previous.type === "v2-orchestration" && item.type === "v2-orchestration") {
+        return threadListV2OrchestrationItemsAreEqual(previous.item, item.item);
+      }
       if (
         previous.type === "v2-thread" ||
+        previous.type === "v2-orchestration" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
         previous.type === "v2-snoozed-shelf" ||
         previous.type === "v2-settled-shelf" ||
         item.type === "v2-thread" ||
+        item.type === "v2-orchestration" ||
         item.type === "v2-show-more" ||
         item.type === "v2-pending" ||
         item.type === "v2-snoozed-shelf" ||
@@ -850,6 +873,8 @@ function ThreadNavigationSidebarPane(
               pinned={item.item.pinned}
               snoozePresetMinute={nowMinute}
               snoozeWakeLabelText={item.snoozeWakeLabelText}
+              {...(item.orchestration === undefined ? {} : { orchestration: item.orchestration })}
+              onToggleOrchestrationContainer={orchestrationExpansion.toggle}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
               providerDriver={
@@ -906,6 +931,25 @@ function ThreadNavigationSidebarPane(
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
               simultaneousSwipeGesture={sidebarScrollGesture}
+            />
+          );
+        }
+        case "v2-orchestration": {
+          const orchestrationItem = item.item;
+          const selectedTitle =
+            orchestrationItem.type === "viewing"
+              ? threads.find(
+                  (thread) =>
+                    `${thread.environmentId}:${thread.id}` === orchestrationItem.threadKey,
+                )?.title
+              : undefined;
+          return (
+            <ThreadListV2OrchestrationRow
+              item={orchestrationItem}
+              {...(selectedTitle === undefined ? {} : { selectedTitle })}
+              pane="sidebar"
+              onToggle={orchestrationExpansion.toggle}
+              onReveal={orchestrationExpansion.reveal}
             />
           );
         }
@@ -1038,6 +1082,8 @@ function ThreadNavigationSidebarPane(
       machineByEnvironmentId,
       movePinnedThread,
       openPendingTask,
+      orchestrationExpansion.reveal,
+      orchestrationExpansion.toggle,
       pinReorderEnvironmentIds,
       pinThread,
       pinningEnvironmentIds,
@@ -1063,6 +1109,7 @@ function ThreadNavigationSidebarPane(
       nowMinute,
       toggleSettledShelf,
       toggleSnoozedShelf,
+      threads,
       unpinThread,
       unsettleThread,
       unsnoozeThread,

@@ -131,7 +131,7 @@ export const CreateThreadTool = mutatingTool(
 export const ForkThreadTool = mutatingTool(
   Tool.make("fork_thread", {
     description:
-      "Fork a T3 Code thread. Omit threadId to fork the calling thread, or pass threadId to fork a specific thread. Omit environment for a same-directory fork, or pass environment.type='worktree' for an isolated managed workspace. Codex-backed source threads are forked through Codex App Server and include copied completed transcript history only; active unfinished turns are not copied. If transcriptCloned is false, the child is a related empty thread and any needed context must be sent explicitly.",
+      "Fork a T3 Code thread. Omit threadId to fork the calling thread, or pass threadId to fork a specific source while preserving the caller as creator. Omit environment for a same-directory fork, or pass environment.type='worktree' for an isolated managed workspace. Set coordination.effortId and coordination.label to create the fork as an effort member in the same operation; set excludeInheritedEffort to opt out of the caller's sole open effort. Codex-backed source threads are forked through Codex App Server and include copied completed transcript history only; active unfinished turns are not copied. If transcriptCloned is false, the child is a related empty thread and any needed context must be sent explicitly.",
     parameters: ThreadOrchestrationForkThreadInput,
     success: ThreadOrchestrationForkThreadResult,
     failure: ThreadOrchestrationError,

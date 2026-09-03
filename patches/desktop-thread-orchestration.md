@@ -40,6 +40,25 @@ Thread relationship facts are recorded automatically as
 read, message, and rename interactions for future graph/UI use. The toolkit
 does not include graph-edit operations.
 
+A fork records two independent graph facts. `createdBy` points from the calling thread to the new
+thread, while `forkedFrom` points from the source thread to the new thread. A self-fork records both
+edges with the same actor. Effort and label options travel in the fork request, so callers do not
+need a follow-up membership repair.
+
+The sidebar treats explicit effort membership as display ownership without rewriting graph lineage.
+This handles older members that lack `createdBy` and cross-lineage members whose creator differs from
+the effort coordinator. One thread still has one sidebar row: an open explicit effort membership wins
+over creation lineage, with the first open membership as the stable tie-break for stale multi-effort
+data. Closed membership is considered only when no open membership owns the row.
+
+Web, desktop, and mobile project the resulting graph into the production thread list. Only lineage
+roots with visible descendants receive a disclosure gutter; every actual thread keeps the full
+production card and its lifecycle, pinning, rename, selection, and context actions. Root collapse is
+recursive, nested containers remain independent, and a selected hidden descendant leaves a Viewing
+row that reopens its precise container path. Search and the global Snoozed and Settled shelves stay
+flat. The shared projection and its surface contract are documented in
+`docs/internals/thread-orchestration-sidebar.md`.
+
 The dormant MCP toolkit's boundary is the issued per-thread credential, not the
 project graph. A credential with the `threads` capability can list projects and
 threads, then target any known thread id.
@@ -47,5 +66,5 @@ threads, then target any known thread id.
 Codex-backed `t3 thread fork` calls follow the official Codex fork semantics:
 T3 Code asks Codex App Server to run `thread/fork`, imports the returned copied
 history into the new T3 Code thread, binds that thread back to the forked Codex
-provider thread, and records the `forkedFrom` relationship. Non-Codex source
+provider thread, and records both relationships. Non-Codex source
 threads still fall back to a related child thread without transcript cloning.
