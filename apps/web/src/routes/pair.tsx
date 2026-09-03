@@ -51,6 +51,11 @@ function PairRouteView() {
     return <HostedPairingRouteSurface />;
   }
 
+  // Prototype routes never reach the pairing surface; the root route renders them bare.
+  if (authGateState.status === "prototype") {
+    return null;
+  }
+
   return (
     <PairingRouteSurface
       auth={authGateState.auth}

@@ -74,6 +74,10 @@ export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
     const currentUrl = new URL(location.href, window.location.origin);
     const browserUrl = new URL(window.location.href);
+    // Prototypes are server-free; they render bare, outside the app shell.
+    if (location.pathname.startsWith("/prototypes/")) {
+      return { authGateState: { status: "prototype" } as const };
+    }
     if (
       location.pathname === "/pair" &&
       (hasHostedPairingRequest(currentUrl) || hasHostedPairingRequest(browserUrl))

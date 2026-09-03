@@ -21,6 +21,7 @@ import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as FixturesDelegationRouteImport } from './routes/fixtures.delegation'
 import { Route as FixturesOrchestrationRouteImport } from './routes/fixtures.orchestration'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
+import { Route as PrototypesSidebarOrganizationRouteImport } from './routes/prototypes.sidebar-organization'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsConnectionsRouteImport } from './routes/settings.connections'
@@ -92,6 +93,12 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrototypesSidebarOrganizationRoute =
+  PrototypesSidebarOrganizationRouteImport.update({
+    id: '/prototypes/sidebar-organization',
+    path: '/prototypes/sidebar-organization',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const SettingsAppearanceRoute = SettingsAppearanceRouteImport.update({
   id: '/appearance',
   path: '/appearance',
@@ -161,6 +168,7 @@ export interface FileRoutesByFullPath {
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/prototypes/sidebar-organization': typeof PrototypesSidebarOrganizationRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -184,6 +192,7 @@ export interface FileRoutesByTo {
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/prototypes/sidebar-organization': typeof PrototypesSidebarOrganizationRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -210,6 +219,7 @@ export interface FileRoutesById {
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
+  '/prototypes/sidebar-organization': typeof PrototypesSidebarOrganizationRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
   '/settings/connections': typeof SettingsConnectionsRoute
@@ -237,6 +247,7 @@ export interface FileRouteTypes {
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
+    | '/prototypes/sidebar-organization'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
@@ -260,6 +271,7 @@ export interface FileRouteTypes {
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
+    | '/prototypes/sidebar-organization'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
@@ -285,6 +297,7 @@ export interface FileRouteTypes {
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
+    | '/prototypes/sidebar-organization'
     | '/settings/appearance'
     | '/settings/archived'
     | '/settings/connections'
@@ -309,6 +322,7 @@ export interface RootRouteChildren {
   FixturesDelegationRoute: typeof FixturesDelegationRoute
   FixturesOrchestrationRoute: typeof FixturesOrchestrationRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
+  PrototypesSidebarOrganizationRoute: typeof PrototypesSidebarOrganizationRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -395,6 +409,13 @@ declare module '@tanstack/react-router' {
       path: '/projects/$projectKey'
       fullPath: '/projects/$projectKey'
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/prototypes/sidebar-organization': {
+      id: '/prototypes/sidebar-organization'
+      path: '/prototypes/sidebar-organization'
+      fullPath: '/prototypes/sidebar-organization'
+      preLoaderRoute: typeof PrototypesSidebarOrganizationRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings/appearance': {
@@ -533,6 +554,7 @@ const rootRouteChildren: RootRouteChildren = {
   FixturesDelegationRoute: FixturesDelegationRoute,
   FixturesOrchestrationRoute: FixturesOrchestrationRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
+  PrototypesSidebarOrganizationRoute: PrototypesSidebarOrganizationRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

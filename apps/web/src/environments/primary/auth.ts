@@ -148,6 +148,8 @@ export interface ServerClientSessionRecord {
 export type ServerAuthGateState =
   | { status: "authenticated" }
   | { status: "offline-authenticated" }
+  /** A `/prototypes/*` route: no server, no shell. */
+  | { status: "prototype" }
   | {
       status: "requires-auth";
       auth: AuthSessionState["auth"];
