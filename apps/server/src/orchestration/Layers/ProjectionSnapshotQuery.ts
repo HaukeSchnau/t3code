@@ -109,6 +109,13 @@ const THREAD_DETAIL_ACTIVITY_LIMIT = 500;
 // Snapshot payloads are decoded and projected in small sequential batches so
 // one client read does not retain the raw payloads for the full activity window.
 const THREAD_DETAIL_ACTIVITY_PAYLOAD_BATCH_SIZE = 25;
+// SQLite's default case-insensitive LIKE cannot seek the binary `kind` index.
+// These adjacent ASCII bounds turn prefix reads into index range scans.
+const THREAD_ORCHESTRATION_KIND_RANGE = ["thread-orchestration.", "thread-orchestration/"] as const;
+const THREAD_ORCHESTRATION_BATCH_KIND_RANGE = [
+  "thread-orchestration.batch.",
+  "thread-orchestration.batch/",
+] as const;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
@@ -706,7 +713,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
-        WHERE kind LIKE 'thread-orchestration.batch.%'
+        WHERE kind >= ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[0]}
+          AND kind < ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[1]}
         ORDER BY created_at ASC, activity_id ASC
       `,
   });
@@ -728,7 +736,8 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sequence,
           created_at AS "createdAt"
         FROM projection_thread_activities
-        WHERE kind LIKE 'thread-orchestration.%'
+        WHERE kind >= ${THREAD_ORCHESTRATION_KIND_RANGE[0]}
+          AND kind < ${THREAD_ORCHESTRATION_KIND_RANGE[1]}
         ORDER BY created_at ASC, activity_id ASC
       `,
   });

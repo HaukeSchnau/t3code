@@ -30,6 +30,7 @@ This is fork-specific behavior. Preserve these requirements during upstream sync
 ### Projections and reducers
 
 - The projection pipeline routes each event only to projectors that handle it, then advances all projector cursors in one atomic transaction. Mixed-cursor bootstrap retains its replay semantics.
+- Coordination activity reads use bounded `kind` ranges instead of SQLite's default case-insensitive `LIKE`. The range predicates seek the existing binary `kind` index rather than scanning the full activity projection as long-running histories grow.
 - Common shell summary changes are applied from the current event. Streaming assistant deltas do not touch the shell-carried latest-turn projection; the completed message updates it once. Full history reconciliation remains only for true history mutations such as revert/prune.
 - Shell and thread reducers use last-item/update-by-ID fast paths and incremental insertion rather than cloning, filtering, and sorting whole histories for each delta.
 
