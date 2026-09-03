@@ -1,0 +1,82 @@
+import { type CSSProperties, memo } from "react";
+import { type ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
+import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
+
+import { getProviderInstanceIcon } from "./providerIconUtils";
+import { cn } from "~/lib/utils";
+
+export function providerInstanceInitials(label: string): string {
+  const words = label.replace(/[_-]+/g, " ").split(/\s+/u).filter(Boolean);
+  if (words.length === 0) return "";
+  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
+  return words
+    .slice(0, 2)
+    .map((word) => word[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
+export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
+  instanceId: ProviderInstanceId;
+  driverKind: ProviderDriverKind;
+  displayName: string;
+  accentColor?: string | undefined;
+  showBadge?: boolean;
+  badgeContent?: "initials" | "none";
+  className?: string;
+  iconClassName?: string;
+  badgeClassName?: string;
+  statusDotClassName?: string;
+  indicatorBackground?: string;
+}) {
+  const Icon = getProviderInstanceIcon(props.instanceId, props.driverKind) ?? null;
+  const showBadge = props.showBadge === true && !isClaudexInstance(props.instanceId);
+  const indicatorBackground = props.indicatorBackground ?? "var(--card)";
+  const accentStyle = props.accentColor
+    ? ({ "--provider-accent": props.accentColor } as CSSProperties)
+    : undefined;
+  const badgeContent = props.badgeContent ?? "initials";
+
+  return (
+    <span
+      className={cn(
+        "relative isolate inline-flex shrink-0 items-center justify-center overflow-visible",
+        props.className,
+      )}
+      style={accentStyle}
+      data-provider-accent-color={props.accentColor}
+    >
+      {Icon ? (
+        <Icon className={cn("size-5 shrink-0", props.iconClassName)} aria-hidden />
+      ) : (
+        <span className={cn("text-[10px] font-semibold leading-none", props.iconClassName)}>
+          {providerInstanceInitials(props.displayName)}
+        </span>
+      )}
+      {props.statusDotClassName ? (
+        <span
+          className={cn(
+            "pointer-events-none absolute -left-0.5 -top-0.5 z-10 size-2 rounded-full",
+            props.statusDotClassName,
+          )}
+          style={{ boxShadow: `0 0 0 2px ${indicatorBackground}` }}
+          aria-hidden
+        />
+      ) : null}
+      {showBadge ? (
+        <span
+          className={cn(
+            "pointer-events-none absolute right-0 bottom-0 z-10 flex h-3.5 min-w-3.5 items-center justify-center rounded-full border px-0.5 text-[8px] font-semibold leading-none shadow-sm",
+            props.accentColor
+              ? "bg-[var(--provider-accent)] text-white"
+              : "bg-card text-muted-foreground",
+            props.badgeClassName,
+          )}
+          style={{ borderColor: indicatorBackground }}
+          aria-hidden
+        >
+          {badgeContent === "initials" ? providerInstanceInitials(props.displayName) : null}
+        </span>
+      ) : null}
+    </span>
+  );
+});

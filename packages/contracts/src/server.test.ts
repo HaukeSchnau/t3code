@@ -1,18 +1,17 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
+import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import {
-  CodexThreadForkInput,
-  CodexThreadForkResult,
+  resolveEnvironmentMachineKind,
   ServerConfig,
   ServerProvider,
   ServerProviders,
   ServerUpsertKeybindingResult,
 } from "./server.ts";
+import { ServerSettings } from "./settings.ts";
 
 const decodeServerProvider = Schema.decodeUnknownSync(ServerProvider);
-const decodeCodexThreadForkInput = Schema.decodeUnknownSync(CodexThreadForkInput);
-const decodeCodexThreadForkResult = Schema.decodeUnknownSync(CodexThreadForkResult);
 const decodeServerProviders = Schema.decodeUnknownSync(ServerProviders);
 const decodeUpsertKeybindingResult = Schema.decodeUnknownSync(ServerUpsertKeybindingResult);
 const decodeAvailableEditors = Schema.decodeUnknownSync(ServerConfig.fields.availableEditors);
@@ -160,37 +159,52 @@ describe("server config forward compatibility", () => {
   });
 });
 
-describe("CodexThreadFork", () => {
-  it("decodes new workspace fork requests", () => {
-    const parsed = decodeCodexThreadForkInput({
-      threadId: "thread-source",
-      lastTurnId: "turn-1",
-      sourceMessageId: "message-1",
-      workspace: { mode: "new", kind: "auto" },
+describe("resolveEnvironmentMachineKind", () => {
+  const decodeDescriptor = Schema.decodeUnknownSync(ExecutionEnvironmentDescriptor);
+  const decodeSettings = Schema.decodeUnknownSync(ServerSettings);
+  const descriptor = (platform: Record<string, unknown>) =>
+    decodeDescriptor({
+      environmentId: "env-1",
+      label: "Box",
+      platform: { os: "linux", arch: "x64", ...platform },
+      serverVersion: "1.0.0",
+      capabilities: {},
     });
 
-    expect(parsed.workspace).toEqual({ mode: "new", kind: "auto" });
-  });
-
-  it("rejects unsupported workspace kinds for Codex fork requests", () => {
-    expect(() =>
-      decodeCodexThreadForkInput({
-        threadId: "thread-source",
-        workspace: { mode: "new", kind: "git-detached" },
+  it("prefers the user's pick over what the server detected", () => {
+    expect(
+      resolveEnvironmentMachineKind({
+        environment: descriptor({ machine: "mac-mini" }),
+        settings: decodeSettings({ environmentIcon: "laptop" }),
       }),
-    ).toThrow();
+    ).toBe("laptop");
   });
 
-  it("decodes fork results with destination workspace metadata", () => {
-    const parsed = decodeCodexThreadForkResult({
-      threadId: "thread-destination",
-      projectId: "project-1",
-      sourceThreadId: "thread-source",
-      providerThreadId: "codex-thread-destination",
-      importedMessageCount: 4,
-      workspaceId: "workspace:thread-destination",
-    });
+  it("uses detection when nothing is picked", () => {
+    expect(
+      resolveEnvironmentMachineKind({
+        environment: descriptor({ machine: "mac-mini" }),
+        settings: decodeSettings({}),
+      }),
+    ).toBe("mac-mini");
+  });
 
-    expect(parsed.workspaceId).toBe("workspace:thread-destination");
+  it("falls back to a server for older servers and before connect", () => {
+    expect(
+      resolveEnvironmentMachineKind({
+        environment: descriptor({}),
+        settings: decodeSettings({}),
+      }),
+    ).toBe("server");
+    expect(resolveEnvironmentMachineKind(null)).toBe("server");
+  });
+
+  it("drops a machine kind this build does not know instead of failing the descriptor", () => {
+    const parsed = descriptor({ machine: "toaster" });
+
+    expect(parsed.platform.machine).toBeUndefined();
+    expect(
+      resolveEnvironmentMachineKind({ environment: parsed, settings: decodeSettings({}) }),
+    ).toBe("server");
   });
 });

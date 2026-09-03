@@ -5,10 +5,10 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import {
   activeThreadAnchorTimestampMs,
   getThreadSortTimestamp,
-  sortThreadsByAttention,
+  resolveSettledThreadTimestamp,
   sortThreads,
   toSortableTimestamp,
-  type SidebarAttentionBand,
+  type SettledThreadTimestampInput,
   type ThreadSortInput,
 } from "../lib/threadSort";
 import type { SidebarThreadSummary, Thread } from "../types";
@@ -24,8 +24,7 @@ export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 // activities, growing as agents work) for as long as the row stays visible,
 // so this limit is a direct renderer-heap and server-load multiplier — keep
 // it small; cold opens still render instantly from the cached snapshot.
-// Keep one of the three thread-detail catch-up permits available for foreground navigation.
-export const SIDEBAR_THREAD_PREWARM_LIMIT = 2;
+export const SIDEBAR_THREAD_PREWARM_LIMIT = 3;
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
 export const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
@@ -585,58 +584,25 @@ export function firstValidTimestamp(
   return null;
 }
 
-export function resolveSidebarThreadAttentionBand(
-  thread: SidebarThreadSummary,
-  options: {
-    readonly lastVisitedAt: string | undefined;
-    readonly wokeAt: string | null;
-  },
-): SidebarAttentionBand {
-  const status = resolveSidebarThreadStatus(thread);
-  const wokeAtMs = options.wokeAt === null ? Number.NaN : Date.parse(options.wokeAt);
-  const lastVisitedAtMs =
-    options.lastVisitedAt === undefined ? Number.NaN : Date.parse(options.lastVisitedAt);
-  const hasUnacknowledgedWake =
-    Number.isFinite(wokeAtMs) && (!Number.isFinite(lastVisitedAtMs) || lastVisitedAtMs < wokeAtMs);
-  const hasPlanReadyPrompt =
-    thread.interactionMode === "plan" &&
-    thread.hasActionableProposedPlan &&
-    isLatestTurnSettled(thread.latestTurn, thread.session);
-
-  if (
-    status === "approval" ||
-    status === "input" ||
-    status === "failed" ||
-    hasPlanReadyPrompt ||
-    hasUnseenCompletion({ ...thread, lastVisitedAt: options.lastVisitedAt }) ||
-    hasUnacknowledgedWake
-  ) {
-    return "attention";
-  }
-  return "normal";
-}
-
-// The default sidebar is an inbox: things that need the user rise, ordinary
-// active threads follow, regardless of whether the agent is currently working.
-// Latest user message is the only recency signal inside each band. Callers
-// without a band resolver retain the upstream re-entry ordering.
+// Sidebar sort: static order, newest anchor on top. Activity NEVER reorders
+// the list — a row holds its position between lifecycle transitions, so the
+// screen only moves when a thread enters or leaves the active list. The
+// anchor is creation time until an un-settle re-anchors it (see
+// activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
+// top instead of sinking back to its creation-order slot. Status (including
+// pending approval) is carried by each card's edge strip, not by position.
 export function sortThreadsForSidebar<
   T extends {
     readonly id: string;
-    readonly environmentId?: string | undefined;
     readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
     readonly unsettledAt?: string | null | undefined;
   },
->(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
-  if (getBand === undefined) {
-    return [...threads].toSorted(
-      (left, right) =>
-        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
-        left.id.localeCompare(right.id),
-    );
-  }
-  return sortThreadsByAttention(threads, getBand);
+>(threads: readonly T[]): T[] {
+  return [...threads].toSorted(
+    (left, right) =>
+      activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+      left.id.localeCompare(right.id),
+  );
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime
@@ -700,41 +666,13 @@ export function reduceSidebarProjectScopeMenuState(
   }
 }
 
-type SettledTimestampInput = Pick<
-  SidebarThreadSummary,
-  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
->;
-
-/** The timestamp a settled row sorts and labels by: settledAt when stamped,
-    otherwise the latest message or turn stamp. updatedAt is the final net. */
-export function resolveSettledTimestamp(thread: SettledTimestampInput): string | null {
-  const settledAt = firstValidTimestamp(thread.settledAt);
-  if (settledAt !== null) return settledAt;
-  let latest: string | null = null;
-  let latestMs = Number.NEGATIVE_INFINITY;
-  for (const candidate of [
-    thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
-  ]) {
-    if (candidate == null) continue;
-    const parsed = Date.parse(candidate);
-    if (!Number.isNaN(parsed) && parsed > latestMs) {
-      latest = candidate;
-      latestMs = parsed;
-    }
-  }
-  return latest ?? firstValidTimestamp(thread.updatedAt);
-}
-
 // Settled rows are history, so they order by when the work ENDED, not when
 // the thread was created or last touched.
 export function sortSettledThreadsForSidebar<
-  T extends SettledTimestampInput & { readonly id: string },
+  T extends SettledThreadTimestampInput & { readonly id: string },
 >(threads: readonly T[]): T[] {
   const timestampMs = (thread: T) => {
-    const timestamp = resolveSettledTimestamp(thread);
+    const timestamp = resolveSettledThreadTimestamp(thread);
     return timestamp === null ? 0 : Date.parse(timestamp);
   };
   return [...threads].toSorted(
@@ -1043,40 +981,6 @@ export function sortLogicalProjectsForSidebar<
     (left, right) =>
       left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey),
   );
-}
-
-/**
- * Orders project pickers by the first live thread each project owns in the
- * already-sorted sidebar. Projects without a live card follow by name.
- */
-export function sortLogicalProjectsByThreadOrder<
-  TProject extends LogicalSidebarProject,
-  TThread extends Pick<ScopedSidebarThread, "environmentId" | "projectId">,
->(projects: readonly TProject[], orderedThreads: readonly TThread[]): TProject[] {
-  const projectKeyByRef = new Map(
-    projects.flatMap((project) =>
-      project.memberProjectRefs.map(
-        (projectRef) =>
-          [`${projectRef.environmentId}\0${projectRef.projectId}`, project.projectKey] as const,
-      ),
-    ),
-  );
-  const firstThreadIndexByProjectKey = new Map<string, number>();
-  orderedThreads.forEach((thread, index) => {
-    const projectKey = projectKeyByRef.get(`${thread.environmentId}\0${thread.projectId}`);
-    if (projectKey !== undefined && !firstThreadIndexByProjectKey.has(projectKey)) {
-      firstThreadIndexByProjectKey.set(projectKey, index);
-    }
-  });
-
-  return [...projects].toSorted((left, right) => {
-    const leftIndex = firstThreadIndexByProjectKey.get(left.projectKey);
-    const rightIndex = firstThreadIndexByProjectKey.get(right.projectKey);
-    if (leftIndex !== undefined || rightIndex !== undefined) {
-      return (leftIndex ?? Number.POSITIVE_INFINITY) - (rightIndex ?? Number.POSITIVE_INFINITY);
-    }
-    return left.title.localeCompare(right.title) || left.projectKey.localeCompare(right.projectKey);
-  });
 }
 
 /**
