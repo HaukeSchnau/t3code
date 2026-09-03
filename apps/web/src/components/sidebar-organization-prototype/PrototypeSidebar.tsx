@@ -27,8 +27,9 @@ import {
   type WorkIndex,
 } from "./model";
 import {
-  branchLabel,
-  DisclosureSlot,
+  NeutralGutter,
+  RootDisclosure,
+  SearchResultRow,
   SectionHeader,
   ShelfHeader,
   ThreadRow,
@@ -55,28 +56,15 @@ function searchContext(index: WorkIndex, thread: ProtoThread): string {
   return parts.join(" · ");
 }
 
-/**
- * Subtitle for a thread row in its canonical place: project, then the branch
- * or delegated-work counts. A collapsed root instead leads with how many
- * descendants it hides so the summary stays honest about what is folded
- * away; the project glyph still identifies it.
- */
-function rowSubtitle(
+/** Third line of a collapsed root: the recursive roll-up, attention first, hidden count last. */
+function collapsedRootSummary(
   index: WorkIndex,
-  thread: ProtoThread,
-  options?: { readonly collapsedRoot?: boolean },
+  rootId: string,
 ): { readonly text: string; readonly attention: boolean } {
-  const project = PROJECTS[thread.project].title;
-  if ((index.childrenOf.get(thread.id)?.length ?? 0) > 0) {
-    const counts = countWork(index, [thread.id]);
-    const parts = [countsLabel(counts, { includeDone: true }) ?? "no live delegated work"];
-    if (options?.collapsedRoot === true) parts.push(`${countDescendants(index, thread.id)} hidden`);
-    else parts.unshift(project);
-    return { text: parts.join(" · "), attention: counts.needsYou > 0 };
-  }
-  if (isSuperseded(index, thread))
-    return { text: `${project} · earlier attempt`, attention: false };
-  return { text: `${project} · ${branchLabel(thread)}`, attention: false };
+  const counts = countWork(index, [rootId]);
+  const parts = [countsLabel(counts, { includeDone: true }) ?? "no live delegated work"];
+  parts.push(`${countDescendants(index, rootId)} hidden`);
+  return { text: parts.join(" · "), attention: counts.needsYou > 0 };
 }
 
 function SearchResults({ model, query }: { readonly model: SidebarModel; readonly query: string }) {
@@ -95,12 +83,11 @@ function SearchResults({ model, query }: { readonly model: SidebarModel; readonl
   return (
     <ul className="flex flex-col" role="list">
       {results.map((thread) => (
-        <ThreadRow
+        <SearchResultRow
           key={thread.id}
           thread={thread}
-          index={model.index}
           active={model.selectedThreadId === thread.id}
-          subtitle={searchContext(model.index, thread)}
+          context={searchContext(model.index, thread)}
           onSelect={() => select(`thread:${thread.id}`)}
         />
       ))}
@@ -121,15 +108,12 @@ function WorkerRow({
   const attempts = supersededChain(index, thread);
   const attemptsId = `attempts:${thread.id}`;
   const attemptsOpen = attempts.length > 0 && model.isExpanded(attemptsId);
-  const subtitle = rowSubtitle(index, thread);
   return (
     <Fragment>
       <ThreadRow
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
-        subtitle={subtitle.text}
-        subtitleAttention={subtitle.attention}
         onSelect={() => select(`thread:${thread.id}`)}
         {...(attempts.length === 0
           ? {}
@@ -150,7 +134,6 @@ function WorkerRow({
                 thread={attempt}
                 index={index}
                 active={model.selectedThreadId === attempt.id}
-                subtitle={rowSubtitle(index, attempt).text}
                 onSelect={() => select(`thread:${attempt.id}`)}
               />
             ))}
@@ -208,7 +191,7 @@ function LineageBody({ model, tray }: { readonly model: SidebarModel; readonly t
   const { index, device } = model;
   const pastOpen = model.isExpanded(tray.pastContainerId);
   return (
-    <div className="ms-3 border-s border-sidebar-border/70 ps-1.5">
+    <div className="ms-2.5 border-s border-sidebar-border/70 ps-1.5">
       <ul className="flex flex-col" role="list">
         {tray.bare.map((thread) => (
           <WorkerRow key={thread.id} model={model} thread={thread} />
@@ -270,7 +253,7 @@ function LineageBody({ model, tray }: { readonly model: SidebarModel; readonly t
   );
 }
 
-/** A lineage root: a plain row when it never delegated, otherwise the row plus its disclosure and subtree. */
+/** A lineage root: a plain card when it never delegated, otherwise the card with its disclosure gutter and subtree. */
 function RootRow({
   model,
   thread,
@@ -288,13 +271,13 @@ function RootRow({
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
-        subtitle={rowSubtitle(index, thread).text}
         onSelect={() => select(`thread:${thread.id}`)}
+        gutter={<NeutralGutter device={device} />}
       />
     );
   }
   const open = model.isExpanded(tray.containerId);
-  const subtitle = rowSubtitle(index, thread, { collapsedRoot: !open });
+  const summary = open ? null : collapsedRootSummary(index, thread.id);
   // The selected thread lives in this lineage but some container on its path
   // is collapsed: say so on the root instead of forcing anything open.
   const placement = model.selectedPlacement;
@@ -311,29 +294,34 @@ function RootRow({
         thread={thread}
         index={index}
         active={model.selectedThreadId === thread.id}
-        subtitle={subtitle.text}
-        subtitleAttention={subtitle.attention}
         onSelect={() => select(`thread:${thread.id}`)}
-        leading={
-          <DisclosureSlot
+        gutter={
+          <RootDisclosure
             device={device}
             expanded={open}
             onToggle={() => model.toggle(tray.containerId)}
-            label={open ? "Hide delegated work" : "Show delegated work"}
+            label={`${open ? "Hide" : "Show"} delegated work for ${thread.title}`}
           />
         }
+        {...(summary === null
+          ? {}
+          : { branchLine: summary.text, branchLineAttention: summary.attention })}
       />
       {hiddenSelected !== null ? (
-        <ViewingRow
-          title={hiddenSelected}
-          device={device}
-          onReveal={() => {
-            for (const id of placement?.containers ?? []) setExpanded(device, id, true);
-          }}
-        />
+        <li className={cn("flex list-none", device === "phone" ? "ps-11" : "ps-5")}>
+          <ul className="min-w-0 flex-1" role="list">
+            <ViewingRow
+              title={hiddenSelected}
+              device={device}
+              onReveal={() => {
+                for (const id of placement?.containers ?? []) setExpanded(device, id, true);
+              }}
+            />
+          </ul>
+        </li>
       ) : null}
       {open ? (
-        <li className="list-none">
+        <li className={cn("list-none", device === "phone" ? "ps-11" : "ps-5")}>
           <LineageBody model={model} tray={tray} />
         </li>
       ) : null}
@@ -400,8 +388,8 @@ export function PrototypeSidebar({
                 thread={thread}
                 index={index}
                 active={model.selectedThreadId === thread.id}
-                subtitle={rowSubtitle(index, thread).text}
                 onSelect={() => select(`thread:${thread.id}`)}
+                gutter={<NeutralGutter device={device} />}
               />
             ))}
           </ul>

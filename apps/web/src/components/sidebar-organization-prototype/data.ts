@@ -48,10 +48,13 @@ export const PROJECTS: Record<ProjectKey, ProtoProject> = {
   },
 };
 
+export type ProviderKind = "claude" | "codex" | "opencode";
+
 export interface ProtoThread {
   readonly id: string;
   readonly title: string;
   readonly project: ProjectKey;
+  readonly provider: ProviderKind;
   readonly state: WorkerState;
   /** Completed and not yet visited: shows the emerald Done label. */
   readonly unread: boolean;
@@ -81,6 +84,7 @@ interface ThreadSeed {
   readonly id: string;
   readonly title: string;
   readonly project: ProjectKey;
+  readonly provider?: ProviderKind;
   readonly state?: WorkerState;
   readonly unread?: boolean;
   readonly settled?: boolean;
@@ -90,11 +94,21 @@ interface ThreadSeed {
   readonly age: string;
 }
 
+/** Sample provider from the title, so Sol and GLM lanes read as Codex-family and Claude lanes as Claude. */
+function providerFor(title: string): ProviderKind {
+  const lower = title.toLowerCase();
+  if (lower.includes("claude") || lower.includes("opus") || lower.includes("fable"))
+    return "claude";
+  if (lower.includes("glm") || lower.includes("opencode")) return "opencode";
+  return "codex";
+}
+
 function thread(seed: ThreadSeed): ProtoThread {
   return {
     id: seed.id,
     title: seed.title,
     project: seed.project,
+    provider: seed.provider ?? providerFor(seed.title),
     state: seed.state ?? "idle",
     unread: seed.unread ?? false,
     settled: seed.settled ?? false,

@@ -1,8 +1,9 @@
 /**
- * Row primitives. Every thread row, top level or nested, live or settled,
- * uses the same two-line `ThreadRow`: title with a status slot, then a
- * subtitle. Hierarchy comes only from indentation, connector lines, and the
- * disclosure on a lineage root, never from a lighter row treatment.
+ * Row primitives. Every thread row, root or nested, live or settled, is the
+ * production regular thread card (`SidebarThreadRow`'s card variant): the
+ * 4.875rem content block with project line and status slot, title, then
+ * branch and provider mark. Hierarchy comes only from the leading disclosure
+ * gutter, indentation, and connector lines, never from a lighter row.
  */
 import {
   ChevronDownIcon,
@@ -10,12 +11,14 @@ import {
   CircleCheckIcon,
   CircleDashedIcon,
   CornerDownRightIcon,
+  GitBranchIcon,
   RotateCcwIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { PROJECTS, type ProtoThread } from "./data";
+import { ClaudeAI, OpenAI, OpenCodeIcon } from "../Icons";
+import { PROJECTS, type ProtoThread, type ProviderKind } from "./data";
 import type { WorkIndex } from "./model";
 import { isSuperseded } from "./model";
 import type { DeviceKind } from "./store";
@@ -105,22 +108,44 @@ export function branchLabel(thread: ProtoThread): string {
   return `hauke/${slug}`;
 }
 
-function rowSurfaceClass(active: boolean): string {
+/** Production card surface: interaction owns the surface, status lives in the content. */
+function rowSurfaceClass(active: boolean, recede: boolean): string {
   return cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none",
     active
       ? "bg-sidebar-row-active text-sidebar-foreground"
-      : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
+      : recede
+        ? "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground"
+        : "bg-transparent text-sidebar-foreground hover:bg-sidebar-row-hover",
   );
 }
 
+function ProviderMark({ provider }: { readonly provider: ProviderKind }) {
+  const className = "size-3.5 opacity-60";
+  return (
+    <span className="inline-flex shrink-0 items-center" aria-hidden>
+      {provider === "claude" ? (
+        <ClaudeAI className={className} />
+      ) : provider === "codex" ? (
+        <OpenAI className={className} />
+      ) : (
+        <OpenCodeIcon className={className} />
+      )}
+    </span>
+  );
+}
+
+/** Gutter widths: a 44-point target on the phone, a compact always-visible chevron on the desktop. */
+function gutterWidth(device: DeviceKind): string {
+  return device === "phone" ? "w-11" : "w-5";
+}
+
 /**
- * The leading disclosure slot on a lineage-root row that has descendants. On the phone it is a
- * 44-point target that is always visible; on the desktop the same slot holds
- * a chevron that appears on hover, and stays faintly visible while collapsed
- * so a folded tray is still discoverable.
+ * The leading disclosure for a lineage root with descendants. It sits in
+ * its own gutter beside the card, never on the navigation surface, and is
+ * visible at rest on every device.
  */
-export function DisclosureSlot({
+export function RootDisclosure({
   device,
   expanded,
   onToggle,
@@ -136,18 +161,10 @@ export function DisclosureSlot({
       type="button"
       aria-expanded={expanded}
       aria-label={label}
-      onClick={(event) => {
-        event.stopPropagation();
-        onToggle();
-      }}
+      onClick={onToggle}
       className={cn(
-        "flex shrink-0 items-center justify-center self-stretch text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:opacity-100",
-        device === "phone"
-          ? "w-11 hover:bg-sidebar-row-hover"
-          : cn(
-              "w-6 transition-opacity group-hover/sidebar-row:opacity-100",
-              expanded ? "opacity-0" : "opacity-50",
-            ),
+        "flex shrink-0 items-center justify-center self-stretch rounded-md text-sidebar-muted-foreground outline-none hover:bg-sidebar-row-hover hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-ring",
+        gutterWidth(device),
       )}
     >
       <ChevronRightIcon
@@ -162,29 +179,31 @@ export function DisclosureSlot({
   );
 }
 
-/** The one thread row. Same height, type, and affordances wherever it sits. */
+/** Empty gutter so root leaves align with roots that carry a disclosure. */
+export function NeutralGutter({ device }: { readonly device: DeviceKind }) {
+  return <span aria-hidden className={cn("shrink-0", gutterWidth(device))} />;
+}
+
+/** The one thread row: the production regular card, wherever it sits. */
 export function ThreadRow({
   thread,
   index,
   active,
   onSelect,
-  leading,
-  subtitle,
-  subtitleAttention = false,
-  trailing,
+  gutter,
+  branchLine,
+  branchLineAttention = false,
   attemptsControl,
 }: {
   readonly thread: ProtoThread;
   readonly index: WorkIndex;
   readonly active: boolean;
   readonly onSelect: () => void;
-  /** Disclosure slot for coordinators; ordinary rows keep the same inset without it. */
-  readonly leading?: ReactNode;
-  /** Second line: project and branch, coordinator counts, or search context. */
-  readonly subtitle: string;
-  readonly subtitleAttention?: boolean;
-  /** Replaces the status label, e.g. a nested coordinator's counts. */
-  readonly trailing?: ReactNode;
+  /** Leading gutter beside the card: a root disclosure, a neutral spacer, or nothing for nested rows. */
+  readonly gutter?: ReactNode;
+  /** Third line: the branch by default, or a collapsed root's recursive summary. */
+  readonly branchLine?: string;
+  readonly branchLineAttention?: boolean;
   readonly attemptsControl?: {
     readonly count: number;
     readonly expanded: boolean;
@@ -192,8 +211,11 @@ export function ThreadRow({
   };
 }) {
   const status = threadStatus(index, thread);
+  // Quiet ready rows recede, as in production; live and attention states keep full weight.
+  const recede = status === null && !thread.unread && !active;
   return (
-    <li className="list-none py-px">
+    <li className="flex list-none items-stretch py-0.5">
+      {gutter}
       <div
         role="button"
         tabIndex={0}
@@ -204,59 +226,115 @@ export function ThreadRow({
             onSelect();
           }
         }}
-        className={cn(rowSurfaceClass(active), "flex h-12 items-stretch")}
+        className={cn(rowSurfaceClass(active, recede), "min-w-0 flex-1")}
       >
-        {leading}
-        <div
-          className={cn(
-            "flex min-w-0 flex-1 items-center gap-2.5 pe-2.5",
-            leading === undefined ? "ps-2.5" : "ps-0.5",
-          )}
-        >
-          <ProjectGlyph project={thread.project} />
-          <span className="flex min-w-0 flex-1 flex-col justify-center">
-            <span className="flex min-w-0 items-center gap-2">
-              <span
-                className={cn(
-                  "min-w-0 flex-1 truncate text-sm font-medium",
-                  active ? "text-foreground" : "text-foreground/90",
-                )}
-              >
-                {thread.title}
-              </span>
-              {attemptsControl !== undefined ? (
-                <button
-                  type="button"
-                  aria-expanded={attemptsControl.expanded}
-                  aria-label={`${attemptsControl.count} earlier attempt${attemptsControl.count === 1 ? "" : "s"}`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    attemptsControl.onToggle();
-                  }}
-                  className={cn(
-                    "inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
-                    attemptsControl.expanded && "text-sidebar-foreground",
-                  )}
-                >
-                  <RotateCcwIcon aria-hidden className="size-3" />
-                  {attemptsControl.count}
-                </button>
-              ) : null}
-              <span className="ml-auto flex shrink-0 items-center">
-                {trailing ?? <StatusLabel status={status} age={thread.age} />}
-              </span>
-            </span>
+        <div className="relative z-10 h-[4.875rem] px-[var(--sidebar-row-content-inset)] py-[var(--sidebar-content-inset)]">
+          <div className="flex h-5 min-w-0 items-center gap-1.5">
+            <ProjectGlyph project={thread.project} />
             <span
               className={cn(
-                "truncate text-xs",
-                subtitleAttention ? "text-amber-700 dark:text-amber-300" : "text-secondary-label",
+                "min-w-0 flex-1 truncate text-secondary-label text-xs",
+                recede ? "font-normal" : "font-medium",
               )}
             >
-              {subtitle}
+              {PROJECTS[thread.project].title}
             </span>
-          </span>
+            <span className="ml-auto flex h-5 min-w-8 shrink-0 items-center justify-end text-xs">
+              <StatusLabel status={status} age={thread.age} />
+            </span>
+          </div>
+          <div className="mt-1 flex min-w-0">
+            <span
+              className={cn(
+                "min-w-0 flex-1 truncate text-sm",
+                recede ? "font-normal text-secondary-label" : "font-medium",
+                active || thread.unread
+                  ? "text-foreground"
+                  : recede
+                    ? "text-secondary-label"
+                    : "text-foreground/90",
+              )}
+            >
+              {thread.title}
+            </span>
+          </div>
+          <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-secondary-label text-xs">
+            {branchLine !== undefined ? (
+              <span
+                className={cn(
+                  "min-w-0 flex-1 truncate whitespace-nowrap tabular-nums",
+                  branchLineAttention && "text-amber-700 dark:text-amber-300",
+                )}
+              >
+                {branchLine}
+              </span>
+            ) : (
+              <>
+                <GitBranchIcon aria-hidden className="size-3 shrink-0" />
+                <span className="min-w-0 flex-1 truncate whitespace-nowrap">
+                  {branchLabel(thread)}
+                </span>
+              </>
+            )}
+            {attemptsControl !== undefined ? (
+              <button
+                type="button"
+                aria-expanded={attemptsControl.expanded}
+                aria-label={`${attemptsControl.count} earlier attempt${attemptsControl.count === 1 ? "" : "s"}`}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  attemptsControl.onToggle();
+                }}
+                className={cn(
+                  "inline-flex h-5 shrink-0 items-center gap-0.5 rounded px-1 text-[11px] tabular-nums text-sidebar-muted-foreground hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+                  attemptsControl.expanded && "text-sidebar-foreground",
+                )}
+              >
+                <RotateCcwIcon aria-hidden className="size-3" />
+                {attemptsControl.count}
+              </button>
+            ) : null}
+            <span className="pointer-events-none ml-auto inline-flex shrink-0 items-center gap-1">
+              <ProviderMark provider={thread.provider} />
+            </span>
+          </div>
         </div>
       </div>
+    </li>
+  );
+}
+
+/** Production search-result row: slim, non-canonical, the hit is still one thread. */
+export function SearchResultRow({
+  thread,
+  active,
+  context,
+  onSelect,
+}: {
+  readonly thread: ProtoThread;
+  readonly active: boolean;
+  readonly context: string;
+  readonly onSelect: () => void;
+}) {
+  return (
+    <li className="list-none">
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-label={`${thread.title}, ${context}`}
+        className={cn(
+          "flex h-9 w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 text-left text-sm outline-none",
+          active
+            ? "bg-sidebar-row-active text-sidebar-foreground"
+            : "text-sidebar-muted-foreground/75 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+        )}
+      >
+        <ProjectGlyph project={thread.project} />
+        <span className="min-w-0 flex-1 truncate">{thread.title}</span>
+        <span className="min-w-0 max-w-[45%] shrink truncate text-xs text-muted-foreground/55">
+          {context}
+        </span>
+      </button>
     </li>
   );
 }
