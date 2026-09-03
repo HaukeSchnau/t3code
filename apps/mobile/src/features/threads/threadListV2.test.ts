@@ -1,6 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import { buildThreadLineage } from "@t3tools/client-runtime/state/threads";
 import {
   CommandId,
   EnvironmentId,
@@ -22,6 +23,7 @@ import {
   resolveThreadListV2Status,
   resolveThreadListV2SwipeActions,
   sortThreadsForListV2,
+  threadListV2OrchestrationItemsAreEqual,
 } from "./threadListV2";
 
 const environmentId = EnvironmentId.make("environment-1");
@@ -940,4 +942,182 @@ describe("buildThreadListV2ListItems", () => {
       "v2-thread",
     ]);
   });
+
+  it("adapts the shared orchestration projection without replacing thread cards", () => {
+    const root = makeThread({ id: ThreadId.make("root"), title: "root" });
+    const child = makeThread({ id: ThreadId.make("child"), title: "child" });
+    const active = buildThreadListV2Items({
+      threads: [root, child],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const lineage = buildThreadLineage([
+      {
+        environmentId,
+        coordination: {
+          relationships: [
+            {
+              kind: "createdBy",
+              actor: { threadId: root.id },
+              target: { threadId: child.id },
+              createdAt: NOW,
+            },
+          ],
+          efforts: [],
+          waits: [],
+          watches: [],
+        },
+      },
+    ]);
+    const collapsed = buildThreadListV2ListItems({
+      items: active.items,
+      pendingTasks: [],
+      orchestration: {
+        lineage,
+        selectedThreadKey: `${environmentId}:${child.id}`,
+        isExpanded: () => false,
+      },
+    });
+
+    expect(collapsed.map((item) => item.type)).toEqual(["v2-thread", "v2-orchestration"]);
+    expect(collapsed[0]).toMatchObject({
+      type: "v2-thread",
+      item: { thread: root },
+      orchestration: { lineageContainer: { root: true, expanded: false } },
+    });
+    expect(collapsed[1]).toMatchObject({
+      type: "v2-orchestration",
+      item: { type: "viewing", threadKey: `${environmentId}:${child.id}` },
+    });
+
+    const expanded = buildThreadListV2ListItems({
+      items: active.items,
+      pendingTasks: [],
+      orchestration: { lineage, isExpanded: () => true },
+    });
+    expect(
+      expanded.flatMap((item) => (item.type === "v2-thread" ? [item.item.thread.id] : [])),
+    ).toEqual([root.id, child.id]);
+    const collapsedRoot = collapsed.find((item) => item.type === "v2-thread")?.orchestration;
+    const expandedRoot = expanded.find((item) => item.type === "v2-thread")?.orchestration;
+    expect(threadListV2OrchestrationItemsAreEqual(collapsedRoot, expandedRoot)).toBe(false);
+  });
+
+  it.each([
+    { pinnedId: "child", expected: ["child", "root"] },
+    { pinnedId: "root", expected: ["root", "child"] },
+  ])(
+    "keeps the $pinnedId side of a pin boundary in its own list block",
+    ({ pinnedId, expected }) => {
+      const root = makeThread({
+        id: ThreadId.make("root"),
+        title: "root",
+        pinnedAt: pinnedId === "root" ? NOW : null,
+      });
+      const child = makeThread({
+        id: ThreadId.make("child"),
+        title: "child",
+        pinnedAt: pinnedId === "child" ? NOW : null,
+      });
+      const active = buildThreadListV2Items({
+        threads: [root, child],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+      });
+      const lineage = buildThreadLineage([
+        {
+          environmentId,
+          coordination: {
+            relationships: [
+              {
+                kind: "createdBy",
+                actor: { threadId: root.id },
+                target: { threadId: child.id },
+                createdAt: NOW,
+              },
+            ],
+            efforts: [],
+            waits: [],
+            watches: [],
+          },
+        },
+      ]);
+      const items = buildThreadListV2ListItems({
+        items: active.items,
+        pendingTasks: [],
+        orchestration: { lineage, isExpanded: () => true },
+      });
+      const rows = items.filter((item) => item.type === "v2-thread");
+
+      expect(rows.map((item) => item.item.thread.id)).toEqual(expected);
+      expect(
+        rows.every(
+          (item) => item.orchestration?.depth === 0 && item.orchestration.lineageContainer === null,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      lifecycle: "snoozed",
+      replacement: {
+        snoozedAt: "2026-06-01T12:00:00.000Z",
+        snoozedUntil: "2026-06-03T09:00:00.000Z",
+      },
+    },
+    {
+      lifecycle: "settled",
+      replacement: { settledOverride: "settled" as const, settledAt: NOW },
+    },
+  ])(
+    "does not revive a superseded attempt when its replacement is $lifecycle",
+    ({ replacement }) => {
+      const earlier = makeThread({ id: ThreadId.make("earlier"), title: "earlier" });
+      const latest = makeThread({ id: ThreadId.make("latest"), title: "latest", ...replacement });
+      const lifecycleLayout = buildThreadListV2Items({
+        threads: [earlier, latest],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        snoozedShelfExpanded: true,
+        settledShelfExpanded: true,
+      });
+      const lineage = buildThreadLineage([
+        {
+          environmentId,
+          coordination: {
+            relationships: [
+              {
+                kind: "replaces",
+                actor: { threadId: latest.id },
+                target: { threadId: earlier.id },
+                createdAt: NOW,
+              },
+            ],
+            efforts: [],
+            waits: [],
+            watches: [],
+          },
+        },
+      ]);
+      const items = buildThreadListV2ListItems({
+        items: lifecycleLayout.items,
+        pendingTasks: [],
+        snoozedCount: lifecycleLayout.snoozedCount,
+        snoozedShelfExpanded: true,
+        snoozedShelfHeaderIndex: lifecycleLayout.snoozedShelfHeaderIndex,
+        settledCount: lifecycleLayout.settledCount,
+        settledShelfExpanded: true,
+        settledShelfHeaderIndex: lifecycleLayout.settledShelfHeaderIndex,
+        orchestration: { lineage, isExpanded: () => true },
+      });
+
+      expect(
+        items.flatMap((item) => (item.type === "v2-thread" ? [item.item.thread.id] : [])),
+      ).toEqual([latest.id]);
+    },
+  );
 });

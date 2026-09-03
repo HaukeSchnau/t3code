@@ -44,11 +44,14 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import {
+  ThreadListV2OrchestrationRow,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
   ThreadListV2SnoozedShelfHeader,
 } from "../threads/thread-list-v2-items";
+import { useThreadOrchestrationExpansion } from "../threads/use-thread-orchestration-expansion";
+import { useThreadLineage } from "../../state/coordination";
 import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
@@ -209,6 +212,8 @@ export function HomeScreen(props: HomeScreenProps) {
   >(() => new Map());
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
   const threadListV2Enabled = useThreadListV2Enabled();
+  const threadLineage = useThreadLineage();
+  const orchestrationExpansion = useThreadOrchestrationExpansion();
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const openSwipeableRef = useRef<SwipeableMethods | null>(null);
   const listRef = useRef<LegendListRef | null>(null);
@@ -725,8 +730,24 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
+        orchestration:
+          v2SearchQuery.length > 0
+            ? undefined
+            : {
+                lineage: threadLineage,
+                isExpanded: orchestrationExpansion.isExpanded,
+              },
       }),
-    [settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
+    [
+      nowMinute,
+      orchestrationExpansion.isExpanded,
+      settledShelfExpanded,
+      snoozedShelfExpanded,
+      threadLineage,
+      threadListV2Layout,
+      v2PendingTasks,
+      v2SearchQuery.length,
+    ],
   );
 
   const renderV2Item = useCallback(
@@ -779,6 +800,23 @@ export function HomeScreen(props: HomeScreenProps) {
           />
         );
       }
+      if (item.type === "v2-orchestration") {
+        const orchestrationItem = item.item;
+        const selectedTitle =
+          orchestrationItem.type === "viewing"
+            ? props.threads.find(
+                (thread) => `${thread.environmentId}:${thread.id}` === orchestrationItem.threadKey,
+              )?.title
+            : undefined;
+        return (
+          <ThreadListV2OrchestrationRow
+            item={orchestrationItem}
+            {...(selectedTitle === undefined ? {} : { selectedTitle })}
+            onToggle={orchestrationExpansion.toggle}
+            onReveal={orchestrationExpansion.reveal}
+          />
+        );
+      }
       const thread = item.item.thread;
       return (
         <ThreadListV2Row
@@ -788,6 +826,8 @@ export function HomeScreen(props: HomeScreenProps) {
           pinned={item.item.pinned}
           snoozePresetMinute={nowMinute}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
+          {...(item.orchestration === undefined ? {} : { orchestration: item.orchestration })}
+          onToggleOrchestrationContainer={orchestrationExpansion.toggle}
           showTrailingDivider={showTrailingDivider}
           project={
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
@@ -881,6 +921,9 @@ export function HomeScreen(props: HomeScreenProps) {
       v2ProjectTitleByProjectKey,
       props.searchQuery,
       nowMinute,
+      orchestrationExpansion.reveal,
+      orchestrationExpansion.toggle,
+      props.threads,
     ],
   );
   const v2KeyExtractor = useCallback((item: ThreadListV2ListItem) => item.key, []);

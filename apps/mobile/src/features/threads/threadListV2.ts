@@ -11,6 +11,13 @@ import type {
   SnoozePreset,
 } from "@t3tools/client-runtime/state/thread-settled";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import {
+  buildSidebarOrchestrationItems,
+  resolveWorkerState,
+  type SidebarOrchestrationItem,
+  type SidebarOrchestrationThreadItem,
+  type ThreadLineage,
+} from "@t3tools/client-runtime/state/threads";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
   activeThreadAnchorTimestampMs,
@@ -255,6 +262,13 @@ export interface ThreadListV2ThreadListItem {
   readonly item: ThreadListV2Item;
   /** Precomputed so recycled-list equality can see a minute-tick change. */
   readonly snoozeWakeLabelText: string | undefined;
+  readonly orchestration?: SidebarOrchestrationThreadItem;
+}
+
+export interface ThreadListV2OrchestrationListItem {
+  readonly type: "v2-orchestration";
+  readonly key: string;
+  readonly item: Exclude<SidebarOrchestrationItem, SidebarOrchestrationThreadItem>;
 }
 
 export interface ThreadListV2PendingListItem {
@@ -281,9 +295,94 @@ export interface ThreadListV2SettledShelfListItem {
 
 export type ThreadListV2ListItem =
   | ThreadListV2ThreadListItem
+  | ThreadListV2OrchestrationListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
+
+function lineageContainersAreEqual(
+  left: SidebarOrchestrationThreadItem["lineageContainer"],
+  right: SidebarOrchestrationThreadItem["lineageContainer"],
+): boolean {
+  return (
+    left === right ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.expanded === right.expanded &&
+      left.summary === right.summary &&
+      left.attention === right.attention &&
+      left.root === right.root)
+  );
+}
+
+function attemptsContainersAreEqual(
+  left: SidebarOrchestrationThreadItem["attemptsContainer"],
+  right: SidebarOrchestrationThreadItem["attemptsContainer"],
+): boolean {
+  return (
+    left === right ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.expanded === right.expanded &&
+      left.count === right.count)
+  );
+}
+
+/** Structural equality for orchestration data held by recycled native rows. */
+export function threadListV2OrchestrationItemsAreEqual(
+  left: SidebarOrchestrationItem | undefined,
+  right: SidebarOrchestrationItem | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.type !== right.type) return false;
+  switch (left.type) {
+    case "thread":
+      if (right.type !== "thread") return false;
+      return (
+        left.key === right.key &&
+        left.threadKey === right.threadKey &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        lineageContainersAreEqual(left.lineageContainer, right.lineageContainer) &&
+        attemptsContainersAreEqual(left.attemptsContainer, right.attemptsContainer)
+      );
+    case "section":
+      if (right.type !== "section") return false;
+      return (
+        left.key === right.key &&
+        left.containerId === right.containerId &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.title === right.title &&
+        left.expanded === right.expanded &&
+        left.summary === right.summary &&
+        left.attention === right.attention &&
+        left.muted === right.muted &&
+        left.closed === right.closed
+      );
+    case "history":
+      if (right.type !== "history") return false;
+      return (
+        left.key === right.key &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.title === right.title &&
+        left.summary === right.summary
+      );
+    case "viewing":
+      if (right.type !== "viewing") return false;
+      return (
+        left.key === right.key &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.threadKey === right.threadKey &&
+        left.containerIds.length === right.containerIds.length &&
+        left.containerIds.every((containerId, index) => containerId === right.containerIds[index])
+      );
+  }
+}
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -300,8 +399,13 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  readonly orchestration?: {
+    readonly lineage: ThreadLineage;
+    readonly selectedThreadKey?: string | null;
+    readonly isExpanded: (containerId: string) => boolean;
+  };
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map((item): ThreadListV2ListItem => ({
+  const threadItems = input.items.map((item): ThreadListV2ThreadListItem => ({
     type: "v2-thread",
     key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
     item,
@@ -322,7 +426,35 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const activeItems = threadItems.slice(0, activeEnd);
+  const itemByThreadKey = new Map(
+    threadItems.map((item) => [`${item.item.thread.environmentId}:${item.item.thread.id}`, item]),
+  );
+  const organizedActiveItems =
+    input.orchestration === undefined
+      ? activeItems
+      : buildSidebarOrchestrationItems({
+          lineage: input.orchestration.lineage,
+          orderedThreadKeys: activeItems.map(
+            (item) => `${item.item.thread.environmentId}:${item.item.thread.id}`,
+          ),
+          ...(input.orchestration.selectedThreadKey === undefined
+            ? {}
+            : { selectedThreadKey: input.orchestration.selectedThreadKey }),
+          isExpanded: input.orchestration.isExpanded,
+          stateOf: (threadKey) => {
+            const thread = itemByThreadKey.get(threadKey)?.item.thread;
+            return thread === undefined ? null : resolveWorkerState(thread);
+          },
+          isPinned: (threadKey) => itemByThreadKey.get(threadKey)?.item.pinned === true,
+        }).items.flatMap((item): ThreadListV2ListItem[] => {
+          if (item.type !== "thread") {
+            return [{ type: "v2-orchestration", key: `v2-${item.key}`, item }];
+          }
+          const threadItem = itemByThreadKey.get(item.threadKey);
+          return threadItem === undefined ? [] : [{ ...threadItem, orchestration: item }];
+        });
+  const result: ThreadListV2ListItem[] = [...organizedActiveItems, ...pendingItems];
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",

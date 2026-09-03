@@ -44,7 +44,7 @@ t3 thread batch await <batch-id> --json
 t3 thread batch cancel <batch-id> --json
 t3 thread batch cleanup <batch-id> --json
 t3 thread create "Review the parser" --worktree --json
-t3 thread fork --worktree --json
+t3 thread fork <source-thread-id> --effort <effort-id> --label prototype --worktree --json
 t3 thread send <thread-id> "Please run the focused tests" --json
 t3 thread send <thread-id> "After that, update the docs" --queue --json
 t3 thread rename <thread-id> "Parser review" --json
@@ -54,7 +54,7 @@ t3 thread rename <thread-id> "Parser review" --json
 `--queue` when the message should wait behind active work. Corrections and review findings that
 affect the current implementation should normally be sent immediately.
 
-Provider sessions set `T3CODE_THREAD_ID`, which lets `create`, `read`, `send`,
+Provider sessions set `T3CODE_THREAD_ID`, which lets `create`, `fork`, `read`, `send`,
 and `rename` record the calling thread automatically. When running the CLI from
 an unrelated shell, pass `--from-thread <thread-id>` if the command needs caller
 identity. `create` requires caller identity because it inherits the caller's
@@ -78,6 +78,10 @@ them: every member still opens, chats, runs tools, shows files, and owns artifac
 other thread. A coordinator with one open effort automatically adds newly created children to it.
 Use `create --no-effort` to opt out, or `create --effort <effort-id>` when more than one effort is
 open. `--replaces <thread-id>` records worker replacement and moves membership within the effort.
+Forks use the same effort inheritance rule. Pass `fork --effort <effort-id> --label <label>` to
+create the fork with its membership in one operation, or `fork --no-effort` to opt out. The caller
+owns the new thread while the selected source remains its separate fork origin. When the caller
+forks itself, both facts point to the caller.
 
 A wait is a separate durable barrier. `wait create` registers it and returns immediately, so it is
 not limited by the lifetime of a CLI process or provider tool call. The server wakes the coordinator

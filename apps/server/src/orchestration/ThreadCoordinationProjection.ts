@@ -69,6 +69,7 @@ export function deriveThreadCoordinationShell(
   const efforts = new Map<ThreadOrchestrationEffortId, OrchestrationEffortShell>();
   const waits = new Map<ThreadOrchestrationWaitId, OrchestrationWaitShell>();
   const watches = new Map<ThreadOrchestrationWatchId, OrchestrationWatchShell>();
+  const effortMemberLeftAt = new Map<string, string>();
 
   for (const activity of activities) {
     if (activity.kind === "thread-orchestration.relationship") {
@@ -136,6 +137,10 @@ export function deriveThreadCoordinationShell(
           });
           break;
         case "member-left":
+          effortMemberLeftAt.set(
+            `${payload.effortId}:${refKey(payload.thread)}`,
+            activity.createdAt,
+          );
           efforts.set(payload.effortId, {
             ...current,
             members: current.members.filter(
@@ -278,6 +283,38 @@ export function deriveThreadCoordinationShell(
       waits.set(waitId, { ...wait, state, resolvedAt: activity.createdAt });
       if (effort !== undefined) efforts.set(effortId, { ...effort, closedAt: activity.createdAt });
     }
+  }
+
+  // Creation relationships carry initial effort membership in the same
+  // durable fact. The explicit member event remains supported for later adds,
+  // labels, and removals.
+  for (const relationship of relationships.values()) {
+    if (
+      relationship.kind !== "createdBy" ||
+      relationship.effortId === undefined ||
+      relationship.label === undefined
+    ) {
+      continue;
+    }
+    const effort = efforts.get(relationship.effortId);
+    if (effort === undefined) continue;
+    const memberKey = `${relationship.effortId}:${refKey(relationship.target)}`;
+    const leftAt = effortMemberLeftAt.get(memberKey);
+    if (leftAt !== undefined && leftAt >= relationship.createdAt) continue;
+    if (effort.members.some((member) => refKey(member.thread) === refKey(relationship.target))) {
+      continue;
+    }
+    efforts.set(relationship.effortId, {
+      ...effort,
+      members: [
+        ...effort.members,
+        {
+          thread: relationship.target,
+          label: relationship.label,
+          joinedAt: relationship.createdAt,
+        },
+      ],
+    });
   }
 
   return {

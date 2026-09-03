@@ -799,6 +799,7 @@ const make = Effect.gen(function* () {
 
   const appendRelationship = (input: {
     readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly actor?: OrchestrationThreadRef;
     readonly kind: ThreadOrchestrationRelationshipKind;
     readonly targetThreadId: ThreadId;
     readonly summary: string;
@@ -819,8 +820,8 @@ const make = Effect.gen(function* () {
         summary: input.summary,
         payload: {
           kind: input.kind,
-          actorEnvironmentId: input.scope.environmentId,
-          actorThreadId: input.scope.threadId,
+          actorEnvironmentId: input.actor?.environmentId ?? input.scope.environmentId,
+          actorThreadId: input.actor?.threadId ?? input.scope.threadId,
           targetEnvironmentId: input.targetEnvironmentId ?? (yield* localEnvironmentId),
           targetThreadId: input.targetThreadId,
           ...(input.batchId !== undefined ? { batchId: input.batchId } : {}),
@@ -3374,9 +3375,85 @@ const make = Effect.gen(function* () {
           projectId: sourceThread.projectId,
         });
       }
+      const forkCoordination = input.coordination;
+      const currentCoordination =
+        forkCoordination?.effortId !== undefined ||
+        forkCoordination?.excludeInheritedEffort === true ||
+        snapshotQuery.getThreadCoordinationShell === undefined
+          ? undefined
+          : yield* coordinationShell();
+      const inheritedEfforts =
+        currentCoordination?.efforts.filter(
+          (effort) => effort.coordinator.threadId === scope.threadId && effort.closedAt === null,
+        ) ?? [];
+      if (inheritedEfforts.length > 1) {
+        return yield* new ThreadOrchestrationError({
+          operation: "fork_thread",
+          code: "ambiguous_effort",
+          message:
+            "This coordinator has more than one open effort. Choose one explicitly or disable effort inheritance.",
+          threadId: scope.threadId,
+        });
+      }
+      const effortId =
+        forkCoordination?.effortId ??
+        (forkCoordination?.excludeInheritedEffort === true
+          ? undefined
+          : inheritedEfforts[0]?.effortId);
+      const effort = effortId === undefined ? undefined : yield* readEffort(scope, { effortId });
+      if (effort !== undefined) {
+        yield* assertCoordinator(
+          "fork_thread",
+          scope,
+          effort.coordinator,
+          "effort",
+          effort.effortId,
+        );
+        if (effort.closedAt !== null) {
+          return yield* new ThreadOrchestrationError({
+            operation: "fork_thread",
+            code: "effort_closed",
+            message: `Effort '${effort.effortId}' is closed.`,
+            threadId: scope.threadId,
+            resourceType: "effort",
+            resourceId: effort.effortId,
+          });
+        }
+      }
       const createdAt = yield* nowIso;
       const nextThreadId = yield* threadId("fork");
       const title = `Fork of ${sourceThread.title}`;
+      const recordCoordination = (thread: ThreadOrchestrationThreadSummary) =>
+        Effect.gen(function* () {
+          yield* appendRelationship({
+            scope,
+            kind: "createdBy",
+            targetThreadId: nextThreadId,
+            ...(effortId !== undefined ? { effortId } : {}),
+            ...(forkCoordination?.label !== undefined
+              ? { label: forkCoordination.label }
+              : effortId !== undefined
+                ? { label: title }
+                : {}),
+            summary: `Created by thread ${scope.threadId}.`,
+            createdAt,
+          });
+          yield* appendRelationship({
+            scope,
+            actor: { environmentId: yield* localEnvironmentId, threadId: sourceThreadId },
+            kind: "forkedFrom",
+            targetThreadId: nextThreadId,
+            summary: `Forked from thread ${sourceThreadId} by thread ${scope.threadId}.`,
+            createdAt,
+          });
+          if (effortId === undefined || effort === undefined) return undefined;
+          const member = {
+            thread: { environmentId: thread.environmentId, threadId: nextThreadId },
+            label: forkCoordination?.label ?? title,
+            joinedAt: createdAt,
+          };
+          return { effortId, ...member };
+        });
       const prepared =
         input.environment?.type === "worktree"
           ? yield* workspaceService
@@ -3432,16 +3509,11 @@ const make = Effect.gen(function* () {
         );
 
       if (codexFork._tag === "Success") {
-        yield* appendRelationship({
-          scope,
-          kind: "forkedFrom",
-          targetThreadId: nextThreadId,
-          summary: `Forked from thread ${sourceThreadId} by thread ${scope.threadId}.`,
-          createdAt,
-        });
+        const membership = yield* recordCoordination(codexFork.result.thread);
         return {
           thread: codexFork.result.thread,
           transcriptCloned: true,
+          ...(membership === undefined ? {} : { membership }),
         };
       }
 
@@ -3471,32 +3543,28 @@ const make = Effect.gen(function* () {
             cleanupPreparedWorkspace.pipe(Effect.flatMap(() => Effect.fail(error))),
           ),
         );
-      yield* appendRelationship({
-        scope,
-        kind: "forkedFrom",
-        targetThreadId: nextThreadId,
-        summary: `Forked from thread ${sourceThreadId} by thread ${scope.threadId}.`,
+      const thread: ThreadOrchestrationThreadSummary = {
+        environmentId: yield* localEnvironmentId,
+        threadId: nextThreadId,
+        projectId: project.id,
+        title,
+        projectTitle: project.title,
+        status: "idle",
+        modelSelection: sourceThread.modelSelection,
+        runtimeMode: sourceThread.runtimeMode,
+        interactionMode: sourceThread.interactionMode,
+        workspaceRoot: project.workspaceRoot,
+        worktreePath: prepared?.compatibilityWorktreePath ?? sourceThread.worktreePath,
+        outcome: "queued" as const,
+        backgroundLiveness: null,
         createdAt,
-      });
+        updatedAt: createdAt,
+      };
+      const membership = yield* recordCoordination(thread);
       return {
-        thread: {
-          environmentId: yield* localEnvironmentId,
-          threadId: nextThreadId,
-          projectId: project.id,
-          title,
-          projectTitle: project.title,
-          status: "idle",
-          modelSelection: sourceThread.modelSelection,
-          runtimeMode: sourceThread.runtimeMode,
-          interactionMode: sourceThread.interactionMode,
-          workspaceRoot: project.workspaceRoot,
-          worktreePath: prepared?.compatibilityWorktreePath ?? sourceThread.worktreePath,
-          outcome: "queued" as const,
-          backgroundLiveness: null,
-          createdAt,
-          updatedAt: createdAt,
-        },
+        thread,
         transcriptCloned: false,
+        ...(membership === undefined ? {} : { membership }),
       };
     });
 

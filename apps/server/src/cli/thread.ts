@@ -622,24 +622,48 @@ const forkCommand = Command.make("fork", {
     Flag.withDescription("Fork into an isolated managed workspace."),
     Flag.withDefault(false),
   ),
+  effort: Flag.string("effort").pipe(
+    Flag.withDescription("Add the forked thread to this effort."),
+    Flag.optional,
+  ),
+  label: Flag.string("label").pipe(
+    Flag.withDescription("Worker label inside the effort."),
+    Flag.optional,
+  ),
+  noEffort: Flag.boolean("no-effort").pipe(
+    Flag.withDescription("Do not inherit the coordinator's sole open effort."),
+    Flag.withDefault(false),
+  ),
 }).pipe(
   Command.withDescription("Fork an idle thread."),
   Command.withHandler((flags) =>
     withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
       Effect.gen(function* () {
-        const source = Option.isSome(flags.threadId)
-          ? ThreadId.make(flags.threadId.value)
-          : currentCallerThreadId(flags.fromThread);
-        if (source === undefined) {
+        const caller = currentCallerThreadId(flags.fromThread);
+        if (caller === undefined) {
           return yield* new ThreadCliCallerRequiredError();
         }
+        const source = Option.isSome(flags.threadId) ? ThreadId.make(flags.threadId.value) : caller;
+        const hasCoordination =
+          Option.isSome(flags.effort) || Option.isSome(flags.label) || flags.noEffort;
         const result = yield* client.threadOrchestration.forkThread({
           headers,
           payload: {
-            scope: actorScope(environmentId, source),
+            scope: actorScope(environmentId, caller),
             input: {
               threadId: source,
               environment: { type: flags.worktree ? "worktree" : "same-directory" },
+              ...(hasCoordination
+                ? {
+                    coordination: {
+                      ...(Option.isSome(flags.effort)
+                        ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
+                        : {}),
+                      ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+                      ...(flags.noEffort ? { excludeInheritedEffort: true } : {}),
+                    },
+                  }
+                : {}),
             },
           },
         });
