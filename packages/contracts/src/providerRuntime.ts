@@ -14,7 +14,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ProviderErrorClass } from "./providerError.ts";
+import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
 import { ProviderApprovalOption } from "./orchestration.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
@@ -785,6 +785,7 @@ export type RuntimeWarningPayload = typeof RuntimeWarningPayload.Type;
 const RuntimeErrorPayload = Schema.Struct({
   message: TrimmedNonEmptyStringSchema,
   class: Schema.optional(RuntimeErrorClass),
+  providerUnavailable: Schema.optional(ProviderUnavailable),
   detail: Schema.optional(Schema.Unknown),
 });
 export type RuntimeErrorPayload = typeof RuntimeErrorPayload.Type;

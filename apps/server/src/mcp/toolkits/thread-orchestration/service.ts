@@ -446,6 +446,19 @@ function outcomeForThread(
   }
 }
 
+function failureForThread(
+  thread: OrchestrationThreadShell,
+): ThreadOrchestrationThreadResult["failure"] {
+  const session = thread.session;
+  if (session?.status !== "error" || session.lastError === null) return null;
+  if (session.providerUnavailable) return session.providerUnavailable;
+  return {
+    type: "runtime_error",
+    reason: session.lastError,
+    errorClass: session.lastErrorClass ?? "unknown",
+  };
+}
+
 function forkSourceBusyReason(context: ProjectionThreadResultContext): string | null {
   const thread = context.thread;
   if (thread.archivedAt !== null) return "archived";
@@ -899,6 +912,7 @@ const make = Effect.gen(function* () {
         latestAssistantMessage: context.latestAssistantMessage,
         queuedMessageCount: context.queuedMessageCount,
         activityCount: context.activityCount,
+        failure: failureForThread(context.thread),
       };
     });
 

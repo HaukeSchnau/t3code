@@ -3763,6 +3763,7 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime exploded");
+    expect(thread.session?.providerUnavailable).toBeNull();
   });
 
   it("finalizes buffered parent text when a provider session exits", async () => {
@@ -3843,7 +3844,58 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
 
     expect(activity?.kind).toBe("runtime.error");
+    expect(activity?.summary).toBe("Runtime error");
     expect(activityPayload?.message).toBe("runtime activity exploded");
+  });
+
+  it("persists provider availability and gives its activity a concise status", async () => {
+    const harness = await createHarness();
+    const now = "2026-09-03T10:43:23.775Z";
+    const providerUnavailable = {
+      type: "provider_unavailable" as const,
+      cause: "rate_limited" as const,
+      scope: "provider_instance" as const,
+      provider: ProviderDriverKind.make("opencode"),
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      model: "zai-coding-plan/glm-5.3-flash",
+      reason: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-03 18:43:23",
+      retryable: true,
+      retryAt: now,
+    };
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-provider-rate-limited"),
+      provider: ProviderDriverKind.make("opencode"),
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-provider-rate-limited"),
+      payload: {
+        message: providerUnavailable.reason,
+        class: "rate_limited",
+        providerUnavailable,
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.providerUnavailable?.retryAt === now,
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-provider-rate-limited",
+    );
+
+    expect(thread.session?.providerUnavailable).toEqual(providerUnavailable);
+    expect(activity).toMatchObject({
+      kind: "runtime.error",
+      summary: "Provider usage limit reached",
+      payload: {
+        message: providerUnavailable.reason,
+        class: "rate_limited",
+        providerUnavailable,
+      },
+    });
   });
 
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {

@@ -3,6 +3,7 @@ import {
   type OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ProviderUnavailable,
   type ProviderRuntimeEvent,
   type ProviderSession,
   RuntimeItemId,
@@ -64,7 +65,12 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
-import { fetchZaiUsageLimits, type ZaiUsageSource, zaiQuotaUrlForApiUrl } from "../zaiUsage.ts";
+import {
+  fetchZaiUsageLimits,
+  type ZaiUsageLimits,
+  type ZaiUsageSource,
+  zaiQuotaUrlForApiUrl,
+} from "../zaiUsage.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 const OPENCODE_ZAI_USAGE_MIN_REFRESH_INTERVAL_MS = 60 * 1000;
@@ -194,6 +200,11 @@ type OpenCodeSessionStatusEvent = Extract<
   OpenCodeSubscribedEvent,
   { readonly type: "session.status" }
 >;
+
+type OpenCodeSessionError = Extract<
+  OpenCodeSubscribedEvent,
+  { readonly type: "session.error" }
+>["properties"]["error"];
 
 const OpenCodeSessionStatusMap = Schema.Record(
   Schema.String,
@@ -387,6 +398,9 @@ interface OpenCodeSessionContext {
   pendingRequestRecovery: OpenCodePendingRequestRecovery | undefined;
   promptGeneration: number;
   promptAdmission: OpenCodePromptAdmission | undefined;
+  zaiUsageSnapshot:
+    | { readonly model: string | undefined; readonly limits: ZaiUsageLimits }
+    | undefined;
   readonly promptSemaphore: Semaphore.Semaphore;
   readonly firstConnection: Deferred.Deferred<void, ProviderAdapterRequestError>;
   /**
@@ -684,6 +698,72 @@ function sessionErrorMessage(error: unknown): string {
   return typeof message === "string" && message.trim().length > 0
     ? message
     : "OpenCode session failed.";
+}
+
+function exhaustedUsageRetryAt(usageLimits: ZaiUsageLimits | undefined): string | null {
+  if (!usageLimits) return null;
+  const windows = usageLimits.windows?.length
+    ? usageLimits.windows
+    : [usageLimits.primary, usageLimits.secondary];
+  return (
+    windows
+      .flatMap((window) =>
+        window && window.usedPercent >= 100 && window.resetsAt ? [window.resetsAt] : [],
+      )
+      .toSorted()
+      .at(0) ?? null
+  );
+}
+
+function retryAtFromOpenCodeHeaders(
+  headers: Readonly<Record<string, string>> | undefined,
+  observedAt: string,
+): string | null {
+  if (!headers) return null;
+  const observed = Option.getOrUndefined(DateTime.make(observedAt));
+  if (!observed) return null;
+  const observedAtMs = DateTime.toEpochMillis(observed);
+  const retryAfterMs = Number(headers["retry-after-ms"]);
+  if (Number.isFinite(retryAfterMs) && retryAfterMs > 0) {
+    return DateTime.formatIso(DateTime.add(observed, { milliseconds: retryAfterMs }));
+  }
+  const retryAfter = headers["retry-after"]?.trim();
+  if (!retryAfter) return null;
+  const seconds = Number(retryAfter);
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return DateTime.formatIso(DateTime.add(observed, { milliseconds: seconds * 1_000 }));
+  }
+  return Option.match(DateTime.make(retryAfter), {
+    onNone: () => null,
+    onSome: (value) =>
+      DateTime.toEpochMillis(value) > observedAtMs ? DateTime.formatIso(value) : null,
+  });
+}
+
+function openCodeProviderUnavailable(input: {
+  readonly error: OpenCodeSessionError;
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly model: string | undefined;
+  readonly usageLimits: ZaiUsageLimits | undefined;
+  readonly observedAt: string;
+}): ProviderUnavailable | undefined {
+  if (input.error?.name !== "APIError" || input.error.data.statusCode !== 429) {
+    return undefined;
+  }
+  const retryAt =
+    exhaustedUsageRetryAt(input.usageLimits) ??
+    retryAtFromOpenCodeHeaders(input.error.data.responseHeaders, input.observedAt);
+  return {
+    type: "provider_unavailable",
+    cause: "rate_limited",
+    scope: "provider_instance",
+    provider: PROVIDER,
+    providerInstanceId: input.providerInstanceId,
+    ...(input.model ? { model: input.model } : {}),
+    reason: input.error.data.message,
+    retryable: input.error.data.isRetryable,
+    retryAt,
+  };
 }
 
 function updateProviderSession(
@@ -1086,6 +1166,7 @@ export function makeOpenCodeAdapter(
       });
 
       const rateLimits = yield* readZaiUsageLimits(source);
+      context.zaiUsageSnapshot = { model: context.session.model, limits: rateLimits };
       yield* emit({
         ...(yield* buildEventBase({ threadId: context.session.threadId })),
         type: "account.rate-limits.updated",
@@ -2398,6 +2479,18 @@ export function makeOpenCodeAdapter(
 
         case "session.error": {
           const message = sessionErrorMessage(event.properties.error);
+          const observedAt = yield* nowIso;
+          const usageSnapshot = context.zaiUsageSnapshot;
+          const providerUnavailable = openCodeProviderUnavailable({
+            error: event.properties.error,
+            providerInstanceId: boundInstanceId,
+            model: context.session.model,
+            usageLimits:
+              usageSnapshot && usageSnapshot.model === context.session.model
+                ? usageSnapshot.limits
+                : undefined,
+            observedAt,
+          });
           const activeTurnId = context.activeTurnId;
           const cancellation = context.cancellation;
           if (isOpenCodeAbortError(event.properties.error)) {
@@ -2447,18 +2540,21 @@ export function makeOpenCodeAdapter(
               payload: {
                 state: "failed",
                 errorMessage: message,
+                ...(providerUnavailable ? { errorClass: "rate_limited" as const } : {}),
               },
             });
           }
           yield* emit({
             ...(yield* buildEventBase({
               threadId: context.session.threadId,
+              createdAt: observedAt,
               raw: event,
             })),
             type: "runtime.error",
             payload: {
               message,
-              class: "provider_error",
+              class: providerUnavailable ? "rate_limited" : "provider_error",
+              ...(providerUnavailable ? { providerUnavailable } : {}),
               detail: event.properties.error,
             },
           });
@@ -2740,6 +2836,7 @@ export function makeOpenCodeAdapter(
           pendingRequestRecovery: undefined,
           promptGeneration: 0,
           promptAdmission: undefined,
+          zaiUsageSnapshot: undefined,
           promptSemaphore: Semaphore.makeUnsafe(1),
           firstConnection: Deferred.makeUnsafe<void, ProviderAdapterRequestError>(),
           stopped: yield* Ref.make(false),
