@@ -73,13 +73,14 @@ it("settles mixed terminal worker outcomes as failed", () => {
   expect(outcomes.every(__testing.isTerminalBatchMemberOutcome)).toBe(true);
 });
 
-it("steers attention outcomes and queues routine settlement notifications", () => {
+it("steers attention and explicit wait outcomes while queuing routine settlements", () => {
   expect(__testing.deliveryForCoordinatorNotification(["failed"])).toBe("immediate");
   expect(__testing.deliveryForCoordinatorNotification(["blocked-approval"])).toBe("immediate");
   expect(__testing.deliveryForCoordinatorNotification(["blocked-input"])).toBe("immediate");
   expect(__testing.deliveryForCoordinatorNotification(["completed", "failed"])).toBe("immediate");
   expect(__testing.deliveryForCoordinatorNotification(["completed"])).toBe("queued");
   expect(__testing.deliveryForCoordinatorNotification(["interrupted"])).toBe("queued");
+  expect(__testing.deliveryForCoordinatorNotification(["completed"], "wait")).toBe("immediate");
 });
 
 const scope: McpInvocationContext.McpInvocationScope = {
