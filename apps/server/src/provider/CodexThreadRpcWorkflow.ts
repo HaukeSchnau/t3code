@@ -185,13 +185,14 @@ export const makeCodexThreadRpcWorkflow = (input: {
   readonly serverSettings: ServerSettings.ServerSettingsService["Service"];
   readonly threadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService["Service"];
   readonly codexThreadForkImporter: CodexThreadForkImporter["Service"];
+  readonly childProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"];
   readonly dispatchNormalizedCommand: (
     command: OrchestrationCommand,
   ) => Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError>;
 }) =>
   Effect.gen(function* () {
     const crypto = yield* Crypto.Crypto;
-    const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const childProcessSpawner = input.childProcessSpawner;
     const randomUUID = crypto.randomUUIDv4.pipe(
       Effect.mapError(
         (cause) =>

@@ -63,6 +63,37 @@ layer("NodeSqliteClient", (it) => {
     }),
   );
 
+  it.effect("records every SQLite statement execution", () =>
+    Effect.gen(function* () {
+      const sql = yield* SqlClient.SqlClient;
+      const before = yield* Metric.snapshot;
+      const beforeMetric = before.find(
+        (snapshot) => snapshot.type === "Histogram" && snapshot.id === "t3_sql_execute_duration",
+      );
+      const beforeCount = beforeMetric?.type === "Histogram" ? beforeMetric.state.count : 0;
+
+      yield* sql`SELECT 1`;
+      yield* sql`SELECT 1`.raw;
+      yield* sql`SELECT 1`.values;
+      yield* sql`SELECT 1`.valuesUnprepared;
+      yield* sql`SELECT 1`.unprepared;
+      yield* Effect.exit(sql.unsafe("SELECT FROM").unprepared);
+
+      const after = yield* Metric.snapshot;
+      const executeDuration = after.find(
+        (snapshot) => snapshot.type === "Histogram" && snapshot.id === "t3_sql_execute_duration",
+      );
+      assert.equal(executeDuration?.type, "Histogram");
+      if (executeDuration?.type === "Histogram") {
+        assert.equal(executeDuration.state.count, beforeCount + 6);
+        assert.include(
+          executeDuration.state.buckets.map(([boundary]) => boundary),
+          2_000,
+        );
+      }
+    }),
+  );
+
   it.effect("records rolled-back SQLite transactions", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;

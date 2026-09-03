@@ -26,7 +26,7 @@ import type { Connection } from "effect/unstable/sql/SqlConnection";
 import { SqlError, classifySqliteError } from "effect/unstable/sql/SqlError";
 import * as Statement from "effect/unstable/sql/Statement";
 
-import { sqliteTransactionDuration } from "../observability/Metrics.ts";
+import { sqliteTransactionDuration, sqlExecuteDuration } from "../observability/Metrics.ts";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
 
@@ -240,24 +240,28 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
 
     return identity<Connection>({
       execute(sql, params, rowTransform) {
-        return rowTransform ? Effect.map(run(sql, params), rowTransform) : run(sql, params);
+        return (rowTransform ? Effect.map(run(sql, params), rowTransform) : run(sql, params)).pipe(
+          Effect.trackDuration(sqlExecuteDuration),
+        );
       },
       executeRaw(sql, params) {
-        return run(sql, params, true);
+        return run(sql, params, true).pipe(Effect.trackDuration(sqlExecuteDuration));
       },
       executeValues(sql, params) {
-        return runValues(sql, params);
+        return runValues(sql, params).pipe(Effect.trackDuration(sqlExecuteDuration));
       },
       executeValuesUnprepared(sql, params) {
         return Effect.flatMap(prepare(sql), (statement) =>
           runStatementValues(statement, params ?? []),
-        );
+        ).pipe(Effect.trackDuration(sqlExecuteDuration));
       },
       executeUnprepared(sql, params, rowTransform) {
         const effect = prepare(sql).pipe(
           Effect.flatMap((statement) => runStatement(statement, params ?? [], false)),
         );
-        return rowTransform ? Effect.map(effect, rowTransform) : effect;
+        return (rowTransform ? Effect.map(effect, rowTransform) : effect).pipe(
+          Effect.trackDuration(sqlExecuteDuration),
+        );
       },
       executeStream(_sql, _params) {
         return Stream.die(new UnsupportedNodeSqliteOperationError());
