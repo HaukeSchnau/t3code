@@ -67,6 +67,7 @@ import {
   type ThreadOrchestrationThreadGraphInput,
   type ThreadOrchestrationThreadGraphResult,
   type ThreadOrchestrationThreadDetail,
+  type ThreadMessageDelivery,
   type ThreadOrchestrationThreadModelChoice,
   type ThreadOrchestrationThreadResult,
   type ThreadOrchestrationThreadSummary,
@@ -396,6 +397,16 @@ function isTerminalBatchMemberOutcome(
 
 function isTerminalBatchStatus(status: ThreadOrchestrationBatchStatus): boolean {
   return ["completed", "failed", "cancelled", "deadline-exceeded"].includes(status);
+}
+
+function deliveryForCoordinatorNotification(
+  outcomes: ReadonlyArray<ThreadOrchestrationThreadSummary["outcome"]>,
+): ThreadMessageDelivery {
+  return outcomes.some((outcome) =>
+    ["failed", "blocked-approval", "blocked-input"].includes(outcome ?? "unknown"),
+  )
+    ? "immediate"
+    : "queued";
 }
 
 function statusForBatch(input: {
@@ -1759,6 +1770,9 @@ const make = Effect.gen(function* () {
           },
           runtimeMode: coordinatorOption.value.runtimeMode,
           interactionMode: coordinatorOption.value.interactionMode,
+          delivery: deliveryForCoordinatorNotification(
+            batch.members.map((member) => member.outcome),
+          ),
           createdAt: notifiedAt,
         })
         .pipe(
@@ -1816,6 +1830,7 @@ const make = Effect.gen(function* () {
           },
           runtimeMode: coordinatorOption.value.runtimeMode,
           interactionMode: coordinatorOption.value.interactionMode,
+          delivery: deliveryForCoordinatorNotification(blocked.map((member) => member.outcome)),
           createdAt,
         })
         .pipe(
@@ -2528,6 +2543,7 @@ const make = Effect.gen(function* () {
           },
           runtimeMode: coordinator.value.runtimeMode,
           interactionMode: coordinator.value.interactionMode,
+          delivery: deliveryForCoordinatorNotification(relevant.map((member) => member.outcome)),
           createdAt,
         })
         .pipe(
@@ -2774,6 +2790,7 @@ const make = Effect.gen(function* () {
                   },
                   runtimeMode: coordinator.value.runtimeMode,
                   interactionMode: coordinator.value.interactionMode,
+                  delivery: deliveryForCoordinatorNotification([outcome]),
                   createdAt,
                 })
                 .pipe(
@@ -3208,6 +3225,7 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ThreadOrchestrationService, make);
 
 export const __testing = {
+  deliveryForCoordinatorNotification,
   isTerminalBatchMemberOutcome,
   isTerminalBatchStatus,
   statusForBatch,
