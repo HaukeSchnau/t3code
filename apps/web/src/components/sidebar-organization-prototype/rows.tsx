@@ -179,11 +179,6 @@ export function RootDisclosure({
   );
 }
 
-/** Empty gutter so root leaves align with roots that carry a disclosure. */
-export function NeutralGutter({ device }: { readonly device: DeviceKind }) {
-  return <span aria-hidden className={cn("shrink-0", gutterWidth(device))} />;
-}
-
 /** The one thread row: the production regular card, wherever it sits. */
 export function ThreadRow({
   thread,
@@ -199,7 +194,7 @@ export function ThreadRow({
   readonly index: WorkIndex;
   readonly active: boolean;
   readonly onSelect: () => void;
-  /** Leading gutter beside the card: a root disclosure, a neutral spacer, or nothing for nested rows. */
+  /** Leading gutter beside the card: a root disclosure when the row owns descendants, otherwise nothing so leaves keep the full width. */
   readonly gutter?: ReactNode;
   /** Third line: the branch by default, or a collapsed root's recursive summary. */
   readonly branchLine?: string;

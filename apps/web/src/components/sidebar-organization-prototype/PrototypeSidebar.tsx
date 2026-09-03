@@ -27,7 +27,6 @@ import {
   type WorkIndex,
 } from "./model";
 import {
-  NeutralGutter,
   RootDisclosure,
   SearchResultRow,
   SectionHeader,
@@ -253,7 +252,7 @@ function LineageBody({ model, tray }: { readonly model: SidebarModel; readonly t
   );
 }
 
-/** A lineage root: a plain card when it never delegated, otherwise the card with its disclosure gutter and subtree. */
+/** A lineage root: a full-width card when it never delegated, otherwise the card behind its disclosure gutter plus subtree. Only rows that own descendants pay for a gutter. */
 function RootRow({
   model,
   thread,
@@ -272,7 +271,6 @@ function RootRow({
         index={index}
         active={model.selectedThreadId === thread.id}
         onSelect={() => select(`thread:${thread.id}`)}
-        gutter={<NeutralGutter device={device} />}
       />
     );
   }
@@ -389,7 +387,6 @@ export function PrototypeSidebar({
                 index={index}
                 active={model.selectedThreadId === thread.id}
                 onSelect={() => select(`thread:${thread.id}`)}
-                gutter={<NeutralGutter device={device} />}
               />
             ))}
           </ul>
