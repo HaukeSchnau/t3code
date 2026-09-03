@@ -171,6 +171,7 @@ const makeHarness = Effect.fn("makeAntigravityDriverHarness")(function* (
     instanceId,
     displayName: "Google test account",
     enabled: false,
+    acceptRuntimeEvent: () => Effect.succeed(true),
     config: { ...AntigravityDriver.defaultConfig(), ...options.config },
     environment: [
       { name: "PATH", value: instancePath },

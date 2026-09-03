@@ -1399,9 +1399,8 @@ function MonitorUserInputPrompt({
       {!requiresFullThread ? (
         <div className="grid gap-1">
           {question.options.map((option) => {
-            const selected = draftAnswers[question.id]?.selectedOptionLabels?.includes(
-              option.label,
-            );
+            const optionValue = option.value ?? option.label;
+            const selected = draftAnswers[question.id]?.selectedOptionValues?.includes(optionValue);
             return (
               <button
                 key={option.label}
@@ -1419,7 +1418,7 @@ function MonitorUserInputPrompt({
                     [question.id]: togglePendingUserInputOptionSelection(
                       question,
                       answers[question.id],
-                      option.label,
+                      optionValue,
                     ),
                   }));
                 }}

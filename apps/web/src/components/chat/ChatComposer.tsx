@@ -1287,7 +1287,7 @@ export interface ChatComposerProps {
   ) => void;
 
   onProviderModelSelect: (instanceId: ProviderInstanceId, model: string) => void;
-  onOpenProviderSetup: (instanceId: ProviderInstanceId) => void;
+  onOpenProviderSetup?: (instanceId: ProviderInstanceId) => void;
   getModelDisabledReason: (instanceId: ProviderInstanceId, model: string) => string | null;
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
@@ -3475,9 +3475,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       type="button"
       size="sm"
       variant="ghost"
-      disabled={!providerSetupInstanceId}
+      disabled={!providerSetupInstanceId || !onOpenProviderSetup}
       onClick={() => {
-        if (providerSetupInstanceId) {
+        if (providerSetupInstanceId && onOpenProviderSetup) {
           onOpenProviderSetup(providerSetupInstanceId);
         }
       }}
@@ -3531,7 +3531,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         onOpenChange={setIsComposerModelPickerOpen}
         getModelDisabledReason={getModelDisabledReason}
         onInstanceModelChange={onProviderModelSelect}
-        onOpenProviderSetup={onOpenProviderSetup}
+        {...(onOpenProviderSetup ? { onOpenProviderSetup } : {})}
       />
 
       {composerControlsCompact ? (
@@ -4856,7 +4856,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   <CompactComposerControlsMenu
                     interactionMode={interactionMode}
                     runtimeMode={runtimeMode}
-                    showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                    showInteractionModeToggle={planModeUiEnabled}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
                     onRuntimeModeChange={handleRuntimeModeChange}
@@ -4870,7 +4870,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       </>
                     ) : null}
                     <ComposerFooterModeControls
-                      showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
+                      showInteractionModeToggle={planModeUiEnabled}
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
                       onToggleInteractionMode={toggleInteractionMode}
