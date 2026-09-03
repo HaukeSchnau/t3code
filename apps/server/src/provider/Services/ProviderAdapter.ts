@@ -47,6 +47,8 @@ export interface ProviderAdapterCapabilities {
   readonly turnContinuation?: ProviderTurnContinuationMode;
   /** Starts a resumed turn with no synthetic user prompt. */
   readonly promptlessTurnContinuation?: boolean;
+  /** False when native conversation history cannot be rewound. */
+  readonly supportsConversationRollback?: boolean;
 }
 
 export interface ProviderThreadTurnSnapshot {

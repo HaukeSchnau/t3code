@@ -22,6 +22,7 @@ import {
   modelSelectionsEqual,
   makeQueuedThreadDeliveryPlan,
   resolveThreadOutboxDeliveryAction,
+  resolveThreadOutboxDispatchStep,
   resolveThreadOutboxFailureAction,
   resolveQueuedThreadSettings,
   shouldRetryThreadOutboxDelivery,
@@ -323,6 +324,62 @@ describe("thread outbox", () => {
         options: [{ id: "reasoningEffort", value: "xhigh" }],
       }),
     ).toBe(false);
+  });
+
+  it("normalizes queued plan mode against the queued provider, not the current thread", () => {
+    const codex = { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-sol" };
+    const antigravity = {
+      instanceId: ProviderInstanceId.make("google-personal"),
+      model: "gemini-test-thinking",
+      options: [{ id: "native-option", value: "keep-this-choice" }],
+    };
+    const providers = [
+      { instanceId: codex.instanceId, showInteractionModeToggle: true },
+      { instanceId: antigravity.instanceId, showInteractionModeToggle: false },
+    ];
+    const message = {
+      ...queuedMessage({ messageId: "queued-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
+      text: "/plan inspect the project",
+      modelSelection: antigravity,
+      interactionMode: "plan",
+    } satisfies QueuedThreadMessage;
+
+    expect(
+      resolveQueuedThreadSettings(
+        message,
+        { modelSelection: codex, runtimeMode: "approval-required", interactionMode: "plan" },
+        providers,
+      ),
+    ).toEqual({
+      modelSelection: antigravity,
+      runtimeMode: "approval-required",
+      interactionMode: "default",
+    });
+    expect(
+      resolveQueuedThreadSettings(
+        { ...message, modelSelection: codex },
+        {
+          modelSelection: antigravity,
+          runtimeMode: "approval-required",
+          interactionMode: "default",
+        },
+        providers,
+      ).interactionMode,
+    ).toBe("plan");
+  });
+
+  it("normalizes a legacy queued message that inherits unsupported plan mode", () => {
+    const modelSelection = {
+      instanceId: ProviderInstanceId.make("google-personal"),
+      model: "gemini-test-thinking",
+    };
+    expect(
+      resolveQueuedThreadSettings(
+        queuedMessage({ messageId: "legacy-plan", createdAt: "2026-09-02T10:00:00.000Z" }),
+        { modelSelection, runtimeMode: "approval-required", interactionMode: "plan" },
+        [{ instanceId: modelSelection.instanceId, showInteractionModeToggle: false }],
+      ).interactionMode,
+    ).toBe("default");
   });
 
   it("backs off queued delivery retries and caps them at sixteen seconds", () => {
@@ -1022,6 +1079,57 @@ describe("thread outbox", () => {
     expect(stored.size).toBe(0);
     expect(commandDocument.entries).toEqual([]);
     restartedRegistry.dispose();
+  });
+
+  it("retries instead of parking a file message while the server config loads", () => {
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [{ name: "report.pdf", sizeBytes: 42 }],
+        serverConfig: null,
+      }),
+    ).toEqual({ step: "retry" });
+  });
+
+  it("gates a sending file message on the server's file support and limit", () => {
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [{ name: "report.pdf", sizeBytes: 42 }],
+        serverConfig: { maxFileUploadBytes: undefined },
+      }),
+    ).toEqual({ step: "restore", reason: "This server does not support file attachments." });
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [{ name: "big.zip", sizeBytes: 2 * 1024 * 1024 }],
+        serverConfig: { maxFileUploadBytes: 1024 * 1024 },
+      }),
+    ).toEqual({ step: "restore", reason: "'big.zip' exceeds the 1 MB attachment limit." });
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [{ name: "report.pdf", sizeBytes: 42 }],
+        serverConfig: { maxFileUploadBytes: 1024 * 1024 },
+      }),
+    ).toEqual({ step: "send" });
+  });
+
+  it("waits for provider capabilities before sending text-only queued messages", () => {
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [],
+        serverConfig: null,
+      }),
+    ).toEqual({ step: "retry" });
+    expect(
+      resolveThreadOutboxDispatchStep({
+        deliveryAction: "send",
+        fileAttachments: [],
+        serverConfig: { maxFileUploadBytes: undefined },
+      }),
+    ).toEqual({ step: "send" });
   });
 
   it("only removes a missing-thread message after shell synchronization is live", () => {

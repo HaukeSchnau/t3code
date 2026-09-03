@@ -11,8 +11,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { prepareTurnAttachments, type PreparedTurnAttachments } from "../lib/attachmentUpload";
 import { scopedProjectKey, scopedThreadKey } from "../lib/scopedEntities";
+import { isModelSelectionUnavailable } from "../lib/modelOptions";
 import { appAtomRegistry } from "./atom-registry";
-import { useProjects, useThreadShells } from "./entities";
+import { useProjects, useServerConfigs, useThreadShells } from "./entities";
+import { serverEnvironment } from "./server";
 import {
   confirmThreadOutboxMessageQueued,
   ensureThreadOutboxLoaded,
@@ -24,6 +26,7 @@ import { removeThreadOutboxMessage } from "./thread-outbox-removal";
 import {
   isQueuedThreadCreationSendable,
   resolveThreadOutboxDeliveryAction,
+  resolveThreadOutboxDispatchStep,
   resolveThreadOutboxFailureAction,
   threadOutboxRetryDelayMs,
   type QueuedThreadCreation,
@@ -297,6 +300,7 @@ export function useThreadOutboxDrain(): void {
   const shellStatuses = useThreadOutboxShellStatuses();
   const threads = useThreadShells();
   const projects = useProjects();
+  const serverConfigs = useServerConfigs();
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const [retryTick, setRetryTick] = useState(0);
   const retryAttemptRef = useRef(new Map<MessageId, number>());
@@ -373,10 +377,36 @@ export function useThreadOutboxDrain(): void {
   }, []);
 
   const sendQueuedMessage = useCallback(
-    async (queuedMessage: QueuedThreadMessage, _thread: EnvironmentThreadShell) => {
+    async (queuedMessage: QueuedThreadMessage, thread: EnvironmentThreadShell) => {
+      const serverConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!serverConfig) return false;
+      const modelSelection = queuedMessage.modelSelection ?? thread.modelSelection;
+      if (isModelSelectionUnavailable(serverConfig, modelSelection)) {
+        const restored = await restoreRejectedQueuedMessage(
+          queuedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        );
+        return restored !== "retry";
+      }
       const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
+      const attachmentPreparation = await prepareQueuedMessageAttachments(
+        queuedMessage,
+        serverConfig.environment.capabilities.attachmentUploads === true,
+      );
       if (attachmentPreparation.status === "abandoned") return true;
+      const currentConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!currentConfig) return false;
+      if (isModelSelectionUnavailable(currentConfig, modelSelection)) {
+        const restored = await restoreRejectedQueuedMessage(
+          attachmentPreparation.persistedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        );
+        return restored !== "retry";
+      }
       const begun = await threadOutboxManager.begin(
         attachmentPreparation.persistedMessage,
         new Date().toISOString(),
@@ -404,9 +434,34 @@ export function useThreadOutboxDrain(): void {
       if (modelSelection === undefined) {
         return false;
       }
+      const serverConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!serverConfig) return false;
+      if (isModelSelectionUnavailable(serverConfig, modelSelection)) {
+        const restored = await restoreRejectedQueuedMessage(
+          queuedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        );
+        return restored !== "retry";
+      }
       const { completeDelivery } = makeDeliveryHelpers(queuedMessage);
-      const attachmentPreparation = await prepareQueuedMessageAttachments(queuedMessage);
+      const attachmentPreparation = await prepareQueuedMessageAttachments(
+        queuedMessage,
+        serverConfig.environment.capabilities.attachmentUploads === true,
+      );
       if (attachmentPreparation.status === "abandoned") return true;
+      const currentConfig = appAtomRegistry.get(
+        serverEnvironment.configValueAtom(queuedMessage.environmentId),
+      );
+      if (!currentConfig) return false;
+      if (isModelSelectionUnavailable(currentConfig, modelSelection)) {
+        const restored = await restoreRejectedQueuedMessage(
+          attachmentPreparation.persistedMessage,
+          "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+        );
+        return restored !== "retry";
+      }
       const begun = await threadOutboxManager.begin(
         attachmentPreparation.persistedMessage,
         new Date().toISOString(),
@@ -484,8 +539,34 @@ export function useThreadOutboxDrain(): void {
         creation !== undefined && thread !== undefined && deliveryState?._tag === "Retrying"
           ? "send"
           : projectedDeliveryAction;
-      if (deliveryAction === "wait") {
+      const serverConfig = serverConfigs.get(nextQueuedMessage.environmentId);
+      const dispatchStep = resolveThreadOutboxDispatchStep({
+        deliveryAction,
+        fileAttachments: nextQueuedMessage.attachments.filter(
+          (attachment) => attachment.type === "file",
+        ),
+        serverConfig: serverConfig
+          ? {
+              maxFileUploadBytes:
+                serverConfig.environment.capabilities.fileAttachments?.maxUploadBytes,
+            }
+          : null,
+      });
+      if (dispatchStep.step === "wait" || dispatchStep.step === "retry") {
         continue;
+      }
+      if (dispatchStep.step === "restore") {
+        beginDispatchingQueuedMessage(nextQueuedMessage.messageId);
+        void confirmThreadOutboxMessageQueued(nextQueuedMessage)
+          .then((queued) =>
+            !queued || appAtomRegistry.get(editingQueuedMessageIdsAtom)[nextQueuedMessage.messageId]
+              ? true
+              : restoreRejectedQueuedMessage(nextQueuedMessage, dispatchStep.reason).then(
+                  (result) => result !== "retry",
+                ),
+          )
+          .finally(() => finishDispatchingQueuedMessage(nextQueuedMessage.messageId));
+        return;
       }
       // The live project shell is preferred for the workspace path, with the
       // snapshot taken at enqueue time as the fallback so a task never dies
@@ -596,6 +677,7 @@ export function useThreadOutboxDrain(): void {
     projects,
     queuedMessagesByThreadKey,
     retryTick,
+    serverConfigs,
     sendQueuedCreation,
     sendQueuedMessage,
     shellStatuses,

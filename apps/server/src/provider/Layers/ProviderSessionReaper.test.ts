@@ -186,6 +186,7 @@ describe("ProviderSessionReaper", () => {
           sessionModelSwitch: "in-session",
           assistantTranscriptRecovery: "none",
         }),
+      assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {
         const driverKind = ProviderDriverKind.make(String(instanceId));
         return Effect.succeed({

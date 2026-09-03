@@ -1514,12 +1514,8 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   const sdkContent: Array<Record<string, unknown>> = [];
 
   const dispatch = planClaudeSkillDispatch(text, dependencies.skillNames);
-  if (dispatch) {
-    if (dispatch.leadingText !== undefined) {
-      sdkContent.push({ type: "text", text: dispatch.leadingText });
-    }
-  } else if (text.length > 0) {
-    sdkContent.push({ type: "text", text });
+  if (dispatch?.leadingText !== undefined) {
+    sdkContent.push({ type: "text", text: dispatch.leadingText });
   }
 
   for (const attachment of input.attachments ?? []) {
@@ -1569,9 +1565,15 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
     );
   }
 
-  // Claude only expands a slash command from the last text block.
+  // The final text block goes last on purpose. The Claude CLI only reads a
+  // streamed user message as a slash-command invocation when the last content
+  // block is text; image blocks ahead of it ride along as preceding input.
+  // Leading with the text made every image-carrying turn fall back to a plain
+  // prompt, so a hand-typed `/skill args` reached the agent unexpanded.
   if (dispatch) {
     sdkContent.push({ type: "text", text: dispatch.commandText });
+  } else if (text.length > 0) {
+    sdkContent.push({ type: "text", text });
   }
 
   return buildUserMessage({ sdkContent });

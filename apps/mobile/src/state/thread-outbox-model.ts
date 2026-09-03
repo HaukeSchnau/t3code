@@ -3,6 +3,10 @@ import {
   makeDurableCommandDeliveryPlan,
   type DurableCommandDeliveryPlan,
 } from "@t3tools/client-runtime/operations/command-outbox";
+import {
+  clampFileAttachmentUploadBytes,
+  fileAttachmentTooLargeMessage,
+} from "@t3tools/client-runtime/state/attachments";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import {
   CommandId,
@@ -18,6 +22,7 @@ import {
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
+  type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -26,6 +31,7 @@ import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import { toUploadChatImageAttachments, type DraftComposerAttachment } from "../lib/composerImages";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";
+import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
@@ -182,11 +188,19 @@ export interface ThreadSettingsSnapshot {
 export function resolveQueuedThreadSettings(
   message: QueuedThreadMessage,
   thread: ThreadSettingsSnapshot,
+  providers: ReadonlyArray<Pick<ServerProvider, "instanceId" | "showInteractionModeToggle">> = [],
 ): ThreadSettingsSnapshot {
+  const modelSelection = message.modelSelection ?? thread.modelSelection;
+  const provider = providers.find(
+    (candidate) => candidate.instanceId === modelSelection.instanceId,
+  );
   return {
-    modelSelection: message.modelSelection ?? thread.modelSelection,
+    modelSelection,
     runtimeMode: message.runtimeMode ?? thread.runtimeMode,
-    interactionMode: message.interactionMode ?? thread.interactionMode,
+    interactionMode: resolveProviderInteractionMode(
+      provider,
+      message.interactionMode ?? thread.interactionMode,
+    ),
   };
 }
 
@@ -263,6 +277,46 @@ export function resolveThreadOutboxDeliveryAction(input: {
     return input.shellStatus === "live" ? "remove" : "wait";
   }
   return input.environmentConnected ? "send" : "wait";
+}
+
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "remove" }
+  | { readonly step: "retry" }
+  | { readonly step: "restore"; readonly reason: string }
+  | { readonly step: "send" };
+
+/**
+ * Wait for provider and file capabilities before sending. Cleanup does not
+ * need config: a creation whose thread exists, or a message whose thread is
+ * gone, can still be removed while config loads.
+ */
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  /** Null while the environment's server config has not synced yet. */
+  readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction !== "send") {
+    return { step: input.deliveryAction };
+  }
+  if (input.serverConfig === null) {
+    return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
+  }
+  const maxBytes = input.serverConfig.maxFileUploadBytes;
+  if (maxBytes === undefined) {
+    return { step: "restore", reason: "This server does not support file attachments." };
+  }
+  const effectiveMaxBytes = clampFileAttachmentUploadBytes(maxBytes);
+  const oversized = input.fileAttachments.find(
+    (attachment) => attachment.sizeBytes > effectiveMaxBytes,
+  );
+  return oversized
+    ? { step: "restore", reason: fileAttachmentTooLargeMessage(oversized.name, effectiveMaxBytes) }
+    : { step: "send" };
 }
 
 /**
