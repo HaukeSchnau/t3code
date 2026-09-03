@@ -93,6 +93,7 @@ import {
   MousePointerClickIcon,
   PaintbrushIcon,
   PlayIcon,
+  RadioTowerIcon,
   SearchIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -1298,6 +1299,33 @@ function UserVideoAttachment({ file }: { readonly file: ChatFileAttachment }) {
 
 function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" }> }) {
   const ctx = use(TimelineRowCtx);
+  if (row.message.origin !== undefined) {
+    const origin = row.message.origin;
+    const label = origin.type === "watch" ? "Watch event" : "Wait result";
+    const detail =
+      origin.type === "watch"
+        ? `${origin.eventCount} event${origin.eventCount === 1 ? "" : "s"} · ${origin.decision}`
+        : origin.state;
+    return (
+      <div className="flex justify-start py-1" data-testid="automation-notification">
+        <div className="max-w-[86%] rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-sm">
+          <div className="mb-1 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <RadioTowerIcon aria-hidden className="size-3.5" />
+            <span>{label}</span>
+            <span>·</span>
+            <span>{detail}</span>
+          </div>
+          <ChatMarkdown
+            text={row.message.text}
+            cwd={ctx.markdownCwd}
+            environmentId={ctx.activeThreadEnvironmentId}
+            threadRef={ctx.threadRef ?? undefined}
+            skills={ctx.skills}
+          />
+        </div>
+      </div>
+    );
+  }
   const attachments = row.message.attachments ?? [];
   const userImages = attachments.filter(isImageAttachment);
   const userFiles = attachments.filter(isFileAttachment);

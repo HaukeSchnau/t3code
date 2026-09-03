@@ -1524,8 +1524,10 @@ const make = Effect.gen(function* () {
     yield* ensureThreadWorktree(thread);
 
     const isFirstUserMessageTurn =
-      !isContinuation && thread.messages.filter((entry) => entry.role === "user").length === 1;
-    if (!isContinuation && message?.role === "user") {
+      !isContinuation &&
+      thread.messages.filter((entry) => entry.role === "user" && entry.origin === undefined)
+        .length === 1;
+    if (!isContinuation && message?.role === "user" && message.origin === undefined) {
       const generationInput = {
         messageText: message.text,
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),

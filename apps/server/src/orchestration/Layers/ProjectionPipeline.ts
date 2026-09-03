@@ -1455,6 +1455,11 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             role: event.payload.role,
             text: nextText,
             ...(nextAttachments !== undefined ? { attachments: [...nextAttachments] } : {}),
+            ...(event.payload.origin !== undefined
+              ? { origin: event.payload.origin }
+              : previousMessage?.origin !== undefined
+                ? { origin: previousMessage.origin }
+                : {}),
             isStreaming: false,
             createdAt: preservesExistingCreatedAt
               ? (previousMessage?.createdAt ?? event.payload.createdAt)
@@ -1543,6 +1548,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             attachments: yield* materializeAttachmentsForProjection({
               attachments: event.payload.queuedMessage.attachments,
             }),
+            origin: event.payload.queuedMessage.origin ?? null,
             modelSelection: event.payload.queuedMessage.modelSelection ?? null,
             titleSeed: event.payload.queuedMessage.titleSeed ?? null,
             runtimeMode: event.payload.queuedMessage.runtimeMode,

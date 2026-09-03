@@ -15,16 +15,18 @@ import {
   countWorkers,
   groupChildrenByEffort,
   openWaitsOf,
+  openWatchesOf,
   resolveWorkerState,
   rootCoordinatorKey,
   type ScopedEffort,
   type ScopedWait,
+  type ScopedWatch,
   type ThreadLineage,
   type WorkerState,
 } from "@t3tools/client-runtime/state/threads";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
-import { ChevronDown, ChevronRight, Ellipsis, Hourglass } from "lucide-react";
+import { ChevronDown, ChevronRight, Ellipsis, Hourglass, RadioTower } from "lucide-react";
 import { memo, useCallback, useMemo, useState } from "react";
 
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -79,6 +81,7 @@ export interface WorkActions {
   readonly closeEffort?: (effortId: string, stopMembers: boolean) => void;
   readonly reopenEffort?: (effortId: string) => void;
   readonly cancelWait?: (waitId: string) => void;
+  readonly cancelWatch?: (watchId: string) => void;
   readonly stopThread?: (ref: ScopedThreadRef) => void;
   readonly retryThread?: (ref: ScopedThreadRef) => void;
 }
@@ -380,6 +383,47 @@ function WaitRow({ context, wait }: { readonly context: WorkContext; readonly wa
   );
 }
 
+function WatchRow({
+  context,
+  watch,
+}: {
+  readonly context: WorkContext;
+  readonly watch: ScopedWatch;
+}) {
+  const source =
+    watch.source.type === "websocket"
+      ? watch.source.url
+      : watch.source.type === "shell"
+        ? watch.source.command
+        : watch.source.argv.join(" ");
+  return (
+    <div
+      data-testid="work-watch"
+      className="flex items-center gap-2 rounded-md border border-border/60 bg-card/30 px-2.5 py-1.5 text-xs"
+    >
+      <RadioTower aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 flex-1 truncate">
+        <span className="font-medium">Watching</span> {source}
+        <span className="text-muted-foreground">
+          {" "}
+          · {watch.eventCount} event{watch.eventCount === 1 ? "" : "s"}
+          {watch.policy.type === "model" ? " · filtered" : ""}
+        </span>
+      </span>
+      {context.actions.cancelWatch ? (
+        <Button
+          size="compact"
+          variant="ghost-muted"
+          className="h-6 px-1.5 text-[.7rem]"
+          onClick={() => context.actions.cancelWatch?.(watch.watchId)}
+        >
+          Cancel watch
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 function EffortSection({
   context,
   effort,
@@ -588,6 +632,7 @@ export function WorkPanel({
   );
   const groups = groupChildrenByEffort(lineage, rootKey, childKeys);
   const waits = openWaitsOf(lineage, rootKey);
+  const watches = openWatchesOf(lineage, rootKey);
   const counts = countWorkers(lineage, childKeys, (key) => stateOf(context, key));
   const selectedRefs = selectedKeys.flatMap((key) => {
     const shell = shellsByKey.get(key);
@@ -598,7 +643,7 @@ export function WorkPanel({
     return <CompareSurface refs={selectedRefs} narrow={narrow} />;
   }
 
-  if (childKeys.length === 0 && waits.length === 0) {
+  if (childKeys.length === 0 && waits.length === 0 && watches.length === 0) {
     return (
       <div className="flex h-full items-center justify-center px-6 text-center text-xs text-muted-foreground">
         This thread has not delegated any work.
@@ -648,6 +693,17 @@ export function WorkPanel({
               </div>
               {waits.map((wait) => (
                 <WaitRow key={wait.waitId} context={context} wait={wait} />
+              ))}
+            </section>
+          ) : null}
+          {watches.length > 0 ? (
+            <section className="flex flex-col gap-1">
+              <div className="flex items-center gap-2 px-1.5 text-[.65rem] font-medium uppercase tracking-wider text-muted-foreground">
+                <RadioTower aria-hidden className="size-3" />
+                Watching
+              </div>
+              {watches.map((watch) => (
+                <WatchRow key={watch.watchId} context={context} watch={watch} />
               ))}
             </section>
           ) : null}

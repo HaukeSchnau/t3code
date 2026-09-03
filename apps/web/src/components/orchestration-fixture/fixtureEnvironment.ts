@@ -232,7 +232,7 @@ export function buildFixtureCoordination(state: FixtureState): OrchestrationCoor
     deadlineAt: null,
     resolvedAt: wait.resolvedAt,
   }));
-  return { relationships, efforts, waits };
+  return { relationships, efforts, waits, watches: [] };
 }
 
 let snapshotSequence = 0;

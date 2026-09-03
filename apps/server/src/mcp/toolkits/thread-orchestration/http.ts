@@ -273,6 +273,38 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "createWatch",
+        Effect.fn("environment.threadOrchestration.createWatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.createWatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "readWatch",
+        Effect.fn("environment.threadOrchestration.readWatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.readWatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "listWatches",
+        Effect.fn("environment.threadOrchestration.listWatches")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          return yield* service.listWatches(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
+        "cancelWatch",
+        Effect.fn("environment.threadOrchestration.cancelWatch")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.cancelWatch(scopeFromActor(args.payload.scope), args.payload.input);
+        }),
+      )
+      .handle(
         "stopThread",
         Effect.fn("environment.threadOrchestration.stopThread")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

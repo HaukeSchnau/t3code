@@ -7,6 +7,15 @@ import { TextGenerationError } from "@t3tools/contracts";
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
 import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
+import type {
+  WaitSummaryGenerationResult,
+  WatchDecisionGenerationResult,
+} from "./TextGenerationSchemas.ts";
+
+export {
+  WaitSummaryGenerationResult,
+  WatchDecisionGenerationResult,
+} from "./TextGenerationSchemas.ts";
 
 export type TextGenerationProvider = "codex" | "claudeAgent" | "cursor" | "grok" | "opencode";
 
@@ -75,6 +84,17 @@ export interface ThreadTitleGenerationResult {
   title: string;
 }
 
+export type NotificationGenerationInput = {
+  readonly cwd: string;
+  readonly prompt: string;
+  readonly kind: "watchDecision" | "waitSummary";
+  readonly modelSelection: ModelSelection;
+};
+
+export type NotificationGenerationResult =
+  | { readonly kind: "watchDecision"; readonly result: WatchDecisionGenerationResult }
+  | { readonly kind: "waitSummary"; readonly result: WaitSummaryGenerationResult };
+
 /**
  * TextGeneration - Service tag for commit and change request text generation.
  */
@@ -106,6 +126,11 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
+
+    /** Apply the configured cheap system model to a bounded orchestration notification. */
+    readonly generateNotification: (
+      input: NotificationGenerationInput,
+    ) => Effect.Effect<NotificationGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -113,7 +138,8 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle";
+  | "generateThreadTitle"
+  | "generateNotification";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -152,6 +178,10 @@ export const makeTextGenerationFromRegistry = (
     generateThreadTitle: (input) =>
       resolveInstance(registry, "generateThreadTitle", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateThreadTitle(input)),
+      ),
+    generateNotification: (input) =>
+      resolveInstance(registry, "generateNotification", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.generateNotification(input)),
       ),
   });
 

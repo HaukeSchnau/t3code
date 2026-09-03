@@ -1,4 +1,8 @@
-import { ChatAttachment, ModelSelection } from "@t3tools/contracts";
+import {
+  ChatAttachment,
+  ModelSelection,
+  OrchestrationNotificationOrigin,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -22,6 +26,7 @@ const ProjectionThreadQueuedMessageDbRowSchema = ProjectionThreadQueuedMessage.m
   Struct.assign({
     attachments: Schema.fromJsonString(Schema.Array(ChatAttachment)),
     modelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    origin: Schema.NullOr(Schema.fromJsonString(OrchestrationNotificationOrigin)),
   }),
 );
 
@@ -37,6 +42,7 @@ const makeProjectionThreadQueuedMessageRepository = Effect.gen(function* () {
           thread_id,
           text,
           attachments_json,
+          origin_json,
           model_selection_json,
           title_seed,
           runtime_mode,
@@ -51,6 +57,7 @@ const makeProjectionThreadQueuedMessageRepository = Effect.gen(function* () {
           ${row.threadId},
           ${row.text},
           ${JSON.stringify(row.attachments)},
+          ${row.origin === null ? null : JSON.stringify(row.origin)},
           ${row.modelSelection === null ? null : JSON.stringify(row.modelSelection)},
           ${row.titleSeed},
           ${row.runtimeMode},
@@ -65,6 +72,7 @@ const makeProjectionThreadQueuedMessageRepository = Effect.gen(function* () {
           thread_id = excluded.thread_id,
           text = excluded.text,
           attachments_json = excluded.attachments_json,
+          origin_json = excluded.origin_json,
           model_selection_json = excluded.model_selection_json,
           title_seed = excluded.title_seed,
           runtime_mode = excluded.runtime_mode,
@@ -86,6 +94,7 @@ const makeProjectionThreadQueuedMessageRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",
@@ -110,6 +119,7 @@ const makeProjectionThreadQueuedMessageRepository = Effect.gen(function* () {
           thread_id AS "threadId",
           text,
           attachments_json AS "attachments",
+          origin_json AS "origin",
           model_selection_json AS "modelSelection",
           title_seed AS "titleSeed",
           runtime_mode AS "runtimeMode",

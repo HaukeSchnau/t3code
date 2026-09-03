@@ -9,6 +9,8 @@ import {
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
+  type OrchestrationWatchSource,
   type ThreadOrchestrationActorScope,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
@@ -17,6 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as References from "effect/References";
+import * as Schema from "effect/Schema";
 import { Argument, Command, Flag, GlobalFlag } from "effect/unstable/cli";
 import { FetchHttpClient } from "effect/unstable/http";
 import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
@@ -54,6 +57,12 @@ class ThreadCliBatchWorkerError extends Data.TaggedError("ThreadCliBatchWorkerEr
 }> {
   override get message(): string {
     return `Invalid --worker '${this.label}=${this.value}'. Use label=provider-instance/model?option:value.`;
+  }
+}
+
+class ThreadCliWatchSourceError extends Data.TaggedError("ThreadCliWatchSourceError")<{}> {
+  override get message(): string {
+    return "Pass exactly one watch source: --command, --argv-json, or --websocket. --argv-json must be a non-empty JSON string array.";
   }
 }
 
@@ -164,6 +173,9 @@ const effortIdArgument = Argument.string("effort-id").pipe(
 );
 const waitIdArgument = Argument.string("wait-id").pipe(
   Argument.withDescription("Durable wait id."),
+);
+const watchIdArgument = Argument.string("watch-id").pipe(
+  Argument.withDescription("Durable watch id."),
 );
 
 const render = (value: unknown, compact: boolean) =>
@@ -934,6 +946,14 @@ const waitCreateCommand = Command.make("create", {
     Flag.withDescription("Server-owned deadline in milliseconds."),
     Flag.optional,
   ),
+  summarize: Flag.boolean("summarize").pipe(
+    Flag.withDescription("Summarize the settled result with the configured system model."),
+    Flag.withDefault(false),
+  ),
+  summaryInstruction: Flag.string("summary-instruction").pipe(
+    Flag.withDescription("Additional instruction for the settlement summary."),
+    Flag.optional,
+  ),
 }).pipe(
   Command.withDescription("Register a durable server-owned wait and return immediately."),
   Command.withHandler((flags) =>
@@ -958,6 +978,15 @@ const waitCreateCommand = Command.make("create", {
               ...(members === undefined ? {} : { members }),
               mode: flags.mode,
               ...(Option.isSome(flags.deadlineMs) ? { deadlineMs: flags.deadlineMs.value } : {}),
+              notificationPolicy:
+                flags.summarize || Option.isSome(flags.summaryInstruction)
+                  ? {
+                      type: "summarize" as const,
+                      ...(Option.isSome(flags.summaryInstruction)
+                        ? { instruction: flags.summaryInstruction.value }
+                        : {}),
+                    }
+                  : { type: "raw" as const },
             },
           },
         });
@@ -1042,6 +1071,164 @@ const waitCancelCommand = Command.make("cancel", {
 const waitCommand = Command.make("wait").pipe(
   Command.withDescription("Create and inspect durable orchestration waits."),
   Command.withSubcommands([waitCreateCommand, waitReadCommand, waitListCommand, waitCancelCommand]),
+);
+
+const watchCreateCommand = Command.make("create", {
+  ...scopedFlags,
+  command: Flag.string("command").pipe(
+    Flag.withDescription("Shell command whose stdout lines are events."),
+    Flag.optional,
+  ),
+  argvJson: Flag.string("argv-json").pipe(
+    Flag.withDescription("JSON string array for direct process execution."),
+    Flag.optional,
+  ),
+  websocket: Flag.string("websocket").pipe(
+    Flag.withDescription("ws:// or wss:// endpoint whose text frames are events."),
+    Flag.optional,
+  ),
+  cwd: Flag.string("cwd").pipe(
+    Flag.withDescription("Command working directory. Defaults to the thread workspace."),
+    Flag.optional,
+  ),
+  instruction: Flag.string("instruction").pipe(
+    Flag.withDescription("Use the configured system model to wake only when this is satisfied."),
+    Flag.optional,
+  ),
+  deadlineMs: Flag.integer("deadline-ms").pipe(
+    Flag.withDescription("Close the watch after this many milliseconds."),
+    Flag.optional,
+  ),
+}).pipe(
+  Command.withDescription("Start a restart-durable command or WebSocket watch."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
+      Effect.gen(function* () {
+        const caller = currentCallerThreadId(flags.fromThread);
+        if (caller === undefined) return yield* new ThreadCliCallerRequiredError();
+        const sourceOptions = [flags.command, flags.argvJson, flags.websocket].filter(
+          Option.isSome,
+        );
+        if (sourceOptions.length !== 1) return yield* new ThreadCliWatchSourceError();
+
+        let source: OrchestrationWatchSource;
+        if (Option.isSome(flags.command)) {
+          source = {
+            type: "shell",
+            command: flags.command.value,
+            ...(Option.isSome(flags.cwd) ? { cwd: flags.cwd.value } : {}),
+          };
+        } else if (Option.isSome(flags.websocket)) {
+          source = { type: "websocket", url: flags.websocket.value };
+        } else {
+          const argv = yield* Schema.decodeUnknownEffect(
+            Schema.fromJsonString(Schema.Array(Schema.String)),
+          )(Option.getOrThrow(flags.argvJson)).pipe(
+            Effect.mapError(() => new ThreadCliWatchSourceError()),
+          );
+          if (argv.length === 0 || argv.some((value) => value.trim().length === 0)) {
+            return yield* new ThreadCliWatchSourceError();
+          }
+          source = {
+            type: "process",
+            argv: argv as [string, ...string[]],
+            ...(Option.isSome(flags.cwd) ? { cwd: flags.cwd.value } : {}),
+          };
+        }
+
+        const result = yield* client.threadOrchestration.createWatch({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: {
+              source,
+              policy: Option.isSome(flags.instruction)
+                ? { type: "model", instruction: flags.instruction.value }
+                : { type: "always" },
+              ...(Option.isSome(flags.deadlineMs) ? { deadlineMs: flags.deadlineMs.value } : {}),
+            },
+          },
+        });
+        yield* Console.log(render(result, flags.json));
+      }),
+    ),
+  ),
+);
+
+const watchReadCommand = Command.make("read", {
+  ...scopedFlags,
+  watchId: watchIdArgument,
+}).pipe(
+  Command.withDescription("Read a durable watch and its latest event state."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .readWatch({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { watchId: ThreadOrchestrationWatchId.make(flags.watchId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const watchListCommand = Command.make("list", {
+  ...scopedFlags,
+  includeClosed: Flag.boolean("include-closed").pipe(
+    Flag.withDescription("Include completed, failed, and cancelled watches."),
+    Flag.withDefault(false),
+  ),
+}).pipe(
+  Command.withDescription("List watches owned by the calling thread."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .listWatches({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: flags.includeClosed ? { includeClosed: true } : {},
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const watchCancelCommand = Command.make("cancel", {
+  ...scopedFlags,
+  watchId: watchIdArgument,
+}).pipe(
+  Command.withDescription("Cancel a durable watch without interrupting its thread turn."),
+  Command.withHandler((flags) =>
+    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
+      const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
+      return client.threadOrchestration
+        .cancelWatch({
+          headers,
+          payload: {
+            scope: actorScope(environmentId, caller),
+            input: { watchId: ThreadOrchestrationWatchId.make(flags.watchId) },
+          },
+        })
+        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
+    }),
+  ),
+);
+
+const watchCommand = Command.make("watch").pipe(
+  Command.withDescription("Create and inspect restart-durable event watches."),
+  Command.withSubcommands([
+    watchCreateCommand,
+    watchReadCommand,
+    watchListCommand,
+    watchCancelCommand,
+  ]),
 );
 
 const stopCommand = Command.make("stop", {
@@ -1266,6 +1453,7 @@ export const threadCommand = Command.make("thread").pipe(
     batchCommand,
     effortCommand,
     waitCommand,
+    watchCommand,
     createCommand,
     forkCommand,
     sendCommand,

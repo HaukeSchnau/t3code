@@ -10,6 +10,7 @@ import {
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
+  ThreadOrchestrationWatchId,
   ThreadOrchestrationError,
   type OrchestrationEffortShell,
   type OrchestrationProjectShell,
@@ -18,6 +19,7 @@ import {
   type OrchestrationThreadShell,
   type OrchestrationThreadRef,
   type OrchestrationWaitShell,
+  type OrchestrationWatchShell,
   type ThreadOrchestrationAwaitBatchInput,
   type ThreadOrchestrationAwaitBatchResult,
   type ThreadOrchestrationAwaitThreadInput,
@@ -42,6 +44,11 @@ import {
   type ThreadOrchestrationListWaitsInput,
   type ThreadOrchestrationListWaitsResult,
   type ThreadOrchestrationCancelWaitInput,
+  type ThreadOrchestrationCreateWatchInput,
+  type ThreadOrchestrationReadWatchInput,
+  type ThreadOrchestrationListWatchesInput,
+  type ThreadOrchestrationListWatchesResult,
+  type ThreadOrchestrationCancelWatchInput,
   type ThreadOrchestrationStopThreadInput,
   type ThreadOrchestrationCreateBatchInput,
   type ThreadOrchestrationCreateBatchResult,
@@ -80,9 +87,12 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
 import { generateBootstrapWorkspaceNaming } from "../../../workspace/BootstrapWorkspaceNaming.ts";
@@ -98,6 +108,7 @@ import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
+import { makeWatchFloodGate, runWatchSource, WatchSourceError } from "./WatchRuntime.ts";
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
@@ -237,6 +248,22 @@ export class ThreadOrchestrationService extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCancelWaitInput,
     ) => Effect.Effect<OrchestrationWaitShell, ThreadOrchestrationError>;
+    readonly createWatch: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: ThreadOrchestrationCreateWatchInput,
+    ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
+    readonly readWatch: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: ThreadOrchestrationReadWatchInput,
+    ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
+    readonly listWatches: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: ThreadOrchestrationListWatchesInput,
+    ) => Effect.Effect<ThreadOrchestrationListWatchesResult, ThreadOrchestrationError>;
+    readonly cancelWatch: (
+      scope: McpInvocationContext.McpInvocationScope,
+      input: ThreadOrchestrationCancelWatchInput,
+    ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
     readonly stopThread: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationStopThreadInput,
@@ -684,6 +711,11 @@ const make = Effect.gen(function* () {
   const providerRegistry = yield* ProviderRegistry;
   const remoteClient = yield* RemoteThreadOrchestrationClient;
   const crypto = yield* Crypto.Crypto;
+  const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const watchFibers = new Map<
+    ThreadOrchestrationWatchId,
+    Fiber.Fiber<void, ThreadOrchestrationError>
+  >();
 
   const shellSnapshot = snapshotQuery
     .getShellSnapshot()
@@ -2104,7 +2136,7 @@ const make = Effect.gen(function* () {
 
   const coordinationShell = () =>
     snapshotQuery.getThreadCoordinationShell === undefined
-      ? Effect.succeed({ relationships: [], efforts: [], waits: [] })
+      ? Effect.succeed({ relationships: [], efforts: [], waits: [], watches: [] })
       : snapshotQuery
           .getThreadCoordinationShell()
           .pipe(Effect.mapError(toThreadOrchestrationError("coordination.read")));
@@ -2113,7 +2145,7 @@ const make = Effect.gen(function* () {
     operation: string,
     scope: McpInvocationContext.McpInvocationScope,
     coordinator: OrchestrationThreadRef,
-    resourceType: "effort" | "wait",
+    resourceType: "effort" | "wait" | "watch",
     resourceId: string,
   ) =>
     Effect.gen(function* () {
@@ -2512,6 +2544,64 @@ const make = Effect.gen(function* () {
             )
           : wait.members;
       const createdAt = yield* nowIso;
+      const notificationPolicy = wait.notificationPolicy;
+      const generatedSummary =
+        kind === "resolved" && notificationPolicy?.type === "summarize"
+          ? yield* Effect.gen(function* () {
+              const settings = yield* serverSettings.getSettings;
+              const results = yield* Effect.forEach(
+                relevant,
+                (member) =>
+                  readThreadResult(scope, {
+                    ...(member.thread.environmentId === undefined
+                      ? {}
+                      : { environmentId: member.thread.environmentId }),
+                    threadId: member.thread.threadId,
+                  }),
+                { concurrency: "unbounded" },
+              );
+              const generated = yield* textGeneration.generateNotification({
+                cwd:
+                  coordinator.value.worktreePath ??
+                  (yield* snapshotQuery.getProjectShellById(coordinator.value.projectId).pipe(
+                    Effect.flatMap(
+                      Option.match({
+                        onNone: () => Effect.succeed(process.cwd()),
+                        onSome: (project) => Effect.succeed(project.workspaceRoot),
+                      }),
+                    ),
+                    Effect.mapError(
+                      toThreadOrchestrationError("wait.notify.project", {
+                        threadId: scope.threadId,
+                      }),
+                    ),
+                  )),
+                kind: "waitSummary",
+                modelSelection: settings.textGenerationModelSelection,
+                prompt: [
+                  "Summarize a settled orchestration wait for its coordinator.",
+                  "Identify failures and meaningful disagreements. Recommend one concrete next step.",
+                  "Do not use tools and do not change whether the wait is settled.",
+                  ...(notificationPolicy.instruction
+                    ? [`Additional instruction: ${notificationPolicy.instruction}`]
+                    : []),
+                  `Wait state: ${wait.state}`,
+                  ...results.map(
+                    (result) =>
+                      `${result.thread.threadId} (${result.thread.outcome ?? "unknown"}): ${result.latestAssistantMessage?.text ?? "No assistant result."}`,
+                  ),
+                ].join("\n"),
+              });
+              return generated.kind === "waitSummary" ? generated.result : null;
+            }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("wait summary generation failed; using raw results", {
+                  waitId: wait.waitId,
+                  cause,
+                }).pipe(Effect.as(null)),
+              ),
+            )
+          : null;
       const notificationKey =
         kind === "attention"
           ? relevant
@@ -2537,13 +2627,36 @@ const make = Effect.gen(function* () {
               ...relevant.map(
                 (member) => `- ${member.thread.threadId}: ${member.outcome ?? "unknown"}`,
               ),
+              ...(generatedSummary === null
+                ? []
+                : [
+                    `Summary: ${generatedSummary.summary}`,
+                    ...generatedSummary.failures.map((failure) => `Failure: ${failure}`),
+                    ...generatedSummary.disagreements.map(
+                      (disagreement) => `Disagreement: ${disagreement}`,
+                    ),
+                    `Recommended next step: ${generatedSummary.recommendedNextStep}`,
+                  ]),
               `Inspect it with: t3 thread wait read ${wait.waitId} --json`,
             ].join("\n"),
             attachments: [],
+            origin: {
+              type: "wait",
+              waitId: wait.waitId,
+              state:
+                kind === "attention"
+                  ? "attention"
+                  : wait.state === "deadline-exceeded"
+                    ? "deadline-exceeded"
+                    : "satisfied",
+              ...(generatedSummary?.summary.trim()
+                ? { summary: generatedSummary.summary.trim() }
+                : {}),
+            },
           },
           runtimeMode: coordinator.value.runtimeMode,
           interactionMode: coordinator.value.interactionMode,
-          delivery: deliveryForCoordinatorNotification(relevant.map((member) => member.outcome)),
+          delivery: "queued",
           createdAt,
         })
         .pipe(
@@ -2704,6 +2817,7 @@ const make = Effect.gen(function* () {
             ? null
             : DateTime.formatIso(DateTime.add(openedDateTime, { milliseconds: deadlineMs })),
         resolvedAt: null,
+        notificationPolicy: input.notificationPolicy ?? { type: "raw" },
       };
       yield* appendCoordinationActivity({
         threadId: scope.threadId,
@@ -2741,6 +2855,417 @@ const make = Effect.gen(function* () {
         stableId: `${input.waitId}:resolved`,
       });
       return { ...wait, state: "cancelled" as const, resolvedAt };
+    });
+
+  const readWatch = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationReadWatchInput,
+  ) =>
+    Effect.gen(function* () {
+      const coordination = yield* coordinationShell();
+      const watch = coordination.watches.find((candidate) => candidate.watchId === input.watchId);
+      if (watch === undefined) {
+        return yield* new ThreadOrchestrationError({
+          operation: "read_watch",
+          code: "not_found",
+          message: `Watch '${input.watchId}' was not found.`,
+          threadId: scope.threadId,
+          resourceType: "watch",
+          resourceId: input.watchId,
+        });
+      }
+      return watch;
+    });
+
+  const listWatches = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationListWatchesInput,
+  ) =>
+    Effect.gen(function* () {
+      const coordination = yield* coordinationShell();
+      const currentEnvironmentId = yield* localEnvironmentId;
+      return {
+        watches: coordination.watches.filter(
+          (watch) =>
+            watch.coordinator.threadId === scope.threadId &&
+            (watch.coordinator.environmentId === undefined ||
+              watch.coordinator.environmentId === currentEnvironmentId) &&
+            (input.includeClosed === true || watch.state === "open"),
+        ),
+      } satisfies ThreadOrchestrationListWatchesResult;
+    });
+
+  const closeWatchInternal = (
+    _scope: McpInvocationContext.McpInvocationScope,
+    watch: OrchestrationWatchShell,
+    state: "completed" | "cancelled" | "failed",
+    reason: string,
+    interrupt: boolean,
+  ) =>
+    Effect.gen(function* () {
+      if (watch.state !== "open") return watch;
+      const closedAt = yield* nowIso;
+      yield* appendCoordinationActivity({
+        threadId: watch.coordinator.threadId,
+        kind: "thread-orchestration.watch.closed",
+        summary: `Watch ${state}: ${reason}`,
+        payload: {
+          kind: "closed",
+          watchId: watch.watchId,
+          generation: watch.generation,
+          state,
+          reason,
+          closedAt,
+        },
+        createdAt: closedAt,
+        stableId: `${watch.watchId}:closed`,
+      });
+      if (interrupt) {
+        const fiber = watchFibers.get(watch.watchId);
+        if (fiber !== undefined) yield* Fiber.interrupt(fiber);
+      }
+      return { ...watch, state, closedAt };
+    });
+
+  const decideWatchBatch = (
+    watch: OrchestrationWatchShell,
+    cwd: string,
+    events: [string, ...string[]],
+  ) =>
+    Effect.gen(function* () {
+      const rawSummary = events.join("\n");
+      if (watch.policy.type === "always") {
+        return { action: "wake" as const, summary: rawSummary };
+      }
+      const settings = yield* serverSettings.getSettings;
+      const generated = yield* textGeneration.generateNotification({
+        cwd,
+        kind: "watchDecision",
+        modelSelection: settings.textGenerationModelSelection,
+        prompt: [
+          "Decide whether a durable monitor event should wake its coding agent.",
+          "Return ignore when the event does not satisfy the instruction, wake when it does,",
+          "or close when it satisfies the instruction and further monitoring is unnecessary.",
+          "Do not use tools. Keep summary factual and concise.",
+          `Instruction: ${watch.policy.instruction}`,
+          "Events:",
+          rawSummary,
+        ].join("\n"),
+      });
+      return generated.kind === "watchDecision"
+        ? generated.result
+        : { action: "wake" as const, summary: rawSummary };
+    }).pipe(
+      Effect.catchCause((cause) =>
+        Effect.logWarning("watch policy generation failed; waking with raw events", {
+          watchId: watch.watchId,
+          cause,
+        }).pipe(Effect.as({ action: "wake" as const, summary: events.join("\n") })),
+      ),
+    );
+
+  const notifyWatch = (
+    watch: OrchestrationWatchShell,
+    generation: number,
+    sequence: number,
+    events: [string, ...string[]],
+    decision: "wake" | "close",
+    summary: string,
+  ) =>
+    Effect.gen(function* () {
+      const coordinator = yield* snapshotQuery
+        .getThreadShellById(watch.coordinator.threadId)
+        .pipe(
+          Effect.mapError(
+            toThreadOrchestrationError("watch.notify", { threadId: watch.coordinator.threadId }),
+          ),
+        );
+      if (Option.isNone(coordinator)) return;
+      const createdAt = yield* nowIso;
+      yield* engine.dispatch({
+        type: "thread.message.queue",
+        commandId: CommandId.make(`${watch.watchId}:${generation}:${sequence}:message-command`),
+        threadId: watch.coordinator.threadId,
+        message: {
+          messageId: MessageId.make(`${watch.watchId}:${generation}:${sequence}:message`),
+          role: "user",
+          text: [
+            `Durable watch ${watch.watchId} observed ${events.length} event${events.length === 1 ? "" : "s"}.`,
+            `Summary: ${summary}`,
+            "Raw events:",
+            ...events.map((event) => `- ${event}`),
+            `Inspect it with: t3 thread watch read ${watch.watchId} --json`,
+          ].join("\n"),
+          attachments: [],
+          origin: {
+            type: "watch",
+            watchId: watch.watchId,
+            generation,
+            sequence,
+            eventCount: events.length,
+            decision,
+            ...(summary.trim().length === 0 ? {} : { summary: summary.trim() }),
+          },
+        },
+        runtimeMode: coordinator.value.runtimeMode,
+        interactionMode: coordinator.value.interactionMode,
+        delivery: "queued",
+        createdAt,
+      });
+    }).pipe(
+      Effect.mapError(
+        toThreadOrchestrationError("watch.notify", { threadId: watch.coordinator.threadId }),
+      ),
+    );
+
+  const startWatch = (
+    scope: McpInvocationContext.McpInvocationScope,
+    watchId: ThreadOrchestrationWatchId,
+  ) =>
+    Effect.gen(function* () {
+      if (watchFibers.has(watchId)) return;
+      const watch = yield* readWatch(scope, { watchId });
+      if (watch.state !== "open") return;
+      const coordinator = yield* resolveThreadSummary(watch.coordinator.threadId);
+      if (["archived", "deleted"].includes(coordinator.status)) {
+        yield* closeWatchInternal(scope, watch, "cancelled", "coordinator is not active", false);
+        return;
+      }
+      const generation = watch.generation + 1;
+      const startedAt = yield* nowIso;
+      yield* appendCoordinationActivity({
+        threadId: watch.coordinator.threadId,
+        kind: "thread-orchestration.watch.started",
+        summary: `Started durable watch generation ${generation}.`,
+        payload: { kind: "started", watchId, generation, startedAt },
+        createdAt: startedAt,
+        stableId: `${watchId}:started:${generation}`,
+      });
+      const cwd = coordinator.worktreePath ?? coordinator.workspaceRoot;
+      const gate = makeWatchFloodGate();
+      let sequence = watch.lastSequence;
+      const runningWatch = { ...watch, generation };
+      const onBatch = (events: [string, ...string[]]) =>
+        Effect.gen(function* () {
+          const pacing = gate.accept(yield* Clock.currentTimeMillis);
+          if (pacing === "drop") return;
+          if (pacing === "overloaded") {
+            return yield* new WatchSourceError({
+              detail: "Watch source exceeded the sustained event limit for 30 seconds.",
+              retryable: false,
+            });
+          }
+          const current = yield* readWatch(scope, { watchId }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WatchSourceError({
+                  detail: "Could not confirm current watch generation.",
+                  retryable: false,
+                  cause,
+                }),
+            ),
+          );
+          if (current.state !== "open" || current.generation !== generation) return;
+          sequence += 1;
+          const decision = yield* decideWatchBatch(current, cwd, events).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WatchSourceError({
+                  detail: "Could not evaluate watch events.",
+                  retryable: false,
+                  cause,
+                }),
+            ),
+          );
+          const observedAt = yield* nowIso;
+          yield* appendCoordinationActivity({
+            threadId: watch.coordinator.threadId,
+            kind: "thread-orchestration.watch.event",
+            summary:
+              decision.action === "ignore"
+                ? "Watch event ignored by notification policy."
+                : `Watch event will ${decision.action} the coordinator.`,
+            payload: {
+              kind: "event",
+              watchId,
+              generation,
+              sequence,
+              events,
+              decision: decision.action,
+              summary: decision.summary,
+              observedAt,
+            },
+            createdAt: observedAt,
+            stableId: `${watchId}:event:${generation}:${sequence}`,
+          }).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WatchSourceError({
+                  detail: "Could not persist watch event.",
+                  retryable: false,
+                  cause,
+                }),
+            ),
+          );
+          if (decision.action === "ignore") return;
+          yield* notifyWatch(
+            current,
+            generation,
+            sequence,
+            events,
+            decision.action,
+            decision.summary,
+          ).pipe(
+            Effect.mapError(
+              (cause) =>
+                new WatchSourceError({
+                  detail: "Could not queue watch notification.",
+                  retryable: false,
+                  cause,
+                }),
+            ),
+          );
+          if (decision.action === "close") {
+            yield* closeWatchInternal(
+              scope,
+              current,
+              "completed",
+              "notification policy closed it",
+              false,
+            ).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WatchSourceError({
+                    detail: "Could not close watch.",
+                    retryable: false,
+                    cause,
+                  }),
+              ),
+            );
+            return yield* new WatchSourceError({
+              detail: "Watch closed by notification policy.",
+              retryable: false,
+            });
+          }
+        });
+
+      const source = runWatchSource(watch.source, cwd, onBatch).pipe(
+        Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, childProcessSpawner),
+      );
+      const deadlineAt = watch.deadlineAt;
+      const deadline =
+        deadlineAt === null
+          ? Effect.never
+          : Clock.currentTimeMillis.pipe(
+              Effect.flatMap((now) =>
+                Effect.sleep(
+                  Duration.millis(
+                    Math.max(0, DateTime.toEpochMillis(DateTime.makeUnsafe(deadlineAt)) - now),
+                  ),
+                ),
+              ),
+              Effect.as("deadline" as const),
+            );
+      const run = Effect.raceFirst(source.pipe(Effect.as("source-exited" as const)), deadline).pipe(
+        Effect.flatMap((reason) =>
+          closeWatchInternal(
+            scope,
+            runningWatch,
+            "completed",
+            reason === "deadline" ? "deadline reached" : "source exited",
+            false,
+          ).pipe(Effect.asVoid),
+        ),
+        Effect.catch((error) => {
+          const detail = Schema.is(WatchSourceError)(error) ? error.detail : error.message;
+          return detail === "Watch closed by notification policy."
+            ? Effect.void
+            : closeWatchInternal(scope, runningWatch, "failed", detail, false).pipe(Effect.asVoid);
+        }),
+        Effect.ensuring(
+          Effect.sync(() => {
+            watchFibers.delete(watchId);
+          }),
+        ),
+      );
+      // Defer execution until this fiber yields so the registry entry always
+      // exists before a zero-deadline or fast-exiting source can clean it up.
+      const fiber = yield* Effect.forkDetach(run, { startImmediately: false });
+      watchFibers.set(watchId, fiber);
+    });
+
+  const createWatch = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationCreateWatchInput,
+  ) =>
+    Effect.gen(function* () {
+      if (input.source.type === "websocket") {
+        let protocol: string;
+        try {
+          protocol = new URL(input.source.url).protocol;
+        } catch {
+          protocol = "";
+        }
+        if (protocol !== "ws:" && protocol !== "wss:") {
+          return yield* new ThreadOrchestrationError({
+            operation: "create_watch",
+            code: "invalid_websocket_url",
+            message: "WebSocket watches require a ws:// or wss:// URL.",
+            threadId: scope.threadId,
+          });
+        }
+      }
+      yield* resolveThreadSummary(scope.threadId);
+      const currentEnvironmentId = yield* localEnvironmentId;
+      const watchId = yield* makeId(
+        crypto,
+        "thread-orchestration:watch",
+        ThreadOrchestrationWatchId.make,
+      );
+      const openedDateTime = yield* DateTime.now;
+      const openedAt = DateTime.formatIso(openedDateTime);
+      const deadlineMs =
+        input.deadlineMs === undefined
+          ? undefined
+          : Math.min(input.deadlineMs, MAX_BATCH_TIMEOUT_MS);
+      const watch: OrchestrationWatchShell = {
+        watchId,
+        coordinator: { environmentId: currentEnvironmentId, threadId: scope.threadId },
+        source: input.source,
+        policy: input.policy ?? { type: "always" },
+        state: "open",
+        generation: 0,
+        lastSequence: 0,
+        eventCount: 0,
+        openedAt,
+        deadlineAt:
+          deadlineMs === undefined
+            ? null
+            : DateTime.formatIso(DateTime.add(openedDateTime, { milliseconds: deadlineMs })),
+        lastEventAt: null,
+        closedAt: null,
+        lastSummary: null,
+      };
+      yield* appendCoordinationActivity({
+        threadId: scope.threadId,
+        kind: "thread-orchestration.watch.opened",
+        summary: `Registered durable ${input.source.type} watch.`,
+        payload: { kind: "opened", watch },
+        createdAt: openedAt,
+        stableId: `${watchId}:opened`,
+      });
+      yield* startWatch(scope, watchId);
+      return { ...watch, generation: 1 };
+    });
+
+  const cancelWatch = (
+    scope: McpInvocationContext.McpInvocationScope,
+    input: ThreadOrchestrationCancelWatchInput,
+  ) =>
+    Effect.gen(function* () {
+      const watch = yield* readWatch(scope, input);
+      yield* assertCoordinator("cancel_watch", scope, watch.coordinator, "watch", input.watchId);
+      return yield* closeWatchInternal(scope, watch, "cancelled", "cancelled by coordinator", true);
     });
 
   const monitorDelegatedThread = (
@@ -3153,6 +3678,66 @@ const make = Effect.gen(function* () {
     }
   }).pipe(Effect.ignoreCause({ log: true }));
 
+  // Watch definitions are durable. Starting a new execution generation makes
+  // late output from a previous server process harmless.
+  yield* Effect.gen(function* () {
+    const coordination = yield* coordinationShell();
+    const currentEnvironmentId = yield* localEnvironmentId;
+    for (const watch of coordination.watches) {
+      if (
+        watch.state !== "open" ||
+        (watch.coordinator.environmentId !== undefined &&
+          watch.coordinator.environmentId !== currentEnvironmentId)
+      ) {
+        continue;
+      }
+      const recoveryScope: McpInvocationContext.McpInvocationScope = {
+        environmentId: currentEnvironmentId,
+        threadId: watch.coordinator.threadId,
+        providerSessionId: "t3-durable-watch",
+        providerInstanceId: ProviderInstanceId.make("t3-durable-watch"),
+        capabilities: new Set(["threads"]),
+        issuedAt: 0,
+      };
+      yield* startWatch(recoveryScope, watch.watchId);
+    }
+  }).pipe(Effect.ignoreCause({ log: true }));
+
+  // Archiving or deleting the owner is an explicit way out. Interrupting a
+  // provider turn is deliberately not: watches live independently of turns.
+  yield* engine.streamDomainEvents.pipe(
+    Stream.filter((event) => event.type === "thread.archived" || event.type === "thread.deleted"),
+    Stream.runForEach((event) =>
+      Effect.gen(function* () {
+        const coordination = yield* coordinationShell();
+        const currentEnvironmentId = yield* localEnvironmentId;
+        const scope: McpInvocationContext.McpInvocationScope = {
+          environmentId: currentEnvironmentId,
+          threadId: ThreadId.make(event.aggregateId),
+          providerSessionId: "t3-durable-watch",
+          providerInstanceId: ProviderInstanceId.make("t3-durable-watch"),
+          capabilities: new Set(["threads"]),
+          issuedAt: 0,
+        };
+        yield* Effect.forEach(
+          coordination.watches.filter(
+            (watch) => watch.state === "open" && watch.coordinator.threadId === event.aggregateId,
+          ),
+          (watch) =>
+            closeWatchInternal(
+              scope,
+              watch,
+              "cancelled",
+              event.type === "thread.deleted" ? "coordinator deleted" : "coordinator archived",
+              true,
+            ),
+          { concurrency: "unbounded", discard: true },
+        );
+      }).pipe(Effect.ignoreCause({ log: true })),
+    ),
+    Effect.forkDetach,
+  );
+
   yield* Effect.gen(function* () {
     const currentEnvironmentId = yield* localEnvironmentId;
     const activities = yield* snapshotQuery
@@ -3213,6 +3798,10 @@ const make = Effect.gen(function* () {
     readWait,
     listWaits,
     cancelWait,
+    createWatch,
+    readWatch,
+    listWatches,
+    cancelWatch,
     stopThread,
     createThread,
     createThreadFromRemote,

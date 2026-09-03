@@ -23,9 +23,17 @@ t3 thread effort add <effort-id> <thread-id> reviewer --json
 t3 thread effort read <effort-id> --json
 t3 thread effort list --include-closed --json
 t3 thread wait create --effort <effort-id> --mode all --deadline-ms 1800000 --json
+t3 thread wait create --effort <effort-id> --mode all --summarize --json
 t3 thread wait read <wait-id> --json
 t3 thread wait list --include-resolved --json
 t3 thread wait cancel <wait-id> --json
+t3 thread watch create --command 'deployctl logs --follow' --json
+t3 thread watch create --argv-json '["deployctl","logs","--follow"]' \
+  --instruction 'Wake when the production deployment either succeeds or fails' --json
+t3 thread watch create --websocket wss://deploy.example/events --deadline-ms 3600000 --json
+t3 thread watch read <watch-id> --json
+t3 thread watch list --include-closed --json
+t3 thread watch cancel <watch-id> --json
 t3 thread stop <thread-id> --json
 t3 thread batch create "Review the parser" \
   --worker 'codex=codexAgent/gpt-5.6-sol?effort:high' \
@@ -78,12 +86,42 @@ passes. Open waits are resumed after a server restart. `wait cancel` cancels onl
 `stop` interrupts a worker, and `effort close --stop-members` closes the group and interrupts its
 local members.
 
+Add `--summarize` to have the configured system text-generation model summarize a resolved wait,
+including failures, disagreements, and a recommended next step. `--summary-instruction` adds
+context for that summary. Settlement remains deterministic: generation runs only after the barrier
+has resolved, and a model failure falls back to the ordinary raw result notification.
+
 Create a wait from one source: either `--effort <effort-id>` or `--members <id,id,...>`. The first
 production version keeps waits on one host so completion events remain reliable. Relationships can
 already describe remote children, while cross-host wait monitoring and stopping fail explicitly.
 
 Efforts are neutral. Workers may cooperate, specialize, review one another, or compete. Comparison
 is a UI action over selected threads, not a required property of the effort.
+
+## Durable watches
+
+A watch keeps observing after the creating agent turn and CLI process have finished. It accepts
+exactly one source: a shell command, an argument array, or a WebSocket endpoint. Each stdout line
+from a command and each text frame from a WebSocket is an event. Command stderr is drained but is
+not delivered as an event. A command watch completes when its process exits; a WebSocket watch
+reconnects after transient connection failures. An optional deadline closes either kind.
+
+Watch definitions are persisted. After the T3 Code server restarts, every open source starts a new
+execution generation. Notifications carry the watch id, generation, and sequence so stale output
+cannot be mistaken for current output. Archiving or deleting the coordinator cancels its watches;
+stopping one provider turn does not.
+
+Without `--instruction`, every accepted event batch queues a wake-up. With an instruction, the
+configured system text-generation model decides whether to ignore the batch, wake the agent, or
+wake it and close the watch. This defaults to GPT-5.6 Luna in a standard installation. If model
+evaluation fails, the raw batch is queued so an infrastructure problem cannot silently hide the
+event. Event text is bounded and paced before generation or delivery to prevent a noisy source from
+flooding the thread.
+
+Watch and wait notifications appear as typed activity cards in thread history. They are queued in
+FIFO order behind active work and automatically start the next turn when the thread is idle. The
+Work panel lists open watches and their observed event counts. Use `watch cancel` as the explicit
+way to stop one without archiving the thread.
 
 ## Durable batches
 

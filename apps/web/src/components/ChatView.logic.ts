@@ -449,7 +449,12 @@ export function buildRevertTurnCountByUserMessageId(input: {
   }
   for (let index = 0; index < input.timelineEntries.length; index += 1) {
     const entry = input.timelineEntries[index];
-    if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
+    if (
+      !entry ||
+      entry.kind !== "message" ||
+      entry.message.role !== "user" ||
+      entry.message.origin !== undefined
+    ) {
       continue;
     }
 
