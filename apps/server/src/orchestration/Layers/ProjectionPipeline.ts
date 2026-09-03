@@ -1767,6 +1767,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         activeTurnId: event.payload.session.activeTurnId,
         lastError: event.payload.session.lastError,
         lastErrorClass: event.payload.session.lastErrorClass ?? null,
+        providerUnavailable: event.payload.session.providerUnavailable ?? null,
         turnRetry: event.payload.session.turnRetry ?? null,
         updatedAt: event.payload.session.updatedAt,
       });

@@ -13,6 +13,7 @@ import {
   OrchestrationTurnRetry,
   ProviderErrorClass,
   ProviderInstanceId,
+  ProviderUnavailable,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -32,6 +33,7 @@ export const ProjectionThreadSession = Schema.Struct({
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(Schema.String),
   lastErrorClass: Schema.optional(Schema.NullOr(ProviderErrorClass)),
+  providerUnavailable: Schema.optional(Schema.NullOr(ProviderUnavailable)),
   turnRetry: Schema.optional(Schema.NullOr(OrchestrationTurnRetry)),
   updatedAt: IsoDateTime,
 });

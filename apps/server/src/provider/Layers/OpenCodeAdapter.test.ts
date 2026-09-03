@@ -184,6 +184,8 @@ const runtimeMock = {
     providerList: { all: [], default: {}, connected: [] } as ProviderListResponse,
     providerListCalls: 0,
     zaiUsageSources: [] as ZaiUsageSource[],
+    zaiUsageLimits: testZaiUsageLimits as ZaiUsageLimits,
+    zaiUsageObserved: null as (() => void) | null,
   },
   reset() {
     this.state.startCalls.length = 0;
@@ -234,6 +236,8 @@ const runtimeMock = {
     this.state.providerList = { all: [], default: {}, connected: [] };
     this.state.providerListCalls = 0;
     this.state.zaiUsageSources.length = 0;
+    this.state.zaiUsageLimits = testZaiUsageLimits;
+    this.state.zaiUsageObserved = null;
   },
 };
 
@@ -528,7 +532,8 @@ const OpenCodeAdapterTestLayer = Layer.effect(
     fetchZaiUsageLimits: (source) =>
       Effect.sync(() => {
         runtimeMock.state.zaiUsageSources.push(source);
-        return testZaiUsageLimits;
+        runtimeMock.state.zaiUsageObserved?.();
+        return runtimeMock.state.zaiUsageLimits;
       }),
   }),
 ).pipe(
@@ -635,6 +640,119 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       yield* advanceTestClock(5 * 60 * 1000);
       NodeAssert.equal(runtimeMock.state.zaiUsageSources.length, 2);
       yield* adapter.stopSession(asThreadId("thread-zai-usage"));
+    }),
+  );
+
+  it.effect("classifies an exhausted provider quota with its reset time", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-zai-rate-limited");
+      const resetAt = "2026-09-03T10:43:23.775Z";
+      const errorEvent = promiseWithResolvers<unknown>();
+      const usageObserved = promiseWithResolvers<void>();
+      runtimeMock.state.providerList = zaiProviderList;
+      runtimeMock.state.zaiUsageLimits = {
+        ...testZaiUsageLimits,
+        primary: { ...testZaiUsageLimits.primary!, usedPercent: 100, resetsAt: resetAt },
+        windows: testZaiUsageLimits.windows?.map((window) => ({
+          ...window,
+          usedPercent: 100,
+          resetsAt: resetAt,
+        })),
+      };
+      runtimeMock.state.zaiUsageObserved = () => usageObserved.resolve(undefined);
+      runtimeMock.state.subscribedEvents = [errorEvent.promise];
+
+      const runtimeErrorFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "runtime.error"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "zai-coding-plan/glm-5.2",
+        ),
+      });
+      yield* advanceTestClock(5 * 60 * 1000);
+      yield* Effect.promise(() => usageObserved.promise);
+
+      const reason = "Usage limit reached for 5 hour. Your limit will reset at 2026-09-03 18:43:23";
+      errorEvent.resolve({
+        id: "evt-zai-rate-limited",
+        type: "session.error",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          error: {
+            name: "APIError",
+            data: {
+              message: reason,
+              statusCode: 429,
+              isRetryable: true,
+              responseHeaders: {},
+            },
+          },
+        },
+      });
+
+      const runtimeError = Option.getOrThrow(yield* Fiber.join(runtimeErrorFiber));
+      NodeAssert.equal(runtimeError.type, "runtime.error");
+      if (runtimeError.type !== "runtime.error") return;
+      NodeAssert.equal(runtimeError.payload.class, "rate_limited");
+      NodeAssert.deepEqual(runtimeError.payload.providerUnavailable, {
+        type: "provider_unavailable",
+        cause: "rate_limited",
+        scope: "provider_instance",
+        provider: "opencode",
+        providerInstanceId: "opencode",
+        model: "zai-coding-plan/glm-5.2",
+        reason,
+        retryable: true,
+        retryAt: resetAt,
+      });
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("keeps an unknown provider failure generic", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-unknown-error");
+      const errorEvent = promiseWithResolvers<unknown>();
+      runtimeMock.state.subscribedEvents = [errorEvent.promise];
+      const runtimeErrorFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId && event.type === "runtime.error"),
+        Stream.runHead,
+        Effect.forkChild,
+      );
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      errorEvent.resolve({
+        id: "evt-opencode-unknown-error",
+        type: "session.error",
+        properties: {
+          sessionID: "http://127.0.0.1:9999/session",
+          error: {
+            name: "APIError",
+            data: { message: "Upstream failed", statusCode: 500, isRetryable: false },
+          },
+        },
+      });
+
+      const runtimeError = Option.getOrThrow(yield* Fiber.join(runtimeErrorFiber));
+      NodeAssert.equal(runtimeError.type, "runtime.error");
+      if (runtimeError.type !== "runtime.error") return;
+      NodeAssert.equal(runtimeError.payload.message, "Upstream failed");
+      NodeAssert.equal(runtimeError.payload.class, "provider_error");
+      NodeAssert.equal(runtimeError.payload.providerUnavailable, undefined);
+      yield* adapter.stopSession(threadId);
     }),
   );
 

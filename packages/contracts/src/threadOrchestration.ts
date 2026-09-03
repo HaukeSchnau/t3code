@@ -27,6 +27,7 @@ import {
   ThreadMessageDelivery,
 } from "./orchestration.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
 
 export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrchestrationError>()(
   "ThreadOrchestrationError",
@@ -158,12 +159,26 @@ export const ThreadOrchestrationReadThreadResultInput = Schema.Struct({
 export type ThreadOrchestrationReadThreadResultInput =
   typeof ThreadOrchestrationReadThreadResultInput.Type;
 
+export const ThreadOrchestrationRuntimeFailure = Schema.Struct({
+  type: Schema.Literal("runtime_error"),
+  reason: TrimmedNonEmptyString,
+  errorClass: ProviderErrorClass,
+});
+export type ThreadOrchestrationRuntimeFailure = typeof ThreadOrchestrationRuntimeFailure.Type;
+
+export const ThreadOrchestrationFailure = Schema.Union([
+  ThreadOrchestrationRuntimeFailure,
+  ProviderUnavailable,
+]);
+export type ThreadOrchestrationFailure = typeof ThreadOrchestrationFailure.Type;
+
 export const ThreadOrchestrationThreadResult = Schema.Struct({
   thread: ThreadOrchestrationThreadSummary,
   latestMessage: Schema.NullOr(OrchestrationMessage),
   latestAssistantMessage: Schema.NullOr(OrchestrationMessage),
   queuedMessageCount: NonNegativeInt,
   activityCount: NonNegativeInt,
+  failure: Schema.optional(Schema.NullOr(ThreadOrchestrationFailure)),
 });
 export type ThreadOrchestrationThreadResult = typeof ThreadOrchestrationThreadResult.Type;
 

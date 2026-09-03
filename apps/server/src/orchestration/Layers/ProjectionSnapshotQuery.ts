@@ -30,6 +30,7 @@ import {
   ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  ProviderUnavailable,
   ThreadLinkedPullRequest,
   ThreadId,
   ThreadWorkspaceId,
@@ -138,6 +139,7 @@ const ProjectionThreadActivityIdRowSchema = Schema.Struct({
 });
 const ProjectionThreadSessionDbRowSchema = ProjectionThreadSession.mapFields(
   Struct.assign({
+    providerUnavailable: Schema.NullOr(Schema.fromJsonString(ProviderUnavailable)),
     turnRetry: Schema.NullOr(Schema.fromJsonString(OrchestrationTurnRetry)),
   }),
 );
@@ -318,6 +320,7 @@ function mapSessionRow(
     activeTurnId: row.activeTurnId,
     lastError: row.lastError,
     lastErrorClass: row.lastErrorClass,
+    providerUnavailable: row.providerUnavailable,
     turnRetry: row.turnRetry,
     updatedAt: row.updatedAt,
   };
@@ -746,6 +749,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_error_class AS "lastErrorClass",
+          provider_unavailable_json AS "providerUnavailable",
           turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -769,6 +773,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
           sessions.last_error_class AS "lastErrorClass",
+          sessions.provider_unavailable_json AS "providerUnavailable",
           sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -796,6 +801,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           sessions.active_turn_id AS "activeTurnId",
           sessions.last_error AS "lastError",
           sessions.last_error_class AS "lastErrorClass",
+          sessions.provider_unavailable_json AS "providerUnavailable",
           sessions.turn_retry_json AS "turnRetry",
           sessions.updated_at AS "updatedAt"
         FROM projection_thread_sessions sessions
@@ -1294,6 +1300,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           active_turn_id AS "activeTurnId",
           last_error AS "lastError",
           last_error_class AS "lastErrorClass",
+          provider_unavailable_json AS "providerUnavailable",
           turn_retry_json AS "turnRetry",
           updated_at AS "updatedAt"
         FROM projection_thread_sessions
@@ -1997,6 +2004,7 @@ pending_approval_requests AS (
                   activeTurnId: row.activeTurnId,
                   lastError: row.lastError,
                   lastErrorClass: row.lastErrorClass,
+                  providerUnavailable: row.providerUnavailable,
                   turnRetry: row.turnRetry,
                   updatedAt: row.updatedAt,
                 });
