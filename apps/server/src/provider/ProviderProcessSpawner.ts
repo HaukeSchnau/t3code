@@ -7,6 +7,7 @@ import * as Layer from "effect/Layer";
 
 const SYSTEMD_SCOPE_ENV = "T3_PROVIDER_SYSTEMD_SCOPE";
 const SYSTEMD_SCOPE_PREFIX = "t3-provider";
+const SYSTEMD_PROVIDER_SLICE = "t3-providers.slice";
 
 export const shouldUseProviderSystemdScopes = (
   platform: NodeJS.Platform,
@@ -23,6 +24,7 @@ export const makeSystemdScopedCommand = (
     "--scope",
     "--quiet",
     "--collect",
+    `--slice=${SYSTEMD_PROVIDER_SLICE}`,
     `--unit=${SYSTEMD_SCOPE_PREFIX}-${ownerId}-${scopeId}`,
     "--property=TimeoutStopSec=15s",
     "--property=MemoryAccounting=yes",
