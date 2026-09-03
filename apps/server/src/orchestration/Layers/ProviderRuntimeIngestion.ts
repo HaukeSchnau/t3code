@@ -531,16 +531,21 @@ export function runtimeEventToActivities(
     }
 
     case "runtime.error": {
+      const providerUnavailable = event.payload.providerUnavailable;
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "error",
           kind: "runtime.error",
-          summary: subagentAwareSummary(event, "Runtime error"),
+          summary: subagentAwareSummary(
+            event,
+            providerUnavailable ? "Provider usage limit reached" : "Runtime error",
+          ),
           payload: {
             message: truncateDetail(event.payload.message),
             ...(event.payload.class !== undefined ? { class: event.payload.class } : {}),
+            ...(providerUnavailable ? { providerUnavailable } : {}),
             ...runtimeAgentContextPayload(event),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -2288,6 +2293,7 @@ const make = Effect.gen(function* () {
               activeTurnId: eventTurnId ?? null,
               lastError: runtimeErrorMessage,
               lastErrorClass: event.payload.class,
+              providerUnavailable: event.payload.providerUnavailable ?? null,
               turnRetry: thread.session?.turnRetry ?? null,
               updatedAt: now,
             },

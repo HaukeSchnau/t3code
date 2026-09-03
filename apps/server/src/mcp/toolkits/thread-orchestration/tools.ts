@@ -87,7 +87,7 @@ export const ReadThreadTool = orchestrationTool(
 export const ReadThreadResultTool = readonlyTool(
   Tool.make("read_thread_result", {
     description:
-      "Read compact status, queue count, latest message, and latest assistant result for a T3 Code thread without loading the full transcript or recording a read relationship. Pass environmentId to read a registered remote host.",
+      "Read compact status, queue count, latest message, latest assistant result, and any typed failure for a T3 Code thread without loading the full transcript or recording a read relationship. A provider_unavailable failure is scoped beyond the thread: do not immediately retry its provider instance; wait until retryAt or choose another provider/model. Pass environmentId to read a registered remote host.",
     parameters: ThreadOrchestrationReadThreadResultInput,
     success: ThreadOrchestrationThreadResult,
     failure: ThreadOrchestrationError,
@@ -98,7 +98,7 @@ export const ReadThreadResultTool = readonlyTool(
 export const AwaitThreadTool = readonlyTool(
   Tool.make("await_thread", {
     description:
-      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result. This is passive and does not record a read relationship. Pass environmentId to wait on a registered remote host.",
+      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result, including any typed failure. A provider_unavailable failure means an immediate retry on that provider instance is pointless; wait until retryAt or choose another provider/model. This is passive and does not record a read relationship. Pass environmentId to wait on a registered remote host.",
     parameters: ThreadOrchestrationAwaitThreadInput,
     success: ThreadOrchestrationAwaitThreadResult,
     failure: ThreadOrchestrationError,

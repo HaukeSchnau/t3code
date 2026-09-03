@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   EnvironmentId,
+  ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
   ThreadOrchestrationError,
@@ -1901,8 +1902,19 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("reads targeted thread detail and compact results without full snapshots", () => {
+it.effect("returns provider availability failures in compact coordinator results", () => {
   const dispatched: OrchestrationCommand[] = [];
+  const providerUnavailable = {
+    type: "provider_unavailable" as const,
+    cause: "rate_limited" as const,
+    scope: "provider_instance" as const,
+    provider: ProviderDriverKind.make("opencode"),
+    providerInstanceId: ProviderInstanceId.make("opencode"),
+    model: "zai-coding-plan/glm-5.3-flash",
+    reason: "Usage limit reached for 5 hour.",
+    retryable: true,
+    retryAt: "2026-09-03T10:43:23.775Z",
+  };
   const assistantMessage = {
     id: "message-assistant" as OrchestrationThread["messages"][number]["id"],
     role: "assistant" as const,
@@ -1918,6 +1930,22 @@ it.effect("reads targeted thread detail and compact results without full snapsho
       makeThread(actorThreadId),
       {
         ...makeThread(targetThreadId),
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("opencode"),
+          model: "zai-coding-plan/glm-5.3-flash",
+        },
+        session: {
+          threadId: targetThreadId,
+          status: "error",
+          providerName: "opencode",
+          providerInstanceId: ProviderInstanceId.make("opencode"),
+          runtimeMode: "full-access",
+          activeTurnId: null,
+          lastError: providerUnavailable.reason,
+          lastErrorClass: "rate_limited",
+          providerUnavailable,
+          updatedAt: "2026-09-03T08:35:33.748Z",
+        },
         messages: [
           {
             id: "message-user" as OrchestrationThread["messages"][number]["id"],
@@ -1995,6 +2023,7 @@ it.effect("reads targeted thread detail and compact results without full snapsho
     expect(result.thread.threadId).toBe(targetThreadId);
     expect(result.latestAssistantMessage).toEqual(assistantMessage);
     expect(result.queuedMessageCount).toBe(0);
+    expect(result.failure).toEqual(providerUnavailable);
     expect(dispatched).toEqual([]);
   }).pipe(Effect.provide(testLayer));
 });

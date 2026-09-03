@@ -26,7 +26,11 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
-import { isProviderOverloadedError, ProviderErrorClass } from "./providerError.ts";
+import {
+  isProviderOverloadedError,
+  ProviderErrorClass,
+  ProviderUnavailable,
+} from "./providerError.ts";
 import { ThreadWorkspaceRetentionPolicy, ThreadWorkspaceRootRole } from "./workspace.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -444,6 +448,7 @@ export const OrchestrationSession = Schema.Struct({
   activeTurnId: Schema.NullOr(TurnId),
   lastError: Schema.NullOr(TrimmedNonEmptyString),
   lastErrorClass: Schema.optional(Schema.NullOr(ProviderErrorClass)),
+  providerUnavailable: Schema.optional(Schema.NullOr(ProviderUnavailable)),
   turnRetry: Schema.optional(Schema.NullOr(OrchestrationTurnRetry)),
   updatedAt: IsoDateTime,
 });
