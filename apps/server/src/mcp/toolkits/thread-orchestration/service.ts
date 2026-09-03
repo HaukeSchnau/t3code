@@ -428,7 +428,9 @@ function isTerminalBatchStatus(status: ThreadOrchestrationBatchStatus): boolean 
 
 function deliveryForCoordinatorNotification(
   outcomes: ReadonlyArray<ThreadOrchestrationThreadSummary["outcome"]>,
+  source: "worker-status" | "wait" = "worker-status",
 ): ThreadMessageDelivery {
+  if (source === "wait") return "immediate";
   return outcomes.some((outcome) =>
     ["failed", "blocked-approval", "blocked-input"].includes(outcome ?? "unknown"),
   )
@@ -2656,7 +2658,10 @@ const make = Effect.gen(function* () {
           },
           runtimeMode: coordinator.value.runtimeMode,
           interactionMode: coordinator.value.interactionMode,
-          delivery: "queued",
+          delivery: deliveryForCoordinatorNotification(
+            relevant.map((member) => member.outcome),
+            "wait",
+          ),
           createdAt,
         })
         .pipe(
