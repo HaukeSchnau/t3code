@@ -1698,7 +1698,11 @@ function AssistantTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "mess
         />
         {row.showAssistantMeta ? (
           <div className="mt-1.5 flex items-center gap-2 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover/assistant:opacity-100">
-            <AssistantCopyButton row={row} />
+            <AssistantCopyButton
+              message={row.message}
+              showCopyButton={row.showAssistantCopyButton}
+              streaming={row.assistantCopyStreaming}
+            />
             <AssistantForkButton row={row} />
             {!row.message.streaming && (
               <Tooltip>

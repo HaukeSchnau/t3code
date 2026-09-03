@@ -350,6 +350,7 @@ describe("ProviderCommandReactor", () => {
       },
     ];
 
+    const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
     const service: ProviderServiceShape = {
       startSession: startSession as ProviderServiceShape["startSession"],
       sendTurn: sendTurn as ProviderServiceShape["sendTurn"],

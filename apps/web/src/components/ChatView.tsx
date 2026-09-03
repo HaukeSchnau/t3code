@@ -6124,7 +6124,6 @@ function ChatViewContent(props: ChatViewProps) {
       return;
     }
     const {
-      files: composerFiles,
       interactionMode: sendInteractionMode,
       interactionModeEnabled: sendInteractionModeEnabled,
     } = sendCtx;
@@ -6139,7 +6138,7 @@ function ChatViewContent(props: ChatViewProps) {
     const annotationImageAppended =
       directAnnotation?.image !== undefined &&
       !annotationImageAlreadyAttached &&
-      sendCtx.images.length + composerFiles.length < PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
+      sendCtx.images.length < PROVIDER_SEND_TURN_MAX_ATTACHMENTS;
     const composerImages =
       directAnnotation?.image && annotationImageAppended
         ? [...sendCtx.images, directAnnotation.image]
@@ -6276,8 +6275,7 @@ function ChatViewContent(props: ChatViewProps) {
       sendInteractionModeEnabled &&
       showPlanFollowUpPrompt &&
       activeProposedPlan &&
-      composerImages.length === 0 &&
-      composerFiles.length === 0
+      composerImages.length === 0
     ) {
       const followUp = resolvePlanFollowUpSubmission({
         draftText: trimmed,

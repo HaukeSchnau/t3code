@@ -540,7 +540,6 @@ const RuntimeCoreDependenciesLive = RuntimeCoreServicesLive.pipe(
   Layer.provideMerge(ProviderInstanceRegistryRuntimeLayerLive),
   Layer.provideMerge(TextGenerationLayerLive),
 ).pipe(
-  Layer.provideMerge(AntigravityInstallation.layer),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // drivers (native stream, written from inside each `<X>Adapter`) and
   // `ProviderService` (canonical stream, written after event normalization).
@@ -865,6 +864,7 @@ export const makeServerLayer = Layer.unwrap(
       Layer.provide(
         Layer.mergeAll(OrchestrationRuntimeLayerLive, ProviderRegistryLayerLive, TerminalLayerLive),
       ),
+      Layer.provide(AntigravityInstallation.layer),
       Layer.provide(activationLayer),
       Layer.provideMerge(serverRelayBrokerTracingLayer),
       Layer.provideMerge(HttpServerLive),
