@@ -1,7 +1,12 @@
 import { type MessageId } from "@t3tools/contracts";
 import { randomHex } from "~/lib/utils";
 import { type ComposerImageAttachment } from "../../composerDraftStore";
-import { isImageAttachment, type ChatMessage, type Thread } from "../../types";
+import {
+  isImageAttachment,
+  type ChatImageAttachment,
+  type ChatMessage,
+  type Thread,
+} from "../../types";
 import { revokeBlobPreviewUrl } from "../ChatView.logic";
 
 export function editableTextFromUserMessage(text: string): string {
@@ -43,6 +48,7 @@ export async function runPreviousMessageEditTransaction(input: {
 
 export async function hydrateMessageImagesForEdit(
   message: ChatMessage,
+  resolvePreviewUrl?: (attachment: ChatImageAttachment) => Promise<string>,
 ): Promise<ComposerImageAttachment[]> {
   const attachments = message.attachments ?? [];
   const images: ComposerImageAttachment[] = [];
@@ -51,10 +57,11 @@ export async function hydrateMessageImagesForEdit(
       if (!isImageAttachment(attachment)) {
         continue;
       }
-      if (!attachment.previewUrl) {
+      const previewUrl = attachment.previewUrl ?? (await resolvePreviewUrl?.(attachment));
+      if (!previewUrl) {
         throw new Error(`Image attachment '${attachment.name}' is missing a preview URL.`);
       }
-      const response = await fetch(attachment.previewUrl, { credentials: "include" });
+      const response = await fetch(previewUrl, { credentials: "include" });
       if (!response.ok) {
         throw new Error(`Failed to load image attachment '${attachment.name}'.`);
       }

@@ -2,6 +2,7 @@ import {
   type AssetCreateUrlInput,
   type AssetCreateUrlResult,
   type ChatFileAttachment,
+  type ChatImageAttachment,
   type EnvironmentId,
   isProviderDriverKind,
   ProjectId,
@@ -330,9 +331,9 @@ export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   URL.revokeObjectURL(previewUrl);
 }
 
-/** Signs an attachment URL without reading its bytes, so video playback can request byte ranges. */
-export async function resolveFileAttachmentUrl(input: {
-  attachment: ChatFileAttachment;
+/** Signs an attachment URL without reading its bytes. */
+export async function resolveAttachmentUrl(input: {
+  attachment: ChatFileAttachment | ChatImageAttachment;
   environmentId: EnvironmentId;
   httpBaseUrl: string;
   createAssetUrl: (input: {

@@ -96,4 +96,41 @@ describe("previous message editing", () => {
     createObjectUrl.mockRestore();
     revokeObjectUrl.mockRestore();
   });
+
+  it("resolves persisted image attachments before editing", async () => {
+    const createObjectUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:edit-preview");
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(new Response(new Blob(["image"], { type: "image/png" })));
+    const attachment = {
+      type: "image" as const,
+      id: "attachment-1",
+      name: "image.png",
+      mimeType: "image/png",
+      sizeBytes: 5,
+    };
+    const resolvePreviewUrl = vi.fn(async () => "/api/assets/image.png");
+
+    const images = await hydrateMessageImagesForEdit(
+      {
+        id: MessageId.make("message-1"),
+        role: "user",
+        text: "Image",
+        attachments: [attachment],
+        turnId: null,
+        createdAt: "2026-08-09T10:00:00.000Z",
+        updatedAt: "2026-08-09T10:00:00.000Z",
+        streaming: false,
+      },
+      resolvePreviewUrl,
+    );
+
+    expect(resolvePreviewUrl).toHaveBeenCalledWith(attachment);
+    expect(fetchMock).toHaveBeenCalledWith("/api/assets/image.png", { credentials: "include" });
+    expect(images).toHaveLength(1);
+    expect(images[0]?.file.name).toBe("image.png");
+    expect(images[0]?.previewUrl).toBe("blob:edit-preview");
+    fetchMock.mockRestore();
+    createObjectUrl.mockRestore();
+  });
 });

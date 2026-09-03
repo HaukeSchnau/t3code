@@ -23,7 +23,7 @@ import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { type ElementContextDraft } from "../../lib/elementContext";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import { derivePhase } from "../../session-logic";
-import { type ChatMessage, type Thread } from "../../types";
+import { type ChatImageAttachment, type ChatMessage, type Thread } from "../../types";
 import { newCommandId, newDraftId, newMessageId } from "~/lib/utils";
 import {
   buildExpiredTerminalContextToastCopy,
@@ -86,6 +86,7 @@ interface UsePreviousMessageEditingInput {
     runtimeMode: RuntimeMode;
     interactionMode: ProviderInteractionMode;
   }) => Promise<void>;
+  resolveImageAttachmentUrl: (attachment: ChatImageAttachment) => Promise<string>;
   onExpandImage: (preview: ExpandedImagePreview) => void;
 }
 
@@ -107,6 +108,7 @@ export function usePreviousMessageEditing({
   beginLocalDispatch,
   resetLocalDispatch,
   persistThreadSettingsForNextTurn,
+  resolveImageAttachmentUrl,
   onExpandImage,
 }: UsePreviousMessageEditingInput): PreviousMessageEditingState {
   const environmentId = routeThreadRef.environmentId;
@@ -394,7 +396,7 @@ export function usePreviousMessageEditing({
       const draftTarget = newDraftId();
       void (async () => {
         try {
-          const images = await hydrateMessageImagesForEdit(message);
+          const images = await hydrateMessageImagesForEdit(message, resolveImageAttachmentUrl);
           const prompt = editableTextFromUserMessage(message.text);
           editPromptRef.current = prompt;
           editComposerImagesRef.current = images;
@@ -428,6 +430,7 @@ export function usePreviousMessageEditing({
       isServerThread,
       isSubmittingEdit,
       isWorking,
+      resolveImageAttachmentUrl,
       scheduleEditComposerFocus,
       setComposerDraftInteractionMode,
       setComposerDraftModelSelection,
