@@ -262,6 +262,7 @@ export default defineConfig(() => {
       outDir: "dist",
       emptyOutDir: true,
       reportCompressedSize: false,
+      manifest: true,
       sourcemap: buildSourcemap,
     },
   };

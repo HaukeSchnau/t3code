@@ -50,6 +50,7 @@ import {
   type MaintainScrollAtEndOptions,
 } from "@legendapp/list/react";
 import { FileDiff } from "@pierre/diffs/react";
+import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import {
   deriveTimelineEntries,
   workEntryDisplayIndicatesToolFailure,
@@ -717,10 +718,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       listRef,
       timestampFormat,
       routeThreadKey,
-      // Must be referentially stable: ChatMarkdown keys its react-markdown
-      // component map on threadRef, and a fresh object here remounts every
-      // rendered markdown node whenever this memo recomputes (e.g. on each
-      // activity delta while the thread is working).
+      // Keep Markdown callbacks memoized during unrelated activity updates.
       threadRef: citationThreadRef,
       markdownCwd,
       resolvedTheme,
@@ -2236,19 +2234,6 @@ function ExpandedWorkGroupEntries({
 
 const workEntryKey = (entry: TimelineWorkEntry) => entry.id;
 
-function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
-  return (
-    <span
-      aria-hidden
-      className="live-activity-focus pointer-events-none absolute inset-y-0 select-none"
-    >
-      <span className="live-activity-focus-counter block">
-        <span className="live-activity-focus-aligned block text-foreground">{children}</span>
-      </span>
-    </span>
-  );
-}
-
 function LiveActivityRow({
   label,
   iconName,
@@ -2261,7 +2246,7 @@ function LiveActivityRow({
   failed?: boolean;
 }) {
   return (
-    <div className="relative min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed">
+    <div className="min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed">
       <LiveActivityContent
         label={label}
         iconName={iconName}
@@ -2269,16 +2254,6 @@ function LiveActivityRow({
         failed={failed}
         announceFailure={failed}
       />
-      <div
-        aria-hidden
-        className="live-activity-focus pointer-events-none absolute inset-y-0 select-none"
-      >
-        <div className="live-activity-focus-counter">
-          <div className="live-activity-focus-aligned">
-            <LiveActivityContent label={label} iconName={iconName} failed={failed} highlighted />
-          </div>
-        </div>
-      </div>
     </div>
   );
 }
@@ -2293,14 +2268,12 @@ function LiveActivityContent({
   toolIcon,
   failed = false,
   announceFailure = false,
-  highlighted = false,
 }: {
   label: string;
   iconName: WorkEntryIconName | undefined;
   toolIcon?: ToolActivityIcon | undefined;
   failed?: boolean;
   announceFailure?: boolean;
-  highlighted?: boolean;
 }) {
   const isSpecialToolIcon =
     iconName === "browser" || iconName === "computer" || iconName === "t3-code";
@@ -2311,14 +2284,14 @@ function LiveActivityContent({
       className={cn(
         "flex min-h-6 min-w-0 items-center gap-1.5 py-0.5",
         resolvedIconName ? "px-0.5" : "px-1",
-        highlighted ? "text-foreground" : "text-secondary-label",
+        "text-secondary-label",
       )}
     >
       {resolvedIconName ? (
         <span
           className={cn(
             "flex size-6 shrink-0 items-center justify-center",
-            failed ? "text-destructive" : highlighted ? "text-foreground" : "text-icon-muted",
+            failed ? "text-destructive" : "text-icon-muted",
           )}
           role={announceFailure ? "img" : undefined}
           aria-label={announceFailure ? "Tool call failed" : undefined}
@@ -2327,7 +2300,7 @@ function LiveActivityContent({
             icon={failed && !isSpecialToolIcon ? undefined : toolIcon}
             fallbackName={resolvedIconName}
             className="block size-4 shrink-0 stroke-[1.8]"
-            muted={!highlighted}
+            muted
           />
         </span>
       ) : null}
@@ -2350,24 +2323,12 @@ function LiveWorkEntryTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "
       aria-expanded={row.expanded}
       onClick={() => ctx.onToggleWorkGroup(row.groupId, row.id)}
     >
-      {row.active ? (
-        <LiveActivityRow
-          label={label}
-          iconName={workEntryIconName(row.entry)}
-          toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
-          failed={failed}
-        />
-      ) : (
-        <div className="min-h-6 w-fit max-w-full min-w-0 overflow-hidden rounded-md text-sm leading-relaxed">
-          <LiveActivityContent
-            label={label}
-            iconName={workEntryIconName(row.entry)}
-            toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
-            failed={failed}
-            announceFailure={failed}
-          />
-        </div>
-      )}
+      <LiveActivityRow
+        label={label}
+        iconName={workEntryIconName(row.entry)}
+        toolIcon={row.entry.toolIcon ?? row.entry.toolSource?.icon}
+        failed={failed}
+      />
     </button>
   );
 }
@@ -2932,19 +2893,22 @@ function UserMessageReviewCommentCard({ comment }: { comment: ReviewCommentConte
           className="text-message-foreground"
         />
       )}
-      {renderablePatch?.kind === "files" &&
-        renderablePatch.files.map((fileDiff) => (
-          <FileDiff
-            key={resolveFileDiffPath(fileDiff)}
-            fileDiff={fileDiff}
-            options={{
-              collapsed: false,
-              diffStyle: "unified",
-              theme: resolveDiffThemeName(ctx.resolvedTheme),
-              preferredHighlighter: PREFERRED_HIGHLIGHTER,
-            }}
-          />
-        ))}
+      {renderablePatch?.kind === "files" && (
+        <DiffWorkerPoolProvider>
+          {renderablePatch.files.map((fileDiff) => (
+            <FileDiff
+              key={resolveFileDiffPath(fileDiff)}
+              fileDiff={fileDiff}
+              options={{
+                collapsed: false,
+                diffStyle: "unified",
+                theme: resolveDiffThemeName(ctx.resolvedTheme),
+                preferredHighlighter: PREFERRED_HIGHLIGHTER,
+              }}
+            />
+          ))}
+        </DiffWorkerPoolProvider>
+      )}
       {renderablePatch?.kind === "raw" && (
         <pre className="overflow-x-auto rounded-md bg-muted/40 p-2 text-xs">
           {renderablePatch.text}

@@ -37,7 +37,7 @@ import {
 } from "./thread-outbox-storage";
 
 function makeMemoryOutboxFileSystem() {
-  const contents = new Map<string, string>();
+  const contents = new Map<string, string | Error>();
   const moves: Array<{ source: string; destination: string; overwrite: boolean }> = [];
   const directory = {};
   const file = (name: string): ThreadOutboxStorageFile => ({
@@ -48,6 +48,7 @@ function makeMemoryOutboxFileSystem() {
     text: async () => {
       const value = contents.get(name);
       if (value === undefined) throw new Error(`Missing file ${name}`);
+      if (value instanceof Error) throw value;
       return value;
     },
     create: ({ overwrite }) => {
@@ -116,7 +117,9 @@ describe("thread outbox", () => {
       harness.storage.saveCommandOutbox!(pendingDocument(b)),
     ]);
 
-    const manifest = JSON.parse(harness.contents.get("command-outbox.manifest.json")!) as {
+    const manifestContents = harness.contents.get("command-outbox.manifest.json");
+    expect(manifestContents).toBeTypeOf("string");
+    const manifest = JSON.parse(manifestContents as string) as {
       sequence: number;
       fileName: string;
     };
@@ -241,6 +244,72 @@ describe("thread outbox", () => {
       restartedRegistry.dispose();
     });
   }
+
+  it.each(["read", "json", "schema"] as const)(
+    "does not load a partial outbox after a record %s failure",
+    async (failure) => {
+      const harness = makeMemoryOutboxFileSystem();
+      const first = queuedMessage({
+        messageId: "message-1",
+        createdAt: "2026-06-08T10:00:01.000Z",
+      });
+      const second = queuedMessage({
+        messageId: "message-2",
+        createdAt: "2026-06-08T10:00:02.000Z",
+      });
+      harness.contents.set("message-1.json", JSON.stringify(encodeQueuedThreadMessage(first)));
+      harness.contents.set(
+        "message-2.json",
+        failure === "read"
+          ? new Error("storage unavailable")
+          : failure === "json"
+            ? "{"
+            : JSON.stringify({ ...second, schemaVersion: 999 }),
+      );
+
+      await expect(harness.storage.load()).rejects.toMatchObject({
+        operation: "read-message",
+        fileName: "message-2.json",
+      });
+
+      harness.contents.set("message-2.json", JSON.stringify(encodeQueuedThreadMessage(second)));
+      await expect(harness.storage.load()).resolves.toEqual([first, second]);
+    },
+  );
+
+  it("preserves queued messages when environment cleanup cannot read the outbox", async () => {
+    const registry = AtomRegistry.make();
+    const message = queuedMessage({
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    const stored = new Map<MessageId, QueuedThreadMessage>();
+    const manager = createThreadOutboxManager({
+      registry,
+      warn: () => {},
+      storage: {
+        load: async () => {
+          throw new Error("storage unavailable");
+        },
+        write: async (entry) => {
+          stored.set(entry.messageId, entry);
+        },
+        remove: async (entry) => {
+          stored.delete(entry.messageId);
+        },
+      },
+    });
+    await manager.enqueue(message);
+
+    await expect(manager.clearEnvironment(message.environmentId)).rejects.toMatchObject({
+      operation: "clear-environment-load",
+    });
+    expect([...stored.values()]).toEqual([message]);
+    expect(registry.get(manager.queuedMessagesByThreadKeyAtom)).toEqual({
+      "environment-1:thread-1": [message],
+    });
+    registry.dispose();
+  });
 
   it("groups messages by scoped thread and preserves creation order", () => {
     const later = queuedMessage({

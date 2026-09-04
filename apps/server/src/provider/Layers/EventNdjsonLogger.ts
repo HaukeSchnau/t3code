@@ -84,6 +84,30 @@ function resolveStreamLabel(stream: EventNdjsonStream): string {
   }
 }
 
+/** OpenCode republishes the full growing tool output for every running update. */
+function isRunningOpenCodeToolSnapshot(event: unknown): boolean {
+  if (typeof event !== "object" || event === null) return false;
+  try {
+    const nested = Reflect.get(event, "event");
+    const nativeEvent = typeof nested === "object" && nested !== null ? nested : event;
+    if (Reflect.get(nativeEvent, "type") !== "message.part.updated") return false;
+    const payload = Reflect.get(nativeEvent, "payload");
+    if (typeof payload !== "object" || payload === null) return false;
+    const properties = Reflect.get(payload, "properties");
+    if (typeof properties !== "object" || properties === null) return false;
+    const part = Reflect.get(properties, "part");
+    if (typeof part !== "object" || part === null || Reflect.get(part, "type") !== "tool") {
+      return false;
+    }
+    const state = Reflect.get(part, "state");
+    return (
+      typeof state === "object" && state !== null && Reflect.get(state, "status") === "running"
+    );
+  } catch {
+    return false;
+  }
+}
+
 function fallbackMetadata(record: ProviderEventMetadataRecord): ProviderEventMetadataRecord {
   return {
     schemaVersion: 1,
@@ -230,6 +254,10 @@ export const makeEventNdjsonLogger = Effect.fn("makeEventNdjsonLogger")(function
 
   const write = Effect.fn("write")(function* (event: unknown, threadId: ThreadId | null) {
     incrementWorkloadCounter("provider_log.candidates");
+    if (options.stream === "native" && isRunningOpenCodeToolSnapshot(event)) {
+      incrementWorkloadCounter("provider_log.sampled_suppressed");
+      return;
+    }
     const metadata = sampledMetadata(event, threadId);
     if (!metadata) return;
 

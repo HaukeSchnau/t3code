@@ -123,6 +123,50 @@ describe("EventNdjsonLogger", () => {
     }),
   );
 
+  it.effect("omits running OpenCode tool snapshots but keeps lifecycle states", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const filePath = NodePath.join(tempDir, "native.log");
+      const threadId = ThreadId.make("thread-tool-lifecycle");
+
+      try {
+        const logger = yield* makeEventNdjsonLogger(filePath, {
+          stream: "native",
+          batchWindowMs: 0,
+        });
+        assert.exists(logger);
+        if (!logger) return;
+        for (const state of ["pending", "running", "completed", "error", "unknown"] as const) {
+          yield* logger.write(
+            {
+              event: {
+                id: `tool-${state}`,
+                type: "message.part.updated",
+                payload: {
+                  properties: {
+                    part: { type: "tool", state: { status: state, output: `output-${state}` } },
+                  },
+                },
+              },
+            },
+            threadId,
+          );
+        }
+        yield* logger.close();
+
+        assert.deepEqual(
+          readLines(filePath).map((line) => {
+            const event = parsePayload(line).event as { readonly id?: string };
+            return event.id;
+          }),
+          ["tool-pending", "tool-completed", "tool-error", "tool-unknown"],
+        );
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+
   it.effect("does not sample lifecycle events", () =>
     Effect.gen(function* () {
       const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));

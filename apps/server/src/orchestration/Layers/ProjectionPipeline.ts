@@ -2528,15 +2528,12 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           { concurrency: 1 },
         ).pipe(
           Effect.flatMap(() =>
-            Effect.forEach(
-              cursorProjectors,
-              (projector) =>
-                projectionStateRepository.upsert({
-                  projector: projector.name,
-                  lastAppliedSequence: event.sequence,
-                  updatedAt: event.occurredAt,
-                }),
-              { concurrency: 1 },
+            projectionStateRepository.upsertMany(
+              cursorProjectors.map((projector) => ({
+                projector: projector.name,
+                lastAppliedSequence: event.sequence,
+                updatedAt: event.occurredAt,
+              })),
             ),
           ),
         ),
