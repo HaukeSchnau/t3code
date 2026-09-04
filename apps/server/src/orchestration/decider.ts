@@ -2,6 +2,7 @@ import {
   EventId,
   type OrchestrationCommand,
   type OrchestrationEvent,
+  type OrchestrationNotificationOrigin,
   type OrchestrationReadModel,
   canResumeThreadTurnState,
 } from "@t3tools/contracts";
@@ -142,6 +143,36 @@ function threadHasQueuedTurnStart(
     latestUserMessageAtMs > latestTurnAtMs &&
     Math.abs(queuedAgeMs) <= QUEUED_TURN_START_GRACE_MS
   );
+}
+
+function delegationNotificationIsCurrent(
+  readModel: OrchestrationReadModel,
+  origin: Extract<OrchestrationNotificationOrigin, { readonly type: "delegation" }>,
+  occurredAt: string,
+): boolean {
+  const source = readModel.threads.find(
+    (thread) => thread.id === origin.threadId && thread.deletedAt === null,
+  );
+  if (
+    source === undefined ||
+    source.archivedAt !== null ||
+    source.latestTurn?.turnId !== origin.turnId ||
+    (source.queuedMessages ?? []).length > 0 ||
+    source.session?.status === "starting" ||
+    source.session?.status === "running" ||
+    source.messages.some(
+      (message) =>
+        message.role === "user" &&
+        source.latestTurn?.completedAt !== null &&
+        source.latestTurn?.completedAt !== undefined &&
+        Date.parse(message.createdAt) > Date.parse(source.latestTurn.completedAt),
+    ) ||
+    threadHasQueuedTurnStart(source, occurredAt)
+  ) {
+    return false;
+  }
+  const expectedState = origin.outcome === "failed" ? "error" : origin.outcome;
+  return source.latestTurn.state === expectedState;
 }
 
 function withEventBase(
@@ -1154,6 +1185,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      if (
+        command.message.origin?.type === "delegation" &&
+        !delegationNotificationIsCurrent(readModel, command.message.origin, command.createdAt)
+      ) {
+        return [];
+      }
       const sourceProposedPlan = command.sourceProposedPlan;
       const sourceThread = sourceProposedPlan
         ? yield* requireThread({

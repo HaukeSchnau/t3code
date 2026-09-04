@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   EnvironmentId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -10,6 +11,7 @@ import {
   ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
+  TurnId,
   type ServerProvider,
   type OrchestrationCommand,
   type ProjectId,
@@ -128,6 +130,169 @@ const makeThread = (id: typeof targetThreadId): OrchestrationThread => ({
   activities: [],
   checkpoints: [],
   session: null,
+});
+
+it("scopes delegated settlement notifications to one worker turn", () => {
+  expect(
+    __testing.delegationNotificationStableId(
+      actorThreadId,
+      targetThreadId,
+      "turn-first",
+      "completed",
+    ),
+  ).not.toBe(
+    __testing.delegationNotificationStableId(
+      actorThreadId,
+      targetThreadId,
+      "turn-second",
+      "completed",
+    ),
+  );
+});
+
+it("keeps status and outcome active across projection handoff states", () => {
+  const turnId = TurnId.make("turn-running");
+  const runningTurn = {
+    ...makeThread(targetThreadId),
+    latestTurn: {
+      turnId,
+      state: "running" as const,
+      requestedAt: "2026-01-01T00:00:00.000Z",
+      startedAt: "2026-01-01T00:00:01.000Z",
+      completedAt: null,
+      assistantMessageId: null,
+    },
+    session: {
+      threadId: targetThreadId,
+      status: "ready" as const,
+      providerName: "codex",
+      runtimeMode: "full-access" as const,
+      activeTurnId: null,
+      lastError: null,
+      updatedAt: "2026-01-01T00:00:01.000Z",
+    },
+  };
+  expect(__testing.statusForThread(runningTurn)).toBe("running");
+  expect(__testing.outcomeForThread(runningTurn)).toBe("running");
+
+  const completedTurnWithRunningSession = {
+    ...runningTurn,
+    latestTurn: {
+      ...runningTurn.latestTurn,
+      state: "completed" as const,
+      completedAt: "2026-01-01T00:01:00.000Z",
+    },
+    session: {
+      ...runningTurn.session,
+      status: "running" as const,
+      activeTurnId: turnId,
+    },
+  };
+  expect(__testing.statusForThread(completedTurnWithRunningSession)).toBe("running");
+  expect(__testing.outcomeForThread(completedTurnWithRunningSession)).toBe("running");
+  const activeResult = {
+    thread: {
+      environmentId: scope.environmentId,
+      threadId: targetThreadId,
+      projectId,
+      title: "Target",
+      projectTitle: project.title,
+      status: __testing.statusForThread(completedTurnWithRunningSession),
+      modelSelection: completedTurnWithRunningSession.modelSelection,
+      runtimeMode: completedTurnWithRunningSession.runtimeMode,
+      interactionMode: completedTurnWithRunningSession.interactionMode,
+      workspaceRoot: project.workspaceRoot,
+      worktreePath: null,
+      outcome: __testing.outcomeForThread(completedTurnWithRunningSession),
+      backgroundLiveness: null,
+      createdAt: completedTurnWithRunningSession.createdAt,
+      updatedAt: completedTurnWithRunningSession.updatedAt,
+    },
+    latestMessage: null,
+    latestAssistantMessage: null,
+    queuedMessageCount: 0,
+    activityCount: 0,
+  };
+  expect(__testing.awaitSatisfiedResult(activeResult, "completed")).toBe(false);
+  expect(__testing.awaitSatisfiedResult(activeResult, "idle")).toBe(false);
+  expect(
+    __testing.outcomeForThread(
+      { ...completedTurnWithRunningSession, session: { ...runningTurn.session } },
+      1,
+    ),
+  ).toBe("queued");
+});
+
+it("finds queued delegated settlements invalidated by a new worker turn", () => {
+  const typedMessageId = MessageId.make("delegation-turn-first-message");
+  const legacyMessageId = MessageId.make(`${actorThreadId}:${targetThreadId}:completed:message`);
+  const unrelatedMessageId = MessageId.make("unrelated-message");
+  const coordinator: OrchestrationThread = {
+    ...makeThread(actorThreadId),
+    queuedMessages: [
+      {
+        messageId: typedMessageId,
+        threadId: actorThreadId,
+        text: "Worker completed.",
+        attachments: [],
+        origin: {
+          type: "delegation",
+          threadId: targetThreadId,
+          turnId: TurnId.make("turn-first"),
+          outcome: "completed",
+        },
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:01:00.000Z",
+        updatedAt: "2026-01-01T00:01:00.000Z",
+      },
+      {
+        messageId: legacyMessageId,
+        threadId: actorThreadId,
+        text: "Legacy worker completion.",
+        attachments: [],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:01:00.000Z",
+        updatedAt: "2026-01-01T00:01:00.000Z",
+      },
+      {
+        messageId: unrelatedMessageId,
+        threadId: actorThreadId,
+        text: "Keep me.",
+        attachments: [],
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        createdAt: "2026-01-01T00:01:00.000Z",
+        updatedAt: "2026-01-01T00:01:00.000Z",
+      },
+    ],
+  };
+
+  expect(__testing.staleDelegationNotificationIds(coordinator, targetThreadId)).toEqual([
+    typedMessageId,
+    legacyMessageId,
+  ]);
+});
+
+it("recognizes a reused created thread as an owned delegation", () => {
+  const createdAt = "2026-01-01T00:00:00.000Z";
+  const activity: OrchestrationThread["activities"][number] = {
+    id: "activity-created" as OrchestrationThread["activities"][number]["id"],
+    tone: "tool",
+    kind: "thread-orchestration.relationship",
+    summary: "Created by coordinator.",
+    payload: {
+      kind: "createdBy",
+      actorThreadId,
+      targetThreadId,
+      wakeCoordinator: true,
+      createdAt,
+    },
+    turnId: null,
+    createdAt,
+  };
+  expect(__testing.isOwnedDelegation([activity], actorThreadId, targetThreadId)).toBe(true);
 });
 
 const readModel: OrchestrationReadModel = {
@@ -888,6 +1053,103 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
       threadId: targetThreadId,
       modelSelection: legacyModelSelection,
       delivery: "immediate",
+    });
+  }).pipe(Effect.provide(testLayer));
+});
+
+it.effect("invalidates a queued prior-turn completion when sending a new worker turn", () => {
+  const dispatched: OrchestrationCommand[] = [];
+  const notificationMessageId = MessageId.make("delegation-turn-first-message");
+  const model: OrchestrationReadModel = {
+    ...readModel,
+    threads: [
+      {
+        ...makeThread(actorThreadId),
+        queuedMessages: [
+          {
+            messageId: notificationMessageId,
+            threadId: actorThreadId,
+            text: "The delegated worker completed.",
+            attachments: [],
+            origin: {
+              type: "delegation",
+              threadId: targetThreadId,
+              turnId: TurnId.make("turn-first"),
+              outcome: "completed",
+            },
+            runtimeMode: "full-access",
+            interactionMode: "default",
+            createdAt: "2026-01-01T00:01:00.000Z",
+            updatedAt: "2026-01-01T00:01:00.000Z",
+          },
+        ],
+      },
+      makeThread(targetThreadId),
+    ],
+  };
+  const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        resolveReceipt: () => Effect.succeed(Option.none()),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            dispatched.push(command);
+            return { sequence: dispatched.length };
+          }),
+        latestSequence: Effect.succeed(0),
+        streamDomainEvents: Stream.empty,
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        getCommandReadModel: () => Effect.succeed(model),
+        getSnapshot: () => Effect.die("unused"),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(model),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(model),
+        getThreadResultContextById: getThreadResultContextById(model),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(model),
+        getThreadDetailById: getThreadDetailById(model),
+        getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
+        searchThreads: () => Effect.succeed({ matches: [] }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testThreadDiscoveryDependencies),
+  );
+
+  return Effect.gen(function* () {
+    const service = yield* ThreadOrchestrationService;
+    yield* service.sendMessageToThread(scope, {
+      threadId: targetThreadId,
+      prompt: "Start the remediation turn.",
+    });
+
+    expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.message.queue",
+      "thread.queued-message.delete",
+      "thread.activity.append",
+    ]);
+    expect(dispatched[1]).toMatchObject({
+      type: "thread.queued-message.delete",
+      threadId: actorThreadId,
+      messageId: notificationMessageId,
     });
   }).pipe(Effect.provide(testLayer));
 });
@@ -2133,7 +2395,7 @@ it.effect("returns provider availability failures in compact coordinator results
   }).pipe(Effect.provide(testLayer));
 });
 
-it.effect("awaits idle threads without polling side effects", () => {
+it.effect("rejects oversized awaits instead of returning a premature idle result", () => {
   const dispatched: OrchestrationCommand[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
     Layer.provide(unsupportedCodexForkImporterLayer),
@@ -2184,6 +2446,23 @@ it.effect("awaits idle threads without polling side effects", () => {
 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
+    const initial = yield* service.readThreadResult(scope, { threadId: targetThreadId });
+    expect(initial.queuedMessageCount).toBe(0);
+    expect(initial.thread.status).toBe("idle");
+    expect(initial.thread.outcome).toBe("queued");
+    expect(__testing.awaitSatisfiedResult(initial, "idle")).toBe(true);
+    const oversizedTimeout = yield* service
+      .awaitThread(scope, {
+        threadId: targetThreadId,
+        until: "idle",
+        timeoutMs: 7_100_000,
+      })
+      .pipe(Effect.flip);
+    expect(oversizedTimeout).toMatchObject({
+      operation: "await_thread",
+      code: "timeout_too_large",
+    });
+
     const result = yield* service.awaitThread(scope, {
       threadId: targetThreadId,
       until: "idle",

@@ -54,6 +54,12 @@ t3 thread rename <thread-id> "Parser review" --json
 `--queue` when the message should wait behind active work. Corrections and review findings that
 affect the current implementation should normally be sent immediately.
 
+`await` is a short synchronous read and accepts timeouts up to 120 seconds. The command rejects
+larger values instead of shortening them. Use `wait create --members <thread-id> --mode all` for
+long-running delegated work. Do not wrap `thread await` in an unconditional command watch: a timed
+out await still prints an unsatisfied result, and an unconditional watch treats every stdout line as
+an event.
+
 Provider sessions set `T3CODE_THREAD_ID`, which lets `create`, `fork`, `read`, `send`,
 and `rename` record the calling thread automatically. When running the CLI from
 an unrelated shell, pass `--from-thread <thread-id>` if the command needs caller

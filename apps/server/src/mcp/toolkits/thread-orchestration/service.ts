@@ -418,7 +418,7 @@ function hasBatchActivity(
 
 function isTerminalBatchMemberOutcome(
   outcome: NonNullable<ThreadOrchestrationThreadSummary["outcome"]>,
-): boolean {
+): outcome is "completed" | "failed" | "interrupted" {
   return ["completed", "failed", "interrupted"].includes(outcome);
 }
 
@@ -456,6 +456,20 @@ function statusForBatch(input: {
 function statusForThread(thread: ThreadSummarySource): string {
   if ("deletedAt" in thread && thread.deletedAt !== null) return "deleted";
   if (thread.archivedAt !== null) return "archived";
+  if (thread.session?.status === "starting" || thread.session?.status === "running") {
+    return thread.session.status;
+  }
+  if (
+    thread.session?.status === "error" ||
+    thread.session?.status === "interrupted" ||
+    thread.session?.status === "stopped"
+  ) {
+    return thread.session.status;
+  }
+  // A turn-start request and the provider session update use separate events.
+  // Prefer the active turn during that gap instead of reporting the stale
+  // resting session status as ready or idle.
+  if (thread.latestTurn?.state === "running") return "running";
   if (thread.session !== null) return thread.session.status;
   if (thread.latestTurn !== null) return thread.latestTurn.state;
   return "idle";
@@ -463,17 +477,22 @@ function statusForThread(thread: ThreadSummarySource): string {
 
 function outcomeForThread(
   thread: ThreadSummarySource,
+  queuedMessageCount = 0,
 ): NonNullable<ThreadOrchestrationThreadSummary["outcome"]> {
   if ("hasPendingUserInput" in thread && thread.hasPendingUserInput) return "blocked-input";
   if ("hasPendingApprovals" in thread && thread.hasPendingApprovals) return "blocked-approval";
   if (
     thread.session?.status === "starting" ||
     thread.session?.status === "running" ||
-    thread.latestTurn?.state === "running" ||
+    (thread.latestTurn?.state === "running" &&
+      !["error", "interrupted", "stopped"].includes(thread.session?.status ?? "")) ||
     ("backgroundLiveness" in thread && thread.backgroundLiveness != null)
   ) {
     return "running";
   }
+  if (thread.session?.status === "error") return "failed";
+  if (thread.session?.status === "interrupted") return "interrupted";
+  if (queuedMessageCount > 0) return "queued";
   switch (thread.latestTurn?.state) {
     case "completed":
       return "completed";
@@ -519,6 +538,7 @@ function summaryForThread(
   thread: ThreadSummarySource,
   project: ProjectSummarySource,
   environmentId: EnvironmentId,
+  queuedMessageCount = 0,
 ): ThreadOrchestrationThreadSummary {
   return {
     environmentId,
@@ -532,7 +552,7 @@ function summaryForThread(
     interactionMode: thread.interactionMode,
     workspaceRoot: project.workspaceRoot,
     worktreePath: thread.worktreePath,
-    outcome: outcomeForThread(thread),
+    outcome: outcomeForThread(thread, queuedMessageCount),
     backgroundLiveness: "backgroundLiveness" in thread ? (thread.backgroundLiveness ?? null) : null,
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
@@ -686,20 +706,65 @@ function relationshipFromActivity(
 }
 
 function awaitSatisfiedResult(
-  context: ProjectionThreadResultContext,
+  result: ThreadOrchestrationThreadResult,
   until: "idle" | "completed" | "queueDrained",
 ): boolean {
+  const outcome = result.thread.outcome ?? "unknown";
   switch (until) {
     case "idle":
-      return !["running", "starting"].includes(statusForThread(context.thread));
+      return !["running", "starting"].includes(result.thread.status) && outcome !== "running";
     case "completed":
-      return context.thread.latestTurn?.state === "completed";
+      return outcome === "completed";
     case "queueDrained":
       return (
-        context.queuedMessageCount === 0 &&
-        !["running", "starting"].includes(statusForThread(context.thread))
+        result.queuedMessageCount === 0 &&
+        !["running", "starting"].includes(result.thread.status) &&
+        outcome !== "running"
       );
   }
+}
+
+function staleDelegationNotificationIds(
+  coordinator: OrchestrationThread,
+  targetThreadId: ThreadId,
+): ReadonlyArray<MessageId> {
+  const legacyIds = new Set(
+    ["completed", "failed", "interrupted"].map(
+      (outcome) => `${coordinator.id}:${targetThreadId}:${outcome}:message`,
+    ),
+  );
+  return (coordinator.queuedMessages ?? []).flatMap((message) => {
+    const origin = message.origin;
+    return (origin?.type === "delegation" && origin.threadId === targetThreadId) ||
+      legacyIds.has(message.messageId)
+      ? [message.messageId]
+      : [];
+  });
+}
+
+function isOwnedDelegation(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+  coordinatorThreadId: ThreadId,
+  targetThreadId: ThreadId,
+): boolean {
+  return activities.some((activity) => {
+    const relationship = relationshipFromActivity(activity);
+    return (
+      relationship?.kind === "createdBy" &&
+      relationship.wakeCoordinator === true &&
+      relationship.actorThreadId === coordinatorThreadId &&
+      relationship.targetThreadId === targetThreadId
+    );
+  });
+}
+
+function delegationNotificationStableId(
+  coordinatorThreadId: ThreadId,
+  targetThreadId: ThreadId,
+  turnId: string,
+  outcome: string,
+): string {
+  return `${coordinatorThreadId}:${targetThreadId}:${turnId}:${outcome}`;
 }
 
 const make = Effect.gen(function* () {
@@ -953,7 +1018,12 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError> =>
     Effect.gen(function* () {
       return {
-        thread: summaryForThread(context.thread, context.project, yield* localEnvironmentId),
+        thread: summaryForThread(
+          context.thread,
+          context.project,
+          yield* localEnvironmentId,
+          context.queuedMessageCount,
+        ),
         latestMessage: context.latestMessage,
         latestAssistantMessage: context.latestAssistantMessage,
         queuedMessageCount: context.queuedMessageCount,
@@ -1183,7 +1253,15 @@ const make = Effect.gen(function* () {
         return yield* remoteClient.awaitThread(scopeForRemote(scope), input);
       }
       const until = input.until ?? "idle";
-      const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, MAX_AWAIT_TIMEOUT_MS);
+      const timeoutMs = input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS;
+      if (timeoutMs > MAX_AWAIT_TIMEOUT_MS) {
+        return yield* new ThreadOrchestrationError({
+          operation: "await_thread",
+          code: "timeout_too_large",
+          message: `Thread await supports at most ${MAX_AWAIT_TIMEOUT_MS} ms. Use a durable orchestration wait for longer work.`,
+          threadId: input.threadId,
+        });
+      }
       const pollIntervalMs = Math.max(
         input.pollIntervalMs ?? DEFAULT_AWAIT_POLL_INTERVAL_MS,
         MIN_AWAIT_POLL_INTERVAL_MS,
@@ -1194,7 +1272,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const context = yield* readThreadResultContext(input.threadId, "await_thread");
           const result = yield* threadResultFromContext(context);
-          const satisfied = awaitSatisfiedResult(context, until);
+          const satisfied = awaitSatisfiedResult(result, until);
           if (satisfied) {
             return { result, satisfied, timedOut: false };
           }
@@ -3280,7 +3358,8 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const result = yield* readThreadResult(scope, { threadId: targetThreadId });
+        const context = yield* readThreadResultContext(targetThreadId, "delegation.monitor");
+        const result = yield* threadResultFromContext(context);
         const outcome = result.thread.outcome ?? "unknown";
         const shouldWake =
           isTerminalBatchMemberOutcome(outcome) ||
@@ -3303,7 +3382,17 @@ const make = Effect.gen(function* () {
               );
             if (Option.isSome(coordinator)) {
               const createdAt = yield* nowIso;
-              const stableId = `${scope.threadId}:${targetThreadId}:${outcome}`;
+              const turnId =
+                context.thread.latestTurn?.turnId ?? context.thread.session?.activeTurnId;
+              if (turnId === null || turnId === undefined) {
+                return;
+              }
+              const stableId = delegationNotificationStableId(
+                scope.threadId,
+                targetThreadId,
+                turnId,
+                outcome,
+              );
               yield* engine
                 .dispatch({
                   type: "thread.message.queue",
@@ -3318,6 +3407,16 @@ const make = Effect.gen(function* () {
                       `Inspect it with: t3 thread result ${targetThreadId} --json`,
                     ].join("\n"),
                     attachments: [],
+                    ...(isTerminalBatchMemberOutcome(outcome)
+                      ? {
+                          origin: {
+                            type: "delegation" as const,
+                            threadId: targetThreadId,
+                            turnId,
+                            outcome,
+                          },
+                        }
+                      : {}),
                   },
                   runtimeMode: coordinator.value.runtimeMode,
                   interactionMode: coordinator.value.interactionMode,
@@ -3335,7 +3434,7 @@ const make = Effect.gen(function* () {
                 threadId: scope.threadId,
                 kind: "thread-orchestration.delegation.notified",
                 summary: `Coordinator notified that ${targetThreadId} is ${outcome}.`,
-                payload: { targetThreadId, outcome, notifiedAt: createdAt },
+                payload: { targetThreadId, turnId, outcome, notifiedAt: createdAt },
                 createdAt,
                 stableId: `${stableId}:notified`,
               });
@@ -3623,6 +3722,35 @@ const make = Effect.gen(function* () {
           ),
         );
       if (input.threadId !== scope.threadId) {
+        const coordinator = yield* snapshotQuery.getThreadDetailById(scope.threadId).pipe(
+          Effect.mapError(
+            toThreadOrchestrationError("send_message_to_thread.notifications", {
+              threadId: scope.threadId,
+            }),
+          ),
+        );
+        if (Option.isSome(coordinator)) {
+          yield* Effect.forEach(
+            staleDelegationNotificationIds(coordinator.value, input.threadId),
+            (messageId) =>
+              engine
+                .dispatch({
+                  type: "thread.queued-message.delete",
+                  commandId: CommandId.make(`thread-orchestration:delegation-delete:${messageId}`),
+                  threadId: scope.threadId,
+                  messageId,
+                  createdAt,
+                })
+                .pipe(
+                  Effect.mapError(
+                    toThreadOrchestrationError("send_message_to_thread.notifications", {
+                      threadId: scope.threadId,
+                    }),
+                  ),
+                ),
+            { discard: true },
+          );
+        }
         yield* appendRelationship({
           scope,
           kind: "messagedBy",
@@ -3630,6 +3758,19 @@ const make = Effect.gen(function* () {
           summary: `Messaged by thread ${scope.threadId}.`,
           createdAt,
         });
+        const relationships = yield* snapshotQuery.listThreadRelationshipActivities().pipe(
+          Effect.mapError(
+            toThreadOrchestrationError("send_message_to_thread.relationships", {
+              threadId: input.threadId,
+            }),
+          ),
+        );
+        if (isOwnedDelegation(relationships, scope.threadId, input.threadId)) {
+          yield* monitorDelegatedThread(scope, input.threadId).pipe(
+            Effect.ignoreCause({ log: true }),
+            Effect.forkDetach,
+          );
+        }
       }
       const resultContextOption = yield* snapshotQuery
         .getThreadResultContextById(input.threadId)
@@ -3650,6 +3791,7 @@ const make = Effect.gen(function* () {
         resultContextOption.value.thread,
         resultContextOption.value.project,
         yield* localEnvironmentId,
+        resultContextOption.value.queuedMessageCount,
       );
       return {
         thread,
@@ -3887,8 +4029,14 @@ const make = Effect.gen(function* () {
 export const layer = Layer.effect(ThreadOrchestrationService, make);
 
 export const __testing = {
+  awaitSatisfiedResult,
+  delegationNotificationStableId,
   deliveryForCoordinatorNotification,
   isTerminalBatchMemberOutcome,
   isTerminalBatchStatus,
+  isOwnedDelegation,
+  outcomeForThread,
+  staleDelegationNotificationIds,
+  statusForThread,
   statusForBatch,
 };

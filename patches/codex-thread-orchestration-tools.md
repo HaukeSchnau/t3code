@@ -40,7 +40,8 @@ The CLI includes compact passive observability commands:
 - `t3 thread result` returns thread status, queue count, and latest messages
   without loading the full transcript.
 - `t3 thread await` waits for a thread to become idle, complete its latest
-  turn, or drain its queued messages.
+  turn, or drain its queued messages. It rejects timeouts above 120 seconds;
+  durable waits own longer orchestration barriers.
 - `t3 thread graph` returns automatic relationship edges without mutating the
   graph being inspected.
 
@@ -51,6 +52,10 @@ immediate delivery path. Notifications from explicit orchestration waits also de
 when the watched condition resolves. Routine unwatched successful completion notifications remain
 queued while a coordinator is running, and all notifications retain the normal idle-thread wake
 behavior.
+
+Successful delegation notifications carry the worker turn id. Sending another turn removes queued
+notifications for the prior turn and starts a new monitor, so a coordinator cannot consume an old
+completion after the worker has restarted.
 
 Full `t3 thread read` still records `readBy` activity when one thread reads
 another. The compact commands are passive, so polling does not add relationship

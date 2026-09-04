@@ -437,7 +437,10 @@ const awaitCommand = Command.make("await", {
     Flag.withDescription("Condition to wait for."),
     Flag.optional,
   ),
-  timeoutMs: Flag.integer("timeout-ms").pipe(Flag.withDescription("Wait timeout."), Flag.optional),
+  timeoutMs: Flag.integer("timeout-ms").pipe(
+    Flag.withDescription("Wait timeout in milliseconds, up to 120000."),
+    Flag.optional,
+  ),
   pollIntervalMs: Flag.integer("poll-interval-ms").pipe(
     Flag.withDescription("Polling interval."),
     Flag.optional,

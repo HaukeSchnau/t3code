@@ -1301,11 +1301,18 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
   const ctx = use(TimelineRowCtx);
   if (row.message.origin !== undefined) {
     const origin = row.message.origin;
-    const label = origin.type === "watch" ? "Watch event" : "Wait result";
+    const label =
+      origin.type === "watch"
+        ? "Watch event"
+        : origin.type === "wait"
+          ? "Wait result"
+          : "Delegated result";
     const detail =
       origin.type === "watch"
         ? `${origin.eventCount} event${origin.eventCount === 1 ? "" : "s"} · ${origin.decision}`
-        : origin.state;
+        : origin.type === "wait"
+          ? origin.state
+          : origin.outcome;
     return (
       <div className="flex justify-start py-1" data-testid="automation-notification">
         <div className="max-w-[86%] rounded-xl border border-border/70 bg-card/60 px-3 py-2 text-sm">

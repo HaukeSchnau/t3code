@@ -1589,11 +1589,18 @@ function renderFeedEntry(
 
     if (message.origin !== undefined) {
       const origin = message.origin;
-      const label = origin.type === "watch" ? "Watch event" : "Wait result";
+      const label =
+        origin.type === "watch"
+          ? "Watch event"
+          : origin.type === "wait"
+            ? "Wait result"
+            : "Delegated result";
       const detail =
         origin.type === "watch"
           ? `${origin.eventCount} event${origin.eventCount === 1 ? "" : "s"} · ${origin.decision}`
-          : origin.state;
+          : origin.type === "wait"
+            ? origin.state
+            : origin.outcome;
       return (
         <View className="mb-5 items-start">
           <View className="max-w-[92%] gap-1 rounded-2xl border border-border bg-surface px-3.5 py-2.5">

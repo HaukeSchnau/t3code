@@ -377,6 +377,12 @@ export const OrchestrationNotificationOrigin = Schema.Union([
     state: Schema.Literals(["attention", "satisfied", "deadline-exceeded"]),
     summary: Schema.optional(TrimmedNonEmptyString),
   }),
+  Schema.Struct({
+    type: Schema.Literal("delegation"),
+    threadId: ThreadId,
+    turnId: TurnId,
+    outcome: Schema.Literals(["completed", "failed", "interrupted"]),
+  }),
 ]);
 export type OrchestrationNotificationOrigin = typeof OrchestrationNotificationOrigin.Type;
 
