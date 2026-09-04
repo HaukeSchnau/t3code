@@ -198,6 +198,7 @@ function LimitWindows({
  * and the signed-in email blurred until clicked, as provider settings do.
  */
 function AccountHeading({
+  instanceId,
   driver,
   label,
   instanceLabel,
@@ -205,6 +206,7 @@ function AccountHeading({
   email,
   accentColor,
 }: {
+  readonly instanceId?: ProviderInstanceId;
   readonly driver: ServerProvider["driver"];
   readonly label: string;
   readonly instanceLabel: string;
@@ -215,6 +217,7 @@ function AccountHeading({
   return (
     <h2 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-foreground">
       <ProviderInstanceIcon
+        instanceId={instanceId ?? ProviderInstanceId.make(driver)}
         driverKind={driver}
         displayName={instanceLabel}
         accentColor={accentColor}
@@ -257,6 +260,7 @@ function ProviderLimits({
   return (
     <section className="flex flex-col gap-3">
       <AccountHeading
+        instanceId={provider.instanceId}
         driver={provider.driver}
         label={getDriverOption(provider.driver)?.label ?? String(provider.driver)}
         instanceLabel={providerLimitsLabel(provider, (driver) => getDriverOption(driver)?.label)}

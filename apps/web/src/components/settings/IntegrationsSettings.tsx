@@ -8,6 +8,7 @@
 import {
   BROWSER_PROFILE_MAX_COUNT,
   type BrowserLinkTarget,
+  BrowserImportFailureReason,
   type BrowserProfile,
   type EnvironmentId,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
@@ -112,6 +113,14 @@ export function browserProfileRemovalAvailable(
 ): boolean {
   return bridgeAvailable && environmentsReady && environmentCount > 0;
 }
+
+export const importFailureReason = (cause: unknown): BrowserImportFailureReason => {
+  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
+  return (
+    BrowserImportFailureReason.literals.find((reason) => message.includes(`failed: ${reason}.`)) ??
+    "readFailed"
+  );
+};
 
 /**
  * The size a "Responsive" default falls back to when the user switches away

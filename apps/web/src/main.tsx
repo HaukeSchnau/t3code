@@ -40,7 +40,7 @@ const app = <AppRoot router={router} />;
 // The index.html boot splash lives inside #root, and React's first commit
 // clears it. Resolve the initial route's split chunks before rendering, so the
 // splash holds until real UI paints instead of dropping to a blank window.
-void router
+export const startup = router
   .load()
   .then(() => {
     // A route chunk failure still resolves router.load(): the error is parked in

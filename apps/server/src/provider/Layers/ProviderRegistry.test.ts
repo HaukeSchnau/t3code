@@ -400,7 +400,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               shortDescription: "Debug failing GitHub Actions checks",
             },
           ]);
-          assert.deepStrictEqual(status.slashCommands.slice(1), [
+          assert.deepStrictEqual(status.slashCommands, [
             {
               name: "feedback",
               description: "Send this thread and Codex logs to OpenAI",
@@ -645,10 +645,10 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           ],
         } as const satisfies ServerProvider;
 
+        const { workspaceSnapshots: _workspaceSnapshots, ...machineProvider } = provider;
         const metadataOnlyRefresh = {
-          ...provider,
+          ...machineProvider,
           checkedAt: "2026-03-25T00:02:00.000Z",
-          workspaceSnapshots: undefined,
         } satisfies ServerProvider;
         assert.deepStrictEqual(
           mergeProviderSnapshot(provider, metadataOnlyRefresh).workspaceSnapshots,

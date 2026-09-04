@@ -595,6 +595,7 @@
             pkgs.git
             pkgs.gnumake
             pkgs.just
+            pkgs.libsecret
             pkgs.pkg-config
             pkgs.python3
             pkgs.procps

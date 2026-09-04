@@ -9,10 +9,12 @@
  *
  * @module provider/Layers/ProviderUsageLimitsIngestion
  */
+import { ProviderUsageLimitsUpdate } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
+import * as Schema from "effect/Schema";
 
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderService } from "../Services/ProviderService.ts";
@@ -33,8 +35,10 @@ export const ProviderUsageLimitsIngestionLive = Layer.effectDiscard(
           if (!instance) {
             return;
           }
+          const limits = event.payload.rateLimits;
+          if (!Schema.is(ProviderUsageLimitsUpdate)(limits)) return;
           const checkedAt = DateTime.formatIso(yield* DateTime.now);
-          yield* instance.snapshot.applyUsageLimits({ ...event.payload.limits, checkedAt });
+          yield* instance.snapshot.applyUsageLimits({ ...limits, checkedAt });
           // One bad event must not end the subscriber for every later one.
         }).pipe(Effect.ignoreCause({ log: true })),
       ),
