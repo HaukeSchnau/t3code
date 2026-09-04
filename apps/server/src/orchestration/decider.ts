@@ -1,5 +1,6 @@
 import {
   EventId,
+  PositiveInt,
   type OrchestrationCommand,
   type OrchestrationEvent,
   type OrchestrationReadModel,
@@ -296,6 +297,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           // automatic seed here, but only a metadata update records an
           // explicit project default.
           defaultModelSelection: null,
+          defaultSkillPackIds: [],
           faviconPath: null,
           projectIcon: null,
           scripts: [],
@@ -337,6 +339,9 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(command.defaultThreadEnvMode !== undefined
             ? { defaultThreadEnvMode: command.defaultThreadEnvMode }
+            : {}),
+          ...(command.defaultSkillPackIds !== undefined
+            ? { defaultSkillPackIds: command.defaultSkillPackIds }
             : {}),
           ...(command.autoPull !== undefined ? { autoPull: command.autoPull } : {}),
           ...(command.faviconPath !== undefined ? { faviconPath: command.faviconPath } : {}),
@@ -399,7 +404,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
     }
 
     case "thread.create": {
-      yield* requireProject({
+      const project = yield* requireProject({
         readModel,
         command,
         projectId: command.projectId,
@@ -409,6 +414,7 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      const skillPackIds = command.skillPackIds ?? project.defaultSkillPackIds ?? [];
       return {
         ...(yield* withEventBase({
           aggregateKind: "thread",
@@ -425,6 +431,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           modelSelection: command.modelSelection,
           runtimeMode: command.runtimeMode,
           interactionMode: command.interactionMode,
+          skillScope: {
+            version: PositiveInt.make(1),
+            appliedVersion: skillPackIds.length === 0 ? 1 : 0,
+            packIds: skillPackIds,
+            state: skillPackIds.length === 0 ? "ready" : "pending",
+          },
           branch: command.branch,
           worktreePath: command.worktreePath,
           workspaceId: command.workspaceId ?? null,
@@ -995,6 +1007,55 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
           threadId: command.threadId,
           interactionMode: command.interactionMode,
           updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.skill-packs.set": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const occurredAt = yield* nowIso;
+      const version = PositiveInt.make((thread.skillScope?.version ?? 0) + 1);
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.skill-packs-set",
+        payload: {
+          threadId: command.threadId,
+          version,
+          packIds: command.packIds,
+          updatedAt: occurredAt,
+        },
+      };
+    }
+
+    case "thread.skill-scope.apply": {
+      yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt: command.createdAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.skill-scope-applied",
+        payload: {
+          threadId: command.threadId,
+          version: command.version,
+          state: command.state,
+          ...(command.issue !== undefined ? { issue: command.issue } : {}),
+          updatedAt: command.createdAt,
         },
       };
     }

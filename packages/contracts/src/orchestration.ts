@@ -33,6 +33,7 @@ import {
   ProviderUnavailable,
 } from "./providerError.ts";
 import { ThreadWorkspaceRetentionPolicy, ThreadWorkspaceRootRole } from "./workspace.ts";
+import { SkillPackId, ThreadSkillScope } from "./skillPacks.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
@@ -345,6 +346,7 @@ export const OrchestrationProject = Schema.Struct({
   // Per-project override for where new threads start. Null/absent means
   // "no override": clients fall back to t3.json, then the global setting.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   // Opt-in because background sync performs network I/O and may move the checkout.
   // Optional on the wire so cached snapshots from older servers still decode.
   autoPull: Schema.optional(Schema.Boolean),
@@ -629,6 +631,7 @@ export const OrchestrationThread = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  skillScope: Schema.optional(ThreadSkillScope),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
@@ -752,6 +755,7 @@ export const OrchestrationProjectShell = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   autoPull: Schema.optional(Schema.Boolean),
   // Optional on the wire so cached snapshots from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
@@ -772,6 +776,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  skillScope: Schema.optional(ThreadSkillScope),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
@@ -1147,6 +1152,7 @@ const ProjectMetaUpdateCommand = Schema.Struct({
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   // Absent = leave unchanged; null = clear the override.
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
@@ -1171,6 +1177,7 @@ const ThreadCreateCommand = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
@@ -1307,12 +1314,21 @@ const ThreadInteractionModeSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadSkillPacksSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.skill-packs.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  packIds: Schema.Array(SkillPackId),
+  createdAt: IsoDateTime,
+});
+
 const ThreadTurnStartBootstrapCreateThread = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
@@ -1539,6 +1555,7 @@ const DispatchableClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadSkillPacksSetCommand,
   ThreadTurnStartCommand,
   ThreadMessageQueueCommand,
   ThreadQueuedMessageDeleteCommand,
@@ -1572,6 +1589,7 @@ export const ClientOrchestrationCommand = Schema.Union([
   ThreadMetaUpdateCommand,
   ThreadRuntimeModeSetCommand,
   ThreadInteractionModeSetCommand,
+  ThreadSkillPacksSetCommand,
   ClientThreadTurnStartCommand,
   ClientThreadMessageQueueCommand,
   ThreadQueuedMessageDeleteCommand,
@@ -1591,6 +1609,16 @@ const ThreadSessionSetCommand = Schema.Struct({
   commandId: CommandId,
   threadId: ThreadId,
   session: OrchestrationSession,
+  createdAt: IsoDateTime,
+});
+
+const ThreadSkillScopeApplyCommand = Schema.Struct({
+  type: Schema.Literal("thread.skill-scope.apply"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  version: PositiveInt,
+  state: Schema.Literals(["ready", "degraded"]),
+  issue: Schema.optional(TrimmedNonEmptyString),
   createdAt: IsoDateTime,
 });
 
@@ -1689,6 +1717,7 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
 const InternalOrchestrationCommand = Schema.Union([
   ThreadAutoSettleCommand,
   ThreadSessionSetCommand,
+  ThreadSkillScopeApplyCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadMessagesImportCommand,
@@ -1726,6 +1755,8 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.meta-updated",
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
+  "thread.skill-packs-set",
+  "thread.skill-scope-applied",
   "thread.message-queued",
   "thread.queued-message-deleted",
   "thread.queued-message-dispatched",
@@ -1757,6 +1788,7 @@ export const ProjectCreatedPayload = Schema.Struct({
   workspaceRoot: TrimmedNonEmptyString,
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.NullOr(ModelSelection),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   // Optional so persisted events from older servers still decode.
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
@@ -1772,6 +1804,7 @@ export const ProjectMetaUpdatedPayload = Schema.Struct({
   repositoryIdentity: Schema.optional(Schema.NullOr(RepositoryIdentity)),
   defaultModelSelection: Schema.optional(Schema.NullOr(ModelSelection)),
   defaultThreadEnvMode: Schema.optional(Schema.NullOr(ThreadEnvMode)),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   autoPull: Schema.optional(Schema.Boolean),
   faviconPath: Schema.optional(Schema.NullOr(ProjectFaviconPath)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),
@@ -1794,6 +1827,7 @@ export const ThreadCreatedPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  skillScope: Schema.optional(ThreadSkillScope),
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
@@ -1896,6 +1930,21 @@ export const ThreadInteractionModeSetPayload = Schema.Struct({
   interactionMode: ProviderInteractionMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_PROVIDER_INTERACTION_MODE)),
   ),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadSkillPacksSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  version: PositiveInt,
+  packIds: Schema.Array(SkillPackId),
+  updatedAt: IsoDateTime,
+});
+
+export const ThreadSkillScopeAppliedPayload = Schema.Struct({
+  threadId: ThreadId,
+  version: PositiveInt,
+  state: Schema.Literals(["ready", "degraded"]),
+  issue: Schema.optional(TrimmedNonEmptyString),
   updatedAt: IsoDateTime,
 });
 
@@ -2144,6 +2193,16 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.interaction-mode-set"),
     payload: ThreadInteractionModeSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.skill-packs-set"),
+    payload: ThreadSkillPacksSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.skill-scope-applied"),
+    payload: ThreadSkillScopeAppliedPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

@@ -60,6 +60,7 @@ import {
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 import { ThreadWorkspaceService } from "../../workspace/ThreadWorkspaceService.ts";
+import { loadSkillPackCatalog, materializeSkillScope } from "../../skills/SkillPackRuntime.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 
@@ -69,6 +70,7 @@ type ProviderIntentEvent = Extract<
     type:
       | "thread.meta-updated"
       | "thread.runtime-mode-set"
+      | "thread.skill-packs-set"
       | "thread.turn-start-requested"
       | "thread.turn-interrupt-requested"
       | "thread.approval-response-requested"
@@ -491,6 +493,27 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const applyThreadSkillScope = (input: {
+    readonly threadId: ThreadId;
+    readonly version: NonNullable<OrchestrationThread["skillScope"]>["version"];
+    readonly state: "ready" | "degraded";
+    readonly issue?: string;
+    readonly createdAt: string;
+  }) =>
+    serverCommandId("provider-skill-scope-applied").pipe(
+      Effect.flatMap((commandId) =>
+        orchestrationEngine.dispatch({
+          type: "thread.skill-scope.apply",
+          commandId,
+          threadId: input.threadId,
+          version: input.version,
+          state: input.state,
+          ...(input.issue ? { issue: input.issue } : {}),
+          createdAt: input.createdAt,
+        }),
+      ),
+    );
+
   const setThreadSessionErrorOnTurnStartFailure = Effect.fnUntraced(function* (input: {
     readonly threadId: ThreadId;
     readonly detail: string;
@@ -749,6 +772,64 @@ const make = Effect.gen(function* () {
       });
     }
     const preferredProvider: ProviderDriverKind = desiredDriverKind;
+    const skillScope = thread.skillScope;
+    const supportsSkillPacks =
+      preferredProvider === ProviderDriverKind.make("codex") ||
+      preferredProvider === ProviderDriverKind.make("claudeAgent") ||
+      preferredProvider === ProviderDriverKind.make("opencode");
+    const settings = yield* serverSettingsService.getSettings;
+    const instanceConfig = settings.providerInstances[desiredInstanceId]?.config;
+    const instanceServerUrl =
+      instanceConfig !== null &&
+      typeof instanceConfig === "object" &&
+      !Array.isArray(instanceConfig)
+        ? (instanceConfig as { readonly serverUrl?: unknown }).serverUrl
+        : undefined;
+    const usesExternalOpenCodeServer =
+      preferredProvider === ProviderDriverKind.make("opencode") &&
+      (typeof instanceServerUrl === "string"
+        ? instanceServerUrl.trim().length > 0
+        : settings.providers.opencode.serverUrl.trim().length > 0);
+    const resolvedSkillScope =
+      !skillScope || skillScope.packIds.length === 0
+        ? { scope: undefined, issue: undefined }
+        : !supportsSkillPacks
+          ? {
+              scope: undefined,
+              issue: `Skill packs are not supported by provider '${preferredProvider}'.`,
+            }
+          : usesExternalOpenCodeServer
+            ? {
+                scope: undefined,
+                issue: "Skill packs are not supported by external OpenCode servers.",
+              }
+            : yield* Effect.gen(function* () {
+                const catalog = yield* loadSkillPackCatalog();
+                return yield* materializeSkillScope({
+                  catalog,
+                  packIds: skillScope.packIds,
+                  version: skillScope.version,
+                });
+              }).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.succeed({
+                    scope: undefined,
+                    issue: `Could not activate skill packs: ${Cause.pretty(cause)}`,
+                  }),
+                ),
+              );
+    const skillScopeState = resolvedSkillScope.issue ? "degraded" : "ready";
+    const skillScopeChanged =
+      skillScope !== undefined && skillScope.version !== skillScope.appliedVersion;
+    const recordAppliedSkillScope = skillScopeChanged
+      ? applyThreadSkillScope({
+          threadId,
+          version: skillScope.version,
+          state: skillScopeState,
+          ...(resolvedSkillScope.issue ? { issue: resolvedSkillScope.issue } : {}),
+          createdAt,
+        })
+      : Effect.void;
     if (thread.session !== null) {
       yield* rejectStartedThreadModelChangeIfRequired({
         threadId,
@@ -826,6 +907,7 @@ const make = Effect.gen(function* () {
         modelSelection: desiredModelSelection,
         ...(input?.resumeCursor !== undefined ? { resumeCursor: input.resumeCursor } : {}),
         runtimeMode: desiredRuntimeMode,
+        ...(resolvedSkillScope.scope ? { skillScope: resolvedSkillScope.scope } : {}),
       });
 
     const bindSessionToThread = (session: ProviderSession) =>
@@ -878,14 +960,17 @@ const make = Effect.gen(function* () {
         preferredProvider === "claudeAgent" &&
         requestedModelSelection !== undefined &&
         !Equal.equals(previousModelSelection, requestedModelSelection);
+      const shouldRestartForSkillScopeChange = skillScopeChanged && supportsSkillPacks;
 
       if (
         !runtimeModeChanged &&
         !cwdChanged &&
         !instanceChanged &&
         !shouldRestartForModelChange &&
-        !shouldRestartForModelSelectionChange
+        !shouldRestartForModelSelectionChange &&
+        !shouldRestartForSkillScopeChange
       ) {
+        yield* recordAppliedSkillScope;
         return existingSessionThreadId;
       }
 
@@ -909,6 +994,7 @@ const make = Effect.gen(function* () {
         instanceChanged,
         shouldRestartForModelChange,
         shouldRestartForModelSelectionChange,
+        shouldRestartForSkillScopeChange,
         hasResumeCursor: resumeCursor !== undefined,
       });
       const restartedSession = yield* startProviderSession(
@@ -923,11 +1009,13 @@ const make = Effect.gen(function* () {
         cwd: restartedSession.cwd,
       });
       yield* bindSessionToThread(restartedSession);
+      yield* recordAppliedSkillScope;
       return restartedSession.threadId;
     }
 
     const startedSession = yield* startProviderSession(undefined);
     yield* bindSessionToThread(startedSession);
+    yield* recordAppliedSkillScope;
     return startedSession.threadId;
   });
 
@@ -1914,6 +2002,19 @@ const make = Effect.gen(function* () {
         );
         return;
       }
+      case "thread.skill-packs-set": {
+        const thread = yield* resolveThread(event.payload.threadId);
+        if (!thread?.session || thread.session.status === "stopped") {
+          return;
+        }
+        const cachedModelSelection = threadModelSelections.get(event.payload.threadId);
+        yield* ensureSessionForThread(
+          event.payload.threadId,
+          event.occurredAt,
+          cachedModelSelection !== undefined ? { modelSelection: cachedModelSelection } : {},
+        );
+        return;
+      }
       case "thread.turn-start-requested":
         yield* processTurnStartRequested(event);
         return;
@@ -1982,6 +2083,7 @@ const make = Effect.gen(function* () {
         (event.type === "thread.meta-updated" && event.payload.regenerateTitle === true) ||
         event.type === "thread.session-set" ||
         event.type === "thread.runtime-mode-set" ||
+        event.type === "thread.skill-packs-set" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.turn-interrupt-requested" ||
         event.type === "thread.approval-response-requested" ||

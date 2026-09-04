@@ -8,6 +8,7 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProviderSkill,
+  SkillPackId,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -146,6 +147,8 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  /** Draft-chosen packs; undefined inherits the project default. */
+  readonly skillPackIds: ReadonlyArray<SkillPackId> | undefined;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
@@ -184,6 +187,7 @@ type NewTaskFlowContextValue = {
   readonly loadMoreBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
+  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
@@ -405,6 +409,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedEnvironmentServerConfig?.settings.newWorktreesStartFromOrigin ??
     true;
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
+  const skillPackIds = selectedProjectDraft.skillPackIds;
 
   // Antigravity keeps unavailable selections so sign-out or a catalog change
   // cannot switch the user's model. Other providers retain their fallback
@@ -799,6 +804,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     },
     [selectedProjectDraftKey],
   );
+  const setSkillPackIds = useCallback(
+    (value: ReadonlyArray<SkillPackId> | undefined) => {
+      if (selectedProjectDraftKey) {
+        updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
+      }
+    },
+    [selectedProjectDraftKey],
+  );
   const setInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
       if (selectedProjectDraftKey) {
@@ -824,6 +837,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,
         interactionMode: message.interactionMode,
+        skillPackIds: message.creation.skillPackIds,
         workspaceSelection: {
           mode: message.creation.workspaceMode,
           branch: message.creation.branch,
@@ -909,6 +923,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
             : {}),
+          ...(draft.skillPackIds ? { skillPackIds: draft.skillPackIds } : {}),
         },
         createdAt: metadata.createdAt,
       };
@@ -1042,6 +1057,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       currentCheckoutBranchName,
       runtimeMode,
       interactionMode,
+      skillPackIds,
       planModeEnabled,
       expandedProvider,
       environments,
@@ -1074,6 +1090,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       loadMoreBranches,
       setRuntimeMode,
       setInteractionMode,
+      setSkillPackIds,
       setSelectedModelOptions,
       setExpandedProvider,
     }),
@@ -1104,6 +1121,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       replaceAttachments,
       reset,
       runtimeMode,
+      skillPackIds,
       selectedBranchName,
       hasMoreBranches,
       selectedEnvironmentId,
@@ -1120,6 +1138,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectBranch,
       selectEnvironment,
       setInteractionMode,
+      setSkillPackIds,
       setPrompt,
       setRuntimeMode,
       setSelectedModelKey,

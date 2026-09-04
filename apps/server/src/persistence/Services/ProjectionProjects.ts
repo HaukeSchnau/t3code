@@ -13,6 +13,7 @@ import {
   ProjectId,
   ProjectScript,
   ThreadEnvMode,
+  SkillPackId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -27,6 +28,7 @@ export const ProjectionProject = Schema.Struct({
   workspaceRoot: Schema.String,
   defaultModelSelection: Schema.NullOr(ModelSelection),
   defaultThreadEnvMode: Schema.NullOr(ThreadEnvMode),
+  defaultSkillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   autoPull: Schema.Boolean,
   faviconPath: Schema.optional(Schema.NullOr(Schema.String)),
   projectIcon: Schema.optional(Schema.NullOr(ProjectIconOverride)),

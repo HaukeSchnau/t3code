@@ -16,6 +16,7 @@ import {
   RuntimeMode,
   ThreadId,
   TurnId,
+  type ProviderSkillScope,
 } from "@t3tools/contracts";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { normalizeModelSlug } from "@t3tools/shared/model";
@@ -203,6 +204,7 @@ export interface CodexSessionRuntimeOptions {
   readonly resumeCursor?: CodexResumeCursor;
   readonly appServerArgs?: ReadonlyArray<string>;
   readonly turnStartupTimeout?: Duration.Duration;
+  readonly skillScope?: ProviderSkillScope;
 }
 
 export interface CodexSessionRuntimeSendTurnInput {
@@ -2811,6 +2813,12 @@ export const makeCodexSessionRuntime = (
       yield* emitSessionEvent("session/connecting", "Starting Codex App Server session.");
       yield* client.request("initialize", buildCodexInitializeParams());
       yield* client.notify("initialized", undefined);
+
+      if (options.skillScope) {
+        yield* client.request("skills/extraRoots/set", {
+          extraRoots: [options.skillScope.skillsPath],
+        });
+      }
 
       const requestedModel = normalizeCodexModelSlug(options.model);
 

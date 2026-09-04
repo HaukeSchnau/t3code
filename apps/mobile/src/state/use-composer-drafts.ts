@@ -4,7 +4,9 @@ import {
   PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
+  SkillPackId as SkillPackIdSchema,
   type EnvironmentId,
+  type SkillPackId,
   MessageId,
   type MessageId as MessageIdType,
   type ModelSelection,
@@ -60,6 +62,8 @@ export interface ComposerDraft {
   readonly modelSelection?: ModelSelection;
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
+  /** Packs for the thread a new-task draft creates; undefined inherits the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   /** Durable outbox intent currently copied into this draft for editing. */
   readonly editingQueuedMessageId?: MessageIdType;
@@ -80,7 +84,7 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection"
+  "modelSelection" | "runtimeMode" | "interactionMode" | "skillPackIds" | "workspaceSelection"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -97,6 +101,7 @@ const ComposerDraftSchema = Schema.Struct({
   modelSelection: Schema.optional(ModelSelectionSchema),
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackIdSchema)),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   editingQueuedMessageId: Schema.optional(MessageId),
 });
@@ -197,6 +202,7 @@ function isEmptyDraft(draft: ComposerDraft): boolean {
     draft.modelSelection === undefined &&
     draft.runtimeMode === undefined &&
     draft.interactionMode === undefined &&
+    draft.skillPackIds === undefined &&
     draft.workspaceSelection === undefined &&
     draft.editingQueuedMessageId === undefined
   );
@@ -227,6 +233,7 @@ export function decodePersistedComposerState(value: unknown): {
               draft.attachments.length === 0 &&
               draft.runtimeMode === undefined &&
               draft.interactionMode === undefined &&
+              draft.skillPackIds === undefined &&
               draft.workspaceSelection === undefined
                 ? { ...draft, modelSelection: undefined }
                 : draft,

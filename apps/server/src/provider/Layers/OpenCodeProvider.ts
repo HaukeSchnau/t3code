@@ -32,6 +32,12 @@ const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
+
+const openCodePresentation = (settings: OpenCodeSettings) => ({
+  ...OPENCODE_PRESENTATION,
+  skillScopeInjection:
+    settings.serverUrl.trim().length === 0 ? ("supported" as const) : ("unsupported" as const),
+});
 const OPENCODE_VERSION_PROBE_TIMEOUT = "4 seconds";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
@@ -328,7 +334,7 @@ export const makePendingOpenCodeProvider = (
 
     if (!openCodeSettings.enabled) {
       return buildServerProvider({
-        presentation: OPENCODE_PRESENTATION,
+        presentation: openCodePresentation(openCodeSettings),
         enabled: false,
         checkedAt,
         models,
@@ -346,7 +352,7 @@ export const makePendingOpenCodeProvider = (
     }
 
     return buildServerProvider({
-      presentation: OPENCODE_PRESENTATION,
+      presentation: openCodePresentation(openCodeSettings),
       enabled: true,
       checkedAt,
       models,
@@ -388,7 +394,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       serverUrl: openCodeSettings.serverUrl,
     });
     return buildServerProvider({
-      presentation: OPENCODE_PRESENTATION,
+      presentation: openCodePresentation(openCodeSettings),
       enabled: openCodeSettings.enabled,
       checkedAt,
       models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
@@ -404,7 +410,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
 
   if (!openCodeSettings.enabled) {
     return buildServerProvider({
-      presentation: OPENCODE_PRESENTATION,
+      presentation: openCodePresentation(openCodeSettings),
       enabled: false,
       checkedAt,
       models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
@@ -459,7 +465,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     }
     if (compareSemverVersions(version, MINIMUM_OPENCODE_VERSION) < 0) {
       return buildServerProvider({
-        presentation: OPENCODE_PRESENTATION,
+        presentation: openCodePresentation(openCodeSettings),
         enabled: openCodeSettings.enabled,
         checkedAt,
         models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES),
@@ -521,7 +527,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
   const skills = openCodeSkillsToServerProviderSkills(inventoryExit.value.inventory.skills);
   const connectedCount = inventoryExit.value.inventory.providerList.connected.length;
   return buildServerProvider({
-    presentation: OPENCODE_PRESENTATION,
+    presentation: openCodePresentation(openCodeSettings),
     enabled: true,
     checkedAt,
     models,

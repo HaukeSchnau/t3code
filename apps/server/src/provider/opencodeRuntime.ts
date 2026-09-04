@@ -58,6 +58,32 @@ export function resolveOpenCodeConfigContent(
   );
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/** Adds a thread's materialized skill root without replacing caller-owned OpenCode config. */
+export function mergeOpenCodeSkillScopeConfigContent(
+  configContent: string,
+  skillsPath: string,
+): string {
+  const parsed: unknown = JSON.parse(configContent);
+  if (!isJsonObject(parsed)) {
+    throw new TypeError("OPENCODE_CONFIG_CONTENT must contain a JSON object.");
+  }
+  const skills = isJsonObject(parsed.skills) ? parsed.skills : {};
+  const existingPaths = Array.isArray(skills.paths)
+    ? skills.paths.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  return JSON.stringify({
+    ...parsed,
+    skills: {
+      ...skills,
+      paths: [...new Set([...existingPaths, skillsPath])],
+    },
+  });
+}
+
 export function resolveOpenCodeServerPassword(
   input: {
     readonly external: boolean;

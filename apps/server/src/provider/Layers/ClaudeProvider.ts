@@ -67,6 +67,7 @@ const CUSTOM_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilit
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
+  skillScopeInjection: "supported",
 } as const;
 const MINIMUM_CLAUDE_FABLE_5_1_VERSION = "2.1.257";
 const MINIMUM_CLAUDE_OPUS_5_VERSION = "2.1.219";

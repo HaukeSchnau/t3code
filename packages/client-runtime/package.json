@@ -79,6 +79,10 @@
       "types": "./src/providerSkills.ts",
       "default": "./src/providerSkills.ts"
     },
+    "./skillPacks": {
+      "types": "./src/skillPacks.ts",
+      "default": "./src/skillPacks.ts"
+    },
     "./voice-input": {
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"

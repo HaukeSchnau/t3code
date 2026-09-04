@@ -245,6 +245,32 @@ Provider commands such as `/compact` only run when they open the message, so the
 them only there. T3 Code's own commands, such as `/model` and `/plan`, and skills stay available on
 any line.
 
+## Skill packs
+
+Skill packs bundle related skills that T3 Code makes available to the agent for a whole thread.
+They add to the skills your provider and project already have; those keep working as before. Core
+skills are always on, so a thread with no packs still has them.
+
+On web and desktop, the **Skills** control sits in the composer's context strip beside the
+workspace control. With no packs selected it shows only an icon; hover it to see **Skills: core**.
+Once packs are selected it shows the profile or pack name, or a pack count. A dot marks a thread
+that differs from its project default, a dashed dot marks packs that apply on the next turn, and a
+warning mark means some skills could not be loaded. Open the control for details.
+
+The **Skills** panel lists profiles first. A profile is a shortcut that selects a set of packs;
+the checklist below it is what actually applies, so you can adjust packs after picking a profile.
+**Details** shows every skill the selection resolves to and notes skills a pack repeats from core
+or another pack. **Reset to project default** returns the thread to its project's packs, and
+**Make project default** saves the current selection for new threads in that project. You can also
+edit the project default under **Settings → Projects → Skills**.
+
+On mobile, open the thread settings sheet and choose **Skills**. New tasks pick packs the same way
+before you start them.
+
+Picking a skill with `$` runs it once in that message and does not change the thread's packs.
+Providers that cannot load packs, such as an external OpenCode server, show a note in **Details**
+when packs are selected; their own skills still work.
+
 On desktop, press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux from a new thread to
 start it in the background. T3 Code opens another new thread and shows an Open action for the
 thread that started. The new thread keeps the selected workspace mode and base branch. If New

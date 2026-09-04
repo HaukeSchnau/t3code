@@ -6,6 +6,7 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type SkillPackId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
@@ -35,6 +36,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  /** Draft-chosen packs; absent inherits the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -75,6 +78,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,
         interactionMode: spec.interactionMode,
+        ...(spec.skillPackIds ? { skillPackIds: spec.skillPackIds } : {}),
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
         createdAt: spec.createdAt,

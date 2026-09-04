@@ -761,6 +761,11 @@ const make = Effect.gen(function* () {
         modelSelection: selectedModel,
         runtimeMode: input.runtimeMode ?? sourceThread?.runtimeMode ?? "full-access",
         interactionMode: input.interactionMode ?? sourceThread?.interactionMode ?? "default",
+        ...(input.skillPackIds !== undefined
+          ? { skillPackIds: input.skillPackIds }
+          : sourceThread?.skillScope
+            ? { skillPackIds: sourceThread.skillScope.packIds }
+            : {}),
       };
     });
 
@@ -1402,6 +1407,9 @@ const make = Effect.gen(function* () {
           modelSelection: resolvedInput.modelSelection,
           runtimeMode: resolvedInput.runtimeMode,
           interactionMode: resolvedInput.interactionMode,
+          ...(resolvedInput.skillPackIds !== undefined
+            ? { skillPackIds: resolvedInput.skillPackIds }
+            : {}),
           branch: prepared?.compatibilityBranch ?? null,
           worktreePath: prepared?.compatibilityWorktreePath ?? null,
           workspaceId: prepared?.workspace.id ?? null,
@@ -3420,6 +3428,7 @@ const make = Effect.gen(function* () {
           modelSelection: sourceThread.modelSelection,
           runtimeMode: sourceThread.runtimeMode,
           interactionMode: sourceThread.interactionMode,
+          ...(sourceThread.skillScope ? { skillPackIds: sourceThread.skillScope.packIds } : {}),
           branch: prepared?.compatibilityBranch ?? null,
           worktreePath: prepared?.compatibilityWorktreePath ?? sourceThread.worktreePath,
           workspaceId: prepared?.workspace.id ?? null,

@@ -16,6 +16,7 @@ import {
   type ServerProvider,
   type ScopedProjectRef,
   type ScopedThreadRef,
+  SkillPackId,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -307,6 +308,7 @@ const PersistedDraftThreadState = Schema.Struct({
   worktreePath: Schema.NullOr(Schema.String),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  skillPackIds: Schema.optionalKey(Schema.Array(SkillPackId)),
   promotedTo: Schema.optionalKey(
     Schema.NullOr(
       Schema.Struct({
@@ -424,6 +426,8 @@ export interface DraftSessionState {
   worktreePath: string | null;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
+  /** Packs chosen for the thread before it exists; undefined inherits the project default. */
+  skillPackIds?: ReadonlyArray<SkillPackId>;
   promotedTo?: ScopedThreadRef | null;
 }
 
@@ -545,6 +549,8 @@ interface ComposerDraftStoreState {
       startFromOrigin?: boolean;
       runtimeMode?: RuntimeMode;
       interactionMode?: ProviderInteractionMode;
+      /** `null` clears the draft's packs so it inherits the project default again. */
+      skillPackIds?: ReadonlyArray<SkillPackId> | null;
     },
   ) => void;
   clearProjectDraftThreadId: (projectRef: ScopedProjectRef) => void;
@@ -1695,6 +1701,7 @@ function createDraftThreadState(
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
+    ...(existingThread?.skillPackIds ? { skillPackIds: existingThread.skillPackIds } : {}),
     promotedTo: null,
   };
 }
@@ -1727,8 +1734,18 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.worktreePath === right.worktreePath &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
+    skillPackIdsEqual(left.skillPackIds, right.skillPackIds) &&
     scopedThreadRefsEqual(left.promotedTo, right.promotedTo)
   );
+}
+
+function skillPackIdsEqual(
+  left: ReadonlyArray<SkillPackId> | undefined,
+  right: ReadonlyArray<SkillPackId> | undefined,
+): boolean {
+  if (left === right) return true;
+  if (!left || !right) return false;
+  return left.length === right.length && left.every((id, index) => id === right[index]);
 }
 
 function removeDraftThreadReferences(
@@ -2426,7 +2443,11 @@ function partializeComposerDraftStoreState(
     if (!keptSessionKeys.has(threadKey)) {
       continue;
     }
-    persistedDraftThreadsByThreadKey[threadKey] = draftThread;
+    // Schema arrays are mutable on the wire; copy the readonly pack list.
+    const { skillPackIds, ...persistedDraftThread } = draftThread;
+    persistedDraftThreadsByThreadKey[threadKey] = skillPackIds
+      ? { ...persistedDraftThread, skillPackIds: [...skillPackIds] }
+      : persistedDraftThread;
   }
   return {
     draftsByThreadKey: persistedDraftsByThreadKey,
@@ -2729,6 +2750,9 @@ function toHydratedDraftThreadState(
     worktreePath: persistedDraftThread.worktreePath,
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.skillPackIds
+      ? { skillPackIds: persistedDraftThread.skillPackIds }
+      : {}),
     promotedTo: persistedDraftThread.promotedTo
       ? scopeThreadRef(
           persistedDraftThread.promotedTo.environmentId as EnvironmentId,
@@ -3189,6 +3213,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               options.startFromOrigin === undefined
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
+            const nextSkillPackIds =
+              options.skillPackIds === undefined
+                ? existing.skillPackIds
+                : (options.skillPackIds ?? undefined);
             const nextDraftThread: DraftThreadState = {
               threadId: existing.threadId,
               environmentId: nextProjectRef.environmentId,
@@ -3205,6 +3233,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
+              ...(nextSkillPackIds ? { skillPackIds: nextSkillPackIds } : {}),
               promotedTo: existing.promotedTo ?? null,
             };
             const isUnchanged =
@@ -3218,6 +3247,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.worktreePath === existing.worktreePath &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
+              skillPackIdsEqual(nextDraftThread.skillPackIds, existing.skillPackIds) &&
               scopedThreadRefsEqual(nextDraftThread.promotedTo, existing.promotedTo);
             if (isUnchanged) {
               return state;

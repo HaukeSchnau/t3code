@@ -11,8 +11,14 @@ import {
   type ModelSelection,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type SkillPackId,
   type ThreadId,
 } from "@t3tools/contracts";
+import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import {
+  resolveSkillPackProviderWarning,
+  resolveSkillPackSelection,
+} from "@t3tools/client-runtime/skillPacks";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import {
   codexFeedbackMessage,
@@ -63,8 +69,11 @@ import {
   useThreadOutboxMessages,
 } from "./use-thread-outbox";
 import { presentLocalIntent } from "../features/threads/trainNetworkPresentation";
+import { useProject } from "./entities";
+import { projectEnvironment } from "./projects";
 import { threadEnvironment } from "./threads";
 import { useAtomCommand } from "./use-atom-command";
+import type { SkillPacksSheetSession } from "../features/threads/skill-packs-session";
 
 export function appendReviewCommentToDraft(input: {
   readonly environmentId: EnvironmentId;
@@ -559,6 +568,62 @@ export function useThreadComposerState() {
     [selectedThreadKey],
   );
 
+  // Skill packs change the server thread right away: the scope reads as
+  // pending until the provider session picks it up on the next turn.
+  const setThreadSkillPacks = useAtomCommand(threadEnvironment.setSkillPacks, "set skill packs");
+  const updateProjectSkillPacks = useAtomCommand(projectEnvironment.update, "update project");
+  const selectedThreadProject = useProject(
+    selectedThreadShell
+      ? scopeProjectRef(selectedThreadShell.environmentId, selectedThreadShell.projectId)
+      : null,
+  );
+  const skillPackCatalog = selectedEnvironmentRuntime?.serverConfig?.skillPackCatalog ?? null;
+  const projectDefaultSkillPackIds = selectedThreadProject?.defaultSkillPackIds;
+  const skillPacks = useMemo<SkillPacksSheetSession | null>(() => {
+    if (!skillPackCatalog || !selectedThread || !selectedThreadShell) {
+      return null;
+    }
+    const environmentId = selectedThreadShell.environmentId;
+    const selection = resolveSkillPackSelection({
+      catalog: skillPackCatalog,
+      projectDefaultPackIds: projectDefaultSkillPackIds,
+      threadScope: selectedThread.skillScope,
+    });
+    const apply = (packIds: ReadonlyArray<SkillPackId>) => {
+      void setThreadSkillPacks({
+        environmentId,
+        input: { threadId: selectedThread.id, packIds: [...packIds] },
+      });
+    };
+    return {
+      catalog: skillPackCatalog,
+      selection,
+      providerWarning: resolveSkillPackProviderWarning({
+        provider: selectedProvider,
+        packIds: selection.packIds,
+      }),
+      onPackIdsChange: apply,
+      onResetToProjectDefault: () => apply(projectDefaultSkillPackIds ?? []),
+      onMakeProjectDefault: () => {
+        void updateProjectSkillPacks({
+          environmentId,
+          input: {
+            projectId: selectedThread.projectId,
+            defaultSkillPackIds: [...selection.packIds],
+          },
+        });
+      },
+    };
+  }, [
+    projectDefaultSkillPackIds,
+    selectedProvider,
+    selectedThread,
+    selectedThreadShell,
+    setThreadSkillPacks,
+    skillPackCatalog,
+    updateProjectSkillPacks,
+  ]);
+
   const onUpdateInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
       if (!selectedThreadKey) {
@@ -604,5 +669,6 @@ export function useThreadComposerState() {
     onUpdateModelSelection,
     onUpdateRuntimeMode,
     onUpdateInteractionMode,
+    skillPacks,
   };
 }

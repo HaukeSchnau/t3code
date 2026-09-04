@@ -27,6 +27,7 @@ import {
 import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { SkillPacksControl, type SkillPacksControlProps } from "./chat/SkillPacksControl";
 import { Button } from "./ui/button";
 import {
   Menu,
@@ -64,6 +65,8 @@ interface BranchToolbarProps {
   showBranchSelector?: boolean;
   composerControlsHostRef?: (element: HTMLDivElement | null) => void;
   contextStripVisible?: boolean;
+  /** Present when the environment publishes a skill pack catalog. */
+  skillPacks?: SkillPacksControlProps;
 }
 
 interface MobileRunContextSelectorProps {
@@ -430,6 +433,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   showBranchSelector = true,
   composerControlsHostRef,
   contextStripVisible = true,
+  skillPacks,
 }: BranchToolbarProps) {
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
@@ -533,9 +537,10 @@ export const BranchToolbar = memo(function BranchToolbar({
             previousWorktreeLabel={previousWorktreeLabel}
             onUsePreviousWorktree={onUsePreviousWorktree}
           />
+          {skillPacks ? <SkillPacksControl {...skillPacks} /> : null}
         </div>
       ) : null}
-      {showGitControls || showEnvironmentIndicator ? (
+      {showGitControls || showEnvironmentIndicator || skillPacks ? (
         <div
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
@@ -569,6 +574,18 @@ export const BranchToolbar = memo(function BranchToolbar({
               previousWorktreeLabel={previousWorktreeLabel}
               onUsePreviousWorktree={onUsePreviousWorktree}
             />
+          ) : null}
+          {skillPacks ? (
+            <>
+              {showGitControls || showEnvironmentIndicator ? (
+                <Separator
+                  orientation="vertical"
+                  className="mx-0.5 h-3.5!"
+                  data-composer-context-control
+                />
+              ) : null}
+              <SkillPacksControl {...skillPacks} />
+            </>
           ) : null}
         </div>
       ) : null}

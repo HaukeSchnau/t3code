@@ -9,6 +9,7 @@ import {
   EventId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderSkillScope,
   ProviderItemId,
   type ProviderApprovalDecision,
   type ProviderEvent,
@@ -48,6 +49,7 @@ import {
 } from "./CodexSessionRuntime.ts";
 import { makeCodexAdapter } from "./CodexAdapter.ts";
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
+const decodeProviderSkillScope = Schema.decodeSync(ProviderSkillScope);
 
 // Test-local service tag so the rest of the file can keep using `yield* CodexAdapter`.
 class CodexAdapter extends Context.Service<CodexAdapter, CodexAdapterShape>()(
@@ -501,6 +503,43 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       const runtime = runtimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
       NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable foo");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("passes the materialized skill scope into the Codex runtime", () => {
+    const runtimeFactory = makeRuntimeFactory();
+    const layer = Layer.effect(
+      CodexAdapter,
+      Effect.gen(function* () {
+        const codexConfig = decodeCodexSettings({});
+        return yield* makeCodexAdapter(codexConfig, { makeRuntime: runtimeFactory.factory });
+      }),
+    ).pipe(
+      Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+      Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(NodeServices.layer),
+    );
+    const skillScope = decodeProviderSkillScope({
+      version: 1,
+      packIds: ["web-craft"],
+      skillIds: ["frontend-design"],
+      skillsPath: "/tmp/t3-skill-scope/skills",
+      pluginPath: "/tmp/t3-skill-scope",
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("sess-skill-scope"),
+        runtimeMode: "full-access",
+        skillScope,
+      });
+
+      const runtime = runtimeFactory.lastRuntime;
+      NodeAssert.ok(runtime);
+      NodeAssert.deepStrictEqual(runtime.options.skillScope, skillScope);
     }).pipe(Effect.provide(layer));
   });
 

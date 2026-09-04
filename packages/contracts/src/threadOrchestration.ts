@@ -32,6 +32,7 @@ import {
 } from "./orchestration.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
+import { SkillPackId } from "./skillPacks.ts";
 
 export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrchestrationError>()(
   "ThreadOrchestrationError",
@@ -207,6 +208,7 @@ export const ThreadOrchestrationCreateThreadInput = Schema.Struct({
   allowLegacyModel: Schema.optional(Schema.Boolean),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   title: Schema.optional(TrimmedNonEmptyString),
   coordination: Schema.optional(
     Schema.Struct({

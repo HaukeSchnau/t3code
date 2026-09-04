@@ -4732,6 +4732,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           append: T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS,
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
+        ...(input.skillScope
+          ? { plugins: [{ type: "local" as const, path: input.skillScope.pluginPath }] }
+          : {}),
         // `ultracode` is a Claude Code setting, not an API effort level. It is
         // normalized to `xhigh` above and paired with `settings.ultracode`.
         ...(effectiveEffort

@@ -79,6 +79,7 @@ import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
 } from "./ThreadSettingsSheet";
+import type { SkillPacksSheetSession } from "./skill-packs-session";
 import {
   type LocalIntentPresentation,
   type TrainConnectionStatus,
@@ -143,6 +144,8 @@ export interface ThreadComposerProps {
   readonly onUpdateModelSelection: (modelSelection: ModelSelection) => void;
   readonly onUpdateRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateInteractionMode: (interactionMode: ProviderInteractionMode) => void;
+  /** Present when the environment publishes a skill pack catalog. */
+  readonly skillPacks?: SkillPacksSheetSession | null;
   readonly onReconnectEnvironment: () => void;
   readonly onExpandedChange?: (expanded: boolean) => void;
   /** Fires on editor focus/blur; hosts use it to vet stale keyboard state. */
@@ -785,12 +788,14 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
         props.onUpdateModelSelection({ ...currentModelSelection, options }),
       runtimeMode: currentRuntimeMode,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+      ...(props.skillPacks ? { skillPacks: props.skillPacks } : {}),
     }),
     [
       currentModelSelection,
       currentRuntimeMode,
       props.onUpdateModelSelection,
       props.onUpdateRuntimeMode,
+      props.skillPacks,
       providerOptionDescriptors,
       settingsOwnerId,
       threadProviderGroups,

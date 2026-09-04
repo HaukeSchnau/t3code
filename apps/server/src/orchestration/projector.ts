@@ -21,6 +21,8 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
+  ThreadSkillPacksSetPayload,
+  ThreadSkillScopeAppliedPayload,
   ThreadMessageQueuedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
@@ -279,6 +281,7 @@ export function projectEvent(
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
+            defaultSkillPackIds: payload.defaultSkillPackIds ?? [],
             defaultThreadEnvMode: null,
             autoPull: false,
             faviconPath: payload.faviconPath ?? null,
@@ -317,6 +320,9 @@ export function projectEvent(
                     : {}),
                   ...(payload.defaultThreadEnvMode !== undefined
                     ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
+                    : {}),
+                  ...(payload.defaultSkillPackIds !== undefined
+                    ? { defaultSkillPackIds: payload.defaultSkillPackIds }
                     : {}),
                   ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
                   ...(payload.faviconPath !== undefined
@@ -367,6 +373,7 @@ export function projectEvent(
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
+            ...(payload.skillScope !== undefined ? { skillScope: payload.skillScope } : {}),
             branch: payload.branch,
             worktreePath: payload.worktreePath,
             workspaceId: payload.workspaceId ?? null,
@@ -578,6 +585,60 @@ export function projectEvent(
           }),
         })),
       );
+
+    case "thread.skill-packs-set":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadSkillPacksSetPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id === payload.threadId
+              ? {
+                  ...thread,
+                  skillScope: {
+                    version: payload.version,
+                    appliedVersion: thread.skillScope?.appliedVersion ?? 0,
+                    packIds: payload.packIds,
+                    state: "pending" as const,
+                  },
+                  updatedAt: payload.updatedAt,
+                }
+              : thread,
+          ),
+        };
+      });
+
+    case "thread.skill-scope-applied":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          ThreadSkillScopeAppliedPayload,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        return {
+          ...nextBase,
+          threads: nextBase.threads.map((thread) =>
+            thread.id === payload.threadId && thread.skillScope?.version === payload.version
+              ? {
+                  ...thread,
+                  skillScope: {
+                    ...thread.skillScope,
+                    appliedVersion: payload.version,
+                    state: payload.state,
+                    ...(payload.issue !== undefined ? { issue: payload.issue } : {}),
+                  },
+                  updatedAt: payload.updatedAt,
+                }
+              : thread,
+          ),
+        };
+      });
 
     case "thread.message-queued":
       return Effect.gen(function* () {

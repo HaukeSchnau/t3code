@@ -467,6 +467,27 @@ describe("shouldShowComposerContextStrip", () => {
       }),
     ).toBe(true);
   });
+
+  it("keeps the strip for the Skills control in a non-Git project with a catalog", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: true,
+        isGitRepo: false,
+        showEnvironmentIndicator: false,
+        hostsRestingComposerControls: false,
+        hasSkillPacks: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: false,
+        isGitRepo: false,
+        showEnvironmentIndicator: false,
+        hostsRestingComposerControls: false,
+        hasSkillPacks: true,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("resolveEffectiveEnvMode", () => {

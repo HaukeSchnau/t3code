@@ -19,6 +19,7 @@ import {
   ThreadTitleMode,
   ThreadWorkspaceId,
   TurnId,
+  ThreadSkillScope,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -38,6 +39,7 @@ export const ProjectionThread = Schema.Struct({
   modelSelection: ModelSelection,
   runtimeMode: RuntimeMode,
   interactionMode: ProviderInteractionMode,
+  skillScope: Schema.optional(Schema.NullOr(ThreadSkillScope)),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   workspaceId: Schema.NullOr(ThreadWorkspaceId).pipe(

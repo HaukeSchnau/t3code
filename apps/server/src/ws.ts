@@ -1,4 +1,5 @@
 import * as DateTime from "effect/DateTime";
+import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -98,6 +99,7 @@ import { ProviderInstanceRegistry } from "./provider/Services/ProviderInstanceRe
 import { makeProviderInstallation } from "./provider/providerInstallation.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
+import { loadSkillPackCatalog, publicSkillPackCatalog } from "./skills/SkillPackRuntime.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as TerminalManager from "./terminal/Manager.ts";
@@ -609,6 +611,14 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const skillPackCatalog = yield* loadSkillPackCatalog().pipe(
+          Effect.map((catalog) => (catalog ? publicSkillPackCatalog(catalog) : null)),
+          Effect.catchCause((cause) =>
+            Effect.logWarning("Failed to load skill pack catalog", {
+              cause: Cause.pretty(cause),
+            }).pipe(Effect.as(null)),
+          ),
+        );
         const availableEditors: ReadonlyArray<EditorId> = yield* resolveAvailableEditorsForConfig(
           externalLauncher.resolveAvailableEditors(),
         );
@@ -626,6 +636,7 @@ const makeWsRpcLayer = (
           keybindings: keybindingsConfig.keybindings,
           issues: keybindingsConfig.issues,
           providers,
+          ...(skillPackCatalog ? { skillPackCatalog } : {}),
           availableEditors,
           // Same discovery-with-timeout treatment as editors: a slow probe
           // must not stall server.getConfig, so it degrades to no targets.

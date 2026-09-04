@@ -20,6 +20,7 @@ import {
   type RuntimeMode,
   ThreadId,
   ProviderInstanceId,
+  ProviderSkillScope,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
 import { assert, describe, it } from "@effect/vitest";
@@ -51,6 +52,7 @@ import {
   type ClaudeAdapterLiveOptions,
 } from "./ClaudeAdapter.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
+const decodeProviderSkillScope = Schema.decodeSync(ProviderSkillScope);
 const encodeUnknownJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
 // Test-local service tag so the rest of the file can keep using `yield* ClaudeAdapter`.
@@ -800,6 +802,33 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("mounts selected skill packs without restricting Claude's native skill catalog", () => {
+    const harness = makeHarness();
+    const skillScope = decodeProviderSkillScope({
+      version: 1,
+      packIds: ["web-craft"],
+      skillIds: ["frontend-design", "html-communication"],
+      skillsPath: "/tmp/t3-skill-scope/skills",
+      pluginPath: "/tmp/t3-skill-scope",
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+        skillScope,
+      });
+
+      const options = harness.getLastCreateQueryInput()?.options;
+      assert.deepEqual(options?.plugins, [{ type: "local", path: skillScope.pluginPath }]);
+      assert.equal(options?.skills, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

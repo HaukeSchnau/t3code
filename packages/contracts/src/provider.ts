@@ -22,6 +22,7 @@ import {
   RuntimeMode,
 } from "./orchestration.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
+import { ProviderSkillScope } from "./skillPacks.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -62,6 +63,7 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
+  skillScope: Schema.optional(ProviderSkillScope),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 

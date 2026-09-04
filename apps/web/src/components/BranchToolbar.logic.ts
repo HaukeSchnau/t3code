@@ -61,10 +61,15 @@ export function shouldShowComposerContextStrip(input: {
   showEnvironmentIndicator: boolean;
   /** A collapsed composer's controls currently fit in their measured strip host. */
   hostsRestingComposerControls: boolean;
+  /** The environment publishes a skill pack catalog, so the strip hosts the Skills control. */
+  hasSkillPacks?: boolean;
 }): boolean {
   return (
     input.hasActiveProject &&
-    (input.isGitRepo || input.showEnvironmentIndicator || input.hostsRestingComposerControls)
+    (input.isGitRepo ||
+      input.showEnvironmentIndicator ||
+      input.hostsRestingComposerControls ||
+      input.hasSkillPacks === true)
   );
 }
 

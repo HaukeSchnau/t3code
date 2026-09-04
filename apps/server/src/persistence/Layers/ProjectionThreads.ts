@@ -14,12 +14,13 @@ import {
   ProjectionThreadRepository,
   type ProjectionThreadRepositoryShape,
 } from "../Services/ProjectionThreads.ts";
-import { ModelSelection, ThreadLinkedPullRequest } from "@t3tools/contracts";
+import { ModelSelection, ThreadLinkedPullRequest, ThreadSkillScope } from "@t3tools/contracts";
 
 const ProjectionThreadDbRow = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    skillScope: Schema.NullOr(Schema.fromJsonString(ThreadSkillScope)),
   }),
 );
 type ProjectionThreadDbRow = typeof ProjectionThreadDbRow.Type;
@@ -39,6 +40,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json,
           runtime_mode,
           interaction_mode,
+          skill_scope_json,
           branch,
           worktree_path,
           workspace_id,
@@ -70,6 +72,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           ${JSON.stringify(row.modelSelection)},
           ${row.runtimeMode},
           ${row.interactionMode},
+          ${row.skillScope == null ? null : JSON.stringify(row.skillScope)},
           ${row.branch},
           ${row.worktreePath},
           ${row.workspaceId ?? null},
@@ -101,6 +104,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json = excluded.model_selection_json,
           runtime_mode = excluded.runtime_mode,
           interaction_mode = excluded.interaction_mode,
+          skill_scope_json = excluded.skill_scope_json,
           branch = excluded.branch,
           worktree_path = excluded.worktree_path,
           workspace_id = excluded.workspace_id,
@@ -139,6 +143,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",
@@ -179,6 +184,7 @@ const makeProjectionThreadRepository = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",

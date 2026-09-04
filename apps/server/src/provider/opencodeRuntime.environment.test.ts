@@ -6,11 +6,39 @@ import * as TestClock from "effect/testing/TestClock";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  mergeOpenCodeSkillScopeConfigContent,
   OpenCodeRuntimeError,
   resolveOpenCodeConfigContent,
   resolveOpenCodeServerPassword,
   verifyOpenCodeServerVersion,
 } from "./opencodeRuntime.ts";
+
+describe("mergeOpenCodeSkillScopeConfigContent", () => {
+  it("adds the materialized path without replacing existing OpenCode config", () => {
+    expect(
+      JSON.parse(
+        mergeOpenCodeSkillScopeConfigContent(
+          '{"model":"anthropic/claude-sonnet-4-5","skills":{"paths":["/existing"]}}',
+          "/state/skill-scopes/web/skills",
+        ),
+      ),
+    ).toEqual({
+      model: "anthropic/claude-sonnet-4-5",
+      skills: { paths: ["/existing", "/state/skill-scopes/web/skills"] },
+    });
+  });
+
+  it("does not duplicate a path already present in the config", () => {
+    expect(
+      JSON.parse(
+        mergeOpenCodeSkillScopeConfigContent(
+          '{"skills":{"paths":["/state/skill-scopes/web/skills"]}}',
+          "/state/skill-scopes/web/skills",
+        ),
+      ),
+    ).toEqual({ skills: { paths: ["/state/skill-scopes/web/skills"] } });
+  });
+});
 
 describe("resolveOpenCodeConfigContent", () => {
   it("prefers the caller environment over the inherited environment", () => {

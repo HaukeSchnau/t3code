@@ -5,6 +5,7 @@ import {
   type ModelSelection,
   ProjectId,
   ProviderInstanceId,
+  SkillPackId,
   ThreadId,
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
@@ -488,6 +489,10 @@ const createCommand = Command.make("create", {
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
   title: Flag.string("title").pipe(Flag.withDescription("Initial thread title."), Flag.optional),
+  skillPacks: Flag.string("skill-pack").pipe(
+    Flag.withDescription("Activate a skill pack. Repeat for multiple packs."),
+    Flag.between(0, 64),
+  ),
   effort: Flag.string("effort").pipe(
     Flag.withDescription("Add the new thread to this effort."),
     Flag.optional,
@@ -547,6 +552,9 @@ const createCommand = Command.make("create", {
                 ? { interactionMode: flags.interactionMode.value }
                 : {}),
               ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+              ...(flags.skillPacks.length > 0
+                ? { skillPackIds: flags.skillPacks.map((skillPack) => SkillPackId.make(skillPack)) }
+                : {}),
               ...(hasCoordination
                 ? {
                     coordination: {

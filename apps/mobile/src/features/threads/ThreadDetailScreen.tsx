@@ -745,6 +745,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 onUpdateModelSelection={composer.onUpdateModelSelection}
                 onUpdateRuntimeMode={composer.onUpdateRuntimeMode}
                 onUpdateInteractionMode={composer.onUpdateInteractionMode}
+                skillPacks={composer.skillPacks}
                 onExpandedChange={setComposerExpanded}
                 onEditorFocusChange={handleOwnedInputFocusChange}
               />
