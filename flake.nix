@@ -56,8 +56,8 @@
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
             web = "sha256-zhRcZForD/22Ho3fNYyFsm+nT9yxsLN55jXwmSmPsBI=";
-            server = "sha256-c6GmPUFhE3pDEyscVzu/TnFiQbSjnPYNaa7rqMH+4DE=";
-            runtime = "sha256-01NSUYSyEnT4AcGic+I29i737PXIU9ylqs+k/ibSMds=";
+            server = "sha256-VdmcUrlcsHMaciVVadV2sfJEvpSmVo4BVora5OafAG0=";
+            runtime = "sha256-+s/TDOZzCn9gM6OaWjq+h/urHh4gp31w61dhSc5SjTg=";
           },
         }:
         let
