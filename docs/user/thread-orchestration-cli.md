@@ -7,6 +7,35 @@ directory, so start the server before using it.
 Run `t3 thread --help` for the full command reference. Every command accepts
 `--json` for compact machine-readable output.
 
+For managed worker threads, prefer one lifecycle:
+
+```bash
+t3 thread create "Review the parser" --worktree --json
+t3 thread wait create --members <thread-id> --mode all --json
+```
+
+Create or fork the workers, register one durable wait covering them, then let the coordinator turn
+end. The server wakes the coordinator when the workers settle or need attention. Use `send` for
+direct coordination between threads. Use `watch create` for external commands and WebSocket events,
+not for thread completion. `await` remains available for diagnostics, but agents should not poll it
+for routine progress.
+
+When one agent delegates to another, its prompt should keep the user's words separate from the
+coordinator's interpretation:
+
+```text
+Source request
+<relevant user request, verbatim>
+
+Coordinator context
+<earlier context, interpretation, and useful constraints>
+```
+
+Describe the result and verification that matter. Keep genuine ownership and safety boundaries
+strict, but leave the approach to the worker unless the user already chose it.
+
+The examples below cover the broader command set:
+
 ```bash
 t3 thread projects --json
 t3 thread models --json
@@ -14,7 +43,6 @@ t3 thread models --include-legacy --json
 t3 thread list --json
 t3 thread read <thread-id> --json
 t3 thread result <thread-id> --json
-t3 thread await <thread-id> --until idle --json
 t3 thread graph <thread-id> --json
 t3 thread effort create "Parser review" --json
 t3 thread create "Implement the parser" --effort <effort-id> --label implementation --worktree --json

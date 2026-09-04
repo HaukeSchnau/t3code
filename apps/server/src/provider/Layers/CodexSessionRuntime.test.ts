@@ -550,8 +550,11 @@ describe("T3 orchestration developer instructions", () => {
       NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
       NodeAssert.match(instructions, /t3 thread --help/);
       NodeAssert.match(instructions, /T3CODE_THREAD_ID/);
-      NodeAssert.match(instructions, /t3 thread send.*delivers a message now/);
-      NodeAssert.match(instructions, /Pass `--queue` only/);
+      NodeAssert.match(instructions, /Source request/);
+      NodeAssert.match(instructions, /Coordinator context/);
+      NodeAssert.match(instructions, /t3 thread send.*delivers a message immediately/);
+      NodeAssert.match(instructions, /t3 thread wait create/);
+      NodeAssert.match(instructions, /Do not poll with `t3 thread await`/);
       NodeAssert.match(instructions, /t3 thread watch create/);
     }
   });
