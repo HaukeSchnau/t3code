@@ -281,6 +281,7 @@ const remoteThreadOrchestrationClientLayer = Layer.succeed(RemoteThreadOrchestra
   readThreadResult: () => Effect.die("unused remote readThreadResult"),
   getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
   createThread: () => Effect.die("unused remote createThread"),
+  createRootThread: () => Effect.die("unused remote createRootThread"),
   sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
   setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
 });
@@ -652,6 +653,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     readThreadResult: () => Effect.die("unused remote readThreadResult"),
     getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
     createThread: () => Effect.die("unused remote createThread"),
+    createRootThread: () => Effect.die("unused remote createRootThread"),
     sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });
@@ -1069,6 +1071,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
           promptSubmitted: true,
         };
       }),
+    createRootThread: () => Effect.die("unused remote createRootThread"),
     sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });
@@ -1267,6 +1270,35 @@ it.effect("uses generated names for worktree threads before starting their initi
         },
       },
     });
+
+    const rootResult = yield* service.createRootThread({
+      prompt: "Investigate the production alert.",
+      target: { projectId, environment: { type: "worktree" } },
+      modelSelection: actorModelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+    });
+
+    expect(rootResult.promptSubmitted).toBe(true);
+    expect(dispatched.slice(3).map((command) => command.type)).toEqual([
+      "thread.create",
+      "thread.turn.start",
+    ]);
+    expect(dispatched[3]).toMatchObject({
+      type: "thread.create",
+      threadId: rootResult.thread.threadId,
+      projectId,
+      modelSelection: actorModelSelection,
+      runtimeMode: "full-access",
+      interactionMode: "default",
+      worktreePath: "/repo/project-worktree",
+      workspaceId,
+    });
+    expect(dispatched[4]).toMatchObject({
+      type: "thread.turn.start",
+      threadId: rootResult.thread.threadId,
+      message: { text: "Investigate the production alert." },
+    });
   }).pipe(Effect.provide(testLayer));
 });
 
@@ -1308,6 +1340,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
           promptSubmitted: true,
         };
       }),
+    createRootThread: () => Effect.die("unused remote createRootThread"),
     sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });

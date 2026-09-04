@@ -111,6 +111,14 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
+        "createRootThread",
+        Effect.fn("environment.threadOrchestration.createRootThread")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          return yield* service.createRootThread(args.payload.input);
+        }),
+      )
+      .handle(
         "createBatch",
         Effect.fn("environment.threadOrchestration.createBatch")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

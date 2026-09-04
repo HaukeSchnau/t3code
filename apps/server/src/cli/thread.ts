@@ -13,6 +13,7 @@ import {
   ThreadOrchestrationWatchId,
   type OrchestrationWatchSource,
   type ThreadOrchestrationActorScope,
+  type ThreadOrchestrationCreateThreadInput,
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Data from "effect/Data";
@@ -43,6 +44,14 @@ class ThreadCliServerUnavailableError extends Data.TaggedError("ThreadCliServerU
 class ThreadCliCallerRequiredError extends Data.TaggedError("ThreadCliCallerRequiredError")<{}> {
   override get message(): string {
     return `Pass --from-thread or run the command inside a T3 provider session with ${THREAD_ID_ENV} set.`;
+  }
+}
+
+class ThreadCliRootCoordinationError extends Data.TaggedError(
+  "ThreadCliRootCoordinationError",
+)<{}> {
+  override get message(): string {
+    return "Root thread creation cannot use --effort, --label, --replaces, or --no-effort. Pass --from-thread to create a coordinated worker.";
   }
 }
 
@@ -515,9 +524,6 @@ const createCommand = Command.make("create", {
     withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
       Effect.gen(function* () {
         const caller = currentCallerThreadId(flags.fromThread);
-        if (caller === undefined) {
-          return yield* new ThreadCliCallerRequiredError();
-        }
         const modelSelection = yield* modelSelectionFromFlags(flags);
         const hasTarget =
           Option.isSome(flags.environment) || Option.isSome(flags.project) || flags.worktree;
@@ -526,52 +532,55 @@ const createCommand = Command.make("create", {
           Option.isSome(flags.label) ||
           Option.isSome(flags.replaces) ||
           flags.noEffort;
-        const result = yield* client.threadOrchestration.createThread({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: {
-              prompt: flags.prompt,
-              ...(hasTarget
-                ? {
-                    target: {
-                      ...(Option.isSome(flags.environment)
-                        ? { environmentId: EnvironmentId.make(flags.environment.value) }
-                        : {}),
-                      ...(Option.isSome(flags.project)
-                        ? { projectId: ProjectId.make(flags.project.value) }
-                        : {}),
-                      ...(flags.worktree ? { environment: { type: "worktree" as const } } : {}),
-                    },
-                  }
-                : {}),
-              ...(modelSelection !== undefined ? { modelSelection } : {}),
-              ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
-              ...(Option.isSome(flags.runtimeMode) ? { runtimeMode: flags.runtimeMode.value } : {}),
-              ...(Option.isSome(flags.interactionMode)
-                ? { interactionMode: flags.interactionMode.value }
-                : {}),
-              ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
-              ...(flags.skillPacks.length > 0
-                ? { skillPackIds: flags.skillPacks.map((skillPack) => SkillPackId.make(skillPack)) }
-                : {}),
-              ...(hasCoordination
-                ? {
-                    coordination: {
-                      ...(Option.isSome(flags.effort)
-                        ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
-                        : {}),
-                      ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
-                      ...(Option.isSome(flags.replaces)
-                        ? { replaces: { threadId: ThreadId.make(flags.replaces.value) } }
-                        : {}),
-                      ...(flags.noEffort ? { excludeInheritedEffort: true } : {}),
-                    },
-                  }
-                : {}),
-            },
-          },
-        });
+        if (caller === undefined && hasCoordination) {
+          return yield* new ThreadCliRootCoordinationError();
+        }
+        const input = {
+          prompt: flags.prompt,
+          ...(hasTarget
+            ? {
+                target: {
+                  ...(Option.isSome(flags.environment)
+                    ? { environmentId: EnvironmentId.make(flags.environment.value) }
+                    : {}),
+                  ...(Option.isSome(flags.project)
+                    ? { projectId: ProjectId.make(flags.project.value) }
+                    : {}),
+                  ...(flags.worktree ? { environment: { type: "worktree" as const } } : {}),
+                },
+              }
+            : {}),
+          ...(modelSelection !== undefined ? { modelSelection } : {}),
+          ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
+          ...(Option.isSome(flags.runtimeMode) ? { runtimeMode: flags.runtimeMode.value } : {}),
+          ...(Option.isSome(flags.interactionMode)
+            ? { interactionMode: flags.interactionMode.value }
+            : {}),
+          ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
+          ...(flags.skillPacks.length > 0
+            ? { skillPackIds: flags.skillPacks.map((skillPack) => SkillPackId.make(skillPack)) }
+            : {}),
+          ...(hasCoordination
+            ? {
+                coordination: {
+                  ...(Option.isSome(flags.effort)
+                    ? { effortId: ThreadOrchestrationEffortId.make(flags.effort.value) }
+                    : {}),
+                  ...(Option.isSome(flags.label) ? { label: flags.label.value } : {}),
+                  ...(Option.isSome(flags.replaces)
+                    ? { replaces: { threadId: ThreadId.make(flags.replaces.value) } }
+                    : {}),
+                  ...(flags.noEffort ? { excludeInheritedEffort: true } : {}),
+                },
+              }
+            : {}),
+        } satisfies ThreadOrchestrationCreateThreadInput;
+        const result = yield* caller === undefined
+          ? client.threadOrchestration.createRootThread({ headers, payload: { input } })
+          : client.threadOrchestration.createThread({
+              headers,
+              payload: { scope: actorScope(environmentId, caller), input },
+            });
         yield* Console.log(render(result, flags.json));
       }),
     ),

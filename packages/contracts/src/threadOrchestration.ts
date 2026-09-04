@@ -693,6 +693,12 @@ export const ThreadOrchestrationScopedCreateThreadInput = Schema.Struct({
 export type ThreadOrchestrationScopedCreateThreadInput =
   typeof ThreadOrchestrationScopedCreateThreadInput.Type;
 
+export const ThreadOrchestrationRootCreateThreadInput = Schema.Struct({
+  input: ThreadOrchestrationCreateThreadInput,
+});
+export type ThreadOrchestrationRootCreateThreadInput =
+  typeof ThreadOrchestrationRootCreateThreadInput.Type;
+
 export const ThreadOrchestrationScopedCreateBatchInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,
   input: ThreadOrchestrationCreateBatchInput,

@@ -168,6 +168,9 @@ export class ThreadOrchestrationService extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCreateThreadInput,
     ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
+    readonly createRootThread: (
+      input: ThreadOrchestrationCreateThreadInput,
+    ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
     readonly createBatch: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCreateBatchInput,
@@ -740,7 +743,7 @@ const make = Effect.gen(function* () {
   });
 
   const resolveCreateInput = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: McpInvocationContext.McpInvocationScope | undefined,
     sourceThread: OrchestrationThreadShell | undefined,
     input: ThreadOrchestrationCreateThreadInput,
   ): Effect.Effect<ResolvedCreateThreadInput, ThreadOrchestrationError> =>
@@ -750,9 +753,8 @@ const make = Effect.gen(function* () {
         return yield* new ThreadOrchestrationError({
           operation: "create_thread",
           code: "model_selection_required",
-          message:
-            "create_thread requires modelSelection when the actor thread is not present in this environment.",
-          threadId: scope.threadId,
+          message: "create_thread requires modelSelection when no caller thread supplies one.",
+          ...(scope !== undefined ? { threadId: scope.threadId } : {}),
           projectId: input.target?.projectId,
         });
       }
@@ -1228,7 +1230,7 @@ const make = Effect.gen(function* () {
     });
 
   const createThreadInternal = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: McpInvocationContext.McpInvocationScope | undefined,
     input: ThreadOrchestrationCreateThreadInput,
     options: {
       readonly modelSelectionIntent: "explicit" | "inherited";
@@ -1236,17 +1238,28 @@ const make = Effect.gen(function* () {
     },
   ) =>
     Effect.gen(function* () {
-      const sourceThreadOption = yield* snapshotQuery.getThreadShellById(scope.threadId).pipe(
-        Effect.mapError(
-          toThreadOrchestrationError("create_thread.source", {
-            threadId: scope.threadId,
-          }),
-        ),
-      );
+      const sourceThreadOption =
+        scope === undefined
+          ? Option.none<OrchestrationThreadShell>()
+          : yield* snapshotQuery.getThreadShellById(scope.threadId).pipe(
+              Effect.mapError(
+                toThreadOrchestrationError("create_thread.source", {
+                  threadId: scope.threadId,
+                }),
+              ),
+            );
       const sourceThread = Option.getOrUndefined(sourceThreadOption);
       const resolvedInput = yield* resolveCreateInput(scope, sourceThread, input);
       const createCoordination = input.coordination;
+      if (scope === undefined && createCoordination !== undefined) {
+        return yield* new ThreadOrchestrationError({
+          operation: "create_thread",
+          code: "caller_required_for_coordination",
+          message: "Root threads cannot join or inherit caller-owned coordination.",
+        });
+      }
       const currentCoordination =
+        scope === undefined ||
         createCoordination?.effortId !== undefined ||
         createCoordination?.excludeInheritedEffort === true ||
         snapshotQuery.getThreadCoordinationShell === undefined
@@ -1256,7 +1269,7 @@ const make = Effect.gen(function* () {
               .pipe(Effect.mapError(toThreadOrchestrationError("create_thread.effort")));
       const inheritedEfforts =
         currentCoordination?.efforts.filter(
-          (effort) => effort.coordinator.threadId === scope.threadId && effort.closedAt === null,
+          (effort) => effort.coordinator.threadId === scope?.threadId && effort.closedAt === null,
         ) ?? [];
       if (inheritedEfforts.length > 1) {
         return yield* new ThreadOrchestrationError({
@@ -1264,7 +1277,7 @@ const make = Effect.gen(function* () {
           code: "ambiguous_effort",
           message:
             "This coordinator has more than one open effort. Choose one explicitly or disable effort inheritance.",
-          threadId: scope.threadId,
+          ...(scope !== undefined ? { threadId: scope.threadId } : {}),
         });
       }
       const effortId =
@@ -1281,6 +1294,9 @@ const make = Effect.gen(function* () {
         input.allowLegacyModel,
       );
       if (yield* shouldRouteRemote(input.target?.environmentId)) {
+        if (scope === undefined) {
+          return yield* remoteClient.createRootThread(resolvedInput);
+        }
         const result = yield* remoteClient.createThread(scopeForRemote(scope), resolvedInput);
         const createdAt = yield* nowIso;
         yield* appendRelationship({
@@ -1322,7 +1338,7 @@ const make = Effect.gen(function* () {
               }),
         };
       }
-      if (!sourceThread && input.target?.projectId === undefined) {
+      if (scope !== undefined && !sourceThread && input.target?.projectId === undefined) {
         return yield* notFoundError("create_thread", "thread", scope.threadId, {
           threadId: scope.threadId,
         });
@@ -1333,9 +1349,8 @@ const make = Effect.gen(function* () {
         return yield* new ThreadOrchestrationError({
           operation: "create_thread",
           code: "project_required",
-          message:
-            "create_thread requires target.projectId when the actor thread is not present in this environment.",
-          threadId: scope.threadId,
+          message: "create_thread requires target.projectId when no caller thread supplies one.",
+          ...(scope !== undefined ? { threadId: scope.threadId } : {}),
         });
       }
       const projectOption = yield* snapshotQuery
@@ -1452,26 +1467,28 @@ const make = Effect.gen(function* () {
           ),
         );
 
-      yield* appendRelationship({
-        scope,
-        kind: "createdBy",
-        targetThreadId: nextThreadId,
-        ...(options.batchId !== undefined ? { batchId: options.batchId } : {}),
-        ...(effortId !== undefined ? { effortId } : {}),
-        ...(createCoordination?.label !== undefined ? { label: createCoordination.label } : {}),
-        wakeCoordinator: options.batchId === undefined && effortId === undefined,
-        summary: `Created by thread ${scope.threadId}.`,
-        createdAt,
-      });
+      if (scope !== undefined) {
+        yield* appendRelationship({
+          scope,
+          kind: "createdBy",
+          targetThreadId: nextThreadId,
+          ...(options.batchId !== undefined ? { batchId: options.batchId } : {}),
+          ...(effortId !== undefined ? { effortId } : {}),
+          ...(createCoordination?.label !== undefined ? { label: createCoordination.label } : {}),
+          wakeCoordinator: options.batchId === undefined && effortId === undefined,
+          summary: `Created by thread ${scope.threadId}.`,
+          createdAt,
+        });
+      }
 
-      if (effortId !== undefined) {
+      if (scope !== undefined && effortId !== undefined) {
         yield* addEffortMember(scope, {
           effortId,
           thread: { environmentId: yield* localEnvironmentId, threadId: nextThreadId },
           label: createCoordination?.label ?? title,
         });
       }
-      if (createCoordination?.replaces !== undefined) {
+      if (scope !== undefined && createCoordination?.replaces !== undefined) {
         const replacementScope = { ...scope, threadId: nextThreadId };
         yield* appendRelationship({
           scope: replacementScope,
@@ -1492,7 +1509,7 @@ const make = Effect.gen(function* () {
           });
         }
       }
-      if (options.batchId === undefined && effortId === undefined) {
+      if (scope !== undefined && options.batchId === undefined && effortId === undefined) {
         yield* monitorDelegatedThread(scope, nextThreadId).pipe(
           Effect.ignoreCause({ log: true }),
           Effect.forkDetach,
@@ -1538,6 +1555,9 @@ const make = Effect.gen(function* () {
     createThreadInternal(scope, input, {
       modelSelectionIntent: input.modelSelection === undefined ? "inherited" : "explicit",
     });
+
+  const createRootThread = (input: ThreadOrchestrationCreateThreadInput) =>
+    createThreadInternal(undefined, input, { modelSelectionIntent: "explicit" });
 
   const createThreadFromRemote = (
     scope: McpInvocationContext.McpInvocationScope,
@@ -3777,6 +3797,7 @@ const make = Effect.gen(function* () {
     cancelWatch,
     stopThread,
     createThread,
+    createRootThread,
     createThreadFromRemote,
     forkThread,
     sendMessageToThread,

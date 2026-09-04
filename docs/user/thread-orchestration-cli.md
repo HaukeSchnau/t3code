@@ -38,6 +38,8 @@ The examples below cover the broader command set:
 ```bash
 t3 thread projects --json
 t3 thread models --json
+t3 thread create "Investigate the alert" --project <project-id> --worktree \
+  --provider-instance codex --model gpt-5.6-sol --option reasoningEffort=high --json
 t3 thread models --include-legacy --json
 t3 thread list --json
 t3 thread read <thread-id> --json
@@ -81,11 +83,11 @@ t3 thread rename <thread-id> "Parser review" --json
 affect the current implementation should normally be sent immediately.
 
 Provider sessions set `T3CODE_THREAD_ID`, which lets `create`, `fork`, `read`, `send`,
-and `rename` record the calling thread automatically. When running the CLI from
-an unrelated shell, pass `--from-thread <thread-id>` if the command needs caller
-identity. `create` requires caller identity because it inherits the caller's
-project, provider, model, runtime mode, and interaction mode unless those
-choices are overridden.
+and `rename` record the calling thread automatically. When `create` has no caller,
+it creates a root thread with no parent relationship. Root creation requires an
+explicit project, provider instance, and model because there is no caller to inherit
+them from. Pass `--from-thread <thread-id>` when a shell command should create a
+delegated worker or use caller-owned coordination.
 
 For `create --worktree`, T3 Code generates one concise title and uses it for both the thread and
 worktree name. An explicit title remains authoritative. If automatic naming is unavailable, the
