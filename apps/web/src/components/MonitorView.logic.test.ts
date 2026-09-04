@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import {
   DEFAULT_MODEL,
   EnvironmentId,
@@ -11,6 +11,10 @@ import {
 
 import { deriveMonitorTimelineEntries, resolveMonitorThreadCandidate } from "./MonitorView";
 import type { SidebarThreadSummary } from "../types";
+
+vi.mock("@pierre/diffs/worker/worker.js?worker", () => ({
+  default: class MockDiffsWorker {},
+}));
 
 const environmentId = EnvironmentId.make("environment-local");
 const projectId = ProjectId.make("project-1");

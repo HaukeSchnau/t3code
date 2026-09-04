@@ -806,6 +806,7 @@ const buildAppUnderTest = (options?: {
         }),
       searchThreads: () => Effect.succeed({ matches: [] }),
       getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 0 }),
+      getEventReplayStats: () => Effect.succeed({ eventCount: 0, payloadBytes: 0 }),
       getProjectShellById: () => Effect.succeed(Option.none()),
       getThreadShellById: () => Effect.succeed(Option.none()),
       getThreadDetailById: () => Effect.succeed(Option.none()),
