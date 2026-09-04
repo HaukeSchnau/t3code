@@ -616,6 +616,67 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
+      it("invalidates workspace catalogs when machine skills or commands change", () => {
+        const provider = {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          status: "ready",
+          enabled: true,
+          installed: true,
+          auth: { status: "authenticated" },
+          checkedAt: "2026-03-25T00:00:00.000Z",
+          version: "2.1.0",
+          models: [],
+          slashCommands: [{ name: "compact" }],
+          skills: [{ name: "existing", path: "/skills/existing/SKILL.md", enabled: true }],
+          workspaceSnapshots: [
+            {
+              cwd: "/workspace",
+              checkedAt: "2026-03-25T00:01:00.000Z",
+              slashCommands: [{ name: "project-command" }],
+              skills: [
+                {
+                  name: "project-skill",
+                  path: "/workspace/.claude/skills/project-skill/SKILL.md",
+                  enabled: true,
+                },
+              ],
+            },
+          ],
+        } as const satisfies ServerProvider;
+
+        const metadataOnlyRefresh = {
+          ...provider,
+          checkedAt: "2026-03-25T00:02:00.000Z",
+          workspaceSnapshots: undefined,
+        } satisfies ServerProvider;
+        assert.deepStrictEqual(
+          mergeProviderSnapshot(provider, metadataOnlyRefresh).workspaceSnapshots,
+          provider.workspaceSnapshots,
+        );
+
+        const skillRefresh = {
+          ...metadataOnlyRefresh,
+          skills: [
+            ...provider.skills,
+            { name: "new-skill", path: "/skills/new-skill/SKILL.md", enabled: true },
+          ],
+        } satisfies ServerProvider;
+        assert.strictEqual(
+          mergeProviderSnapshot(provider, skillRefresh).workspaceSnapshots,
+          undefined,
+        );
+
+        const commandRefresh = {
+          ...metadataOnlyRefresh,
+          slashCommands: [...provider.slashCommands, { name: "new-command" }],
+        } satisfies ServerProvider;
+        assert.strictEqual(
+          mergeProviderSnapshot(provider, commandRefresh).workspaceSnapshots,
+          undefined,
+        );
+      });
+
       it("preserves previously discovered provider models when a refresh returns none", () => {
         const previousProvider = {
           instanceId: ProviderInstanceId.make("cursor"),

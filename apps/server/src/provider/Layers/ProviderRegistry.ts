@@ -159,30 +159,35 @@ const mergeProviderModels = (
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
-): ServerProvider =>
-  !previousProvider
-    ? nextProvider
-    : {
-        ...nextProvider,
-        models: isClaudexInstance(nextProvider.instanceId)
-          ? nextProvider.models
-          : mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
-        ...(nextProvider.workspaceSnapshots !== undefined
-          ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
-          : previousProvider.workspaceSnapshots !== undefined
-            ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
-            : {}),
-        ...(shouldRetainMissingOpenCodeMetadata(nextProvider)
-          ? {
-              slashCommands:
-                nextProvider.slashCommands.length === 0
-                  ? previousProvider.slashCommands
-                  : nextProvider.slashCommands,
-              skills:
-                nextProvider.skills.length === 0 ? previousProvider.skills : nextProvider.skills,
-            }
-          : {}),
-      };
+): ServerProvider => {
+  if (!previousProvider) return nextProvider;
+
+  const retainMissingMetadata = shouldRetainMissingOpenCodeMetadata(nextProvider);
+  const slashCommands =
+    retainMissingMetadata && nextProvider.slashCommands.length === 0
+      ? previousProvider.slashCommands
+      : nextProvider.slashCommands;
+  const skills =
+    retainMissingMetadata && nextProvider.skills.length === 0
+      ? previousProvider.skills
+      : nextProvider.skills;
+  const composerCatalogChanged =
+    !Equal.equals(previousProvider.slashCommands, slashCommands) ||
+    !Equal.equals(previousProvider.skills, skills);
+
+  return {
+    ...nextProvider,
+    models: isClaudexInstance(nextProvider.instanceId)
+      ? nextProvider.models
+      : mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    ...(nextProvider.workspaceSnapshots !== undefined
+      ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
+      : !composerCatalogChanged && previousProvider.workspaceSnapshots !== undefined
+        ? { workspaceSnapshots: previousProvider.workspaceSnapshots }
+        : {}),
+    ...(retainMissingMetadata ? { slashCommands, skills } : {}),
+  };
+};
 
 export const mergeProviderSnapshots = (
   previousProviders: ReadonlyArray<ServerProvider>,
