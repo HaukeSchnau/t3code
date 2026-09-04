@@ -215,6 +215,9 @@ const make = Effect.gen(function* () {
           modelSelection: input.sourceThread.modelSelection,
           runtimeMode: input.sourceThread.runtimeMode,
           interactionMode: input.sourceThread.interactionMode,
+          ...(input.sourceThread.skillScope
+            ? { skillPackIds: input.sourceThread.skillScope.packIds }
+            : {}),
           branch: input.preparedWorkspace?.compatibilityBranch ?? input.sourceThread.branch,
           worktreePath:
             input.preparedWorkspace?.compatibilityWorktreePath ?? input.sourceThread.worktreePath,

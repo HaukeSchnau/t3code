@@ -29,6 +29,7 @@ import { ModelCapabilities } from "./model.ts";
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ServerProviderUsageLimits, UsageLimitSourceSnapshots } from "./providerUsageLimits.ts";
 import { ServerSettings } from "./settings.ts";
+import { SkillPackCatalog } from "./skillPacks.ts";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -203,6 +204,7 @@ export const ServerProvider = Schema.Struct({
   requiresNewThreadForModelChange: Schema.optional(Schema.Boolean),
   supportsConversationRollback: Schema.optional(Schema.Boolean),
   supportsTextGeneration: Schema.optional(Schema.Boolean),
+  skillScopeInjection: Schema.optional(Schema.Literals(["supported", "unsupported"])),
   setup: Schema.optional(
     Schema.Struct({
       canAuthenticate: Schema.Boolean,
@@ -605,6 +607,8 @@ export const ServerConfig = Schema.Struct({
   keybindings: ResolvedKeybindingsConfig,
   issues: ServerConfigIssues,
   providers: ServerProviders,
+  /** Optional because older servers and installations without a catalog omit it. */
+  skillPackCatalog: Schema.optional(SkillPackCatalog),
   // Editor ids grow over time; drop ones this build does not know rather than
   // failing the whole config decode.
   availableEditors: ForwardCompatibleArray(EditorId),

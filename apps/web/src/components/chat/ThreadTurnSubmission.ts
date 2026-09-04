@@ -9,6 +9,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type ServerProvider,
+  type SkillPackId,
   type ThreadId,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
@@ -99,6 +100,8 @@ export interface ThreadTurnSubmissionTarget {
   readonly startFromOrigin: boolean;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
+  /** Draft-chosen packs for the thread this turn creates; absent inherits the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
 }
 
 export interface PreparedThreadTurnSubmission {
@@ -386,6 +389,7 @@ function createCommand(input: {
                   ),
                   runtimeMode: input.target.runtimeMode,
                   interactionMode: input.target.interactionMode,
+                  ...(input.target.skillPackIds ? { skillPackIds: input.target.skillPackIds } : {}),
                   branch: input.target.activeBranch,
                   worktreePath: input.target.threadWorktreePath,
                   workspaceId: null,

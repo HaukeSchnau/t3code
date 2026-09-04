@@ -72,6 +72,8 @@ export function isShellVisibleThreadEvent(event: OrchestrationEvent): boolean {
     case "thread.meta-updated":
     case "thread.runtime-mode-set":
     case "thread.interaction-mode-set":
+    case "thread.skill-packs-set":
+    case "thread.skill-scope-applied":
     case "thread.turn-interrupt-requested":
     case "thread.approval-response-requested":
     case "thread.reverted":

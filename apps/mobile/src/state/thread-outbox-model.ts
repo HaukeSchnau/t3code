@@ -13,11 +13,13 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  SkillPackId,
   ThreadId,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
+  type SkillPackId as SkillPackIdType,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
@@ -42,6 +44,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -79,6 +82,7 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly skillPackIds?: ReadonlyArray<SkillPackIdType>;
 }
 
 export interface QueuedThreadMessage {
@@ -129,6 +133,7 @@ export function makeQueuedThreadDeliveryPlan(
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
+          ...(message.creation.skillPackIds ? { skillPackIds: message.creation.skillPackIds } : {}),
           worktreeBranchName: message.deliveryWorktreeBranchName ?? `t3-code/${message.commandId}`,
         }),
       }

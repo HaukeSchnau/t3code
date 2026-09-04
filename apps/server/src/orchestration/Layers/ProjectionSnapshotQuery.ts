@@ -37,6 +37,8 @@ import {
   ThreadLinkedPullRequest,
   ThreadId,
   ThreadWorkspaceId,
+  SkillPackId,
+  ThreadSkillScope,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
 import * as Effect from "effect/Effect";
@@ -122,6 +124,7 @@ const THREAD_ORCHESTRATION_BATCH_KIND_RANGE = [
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
+    defaultSkillPackIds: Schema.fromJsonString(Schema.Array(SkillPackId)),
     autoPull: Schema.Number,
     projectIcon: Schema.NullOr(Schema.fromJsonString(ProjectIconOverride)),
     scripts: Schema.fromJsonString(Schema.Array(ProjectScript)),
@@ -138,6 +141,7 @@ const ProjectionThreadProposedPlanDbRowSchema = ProjectionThreadProposedPlan;
 const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
   Struct.assign({
     modelSelection: Schema.fromJsonString(ModelSelection),
+    skillScope: Schema.NullOr(Schema.fromJsonString(ThreadSkillScope)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
   }),
 );
@@ -350,6 +354,7 @@ function mapProjectShellRow(
     repositoryIdentity,
     defaultModelSelection: row.defaultModelSelection,
     defaultThreadEnvMode: row.defaultThreadEnvMode,
+    defaultSkillPackIds: row.defaultSkillPackIds,
     autoPull: row.autoPull === 1,
     faviconPath: row.faviconPath ?? null,
     projectIcon: row.projectIcon ?? null,
@@ -461,6 +466,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
+          default_skill_pack_ids_json AS "defaultSkillPackIds",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
@@ -486,6 +492,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",
@@ -526,6 +533,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",
@@ -568,6 +576,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",
@@ -1001,6 +1010,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
+          default_skill_pack_ids_json AS "defaultSkillPackIds",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
@@ -1027,6 +1037,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           workspace_root AS "workspaceRoot",
           default_model_selection_json AS "defaultModelSelection",
           default_thread_env_mode AS "defaultThreadEnvMode",
+          default_skill_pack_ids_json AS "defaultSkillPackIds",
           auto_pull AS "autoPull",
           favicon_path AS "faviconPath",
           project_icon_json AS "projectIcon",
@@ -1090,6 +1101,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           model_selection_json AS "modelSelection",
           runtime_mode AS "runtimeMode",
           interaction_mode AS "interactionMode",
+          skill_scope_json AS "skillScope",
           branch,
           worktree_path AS "worktreePath",
           workspace_id AS "workspaceId",
@@ -2085,6 +2097,7 @@ pending_approval_requests AS (
                 repositoryIdentity: repositoryIdentities.get(row.projectId) ?? null,
                 defaultModelSelection: row.defaultModelSelection,
                 defaultThreadEnvMode: row.defaultThreadEnvMode,
+                defaultSkillPackIds: row.defaultSkillPackIds,
                 autoPull: row.autoPull === 1,
                 faviconPath: row.faviconPath ?? null,
                 projectIcon: row.projectIcon ?? null,
@@ -2102,6 +2115,7 @@ pending_approval_requests AS (
                 modelSelection: row.modelSelection,
                 runtimeMode: row.runtimeMode,
                 interactionMode: row.interactionMode,
+                ...(row.skillScope !== null ? { skillScope: row.skillScope } : {}),
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 workspaceId: row.workspaceId,
@@ -2558,6 +2572,7 @@ pending_approval_requests AS (
                         modelSelection: row.modelSelection,
                         runtimeMode: row.runtimeMode,
                         interactionMode: row.interactionMode,
+                        ...(row.skillScope !== null ? { skillScope: row.skillScope } : {}),
                         branch: row.branch,
                         worktreePath: row.worktreePath,
                         workspaceId: row.workspaceId,

@@ -54,11 +54,13 @@ import { type OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
 import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import {
   buildOpenCodePermissionRules,
+  mergeOpenCodeSkillScopeConfigContent,
   OpenCodeRuntime,
   OpenCodeRuntimeError,
   openCodeQuestionId,
   openCodeRuntimeErrorDetail,
   parseOpenCodeModelSlug,
+  resolveOpenCodeConfigContent,
   runOpenCodeSdk,
   toOpenCodeFileParts,
   toOpenCodePermissionReply,
@@ -2718,11 +2720,25 @@ export function makeOpenCodeAdapter(
               // The runtime binds the server's lifetime to the Scope.Scope
               // we provide below — closing `sessionScope` kills the child
               // process automatically. No manual `server.close()` needed.
+              const sessionEnvironment = withThreadCliEnvironment(
+                options?.environment,
+                input.threadId,
+              );
+              const environment =
+                input.skillScope && !serverUrl
+                  ? {
+                      ...sessionEnvironment,
+                      OPENCODE_CONFIG_CONTENT: mergeOpenCodeSkillScopeConfigContent(
+                        resolveOpenCodeConfigContent(sessionEnvironment),
+                        input.skillScope.skillsPath,
+                      ),
+                    }
+                  : sessionEnvironment;
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 directory,
                 serverUrl,
-                environment: withThreadCliEnvironment(options?.environment, input.threadId),
+                environment,
                 ...(serverPassword ? { serverPassword } : {}),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({

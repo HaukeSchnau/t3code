@@ -219,6 +219,8 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
         case "thread.meta-updated":
         case "thread.runtime-mode-set":
         case "thread.interaction-mode-set":
+        case "thread.skill-packs-set":
+        case "thread.skill-scope-applied":
         case "thread.approval-response-requested":
         case "thread.reverted":
         case "thread.history-pruned":
@@ -744,6 +746,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             workspaceRoot: event.payload.workspaceRoot,
             defaultModelSelection: event.payload.defaultModelSelection,
             defaultThreadEnvMode: null,
+            defaultSkillPackIds: event.payload.defaultSkillPackIds ?? [],
             autoPull: false,
             faviconPath: event.payload.faviconPath ?? null,
             projectIcon: event.payload.projectIcon ?? null,
@@ -772,6 +775,9 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
               : {}),
             ...(event.payload.defaultThreadEnvMode !== undefined
               ? { defaultThreadEnvMode: event.payload.defaultThreadEnvMode }
+              : {}),
+            ...(event.payload.defaultSkillPackIds !== undefined
+              ? { defaultSkillPackIds: event.payload.defaultSkillPackIds }
               : {}),
             ...(event.payload.autoPull !== undefined ? { autoPull: event.payload.autoPull } : {}),
             ...(event.payload.faviconPath !== undefined
@@ -887,6 +893,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             modelSelection: event.payload.modelSelection,
             runtimeMode: event.payload.runtimeMode,
             interactionMode: event.payload.interactionMode,
+            skillScope: event.payload.skillScope ?? null,
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             workspaceId: event.payload.workspaceId ?? null,
@@ -1127,6 +1134,47 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           yield* projectionThreadRepository.upsert({
             ...existingRow.value,
             interactionMode: event.payload.interactionMode,
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.skill-packs-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) return;
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            skillScope: {
+              version: event.payload.version,
+              appliedVersion: existingRow.value.skillScope?.appliedVersion ?? 0,
+              packIds: event.payload.packIds,
+              state: "pending",
+            },
+            updatedAt: event.payload.updatedAt,
+          });
+          return;
+        }
+
+        case "thread.skill-scope-applied": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (
+            Option.isNone(existingRow) ||
+            existingRow.value.skillScope?.version !== event.payload.version
+          ) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            skillScope: {
+              ...existingRow.value.skillScope,
+              appliedVersion: event.payload.version,
+              state: event.payload.state,
+              ...(event.payload.issue !== undefined ? { issue: event.payload.issue } : {}),
+            },
             updatedAt: event.payload.updatedAt,
           });
           return;
@@ -1799,7 +1847,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
             threadId: event.payload.threadId,
           });
-          if (Option.isSome(pendingTurnStart)) {
+          if (Option.isSome(pendingTurnStart) && pendingTurnStart.value.messageId !== null) {
             const pendingMessage = yield* projectionThreadMessageRepository.getByMessageId({
               messageId: pendingTurnStart.value.messageId,
             });

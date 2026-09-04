@@ -289,6 +289,9 @@ export function applyThreadDetailEvent(
           modelSelection: event.payload.modelSelection,
           runtimeMode: event.payload.runtimeMode,
           interactionMode: event.payload.interactionMode,
+          ...(event.payload.skillScope !== undefined
+            ? { skillScope: event.payload.skillScope }
+            : {}),
           branch: event.payload.branch,
           worktreePath: event.payload.worktreePath,
           latestTurn: null,
@@ -458,6 +461,38 @@ export function applyThreadDetailEvent(
           updatedAt: event.payload.updatedAt,
         },
       };
+
+    case "thread.skill-packs-set":
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          skillScope: {
+            version: event.payload.version,
+            appliedVersion: thread.skillScope?.appliedVersion ?? 0,
+            packIds: event.payload.packIds,
+            state: "pending",
+          },
+          updatedAt: event.payload.updatedAt,
+        },
+      };
+
+    case "thread.skill-scope-applied":
+      return thread.skillScope?.version === event.payload.version
+        ? {
+            kind: "updated",
+            thread: {
+              ...thread,
+              skillScope: {
+                ...thread.skillScope,
+                appliedVersion: event.payload.version,
+                state: event.payload.state,
+                ...(event.payload.issue !== undefined ? { issue: event.payload.issue } : {}),
+              },
+              updatedAt: event.payload.updatedAt,
+            },
+          }
+        : { kind: "unchanged" };
 
     // ── Queued messages ────────────────────────────────────────────
     case "thread.message-queued": {

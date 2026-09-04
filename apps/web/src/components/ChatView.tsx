@@ -24,6 +24,7 @@ import {
   ProviderDriverKind,
   resolveEnvironmentMachineKind,
   RuntimeMode,
+  type SkillPackId,
   TerminalOpenInput,
 } from "@t3tools/contracts";
 import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
@@ -265,6 +266,11 @@ import {
 } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment, useEnvironmentThread } from "../state/threads";
+import {
+  resolveSkillPackProviderWarning,
+  resolveSkillPackSelection,
+} from "@t3tools/client-runtime/skillPacks";
+import type { SkillPacksControlProps } from "./chat/SkillPacksControl";
 import {
   canPauseThreadTurn,
   canResumeThreadTurn,
@@ -1355,6 +1361,7 @@ function ChatViewContent(props: ChatViewProps) {
   const setThreadInteractionMode = useAtomCommand(threadEnvironment.setInteractionMode, {
     reportFailure: false,
   });
+  const setThreadSkillPacks = useAtomCommand(threadEnvironment.setSkillPacks, "set skill packs");
   const startThreadTurn = useAtomCommand(threadEnvironment.startTurn, {
     reportFailure: false,
   });
@@ -3152,6 +3159,103 @@ function ChatViewContent(props: ChatViewProps) {
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
   // Default true while loading to avoid toolbar flicker.
   const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  // Skill packs: a server thread carries its materialized scope, a draft keeps
+  // its picks locally until the first turn creates the thread.
+  const skillPackCatalog = activeEnvironment?.serverConfig?.skillPackCatalog ?? null;
+  const projectDefaultSkillPackIds = activeProject?.defaultSkillPackIds;
+  const draftSkillPackIds = draftThread?.skillPackIds;
+  const serverThreadSkillScope = activeServerThread?.skillScope;
+  const skillPackSelection = useMemo(
+    () =>
+      skillPackCatalog
+        ? resolveSkillPackSelection({
+            catalog: skillPackCatalog,
+            projectDefaultPackIds: projectDefaultSkillPackIds,
+            ...(isServerThread
+              ? { threadScope: serverThreadSkillScope }
+              : { draftPackIds: draftSkillPackIds }),
+          })
+        : null,
+    [
+      draftSkillPackIds,
+      isServerThread,
+      projectDefaultSkillPackIds,
+      serverThreadSkillScope,
+      skillPackCatalog,
+    ],
+  );
+  const applySkillPackIds = useCallback(
+    (packIds: ReadonlyArray<SkillPackId> | null) => {
+      if (isServerThread) {
+        void setThreadSkillPacks({
+          environmentId,
+          input: { threadId, packIds: packIds ?? [...(projectDefaultSkillPackIds ?? [])] },
+        });
+        return;
+      }
+      setDraftThreadContext(composerDraftTarget, { skillPackIds: packIds });
+    },
+    [
+      composerDraftTarget,
+      environmentId,
+      isServerThread,
+      projectDefaultSkillPackIds,
+      setDraftThreadContext,
+      setThreadSkillPacks,
+      threadId,
+    ],
+  );
+  const makeSkillPacksProjectDefault = useCallback(async () => {
+    if (!activeProject || !skillPackSelection) return;
+    const result = await updateProject({
+      environmentId: activeProject.environmentId,
+      input: { projectId: activeProject.id, defaultSkillPackIds: skillPackSelection.packIds },
+    });
+    if (result._tag === "Failure") {
+      if (!isAtomCommandInterrupted(result)) {
+        toastManager.add({
+          type: "error",
+          title: "Could not save the project's default skills",
+          description: chatActionErrorMessage(squashAtomCommandFailure(result)),
+        });
+      }
+      return;
+    }
+    // The draft's picks now match the project, so drop the override.
+    if (!isServerThread) {
+      setDraftThreadContext(composerDraftTarget, { skillPackIds: null });
+    }
+  }, [
+    activeProject,
+    composerDraftTarget,
+    isServerThread,
+    setDraftThreadContext,
+    skillPackSelection,
+    updateProject,
+  ]);
+  const composerSkillPacks = useMemo<SkillPacksControlProps | null>(
+    () =>
+      skillPackCatalog && skillPackSelection
+        ? {
+            catalog: skillPackCatalog,
+            selection: skillPackSelection,
+            providerWarning: resolveSkillPackProviderWarning({
+              provider: activeProviderStatus,
+              packIds: skillPackSelection.packIds,
+            }),
+            onPackIdsChange: applySkillPackIds,
+            onResetToProjectDefault: () => applySkillPackIds(null),
+            onMakeProjectDefault: () => void makeSkillPacksProjectDefault(),
+          }
+        : null,
+    [
+      activeProviderStatus,
+      applySkillPackIds,
+      makeSkillPacksProjectDefault,
+      skillPackCatalog,
+      skillPackSelection,
+    ],
+  );
   // Keep a hidden, off-flow strip mounted for existing threads so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
   // content-driven: Git/environment context or controls that actually fit.
@@ -3160,12 +3264,14 @@ function ChatViewContent(props: ChatViewProps) {
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
+    hasSkillPacks: composerSkillPacks !== null,
   });
   const showComposerContextStrip = shouldShowComposerContextStrip({
     hasActiveProject: activeProject !== null,
     isGitRepo,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
+    hasSkillPacks: composerSkillPacks !== null,
   });
   const initialDiffPanelGitScope =
     gitStatusQuery.data?.hasWorkingTreeChanges === true ? "unstaged" : "branch";
@@ -6417,6 +6523,9 @@ function ChatViewContent(props: ChatViewProps) {
         startFromOrigin,
         runtimeMode,
         interactionMode: sendInteractionMode,
+        ...(isLocalDraftThread && draftThread?.skillPackIds
+          ? { skillPackIds: draftThread.skillPackIds }
+          : {}),
       },
       title,
       delivery: createDurableThreadTurnDeliveryAdapter({
@@ -7925,6 +8034,7 @@ function ChatViewContent(props: ChatViewProps) {
                                 availableEnvironments={logicalProjectEnvironments}
                                 composerControlsHostRef={setRestingComposerControlsHost}
                                 contextStripVisible={showComposerContextStrip}
+                                {...(composerSkillPacks ? { skillPacks: composerSkillPacks } : {})}
                               />
                             </div>
                           )}

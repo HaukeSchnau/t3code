@@ -3,6 +3,8 @@ import {
   EventId,
   ProjectId,
   ProviderInstanceId,
+  SkillPackId,
+  ThreadId,
   type ModelSelection,
   type OrchestrationEvent,
 } from "@t3tools/contracts";
@@ -174,5 +176,64 @@ it.layer(NodeServices.layer)("decider project defaults", (it) => {
       const updated = yield* projectEvent(readModel, { ...event, sequence: 2 });
       expect(updated.projects[0]?.autoPull).toBe(true);
     }),
+  );
+
+  it.effect(
+    "uses project skill packs for new threads unless the create command overrides them",
+    () =>
+      Effect.gen(function* () {
+        const initial = yield* projectEvent(createEmptyReadModel(now), seedProjectCreated(1));
+        const webCraft = SkillPackId.make("web-craft");
+        const architecture = SkillPackId.make("architecture");
+        const update = yield* decideOrchestrationCommand({
+          command: {
+            type: "project.meta.update",
+            commandId: CommandId.make("cmd-project-skill-packs"),
+            projectId,
+            defaultSkillPackIds: [webCraft],
+          },
+          readModel: initial,
+        });
+        const updateEvent = Array.isArray(update) ? update[0] : update;
+        const readModel = yield* projectEvent(initial, { ...updateEvent, sequence: 2 });
+        expect(readModel.projects[0]?.defaultSkillPackIds).toEqual([webCraft]);
+
+        const createThread = (threadId: ThreadId, skillPackIds?: ReadonlyArray<SkillPackId>) =>
+          decideOrchestrationCommand({
+            command: {
+              type: "thread.create",
+              commandId: CommandId.make(`cmd-${threadId}`),
+              threadId,
+              projectId,
+              title: "Skill packs",
+              modelSelection: {
+                instanceId: ProviderInstanceId.make("codex"),
+                model: "gpt-5.6-sol",
+              },
+              interactionMode: "default" as const,
+              runtimeMode: "full-access" as const,
+              ...(skillPackIds !== undefined ? { skillPackIds } : {}),
+              branch: null,
+              worktreePath: null,
+              createdAt: now,
+            },
+            readModel,
+          });
+
+        const inheritedResult = yield* createThread(ThreadId.make("thread-inherited"));
+        const inherited = Array.isArray(inheritedResult) ? inheritedResult[0] : inheritedResult;
+        expect(inherited.type).toBe("thread.created");
+        expect(
+          inherited.type === "thread.created" ? inherited.payload.skillScope?.packIds : undefined,
+        ).toEqual([webCraft]);
+
+        const overriddenResult = yield* createThread(ThreadId.make("thread-override"), [
+          architecture,
+        ]);
+        const overridden = Array.isArray(overriddenResult) ? overriddenResult[0] : overriddenResult;
+        expect(
+          overridden.type === "thread.created" ? overridden.payload.skillScope?.packIds : undefined,
+        ).toEqual([architecture]);
+      }),
   );
 });

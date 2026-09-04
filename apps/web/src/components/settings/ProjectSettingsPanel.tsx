@@ -18,6 +18,7 @@ import type {
   ProjectIconOverride,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
+  SkillPackId,
   T3ProjectFileScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -71,7 +72,13 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useProjects, useThreadShells } from "../../state/entities";
+import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
+import {
+  formatSkillPackSelectionLabel,
+  resolveSkillPackSelection,
+} from "@t3tools/client-runtime/skillPacks";
+import { SkillPacksPanel } from "../chat/SkillPacksControl";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -383,6 +390,7 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         title: string;
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
+        defaultSkillPackIds: ReadonlyArray<SkillPackId>;
         autoPull: boolean;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
@@ -464,6 +472,29 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const setDefaultModel = useCallback(
     (selection: ModelSelection | null) =>
       void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model"),
+    [updateAllMembers],
+  );
+
+  // ----- default skill packs -----
+  const skillPackCatalog =
+    useServerConfigs().get(representative.environmentId)?.skillPackCatalog ?? null;
+  const defaultSkillPackIds = representative.defaultSkillPackIds;
+  const defaultSkillPackSelection = useMemo(
+    () =>
+      skillPackCatalog
+        ? resolveSkillPackSelection({
+            catalog: skillPackCatalog,
+            projectDefaultPackIds: defaultSkillPackIds,
+          })
+        : null,
+    [defaultSkillPackIds, skillPackCatalog],
+  );
+  const setDefaultSkillPackIds = useCallback(
+    (packIds: ReadonlyArray<SkillPackId>) =>
+      void updateAllMembers(
+        { defaultSkillPackIds: packIds },
+        "Failed to update the project's default skills",
+      ),
     [updateAllMembers],
   );
 
@@ -987,6 +1018,42 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               </Select>
             }
           />
+          {skillPackCatalog && defaultSkillPackSelection ? (
+            <SettingsRow
+              title="Skills"
+              description="Skill packs new threads in this project start with. Core skills are always on; a thread can still pick its own packs."
+              resetAction={
+                defaultSkillPackSelection.packIds.length > 0 ? (
+                  <SettingResetButton
+                    label="project default skills"
+                    onClick={() => setDefaultSkillPackIds([])}
+                  />
+                ) : null
+              }
+              control={
+                <Popover>
+                  <PopoverTrigger
+                    render={<Button variant="outline" size="sm" aria-label="Default skills" />}
+                  >
+                    {formatSkillPackSelectionLabel(skillPackCatalog, defaultSkillPackSelection)}
+                    <ChevronDownIcon className="size-3.5 text-icon-muted" />
+                  </PopoverTrigger>
+                  <PopoverPopup
+                    align="end"
+                    className="w-80"
+                    viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
+                  >
+                    <SkillPacksPanel
+                      catalog={skillPackCatalog}
+                      selection={defaultSkillPackSelection}
+                      providerWarning={null}
+                      onPackIdsChange={setDefaultSkillPackIds}
+                    />
+                  </PopoverPopup>
+                </Popover>
+              }
+            />
+          ) : null}
           <SettingsRow
             title="Automatically pull"
             description="Keeps the default branch current in the background when the checkout has no local changes or commits."

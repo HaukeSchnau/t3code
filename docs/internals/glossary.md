@@ -109,6 +109,14 @@ The safety/access mode for a thread or session. [The contracts][1] define four v
 
 The agent interaction style for a thread. In [the contracts][1], the values are `default` and `plan`.
 
+#### Skill pack
+
+A named bundle of skill ids from the environment's skill pack catalog, published on `ServerConfig.skillPackCatalog` alongside the core skill ids that are always active and the profiles that shortcut a set of packs. Projects store `defaultSkillPackIds`; clients resolve a thread's effective packs with `resolveSkillPackSelection` in [skillPacks.ts](../../packages/client-runtime/src/skillPacks.ts). Packs are additive to provider-native and project skills. See [skillPacks.ts](../../packages/contracts/src/skillPacks.ts).
+
+#### Skill scope
+
+The materialized pack selection of one thread. `thread.skill-packs.set` records the wanted packs and bumps `version`; the scope reads as `pending` until the provider session reports `thread.skill-scope.apply`, which lands it as `ready` or `degraded` with an issue. A thread with no scope inherits the project default.
+
 #### Assistant delivery mode
 
 Controls how assistant text reaches the thread timeline. In [the contracts][1], `streaming` updates incrementally and `buffered` accumulates text. Buffered delivery is not held until the turn completes: it spills once accumulated text would exceed 24,000 characters, and flushes at approval and user-input boundaries. See [ProviderRuntimeIngestion.ts][5].

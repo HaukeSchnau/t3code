@@ -30,3 +30,10 @@ untracked files, or local commits.
 
 The pull is skipped if the checkout is on another branch, has no upstream, or contains local work.
 Pull failures do not prevent the server from starting.
+
+## Default skills for new threads
+
+When your environment publishes skill packs, the project page shows a **Skills** row. It sets the
+packs new threads in the project start with. Core skills are always on, and a thread can still pick
+its own packs from the composer. Select the row's control to choose profiles or packs, and use the
+reset action to return to core only. See [the composer guide](composer.md#skill-packs).
