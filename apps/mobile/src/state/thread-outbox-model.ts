@@ -31,6 +31,7 @@ import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn"
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 
+// Keep current writes until a compatible native baseline includes the v4 reader.
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
 const THREAD_OUTBOX_MAX_RETRY_DELAY_MS = 16_000;
 
@@ -48,7 +49,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
-  schemaVersion: Schema.Literals([1, 2, THREAD_OUTBOX_SCHEMA_VERSION]),
+  schemaVersion: Schema.Literals([1, 2, THREAD_OUTBOX_SCHEMA_VERSION, 4]),
   environmentId: EnvironmentId,
   threadId: ThreadId,
   messageId: MessageId,
@@ -124,7 +125,6 @@ export function makeQueuedThreadDeliveryPlan(
           messageId: message.messageId,
           createdAt: message.createdAt,
           text: message.text.trim(),
-          attachments: message.attachments,
           uploadedAttachments: attachments,
           modelSelection: message.modelSelection!,
           runtimeMode: settings.runtimeMode,

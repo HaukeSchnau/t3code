@@ -22,9 +22,13 @@ import { uuidv4 } from "./uuid";
 
 export { toUploadChatImageAttachments } from "./composerImageAttachments";
 
-export interface DraftComposerImageAttachment extends UploadChatImageAttachment {
+export interface DraftComposerImageAttachment extends Omit<UploadChatImageAttachment, "dataUrl"> {
   readonly id: string;
   readonly previewUri: string;
+  /** Owned image bytes from a file-backed draft. Current writers still use inline bytes. */
+  readonly fileUri?: string;
+  /** Inline bytes from current writers and older drafts. */
+  readonly dataUrl?: string;
   readonly uploadedAttachmentId?: string;
   readonly uploadEnvironmentId?: EnvironmentId;
 }
@@ -42,6 +46,15 @@ export interface DraftComposerFileAttachment {
 
 export type DraftComposerAttachment = DraftComposerImageAttachment | DraftComposerFileAttachment;
 
+/** Any composer attachment whose bytes live in the app-owned attachment directory. */
+export type FileBackedComposerAttachment = DraftComposerAttachment & { readonly fileUri: string };
+
+/** Files have a local copy. Images can have one after a file-backed draft is restored. */
+export function isFileBackedComposerAttachment(
+  attachment: DraftComposerAttachment,
+): attachment is FileBackedComposerAttachment {
+  return attachment.fileUri !== undefined;
+}
 const OWNED_PASTED_IMAGE_DIRECTORY = "t3-composer-paste";
 const ATTACHMENT_COPY_CHUNK_BYTES = 64 * 1024;
 

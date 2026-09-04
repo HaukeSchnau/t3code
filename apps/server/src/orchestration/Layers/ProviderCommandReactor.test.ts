@@ -428,6 +428,8 @@ describe("ProviderCommandReactor", () => {
         return {
           readEvents: engine.readEvents,
           resolveReceipt: engine.resolveReceipt,
+          readThreadEvents: engine.readThreadEvents,
+          getThreadReplayStats: engine.getThreadReplayStats,
           dispatch: (command) => {
             if (command.type === "thread.title.regeneration.complete") {
               titleRegenerationCompletionDispatchAttempts += 1;

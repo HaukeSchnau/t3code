@@ -75,6 +75,9 @@ function makeEngine(input: {
 }): OrchestrationEngine.OrchestrationEngineShape {
   return {
     readEvents: () => Stream.empty,
+    readThreadEvents: () => Stream.empty,
+    getThreadReplayStats: () =>
+      Effect.succeed({ eventCount: 0, payloadBytes: 0, hasCreateEvent: false }),
     dispatch: () => Effect.die("unexpected dispatch"),
     resolveReceipt: () => Effect.succeed(Option.none()),
     latestSequence: Effect.succeed(0),

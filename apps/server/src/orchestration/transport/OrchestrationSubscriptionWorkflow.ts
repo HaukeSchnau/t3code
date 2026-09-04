@@ -13,6 +13,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 
 import { projectActivityEvent, projectThreadDetailSnapshot } from "../ActivityPayloadProjection.ts";
@@ -36,8 +37,9 @@ import {
 const SHELL_CURSOR_COMPACTION_INTERVAL = 128;
 const SHELL_REPLAY_PAGE_SIZE = 50;
 const SHELL_RESUME_MAX_GAP = 1_000;
-const THREAD_RESUME_MAX_GAP = 1_000;
+const THREAD_RESUME_MAX_EVENTS = 1_000;
 const LIVE_REPLAY_BUFFER_SIZE = 1_024;
+const ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES = 8 * 1024 * 1024;
 const SHELL_REFETCH_CONCURRENCY = 8;
 const SHELL_COALESCE_WINDOW = Duration.millis(50);
 const SHELL_COALESCE_MAX_CHUNK = 512;
@@ -601,24 +603,50 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
                         }),
                     ),
                   );
-                  const mustReplaceCursor =
+                  let mustReplaceCursor =
                     afterSequence > authoritativeHead ||
                     authoritativeHead - afterSequence > SHELL_RESUME_MAX_GAP;
+                  let replacementReason: "bounded" | "event-count" | "payload-bytes" =
+                    afterSequence > authoritativeHead ? "bounded" : "event-count";
+                  let probeEventCount = Math.max(0, authoritativeHead - afterSequence);
+                  let probePayloadBytes = 0;
+                  if (!mustReplaceCursor && input.projectionSnapshotQuery.getEventReplayStats) {
+                    const stats = yield* input.projectionSnapshotQuery
+                      .getEventReplayStats({
+                        fromSequenceExclusive: afterSequence,
+                        toSequenceInclusive: authoritativeHead,
+                      })
+                      .pipe(
+                        Effect.mapError(
+                          (cause) =>
+                            new OrchestrationGetSnapshotError({
+                              message: "Failed to measure orchestration replay range",
+                              cause,
+                            }),
+                        ),
+                      );
+                    probeEventCount = stats.eventCount;
+                    probePayloadBytes = stats.payloadBytes;
+                    if (stats.payloadBytes > SHELL_REPLAY_THRESHOLDS.maxPayloadBytes) {
+                      mustReplaceCursor = true;
+                      replacementReason = "payload-bytes";
+                    }
+                  }
                   if (!mustReplaceCursor) {
                     observer.recordStrategy({
                       strategy: "events",
                       reason: "capability-unavailable",
-                      probeEventCount: 0,
-                      probePayloadBytes: 0,
+                      probeEventCount,
+                      probePayloadBytes,
                     });
                     return replayFrom(afterSequence);
                   }
                   const snapshot = yield* loadSnapshot;
                   observer.recordStrategy({
                     strategy: "snapshot",
-                    reason: afterSequence > authoritativeHead ? "bounded" : "event-count",
-                    probeEventCount: Math.max(0, authoritativeHead - afterSequence),
-                    probePayloadBytes: 0,
+                    reason: replacementReason,
+                    probeEventCount,
+                    probePayloadBytes,
                     snapshotSequence: snapshot.snapshotSequence,
                   });
                   const snapshotItem: ShellCatchUpItem = { kind: "snapshot", snapshot };
@@ -763,28 +791,56 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
           Effect.raceFirst(liveBudget.failed),
           Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
         ),
+        { startImmediately: true },
       );
       const bufferedLiveStream = Stream.fromQueue(liveBuffer);
+      let replayOnMissingSnapshot:
+        | Stream.Stream<ThreadBufferedItem, OrchestrationGetSnapshotError, Scope.Scope>
+        | undefined;
 
       if (subscriptionInput.afterSequence !== undefined) {
         const afterSequence = subscriptionInput.afterSequence;
         const headSequence = yield* input.orchestrationEngine.latestSequence;
-        const replayGap = headSequence - afterSequence;
-        if (replayGap >= 0 && replayGap <= THREAD_RESUME_MAX_GAP) {
-          const catchUpStream = input.orchestrationEngine.readEvents(afterSequence, replayGap).pipe(
-            Stream.filter(isThisThreadDetailEvent),
-            Stream.map((event) => ({
-              kind: "event" as const,
-              event: projectActivityEvent(event),
-            })),
-            Stream.mapError(
-              (cause) =>
-                new OrchestrationGetSnapshotError({
-                  message: `Failed to replay thread ${subscriptionInput.threadId} events`,
-                  cause,
-                }),
-            ),
-          );
+        const range = {
+          threadId: subscriptionInput.threadId,
+          fromSequenceExclusive: afterSequence,
+          toSequenceInclusive: headSequence,
+        };
+        const replayStats =
+          afterSequence > headSequence
+            ? null
+            : yield* input.orchestrationEngine
+                .getThreadReplayStats({ ...range, maxEvents: THREAD_RESUME_MAX_EVENTS })
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new OrchestrationGetSnapshotError({
+                        message: `Failed to measure thread ${subscriptionInput.threadId} replay range`,
+                        cause,
+                      }),
+                  ),
+                );
+        if (
+          replayStats !== null &&
+          replayStats.eventCount <= THREAD_RESUME_MAX_EVENTS &&
+          replayStats.payloadBytes <= ORCHESTRATION_REPLAY_PAYLOAD_BUDGET_BYTES
+        ) {
+          const catchUpStream = input.orchestrationEngine
+            .readThreadEvents({ ...range, limit: THREAD_RESUME_MAX_EVENTS })
+            .pipe(
+              Stream.filter(isThisThreadDetailEvent),
+              Stream.map((event) => ({
+                kind: "event" as const,
+                event: projectActivityEvent(event),
+              })),
+              Stream.mapError(
+                (cause) =>
+                  new OrchestrationGetSnapshotError({
+                    message: `Failed to replay thread ${subscriptionInput.threadId} events`,
+                    cause,
+                  }),
+              ),
+            );
           const afterCatchUp =
             subscriptionInput.requestCompletionMarker === true
               ? liveBudget.deliver(
@@ -797,7 +853,11 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
                   ),
                 )
               : liveBudget.deliver(bufferedLiveStream);
-          return Stream.concat(catchUpStream, afterCatchUp);
+          const replay = Stream.concat(catchUpStream, afterCatchUp);
+          if (!replayStats.hasCreateEvent) {
+            return replay;
+          }
+          replayOnMissingSnapshot = replay;
         }
       }
 
@@ -805,6 +865,9 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
         .getThreadDetailSnapshot(
           subscriptionInput.threadId,
           subscriptionInput.activityDetailMode ?? "full",
+          subscriptionInput.turnLimit === undefined
+            ? undefined
+            : { turnLimit: subscriptionInput.turnLimit },
         )
         .pipe(
           Effect.mapError(
@@ -816,6 +879,9 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
           ),
         );
       if (Option.isNone(snapshot)) {
+        if (replayOnMissingSnapshot !== undefined) {
+          return replayOnMissingSnapshot;
+        }
         return yield* new OrchestrationGetSnapshotError({
           message: `Thread ${subscriptionInput.threadId} was not found`,
           cause: subscriptionInput.threadId,

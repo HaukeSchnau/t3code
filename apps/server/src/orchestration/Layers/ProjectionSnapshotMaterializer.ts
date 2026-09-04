@@ -110,12 +110,16 @@ export const makeProjectionSnapshotMaterializer = Effect.fn("makeProjectionSnaps
         return yield* singleFlight(shellFlights, `shell:${sequence}`, query.getShellSnapshot());
       }),
       getThreadDetailSnapshot: Effect.fn("ProjectionSnapshotMaterializer.getThreadDetailSnapshot")(
-        function* (threadId, activityDetailMode: OrchestrationThreadActivityDetailMode = "full") {
+        function* (
+          threadId,
+          activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
+          window,
+        ) {
           const sequence = yield* snapshotSequence();
           return yield* singleFlight(
             threadFlights,
-            `thread:${threadId}:${activityDetailMode}:${sequence}`,
-            query.getThreadDetailSnapshot(threadId, activityDetailMode),
+            `thread:${threadId}:${activityDetailMode}:${window?.turnLimit ?? "all"}:${window?.beforeCursor ?? "latest"}:${sequence}`,
+            query.getThreadDetailSnapshot(threadId, activityDetailMode, window),
           );
         },
       ),

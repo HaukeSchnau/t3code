@@ -6,11 +6,17 @@ import type { DraftComposerImageAttachment } from "./composerImages";
 export function toUploadChatImageAttachments(
   attachments: ReadonlyArray<DraftComposerImageAttachment>,
 ): ReadonlyArray<UploadChatImageAttachment> {
-  return attachments.map((attachment) => ({
-    type: attachment.type,
-    name: attachment.name,
-    mimeType: attachment.mimeType,
-    sizeBytes: attachment.sizeBytes,
-    dataUrl: attachment.dataUrl,
-  }));
+  return attachments.flatMap((attachment) =>
+    attachment.dataUrl === undefined
+      ? []
+      : [
+          {
+            type: attachment.type,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            dataUrl: attachment.dataUrl,
+          },
+        ],
+  );
 }
