@@ -457,19 +457,13 @@ describe("composerDraftStore prompt stashes", () => {
 
     const persistApi = useComposerDraftStore.persist as unknown as {
       getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
         merge: (
           persistedState: unknown,
           currentState: ReturnType<typeof useComposerDraftStore.getState>,
         ) => ReturnType<typeof useComposerDraftStore.getState>;
       };
     };
-    const persistedState = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      promptStashesByProjectKey?: Record<
-        string,
-        Array<{ draft: { attachments: Array<{ id: string; dataUrl: string }> } }>
-      >;
-    };
+    const persistedState = partializeComposerDraftStoreState(useComposerDraftStore.getState());
 
     expect(
       persistedState.promptStashesByProjectKey?.[projectKey]?.[0]?.draft.attachments,
@@ -557,14 +551,7 @@ describe("composerDraftStore inline replies", () => {
 
     expect(store.getComposerDraft(threadRef)?.inlineReplies[0]?.text).toBe("My annotation");
 
-    const persistApi = useComposerDraftStore.persist as unknown as {
-      getOptions: () => {
-        partialize: (state: ReturnType<typeof useComposerDraftStore.getState>) => unknown;
-      };
-    };
-    const persisted = persistApi.getOptions().partialize(useComposerDraftStore.getState()) as {
-      draftsByThreadKey?: Record<string, { inlineReplies?: Array<{ text: string }> }>;
-    };
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
     expect(
       persisted.draftsByThreadKey?.[scopedThreadKey(threadRef)]?.inlineReplies?.[0]?.text,
     ).toBe("My annotation");
