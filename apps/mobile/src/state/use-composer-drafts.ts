@@ -603,20 +603,22 @@ export function ensureComposerDraftsLoaded(): void {
   loadPromise = loading;
   // Handle fire-and-forget hook loads without swallowing failures from the
   // write and cleanup callers that await this same promise. A later call retries.
-  void loading.catch((cause) => {
-    if (loadPromise === loading) loadPromise = null;
-    console.warn(
-      "[composer-drafts] failed to hydrate drafts",
-      cause instanceof ComposerDraftPersistenceError
-        ? cause
-        : new ComposerDraftPersistenceError({
-            operation: "hydrate",
-            directory: COMPOSER_DRAFTS_DIRECTORY,
-            fileName: COMPOSER_DRAFTS_FILE,
-            cause,
-          }),
-    );
-  }).finally(() => appAtomRegistry.set(composerDraftsReadyAtom, true));
+  void loading
+    .catch((cause) => {
+      if (loadPromise === loading) loadPromise = null;
+      console.warn(
+        "[composer-drafts] failed to hydrate drafts",
+        cause instanceof ComposerDraftPersistenceError
+          ? cause
+          : new ComposerDraftPersistenceError({
+              operation: "hydrate",
+              directory: COMPOSER_DRAFTS_DIRECTORY,
+              fileName: COMPOSER_DRAFTS_FILE,
+              cause,
+            }),
+      );
+    })
+    .finally(() => appAtomRegistry.set(composerDraftsReadyAtom, true));
 }
 
 export function setComposerDraftQueuedEdit(
