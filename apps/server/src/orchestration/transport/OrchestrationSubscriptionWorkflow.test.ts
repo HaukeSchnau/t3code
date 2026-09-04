@@ -1,7 +1,9 @@
 import {
   EventId,
   MessageId,
+  OrchestrationGetSnapshotError,
   OrchestrationShellSnapshot,
+  ProjectId,
   ThreadId,
   TurnId,
   type OrchestrationEvent,
@@ -49,6 +51,23 @@ function makeMessageEvent(sequence: number): OrchestrationEvent {
   };
 }
 
+function makeProjectDeletedEvent(sequence: number): OrchestrationEvent {
+  const projectId = ProjectId.make("project-slow-client");
+  return {
+    sequence,
+    eventId: EventId.make(`event-${sequence}`),
+    aggregateKind: "project",
+    aggregateId: projectId,
+    occurredAt: now,
+    commandId: null,
+    causationEventId: null,
+    correlationId: null,
+    metadata: {},
+    type: "project.deleted",
+    payload: { projectId, deletedAt: now },
+  };
+}
+
 function makeEngine(input: {
   readonly liveEvents: PubSub.PubSub<OrchestrationEvent>;
   readonly attached: Deferred.Deferred<void>;
@@ -56,7 +75,7 @@ function makeEngine(input: {
 }): OrchestrationEngine.OrchestrationEngineShape {
   return {
     readEvents: () => Stream.empty,
-    dispatch: () => Effect.dieMessage("unexpected dispatch"),
+    dispatch: () => Effect.die("unexpected dispatch"),
     resolveReceipt: () => Effect.succeed(Option.none()),
     latestSequence: Effect.succeed(0),
     streamDomainEvents: Stream.unwrap(
@@ -82,9 +101,9 @@ const projectionSnapshotQuery = {
 } as unknown as ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
 
 const projectionSnapshotMaterializer = {
-  getSnapshot: () => Effect.dieMessage("unexpected snapshot materialization"),
-  getShellSnapshot: () => Effect.dieMessage("unexpected shell materialization"),
-  getThreadDetailSnapshot: () => Effect.dieMessage("unexpected thread materialization"),
+  getSnapshot: () => Effect.die("unexpected snapshot materialization"),
+  getShellSnapshot: () => Effect.die("unexpected shell materialization"),
+  getThreadDetailSnapshot: () => Effect.die("unexpected thread materialization"),
 } satisfies ProjectionSnapshotMaterializer.ProjectionSnapshotMaterializerShape;
 
 const replayLogPublisher: ReplayLogPublisher.ReplayLogPublisher["Service"] = {
@@ -105,25 +124,33 @@ describe("OrchestrationSubscriptionWorkflow", () => {
             projectionSnapshotMaterializer,
             replayLogPublisher,
           });
-          const stream = yield* kind === "shell"
-            ? workflow.subscribeShell({})
-            : workflow.subscribeThread({ threadId, afterSequence: 0 });
-          yield* Deferred.await(attached);
+          const overflow = <A, R>(
+            stream: Stream.Stream<A, OrchestrationGetSnapshotError, R>,
+            events: ReadonlyArray<OrchestrationEvent>,
+          ) =>
+            Effect.gen(function* () {
+              yield* Deferred.await(attached);
+              yield* PubSub.publishAll(liveEvents, events);
+              yield* Deferred.await(detached);
 
-          yield* PubSub.publishAll(
-            liveEvents,
-            Array.from({ length: LIVE_STREAM_MAX_ITEMS + 1 }, (_, index) =>
-              makeMessageEvent(index + 1),
-            ),
+              const result = yield* Stream.runDrain(stream).pipe(Effect.result);
+              expect(result._tag).toBe("Failure");
+              if (result._tag === "Failure") {
+                expect(result.failure._tag).toBe("OrchestrationGetSnapshotError");
+              }
+              expect(yield* PubSub.size(liveEvents)).toBe(0);
+            });
+          const eventFactory = kind === "shell" ? makeProjectDeletedEvent : makeMessageEvent;
+          const events = Array.from({ length: LIVE_STREAM_MAX_ITEMS + 1 }, (_, index) =>
+            eventFactory(index + 1),
           );
-          yield* Deferred.await(detached);
-
-          const result = yield* Stream.runDrain(stream).pipe(Effect.result);
-          expect(result._tag).toBe("Failure");
-          if (result._tag === "Failure") {
-            expect(result.failure._tag).toBe("OrchestrationGetSnapshotError");
+          if (kind === "shell") {
+            const stream = yield* workflow.subscribeShell({});
+            yield* overflow(stream, events);
+          } else {
+            const stream = yield* workflow.subscribeThread({ threadId, afterSequence: 0 });
+            yield* overflow(stream, events);
           }
-          expect(yield* PubSub.size(liveEvents)).toBe(0);
         }),
       ),
     );
