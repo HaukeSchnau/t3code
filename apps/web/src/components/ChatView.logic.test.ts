@@ -1664,6 +1664,7 @@ describe("hasServerAcknowledgedLocalDispatch", () => {
       phase: "ready" as const,
       latestTurn: null,
       latestUserMessageId: localDispatch.latestUserMessageId,
+      queuedMessageIds: localDispatch.queuedMessageIds,
       session: null,
       hasPendingApproval: false,
       hasPendingUserInput: false,

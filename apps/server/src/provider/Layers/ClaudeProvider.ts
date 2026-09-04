@@ -24,6 +24,7 @@ import {
   query as claudeQuery,
   type Options as ClaudeQueryOptions,
   type SlashCommand as ClaudeSlashCommand,
+  type SDKControlGetUsageResponse,
   type SDKUserMessage,
   type SettingSource,
 } from "@anthropic-ai/claude-agent-sdk";
@@ -729,6 +730,7 @@ type ClaudeCapabilitiesProbe = {
    */
   readonly apiProvider: string | undefined;
   readonly slashCommands: ReadonlyArray<ServerProviderSlashCommand>;
+  readonly usage?: Pick<SDKControlGetUsageResponse, "rate_limits_available" | "rate_limits">;
 };
 
 function parseClaudeInitializationCommands(
@@ -846,6 +848,13 @@ const probeClaudeCapabilities = (
       });
       try {
         const init = await q.initializationResult();
+        const usage = await q.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET().then(
+          (response) => ({
+            rate_limits_available: response.rate_limits_available,
+            rate_limits: response.rate_limits,
+          }),
+          () => undefined,
+        );
         const account = init.account as
           | {
               readonly email?: string;
@@ -860,6 +869,7 @@ const probeClaudeCapabilities = (
           tokenSource: account?.tokenSource,
           apiProvider: account?.apiProvider,
           slashCommands: parseClaudeInitializationCommands(init.commands),
+          ...(usage ? { usage } : {}),
         } satisfies ClaudeCapabilitiesProbe;
       } finally {
         q.close();

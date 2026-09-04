@@ -16,6 +16,7 @@ import {
   ApprovalRequestId,
   EnvironmentId,
   EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,

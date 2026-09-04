@@ -1266,9 +1266,11 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
     `,
   });
 
-  const getUserInputActivity: ProjectionSnapshotQueryShape["getUserInputActivity"] = (input) =>
+  const getUserInputActivity: NonNullable<ProjectionSnapshotQueryShape["getUserInputActivity"]> = (
+    input,
+  ) =>
     getUserInputActivityRow(input).pipe(
-      Effect.map(Option.map(mapThreadActivityRow)),
+      Effect.map(Option.map(mapProjectionActivityRow)),
       Effect.mapError(
         toPersistenceSqlOrDecodeError(
           "ProjectionSnapshotQuery.getUserInputActivity:query",

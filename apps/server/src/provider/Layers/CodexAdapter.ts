@@ -1804,7 +1804,7 @@ function mapToRuntimeEvents(
       {
         type: "account.rate-limits.updated",
         ...runtimeEventBase(event, canonicalThreadId),
-        payload: { limits },
+        payload: { rateLimits: limits },
       },
     ];
   }

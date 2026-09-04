@@ -351,7 +351,7 @@ import {
   threadTurnDraftFromComposer,
 } from "./chat/ThreadTurnSubmission";
 import {
-  hasAvailableClaudeCompactionProvider,
+  hasAvailableCompactionProvider,
   hasDismissedResumeCompaction,
   shouldOfferResumeCompaction,
 } from "./chat/ContextWindowMeter.logic";
@@ -3100,8 +3100,9 @@ function ChatViewContent(props: ChatViewProps) {
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
   const compactionProviderAvailable = useMemo(
     () =>
-      hasAvailableClaudeCompactionProvider({
+      hasAvailableCompactionProvider({
         providers: providerInstanceEntries,
+        driverKind: selectedProvider,
         instanceId: activeProviderInstanceId,
         lockedInstanceId: lockedProvider
           ? (activeThread?.session?.providerInstanceId ??
@@ -3115,6 +3116,7 @@ function ChatViewContent(props: ChatViewProps) {
       activeThread?.session?.providerInstanceId,
       lockedProvider,
       providerInstanceEntries,
+      selectedProvider,
     ],
   );
   const [resumeCompactionPermanentlyDismissed, setResumeCompactionPermanentlyDismissed] =

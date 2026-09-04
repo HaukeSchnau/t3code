@@ -343,6 +343,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
     openDevTools: (tabId) => invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
+    listBrowserImportSources: () => invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
+    importBrowserCookies: (input) => invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
     clearCookies: () => invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
     clearCache: () => invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
     setAudioMuted: (tabId, audioMuted) =>

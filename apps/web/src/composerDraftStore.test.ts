@@ -66,6 +66,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
   clearComposerDraftsEnvironment,
+  composerDraftHasUserContent,
   hasComposerDraftSnapshotState,
   finalizePromotedDraftThreadByRef,
   markPromotedDraftThread,
@@ -564,6 +565,31 @@ describe("composerDraftStore inline replies", () => {
 
     store.clearComposerContent(threadRef);
     expect(store.getComposerDraft(threadRef)).toBeNull();
+  });
+});
+
+describe("composerDraftStore unsent draft marker", () => {
+  const threadId = ThreadId.make("thread-unsent-marker");
+  const threadRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+
+  beforeEach(() => {
+    resetComposerDraftStore();
+  });
+
+  it("reports content for typed text and clears when the composer is emptied", () => {
+    const hasDraft = () =>
+      composerDraftHasUserContent(useComposerDraftStore.getState().getComposerDraft(threadRef));
+
+    expect(hasDraft()).toBe(false);
+
+    useComposerDraftStore.getState().setPrompt(threadRef, "   ");
+    expect(hasDraft()).toBe(false);
+
+    useComposerDraftStore.getState().setPrompt(threadRef, "follow up on the relay case");
+    expect(hasDraft()).toBe(true);
+
+    useComposerDraftStore.getState().clearComposerContent(threadRef);
+    expect(hasDraft()).toBe(false);
   });
 });
 

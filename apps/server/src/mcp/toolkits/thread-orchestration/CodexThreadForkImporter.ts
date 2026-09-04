@@ -51,6 +51,7 @@ export interface CodexThreadForkImportInput {
     | "branch"
     | "worktreePath"
     | "workspaceId"
+    | "skillScope"
   >;
   readonly project: Pick<OrchestrationProject, "id" | "title" | "workspaceRoot">;
   readonly title: string;

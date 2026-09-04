@@ -19,18 +19,22 @@ import {
   type OrchestrationThread,
   type OrchestrationThreadActivity,
   type ProviderRuntimeEvent,
+  RuntimeRequestId,
   defaultInstanceIdForDriver,
   isProviderOverloadedError,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Predicate from "effect/Predicate";
 import * as Stream from "effect/Stream";
 import { makeKeyedDrainableWorker } from "@t3tools/shared/KeyedDrainableWorker";
+import { formatTokens } from "@t3tools/shared/usageFormat";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
@@ -345,10 +349,43 @@ function assistantSegmentMessageId(baseKey: string, segmentIndex: number): Messa
 function buildContextWindowActivityPayload(
   event: ProviderRuntimeEvent,
 ): ThreadTokenUsageSnapshot | undefined {
-  if (event.type !== "thread.token-usage.updated" || event.payload.usage.usedTokens <= 0) {
+  if (event.type !== "thread.token-usage.updated" || event.payload.usage.usedTokens < 0) {
     return undefined;
   }
   return event.payload.usage;
+}
+
+function compactedTokenCountsFromActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity> | undefined,
+): { readonly beforeTokens: number; readonly afterTokens: number } | undefined {
+  const lastCompactionIndex = activities?.findLastIndex(
+    (activity) => activity.kind === "context-compaction",
+  );
+  const lastCompaction =
+    lastCompactionIndex !== undefined && lastCompactionIndex >= 0
+      ? activities?.[lastCompactionIndex]
+      : undefined;
+  const activitiesSinceLastCompaction = activities?.slice((lastCompactionIndex ?? -1) + 1) ?? [];
+  const usedTokens = activitiesSinceLastCompaction.flatMap((activity) => {
+    if (activity.kind !== "context-window.updated") return [];
+    if (lastCompaction !== undefined) {
+      const isAfterLastCompaction =
+        activity.sequence !== undefined && lastCompaction.sequence !== undefined
+          ? activity.sequence > lastCompaction.sequence
+          : activity.createdAt > lastCompaction.createdAt;
+      if (!isAfterLastCompaction) return [];
+    }
+    const payload = Predicate.isObject(activity.payload) ? activity.payload : undefined;
+    return Predicate.isNumber(payload?.usedTokens) && payload.usedTokens >= 0
+      ? [payload.usedTokens]
+      : [];
+  });
+  const beforeTokens = usedTokens.at(-2);
+  const afterTokens = usedTokens.at(-1);
+  if (beforeTokens === undefined || afterTokens === undefined || afterTokens >= beforeTokens) {
+    return undefined;
+  }
+  return { beforeTokens, afterTokens };
 }
 
 function normalizeRuntimeTurnState(
@@ -625,6 +662,7 @@ export function runtimeEventToActivities(
           payload: {
             ...(event.requestId ? { requestId: event.requestId } : {}),
             questions: event.payload.questions,
+            ...(event.payload.responseMode ? { responseMode: event.payload.responseMode } : {}),
             ...(event.payload.optional ? { optional: true } : {}),
             ...runtimeAgentContextPayload(event),
           },
@@ -861,15 +899,24 @@ export function runtimeEventToActivities(
         return [];
       }
 
+      const beforeTokens = event.payload.beforeTokens;
+      const afterTokens = event.payload.afterTokens;
+      const summary =
+        beforeTokens !== undefined && afterTokens !== undefined
+          ? `Compacted context ${formatTokens(beforeTokens)} → ${formatTokens(afterTokens)} tokens`
+          : "Context compacted";
       return [
         {
           id: event.eventId,
           createdAt: event.createdAt,
           tone: "info",
           kind: "context-compaction",
-          summary: "Context compacted",
+          summary,
           payload: {
             state: event.payload.state,
+            ...(beforeTokens !== undefined ? { beforeTokens } : {}),
+            ...(afterTokens !== undefined ? { afterTokens } : {}),
+            ...(event.requestId !== undefined ? { requestId: event.requestId } : {}),
             ...(event.payload.detail !== undefined ? { detail: event.payload.detail } : {}),
           },
           turnId: toTurnId(event.turnId) ?? null,
@@ -1728,6 +1775,9 @@ const make = Effect.gen(function* () {
 
       const eventTurnId = toTurnId(event.turnId);
       const activeTurnId = thread.session?.activeTurnId ?? null;
+      const isTerminalTurn = event.type === "turn.completed" || event.type === "turn.aborted";
+      const isCompactedThreadState =
+        event.type === "thread.state.changed" && event.payload.state === "compacted";
       const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
         threadId: thread.id,
       });
@@ -1781,8 +1831,6 @@ const make = Effect.gen(function* () {
         activeTurnId !== null && eventTurnId !== undefined && !sameId(activeTurnId, eventTurnId);
       const missingTurnForActiveTurn = activeTurnId !== null && eventTurnId === undefined;
       const isTerminalTurnEvent = event.type === "turn.completed" || event.type === "turn.aborted";
-      const terminatesAssistantTurn =
-        isTerminalTurnEvent || event.type === "runtime.error" || event.type === "session.exited";
 
       // A turn.started that conflicts with the active turn is legitimate when
       // the server itself has a turn start pending for this thread AND the
@@ -1817,14 +1865,10 @@ const make = Effect.gen(function* () {
             if (activeTurnId !== null && eventTurnId !== undefined) {
               return sameId(activeTurnId, eventTurnId);
             }
-            // No active turn tracked: accept only completions that name their
-            // turn (covers a real completion whose turn.started was lost). An
-            // untargeted completion cannot prove it belongs to any turn this
-            // thread ran — the known emitter was the Claude resume handshake
-            // (system/init + result(num_turns: 0)), which is not a turn at
-            // all — and applying it here stomps the "starting" lifecycle
-            // state while a turn start is pending.
-            return eventTurnId !== undefined;
+            // A named completion can recover a lost turn.started event.
+            // An abort needs an active turn so a delayed stop cannot replace
+            // a ready session or clear a newer pending start.
+            return event.type === "turn.completed" && eventTurnId !== undefined;
           default:
             return true;
         }
@@ -1840,7 +1884,7 @@ const make = Effect.gen(function* () {
         event.type === "session.exited" ||
         event.type === "thread.started" ||
         event.type === "turn.started" ||
-        isTerminalTurnEvent
+        isTerminalTurn
       ) {
         const status = (() => {
           switch (event.type) {
@@ -1855,6 +1899,8 @@ const make = Effect.gen(function* () {
               return "running";
             case "session.exited":
               return "stopped";
+            case "turn.aborted":
+              return "interrupted";
             case "turn.completed":
               switch (normalizeRuntimeTurnState(event.payload.state)) {
                 case "failed":
@@ -1865,8 +1911,6 @@ const make = Effect.gen(function* () {
                 case "completed":
                   return "ready";
               }
-            case "turn.aborted":
-              return "interrupted";
             case "session.started":
             case "thread.started":
               // Provider thread/session start notifications can arrive during an
@@ -1899,11 +1943,13 @@ const make = Effect.gen(function* () {
             : event.type === "turn.completed" &&
                 normalizeRuntimeTurnState(event.payload.state) === "failed"
               ? (event.payload.errorMessage ?? thread.session?.lastError ?? "Turn failed")
-              : event.type === "turn.aborted"
+              : event.type === "turn.aborted" && event.provider === "codex"
                 ? (event.payload.reason ?? thread.session?.lastError ?? "Turn interrupted")
-                : status === "ready"
+                : event.type === "turn.aborted"
                   ? null
-                  : (thread.session?.lastError ?? null);
+                  : status === "ready"
+                    ? null
+                    : (thread.session?.lastError ?? null);
         const lastErrorClass =
           event.type === "turn.completed" &&
           normalizeRuntimeTurnState(event.payload.state) === "failed"
@@ -2081,7 +2127,8 @@ const make = Effect.gen(function* () {
       }
 
       const pauseForUserTurnId =
-        event.type === "request.opened" || event.type === "user-input.requested"
+        event.type === "request.opened" ||
+        (event.type === "user-input.requested" && event.payload.responseMode !== "message")
           ? toTurnId(event.turnId)
           : undefined;
       if (pauseForUserTurnId) {
@@ -2213,6 +2260,10 @@ const make = Effect.gen(function* () {
         });
       }
 
+      const terminatesAssistantTurn =
+        event.type === "runtime.error" ||
+        event.type === "session.exited" ||
+        (isTerminalTurnEvent && shouldApplyThreadLifecycle);
       if (terminatesAssistantTurn) {
         const detailedThread = yield* getLoadedThreadDetail();
         const messages = detailedThread?.messages ?? [];
@@ -2366,7 +2417,7 @@ const make = Effect.gen(function* () {
       } else if (!conflictsWithActiveTurn) {
         if (event.type === "turn.plan.updated") {
           threadPlanProgress.recordPlanProgress(thread.id, event.payload.plan);
-        } else if (event.type === "turn.completed" || event.type === "turn.aborted") {
+        } else if (isTerminalTurn && shouldApplyThreadLifecycle) {
           threadPlanProgress.clearThreadPlanProgress(thread.id);
         }
       }
@@ -2417,7 +2468,58 @@ const make = Effect.gen(function* () {
         }
       }
 
-      const activities = runtimeEventToActivities(event, taskTitle);
+      let activityEvent = event;
+      if (
+        isCompactedThreadState &&
+        event.requestId === undefined &&
+        Option.isSome(pendingTurnStart) &&
+        thread.session?.status === "starting" &&
+        activeTurnId === null &&
+        sameId(thread.session.providerName, event.provider) &&
+        sameId(thread.session.providerInstanceId, event.providerInstanceId) &&
+        DateTime.isGreaterThanOrEqualTo(
+          DateTime.makeUnsafe(event.createdAt),
+          DateTime.makeUnsafe(pendingTurnStart.value.requestedAt),
+        )
+      ) {
+        const pendingMessage = (yield* getLoadedThreadDetail())?.messages.find(
+          (message) => message.id === pendingTurnStart.value.messageId,
+        );
+        if (
+          pendingMessage?.role === "user" &&
+          (pendingMessage.attachments?.length ?? 0) === 0 &&
+          pendingMessage.text.trim().toLowerCase() === "/compact"
+        ) {
+          activityEvent = {
+            ...event,
+            requestId: RuntimeRequestId.make(String(pendingTurnStart.value.messageId)),
+          };
+        }
+      }
+      if (
+        activityEvent.type === "thread.state.changed" &&
+        activityEvent.payload.state === "compacted" &&
+        (activityEvent.payload.beforeTokens === undefined ||
+          activityEvent.payload.afterTokens === undefined)
+      ) {
+        const threadDetail = yield* resolveThreadDetail(thread.id, [
+          "context-window.updated",
+          "context-compaction",
+        ]);
+        const tokenCounts = compactedTokenCountsFromActivities(threadDetail?.activities);
+        if (tokenCounts) {
+          activityEvent = {
+            ...activityEvent,
+            payload: {
+              ...activityEvent.payload,
+              beforeTokens: activityEvent.payload.beforeTokens ?? tokenCounts.beforeTokens,
+              afterTokens: activityEvent.payload.afterTokens ?? tokenCounts.afterTokens,
+            },
+          };
+        }
+      }
+
+      const activities = runtimeEventToActivities(activityEvent, taskTitle);
       yield* Effect.forEach(activities, (activity) =>
         providerCommandId(event, "thread-activity-append").pipe(
           Effect.flatMap((commandId) =>
