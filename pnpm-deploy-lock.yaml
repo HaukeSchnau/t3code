@@ -5820,6 +5820,7 @@ packages:
         integrity: sha512-0mq1pHadfyXCYCqm2cNpbjNIT+fbaUpNxewZb/YNr2L0IrEVMOb8gM/Fl4K6XvHCW3uSNDFwPl/+iKm0bx9jYg==,
       }
     engines: { node: ">=18.0.0" }
+    deprecated: Depreacted due to a memory leak issue https://github.com/smithy-lang/smithy-typescript/issues/2258
 
   "@smithy/shared-ini-file-loader@4.7.2":
     resolution:
