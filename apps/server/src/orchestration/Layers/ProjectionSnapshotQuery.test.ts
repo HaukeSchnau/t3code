@@ -3,6 +3,7 @@ import {
   EventId,
   MessageId,
   ProjectId,
+  SkillPackId,
   ThreadId,
   TurnId,
   ProviderInstanceId,
@@ -41,6 +42,61 @@ const projectionSnapshotLayer = it.layer(
 );
 
 projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
+  it.effect("preserves a pending skill scope in thread reads", () =>
+    Effect.gen(function* () {
+      const snapshotQuery = yield* ProjectionSnapshotQuery;
+      const sql = yield* SqlClient.SqlClient;
+      yield* sql`DELETE FROM projection_thread_sessions`;
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+      yield* sql`
+        INSERT INTO projection_projects (
+          project_id, title, workspace_root, scripts_json, created_at, updated_at, deleted_at
+        ) VALUES (
+          'project-skill-scope', 'Skill scope', '/tmp/skill-scope', '[]',
+          '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z', NULL
+        )
+      `;
+      yield* sql`
+        INSERT INTO projection_threads (
+          thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
+          skill_scope_json, branch, worktree_path, created_at, updated_at, deleted_at
+        ) VALUES (
+          'thread-skill-scope', 'project-skill-scope', 'Skill scope thread',
+          '{"instanceId":"codex","model":"gpt-5.6-sol"}', 'full-access', 'default',
+          '{"version":3,"appliedVersion":0,"packIds":["web-craft"],"state":"pending"}',
+          NULL, NULL, '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:01.000Z', NULL
+        )
+      `;
+
+      const detail = yield* snapshotQuery.getThreadDetailById(ThreadId.make("thread-skill-scope"), {
+        activityKinds: [],
+      });
+
+      assert.isTrue(Option.isSome(detail));
+      if (Option.isSome(detail)) {
+        assert.deepEqual(detail.value.skillScope, {
+          version: 3,
+          appliedVersion: 0,
+          packIds: [SkillPackId.make("web-craft")],
+          state: "pending",
+        });
+      }
+      const shell = yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-skill-scope"));
+      assert.isTrue(Option.isSome(shell));
+      if (Option.isSome(shell)) {
+        assert.deepEqual(shell.value.skillScope, {
+          version: 3,
+          appliedVersion: 0,
+          packIds: [SkillPackId.make("web-craft")],
+          state: "pending",
+        });
+      }
+      yield* sql`DELETE FROM projection_threads`;
+      yield* sql`DELETE FROM projection_projects`;
+    }),
+  );
+
   it.effect("reads restart safety from narrow normalized projection state", () =>
     Effect.gen(function* () {
       const snapshotQuery = yield* ProjectionSnapshotQuery;

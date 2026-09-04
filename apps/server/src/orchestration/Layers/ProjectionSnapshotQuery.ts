@@ -3068,6 +3068,7 @@ pending_approval_requests AS (
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.skillScope !== null ? { skillScope: threadRow.value.skillScope } : {}),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         workspaceId: threadRow.value.workspaceId,
@@ -3403,6 +3404,7 @@ pending_approval_requests AS (
         modelSelection: threadRow.value.modelSelection,
         runtimeMode: threadRow.value.runtimeMode,
         interactionMode: threadRow.value.interactionMode,
+        ...(threadRow.value.skillScope !== null ? { skillScope: threadRow.value.skillScope } : {}),
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         workspaceId: threadRow.value.workspaceId,
@@ -3438,6 +3440,22 @@ pending_approval_requests AS (
         })),
         session: Option.isSome(sessionRow) ? mapSessionRow(sessionRow.value) : null,
       };
+
+      // #region motel debug
+      if (threadRow.value.skillScope !== null) {
+        yield* Effect.logInfo("motel debug: projected thread skill scope", {
+          debug: {
+            session: "skill-scope-activation-20260904",
+            hypothesis: "projection-detail-drops-skill-scope",
+            step: "thread-detail-construction",
+            label: "Compare the persisted skill scope with the returned thread detail",
+          },
+          threadId,
+          persistedSkillScopeVersion: threadRow.value.skillScope.version,
+          returnedSkillScopeVersion: "skillScope" in thread ? thread.skillScope.version : null,
+        });
+      }
+      // #endregion motel debug
 
       return Option.some(
         yield* decodeThread(thread).pipe(
