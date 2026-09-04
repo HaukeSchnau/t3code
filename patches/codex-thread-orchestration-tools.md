@@ -39,8 +39,6 @@ The CLI includes compact passive observability commands:
 
 - `t3 thread result` returns thread status, queue count, and latest messages
   without loading the full transcript.
-- `t3 thread await` waits for a thread to become idle, complete its latest
-  turn, or drain its queued messages.
 - `t3 thread graph` returns automatic relationship edges without mutating the
   graph being inspected.
 
@@ -53,8 +51,8 @@ queued while a coordinator is running, and all notifications retain the normal i
 behavior.
 
 Full `t3 thread read` still records `readBy` activity when one thread reads
-another. The compact commands are passive, so polling does not add relationship
-edges.
+another. The compact `result` command is passive, so status checks do not add
+relationship edges.
 
 The patch routes Codex-backed `t3 thread fork` calls through Codex App Server.
 Forking asks Codex App Server to run `thread/fork`, then imports the returned copied

@@ -17,8 +17,7 @@ t3 thread wait create --members <thread-id> --mode all --json
 Create or fork the workers, register one durable wait covering them, then let the coordinator turn
 end. The server wakes the coordinator when the workers settle or need attention. Use `send` for
 direct coordination between threads. Use `watch create` for external commands and WebSocket events,
-not for thread completion. `await` remains available for diagnostics, but agents should not poll it
-for routine progress.
+not for thread completion. Use `result`, `batch read`, or `wait read` for a one-time status check.
 
 When one agent delegates to another, its prompt should keep the user's words separate from the
 coordinator's interpretation:
@@ -68,7 +67,6 @@ t3 thread batch create "Review the parser" \
   --worker 'claude=claudeAgent/claude-opus-5?effort:high' \
   --worktree --timeout-ms 1800000 --json
 t3 thread batch read <batch-id> --json
-t3 thread batch await <batch-id> --json
 t3 thread batch cancel <batch-id> --json
 t3 thread batch cleanup <batch-id> --json
 t3 thread create "Review the parser" --worktree --json

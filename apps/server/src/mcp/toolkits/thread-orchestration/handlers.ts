@@ -58,14 +58,6 @@ const handlers = {
         ),
       ),
     ),
-  await_thread: (input) =>
-    requireThreadScope.pipe(
-      Effect.flatMap((scope) =>
-        ThreadOrchestrationService.pipe(
-          Effect.flatMap((service) => service.awaitThread(scope, input)),
-        ),
-      ),
-    ),
   get_thread_graph: (input) =>
     requireThreadScope.pipe(
       Effect.flatMap((scope) =>

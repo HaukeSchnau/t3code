@@ -50,8 +50,6 @@ import {
   OrchestrationWatchShell,
 } from "./orchestration.ts";
 import {
-  ThreadOrchestrationAwaitBatchResult,
-  ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationBatch,
   ThreadOrchestrationCleanupBatchResult,
   ThreadOrchestrationCreateBatchResult,
@@ -64,8 +62,6 @@ import {
   ThreadOrchestrationListEffortsResult,
   ThreadOrchestrationListWaitsResult,
   ThreadOrchestrationListWatchesResult,
-  ThreadOrchestrationScopedAwaitThreadInput,
-  ThreadOrchestrationScopedAwaitBatchInput,
   ThreadOrchestrationScopedCancelBatchInput,
   ThreadOrchestrationScopedCleanupBatchInput,
   ThreadOrchestrationScopedCreateEffortInput,
@@ -711,14 +707,6 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
     }).middleware(EnvironmentAuthenticatedAuth),
   )
   .add(
-    HttpApiEndpoint.post("awaitThread", "/api/thread-orchestration/await-thread", {
-      headers: OptionalBearerHeaders,
-      payload: ThreadOrchestrationScopedAwaitThreadInput,
-      success: ThreadOrchestrationAwaitThreadResult,
-      error: EnvironmentThreadOrchestrationReadErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
     HttpApiEndpoint.post("getThreadGraph", "/api/thread-orchestration/graph", {
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedThreadGraphInput,
@@ -747,14 +735,6 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedReadBatchInput,
       success: ThreadOrchestrationBatch,
-      error: EnvironmentThreadOrchestrationReadErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("awaitBatch", "/api/thread-orchestration/await-batch", {
-      headers: OptionalBearerHeaders,
-      payload: ThreadOrchestrationScopedAwaitBatchInput,
-      success: ThreadOrchestrationAwaitBatchResult,
       error: EnvironmentThreadOrchestrationReadErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   )

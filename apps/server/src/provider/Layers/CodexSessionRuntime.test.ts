@@ -554,7 +554,7 @@ describe("T3 orchestration developer instructions", () => {
       NodeAssert.match(instructions, /Coordinator context/);
       NodeAssert.match(instructions, /t3 thread send.*delivers a message immediately/);
       NodeAssert.match(instructions, /t3 thread wait create/);
-      NodeAssert.match(instructions, /Do not poll with `t3 thread await`/);
+      NodeAssert.match(instructions, /Do not poll workers for routine progress/);
       NodeAssert.match(instructions, /t3 thread watch create/);
     }
   });

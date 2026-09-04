@@ -20,10 +20,6 @@ import {
   type OrchestrationThreadRef,
   type OrchestrationWaitShell,
   type OrchestrationWatchShell,
-  type ThreadOrchestrationAwaitBatchInput,
-  type ThreadOrchestrationAwaitBatchResult,
-  type ThreadOrchestrationAwaitThreadInput,
-  type ThreadOrchestrationAwaitThreadResult,
   type ThreadOrchestrationActorScope,
   type ThreadOrchestrationBatch,
   type ThreadOrchestrationBatchStatus,
@@ -112,10 +108,6 @@ import { makeWatchFloodGate, runWatchSource, WatchSourceError } from "./WatchRun
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
-const DEFAULT_AWAIT_TIMEOUT_MS = 30_000;
-const MAX_AWAIT_TIMEOUT_MS = 120_000;
-const DEFAULT_AWAIT_POLL_INTERVAL_MS = 1_000;
-const MIN_AWAIT_POLL_INTERVAL_MS = 100;
 const MAX_BATCH_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1_000;
 
 const HIDDEN_THREAD_MODEL_SLUGS = new Set([
@@ -168,10 +160,6 @@ export class ThreadOrchestrationService extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationReadThreadResultInput,
     ) => Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError>;
-    readonly awaitThread: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationAwaitThreadInput,
-    ) => Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError>;
     readonly getThreadGraph: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationThreadGraphInput,
@@ -188,10 +176,6 @@ export class ThreadOrchestrationService extends Context.Service<
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationReadBatchInput,
     ) => Effect.Effect<ThreadOrchestrationBatch, ThreadOrchestrationError>;
-    readonly awaitBatch: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationAwaitBatchInput,
-    ) => Effect.Effect<ThreadOrchestrationAwaitBatchResult, ThreadOrchestrationError>;
     readonly cancelBatch: (
       scope: McpInvocationContext.McpInvocationScope,
       input: ThreadOrchestrationCancelBatchInput,
@@ -685,23 +669,6 @@ function relationshipFromActivity(
   };
 }
 
-function awaitSatisfiedResult(
-  context: ProjectionThreadResultContext,
-  until: "idle" | "completed" | "queueDrained",
-): boolean {
-  switch (until) {
-    case "idle":
-      return !["running", "starting"].includes(statusForThread(context.thread));
-    case "completed":
-      return context.thread.latestTurn?.state === "completed";
-    case "queueDrained":
-      return (
-        context.queuedMessageCount === 0 &&
-        !["running", "starting"].includes(statusForThread(context.thread))
-      );
-  }
-}
-
 const make = Effect.gen(function* () {
   const engine = yield* OrchestrationEngineService;
   const snapshotQuery = yield* ProjectionSnapshotQuery;
@@ -1172,40 +1139,6 @@ const make = Effect.gen(function* () {
         activities: thread.activities,
         queuedMessageCount: thread.queuedMessages?.length ?? 0,
       };
-    });
-
-  const awaitThread = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationAwaitThreadInput,
-  ) =>
-    Effect.gen(function* () {
-      if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.awaitThread(scopeForRemote(scope), input);
-      }
-      const until = input.until ?? "idle";
-      const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, MAX_AWAIT_TIMEOUT_MS);
-      const pollIntervalMs = Math.max(
-        input.pollIntervalMs ?? DEFAULT_AWAIT_POLL_INTERVAL_MS,
-        MIN_AWAIT_POLL_INTERVAL_MS,
-      );
-      const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
-
-      const poll: Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError> =
-        Effect.gen(function* () {
-          const context = yield* readThreadResultContext(input.threadId, "await_thread");
-          const result = yield* threadResultFromContext(context);
-          const satisfied = awaitSatisfiedResult(context, until);
-          if (satisfied) {
-            return { result, satisfied, timedOut: false };
-          }
-          if ((yield* Clock.currentTimeMillis) >= deadline) {
-            return { result, satisfied: false, timedOut: true };
-          }
-          yield* Effect.sleep(Duration.millis(pollIntervalMs));
-          return yield* poll;
-        });
-
-      return yield* poll;
     });
 
   const getThreadGraph = (
@@ -2006,46 +1939,6 @@ const make = Effect.gen(function* () {
         Effect.forkDetach,
       );
       return { batch: yield* readBatch(scope, { batchId }) };
-    });
-
-  const awaitBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationAwaitBatchInput,
-  ) =>
-    Effect.gen(function* () {
-      const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_AWAIT_TIMEOUT_MS, MAX_AWAIT_TIMEOUT_MS);
-      const deadline = (yield* Clock.currentTimeMillis) + timeoutMs;
-      const wait: Effect.Effect<ThreadOrchestrationAwaitBatchResult, ThreadOrchestrationError> =
-        Effect.scoped(
-          Effect.gen(function* () {
-            const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
-              ? yield* engine.liveSubscriptionCapability!.subscribe
-              : engine.streamDomainEvents;
-            const batch = yield* readBatch(scope, { batchId: input.batchId });
-            const satisfied = isTerminalBatchStatus(batch.status);
-            if (satisfied) return { batch, satisfied: true, timedOut: false };
-            const remaining = deadline - (yield* Clock.currentTimeMillis);
-            if (remaining <= 0) {
-              return { batch, satisfied: false, timedOut: true };
-            }
-            const memberThreadIds = new Set(batch.members.map((member) => member.thread.threadId));
-            const nextMemberEvent = eventStream.pipe(
-              Stream.filter(
-                (event) =>
-                  event.aggregateKind === "thread" &&
-                  memberThreadIds.has(ThreadId.make(event.aggregateId)),
-              ),
-              Stream.runHead,
-              Effect.as(false),
-            );
-            const timedOut = yield* Effect.raceFirst(
-              nextMemberEvent,
-              Effect.sleep(Duration.millis(remaining)).pipe(Effect.as(true)),
-            );
-            return timedOut ? { batch, satisfied: false, timedOut: true } : yield* wait;
-          }),
-        );
-      return yield* wait;
     });
 
   const cancelBatch = (
@@ -3852,11 +3745,9 @@ const make = Effect.gen(function* () {
     listThreads,
     readThread,
     readThreadResult,
-    awaitThread,
     getThreadGraph,
     createBatch,
     readBatch,
-    awaitBatch,
     cancelBatch,
     cleanupBatch,
     createEffort,

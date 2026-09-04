@@ -2,8 +2,6 @@ import {
   ThreadOrchestrationCreateThreadInput,
   ThreadOrchestrationCreateThreadResult,
   ThreadOrchestrationError,
-  ThreadOrchestrationAwaitThreadInput,
-  ThreadOrchestrationAwaitThreadResult,
   ThreadOrchestrationForkThreadInput,
   ThreadOrchestrationForkThreadResult,
   ThreadOrchestrationListProjectsResult,
@@ -43,7 +41,7 @@ const readonlyTool = <T extends Tool.Any>(tool: T): T =>
 export const ListProjectsTool = readonlyTool(
   Tool.make("list_projects", {
     description:
-      "List local and registered remote environments plus their projects for durable T3 Code thread orchestration. Use a returned environmentId with create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, await_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, or get_thread_graph.environmentId. This is the normal discovery tool before creating threads in another project or on another host.",
+      "List local and registered remote environments plus their projects for durable T3 Code thread orchestration. Use a returned environmentId with create_thread.target.environmentId, list_threads.environmentId, read_thread.environmentId, send_message_to_thread.environmentId, set_thread_title.environmentId, or get_thread_graph.environmentId. This is the normal discovery tool before creating threads in another project or on another host.",
     success: ThreadOrchestrationListProjectsResult,
     failure: ThreadOrchestrationError,
     dependencies,
@@ -93,17 +91,6 @@ export const ReadThreadResultTool = readonlyTool(
     failure: ThreadOrchestrationError,
     dependencies,
   }).annotate(Tool.Title, "Read thread result"),
-);
-
-export const AwaitThreadTool = readonlyTool(
-  Tool.make("await_thread", {
-    description:
-      "Wait for a T3 Code thread to become idle, complete its latest turn, or drain its queue, then return the same compact result shape as read_thread_result, including any typed failure. A provider_unavailable failure means an immediate retry on that provider instance is pointless; wait until retryAt or choose another provider/model. This is passive and does not record a read relationship. Pass environmentId to wait on a registered remote host.",
-    parameters: ThreadOrchestrationAwaitThreadInput,
-    success: ThreadOrchestrationAwaitThreadResult,
-    failure: ThreadOrchestrationError,
-    dependencies,
-  }).annotate(Tool.Title, "Await thread"),
 );
 
 export const GetThreadGraphTool = readonlyTool(
@@ -167,7 +154,6 @@ export const ThreadOrchestrationToolkit = Toolkit.make(
   ListThreadsTool,
   ReadThreadTool,
   ReadThreadResultTool,
-  AwaitThreadTool,
   GetThreadGraphTool,
   CreateThreadTool,
   ForkThreadTool,
