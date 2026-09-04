@@ -26,6 +26,7 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
@@ -33,6 +34,7 @@ import * as ManagedRuntime from "effect/ManagedRuntime";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
@@ -64,6 +66,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { TranscriptJournalTrackerLive } from "../../observability/TranscriptJournalObservability.ts";
 import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
 import { isTranscriptDurabilityEvent } from "../../provider/ProviderRuntimeEventDurability.ts";
+import { makeSqlStatementCounter } from "../../../integration/SqlStatementCounter.integration.ts";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
@@ -109,7 +112,12 @@ function isLegacyTurnCompletedEvent(
 function createProviderServiceHarness(options?: {
   readonly assistantTranscriptRecovery?: "none" | "authoritative";
 }) {
-  const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
+  const runtimeEventPubSub = Effect.runSync(
+    PubSub.unbounded<{
+      readonly events: ReadonlyArray<ProviderRuntimeEvent>;
+      readonly enqueued?: Deferred.Deferred<void>;
+    }>(),
+  );
   const runtimeSessions: ProviderSession[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
@@ -144,9 +152,17 @@ function createProviderServiceHarness(options?: {
     rollbackConversation: () => unsupported(),
     uploadFeedback: () => unsupported(),
     get streamEvents() {
-      return Stream.fromPubSub(runtimeEventPubSub);
+      return Stream.fromPubSub(runtimeEventPubSub).pipe(
+        Stream.flatMap(({ events, enqueued }) =>
+          Stream.concat(
+            Stream.fromIterable(events),
+            enqueued
+              ? Stream.fromEffect(Deferred.succeed(enqueued, undefined)).pipe(Stream.drain)
+              : Stream.empty,
+          ),
+        ),
+      );
     },
-    subscribeEvents: PubSub.subscribe(runtimeEventPubSub),
   };
 
   const setSession = (session: ProviderSession): void => {
@@ -173,12 +189,27 @@ function createProviderServiceHarness(options?: {
     return event as ProviderRuntimeEvent;
   };
 
-  const publish = (event: ProviderRuntimeEvent) => PubSub.publish(runtimeEventPubSub, event);
+  const publish = (
+    events: ReadonlyArray<ProviderRuntimeEvent>,
+    enqueued?: Deferred.Deferred<void>,
+  ) => PubSub.publish(runtimeEventPubSub, { events, ...(enqueued ? { enqueued } : {}) });
+
+  const emitAndWaitForEnqueue = Effect.fnUntraced(function* (
+    events: ReadonlyArray<LegacyProviderRuntimeEvent>,
+  ) {
+    const enqueued = yield* Deferred.make<void>();
+    yield* PubSub.publish(runtimeEventPubSub, {
+      events: events.map(normalizeLegacyEvent),
+      enqueued,
+    });
+    yield* Deferred.await(enqueued);
+  });
 
   return {
     service,
     normalizeLegacyEvent,
     publish,
+    emitAndWaitForEnqueue,
     setSession,
   };
 }
@@ -271,6 +302,7 @@ describe("ProviderRuntimeIngestion", () => {
         ? { assistantTranscriptRecovery: options.assistantTranscriptRecovery }
         : undefined,
     );
+    const sqlCounter = makeSqlStatementCounter();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -299,31 +331,60 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(TranscriptJournalTrackerLive),
+      Layer.provideMerge(Layer.succeed(Tracer.Tracer, sqlCounter.tracer)),
     );
-    runtime = ManagedRuntime.make(layer);
-    const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
-    const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
-    const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
-    const transcriptJournal = await runtime.runPromise(Effect.service(ProviderTranscriptJournal));
+    const testRuntime = ManagedRuntime.make(layer);
+    runtime = testRuntime;
+    const engine = await testRuntime.runPromise(Effect.service(OrchestrationEngineService));
+    const snapshotQuery = await testRuntime.runPromise(Effect.service(ProjectionSnapshotQuery));
+    const ingestion = await testRuntime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const transcriptJournal = await testRuntime.runPromise(
+      Effect.service(ProviderTranscriptJournal),
+    );
     scope = await Effect.runPromise(Scope.make("sequential"));
-    await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
+    await testRuntime.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     let pendingEmits = Promise.resolve();
     const emit = (legacyEvent: LegacyProviderRuntimeEvent): void => {
       const event = provider.normalizeLegacyEvent(legacyEvent);
-      pendingEmits = pendingEmits.then(() =>
-        runtime!.runPromise(
+      pendingEmits = pendingEmits.then(async () => {
+        const enqueued = await testRuntime.runPromise(Deferred.make<void>());
+        await testRuntime.runPromise(
           (isTranscriptDurabilityEvent(event)
             ? transcriptJournal.append(event).pipe(Effect.asVoid)
             : Effect.void
-          ).pipe(Effect.andThen(provider.publish(event)), Effect.asVoid),
-        ),
-      );
+          ).pipe(
+            Effect.andThen(provider.publish([event], enqueued)),
+            Effect.andThen(Deferred.await(enqueued)),
+            Effect.asVoid,
+          ),
+        );
+      });
     };
     const drain = async () => {
       await pendingEmits;
-      await runtime!.runPromise(Effect.yieldNow.pipe(Effect.andThen(ingestion.drain)));
+      await testRuntime.runPromise(ingestion.drain);
     };
-    const dispatch = (command: OrchestrationCommand) => Effect.runPromise(engine.dispatch(command));
+    const dispatch = (command: OrchestrationCommand) =>
+      testRuntime.runPromise(engine.dispatch(command));
+    const emitAndDrain = (events: ReadonlyArray<LegacyProviderRuntimeEvent>) => {
+      const normalizedEvents = events.map(provider.normalizeLegacyEvent);
+      return testRuntime.runPromise(
+        Effect.gen(function* () {
+          yield* Effect.forEach(
+            normalizedEvents,
+            (event) =>
+              isTranscriptDurabilityEvent(event)
+                ? transcriptJournal.append(event).pipe(Effect.asVoid)
+                : Effect.void,
+            { discard: true },
+          );
+          const enqueued = yield* Deferred.make<void>();
+          yield* provider.publish(normalizedEvents, enqueued);
+          yield* Deferred.await(enqueued);
+          yield* ingestion.drain;
+        }),
+      );
+    };
 
     const createdAt = "2026-01-01T00:00:00.000Z";
     await dispatch({
@@ -383,9 +444,11 @@ describe("ProviderRuntimeIngestion", () => {
       dispatch,
       readModel: async () => {
         await drain();
-        return Effect.runPromise(snapshotQuery.getSnapshot());
+        return testRuntime.runPromise(snapshotQuery.getSnapshot());
       },
       emit,
+      emitAndDrain,
+      sqlCount: sqlCounter.count,
       setProviderSession: provider.setSession,
       drain,
     };
@@ -3131,39 +3194,42 @@ describe("ProviderRuntimeIngestion", () => {
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
   });
 
-  it("buffers assistant deltas only with authoritative recovery until completion", async () => {
+  it("bounds lifecycle queries while buffering assistant deltas until completion", async () => {
     const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
     const now = "2026-01-01T00:00:00.000Z";
 
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-    });
-    await waitForThread(
-      harness.readModel,
-      (thread) =>
-        thread.session?.status === "running" && thread.session?.activeTurnId === "turn-buffered",
-    );
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-message-delta-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-      itemId: asItemId("item-buffered"),
-      payload: {
-        streamKind: "assistant_text",
-        delta: "buffer me",
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
       },
-    });
+    ]);
 
-    await harness.drain();
+    const eventCount = 1_000;
+    const before = harness.sqlCount();
+    await harness.emitAndDrain(
+      Array.from({ length: eventCount }, (_, index) => ({
+        type: "content.delta",
+        eventId: asEventId(`evt-message-delta-buffered-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          streamKind: "assistant_text",
+          delta: "a",
+        },
+      })),
+    );
+    const lifecycleQueryCount = harness.sqlCount() - before;
+    expect(lifecycleQueryCount).toBeGreaterThan(0);
+    expect(lifecycleQueryCount).toBeLessThanOrEqual(eventCount * 2);
+
     const midReadModel = await harness.readModel();
     const midThread = midReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(
@@ -3172,30 +3238,25 @@ describe("ProviderRuntimeIngestion", () => {
       ),
     ).toBe(false);
 
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-message-completed-buffered"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-buffered"),
-      itemId: asItemId("item-buffered"),
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
+    await harness.emitAndDrain([
+      {
+        type: "item.completed",
+        eventId: asEventId("evt-message-completed-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+        },
       },
-    });
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.messages.some(
-        (message: ProviderRuntimeTestMessage) =>
-          message.id === "assistant:item-buffered" && !message.streaming,
-      ),
-    );
-    const message = thread.messages.find(
-      (entry: ProviderRuntimeTestMessage) => entry.id === "assistant:item-buffered",
-    );
-    expect(message?.text).toBe("buffer me");
+    ]);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    const message = thread?.messages.find((entry) => entry.id === "assistant:item-buffered");
+    expect(message?.text).toBe("a".repeat(eventCount));
     expect(message?.streaming).toBe(false);
   });
 

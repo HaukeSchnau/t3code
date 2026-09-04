@@ -16,6 +16,7 @@ import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
 
 import { projectActivityEvent, projectThreadDetailSnapshot } from "../ActivityPayloadProjection.ts";
+import { makeLiveStreamBudget, type RetainedLiveItem } from "../LiveStreamBudget.ts";
 import { planReplay, type ReplayThresholds } from "../ReplayPlanner.ts";
 import type * as OrchestrationEngine from "../Services/OrchestrationEngine.ts";
 import type * as ProjectionSnapshotMaterializer from "../Services/ProjectionSnapshotMaterializer.ts";
@@ -445,15 +446,76 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
 
   const subscribeShell = (subscriptionInput: OrchestrationSubscribeShellInput) =>
     Effect.gen(function* () {
-      const liveBuffer = yield* Queue.unbounded<ShellLiveInput>();
+      const liveBudget = yield* makeLiveStreamBudget();
+      const liveBuffer = yield* Queue.unbounded<
+        RetainedLiveItem<ShellLiveInput>,
+        OrchestrationGetSnapshotError
+      >();
+      let liveBufferClosed = false;
+      const closeLiveBuffer = (error?: OrchestrationGetSnapshotError) =>
+        Effect.gen(function* () {
+          if (liveBufferClosed) return;
+          liveBufferClosed = true;
+          liveBudget.release(yield* Queue.clear(liveBuffer).pipe(Effect.orDie));
+          if (error) yield* Queue.fail(liveBuffer, error);
+          yield* Queue.shutdown(liveBuffer);
+        });
+      yield* Effect.addFinalizer(() => closeLiveBuffer());
+      yield* liveBudget.failed.pipe(
+        Effect.catchTags({ OrchestrationGetSnapshotError: closeLiveBuffer }),
+        Effect.forkScoped,
+      );
       yield* Effect.forkScoped(
         input.orchestrationEngine.streamDomainEvents.pipe(
-          Stream.runForEach((event) => Queue.offer(liveBuffer, { kind: "event" as const, event })),
+          Stream.runForEach((event) =>
+            liveBudget.retain({ kind: "event" as const, event }, event).pipe(
+              Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+              Effect.uninterruptible,
+            ),
+          ),
+          Effect.raceFirst(liveBudget.failed),
+          Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
         ),
         { startImmediately: true },
       );
-      const bufferedLiveStream = compactShellCursorItems(
-        coalesceShellLiveStream(Stream.fromQueue(liveBuffer)),
+      const coalesceRetainedInputs = (items: ReadonlyArray<RetainedLiveItem<ShellLiveInput>>) =>
+        coalesceShellLiveInputs(items.map((item) => item.value)).pipe(
+          Effect.flatMap((output) => liveBudget.replace(items, output)),
+        );
+      interface RetainedCursorCompactionState {
+        readonly count: number;
+        readonly pending: RetainedLiveItem<OrchestrationShellCursorItem> | null;
+      }
+      const compactRetainedCursorItems = <E, R>(
+        stream: Stream.Stream<RetainedLiveItem<ShellDeltaItem>, E, R>,
+      ) =>
+        stream.pipe(
+          Stream.mapAccumEffect(
+            (): RetainedCursorCompactionState => ({ count: 0, pending: null }),
+            (state, item) =>
+              Effect.sync(() => {
+                if (item.value.kind !== "cursor") {
+                  if (state.pending) liveBudget.release([state.pending]);
+                  incrementWorkloadCounter("shell.suppressed", state.count);
+                  return [{ count: 0, pending: null }, [item]] as const;
+                }
+                if (state.pending) liveBudget.release([state.pending]);
+                const count = state.count + 1;
+                if (count >= SHELL_CURSOR_COMPACTION_INTERVAL) {
+                  incrementWorkloadCounter("shell.suppressed", state.count);
+                  return [{ count: 0, pending: null }, [item]] as const;
+                }
+                return [{ count, pending: item }, []] as const;
+              }),
+            { onHalt: (state) => (state.pending === null ? [] : [state.pending]) },
+          ),
+        );
+      const bufferedLiveStream = compactRetainedCursorItems(
+        Stream.fromQueue(liveBuffer).pipe(
+          Stream.groupedWithin(SHELL_COALESCE_MAX_CHUNK, SHELL_COALESCE_WINDOW),
+          Stream.mapEffect(coalesceRetainedInputs),
+          Stream.flatMap((items) => Stream.fromIterable(items)),
+        ),
       );
 
       const loadSnapshot = input.projectionSnapshotQuery.getShellSnapshot().pipe(
@@ -471,16 +533,20 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
 
       const synchronizedThenLive =
         subscriptionInput.requestCompletionMarker === true
-          ? Stream.concat(
-              Stream.fromEffect(
-                Queue.offer(liveBuffer, { kind: "synchronized" as const }).pipe(
-                  Effect.andThen(Queue.takeAll(liveBuffer)),
-                  Effect.flatMap(coalesceShellLiveInputs),
-                ),
-              ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
-              bufferedLiveStream,
+          ? liveBudget.deliver(
+              Stream.concat(
+                Stream.fromEffect(
+                  liveBudget.retain({ kind: "synchronized" as const }).pipe(
+                    Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                    Effect.uninterruptible,
+                    Effect.andThen(Queue.takeAll(liveBuffer)),
+                    Effect.flatMap(coalesceRetainedInputs),
+                  ),
+                ).pipe(Stream.flatMap((items) => Stream.fromIterable(items))),
+                bufferedLiveStream,
+              ),
             )
-          : bufferedLiveStream;
+          : liveBudget.deliver(bufferedLiveStream);
 
       if (subscriptionInput.afterSequence !== undefined) {
         const afterSequence = subscriptionInput.afterSequence;
@@ -488,8 +554,13 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
           observer: makeReplayObserver("shell", afterSequence).pipe(
             Effect.provideService(ReplayLogPublisher.ReplayLogPublisher, input.replayLogPublisher),
           ),
-          live: bufferedLiveStream.pipe(
-            Stream.filter((item): item is ShellLiveItem => item.kind !== "synchronized"),
+          live: liveBudget.deliver(
+            bufferedLiveStream.pipe(
+              Stream.filter(
+                (item): item is RetainedLiveItem<ShellLiveItem> =>
+                  item.value.kind !== "synchronized",
+              ),
+            ),
           ),
           sequence: (item: ShellCatchUpItem) =>
             item.kind === "snapshot" ? item.snapshot.snapshotSequence : item.sequence,
@@ -650,15 +721,42 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
         Stream.tap(() =>
           Effect.sync(() => incrementWorkloadCounter("thread_detail.events_published")),
         ),
-        Stream.map((event) => ({
-          kind: "event" as const,
-          event: projectActivityEvent(event),
-        })),
       );
 
-      const liveBuffer = yield* Queue.unbounded<ThreadBufferedItem>();
+      const liveBudget = yield* makeLiveStreamBudget();
+      const liveBuffer = yield* Queue.unbounded<
+        RetainedLiveItem<ThreadBufferedItem>,
+        OrchestrationGetSnapshotError
+      >();
+      let liveBufferClosed = false;
+      const closeLiveBuffer = (error?: OrchestrationGetSnapshotError) =>
+        Effect.gen(function* () {
+          if (liveBufferClosed) return;
+          liveBufferClosed = true;
+          liveBudget.release(yield* Queue.clear(liveBuffer).pipe(Effect.orDie));
+          if (error) yield* Queue.fail(liveBuffer, error);
+          yield* Queue.shutdown(liveBuffer);
+        });
+      yield* Effect.addFinalizer(() => closeLiveBuffer());
+      yield* liveBudget.failed.pipe(
+        Effect.catchTags({ OrchestrationGetSnapshotError: closeLiveBuffer }),
+        Effect.forkScoped,
+      );
       yield* Effect.forkScoped(
-        liveStream.pipe(Stream.runForEach((item) => Queue.offer(liveBuffer, item))),
+        liveStream.pipe(
+          Stream.runForEach((event) => {
+            const item = {
+              kind: "event" as const,
+              event: projectActivityEvent(event),
+            };
+            return liveBudget.retain(item, event).pipe(
+              Effect.flatMap((retained) => Queue.offer(liveBuffer, retained)),
+              Effect.uninterruptible,
+            );
+          }),
+          Effect.raceFirst(liveBudget.failed),
+          Effect.catchTags({ OrchestrationGetSnapshotError: () => Effect.void }),
+        ),
       );
       const bufferedLiveStream = Stream.fromQueue(liveBuffer);
 
@@ -683,13 +781,16 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
           );
           const afterCatchUp =
             subscriptionInput.requestCompletionMarker === true
-              ? Stream.concat(
-                  Stream.fromEffect(
-                    Queue.offer(liveBuffer, { kind: "synchronized" as const }),
-                  ).pipe(Stream.drain),
-                  bufferedLiveStream,
+              ? liveBudget.deliver(
+                  Stream.unwrap(
+                    liveBudget.retain({ kind: "synchronized" as const }).pipe(
+                      Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                      Effect.uninterruptible,
+                      Effect.as(bufferedLiveStream),
+                    ),
+                  ),
                 )
-              : bufferedLiveStream;
+              : liveBudget.deliver(bufferedLiveStream);
           return Stream.concat(catchUpStream, afterCatchUp);
         }
       }
@@ -716,13 +817,16 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
       }
       const afterSnapshot =
         subscriptionInput.requestCompletionMarker === true
-          ? Stream.concat(
-              Stream.fromEffect(Queue.offer(liveBuffer, { kind: "synchronized" as const })).pipe(
-                Stream.drain,
+          ? liveBudget.deliver(
+              Stream.unwrap(
+                liveBudget.retain({ kind: "synchronized" as const }).pipe(
+                  Effect.flatMap((item) => Queue.offer(liveBuffer, item)),
+                  Effect.uninterruptible,
+                  Effect.as(bufferedLiveStream),
+                ),
               ),
-              bufferedLiveStream,
             )
-          : bufferedLiveStream;
+          : liveBudget.deliver(bufferedLiveStream);
       return Stream.concat(
         Stream.make({
           kind: "snapshot" as const,

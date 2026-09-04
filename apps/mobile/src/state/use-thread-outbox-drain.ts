@@ -412,7 +412,7 @@ export function useThreadOutboxDrain(): void {
         return (
           (await restoreRejectedQueuedMessage(
             queuedMessage,
-            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+            "Antigravity model unavailable. Set it up on web or desktop, or choose another model.",
           )) !== "retry"
         );
       }
@@ -441,7 +441,7 @@ export function useThreadOutboxDrain(): void {
         return (
           (await restoreRejectedQueuedMessage(
             attachmentPreparation.persistedMessage,
-            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+            "Antigravity model unavailable. Set it up on web or desktop, or choose another model.",
           )) !== "retry"
         );
       }
@@ -492,7 +492,7 @@ export function useThreadOutboxDrain(): void {
         return (
           (await restoreRejectedQueuedMessage(
             queuedMessage,
-            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+            "Antigravity model unavailable. Set it up on web or desktop, or choose another model.",
           )) !== "retry"
         );
       }
@@ -525,7 +525,7 @@ export function useThreadOutboxDrain(): void {
         return (
           (await restoreRejectedQueuedMessage(
             attachmentPreparation.persistedMessage,
-            "Antigravity model unavailable. Open model settings to finish setup or choose another model.",
+            "Antigravity model unavailable. Set it up on web or desktop, or choose another model.",
           )) !== "retry"
         );
       }
