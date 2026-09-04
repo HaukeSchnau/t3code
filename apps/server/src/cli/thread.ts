@@ -430,50 +430,6 @@ const resultCommand = Command.make("result", {
   ),
 );
 
-const awaitCommand = Command.make("await", {
-  ...scopedFlags,
-  threadId: threadIdArgument,
-  until: Flag.choice("until", ["idle", "completed", "queue-drained"] as const).pipe(
-    Flag.withDescription("Condition to wait for."),
-    Flag.optional,
-  ),
-  timeoutMs: Flag.integer("timeout-ms").pipe(Flag.withDescription("Wait timeout."), Flag.optional),
-  pollIntervalMs: Flag.integer("poll-interval-ms").pipe(
-    Flag.withDescription("Polling interval."),
-    Flag.optional,
-  ),
-}).pipe(
-  Command.withDescription("Wait for a thread condition."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) => {
-      const target = ThreadId.make(flags.threadId);
-      const caller = currentCallerThreadId(flags.fromThread) ?? target;
-      const until = Option.getOrUndefined(flags.until);
-      return client.threadOrchestration
-        .awaitThread({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: {
-              threadId: target,
-              ...(Option.isSome(flags.environment)
-                ? { environmentId: EnvironmentId.make(flags.environment.value) }
-                : {}),
-              ...(until !== undefined
-                ? { until: until === "queue-drained" ? "queueDrained" : until }
-                : {}),
-              ...(Option.isSome(flags.timeoutMs) ? { timeoutMs: flags.timeoutMs.value } : {}),
-              ...(Option.isSome(flags.pollIntervalMs)
-                ? { pollIntervalMs: flags.pollIntervalMs.value }
-                : {}),
-            },
-          },
-        })
-        .pipe(Effect.tap((result) => Console.log(render(result, flags.json))));
-    }),
-  ),
-);
-
 const graphCommand = Command.make("graph", {
   ...scopedFlags,
   rootThreadId: Argument.string("root-thread-id").pipe(
@@ -1383,32 +1339,6 @@ const batchReadCommand = Command.make("read", {
   ),
 );
 
-const batchAwaitCommand = Command.make("await", {
-  ...scopedFlags,
-  batchId: batchIdArgument,
-  timeoutMs: Flag.integer("timeout-ms").pipe(Flag.withDescription("Wait timeout."), Flag.optional),
-}).pipe(
-  Command.withDescription("Wait briefly for a batch; the server barrier keeps running afterward."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
-      Effect.gen(function* () {
-        const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
-        const result = yield* client.threadOrchestration.awaitBatch({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: {
-              batchId: ThreadOrchestrationBatchId.make(flags.batchId),
-              ...(Option.isSome(flags.timeoutMs) ? { timeoutMs: flags.timeoutMs.value } : {}),
-            },
-          },
-        });
-        yield* Console.log(render(result, flags.json));
-      }),
-    ),
-  ),
-);
-
 const batchCancelCommand = Command.make("cancel", {
   ...scopedFlags,
   batchId: batchIdArgument,
@@ -1458,7 +1388,6 @@ const batchCommand = Command.make("batch").pipe(
   Command.withSubcommands([
     batchCreateCommand,
     batchReadCommand,
-    batchAwaitCommand,
     batchCancelCommand,
     batchCleanupCommand,
   ]),
@@ -1472,7 +1401,6 @@ export const threadCommand = Command.make("thread").pipe(
     listCommand,
     readCommand,
     resultCommand,
-    awaitCommand,
     graphCommand,
     batchCommand,
     effortCommand,

@@ -3,8 +3,6 @@ import {
   EnvironmentId,
   ThreadOrchestrationError,
   type ThreadOrchestrationActorScope,
-  type ThreadOrchestrationAwaitThreadInput,
-  type ThreadOrchestrationAwaitThreadResult,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
   type ThreadOrchestrationListProjectsResult,
@@ -59,10 +57,6 @@ export class RemoteThreadOrchestrationClient extends Context.Service<
       scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadThreadResultInput,
     ) => Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError>;
-    readonly awaitThread: (
-      scope: ThreadOrchestrationActorScope,
-      input: ThreadOrchestrationAwaitThreadInput,
-    ) => Effect.Effect<ThreadOrchestrationAwaitThreadResult, ThreadOrchestrationError>;
     readonly getThreadGraph: (
       scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationThreadGraphInput,
@@ -304,23 +298,6 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const awaitThread = (
-    scope: ThreadOrchestrationActorScope,
-    input: ThreadOrchestrationAwaitThreadInput,
-  ) =>
-    withTarget("await_thread.remote", input.environmentId!, ({ baseUrl, authorization }) =>
-      Effect.gen(function* () {
-        const client = yield* remoteClient(baseUrl);
-        return yield* client.threadOrchestration.awaitThread({
-          headers: { authorization },
-          payload: { scope, input },
-        });
-      }).pipe(
-        Effect.provide(FetchHttpClient.layer),
-        Effect.mapError(toThreadOrchestrationError("await_thread.remote", input.environmentId)),
-      ),
-    );
-
   const getThreadGraph = (
     scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationThreadGraphInput,
@@ -408,7 +385,6 @@ const make = Effect.gen(function* () {
     listThreads,
     readThread,
     readThreadResult,
-    awaitThread,
     getThreadGraph,
     createThread,
     sendMessageToThread,

@@ -186,25 +186,6 @@ export const ThreadOrchestrationThreadResult = Schema.Struct({
 });
 export type ThreadOrchestrationThreadResult = typeof ThreadOrchestrationThreadResult.Type;
 
-export const ThreadOrchestrationAwaitUntil = Schema.Literals(["idle", "completed", "queueDrained"]);
-export type ThreadOrchestrationAwaitUntil = typeof ThreadOrchestrationAwaitUntil.Type;
-
-export const ThreadOrchestrationAwaitThreadInput = Schema.Struct({
-  environmentId: Schema.optional(EnvironmentId),
-  threadId: ThreadId,
-  until: Schema.optional(ThreadOrchestrationAwaitUntil),
-  timeoutMs: Schema.optional(PositiveInt),
-  pollIntervalMs: Schema.optional(PositiveInt),
-});
-export type ThreadOrchestrationAwaitThreadInput = typeof ThreadOrchestrationAwaitThreadInput.Type;
-
-export const ThreadOrchestrationAwaitThreadResult = Schema.Struct({
-  result: ThreadOrchestrationThreadResult,
-  satisfied: Schema.Boolean,
-  timedOut: Schema.Boolean,
-});
-export type ThreadOrchestrationAwaitThreadResult = typeof ThreadOrchestrationAwaitThreadResult.Type;
-
 export const ThreadOrchestrationCreateEnvironment = Schema.Union([
   Schema.Struct({ type: Schema.Literal("local") }),
   Schema.Struct({ type: Schema.Literal("worktree") }),
@@ -331,19 +312,6 @@ export const ThreadOrchestrationReadBatchInput = Schema.Struct({
   batchId: ThreadOrchestrationBatchId,
 });
 export type ThreadOrchestrationReadBatchInput = typeof ThreadOrchestrationReadBatchInput.Type;
-
-export const ThreadOrchestrationAwaitBatchInput = Schema.Struct({
-  batchId: ThreadOrchestrationBatchId,
-  timeoutMs: Schema.optional(PositiveInt),
-});
-export type ThreadOrchestrationAwaitBatchInput = typeof ThreadOrchestrationAwaitBatchInput.Type;
-
-export const ThreadOrchestrationAwaitBatchResult = Schema.Struct({
-  batch: ThreadOrchestrationBatch,
-  satisfied: Schema.Boolean,
-  timedOut: Schema.Boolean,
-});
-export type ThreadOrchestrationAwaitBatchResult = typeof ThreadOrchestrationAwaitBatchResult.Type;
 
 export const ThreadOrchestrationCancelBatchInput = Schema.Struct({
   batchId: ThreadOrchestrationBatchId,
@@ -709,13 +677,6 @@ export const ThreadOrchestrationScopedReadThreadResultInput = Schema.Struct({
 export type ThreadOrchestrationScopedReadThreadResultInput =
   typeof ThreadOrchestrationScopedReadThreadResultInput.Type;
 
-export const ThreadOrchestrationScopedAwaitThreadInput = Schema.Struct({
-  scope: ThreadOrchestrationActorScope,
-  input: ThreadOrchestrationAwaitThreadInput,
-});
-export type ThreadOrchestrationScopedAwaitThreadInput =
-  typeof ThreadOrchestrationScopedAwaitThreadInput.Type;
-
 export const ThreadOrchestrationScopedThreadGraphInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,
   input: ThreadOrchestrationThreadGraphInput,
@@ -743,13 +704,6 @@ export const ThreadOrchestrationScopedReadBatchInput = Schema.Struct({
 });
 export type ThreadOrchestrationScopedReadBatchInput =
   typeof ThreadOrchestrationScopedReadBatchInput.Type;
-
-export const ThreadOrchestrationScopedAwaitBatchInput = Schema.Struct({
-  scope: ThreadOrchestrationActorScope,
-  input: ThreadOrchestrationAwaitBatchInput,
-});
-export type ThreadOrchestrationScopedAwaitBatchInput =
-  typeof ThreadOrchestrationScopedAwaitBatchInput.Type;
 
 export const ThreadOrchestrationScopedCancelBatchInput = Schema.Struct({
   scope: ThreadOrchestrationActorScope,

@@ -89,14 +89,6 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
-        "awaitThread",
-        Effect.fn("environment.threadOrchestration.awaitThread")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* service.awaitThread(scopeFromActor(args.payload.scope), args.payload.input);
-        }),
-      )
-      .handle(
         "getThreadGraph",
         Effect.fn("environment.threadOrchestration.getThreadGraph")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
@@ -132,14 +124,6 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
           return yield* service.readBatch(scopeFromActor(args.payload.scope), args.payload.input);
-        }),
-      )
-      .handle(
-        "awaitBatch",
-        Effect.fn("environment.threadOrchestration.awaitBatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* service.awaitBatch(scopeFromActor(args.payload.scope), args.payload.input);
         }),
       )
       .handle(

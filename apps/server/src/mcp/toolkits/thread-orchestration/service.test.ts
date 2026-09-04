@@ -279,7 +279,6 @@ const remoteThreadOrchestrationClientLayer = Layer.succeed(RemoteThreadOrchestra
   listThreads: () => Effect.die("unused remote listThreads"),
   readThread: () => Effect.die("unused remote readThread"),
   readThreadResult: () => Effect.die("unused remote readThreadResult"),
-  awaitThread: () => Effect.die("unused remote awaitThread"),
   getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
   createThread: () => Effect.die("unused remote createThread"),
   sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
@@ -651,7 +650,6 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     listThreads: () => Effect.die("unused remote listThreads"),
     readThread: () => Effect.die("unused remote readThread"),
     readThreadResult: () => Effect.die("unused remote readThreadResult"),
-    awaitThread: () => Effect.die("unused remote awaitThread"),
     getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
     createThread: () => Effect.die("unused remote createThread"),
     sendMessageToThread: () => Effect.die("unused remote sendMessageToThread"),
@@ -1048,7 +1046,6 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     listThreads: () => Effect.die("unused remote listThreads"),
     readThread: () => Effect.die("unused remote readThread"),
     readThreadResult: () => Effect.die("unused remote readThreadResult"),
-    awaitThread: () => Effect.die("unused remote awaitThread"),
     getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
     createThread: (_remoteScope, input) =>
       Effect.sync(() => {
@@ -1287,7 +1284,6 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     listThreads: () => Effect.die("unused remote listThreads"),
     readThread: () => Effect.die("unused remote readThread"),
     readThreadResult: () => Effect.die("unused remote readThreadResult"),
-    awaitThread: () => Effect.die("unused remote awaitThread"),
     getThreadGraph: () => Effect.die("unused remote getThreadGraph"),
     createThread: (remoteScope, input) =>
       Effect.sync(() => {
@@ -2129,71 +2125,6 @@ it.effect("returns provider availability failures in compact coordinator results
     expect(result.latestAssistantMessage).toEqual(assistantMessage);
     expect(result.queuedMessageCount).toBe(0);
     expect(result.failure).toEqual(providerUnavailable);
-    expect(dispatched).toEqual([]);
-  }).pipe(Effect.provide(testLayer));
-});
-
-it.effect("awaits idle threads without polling side effects", () => {
-  const dispatched: OrchestrationCommand[] = [];
-  const testLayer = ThreadOrchestrationServiceLive.pipe(
-    Layer.provide(unsupportedCodexForkImporterLayer),
-    Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
-        readEvents: () => Stream.empty,
-        resolveReceipt: () => Effect.succeed(Option.none()),
-        dispatch: (command) =>
-          Effect.sync(() => {
-            dispatched.push(command);
-            return { sequence: dispatched.length };
-          }),
-        latestSequence: Effect.succeed(0),
-        streamDomainEvents: Stream.empty,
-      }),
-    ),
-    Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
-        getCommandReadModel: () => Effect.succeed(readModel),
-        getSnapshot: () => Effect.die("full snapshot should not be read"),
-        getShellSnapshot: () => Effect.die("unused"),
-        getArchivedShellSnapshot: () => Effect.die("unused"),
-        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
-        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
-        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
-        getProjectShellById: getProjectShellById(),
-        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
-        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
-        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: getThreadShellById(),
-        getThreadResultContextById: getThreadResultContextById(),
-        listThreadRelationshipActivities: listThreadRelationshipActivities(),
-        getThreadDetailById: getThreadDetailById(),
-        getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
-        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
-        searchThreads: () => Effect.succeed({ matches: [] }),
-      }),
-    ),
-    Layer.provide(
-      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
-        prepareWorkspace: () => Effect.die("unused"),
-        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
-        deleteWorkspace: () => Effect.die("unused"),
-      }),
-    ),
-    Layer.provide(testThreadDiscoveryDependencies),
-  );
-
-  return Effect.gen(function* () {
-    const service = yield* ThreadOrchestrationService;
-    const result = yield* service.awaitThread(scope, {
-      threadId: targetThreadId,
-      until: "idle",
-      timeoutMs: 100,
-      pollIntervalMs: 100,
-    });
-
-    expect(result.satisfied).toBe(true);
-    expect(result.timedOut).toBe(false);
-    expect(result.result.thread.threadId).toBe(targetThreadId);
     expect(dispatched).toEqual([]);
   }).pipe(Effect.provide(testLayer));
 });

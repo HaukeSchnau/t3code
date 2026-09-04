@@ -10,7 +10,6 @@ The same operations are available through the running server and the
 - `list_threads` becomes `t3 thread list`.
 - `read_thread` becomes `t3 thread read`.
 - `read_thread_result` becomes `t3 thread result`.
-- `await_thread` becomes `t3 thread await`.
 - `get_thread_graph` becomes `t3 thread graph`.
 - `create_thread` becomes `t3 thread create`.
 - `fork_thread` becomes `t3 thread fork`.
@@ -33,10 +32,9 @@ server. It never opens live state directly.
 Codex, Claude, and OpenCode receive the same concise orchestration instructions through their
 native developer or system prompt channel. The instructions preserve the user's request separately
 from coordinator context, give workers control over their approach, favor direct peer communication,
-and make `wait create` followed by ending the coordinator turn the normal lifecycle. `await` remains
-available for diagnostics but is not the recommended way to supervise workers. Cursor, Grok, and
-Antigravity use ACP, which has no standard system-instruction field; T3 Code does not rewrite their
-user prompts to emulate one.
+and make `wait create` followed by ending the coordinator turn the normal lifecycle. Cursor, Grok,
+and Antigravity use ACP, which has no standard system-instruction field; T3 Code does not rewrite
+their user prompts to emulate one.
 
 `t3 thread send` dispatches immediately by default, steering a running turn through the same
 provider path as the client queue's "Send now" action. `--queue` retains a durable follow-up until
