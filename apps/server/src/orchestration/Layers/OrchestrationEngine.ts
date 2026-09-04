@@ -530,6 +530,19 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ),
         };
 
+  const readThreadEvents: OrchestrationEngineShape["readThreadEvents"] = ({ threadId, ...range }) =>
+    eventStore.readAggregateRange({ ...range, aggregateKind: "thread", aggregateId: threadId });
+
+  const getThreadReplayStats: OrchestrationEngineShape["getThreadReplayStats"] = ({
+    threadId,
+    ...range
+  }) =>
+    eventStore.getAggregateReplayStats({
+      ...range,
+      aggregateKind: "thread",
+      aggregateId: threadId,
+    });
+
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
       const result = yield* Deferred.make<{ sequence: number }, OrchestrationDispatchError>();
@@ -552,6 +565,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
       ),
     },
+    readThreadEvents,
+    getThreadReplayStats,
     dispatch,
     resolveReceipt,
     subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(

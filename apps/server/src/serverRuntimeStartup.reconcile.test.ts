@@ -90,6 +90,8 @@ const runReconciliation = (input: {
     Effect.provideService(ProviderSessionDirectory.ProviderSessionDirectory, input.directory),
     Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
       readEvents: () => Stream.empty,
+      readThreadEvents: () => Stream.empty,
+      getThreadReplayStats: () => Effect.die("unused thread replay stats"),
       dispatch: input.dispatch,
       resolveReceipt: () => Effect.succeed(Option.none()),
       streamDomainEvents: Stream.empty,
@@ -654,6 +656,8 @@ it.effect("does not fail startup when the live provider session inventory cannot
     }),
     Effect.provideService(OrchestrationEngine.OrchestrationEngineService, {
       readEvents: () => Stream.empty,
+      readThreadEvents: () => Stream.empty,
+      getThreadReplayStats: () => Effect.die("unused thread replay stats"),
       dispatch: () => Effect.die("unused"),
       resolveReceipt: () => Effect.succeed(Option.none()),
       streamDomainEvents: Stream.empty,

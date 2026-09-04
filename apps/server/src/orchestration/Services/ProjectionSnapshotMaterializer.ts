@@ -3,6 +3,7 @@ import type {
   OrchestrationShellSnapshot,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadActivityDetailMode,
+  OrchestrationThreadDetailWindow,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -20,6 +21,7 @@ export interface ProjectionSnapshotMaterializerShape {
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
     activityDetailMode?: OrchestrationThreadActivityDetailMode,
+    window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
 }
 

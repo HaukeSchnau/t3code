@@ -109,6 +109,8 @@ const baseProjectionQuery = {
 
 const baseEngine: OrchestrationEngine.OrchestrationEngineShape = {
   readEvents: () => Stream.empty,
+  readThreadEvents: () => Stream.die("unexpected thread replay"),
+  getThreadReplayStats: () => Effect.die("unexpected thread replay stats"),
   resolveReceipt: () => Effect.succeed(Option.none()),
   dispatch: () => Effect.die("unexpected dispatch"),
   latestSequence: Effect.succeed(0),

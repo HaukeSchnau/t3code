@@ -439,6 +439,8 @@ it.effect("lists thread model choices with curated model selections and reasonin
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         latestSequence: Effect.succeed(0),
@@ -547,6 +549,8 @@ it.effect("lists environments and projects without provider model metadata", () 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         latestSequence: Effect.succeed(0),
@@ -664,6 +668,8 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         latestSequence: Effect.succeed(0),
@@ -752,6 +758,8 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -915,6 +923,8 @@ it.effect("rejects hidden and legacy models unless legacy use is explicit", () =
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -1085,6 +1095,8 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("unused"),
         latestSequence: Effect.succeed(0),
@@ -1152,6 +1164,8 @@ it.effect("uses generated names for worktree threads before starting their initi
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -1356,6 +1370,8 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -1459,6 +1475,8 @@ it.effect("prepares requested worktrees for forked threads", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -1677,6 +1695,8 @@ it.effect("rejects fork requests while the source thread is running", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () => Effect.die("dispatch should not be called for a running source thread"),
         latestSequence: Effect.succeed(0),
@@ -1742,6 +1762,8 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: () =>
           Effect.fail(
@@ -1859,6 +1881,8 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -1967,6 +1991,8 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -2114,6 +2140,8 @@ it.effect("returns provider availability failures in compact coordinator results
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
@@ -2223,6 +2251,8 @@ it.effect("reads relationship graphs without adding read edges", () => {
     Layer.provide(
       Layer.succeed(OrchestrationEngineService, {
         readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
         resolveReceipt: () => Effect.succeed(Option.none()),
         dispatch: (command) =>
           Effect.sync(() => {
