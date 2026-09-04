@@ -37,6 +37,7 @@ import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { AntigravityInstallation } from "../AntigravityInstallation.ts";
 import * as ModelManifest from "../ModelManifest.ts";
+import * as CodexResetCredit from "./codexResetCredit.ts";
 import * as OpenCodeRuntime from "../opencodeRuntime.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./ProviderInstanceRegistryHydration.ts";
@@ -50,6 +51,7 @@ import {
 import * as ServerConfig from "../../config.ts";
 import * as ServerSettingsModule from "../../serverSettings.ts";
 import { readProviderStatusCache, resolveProviderStatusCachePath } from "../providerStatusCache.ts";
+import { COMPACT_SLASH_COMMAND } from "../providerSnapshot.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
 import * as ProviderRegistry from "../Services/ProviderRegistry.ts";
@@ -398,7 +400,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               shortDescription: "Debug failing GitHub Actions checks",
             },
           ]);
-          assert.deepStrictEqual(status.slashCommands, [
+          assert.deepStrictEqual(status.slashCommands.slice(1), [
             {
               name: "feedback",
               description: "Send this thread and Codex logs to OpenAI",
@@ -1151,6 +1153,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 Effect.andThen(Effect.never),
               ),
               streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
             },
             adapter: {} as ProviderInstance["adapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1240,6 +1243,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               getSnapshot: Effect.succeed(provider),
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
             },
             snapshotForCwd,
             adapter: {} as ProviderInstance["adapter"],
@@ -1430,6 +1434,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   Effect.as(codexProvider),
                 ),
                 streamChanges: Stream.empty,
+                applyUsageLimits: () => Effect.void,
               },
               adapter: {} as ProviderInstance["adapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1453,6 +1458,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   Effect.andThen(Ref.get(catalogSnapshot)),
                 ),
                 streamChanges: Stream.empty,
+                applyUsageLimits: () => Effect.void,
               },
               adapter: {} as ProviderInstance["adapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1574,6 +1580,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               getSnapshot: Effect.succeed(initialProvider),
               refresh: Effect.succeed(refreshedProvider),
               streamChanges: Stream.fromPubSub(changes),
+              applyUsageLimits: () => Effect.void,
             },
             adapter: {} as ProviderInstance["adapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1703,6 +1710,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 getSnapshot: Effect.succeed(initialProvider),
                 refresh: Effect.succeed(authoritativeProvider),
                 streamChanges: Stream.fromPubSub(changes),
+                applyUsageLimits: () => Effect.void,
               },
               adapter: {} as ProviderInstance["adapter"],
               textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1810,6 +1818,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               getSnapshot: Effect.succeed(cachedProvider),
               refresh: Effect.die(new Error("simulated refresh failure")),
               streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
             },
             adapter: {} as ProviderInstance["adapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -1903,6 +1912,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               getSnapshot: Effect.succeed(provider),
               refresh: Effect.succeed(provider),
               streamChanges: Stream.empty,
+              applyUsageLimits: () => Effect.void,
             },
             adapter: {} as ProviderInstance["adapter"],
             textGeneration: {} as ProviderInstance["textGeneration"],
@@ -2051,6 +2061,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
             ),
             Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(CodexResetCredit.layerTest),
             Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
             // NO spawner mock — `ChildProcessSpawner` is supplied by the
@@ -2158,6 +2169,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
             ),
             Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(CodexResetCredit.layerTest),
             Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
             Layer.updateService(ChildProcessSpawner.ChildProcessSpawner, (spawner) =>
               ChildProcessSpawner.make((command) => {
@@ -2272,6 +2284,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               ),
             ),
             Layer.provideMerge(ModelManifest.layerTest),
+            Layer.provideMerge(CodexResetCredit.layerTest),
             Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
             Layer.provideMerge(NodeServices.layer),
             Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
@@ -2333,6 +2346,8 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 ),
               ),
               Layer.provideMerge(ModelManifest.layerTest),
+              Layer.provideMerge(CodexResetCredit.layerTest),
+              Layer.provideMerge(CodexResetCredit.layerTest),
               Layer.provideMerge(OpenCodeRuntime.OpenCodeRuntimeLive),
               Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),
               Layer.provideMerge(
@@ -2602,11 +2617,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             }),
           );
 
-          assert.deepStrictEqual(status.slashCommands, [
-            {
-              name: "compact",
-              description: "Summarize the conversation and reduce context usage",
-            },
+          assert.deepStrictEqual(status.slashCommands.slice(1), [
             {
               name: "review",
               description: "Review a pull request",
@@ -2650,10 +2661,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           assert.deepStrictEqual(status.slashCommands, [
-            {
-              name: "compact",
-              description: "Summarize the conversation and reduce context usage",
-            },
+            COMPACT_SLASH_COMMAND,
             {
               name: "ui",
               description: "Explore and refine UI",

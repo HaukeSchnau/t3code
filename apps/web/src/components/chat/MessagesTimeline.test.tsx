@@ -1040,7 +1040,7 @@ describe("MessagesTimeline", () => {
             entry: {
               id: "work-1",
               createdAt: "2026-03-17T19:12:28.000Z",
-              label: "Context compacted",
+              label: "Compacted context 899K → 19K tokens",
               tone: "info",
             },
           },
@@ -1048,7 +1048,7 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Context compacted");
+    expect(markup).toContain("Compacted context 899K → 19K tokens");
   });
 
   it("summarizes changed files in one line", () => {
@@ -1537,7 +1537,7 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain('aria-label="Received 1 update and used 1 tool, tool call failed"');
-    // Ordinary tool failures render muted, not red.
+    // Ordinary tool failures do not use destructive row styling.
     expect(markup).not.toContain("text-destructive");
   });
 
