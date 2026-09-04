@@ -65,6 +65,9 @@ export class RemoteThreadOrchestrationClient extends Context.Service<
       scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCreateThreadInput,
     ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
+    readonly createRootThread: (
+      input: ThreadOrchestrationCreateThreadInput,
+    ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
     readonly sendMessageToThread: (
       scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationSendMessageInput,
@@ -340,6 +343,30 @@ const make = Effect.gen(function* () {
       ),
     );
 
+  const createRootThread = (input: ThreadOrchestrationCreateThreadInput) =>
+    withTarget(
+      "create_root_thread.remote",
+      input.target!.environmentId!,
+      ({ baseUrl, authorization }) =>
+        Effect.gen(function* () {
+          const client = yield* remoteClient(baseUrl);
+          return yield* client.threadOrchestration.createRootThread({
+            headers: { authorization },
+            payload: {
+              input: {
+                ...input,
+                target: input.target ? { ...input.target, environmentId: undefined } : undefined,
+              },
+            },
+          });
+        }).pipe(
+          Effect.provide(FetchHttpClient.layer),
+          Effect.mapError(
+            toThreadOrchestrationError("create_root_thread.remote", input.target?.environmentId),
+          ),
+        ),
+    );
+
   const sendMessageToThread = (
     scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationSendMessageInput,
@@ -387,6 +414,7 @@ const make = Effect.gen(function* () {
     readThreadResult,
     getThreadGraph,
     createThread,
+    createRootThread,
     sendMessageToThread,
     setThreadTitle,
   });

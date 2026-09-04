@@ -83,6 +83,7 @@ import {
   ThreadOrchestrationScopedStopThreadInput,
   ThreadOrchestrationScopedCreateBatchInput,
   ThreadOrchestrationScopedCreateThreadInput,
+  ThreadOrchestrationRootCreateThreadInput,
   ThreadOrchestrationScopedForkThreadInput,
   ThreadOrchestrationScopedListThreadsInput,
   ThreadOrchestrationScopedReadThreadInput,
@@ -718,6 +719,14 @@ export class EnvironmentThreadOrchestrationHttpApi extends HttpApiGroup.make("th
     HttpApiEndpoint.post("createThread", "/api/thread-orchestration/create-thread", {
       headers: OptionalBearerHeaders,
       payload: ThreadOrchestrationScopedCreateThreadInput,
+      success: ThreadOrchestrationCreateThreadResult,
+      error: EnvironmentThreadOrchestrationOperateErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.post("createRootThread", "/api/thread-orchestration/create-root-thread", {
+      headers: OptionalBearerHeaders,
+      payload: ThreadOrchestrationRootCreateThreadInput,
       success: ThreadOrchestrationCreateThreadResult,
       error: EnvironmentThreadOrchestrationOperateErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
