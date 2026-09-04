@@ -1046,7 +1046,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
       : `Updated ${elapsedLabel} ago`
     : null;
   const history = snapshot.history ?? [];
-  const primary = deriveWindowDisplay(
+  const legacyPrimary = deriveWindowDisplay(
     snapshot.primary,
     snapshot.rateLimitReachedType,
     history,
@@ -1055,7 +1055,7 @@ export function deriveDisplayedUsageLimitsSnapshot(
     isStale,
     options,
   );
-  const secondary = deriveWindowDisplay(
+  const legacySecondary = deriveWindowDisplay(
     snapshot.secondary,
     snapshot.rateLimitReachedType,
     history,
@@ -1076,6 +1076,13 @@ export function deriveDisplayedUsageLimitsSnapshot(
     );
     return derived ? [derived] : [];
   });
+  // Newer provider snapshots expose named windows without duplicating them
+  // into the legacy primary/secondary slots. Keep the compact composer meter
+  // useful for both shapes by promoting the first two named windows only for
+  // display; the full named list remains available to the detail popover.
+  const usesNamedWindowsOnly = legacyPrimary === null && legacySecondary === null;
+  const primary = legacyPrimary ?? (usesNamedWindowsOnly ? windows[0] : null) ?? null;
+  const secondary = legacySecondary ?? (usesNamedWindowsOnly ? windows[1] : null) ?? null;
   const compactWindow = primary ? "primary" : secondary ? "secondary" : null;
   const compactWindowStatus =
     compactWindow === "primary"

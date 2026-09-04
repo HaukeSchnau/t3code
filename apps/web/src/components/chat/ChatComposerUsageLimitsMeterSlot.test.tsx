@@ -39,6 +39,30 @@ describe("ComposerUsageLimitsMeterSlot", () => {
     expect(html).toContain("20%");
   });
 
+  it("renders Codex snapshots that only expose named windows", () => {
+    const html = renderToStaticMarkup(
+      <ComposerUsageLimitsMeterSlot
+        compact={false}
+        selectedProvider={ProviderDriverKind.make("codex")}
+        activeUsageLimits={{
+          ...usageLimits,
+          primary: null,
+          windows: [
+            {
+              label: "Weekly",
+              usedPercent: 93,
+              resetsAt: "2099-01-08T05:00:00.000Z",
+              windowDurationMins: 10080,
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(html).toContain("1w");
+    expect(html).toContain("93%");
+  });
+
   it("renders Claude usage limits", () => {
     const claudeUsageLimits: UsageLimitsSnapshot = {
       ...usageLimits,
