@@ -484,15 +484,21 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
         );
       interface RetainedCursorCompactionState {
         readonly count: number;
-        readonly pending: RetainedLiveItem<OrchestrationShellCursorItem> | null;
+        readonly pending: RetainedLiveItem<ShellDeltaItem> | null;
       }
       const compactRetainedCursorItems = <E, R>(
         stream: Stream.Stream<RetainedLiveItem<ShellDeltaItem>, E, R>,
-      ) =>
+      ): Stream.Stream<RetainedLiveItem<ShellDeltaItem>, E, R> =>
         stream.pipe(
-          Stream.mapAccumEffect(
+          Stream.mapAccumEffect<
+            RetainedCursorCompactionState,
+            RetainedLiveItem<ShellDeltaItem>,
+            RetainedLiveItem<ShellDeltaItem>,
+            never,
+            never
+          >(
             (): RetainedCursorCompactionState => ({ count: 0, pending: null }),
-            (state, item) =>
+            (state: RetainedCursorCompactionState, item: RetainedLiveItem<ShellDeltaItem>) =>
               Effect.sync(() => {
                 if (item.value.kind !== "cursor") {
                   if (state.pending) liveBudget.release([state.pending]);

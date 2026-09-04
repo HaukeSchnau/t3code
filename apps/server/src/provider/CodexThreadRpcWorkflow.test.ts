@@ -87,6 +87,7 @@ const readModel = (thread: OrchestrationThread): OrchestrationReadModel => ({
 
 const baseProjectionQuery = {
   getCommandReadModel: () => Effect.die("unexpected command read"),
+  getThreadRuntimeContext: () => Effect.die("unexpected runtime context read"),
   getSnapshot: () => Effect.die("unexpected snapshot read"),
   getShellSnapshot: () => Effect.die("unexpected shell snapshot read"),
   getArchivedShellSnapshot: () => Effect.die("unexpected archived snapshot read"),

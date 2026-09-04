@@ -448,6 +448,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -555,6 +556,7 @@ it.effect("lists environments and projects without provider model metadata", () 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -671,6 +673,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -765,6 +768,7 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -924,6 +928,7 @@ it.effect("rejects hidden and legacy models unless legacy use is explicit", () =
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1089,6 +1094,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1159,6 +1165,7 @@ it.effect("uses generated names for worktree threads before starting their initi
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1362,6 +1369,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1464,6 +1472,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1677,6 +1686,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(runningReadModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(shellSnapshot),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1747,6 +1757,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1861,6 +1872,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -1968,6 +1980,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -2114,6 +2127,7 @@ it.effect("returns provider availability failures in compact coordinator results
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.die("unused"),
         getArchivedShellSnapshot: () => Effect.die("unused"),
@@ -2222,6 +2236,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
     Layer.provide(
       Layer.succeed(ProjectionSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
+        getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
         getShellSnapshot: () => Effect.succeed(makeShellSnapshot(model, false)),
         getArchivedShellSnapshot: () => Effect.die("unused"),

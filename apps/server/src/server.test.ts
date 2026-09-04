@@ -20,6 +20,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationThreadDetailSnapshot,
+  type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
   type OrchestrationThreadActivity,
   type OrchestrationThreadShell,
@@ -8334,6 +8335,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                   snapshotSequence: headSequence,
                   projects: headSequence === 1 ? [project] : [],
                   threads: headSequence === 1 ? [thread] : [],
+                  usageLimits: [],
                   updatedAt: "2026-01-01T00:00:02.000Z",
                 };
               }),
