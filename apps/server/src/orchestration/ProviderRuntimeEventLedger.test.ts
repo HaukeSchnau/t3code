@@ -44,6 +44,22 @@ describe("ProviderRuntimeEventLedger", () => {
     }),
   );
 
+  it.effect("retains exact identities beyond the former 50k FIFO boundary", () =>
+    Effect.gen(function* () {
+      const ledger = makeProviderRuntimeEventLedger();
+      const first = delta("event-first", "item-first");
+      yield* ledger.rememberProcessed(first);
+      yield* Effect.forEach(
+        Array.from({ length: 50_001 }, (_, index) => index),
+        (index) => ledger.rememberProcessed(delta(`event-${index}`, "item-filler")),
+        { discard: true },
+      );
+
+      expect(ledger.hasProcessed(first)).toBe(true);
+      yield* ledger.reset;
+    }),
+  );
+
   it.effect("compacts completed item and turn scopes until session exit", () =>
     Effect.gen(function* () {
       const ledger = makeProviderRuntimeEventLedger();
