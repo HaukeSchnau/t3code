@@ -107,6 +107,7 @@ import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClie
 import {
   makeWatchChangeGate,
   makeWatchFloodGate,
+  makeWatchShutdownGuard,
   runWatchSource,
   WatchSourceError,
 } from "./WatchRuntime.ts";
@@ -689,6 +690,8 @@ const make = Effect.gen(function* () {
   const remoteClient = yield* RemoteThreadOrchestrationClient;
   const crypto = yield* Crypto.Crypto;
   const childProcessSpawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const watchScope = yield* Effect.scope;
+  const watchShutdown = yield* makeWatchShutdownGuard();
   const watchFibers = new Map<
     ThreadOrchestrationWatchId,
     Fiber.Fiber<void, ThreadOrchestrationError>
@@ -3102,19 +3105,25 @@ const make = Effect.gen(function* () {
             );
       const run = Effect.raceFirst(source.pipe(Effect.as("source-exited" as const)), deadline).pipe(
         Effect.flatMap((reason) =>
-          closeWatchInternal(
-            scope,
-            runningWatch,
-            "completed",
-            reason === "deadline" ? "deadline reached" : "source exited",
-            false,
-          ).pipe(Effect.asVoid),
+          watchShutdown
+            .unlessStopping(
+              closeWatchInternal(
+                scope,
+                runningWatch,
+                "completed",
+                reason === "deadline" ? "deadline reached" : "source exited",
+                false,
+              ),
+            )
+            .pipe(Effect.asVoid),
         ),
         Effect.catch((error) => {
           const detail = Schema.is(WatchSourceError)(error) ? error.detail : error.message;
           return detail === "Watch closed by notification policy."
             ? Effect.void
-            : closeWatchInternal(scope, runningWatch, "failed", detail, false).pipe(Effect.asVoid);
+            : watchShutdown
+                .unlessStopping(closeWatchInternal(scope, runningWatch, "failed", detail, false))
+                .pipe(Effect.asVoid);
         }),
         Effect.ensuring(
           Effect.sync(() => {
@@ -3124,7 +3133,7 @@ const make = Effect.gen(function* () {
       );
       // Defer execution until this fiber yields so the registry entry always
       // exists before a zero-deadline or fast-exiting source can clean it up.
-      const fiber = yield* Effect.forkDetach(run, { startImmediately: false });
+      const fiber = yield* Effect.forkIn(run, watchScope, { startImmediately: false });
       watchFibers.set(watchId, fiber);
     });
 

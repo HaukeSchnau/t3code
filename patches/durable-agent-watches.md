@@ -15,8 +15,12 @@ waits.
   every persisted event and delivered notification includes generation and sequence identity.
 - Command stdout lines and WebSocket text frames are batched for 200 ms, capped to 500 characters
   per event and 3,000 characters per batch, and protected by a bounded flood gate.
-- WebSockets reconnect after transient failures. Process exit and deadlines complete a watch;
+- WebSockets reconnect after transient failures. Successful process exit and deadlines complete a watch;
   sustained overload and non-retryable source failures fail it.
+- Server shutdown interrupts scoped watch workers without closing their durable definitions.
+  SIGTERM/SIGINT handling also suppresses terminal transitions from children killed by systemd
+  before scope cleanup. Startup resumes the open definitions. Nonzero command exits report their
+  exit code; signal failures report the underlying OS error rather than the command text.
 - Notifications always enter the coordinator's durable FIFO queue. They never steer active work.
   Stopping a turn leaves watches open; cancellation, archive, and deletion stop them.
 - An optional model policy uses the configured text-generation selection, normally GPT-5.6 Luna,
