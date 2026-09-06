@@ -6,12 +6,52 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as NodeProcess from "node:process";
 
 import type { OrchestrationWatchSource } from "@t3tools/contracts";
 
 const BATCH_WINDOW = Duration.millis(200);
 const MAX_EVENT_CHARS = 500;
 const MAX_BATCH_CHARS = 3_000;
+
+/** Mark shutdown synchronously, before child-process exit callbacks can close durable watches. */
+export const makeWatchShutdownGuard = Effect.fn("makeWatchShutdownGuard")(function* (
+  signals: {
+    on(event: string, listener: () => void): unknown;
+    off(event: string, listener: () => void): unknown;
+  } = NodeProcess,
+) {
+  let stopping = false;
+  const stop = () => {
+    stopping = true;
+  };
+  yield* Effect.acquireRelease(
+    Effect.sync(() => {
+      signals.on("SIGTERM", stop);
+      signals.on("SIGINT", stop);
+    }),
+    () =>
+      Effect.sync(() => {
+        stop();
+        signals.off("SIGTERM", stop);
+        signals.off("SIGINT", stop);
+      }),
+  );
+  return {
+    unlessStopping: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
+      Effect.suspend(() => {
+        if (!stopping) return effect;
+        // #region motel debug
+        // TODO: Remove after the production restart verification is confirmed.
+        return Effect.logInfo("Preserving durable watch during server shutdown", {
+          "debug.session": "watch-shutdown",
+          "debug.hypothesis": "shutdown-closes-watch",
+          "debug.step": "skip-terminal-transition",
+        });
+        // #endregion motel debug
+      }),
+  };
+});
 
 /** Consecutive snapshots are unchanged; A → B → A still reports both changes. */
 export function makeWatchChangeGate() {
@@ -189,17 +229,37 @@ export const runWatchSource = Effect.fn("runWatchSource")(function* (
               Stream.runForEach(onBatch),
             ),
             child.stderr.pipe(Stream.runDrain),
-            child.exitCode,
+            child.exitCode.pipe(
+              Effect.flatMap((code) =>
+                code === 0
+                  ? Effect.void
+                  : Effect.fail(
+                      new WatchSourceError({
+                        detail: `Watch command exited with code ${code}.`,
+                        retryable: false,
+                      }),
+                    ),
+              ),
+            ),
           ],
           { concurrency: "unbounded" },
         ),
       ),
       Effect.asVoid,
-      Effect.mapError((cause) =>
-        Schema.is(WatchSourceError)(cause)
-          ? cause
-          : new WatchSourceError({ detail: "Watch command failed.", retryable: false, cause }),
-      ),
+      Effect.mapError((cause) => {
+        if (Schema.is(WatchSourceError)(cause)) return cause;
+        // Platform errors wrap the OS error; their own message includes the command,
+        // which may contain credentials and should not be copied into chat.
+        const detail =
+          cause instanceof Error && cause.cause instanceof Error
+            ? cause.cause.message
+            : "Process I/O failed.";
+        return new WatchSourceError({
+          detail: `Watch command failed: ${detail}`,
+          retryable: false,
+          cause,
+        });
+      }),
     ),
   );
 });
