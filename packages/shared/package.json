@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./watchActivities": {
+      "types": "./src/watchActivities.ts",
+      "import": "./src/watchActivities.ts"
+    },
     "./bundledProviderInstances": {
       "types": "./src/bundledProviderInstances.ts",
       "import": "./src/bundledProviderInstances.ts"

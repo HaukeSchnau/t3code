@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import { collapseWatchActivities } from "@t3tools/shared/watchActivities";
 import * as Arr from "effect/Array";
 import * as Schema from "effect/Schema";
 import { shallow } from "zustand/vanilla/shallow";
@@ -908,7 +909,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 export function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): WorkLogEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const ordered = collapseWatchActivities([...activities].toSorted(compareActivitiesByOrder));
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.kind === "tool.started") continue;
