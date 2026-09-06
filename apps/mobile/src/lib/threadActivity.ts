@@ -1,3 +1,4 @@
+import { collapseWatchActivities } from "@t3tools/shared/watchActivities";
 import {
   ApprovalRequestId,
   isToolLifecycleItemType,
@@ -414,7 +415,7 @@ function isAgentInternalActivity(activity: OrchestrationThreadActivity): boolean
 function deriveWorkLogEntries(
   activities: ReadonlyArray<OrchestrationThreadActivity>,
 ): DerivedWorkLogEntry[] {
-  const ordered = Arr.sort(activities, activityOrder);
+  const ordered = collapseWatchActivities(Arr.sort(activities, activityOrder));
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of ordered) {
     if (activity.tone !== "error" && isWorktreeSetupActivity(activity.kind)) continue;

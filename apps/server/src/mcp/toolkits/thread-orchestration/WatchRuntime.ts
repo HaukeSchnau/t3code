@@ -13,6 +13,17 @@ const BATCH_WINDOW = Duration.millis(200);
 const MAX_EVENT_CHARS = 500;
 const MAX_BATCH_CHARS = 3_000;
 
+/** Consecutive snapshots are unchanged; A → B → A still reports both changes. */
+export function makeWatchChangeGate() {
+  let previous: string | undefined;
+  return (events: ReadonlyArray<string>) => {
+    const current = JSON.stringify(events);
+    if (current === previous) return false;
+    previous = current;
+    return true;
+  };
+}
+
 export class WatchSourceError extends Schema.TaggedErrorClass<WatchSourceError>()(
   "WatchSourceError",
   { detail: Schema.String, retryable: Schema.Boolean, cause: Schema.optional(Schema.Defect()) },

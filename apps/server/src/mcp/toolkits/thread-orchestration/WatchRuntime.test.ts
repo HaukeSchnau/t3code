@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { boundWatchEvents, makeWatchFloodGate } from "./WatchRuntime.ts";
+import { boundWatchEvents, makeWatchChangeGate, makeWatchFloodGate } from "./WatchRuntime.ts";
 
 describe("durable watch event pacing", () => {
+  it("ignores repeated snapshots while preserving transitions back to earlier states", () => {
+    const changed = makeWatchChangeGate();
+    expect(changed(["pending"])).toBe(true);
+    expect(changed(["pending"])).toBe(false);
+    expect(changed(["active"])).toBe(true);
+    expect(changed(["pending"])).toBe(true);
+  });
   it("bounds individual events and the combined batch", () => {
     const bounded = boundWatchEvents(["  first  ", "x".repeat(600), "y".repeat(3_000)]);
 

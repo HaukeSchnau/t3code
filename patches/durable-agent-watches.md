@@ -26,6 +26,11 @@ waits.
 - Watch and wait deliveries retain a typed origin through events, projections, SQLite, snapshots,
   web, and mobile. They do not masquerade as editable user-authored chat messages.
 - Open watches remain inspectable in the Work panel and through CLI read/list/cancel commands.
+- Web, desktop, and mobile show one stable lifecycle row per watch. Event decisions remain
+  durable diagnostics and do not render in chat, including historical ignored events.
+- Model policies skip identical consecutive batches within a source generation before invoking
+  text generation. Always-notify watches preserve every event; a restarted source evaluates its
+  first report again. Prefer event-driven sources or emit only changed snapshots for monitoring.
 
 ## Maintenance notes
 

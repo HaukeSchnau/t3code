@@ -104,7 +104,12 @@ import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
-import { makeWatchFloodGate, runWatchSource, WatchSourceError } from "./WatchRuntime.ts";
+import {
+  makeWatchChangeGate,
+  makeWatchFloodGate,
+  runWatchSource,
+  WatchSourceError,
+} from "./WatchRuntime.ts";
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
@@ -2970,6 +2975,7 @@ const make = Effect.gen(function* () {
       });
       const cwd = coordinator.worktreePath ?? coordinator.workspaceRoot;
       const gate = makeWatchFloodGate();
+      const changed = makeWatchChangeGate();
       let sequence = watch.lastSequence;
       const runningWatch = { ...watch, generation };
       const onBatch = (events: [string, ...string[]]) =>
@@ -2993,6 +2999,7 @@ const make = Effect.gen(function* () {
             ),
           );
           if (current.state !== "open" || current.generation !== generation) return;
+          if (current.policy.type === "model" && !changed(events)) return;
           sequence += 1;
           const decision = yield* decideWatchBatch(current, cwd, events).pipe(
             Effect.mapError(
