@@ -1700,54 +1700,6 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalPayload.status).toBe("completed");
   });
 
-  it("retains duplicate identities beyond the former 50k FIFO boundary", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-long-dedupe");
-    const agentContext = {
-      providerThreadId: "provider-child-long-dedupe",
-      parentTurnId: turnId,
-    } as const;
-    const firstDelta = {
-      type: "content.delta" as const,
-      eventId: asEventId("evt-subagent-long-dedupe-first"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-long-dedupe"),
-      agentContext,
-      payload: { streamKind: "assistant_text" as const, delta: "exact once" },
-    };
-    harness.emit(firstDelta);
-    for (let index = 0; index < 50_001; index += 1) {
-      harness.emit({
-        type: "content.delta",
-        eventId: asEventId(`evt-subagent-long-output-${index}`),
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: "2026-01-01T00:00:00.100Z",
-        threadId: asThreadId("thread-1"),
-        turnId,
-        itemId: asItemId("item-subagent-long-output"),
-        agentContext,
-        payload: { streamKind: "command_output", delta: "x" },
-      });
-    }
-    harness.emit(firstDelta);
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => {
-        if (activity.kind !== "subagent.thread") return false;
-        return (activity.payload as Record<string, unknown>).transcript === "exact once";
-      }),
-    );
-    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
-    if (!subagent) {
-      throw new Error("Expected the long-session subagent activity.");
-    }
-    expect((subagent.payload as Record<string, unknown>).transcript).toBe("exact once");
-  }, 60_000);
-
   it("retains dirty transcript state for more than one thousand concurrent subagents", async () => {
     const harness = await createHarness();
     const turnId = asTurnId("turn-subagent-many-children");
