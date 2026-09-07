@@ -2,7 +2,7 @@ import {
   type ChatAttachment,
   CommandId,
   EventId,
-  type MessageId,
+  MessageId,
   type ModelSelection,
   type OrchestrationEvent,
   type OrchestrationThread,
@@ -15,6 +15,8 @@ import {
   type ProviderSession,
   type RuntimeMode,
   TurnId,
+  UserInputQuestion,
+  type ProviderUserInputAnswers,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
@@ -359,11 +361,46 @@ function isUnknownPendingUserInputRequestError(cause: Cause.Cause<ProviderServic
   );
 }
 
+const decodeAsyncQuestions = Schema.decodeUnknownOption(Schema.Array(UserInputQuestion));
+const isAnswerList = Schema.is(Schema.Array(Schema.String));
+const isAnswerObject = Schema.is(Schema.Struct({ answers: Schema.Array(Schema.String) }));
+const isMessageModeRequestPayload = Schema.is(
+  Schema.Struct({
+    responseMode: Schema.Literal("message"),
+    questions: Schema.optionalKey(Schema.Unknown),
+  }),
+);
+
+function asyncAnswerList(value: unknown) {
+  if (value === undefined) return [];
+  if (typeof value === "string") return [value];
+  if (isAnswerList(value)) return value;
+  if (isAnswerObject(value)) return value.answers;
+  return null;
+}
+
+// Keep the original question beside each answer when sending it as a user message.
+function formatAsyncUserInputResponse(questions: unknown, answers: ProviderUserInputAnswers) {
+  const decoded = decodeAsyncQuestions(questions);
+  if (Option.isNone(decoded) || decoded.value.length === 0) return null;
+  if (Object.keys(answers).some((id) => !decoded.value.some((question) => question.id === id))) {
+    return null;
+  }
+  const sections: string[] = [];
+  for (const question of decoded.value) {
+    const value = answers[question.id];
+    const answer = asyncAnswerList(value);
+    if (answer === null) return null;
+    sections.push(`${question.question}\n${answer.join("\n") || "(No answer provided)"}`);
+  }
+  return `Answers to your questions:\n\n${sections.join("\n\n")}`;
+}
+
 function stalePendingRequestDetail(
   requestKind: "approval" | "user-input",
   requestId: string,
 ): string {
-  return `Stale pending ${requestKind} request: ${requestId}. Provider callback state does not survive app restarts or recovered sessions. Restart the turn to continue.`;
+  return `Stale pending ${requestKind} request: ${requestId}. The provider no longer recognizes this callback; it may already be resolved or belong to an earlier session. Restart the turn to continue.`;
 }
 
 function buildGeneratedWorktreeBranchName(raw: string): string {
@@ -438,6 +475,7 @@ const make = Effect.gen(function* () {
     readonly turnId: TurnId | null;
     readonly createdAt: string;
     readonly requestId?: string;
+    readonly responseMode?: "message";
   }) =>
     Effect.all({
       commandId: serverCommandId("provider-failure-activity"),
@@ -456,6 +494,7 @@ const make = Effect.gen(function* () {
             payload: {
               detail: input.detail,
               ...(input.requestId ? { requestId: input.requestId } : {}),
+              ...(input.responseMode ? { responseMode: input.responseMode } : {}),
             },
             turnId: input.turnId,
             createdAt: input.createdAt,
@@ -1815,6 +1854,88 @@ const make = Effect.gen(function* () {
       const thread = yield* resolveThread(event.payload.threadId);
       if (!thread) {
         return;
+      }
+      // Async questions are notifications, not provider callback requests. Resolve
+      // their mode from durable state, including after a provider/session restart.
+      const request = projectionSnapshotQuery.getUserInputActivity
+        ? yield* projectionSnapshotQuery.getUserInputActivity({
+            threadId: thread.id,
+            requestId: event.payload.requestId,
+          })
+        : Option.none();
+      if (Option.isSome(request) && isMessageModeRequestPayload(request.value.payload)) {
+        yield* Effect.annotateCurrentSpan({
+          "user_input.response_mode": "message",
+          "user_input.request_id": event.payload.requestId,
+        });
+        if (request.value.kind === "user-input.resolved") return;
+        const text = formatAsyncUserInputResponse(
+          request.value.payload.questions,
+          event.payload.answers,
+        );
+        if (text === null) {
+          return yield* appendProviderFailureActivity({
+            threadId: thread.id,
+            kind: "provider.user-input.respond.failed",
+            summary: "Async question answer was not accepted",
+            detail: "The answer does not match the saved questions. Correct it and retry.",
+            requestId: event.payload.requestId,
+            responseMode: "message",
+            turnId: null,
+            createdAt: event.payload.createdAt,
+          });
+        }
+        const messageId = MessageId.make(`user-input:${thread.id}:${event.payload.requestId}`);
+        return yield* Effect.gen(function* () {
+          // Thread workers serialize answers. Check the durable message before
+          // retrying a partially completed response, even if its timestamp or
+          // current model settings changed. Each response attempt gets its own
+          // command receipt so a rejected save can be retried.
+          if (!thread.messages.some((message) => message.id === messageId)) {
+            yield* orchestrationEngine.dispatch({
+              type: "thread.message.queue",
+              commandId: CommandId.make(`${event.eventId}:queue`),
+              threadId: thread.id,
+              message: { messageId, role: "user", text, attachments: [] },
+              delivery: "immediate",
+              modelSelection: thread.modelSelection,
+              runtimeMode: thread.runtimeMode,
+              interactionMode: thread.interactionMode,
+              createdAt: event.payload.createdAt,
+            });
+          }
+          yield* orchestrationEngine.dispatch({
+            type: "thread.activity.append",
+            commandId: CommandId.make(`${event.eventId}:resolve`),
+            threadId: thread.id,
+            activity: {
+              id: EventId.make(`${messageId}:resolved`),
+              kind: "user-input.resolved",
+              tone: "info",
+              summary: "Answer accepted as a message",
+              payload: { requestId: event.payload.requestId, responseMode: "message", messageId },
+              turnId: null,
+              createdAt: event.payload.createdAt,
+            },
+            createdAt: event.payload.createdAt,
+          });
+        }).pipe(
+          Effect.catchCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.failCause(cause)
+              : appendProviderFailureActivity({
+                  threadId: thread.id,
+                  kind: "provider.user-input.respond.failed",
+                  summary: "Async question answer could not be confirmed",
+                  detail:
+                    "Answer submission could not be confirmed. Retry this question; an already accepted message will not be duplicated.",
+                  requestId: event.payload.requestId,
+                  responseMode: "message",
+                  turnId: null,
+                  createdAt: event.payload.createdAt,
+                }),
+          ),
+        );
       }
       const hasSession = thread.session && thread.session.status !== "stopped";
       if (!hasSession) {
