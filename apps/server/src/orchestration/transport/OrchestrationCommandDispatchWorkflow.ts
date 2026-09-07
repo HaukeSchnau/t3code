@@ -350,6 +350,15 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread && !progress.threadCreated) {
+          // #region motel debug
+          // TODO: Remove after production skill selection is confirmed working.
+          yield* Effect.logInfo("motel debug: bootstrap skill selection", {
+            "debug.session": "skill-bootstrap-20260907",
+            "debug.hypothesis": "bootstrap-drops-selected-packs",
+            "debug.step": "before-thread-create",
+            requestedPackIds: bootstrap.createThread.skillPackIds,
+          });
+          // #endregion motel debug
           const bootstrapStart = yield* Effect.all(
             {
               created: dispatchCommand({
@@ -361,6 +370,9 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
                 interactionMode: bootstrap.createThread.interactionMode,
+                ...(bootstrap.createThread.skillPackIds !== undefined
+                  ? { skillPackIds: bootstrap.createThread.skillPackIds }
+                  : {}),
                 branch: bootstrap.createThread.branch,
                 worktreePath: bootstrap.createThread.worktreePath,
                 workspaceId: bootstrap.createThread.workspaceId ?? null,

@@ -12,6 +12,10 @@ their native discovery and trigger behavior.
 - Read the configured catalog from `T3CODE_SKILL_CATALOG_PATH` and publish only its path-free client
   projection.
 - Persist project defaults and versioned per-thread pack selections in orchestration state.
+- Merge skill scope from the authoritative shell subscription into cached thread details so
+  existing-thread checkboxes and activation status update immediately on server events.
+- Forward draft pack IDs through first-turn bootstrap into `thread.create`, preserving an
+  explicit empty selection as well as omitted selections that inherit project defaults.
 - Materialize selected skills once as content-addressed symlink trees and a Claude local plugin.
 - Inject the tree through Codex extra roots, Claude local plugins, or local OpenCode config paths.
   Do not set Claude's SDK skill allowlist or add prompt instructions that force skill activation.
