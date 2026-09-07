@@ -17,6 +17,8 @@ their native discovery and trigger behavior.
 - Forward draft pack IDs through first-turn bootstrap into `thread.create`, preserving an
   explicit empty selection as well as omitted selections that inherit project defaults.
 - Materialize selected skills once as content-addressed symlink trees and a Claude local plugin.
+  Use the stable plugin name `skills`, so Claude exposes `skills:animate` rather than a cache hash.
+  Include that name in the cache digest so namespace changes get a new plugin directory.
 - Inject the tree through Codex extra roots, Claude local plugins, or local OpenCode config paths.
   Do not set Claude's SDK skill allowlist or add prompt instructions that force skill activation.
 - Mark unsupported providers and external OpenCode servers degraded while leaving their native
