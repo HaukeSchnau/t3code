@@ -2,6 +2,8 @@ import {
   EnvironmentId,
   ProjectId,
   ProviderInstanceId,
+  PositiveInt,
+  SkillPackId,
   ThreadId,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
@@ -221,6 +223,12 @@ describe("environment entity projections", () => {
       title: "Current thread",
       branch: "current-branch",
       worktreePath: "/repo/current-worktree",
+      skillScope: {
+        version: PositiveInt.make(2),
+        appliedVersion: 1,
+        packIds: [SkillPackId.make("mobile-runtime")],
+        state: "pending" as const,
+      },
     };
 
     const merged = mergeEnvironmentThread(detail, shell);
@@ -231,6 +239,7 @@ describe("environment entity projections", () => {
       worktreePath: "/repo/current-worktree",
     });
     expect(merged?.messages).toBe(messages);
+    expect(merged?.skillScope).toEqual(shell.skillScope);
   });
 
   it("preserves untouched project and thread identities across unrelated shell updates", () => {

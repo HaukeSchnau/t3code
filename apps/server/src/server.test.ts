@@ -36,6 +36,7 @@ import {
   type ProviderInstallState,
   ProviderSetupError,
   ResolvedKeybindingRule,
+  SkillPackId,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
   ThreadId,
@@ -10367,6 +10368,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               modelSelection: defaultModelSelection,
               runtimeMode: "full-access" as const,
               interactionMode: "default" as const,
+              skillPackIds: [SkillPackId.make("web-craft")],
               branch: "main",
               worktreePath: null,
               createdAt,
@@ -10401,6 +10403,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ).pipe(Effect.result);
 
         assert.equal(response.sequence, 6);
+        const createdThread = dispatchedCommands[0];
+        assertTrue(createdThread?.type === "thread.create");
+        assert.deepEqual(createdThread.skillPackIds, [SkillPackId.make("web-craft")]);
         assert.deepEqual(replayed, response);
         assertTrue(changedReplay._tag === "Failure");
         assertInclude(String(changedReplay.failure), "payload-mismatch");

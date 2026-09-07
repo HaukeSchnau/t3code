@@ -6,7 +6,6 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import * as NodeProcess from "node:process";
 
 import type { OrchestrationWatchSource } from "@t3tools/contracts";
 
@@ -19,7 +18,7 @@ export const makeWatchShutdownGuard = Effect.fn("makeWatchShutdownGuard")(functi
   signals: {
     on(event: string, listener: () => void): unknown;
     off(event: string, listener: () => void): unknown;
-  } = NodeProcess,
+  } = process,
 ) {
   let stopping = false;
   const stop = () => {

@@ -12,6 +12,18 @@ import {
 } from "./WatchRuntime.ts";
 
 describe("watch shutdown and command failures", () => {
+  it.effect("registers and removes listeners on the real process by default", () =>
+    Effect.gen(function* () {
+      const before = process.listenerCount("SIGTERM");
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          yield* makeWatchShutdownGuard();
+          expect(process.listenerCount("SIGTERM")).toBe(before + 1);
+        }),
+      );
+      expect(process.listenerCount("SIGTERM")).toBe(before);
+    }),
+  );
   for (const signal of ["SIGTERM", "SIGINT"]) {
     it.effect(`preserves watches after ${signal} and removes its listener`, () =>
       Effect.gen(function* () {
