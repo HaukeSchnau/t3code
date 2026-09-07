@@ -1,7 +1,7 @@
 import {
   type DesktopSshEnvironmentTarget,
   EnvironmentId,
-  type OrchestrationShellSnapshot,
+  type OrchestrationV2ShellSnapshot,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Context from "effect/Context";
@@ -51,6 +51,7 @@ import * as RpcSession from "../rpc/session.ts";
 import * as EnvironmentSupervisor from "./supervisor.ts";
 import * as ConnectionWakeups from "./wakeups.ts";
 import { runDesktopCommitWithReconnectObserver } from "../state/server.ts";
+import { v2ShellSnapshot } from "../state/orchestrationV2TestFixtures.ts";
 
 const TARGET = new PrimaryConnectionTarget({
   environmentId: EnvironmentId.make("environment-1"),
@@ -117,12 +118,9 @@ const SSH_PROFILE = new SshConnectionProfile({
   target: SSH_TARGET,
 });
 
-const CACHED_SNAPSHOT: OrchestrationShellSnapshot = {
+const CACHED_SNAPSHOT: OrchestrationV2ShellSnapshot = {
+  ...v2ShellSnapshot,
   snapshotSequence: 1,
-  projects: [],
-  threads: [],
-  usageLimits: [],
-  updatedAt: "2026-06-06T00:00:00.000Z",
 };
 
 interface SessionControl {
@@ -840,43 +838,6 @@ describe("EnvironmentRegistry", () => {
         ).toEqual(TARGET);
       }).pipe(Effect.provide(harness.layer));
     }),
-  );
-
-  it.effect(
-    "reconciles a changed primary identity without retaining the old runtime or cache",
-    () =>
-      Effect.gen(function* () {
-        const harness = yield* makeHarness([]);
-
-        yield* Effect.gen(function* () {
-          const registry = yield* EnvironmentRegistry.EnvironmentRegistry;
-          yield* registry.reconcilePlatform([
-            new PrimaryConnectionRegistration({ target: TARGET }),
-          ]);
-          yield* awaitConnectionState(
-            registry,
-            TARGET.environmentId,
-            (state) => state.phase === "connected",
-          );
-
-          yield* registry.reconcilePlatform([
-            new PrimaryConnectionRegistration({ target: SECOND_TARGET }),
-          ]);
-          yield* awaitConnectionState(
-            registry,
-            SECOND_TARGET.environmentId,
-            (state) => state.phase === "connected",
-          );
-
-          const entries = yield* SubscriptionRef.get(registry.entries);
-          expect(entries.has(TARGET.environmentId)).toBe(false);
-          expect(entries.get(SECOND_TARGET.environmentId)?.target).toEqual(SECOND_TARGET);
-          expect((yield* Ref.get(harness.shellCache)).has(TARGET.environmentId)).toBe(false);
-          expect(yield* Ref.get(harness.cacheClears)).toContain(TARGET.environmentId);
-          expect(yield* Ref.get(harness.ownedDataClears)).toContain(TARGET.environmentId);
-          expect(yield* Ref.get(harness.releasedSessions)).toBeGreaterThanOrEqual(1);
-        }).pipe(Effect.provide(harness.layer), Effect.scoped);
-      }),
   );
 
   it.effect("gives a primary platform registration precedence over persisted registrations", () =>

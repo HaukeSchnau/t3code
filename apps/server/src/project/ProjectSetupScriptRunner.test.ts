@@ -15,9 +15,9 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 
 import * as ServerConfig from "../config.ts";
-import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as ProjectService from "./ProjectService.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
 
 const isProjectSetupScriptOperationError = Schema.is(
@@ -66,35 +66,19 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
   deletedAt: null,
 });
 
-const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
-  Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-    getUserInputActivity: () => Effect.die("unused"),
-    getCommandReadModel: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () => Effect.die("unused"),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
-    getCounts: () => Effect.die("unused"),
-    getEventReplayStats: () => Effect.die("unused"),
-    getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
+const makeProjectServiceLayer = (project: OrchestrationProject) =>
+  Layer.succeed(ProjectService.ProjectService, {
+    create: () => Effect.die("unused"),
+    bootstrap: () => Effect.die("unused"),
+    update: () => Effect.die("unused"),
+    delete: () => Effect.die("unused"),
+    getById: (projectId) =>
+      Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
+    getByWorkspaceRoot: (workspaceRoot) =>
       Effect.succeed(
         workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
       ),
-    getProjectShellById: (projectId) =>
-      Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    getImportedAgentSessionSources: () => Effect.die("unused"),
-    getThreadCheckpointContext: () => Effect.die("unused"),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadRuntimeContext: () => Effect.die("unused"),
-    getTurnStartMessage: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getThreadResultContextById: () => Effect.die("unused"),
-    listThreadRelationshipActivities: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-    getTurnActivitiesSnapshot: () => Effect.die("unused"),
-    searchThreads: () => Effect.succeed({ matches: [] }),
+    snapshot: Effect.die("unused"),
   });
 
 const makeTerminalManagerLayer = (
@@ -114,12 +98,14 @@ const makeTerminalManagerLayer = (
 const testLayer = (
   project: OrchestrationProject,
   terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
+  settings: Parameters<typeof ServerSettings.layerTest>[0] = {},
 ) => {
   const nodeFileServices = Layer.merge(NodeFileSystem.layer, NodePath.layer);
   return Layer.mergeAll(
     ProjectSetupScriptRunner.layer.pipe(
-      Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
+      Layer.provideMerge(makeProjectServiceLayer(project)),
       Layer.provideMerge(makeTerminalManagerLayer(terminal)),
+      Layer.provideMerge(ServerSettings.layerTest(settings)),
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "t3-setup-runner-test-" }).pipe(
           Layer.provide(nodeFileServices),
@@ -131,7 +117,11 @@ const testLayer = (
   );
 };
 
-const claimWrapperExecution = (data: string) =>
+const claimWrapperExecution = (
+  data: string,
+  command = "bun install",
+  terminalId = "setup-setup",
+) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
@@ -140,7 +130,7 @@ const claimWrapperExecution = (data: string) =>
     yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
     yield* fileSystem.writeFileString(
       path.join(executionDirectory, "completed.json"),
-      validCompletion(),
+      validCompletion("thread-1", terminalId, command),
     );
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
@@ -161,7 +151,10 @@ describe("ProjectSetupScriptRunner", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     );
-    const write = vi.fn(() => Effect.void);
+    const write = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+        claimWrapperExecution(input.data, "npm install", "setup-default-setup"),
+    );
     return Effect.gen(function* () {
       const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const result = yield* runner.runForThread({
@@ -177,17 +170,14 @@ describe("ProjectSetupScriptRunner", () => {
         worktreePath: "/repo/worktrees/a",
         env: { T3CODE_PROJECT_ROOT: "/repo/project", T3CODE_WORKTREE_PATH: "/repo/worktrees/a" },
       });
-      expect(write).toHaveBeenCalledWith({
-        threadId: "thread-1",
-        terminalId: "setup-default-setup",
-        data: "npm install\r",
-      });
+      expect(write).toHaveBeenCalledOnce();
+      expect(write.mock.calls[0]?.[0].data).toContain("run.cjs");
     }).pipe(
       Effect.provide(
         testLayer(
           makeProject([]),
           { open, write },
-          ServerSettings.layerTest({
+          {
             defaultProjectScripts: [
               {
                 id: "default-setup",
@@ -197,7 +187,7 @@ describe("ProjectSetupScriptRunner", () => {
                 runOnWorktreeCreate: true,
               },
             ],
-          }),
+          },
         ),
       ),
     );

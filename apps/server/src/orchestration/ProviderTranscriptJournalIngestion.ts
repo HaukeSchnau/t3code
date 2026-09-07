@@ -26,7 +26,10 @@ import {
   planProviderTranscriptJournalBatchSeals,
   type ProviderTranscriptJournalBatch,
 } from "./ProviderTranscriptJournalBatch.ts";
-import { isSubagentRuntimeEvent } from "./ProviderSubagentActivityProjection.ts";
+
+function isSubagentRuntimeEvent(event: ProviderRuntimeEvent): boolean {
+  return event.agentContext !== undefined;
+}
 
 function transcriptItemScopeKey(event: ProviderRuntimeEvent): string | null {
   if (event.itemId === undefined) return null;

@@ -5,6 +5,7 @@ import {
 } from "@t3tools/contracts";
 import * as Console from "effect/Console";
 import * as Data from "effect/Data";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -15,11 +16,13 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
-import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
+import {
+  ProjectionStoreV2,
+  layer as ProjectionStoreV2Layer,
+} from "../orchestration-v2/ProjectionStore.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
-import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
-import { getServerIdleStatus } from "../status/IdleStatus.ts";
+import { summarizeServerIdleStatus } from "../status/IdleStatus.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
 class StatusLiveServerUnavailableError extends Data.TaggedError(
@@ -68,9 +71,8 @@ const withStatusCliSessionToken = <A, E, R>(
     (issued) => environmentAuth.revokeSession(issued.sessionId).pipe(Effect.ignore({ log: true })),
   );
 
-const StatusOfflineRuntimeLive = OrchestrationProjectionSnapshotQueryLive.pipe(
-  Layer.provideMerge(RepositoryIdentityResolver.layer),
-  Layer.provideMerge(SqlitePersistenceLayerLive),
+const StatusOfflineRuntimeLive = ProjectionStoreV2Layer.pipe(
+  Layer.provide(SqlitePersistenceLayerLive),
 );
 
 function formatIdleStatus(status: ServerIdleStatus, options: { readonly json: boolean }): string {
@@ -119,7 +121,15 @@ const queryOfflineIdleStatus = (flags: CliAuthLocationFlags) =>
   Effect.gen(function* () {
     const logLevel = yield* GlobalFlag.LogLevel;
     const config = yield* resolveCliAuthConfig(flags, logLevel);
-    return yield* getServerIdleStatus().pipe(
+    return yield* Effect.gen(function* () {
+      const projectionStore = yield* ProjectionStoreV2;
+      const snapshot = yield* projectionStore.getShellSnapshot({ location: "active" });
+      const checkedAt = yield* DateTime.now;
+      return summarizeServerIdleStatus({
+        threads: snapshot.threads,
+        checkedAt: DateTime.formatIso(checkedAt),
+      });
+    }).pipe(
       Effect.provide(
         StatusOfflineRuntimeLive.pipe(
           Layer.provide(ServerConfig.layer(config)),

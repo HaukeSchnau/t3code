@@ -238,7 +238,7 @@ describe("thread outbox", () => {
         storage: harness.storage,
       });
       await restarted.load();
-      expect(await harness.storage.load()).toEqual([]);
+      expect(await harness.storage.load()).toEqual({ messages: [], errors: [] });
       expect((await harness.storage.loadCommandOutbox!()).entries).toEqual([]);
       expect(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).toEqual({});
       restartedRegistry.dispose();
@@ -246,7 +246,7 @@ describe("thread outbox", () => {
   }
 
   it.each(["read", "json", "schema"] as const)(
-    "does not load a partial outbox after a record %s failure",
+    "returns readable messages and reports a record %s failure",
     async (failure) => {
       const harness = makeMemoryOutboxFileSystem();
       const first = queuedMessage({
@@ -267,13 +267,21 @@ describe("thread outbox", () => {
             : JSON.stringify({ ...second, schemaVersion: 999 }),
       );
 
-      await expect(harness.storage.load()).rejects.toMatchObject({
-        operation: "read-message",
-        fileName: "message-2.json",
+      await expect(harness.storage.load()).resolves.toMatchObject({
+        messages: [first],
+        errors: [
+          expect.objectContaining({
+            operation: "read-message",
+            fileName: "message-2.json",
+          }),
+        ],
       });
 
       harness.contents.set("message-2.json", JSON.stringify(encodeQueuedThreadMessage(second)));
-      await expect(harness.storage.load()).resolves.toEqual([first, second]);
+      await expect(harness.storage.load()).resolves.toEqual({
+        messages: [first, second],
+        errors: [],
+      });
     },
   );
 
@@ -507,7 +515,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => undefined,
         remove: async () => undefined,
       },
@@ -554,7 +562,7 @@ describe("thread outbox", () => {
         if (loadCalls === 1) {
           await initialLoadBlocked;
         }
-        return [...stored.values()];
+        return { messages: [...stored.values()], errors: [] };
       },
       write: async () => undefined,
       remove: async (candidate) => {
@@ -590,7 +598,7 @@ describe("thread outbox", () => {
         load: async () => {
           loadCalls += 1;
           if (loadCalls === 1) throw loadCause;
-          return [];
+          return { messages: [], errors: [] };
         },
         write: async () => undefined,
         remove: async () => undefined,
@@ -623,7 +631,7 @@ describe("thread outbox", () => {
     const removalCause = new Error("remove failed");
     let failRemoval = true;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => {
         stored.set(message.messageId, message);
       },
@@ -673,7 +681,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => writeBlocked,
         remove: async () => undefined,
       },
@@ -702,7 +710,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => {
           throw writeCause;
         },
@@ -737,7 +745,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => {
           if (failNextWrite) {
             failNextWrite = false;
@@ -774,7 +782,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => undefined,
         remove: async () => undefined,
       },
@@ -799,7 +807,7 @@ describe("thread outbox", () => {
     const manager = createThreadOutboxManager({
       registry,
       storage: {
-        load: async () => [],
+        load: async () => ({ messages: [], errors: [] }),
         write: async () => undefined,
         remove: async () => undefined,
       },
@@ -824,7 +832,7 @@ describe("thread outbox", () => {
     const registry = AtomRegistry.make();
     const stored = new Map<MessageId, QueuedThreadMessage>();
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => {
         stored.set(message.messageId, message);
       },
@@ -869,7 +877,7 @@ describe("thread outbox", () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => void stored.delete(message.messageId),
       loadCommandOutbox: async () => commandDocument,
@@ -899,6 +907,36 @@ describe("thread outbox", () => {
     registry.dispose();
   });
 
+  it("keeps a markerless legacy plan when an older queued message is edited", async () => {
+    const registry = AtomRegistry.make();
+    const message = queuedMessage({
+      messageId: "legacy-message",
+      createdAt: "2026-07-15T10:00:00.000Z",
+    });
+    const nativePlan = makeQueuedThreadDeliveryPlan(message);
+    const { deliveryProtocol: _, ...legacyPlan } = nativePlan;
+    let commandDocument = decodeDurableCommandOutboxDocument({
+      schemaVersion: 1,
+      entries: [{ plan: legacyPlan, state: { _tag: "Pending" } }],
+    });
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: {
+        load: async () => ({ messages: [message], errors: [] }),
+        write: async () => undefined,
+        remove: async () => undefined,
+        loadCommandOutbox: async () => commandDocument,
+        saveCommandOutbox: async (document) => void (commandDocument = document),
+      },
+    });
+
+    await manager.load();
+    await manager.update(message, { ...message, commandId: CommandId.make("legacy-edit") });
+
+    expect(commandDocument.entries[0]?.plan.deliveryProtocol).toBe("legacy");
+    registry.dispose();
+  });
+
   it("reconciles a committed replacement when obsolete presentation cleanup crashes", async () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
@@ -908,7 +946,7 @@ describe("thread outbox", () => {
       createdAt: "2026-07-15T10:00:00.000Z",
     });
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => {
         if (message.messageId === original.messageId && failOldRemoval) {
@@ -951,7 +989,7 @@ describe("thread outbox", () => {
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     let failNextLifecycleSave = false;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => void stored.delete(message.messageId),
       loadCommandOutbox: async () => commandDocument,
@@ -987,7 +1025,7 @@ describe("thread outbox", () => {
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     let failAcknowledgedRemoval = true;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => {
         if (message.acknowledgedAt && failAcknowledgedRemoval) {
@@ -1029,7 +1067,7 @@ describe("thread outbox", () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => void stored.delete(message.messageId),
       loadCommandOutbox: async () => commandDocument,
@@ -1072,7 +1110,7 @@ describe("thread outbox", () => {
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const failedRemovals = new Set<MessageId>();
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => {
         if (!failedRemovals.has(message.messageId)) {
@@ -1125,7 +1163,7 @@ describe("thread outbox", () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => void stored.delete(message.messageId),
       loadCommandOutbox: async () => commandDocument,
@@ -1151,7 +1189,7 @@ describe("thread outbox", () => {
     const stored = new Map<MessageId, QueuedThreadMessage>();
     let commandDocument: DurableCommandOutboxDocument = EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT;
     const storage: ThreadOutboxStorage = {
-      load: async () => [...stored.values()],
+      load: async () => ({ messages: [...stored.values()], errors: [] }),
       write: async (message) => void stored.set(message.messageId, message),
       remove: async (message) => void stored.delete(message.messageId),
       loadCommandOutbox: async () => commandDocument,

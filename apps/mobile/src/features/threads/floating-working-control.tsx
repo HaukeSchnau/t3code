@@ -27,6 +27,8 @@ import { NATIVE_LIQUID_GLASS_SUPPORTED } from "../../native/native-glass";
 import type { FloatingWorkingStatus } from "./floating-working-status";
 import { ShimmeringWorkContent } from "./thread-work-log";
 
+export type { FloatingWorkingStatus } from "./floating-working-status";
+
 const CONTROL_HEIGHT = 38.5; // h-11 with the mobile 14px rem
 // The collapsed composer capsule starts 6 below its overlay's top edge, so
 // the pill sits at (gap - 6) above the overlay to leave the same gap to the
@@ -310,9 +312,6 @@ function FloatingStatusLabel(props: {
           type="monochrome"
         />
         <ShimmeringWorkContent
-          className="flex-none"
-          textClassName="font-t3-medium"
-          compact
           icon="arrow.triangle.branch"
           iconSubtleColor="transparent"
           label={props.status.label}

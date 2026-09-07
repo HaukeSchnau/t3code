@@ -5,6 +5,8 @@ import { DRIVER_OPTION_BY_VALUE } from "./providerDriverMeta";
 import {
   deriveProviderSettingsFields,
   nextProviderConfigWithFieldValue,
+  readProviderConfigBoolean,
+  readProviderConfigString,
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
@@ -35,17 +37,32 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
-  it("renders Claude built-in model discovery as a switch", () => {
-    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
-    expect(claude).toBeDefined();
+  it("uses a dedicated environment field instead of legacy Cursor CLI settings", () => {
+    const cursor = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursor")];
 
-    expect(
-      deriveProviderSettingsFields(claude!).find((field) => field.key === "includeBuiltInModels"),
-    ).toMatchObject({
-      label: "Include built-in models",
-      control: "switch",
-      defaultBooleanValue: true,
-    });
+    expect(cursor).toBeDefined();
+    expect(deriveProviderSettingsFields(cursor!)).toEqual([]);
+    expect(cursor?.environmentFields).toEqual([
+      {
+        name: "CURSOR_API_KEY",
+        label: "Cursor API key",
+        description: "Required by the Cursor Agent SDK.",
+        placeholder: "Paste API key",
+        sensitive: true,
+      },
+    ]);
+  });
+
+  it("exposes ACP Registry as an instance-only configurable driver", () => {
+    const acpRegistry = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("acpRegistry")];
+
+    expect(acpRegistry).toBeDefined();
+    expect(acpRegistry?.hasDefaultInstance).toBe(false);
+    expect(deriveProviderSettingsFields(acpRegistry!).map((field) => field.key)).toEqual([
+      "agentId",
+      "commandPath",
+      "authMethodId",
+    ]);
   });
 
   it("derives a select control with its choices for the Antigravity sign-in method", () => {
@@ -78,11 +95,11 @@ describe("ProviderSettingsForm helpers", () => {
     expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
       "binaryPath",
       "homePath",
-      "includeBuiltInModels",
       "autoCompactWindow",
       "launchArgs",
     ]);
   });
+
   it("preserves unknown config keys while omitting empty configurable fields", () => {
     const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
     expect(opencode).toBeDefined();
@@ -99,6 +116,10 @@ describe("ProviderSettingsForm helpers", () => {
     );
 
     expect(next).toEqual({ forkOwned: 1 });
+  });
+
+  it("reads non-string config values as blank strings", () => {
+    expect(readProviderConfigString({ binaryPath: 123 }, "binaryPath")).toBe("");
   });
 
   it("omits false boolean fields when clearWhenEmpty is omit", () => {
@@ -162,5 +183,13 @@ describe("ProviderSettingsForm helpers", () => {
     );
 
     expect(next).toEqual({ experimental: false });
+  });
+
+  it("reads non-boolean config values as false booleans", () => {
+    expect(readProviderConfigBoolean({ experimental: "true" }, "experimental")).toBe(false);
+  });
+
+  it("reads missing boolean config values from the supplied default", () => {
+    expect(readProviderConfigBoolean({}, "experimental", true)).toBe(true);
   });
 });

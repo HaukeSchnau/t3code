@@ -1,7 +1,27 @@
-import type { ProviderSession } from "@t3tools/contracts";
+import type {
+  OrchestrationSession,
+  ProviderSession,
+  ThreadId,
+  TurnId,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 
-import type { ProjectionRestartSafetyThread } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+/**
+ * Narrow legacy read-model state needed to reconcile a provider session after
+ * a process restart. The V2 projector owns an equivalent shape, but this
+ * small pure policy remains useful to the legacy startup compatibility path.
+ */
+export interface ProjectionRestartSafetyThread {
+  readonly threadId: ThreadId;
+  readonly session: OrchestrationSession | null;
+  readonly latestTurnId: TurnId | null;
+  readonly latestTurnState: string | null;
+  readonly latestTurnUpdatedAt: string | null;
+  readonly queuedMessageCount: number;
+  readonly pendingApprovalCount: number;
+  readonly pendingUserInputCount: number;
+  readonly undeliveredTranscriptEventCount: number;
+}
 
 export const SERVER_RUNTIME_STARTED_AT = DateTime.formatIso(DateTime.nowUnsafe());
 

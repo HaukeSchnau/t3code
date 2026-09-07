@@ -46,6 +46,32 @@ describe("durable command outbox model", () => {
     expect(plan.command.commandId).toBe("command-1");
   });
 
+  it("keeps markerless persisted plans legacy while marking new native plans", () => {
+    const legacy = decodeDurableCommandOutboxDocument({
+      schemaVersion: 1,
+      entries: [
+        {
+          plan: {
+            schemaVersion: 1,
+            environmentId: "environment-1",
+            enqueuedAt: "2026-07-15T10:00:00.000Z",
+            command: startCommand("legacy-command"),
+          },
+          state: { _tag: "Pending" },
+        },
+      ],
+    });
+    const native = makeDurableCommandDeliveryPlan({
+      environmentId: EnvironmentId.make("environment-1"),
+      enqueuedAt: "2026-07-15T10:00:00.000Z",
+      command: startCommand("native-command"),
+      deliveryProtocol: "native",
+    });
+
+    expect(legacy.entries[0]?.plan.deliveryProtocol).toBeUndefined();
+    expect(native.deliveryProtocol).toBe("native");
+  });
+
   it("round-trips the versioned document", () => {
     const document = decodeDurableCommandOutboxDocument({
       schemaVersion: 1,

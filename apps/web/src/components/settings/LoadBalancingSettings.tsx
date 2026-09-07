@@ -29,7 +29,7 @@ export function LoadBalancingSettings({
 
   if (environments.length < 2) {
     return (
-      <SettingsSection {...searchableSetting("load-balancing")} variant="plain">
+      <SettingsSection id="load-balancing" title="Load balancing" variant="plain">
         <p className="px-3 text-sm text-muted-foreground sm:px-4">
           Connect another machine to automatically balance load across environments.
         </p>
@@ -38,7 +38,7 @@ export function LoadBalancingSettings({
   }
 
   return (
-    <SettingsSection {...searchableSetting("load-balancing")}>
+    <SettingsSection id="load-balancing" title="Load balancing">
       <SettingsRow
         title="Automatically balance load"
         description="Choose a machine automatically for new threads in shared projects."

@@ -1,225 +1,127 @@
+import { CheckCircle2Icon, RotateCcwIcon, Trash2Icon, WifiOffIcon } from "lucide-react";
 import type {
   DurableClientCommand,
   DurableCommandOutboxEntry,
 } from "@t3tools/client-runtime/operations/command-outbox";
-import type { CommandId } from "@t3tools/contracts";
-import { LoaderCircleIcon, PencilIcon, RotateCwIcon, Trash2Icon } from "lucide-react";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, useMemo } from "react";
 
-import { cn, newCommandId } from "~/lib/utils";
+import { newCommandId } from "../../lib/utils";
+import { cn } from "../../lib/utils";
+import {
+  localRetryCountdownText,
+  presentDurableOutboxEntry,
+  type DurableOutboxEntryView,
+} from "./durableOutboxPresentation";
 import { Button } from "../ui/button";
-import { localRetryCountdownText, presentDurableOutboxEntry } from "./durableOutboxPresentation";
-
-interface DurableOutboxStripProps {
-  readonly entries: ReadonlyArray<DurableCommandOutboxEntry>;
-  readonly className?: string;
-  readonly onCancel: (commandId: CommandId) => Promise<void>;
-  readonly onReplace: (
-    commandId: CommandId,
-    replacement: DurableClientCommand,
-    state: "Pending" | "Rejected",
-  ) => Promise<void>;
-  readonly onDiscard: (commandId: CommandId) => Promise<void>;
-}
 
 export const DurableOutboxStrip = memo(function DurableOutboxStrip({
   entries,
-  className,
   onCancel,
   onReplace,
   onDiscard,
-}: DurableOutboxStripProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  const [editingCommandId, setEditingCommandId] = useState<CommandId | null>(null);
-  const [editText, setEditText] = useState("");
-  const [busyCommandId, setBusyCommandId] = useState<CommandId | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
-  const views = useMemo(() => entries.map(presentDurableOutboxEntry), [entries]);
-  const hasRetryCountdown = views.some((view) => view.retryAt !== null);
-
-  useEffect(() => {
-    if (!hasRetryCountdown) return;
-    const interval = window.setInterval(() => setNowMs(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [hasRetryCountdown]);
-
-  if (views.length === 0) return null;
-
-  const run = async (commandId: CommandId, task: () => Promise<void>) => {
-    setBusyCommandId(commandId);
-    setActionError(null);
-    try {
-      await task();
-      setEditingCommandId(null);
-    } catch (cause) {
-      setActionError(
-        cause instanceof Error ? cause.message : "The saved message could not be updated.",
-      );
-    } finally {
-      setBusyCommandId(null);
-    }
-  };
-
+}: {
+  readonly entries: ReadonlyArray<DurableCommandOutboxEntry>;
+  readonly onCancel: (commandId: DurableClientCommand["commandId"]) => void;
+  readonly onReplace: (
+    commandId: DurableClientCommand["commandId"],
+    replacement: DurableClientCommand,
+    state: "Pending" | "Rejected",
+  ) => void;
+  readonly onDiscard: (commandId: DurableClientCommand["commandId"]) => void;
+}) {
+  if (entries.length === 0) return null;
   return (
     <div
-      className={cn(
-        "mx-auto mb-2 max-h-52 w-full max-w-3xl space-y-1 overflow-y-auto rounded-xl border border-info/25 bg-info/6 p-1.5 shadow-xs",
-        className,
-      )}
-      aria-label={`Messages saved on this device (${views.length})`}
+      className="mx-auto mb-2 w-full max-w-3xl space-y-1.5 rounded-xl border border-border bg-muted/35 p-2 text-xs"
+      aria-label={`Saved messages (${entries.length})`}
       data-durable-outbox-strip="true"
     >
-      {views.map((view) => {
-        const command = view.entry.plan.command;
-        const commandId = command.commandId;
-        const editing = editingCommandId === commandId;
-        const busy = busyCommandId === commandId;
-        const retryText = localRetryCountdownText(view.retryAt, nowMs);
-
-        return (
-          <div
-            key={commandId}
-            className="rounded-lg px-2 py-1.5 text-xs text-muted-foreground"
-            data-outbox-command-id={commandId}
-            data-outbox-state={view.entry.state._tag}
-          >
-            <div className="flex min-w-0 items-center gap-2">
-              {view.entry.state._tag === "Delivering" ? (
-                <LoaderCircleIcon
-                  className="size-3.5 shrink-0 animate-spin motion-reduce:animate-none"
-                  aria-hidden="true"
-                />
-              ) : (
-                <span className="size-2 shrink-0 rounded-full bg-info" aria-hidden="true" />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="font-medium text-foreground">{view.title}</div>
-                <div className="truncate">
-                  {view.detail}
-                  {view.attempt !== null ? ` Attempt ${view.attempt}.` : ""}
-                  {retryText !== null ? ` ${retryText}.` : ""}
-                </div>
-              </div>
-              <div className="flex shrink-0 items-center gap-1">
-                {view.canEdit ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => {
-                      setEditingCommandId(commandId);
-                      setEditText(command.message.text);
-                    }}
-                  >
-                    <PencilIcon className="size-3" aria-hidden="true" />
-                    Edit
-                  </Button>
-                ) : null}
-                {view.canCancel ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="ghost"
-                    disabled={busy}
-                    onClick={() => void run(commandId, () => onCancel(commandId))}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-                {view.canRetry ? (
-                  <Button
-                    type="button"
-                    size="xs"
-                    variant="outline"
-                    disabled={busy}
-                    onClick={() =>
-                      void run(commandId, () =>
-                        onReplace(commandId, { ...command, commandId: newCommandId() }, "Rejected"),
-                      )
-                    }
-                  >
-                    <RotateCwIcon
-                      className={cn("size-3", busy && "animate-spin motion-reduce:animate-none")}
-                      aria-hidden="true"
-                    />
-                    Retry
-                  </Button>
-                ) : null}
-                {view.canDiscard ? (
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="ghost"
-                    aria-label="Discard rejected message"
-                    disabled={busy}
-                    onClick={() => void run(commandId, () => onDiscard(commandId))}
-                  >
-                    <Trash2Icon className="size-3.5" aria-hidden="true" />
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-            {editing ? (
-              <form
-                className="mt-2 flex gap-1.5"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  const text = editText.trim();
-                  if (!text) return;
-                  const replacement: DurableClientCommand =
-                    command.type === "thread.turn.start"
-                      ? {
-                          ...command,
-                          commandId: newCommandId(),
-                          message: { ...command.message, text },
-                          titleSeed: text,
-                        }
-                      : {
-                          ...command,
-                          commandId: newCommandId(),
-                          message: { ...command.message, text },
-                          titleSeed: text,
-                        };
-                  void run(commandId, () => onReplace(commandId, replacement, "Pending"));
-                }}
-              >
-                <label className="sr-only" htmlFor={`outbox-edit-${commandId}`}>
-                  Edit saved message
-                </label>
-                <input
-                  id={`outbox-edit-${commandId}`}
-                  className="min-w-0 flex-1 rounded-md border border-input bg-background px-2 py-1 text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  value={editText}
-                  autoFocus
-                  disabled={busy}
-                  onChange={(event) => setEditText(event.target.value)}
-                />
-                <Button type="submit" size="xs" disabled={busy || editText.trim().length === 0}>
-                  Save
-                </Button>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="ghost"
-                  disabled={busy}
-                  onClick={() => setEditingCommandId(null)}
-                >
-                  Close
-                </Button>
-              </form>
-            ) : null}
-            <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
-              {view.title}. {view.detail}
-            </span>
-          </div>
-        );
-      })}
-      {actionError ? (
-        <p className="px-2 py-1 text-destructive text-xs" role="alert">
-          {actionError}
-        </p>
-      ) : null}
+      <div className="flex items-center gap-1.5 px-1 text-[11px] font-medium text-muted-foreground">
+        <WifiOffIcon className="size-3.5" />
+        <span>Saved on this device</span>
+        <span className="ml-auto tabular-nums">{entries.length}</span>
+      </div>
+      {entries.map((entry) => (
+        <DurableOutboxRow
+          key={entry.plan.command.commandId}
+          entry={entry}
+          onCancel={onCancel}
+          onReplace={onReplace}
+          onDiscard={onDiscard}
+        />
+      ))}
     </div>
   );
 });
+
+function DurableOutboxRow({
+  entry,
+  onCancel,
+  onReplace,
+  onDiscard,
+}: {
+  readonly entry: DurableCommandOutboxEntry;
+  readonly onCancel: (commandId: DurableClientCommand["commandId"]) => void;
+  readonly onReplace: (
+    commandId: DurableClientCommand["commandId"],
+    replacement: DurableClientCommand,
+    state: "Pending" | "Rejected",
+  ) => void;
+  readonly onDiscard: (commandId: DurableClientCommand["commandId"]) => void;
+}) {
+  const view = presentDurableOutboxEntry(entry);
+  const retryLabel = useMemo(
+    () => localRetryCountdownText(view.retryAt, Date.now()),
+    [view.retryAt],
+  );
+  const command = entry.plan.command;
+  const replacement = {
+    ...command,
+    commandId: newCommandId(),
+    createdAt: new Date().toISOString(),
+  } satisfies DurableClientCommand;
+  return (
+    <div className="flex items-center gap-2 rounded-lg border border-border/60 bg-background/60 px-2 py-1.5">
+      <div className="min-w-0 flex-1">
+        <div className="truncate font-medium text-foreground">{command.message.text || "Image"}</div>
+        <div className="truncate text-[11px] text-muted-foreground">{view.detail}{retryLabel ? ` ${retryLabel}` : ""}</div>
+      </div>
+      <OutboxActions
+        view={view}
+        command={command}
+        replacement={replacement}
+        onCancel={onCancel}
+        onReplace={onReplace}
+        onDiscard={onDiscard}
+      />
+    </div>
+  );
+}
+
+function OutboxActions({
+  view,
+  command,
+  replacement,
+  onCancel,
+  onReplace,
+  onDiscard,
+}: {
+  readonly view: DurableOutboxEntryView;
+  readonly command: DurableClientCommand;
+  readonly replacement: DurableClientCommand;
+  readonly onCancel: (commandId: DurableClientCommand["commandId"]) => void;
+  readonly onReplace: (
+    commandId: DurableClientCommand["commandId"],
+    replacement: DurableClientCommand,
+    state: "Pending" | "Rejected",
+  ) => void;
+  readonly onDiscard: (commandId: DurableClientCommand["commandId"]) => void;
+}) {
+  if (view.canCancel) {
+    return <Button size="icon-xs" variant="ghost" aria-label="Cancel saved message" onClick={() => onCancel(command.commandId)}><Trash2Icon className="size-3.5" /></Button>;
+  }
+  if (view.canRetry) {
+    return <div className="flex items-center gap-1"><Button size="xs" variant="outline" onClick={() => onReplace(command.commandId, replacement, "Rejected")}><RotateCcwIcon className="size-3" />Retry</Button><Button size="icon-xs" variant="ghost" aria-label="Discard rejected message" onClick={() => onDiscard(command.commandId)}><Trash2Icon className="size-3.5" /></Button></div>;
+  }
+  return <CheckCircle2Icon className={cn("size-4 shrink-0", view.attempt === null ? "text-muted-foreground/60" : "text-primary")} aria-hidden />;
+}

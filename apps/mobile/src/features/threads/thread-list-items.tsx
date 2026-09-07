@@ -477,7 +477,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
   const { thread, onSelectThread, onArchiveThread, onDeleteThread, onRegenerateThreadTitle } =
     props;
   const status = resolveThreadStatus(thread);
-  const pr = useThreadPr(thread, props.projectCwd);
+  const pr = useThreadPr(thread);
   const timestamp = relativeTime(
     thread.latestUserMessageAt ?? thread.updatedAt ?? thread.createdAt,
   );
@@ -718,6 +718,7 @@ export const ThreadListRow = memo(function ThreadListRow(props: {
       primaryAction={primaryAction}
       resetKey={`${thread.environmentId}:${thread.id}`}
       simultaneousWithExternalGesture={props.simultaneousSwipeGesture}
+      threadKey={`${thread.environmentId}:${thread.id}`}
       threadTitle={thread.title}
     >
       {(close) => (

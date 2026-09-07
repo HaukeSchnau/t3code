@@ -4,6 +4,14 @@ T3 Code persists one immutable terminal receipt per orchestration command ID. Th
 reliability boundary lets clients retry a command after a transport failure makes its acknowledgement
 ambiguous without issuing the command's effects twice.
 
+## V2 integration
+
+V2 owns thread commands, event persistence, and execution. The fork adds full-envelope fingerprints to native accepted and rejected receipts, including validation of a competing transactional claim. Project commands use the same fingerprint rule through the project receipt repository.
+
+Native launches retain deterministic thread/message identities and the existing setup execution journal. Pre-upgrade outboxes replay through `orchestration.replayLegacyOutbox`. V1 normalized attachments and server timestamps before hashing; compatibility reconstructs a historical envelope only when its entire hash matches the recorded identity. An unrecoverable historical identity returns an explicit error before setup or provider execution. It must never be bypassed with a new command ID automatically.
+
+Pending-upload claims use a stable per-thread identity so transport retries do not change the native command envelope.
+
 ## Required behavior
 
 - Every new receipt stores the command variant and a SHA-256 fingerprint of the complete decoded

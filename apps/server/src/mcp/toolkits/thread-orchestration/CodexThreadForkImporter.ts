@@ -1,27 +1,33 @@
 import {
   CodexSettings,
-  CommandId,
+  defaultInstanceIdForDriver,
   ProviderDriverKind,
   ThreadId,
   ThreadOrchestrationError,
-  type TurnId,
-  defaultInstanceIdForDriver,
-  type OrchestrationProject,
-  type OrchestrationThread,
-  type ThreadOrchestrationThreadSummary,
+  type OrchestrationProjectShell,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ConversationMessage,
+  type OrchestrationV2DomainEvent,
+  type OrchestrationV2ProviderSession,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ThreadProjection,
+  type OrchestrationV2TurnItem,
+  type ProviderInstanceId,
+  type ProviderThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as ServerConfig from "../../../config.ts";
-import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
+import { CodexProviderCapabilitiesV2 } from "../../../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import { EventSinkV2 } from "../../../orchestration-v2/EventSink.ts";
+import { IdAllocatorV2 } from "../../../orchestration-v2/IdAllocator.ts";
 import {
   materializeCodexShadowHome,
   resolveCodexHomeLayout,
@@ -29,43 +35,45 @@ import {
 import {
   codexThreadMessages,
   forkCodexProviderThread,
+  type CodexProviderThread,
 } from "../../../provider/CodexThreadBridge.ts";
 import { mergeProviderInstanceEnvironment } from "../../../provider/ProviderInstanceEnvironment.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
-import { ProviderSessionDirectory } from "../../../provider/Services/ProviderSessionDirectory.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import type { PreparedThreadWorkspace } from "../../../workspace/ThreadWorkspaceService.ts";
 
 const CODEX_DRIVER = ProviderDriverKind.make("codex");
 const DEFAULT_CODEX_INSTANCE_ID = defaultInstanceIdForDriver(CODEX_DRIVER);
 const decodeCodexSettings = Schema.decodeUnknownEffect(CodexSettings);
+const isThreadOrchestrationError = Schema.is(ThreadOrchestrationError);
 
+/**
+ * Forks an arbitrary native Codex transcript into a V2 thread. This remains
+ * separate from `thread.fork`, which intentionally accepts only a completed
+ * V2 run and cannot represent native deep-links or truncated transcripts.
+ */
 export interface CodexThreadForkImportInput {
   readonly threadId: ThreadId;
-  readonly sourceThread: Pick<
-    OrchestrationThread,
-    | "id"
-    | "modelSelection"
-    | "runtimeMode"
-    | "interactionMode"
-    | "branch"
-    | "worktreePath"
-    | "workspaceId"
-    | "skillScope"
-  >;
-  readonly project: Pick<OrchestrationProject, "id" | "title" | "workspaceRoot">;
+  readonly sourceThread: OrchestrationV2AppThread;
+  readonly sourceProviderThread: OrchestrationV2ProviderThread;
+  readonly project: OrchestrationProjectShell;
   readonly title: string;
-  readonly createdAt: string;
+  readonly createdAt: DateTime.Utc;
+  readonly createdBy?: OrchestrationV2AppThread["createdBy"];
+  readonly creationSource?: OrchestrationV2AppThread["creationSource"];
   readonly preparedWorkspace?: PreparedThreadWorkspace;
-  readonly lastTurnId?: TurnId | null;
+  readonly lastTurnId?: string | null;
   readonly developerInstructions?: string;
+  /** Reuse an already-read native transcript for Codex resume imports. */
+  readonly nativeThread?: CodexProviderThread;
 }
 
 export interface CodexThreadForkImportResult {
-  readonly thread: ThreadOrchestrationThreadSummary;
-  readonly sourceProviderThreadId: string;
-  readonly providerThreadId: string;
+  readonly threadId: ThreadId;
+  readonly providerThreadId: ProviderThreadId;
+  readonly sourceProviderThreadId: ProviderThreadId;
   readonly importedMessageCount: number;
+  readonly projection: OrchestrationV2ThreadProjection;
 }
 
 export class CodexThreadForkImporter extends Context.Service<
@@ -78,70 +86,47 @@ export class CodexThreadForkImporter extends Context.Service<
 >()("t3/mcp/toolkits/thread-orchestration/CodexThreadForkImporter") {}
 
 const make = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngineService;
   const providerRegistry = yield* ProviderRegistry;
-  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const config = yield* ServerConfig.ServerConfig;
-  const environment = yield* ServerEnvironment.ServerEnvironment;
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const eventSink = yield* EventSinkV2;
+  const idAllocator = yield* IdAllocatorV2;
 
-  const fork = (input: CodexThreadForkImportInput) => {
-    let createdThread = false;
-    const cleanupCreatedThread = () =>
-      createdThread
-        ? engine
-            .dispatch({
-              type: "thread.delete",
-              commandId: CommandId.make(`codex-fork-thread-rollback:${input.threadId}`),
-              threadId: input.threadId,
-            })
-            .pipe(Effect.ignoreCause({ log: true }))
-        : Effect.void;
-
-    return Effect.gen(function* () {
-      const bindingOption = yield* providerSessionDirectory
-        .getBinding(input.sourceThread.id)
-        .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_binding_read")));
-      if (Option.isNone(bindingOption)) {
-        return yield* unsupportedSource(input.sourceThread.id, "has no provider session");
-      }
-      const binding = bindingOption.value;
-      if (binding.provider !== CODEX_DRIVER) {
-        return yield* unsupportedSource(input.sourceThread.id, "is not backed by Codex");
-      }
-
-      const sourceProviderThreadId = providerThreadIdFromResumeCursor(binding.resumeCursor);
-      if (!sourceProviderThreadId) {
-        return yield* unsupportedSource(input.sourceThread.id, "has no Codex provider thread id");
-      }
-
-      const providers = yield* providerRegistry.getProviders;
-      const codexProvider =
-        (binding.providerInstanceId
-          ? providers.find(
-              (provider) =>
-                provider.driver === CODEX_DRIVER &&
-                provider.instanceId === binding.providerInstanceId &&
-                provider.enabled &&
-                provider.availability !== "unavailable",
-            )
-          : undefined) ??
-        providers.find(
-          (provider) =>
-            provider.driver === CODEX_DRIVER &&
-            provider.instanceId === DEFAULT_CODEX_INSTANCE_ID &&
-            provider.enabled &&
-            provider.availability !== "unavailable",
-        ) ??
-        providers.find(
-          (provider) =>
-            provider.driver === CODEX_DRIVER &&
-            provider.enabled &&
-            provider.availability !== "unavailable",
+  const fork = (input: CodexThreadForkImportInput) =>
+    Effect.gen(function* () {
+      if (
+        input.sourceProviderThread.driver !== CODEX_DRIVER ||
+        input.sourceProviderThread.nativeThreadRef?.driver !== CODEX_DRIVER ||
+        input.sourceProviderThread.nativeThreadRef.strength !== "strong" ||
+        input.sourceProviderThread.nativeThreadRef.nativeId === null
+      ) {
+        return yield* unsupportedSource(
+          input.sourceThread.id,
+          "has no strong Codex native thread ref",
         );
+      }
+      const sourceNativeId = input.sourceProviderThread.nativeThreadRef.nativeId;
+      const sourceProviderThreadId = input.sourceProviderThread.id;
+      const providers = yield* providerRegistry.getProviders;
+      const providerCandidates: ReadonlyArray<{
+        readonly driver: ProviderDriverKind;
+        readonly instanceId: ProviderInstanceId;
+        readonly enabled: boolean;
+        readonly availability?: string;
+      }> = providers.map((provider) => ({
+        driver: provider.driver,
+        instanceId: provider.instanceId,
+        enabled: provider.enabled,
+        availability: provider.availability ?? "available",
+      }));
+      const codexProvider = selectCodexProvider(
+        providerCandidates,
+        input.sourceProviderThread.providerInstanceId,
+        input.sourceThread.providerInstanceId,
+      );
       if (!codexProvider) {
         return yield* new ThreadOrchestrationError({
           operation: "fork_thread.codex",
@@ -190,129 +175,303 @@ const make = Effect.gen(function* () {
         Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_home")),
       );
 
-      const forkResponse = yield* forkCodexProviderThread({
-        providerThreadId: sourceProviderThreadId,
-        binaryPath: codexConfig.binaryPath,
-        configCwd: config.cwd,
-        spawner,
-        ...(input.preparedWorkspace !== undefined
-          ? { cwd: input.preparedWorkspace.primaryCwd }
-          : {}),
-        ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
-        environment: processEnv,
-        ...(input.lastTurnId !== undefined ? { lastTurnId: input.lastTurnId } : {}),
-        ...(input.developerInstructions
-          ? { developerInstructions: input.developerInstructions }
-          : {}),
-      }).pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_fork")));
+      const forkResponse =
+        input.nativeThread === undefined
+          ? yield* forkCodexProviderThread({
+              providerThreadId: sourceNativeId,
+              binaryPath: codexConfig.binaryPath,
+              configCwd: config.cwd,
+              spawner,
+              ...(input.preparedWorkspace !== undefined
+                ? { cwd: input.preparedWorkspace.primaryCwd }
+                : {}),
+              ...(homeLayout.effectiveHomePath ? { homePath: homeLayout.effectiveHomePath } : {}),
+              environment: processEnv,
+              ...(input.lastTurnId !== undefined ? { lastTurnId: input.lastTurnId } : {}),
+              ...(input.developerInstructions
+                ? { developerInstructions: input.developerInstructions }
+                : {}),
+            }).pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_fork")))
+          : { thread: input.nativeThread };
 
-      yield* engine
-        .dispatch({
-          type: "thread.create",
-          commandId: CommandId.make(`codex-fork-thread-create:${input.threadId}`),
-          threadId: input.threadId,
-          projectId: input.project.id,
-          title: input.title,
-          modelSelection: input.sourceThread.modelSelection,
-          runtimeMode: input.sourceThread.runtimeMode,
-          interactionMode: input.sourceThread.interactionMode,
-          ...(input.sourceThread.skillScope
-            ? { skillPackIds: input.sourceThread.skillScope.packIds }
-            : {}),
-          branch: input.preparedWorkspace?.compatibilityBranch ?? input.sourceThread.branch,
-          worktreePath:
-            input.preparedWorkspace?.compatibilityWorktreePath ?? input.sourceThread.worktreePath,
-          workspaceId: input.preparedWorkspace?.workspace.id ?? input.sourceThread.workspaceId,
-          createdAt: input.createdAt,
-        })
-        .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_create")));
-      createdThread = true;
+      const targetProviderThreadId = idAllocator.derive.providerThread({
+        driver: CODEX_DRIVER,
+        nativeThreadId: forkResponse.thread.id,
+      });
+      const providerSessionId = yield* idAllocator.allocate.providerSession({
+        providerInstanceId: codexProvider.instanceId,
+        threadId: input.threadId,
+      });
+      const targetCwd =
+        input.preparedWorkspace?.primaryCwd ?? forkResponse.thread.cwd ?? config.cwd;
+      const thread: OrchestrationV2AppThread = {
+        ...input.sourceThread,
+        createdBy: input.createdBy ?? "user",
+        creationSource: input.creationSource ?? "mcp",
+        id: input.threadId,
+        projectId: input.project.id,
+        title: input.title,
+        providerInstanceId: codexProvider.instanceId,
+        workspaceId:
+          input.preparedWorkspace?.workspace.id ?? input.sourceThread.workspaceId ?? null,
+        worktreePath:
+          input.preparedWorkspace?.compatibilityWorktreePath ?? input.sourceThread.worktreePath,
+        branch: input.preparedWorkspace?.compatibilityBranch ?? input.sourceThread.branch,
+        activeProviderThreadId: targetProviderThreadId,
+        historyOrigin: "native",
+        lineage: {
+          parentThreadId: input.sourceThread.id,
+          relationshipToParent: "fork",
+          rootThreadId: input.sourceThread.lineage.rootThreadId,
+        },
+        forkedFrom: { type: "provider_thread", providerThreadId: sourceProviderThreadId },
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+        archivedAt: null,
+        settledOverride: null,
+        settledAt: null,
+        snoozedUntil: null,
+        snoozedAt: null,
+        lastVisitedAt: null,
+        deletedAt: null,
+      };
+      const providerSession: OrchestrationV2ProviderSession = {
+        id: providerSessionId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: codexProvider.instanceId,
+        status: "stopped",
+        cwd: targetCwd,
+        model: input.sourceThread.modelSelection.model,
+        capabilities: CodexProviderCapabilitiesV2,
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+        lastError: null,
+      };
+      const providerThread: OrchestrationV2ProviderThread = {
+        id: targetProviderThreadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: codexProvider.instanceId,
+        providerSessionId,
+        appThreadId: input.threadId,
+        ownerNodeId: null,
+        nativeThreadRef: {
+          driver: CODEX_DRIVER,
+          nativeId: forkResponse.thread.id,
+          strength: "strong",
+        },
+        nativeConversationHeadRef: null,
+        status: "idle",
+        firstRunOrdinal: null,
+        lastRunOrdinal: null,
+        handoffIds: [],
+        forkedFrom: { providerThreadId: sourceProviderThreadId },
+        pendingBackgroundTasks: [],
+        createdAt: input.createdAt,
+        updatedAt: input.createdAt,
+      };
 
       const messages = codexThreadMessages({
         thread: forkResponse.thread,
-        importedAt: input.createdAt,
+        importedAt: DateTime.formatIso(input.createdAt),
+        ...(input.lastTurnId === null ? { importThroughTurnId: null } : {}),
       });
-      if (messages.length > 0) {
-        yield* engine
-          .dispatch({
-            type: "thread.messages.import",
-            commandId: CommandId.make(`codex-fork-messages-import:${input.threadId}`),
-            threadId: input.threadId,
-            messages,
-            createdAt: input.createdAt,
-          })
-          .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_import")));
-      }
+      const commandId = yield* idAllocator.allocate.command({
+        fixtureName: "codex-thread-fork",
+        commandName: input.threadId,
+      });
+      const events: Array<OrchestrationV2DomainEvent> = [];
+      const append = (event: Omit<OrchestrationV2DomainEvent, "id">) =>
+        Effect.gen(function* () {
+          events.push({
+            ...event,
+            id: yield* idAllocator.allocate.event({
+              threadId: input.threadId,
+              commandId,
+              providerSessionId,
+            }),
+          } as OrchestrationV2DomainEvent);
+        });
 
-      yield* providerSessionDirectory
-        .upsert({
+      yield* append({
+        type: "thread.created",
+        threadId: input.threadId,
+        providerInstanceId: codexProvider.instanceId,
+        occurredAt: input.createdAt,
+        payload: thread,
+      });
+      yield* append({
+        type: "provider-session.attached",
+        threadId: input.threadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: codexProvider.instanceId,
+        occurredAt: input.createdAt,
+        payload: providerSession,
+      });
+      yield* append({
+        type: "provider-thread.updated",
+        threadId: input.threadId,
+        driver: CODEX_DRIVER,
+        providerInstanceId: codexProvider.instanceId,
+        occurredAt: input.createdAt,
+        payload: providerThread,
+      });
+      for (const [ordinal, message] of messages.entries()) {
+        const messageId = message.id;
+        const timestamp = DateTime.makeUnsafe(message.createdAt);
+        const conversationMessage: OrchestrationV2ConversationMessage = {
+          createdBy: message.role === "user" ? "user" : "agent",
+          creationSource: "provider",
+          id: messageId,
           threadId: input.threadId,
-          provider: CODEX_DRIVER,
+          runId: null,
+          nodeId: null,
+          role: message.role,
+          text: message.text,
+          attachments: [],
+          streaming: false,
+          createdAt: timestamp,
+          updatedAt: DateTime.makeUnsafe(message.updatedAt),
+        };
+        const turnItemId = idAllocator.derive.turnItemFromProviderItem({
+          driver: CODEX_DRIVER,
+          nativeItemId: messageId,
+        });
+        const turnItem: OrchestrationV2TurnItem =
+          message.role === "user"
+            ? {
+                createdBy: "user",
+                creationSource: "provider",
+                id: turnItemId,
+                threadId: input.threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: targetProviderThreadId,
+                providerTurnId: null,
+                nativeItemRef: { driver: CODEX_DRIVER, nativeId: messageId, strength: "weak" },
+                parentItemId: null,
+                ordinal,
+                status: "completed",
+                title: null,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                updatedAt: timestamp,
+                type: "user_message",
+                messageId,
+                inputIntent: "turn_start",
+                text: message.text,
+                attachments: [],
+              }
+            : {
+                id: turnItemId,
+                threadId: input.threadId,
+                runId: null,
+                nodeId: null,
+                providerThreadId: targetProviderThreadId,
+                providerTurnId:
+                  message.turnId === null
+                    ? null
+                    : idAllocator.derive.providerTurn({
+                        driver: CODEX_DRIVER,
+                        nativeTurnId: message.turnId,
+                      }),
+                nativeItemRef: { driver: CODEX_DRIVER, nativeId: messageId, strength: "weak" },
+                parentItemId: null,
+                ordinal,
+                status: "completed",
+                title: null,
+                startedAt: timestamp,
+                completedAt: timestamp,
+                updatedAt: timestamp,
+                type: "assistant_message",
+                messageId,
+                text: message.text,
+                attachments: [],
+                streaming: false,
+              };
+        yield* append({
+          type: "message.updated",
+          threadId: input.threadId,
+          driver: CODEX_DRIVER,
           providerInstanceId: codexProvider.instanceId,
-          status: "stopped",
-          resumeCursor: { threadId: forkResponse.thread.id },
-          runtimePayload: {
-            cwd: forkResponse.thread.cwd,
-            modelSelection: input.sourceThread.modelSelection,
-            source: "codex-thread-fork",
-            sourceThreadId: input.sourceThread.id,
-            sourceProviderThreadId,
-          },
-          runtimeMode: input.sourceThread.runtimeMode,
-        })
-        .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_binding")));
-
-      yield* engine
-        .dispatch({
-          type: "thread.session.set",
-          commandId: CommandId.make(`codex-fork-session-set:${input.threadId}`),
+          occurredAt: timestamp,
+          payload: conversationMessage,
+        });
+        yield* append({
+          type: "turn-item.updated",
           threadId: input.threadId,
-          session: {
-            threadId: input.threadId,
-            status: "stopped",
-            providerName: CODEX_DRIVER,
-            providerInstanceId: codexProvider.instanceId,
-            runtimeMode: input.sourceThread.runtimeMode,
-            activeTurnId: null,
-            lastError: null,
-            updatedAt: input.createdAt,
-          },
-          createdAt: input.createdAt,
-        })
-        .pipe(Effect.mapError(toThreadOrchestrationError(input, "fork_thread.codex_session")));
-
+          driver: CODEX_DRIVER,
+          providerInstanceId: codexProvider.instanceId,
+          occurredAt: timestamp,
+          payload: turnItem,
+        });
+      }
+      yield* eventSink.write({ commandId, events });
+      const projection: OrchestrationV2ThreadProjection = {
+        thread,
+        runs: [],
+        attempts: [],
+        nodes: [],
+        subagents: [],
+        providerSessions: [providerSession],
+        providerThreads: [providerThread],
+        providerTurns: [],
+        runtimeRequests: [],
+        messages: events.flatMap((event) =>
+          event.type === "message.updated" ? [event.payload] : [],
+        ),
+        plans: [],
+        turnItems: events.flatMap((event) =>
+          event.type === "turn-item.updated" ? [event.payload] : [],
+        ),
+        checkpointScopes: [],
+        checkpoints: [],
+        contextHandoffs: [],
+        contextTransfers: [],
+        visibleTurnItems: [],
+        updatedAt: input.createdAt,
+      };
       return {
-        thread: {
-          environmentId: (yield* environment.getDescriptor).environmentId,
-          threadId: input.threadId,
-          projectId: input.project.id,
-          title: input.title,
-          projectTitle: input.project.title,
-          status: "idle" as const,
-          modelSelection: input.sourceThread.modelSelection,
-          runtimeMode: input.sourceThread.runtimeMode,
-          interactionMode: input.sourceThread.interactionMode,
-          workspaceRoot: input.project.workspaceRoot,
-          worktreePath:
-            input.preparedWorkspace?.compatibilityWorktreePath ?? input.sourceThread.worktreePath,
-          createdAt: input.createdAt,
-          updatedAt: input.createdAt,
-        },
+        threadId: input.threadId,
+        providerThreadId: targetProviderThreadId,
         sourceProviderThreadId,
-        providerThreadId: forkResponse.thread.id,
         importedMessageCount: messages.length,
+        projection,
       };
     }).pipe(
-      Effect.catch((cause: ThreadOrchestrationError) =>
-        cleanupCreatedThread().pipe(Effect.flatMap(() => Effect.fail(cause))),
-      ),
+      Effect.mapError((cause) => {
+        if (isThreadOrchestrationError(cause)) return cause;
+        return toThreadOrchestrationError(input, "fork_thread.codex")(cause);
+      }),
     );
-  };
 
   return { fork };
 });
 
 export const CodexThreadForkImporterLive = Layer.effect(CodexThreadForkImporter, make);
+
+function selectCodexProvider(
+  providers: ReadonlyArray<{
+    readonly driver: ProviderDriverKind;
+    readonly instanceId: ProviderInstanceId;
+    readonly enabled: boolean;
+    readonly availability?: string;
+  }>,
+  ...preferredInstanceIds: ReadonlyArray<ProviderInstanceId>
+) {
+  const usable = providers.filter(
+    (provider) =>
+      provider.driver === CODEX_DRIVER &&
+      provider.enabled &&
+      provider.availability !== "unavailable",
+  );
+  return (
+    preferredInstanceIds
+      .map((instanceId) => usable.find((provider) => provider.instanceId === instanceId))
+      .find(Boolean) ??
+    usable.find((provider) => provider.instanceId === DEFAULT_CODEX_INSTANCE_ID) ??
+    usable[0]
+  );
+}
 
 function unsupportedSource(threadId: ThreadId, reason: string) {
   return new ThreadOrchestrationError({
@@ -321,18 +480,6 @@ function unsupportedSource(threadId: ThreadId, reason: string) {
     message: `Thread '${threadId}' cannot be forked through Codex App Server because it ${reason}.`,
     threadId,
   });
-}
-
-function providerThreadIdFromResumeCursor(resumeCursor: unknown): string | undefined {
-  if (!resumeCursor || typeof resumeCursor !== "object" || !("threadId" in resumeCursor)) {
-    return undefined;
-  }
-  const raw = resumeCursor.threadId;
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-  const trimmed = raw.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
 }
 
 function toThreadOrchestrationError(input: CodexThreadForkImportInput, operation: string) {

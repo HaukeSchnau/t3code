@@ -1,4 +1,5 @@
 import * as Option from "effect/Option";
+import * as DateTime from "effect/DateTime";
 
 import type {
   ConnectionAttemptError,
@@ -243,10 +244,21 @@ export function projectEnvironmentConnectionProgress(
 function snapshotIdentity(state: EnvironmentShellState): SnapshotIdentity | null {
   return Option.match(state.snapshot, {
     onNone: () => null,
-    onSome: (snapshot) => ({
-      contentSequence: snapshot.snapshotSequence,
-      updatedAt: snapshot.updatedAt,
-    }),
+    onSome: (snapshot) => {
+      const updatedAt = [
+        ...snapshot.threads.concat(snapshot.archivedThreads).map((thread) =>
+          DateTime.formatIso(thread.updatedAt),
+        ),
+        ...snapshot.projects.map((project) => project.updatedAt),
+      ].reduce<string | null>(
+        (latest, candidate) => latest === null || candidate > latest ? candidate : latest,
+        null,
+      );
+      return {
+        contentSequence: snapshot.snapshotSequence,
+        updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
+      };
+    },
   });
 }
 

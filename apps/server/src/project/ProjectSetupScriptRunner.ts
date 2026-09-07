@@ -1,7 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off -- setup journal identities require a stable cryptographic digest.
 import * as NodeCrypto from "node:crypto";
 
-import { ProjectId } from "@t3tools/contracts";
+import { ProjectId, type ProjectScript } from "@t3tools/contracts";
 import {
   projectScriptRuntimeEnv,
   resolveProjectScripts,
@@ -20,6 +20,7 @@ import * as ServerConfig from "../config.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import * as ProjectService from "./ProjectService.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 export const SETUP_RECONCILIATION_TIMEOUT_MILLIS = 30_000;
@@ -70,6 +71,7 @@ export type ProjectSetupScriptRunnerResult =
   | ProjectSetupScriptRunnerResultStarted;
 
 export interface ProjectSetupScriptRunnerInput {
+  readonly project?: { readonly id?: ProjectId; readonly workspaceRoot: string; readonly scripts: ReadonlyArray<ProjectScript> };
   readonly threadId: string;
   readonly projectId?: string;
   readonly projectCwd?: string;
@@ -177,7 +179,7 @@ export class ProjectSetupScriptRunner extends Context.Service<
 >()("t3/project/ProjectSetupScriptRunner") {}
 
 export const make = Effect.gen(function* () {
-  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+  const projects = yield* ProjectService.ProjectService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -193,23 +195,27 @@ export const make = Effect.gen(function* () {
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.projectCwd === undefined ? {} : { projectCwd: input.projectCwd }),
     };
-    const projectById = input.projectId
-      ? yield* projectionSnapshotQuery.getProjectShellById(ProjectId.make(input.projectId)).pipe(
-          Effect.map(Option.getOrUndefined),
-          Effect.mapError(
-            (cause) =>
-              new ProjectSetupScriptOperationError({
-                ...errorContext,
-                operation: "resolveProject",
-                cause,
-              }),
-          ),
-        )
-      : null;
+    const suppliedProject = input.project;
+    const projectById =
+      suppliedProject ??
+      (input.projectId
+        ? yield* projects.getById(ProjectId.make(input.projectId)).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.mapError(
+              (cause) =>
+                new ProjectSetupScriptOperationError({
+                  ...errorContext,
+                  operation: "resolveProject",
+                  cause,
+                }),
+            ),
+          )
+        : null);
     const project =
+      suppliedProject ??
       projectById ??
       (input.projectCwd
-        ? yield* projectionSnapshotQuery.getActiveProjectByWorkspaceRoot(input.projectCwd).pipe(
+        ? yield* projects.getByWorkspaceRoot(input.projectCwd).pipe(
             Effect.map(Option.getOrUndefined),
             Effect.mapError(
               (cause) =>
@@ -235,7 +241,7 @@ export const make = Effect.gen(function* () {
           }),
       ),
     );
-    const script = setupProjectScript(resolveProjectScripts(settings, project));
+    const script = setupProjectScript(resolveProjectScripts(settings, { ...project, ...(input.projectId === undefined ? {} : { id: ProjectId.make(input.projectId) }) }));
     if (!script) return { errorContext, project, script: null } as const;
     const terminalId = input.preferredTerminalId ?? `setup-${script.id}`;
     return {

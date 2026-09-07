@@ -1,381 +1,67 @@
 import {
   ANTIGRAVITY_DEFAULT_MODEL,
+  ProviderDriverKind,
+  type ServerProvider,
+} from "@t3tools/contracts";
+import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
+import type { RightPanelSurface } from "../rightPanelStore";
+import {
   EnvironmentId,
   MessageId,
   ProjectId,
-  ProviderDriverKind,
   ProviderInstanceId,
-  type ServerProvider,
   ThreadId,
-  TurnId,
+  RunId,
+  TurnItemId,
+  type OrchestrationV2ProjectedTurnItem,
 } from "@t3tools/contracts";
+import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
+import * as DateTime from "effect/DateTime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import type { Thread, ThreadShell, TurnDiffSummary } from "../types";
-import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
-import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import type { Thread, TurnDiffSummary } from "../types";
+import { makeThreadFixture } from "../test-fixtures";
 import {
-  type RightPanelSurface,
-  pullRequestSurface,
-  selectActiveRightPanelSurface,
-  useRightPanelStore,
-} from "../rightPanelStore";
-import {
-  selectThreadPreviewMiniPlayer,
-  usePreviewMiniPlayerStore,
-} from "../previewMiniPlayerStore";
-import {
-  MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
-  MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
   agentControlledBrowserCloseConfirmation,
-  branchMismatchKey,
-  buildExpiredTerminalContextToastCopy,
-  buildLoadingThreadFromShell,
-  buildThreadTurnInterruptInput,
-  collectAuthoritativeProjectedMessageIds,
-  createLocalDispatchSnapshot,
-  deriveComposerSendState,
-  deriveLockedProvider,
-  dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getAntigravitySendBlockReason,
-  getStartedThreadModelChangeBlockReason,
-  hasEnvironmentReconnectWarningGraceElapsed,
-  hasServerAcknowledgedLocalDispatch,
-  shouldRefocusComposerOnWindowFocus,
-  isBranchMismatchDismissedForSession,
-  reconcileMountedTerminalThreadIds,
-  reconcileRetainedMountedThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
-  resolveDraftPromotionNavigationTarget,
-  observeProactivePanelUserChoice,
   resolveProactiveTurnDiffAction,
-  resolveThreadMetadataUpdateForNextTurn,
-  resolveSendEnvMode,
   resolveDraftHeroState,
   scheduleEnvironmentReconnectWarning,
-  startNewThreadForProject,
   codexArtifactTemplatePromptToAppend,
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
   shouldOpenProactivePullRequest,
-  shouldRetargetThreadPullRequestPanel,
   shouldOpenProactiveTurnDiff,
   shouldRenderPreviewMiniPlayer,
+  MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+  MAX_HIDDEN_MOUNTED_TERMINAL_THREADS,
+  branchMismatchKey,
+  buildExpiredTerminalContextToastCopy,
+  createLocalDispatchSnapshot,
+  deriveCommittedServerUserMessageIds,
+  deriveComposerSendState,
+  dismissBranchMismatchForSession,
+  getStartedThreadModelChangeBlockReason,
+  hasEnvironmentReconnectWarningGraceElapsed,
+  hasServerAcknowledgedLocalDispatch,
+  isBranchMismatchDismissedForSession,
+  reconcileMountedTerminalThreadIds,
+  reconcileRetainedMountedThreadIds,
+  resolveDraftPromotionNavigationTarget,
+  resolveEffectiveInteractionMode,
+  resolveThreadMetadataUpdateForNextTurn,
+  resolveSendEnvMode,
+  startNewThreadForProject,
   shouldShowBranchMismatchBanner,
+  shouldShowComposerContextStrip,
   shouldShowPlanFollowUpPrompt,
   shouldWriteThreadErrorToCurrentServerThread,
   toolGroupConsumesUpwardNavigation,
 } from "./ChatView.logic";
-
-describe("agent browser close confirmation", () => {
-  const surfaces = [
-    { id: "browser:one", kind: "preview", resourceId: "tab-1" },
-    { id: "browser:two", kind: "preview", resourceId: "tab-2" },
-    { id: "diff", kind: "diff" },
-  ] satisfies RightPanelSurface[];
-
-  it("only warns for browsers under active agent control", () => {
-    expect(
-      agentControlledBrowserCloseConfirmation(surfaces, {
-        "tab-1": { controller: "none" },
-        "tab-2": { controller: "human" },
-      }),
-    ).toBeNull();
-
-    expect(
-      agentControlledBrowserCloseConfirmation([surfaces[0]!], {
-        "tab-1": { controller: "agent" },
-      }),
-    ).toBe(
-      [
-        "Close browser while the agent is using it?",
-        "The agent is actively controlling this browser. Closing it may interrupt the current browser action.",
-      ].join("\n"),
-    );
-  });
-
-  it("counts every agent-controlled browser in a bulk close", () => {
-    expect(
-      agentControlledBrowserCloseConfirmation(surfaces, {
-        "tab-1": { controller: "agent" },
-        "tab-2": { controller: "agent" },
-      }),
-    ).toContain("Close 2 browsers");
-  });
-});
-
-describe("floating browser preview", () => {
-  it("keeps agent preview intent when a user selects its browser tab and then switches away", () => {
-    useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
-    usePreviewMiniPlayerStore.setState({ byThreadKey: {} });
-    const ref = scopeThreadRef(EnvironmentId.make("env-1"), ThreadId.make("thread-1"));
-    const panels = useRightPanelStore.getState();
-    const revision = panels.getUserActionRevision(ref);
-    usePreviewMiniPlayerStore.getState().open(ref, "agent-tab");
-    panels.reconcileBrowserSurfaces(ref, ["agent-tab"]);
-    const intent = selectThreadPreviewMiniPlayer(
-      usePreviewMiniPlayerStore.getState().byThreadKey,
-      ref,
-    );
-    const isFloating = () =>
-      shouldRenderPreviewMiniPlayer(
-        selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, ref)
-          ?.tabId ?? null,
-        selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, ref),
-      );
-
-    panels.openProactive(ref, { id: "diff", kind: "diff" }, revision);
-    expect(isFloating()).toBe(true);
-    panels.activateSurface(ref, "browser:agent-tab");
-    expect(isFloating()).toBe(false);
-    expect(panels.openProactive(ref, { id: "diff", kind: "diff" }, revision)).toBe(false);
-    panels.open(ref, "diff");
-    expect(isFloating()).toBe(true);
-    expect(
-      selectThreadPreviewMiniPlayer(usePreviewMiniPlayerStore.getState().byThreadKey, ref),
-    ).toBe(intent);
-  });
-
-  it("only hides the duplicate while the same browser is rendered in the panel", () => {
-    expect(shouldRenderPreviewMiniPlayer(null, null)).toBe(false);
-    expect(
-      shouldRenderPreviewMiniPlayer("tab-1", {
-        id: "browser:one",
-        kind: "preview",
-        resourceId: "tab-1",
-      }),
-    ).toBe(false);
-    expect(
-      shouldRenderPreviewMiniPlayer("tab-1", {
-        id: "browser:two",
-        kind: "preview",
-        resourceId: "tab-2",
-      }),
-    ).toBe(true);
-    expect(shouldRenderPreviewMiniPlayer("tab-1", { id: "diff", kind: "diff" })).toBe(true);
-  });
-});
-
-describe("proactive panels", () => {
-  it("keeps a manual PR selection made after following a replacement while loading", () => {
-    useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
-    const ref = scopeThreadRef(EnvironmentId.make("env-1"), ThreadId.make("thread-1"));
-    const panels = useRightPanelStore.getState();
-    const oldPr = pullRequestSurface({
-      projectId: "project-1",
-      repository: "owner/repo",
-      number: 1,
-    });
-    const replacement = pullRequestSurface({ ...oldPr, number: 2 });
-    const turnId = TurnId.make("turn-1");
-    panels.openPullRequest(ref, oldPr);
-    const loading = observeProactivePanelUserChoice(null, {
-      threadKey: "env-1:thread-1",
-      runningTurnId: turnId,
-      userActionRevision: panels.getUserActionRevision(ref),
-    });
-    expect(panels.openProactive(ref, replacement, loading.userActionRevision)).toBe(true);
-
-    panels.activateSurface(ref, oldPr.id);
-    const loaded = observeProactivePanelUserChoice(loading, {
-      threadKey: loading.threadKey,
-      runningTurnId: turnId,
-      userActionRevision: panels.getUserActionRevision(ref),
-    });
-    expect(panels.openProactive(ref, replacement, loaded.userActionRevision)).toBe(false);
-    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, ref)).toEqual(
-      oldPr,
-    );
-    expect(shouldOpenProactivePullRequest(loaded.targetKey, "owner/repo:2")).toBe(false);
-    expect(
-      shouldOpenProactiveTurnDiff({
-        previousRunningTurnId: loaded.runningTurnId,
-        runningTurnId: null,
-        settledTurnId: turnId,
-        turnCompleted: true,
-      }),
-    ).toBe(false);
-  });
-
-  it.each(["idle", "loading", "observed"] as const)(
-    "captures a new turn's choice once with initial state %s",
-    (initialState) => {
-      useRightPanelStore.setState({ byThreadKey: {}, userActionRevisionByThreadKey: {} });
-      const ref = scopeThreadRef(EnvironmentId.make("env-1"), ThreadId.make("thread-1"));
-      const panels = useRightPanelStore.getState();
-      const firstTurn = TurnId.make("turn-1");
-      const nextTurn = TurnId.make("turn-2");
-      const initial = observeProactivePanelUserChoice(null, {
-        threadKey: "env-1:thread-1",
-        runningTurnId: initialState === "idle" ? null : firstTurn,
-        userActionRevision: panels.getUserActionRevision(ref),
-      });
-      panels.openFile(ref, "src/first.ts");
-      const loadingNextTurn = observeProactivePanelUserChoice(
-        {
-          ...initial,
-          ...(initialState === "observed" ? { runningTurnId: firstTurn, targetKey: null } : {}),
-        },
-        {
-          threadKey: initial.threadKey,
-          runningTurnId: nextTurn,
-          userActionRevision: panels.getUserActionRevision(ref),
-        },
-      );
-      expect(
-        panels.openProactive(ref, { id: "diff", kind: "diff" }, loadingNextTurn.userActionRevision),
-      ).toBe(true);
-
-      panels.openFile(ref, "src/second.ts");
-      const loaded = observeProactivePanelUserChoice(loadingNextTurn, {
-        threadKey: initial.threadKey,
-        runningTurnId: nextTurn,
-        userActionRevision: panels.getUserActionRevision(ref),
-      });
-      expect(
-        panels.openProactive(ref, { id: "diff", kind: "diff" }, loaded.userActionRevision),
-      ).toBe(false);
-      expect(
-        selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, ref)?.id,
-      ).toBe("file:src/second.ts");
-    },
-  );
-
-  it("opens a pull request only after a newly observed link appears", () => {
-    expect(shouldOpenProactivePullRequest(undefined, "project:repo:42")).toBe(false);
-    expect(shouldOpenProactivePullRequest(null, "project:repo:42")).toBe(true);
-    expect(shouldOpenProactivePullRequest("project:repo:42", "project:repo:42")).toBe(false);
-    expect(shouldOpenProactivePullRequest("project:repo:42", null)).toBe(false);
-  });
-
-  it("follows a changed server PR link without replacing an unrelated open panel", () => {
-    const previous = {
-      projectId: ProjectId.make("project-1"),
-      repository: "pingdotgg/t3code",
-      number: 42,
-      url: "https://github.com/pingdotgg/t3code/pull/42",
-    };
-    const current = {
-      ...previous,
-      number: 43,
-      url: "https://github.com/pingdotgg/t3code/pull/43",
-    };
-    const surface = {
-      id: "pull-request:previous",
-      kind: "pull-request",
-      projectId: previous.projectId,
-      repository: "PingDotGG/T3Code",
-      number: previous.number,
-    } satisfies RightPanelSurface;
-
-    expect(shouldRetargetThreadPullRequestPanel(previous, current, surface)).toBe(true);
-    expect(shouldRetargetThreadPullRequestPanel(previous, previous, surface)).toBe(false);
-    expect(shouldRetargetThreadPullRequestPanel(previous, null, surface)).toBe(false);
-    expect(
-      shouldRetargetThreadPullRequestPanel(previous, current, { ...surface, number: 99 }),
-    ).toBe(false);
-    expect(
-      shouldRetargetThreadPullRequestPanel(previous, current, {
-        ...surface,
-        projectId: "another-project",
-      }),
-    ).toBe(false);
-  });
-
-  it("opens the diff only when the observed running turn settles", () => {
-    const turnId = TurnId.make("turn-1");
-    expect(
-      shouldOpenProactiveTurnDiff({
-        previousRunningTurnId: undefined,
-        runningTurnId: null,
-        settledTurnId: turnId,
-        turnCompleted: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOpenProactiveTurnDiff({
-        previousRunningTurnId: turnId,
-        runningTurnId: null,
-        settledTurnId: turnId,
-        turnCompleted: true,
-      }),
-    ).toBe(true);
-    expect(
-      shouldOpenProactiveTurnDiff({
-        previousRunningTurnId: turnId,
-        runningTurnId: TurnId.make("turn-2"),
-        settledTurnId: turnId,
-        turnCompleted: true,
-      }),
-    ).toBe(false);
-    expect(
-      shouldOpenProactiveTurnDiff({
-        previousRunningTurnId: turnId,
-        runningTurnId: null,
-        settledTurnId: turnId,
-        turnCompleted: false,
-      }),
-    ).toBe(false);
-  });
-
-  it("opens a completed turn diff only for changed files", () => {
-    const changedCheckpoint = {
-      status: "ready",
-      files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-    } satisfies Pick<TurnDiffSummary, "status" | "files">;
-    const unchangedCheckpoint = {
-      status: "ready",
-      files: [],
-    } satisfies Pick<TurnDiffSummary, "status" | "files">;
-
-    expect(
-      resolveProactiveTurnDiffAction({
-        checkpoint: changedCheckpoint,
-        isGitRepo: true,
-      }),
-    ).toBe("open");
-    expect(
-      resolveProactiveTurnDiffAction({
-        checkpoint: unchangedCheckpoint,
-        isGitRepo: true,
-      }),
-    ).toBe("ignore");
-  });
-
-  it("waits for definitive checkpoint and repository state", () => {
-    const missingCheckpoint = {
-      status: "missing",
-      files: [],
-    } satisfies Pick<TurnDiffSummary, "status" | "files">;
-    const changedCheckpoint = {
-      status: "ready",
-      files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
-    } satisfies Pick<TurnDiffSummary, "status" | "files">;
-
-    expect(
-      resolveProactiveTurnDiffAction({
-        checkpoint: undefined,
-        isGitRepo: true,
-      }),
-    ).toBe("defer");
-    expect(
-      resolveProactiveTurnDiffAction({
-        checkpoint: missingCheckpoint,
-        isGitRepo: true,
-      }),
-    ).toBe("defer");
-    expect(
-      resolveProactiveTurnDiffAction({
-        checkpoint: changedCheckpoint,
-        isGitRepo: undefined,
-      }),
-    ).toBe("defer");
-  });
-});
 
 describe("toolGroupConsumesUpwardNavigation", () => {
   class ScrollElement extends EventTarget {
@@ -516,6 +202,909 @@ const helloWorldTemplate: CodexArtifactTemplate = {
   skillName: "artifact-template-hello-world",
 };
 
+function makeThread(overrides: Partial<Thread> = {}): Thread {
+  return makeThreadFixture({
+    id: threadId,
+    environmentId,
+    projectId,
+    title: "Thread",
+    modelSelection: {
+      instanceId: ProviderInstanceId.make("codex"),
+      model: "gpt-5.4",
+    },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    runtime: null,
+    messages: [],
+    proposedPlans: [],
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
+    latestRun: null,
+    branch: null,
+    worktreePath: null,
+    ...overrides,
+  });
+}
+
+const completedTurn = {
+  runId: RunId.make("turn-1"),
+  status: "completed" as const,
+  requestedAt: now,
+  startedAt: "2026-03-29T00:00:01.000Z",
+  completedAt: "2026-03-29T00:00:10.000Z",
+  assistantMessageId: null,
+};
+
+const readySession = {
+  status: "completed" as const,
+  providerName: "codex",
+  providerInstanceId: ProviderInstanceId.make("codex"),
+  activeRunId: null,
+  lastError: null,
+  updatedAt: "2026-03-29T00:00:10.000Z",
+};
+
+describe("resolveDraftPromotionNavigationTarget", () => {
+  const serverThreadRef = { environmentId, threadId };
+  const preparingRun = {
+    ...completedTurn,
+    status: "preparing" as const,
+    startedAt: null,
+    completedAt: null,
+  };
+
+  it("stays on the draft while the workspace is still preparing", () => {
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef,
+        serverThread: makeThread({ latestRun: preparingRun }),
+        backgroundSubmissionPending: false,
+      }),
+    ).toBeNull();
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef,
+        serverThread: makeThread(),
+        backgroundSubmissionPending: false,
+      }),
+    ).toBeNull();
+  });
+
+  it("navigates once the run starts or startup stops", () => {
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef,
+        serverThread: makeThread({ latestRun: completedTurn }),
+        backgroundSubmissionPending: false,
+      }),
+    ).toBe(serverThreadRef);
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef,
+        serverThread: makeThread({
+          latestRun: { ...preparingRun, status: "failed" as const },
+        }),
+        backgroundSubmissionPending: false,
+      }),
+    ).toBe(serverThreadRef);
+  });
+
+  it("defers while a background submission is pending", () => {
+    expect(
+      resolveDraftPromotionNavigationTarget({
+        serverThreadRef,
+        serverThread: makeThread({ latestRun: completedTurn }),
+        backgroundSubmissionPending: true,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("resolveEffectiveInteractionMode", () => {
+  it("forces build mode when legacy plan mode is disabled", () => {
+    expect(
+      resolveEffectiveInteractionMode({
+        planModeEnabled: false,
+        composerInteractionMode: "plan",
+        threadInteractionMode: "plan",
+      }),
+    ).toBe("default");
+  });
+
+  it("uses the saved mode while legacy plan mode is enabled", () => {
+    expect(
+      resolveEffectiveInteractionMode({
+        planModeEnabled: true,
+        composerInteractionMode: null,
+        threadInteractionMode: "plan",
+      }),
+    ).toBe("plan");
+  });
+});
+
+describe("resolveThreadMetadataUpdateForNextTurn", () => {
+  const modelSelection = {
+    instanceId: ProviderInstanceId.make("codex"),
+    model: "gpt-5.4",
+  };
+
+  it("updates a stale local thread branch to the active checkout", () => {
+    expect(
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        currentBranch: "feature/thread",
+        nextBranch: "feature/checkout",
+      }),
+    ).toEqual({ branch: "feature/checkout", worktreePath: null });
+  });
+
+  it("does not write metadata when the model and branch are unchanged", () => {
+    expect(
+      resolveThreadMetadataUpdateForNextTurn({
+        currentModelSelection: modelSelection,
+        nextModelSelection: modelSelection,
+        currentBranch: "feature/current",
+        nextBranch: "feature/current",
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("shouldShowComposerContextStrip", () => {
+  it("shows git context while composing a new thread", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps git context in an active thread only when requested", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: false,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: false,
+        isGitRepo: true,
+        hasActiveProject: true,
+        persistInActiveThreads: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("hides git context without a git-backed project", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: false,
+        hasActiveProject: true,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldShowComposerContextStrip({
+        isDraftHeroState: true,
+        isGitRepo: true,
+        hasActiveProject: false,
+        persistInActiveThreads: true,
+      }),
+    ).toBe(false);
+  });
+});
+describe("deriveComposerSendState", () => {
+  it("treats expired terminal pills as non-sendable content", () => {
+    const state = deriveComposerSendState({
+      prompt: "\uFFFC",
+      imageCount: 0,
+      terminalContexts: [
+        {
+          id: "ctx-expired",
+          threadId,
+          terminalId: "default",
+          terminalLabel: "Terminal 1",
+          lineStart: 4,
+          lineEnd: 4,
+          text: "",
+          createdAt: now,
+        },
+      ],
+    });
+
+    expect(state.trimmedPrompt).toBe("");
+    expect(state.sendableTerminalContexts).toEqual([]);
+    expect(state.expiredTerminalContextCount).toBe(1);
+    expect(state.hasSendableContent).toBe(false);
+  });
+
+  it("keeps text sendable while excluding expired terminal pills", () => {
+    const state = deriveComposerSendState({
+      prompt: `yoo \uFFFC waddup`,
+      imageCount: 0,
+      terminalContexts: [
+        {
+          id: "ctx-expired",
+          threadId,
+          terminalId: "default",
+          terminalLabel: "Terminal 1",
+          lineStart: 4,
+          lineEnd: 4,
+          text: "",
+          createdAt: now,
+        },
+      ],
+    });
+
+    expect(state.trimmedPrompt).toBe("yoo  waddup");
+    expect(state.expiredTerminalContextCount).toBe(1);
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("treats element contexts as sendable content (no text, no images, no terminals)", () => {
+    const state = deriveComposerSendState({
+      prompt: "",
+      imageCount: 0,
+      terminalContexts: [],
+      elementContextCount: 1,
+    });
+
+    expect(state.trimmedPrompt).toBe("");
+    expect(state.expiredTerminalContextCount).toBe(0);
+    expect(state.hasSendableContent).toBe(true);
+  });
+
+  it("does NOT treat zero element contexts as sendable", () => {
+    expect(
+      deriveComposerSendState({
+        prompt: "",
+        imageCount: 0,
+        terminalContexts: [],
+        elementContextCount: 0,
+      }).hasSendableContent,
+    ).toBe(false);
+  });
+});
+
+describe("buildExpiredTerminalContextToastCopy", () => {
+  it("formats empty and omission guidance", () => {
+    expect(buildExpiredTerminalContextToastCopy(1, "empty")).toEqual({
+      title: "Expired terminal context won't be sent",
+      description: "Remove it or re-add it to include terminal output.",
+    });
+    expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
+      title: "Expired terminal contexts omitted from message",
+      description: "Re-add it if you want that terminal output included.",
+    });
+  });
+});
+
+describe("getStartedThreadModelChangeBlockReason", () => {
+  const providers = [
+    {
+      instanceId: ProviderInstanceId.make("codex"),
+    },
+    {
+      instanceId: ProviderInstanceId.make("grok"),
+      requiresNewThreadForModelChange: true,
+    },
+  ];
+
+  it("allows model changes before a provider session has started", () => {
+    expect(
+      getStartedThreadModelChangeBlockReason({
+        providers,
+        hasStartedSession: false,
+        currentModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-other",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("allows unchanged model selections for restricted providers", () => {
+    expect(
+      getStartedThreadModelChangeBlockReason({
+        providers,
+        hasStartedSession: true,
+        currentModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+      }),
+    ).toBeNull();
+  });
+
+  it("blocks started-session model changes for providers that require a new thread", () => {
+    expect(
+      getStartedThreadModelChangeBlockReason({
+        providers,
+        hasStartedSession: true,
+        currentModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-build",
+        },
+        nextModelSelection: {
+          instanceId: ProviderInstanceId.make("grok"),
+          model: "grok-other",
+        },
+      }),
+    ).toEqual({
+      title: "Start a new chat to change models",
+      description:
+        "This provider does not allow switching models after a conversation has started.",
+    });
+  });
+});
+
+describe("resolveSendEnvMode", () => {
+  it("keeps worktree mode only for git repositories", () => {
+    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
+    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("local");
+  });
+});
+
+describe("branchMismatchKey", () => {
+  it("builds a key from thread id and both branches", () => {
+    expect(branchMismatchKey("thread-1", { threadBranch: "feat/a", currentBranch: "feat/b" })).toBe(
+      "thread-1:feat/a:feat/b",
+    );
+  });
+
+  it("returns null without a thread or mismatch", () => {
+    expect(branchMismatchKey(null, { threadBranch: "a", currentBranch: "b" })).toBeNull();
+    expect(branchMismatchKey("thread-1", null)).toBeNull();
+  });
+});
+
+describe("shouldShowBranchMismatchBanner", () => {
+  const base = {
+    hasMismatch: true,
+    isDismissed: false,
+    composerHasContent: false,
+    wasShownForCurrentMismatch: false,
+  };
+
+  it("stays hidden during passive browsing (even though the composer autofocuses)", () => {
+    expect(shouldShowBranchMismatchBanner(base)).toBe(false);
+  });
+
+  it("shows once the composer has draft content", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, composerHasContent: true })).toBe(true);
+  });
+
+  it("stays mounted after the draft clears once shown for the current mismatch", () => {
+    expect(shouldShowBranchMismatchBanner({ ...base, wasShownForCurrentMismatch: true })).toBe(
+      true,
+    );
+  });
+
+  it("never shows when dismissed or without a mismatch", () => {
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, isDismissed: true }),
+    ).toBe(false);
+    expect(
+      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldShowPlanFollowUpPrompt", () => {
+  const base = {
+    pendingUserInputCount: 0,
+    interactionMode: "plan" as const,
+    latestTurnSettled: true,
+    hasActionableProposedPlan: true,
+    hasComposerAttachments: false,
+  };
+
+  it("shows plan actions for a settled actionable plan without attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
+  });
+
+  it("hides plan actions while the composer has staged attachments", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
+  });
+
+  it("preserves the existing plan follow-up gates", () => {
+    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
+    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
+  });
+});
+
+describe("session branch mismatch dismissal", () => {
+  it("tracks dismissed keys and treats other keys as active", () => {
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(false);
+    dismissBranchMismatchForSession("t1:a:b");
+    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(true);
+    expect(isBranchMismatchDismissedForSession("t1:a:c")).toBe(false);
+    expect(isBranchMismatchDismissedForSession(null)).toBe(false);
+  });
+});
+
+describe("reconcileMountedTerminalThreadIds", () => {
+  it("keeps open threads and makes the active thread most recent", () => {
+    expect(
+      reconcileMountedTerminalThreadIds({
+        currentThreadIds: ["thread-a", "thread-b", "thread-c"],
+        openThreadIds: ["thread-a", "thread-b", "thread-c"],
+        activeThreadId: "thread-a",
+        activeThreadTerminalOpen: true,
+        maxHiddenThreadCount: 2,
+      }),
+    ).toEqual(["thread-b", "thread-c", "thread-a"]);
+  });
+
+  it("drops closed threads and enforces the hidden mounted cap", () => {
+    const ids = Array.from(
+      { length: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS + 2 },
+      (_, index) => `thread-${index}`,
+    );
+    expect(
+      reconcileMountedTerminalThreadIds({
+        currentThreadIds: ids,
+        openThreadIds: ids.slice(1),
+        activeThreadId: null,
+        activeThreadTerminalOpen: false,
+      }),
+    ).toEqual(ids.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
+  });
+});
+
+describe("reconcileRetainedMountedThreadIds", () => {
+  it("retains hidden open threads and adds the active open thread", () => {
+    expect(
+      reconcileRetainedMountedThreadIds({
+        currentThreadIds: [ThreadId.make("thread-hidden")],
+        openThreadIds: [ThreadId.make("thread-hidden")],
+        activeThreadId: ThreadId.make("thread-active"),
+        activeThreadOpen: true,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+      }),
+    ).toEqual([ThreadId.make("thread-hidden"), ThreadId.make("thread-active")]);
+  });
+
+  it("can retain the active thread as hidden when it is inactive", () => {
+    expect(
+      reconcileRetainedMountedThreadIds({
+        currentThreadIds: [ThreadId.make("thread-active")],
+        openThreadIds: [ThreadId.make("thread-active")],
+        activeThreadId: ThreadId.make("thread-active"),
+        activeThreadOpen: false,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+        retainInactiveActiveThread: true,
+      }),
+    ).toEqual([ThreadId.make("thread-active")]);
+  });
+
+  it("evicts the oldest hidden threads beyond the configured cap", () => {
+    const currentThreadIds = Array.from(
+      { length: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS + 2 },
+      (_, index) => ThreadId.make(`thread-${index + 1}`),
+    );
+
+    expect(
+      reconcileRetainedMountedThreadIds({
+        currentThreadIds,
+        openThreadIds: currentThreadIds,
+        activeThreadId: null,
+        activeThreadOpen: false,
+        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+      }),
+    ).toEqual(currentThreadIds.slice(-MAX_HIDDEN_MOUNTED_PREVIEW_THREADS));
+  });
+});
+
+describe("shouldWriteThreadErrorToCurrentServerThread", () => {
+  it("requires the environment, route thread, and target thread to match", () => {
+    const routeThreadRef = { environmentId, threadId };
+
+    expect(
+      shouldWriteThreadErrorToCurrentServerThread({
+        serverThread: { environmentId, id: threadId },
+        routeThreadRef,
+        targetThreadId: threadId,
+      }),
+    ).toBe(true);
+    expect(
+      shouldWriteThreadErrorToCurrentServerThread({
+        serverThread: null,
+        routeThreadRef,
+        targetThreadId: threadId,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("startNewThreadForProject", () => {
+  it("starts a thread through the supplied shared handler for the active project", () => {
+    const calls: Array<{ environmentId: EnvironmentId; projectId: ProjectId }> = [];
+    const projectRef = { environmentId, projectId };
+
+    expect(
+      startNewThreadForProject(projectRef, (nextProjectRef) => {
+        calls.push(nextProjectRef);
+        return Promise.resolve();
+      }),
+    ).toBe(true);
+    expect(calls).toEqual([projectRef]);
+  });
+
+  it("does nothing when the active project is unavailable", () => {
+    let called = false;
+
+    expect(
+      startNewThreadForProject(null, () => {
+        called = true;
+        return Promise.resolve();
+      }),
+    ).toBe(false);
+    expect(called).toBe(false);
+  });
+});
+
+describe("hasServerAcknowledgedLocalDispatch", () => {
+  it("does not acknowledge unchanged server state", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestRun: completedTurn,
+        runtime: readySession,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("acknowledges a settled newer turn", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
+    );
+    const newerTurn = {
+      ...completedTurn,
+      runId: RunId.make("turn-2"),
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: "2026-03-29T00:01:30.000Z",
+    };
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "ready",
+        latestRun: newerTurn,
+        runtime: { ...readySession, updatedAt: newerTurn.completedAt },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("waits for the matching running turn before acknowledging", () => {
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: completedTurn, runtime: readySession }),
+    );
+    const runningTurn = {
+      ...completedTurn,
+      runId: RunId.make("turn-2"),
+      status: "running" as const,
+      requestedAt: "2026-03-29T00:01:00.000Z",
+      startedAt: "2026-03-29T00:01:01.000Z",
+      completedAt: null,
+    };
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestRun: runningTurn,
+        runtime: {
+          ...readySession,
+          status: "running",
+          activeRunId: RunId.make("turn-other"),
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(false);
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestRun: runningTurn,
+        runtime: {
+          ...readySession,
+          status: "running",
+          activeRunId: runningTurn.runId,
+        },
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("acknowledges a steering message projected onto the current running run", () => {
+    const runningRun = {
+      ...completedTurn,
+      status: "running" as const,
+      completedAt: null,
+    };
+    const runningRuntime = {
+      ...readySession,
+      status: "running" as const,
+      activeRunId: runningRun.runId,
+    };
+    const localDispatch = createLocalDispatchSnapshot(
+      makeThread({ latestRun: runningRun, runtime: runningRuntime }),
+      { latestUserMessageId: MessageId.make("message-before-steer") },
+    );
+
+    expect(
+      hasServerAcknowledgedLocalDispatch({
+        localDispatch,
+        phase: "running",
+        latestRun: runningRun,
+        latestUserMessageId: MessageId.make("message-steer"),
+        runtime: runningRuntime,
+        hasPendingApproval: false,
+        hasPendingUserInput: false,
+        threadError: null,
+      }),
+    ).toBe(true);
+  });
+
+  it("acknowledges pending user interaction and errors immediately", () => {
+    const localDispatch = createLocalDispatchSnapshot(makeThread());
+    const common = {
+      localDispatch,
+      phase: "ready" as const,
+      latestRun: null,
+      runtime: null,
+      hasPendingApproval: false,
+      hasPendingUserInput: false,
+      threadError: null,
+    };
+
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
+    expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
+  });
+});
+
+describe("deriveCommittedServerUserMessageIds", () => {
+  it("tracks only committed user turn items, not assistant rows or projection-only messages", () => {
+    const turnStartId = MessageId.make("message-turn-start");
+    const steerId = MessageId.make("message-steer");
+    const assistantId = MessageId.make("message-assistant");
+    const committedAt = DateTime.makeUnsafe("2026-06-26T17:50:15.180Z");
+    const runId = RunId.make("run:thread:thread-1:ordinal:1");
+    const visibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> = [
+      {
+        position: 0,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-turn-start"),
+        item: {
+          id: TurnItemId.make("turn-item:message-turn-start"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 1,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          createdBy: "user",
+          creationSource: "web",
+          type: "user_message",
+          messageId: turnStartId,
+          inputIntent: "turn_start",
+          text: "start",
+          attachments: [],
+        },
+      },
+      {
+        position: 1,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-assistant"),
+        item: {
+          id: TurnItemId.make("turn-item:message-assistant"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 2,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          type: "assistant_message",
+          messageId: assistantId,
+          text: "working",
+          streaming: false,
+        },
+      },
+      {
+        position: 2,
+        visibility: "local",
+        sourceThreadId: threadId,
+        sourceItemId: TurnItemId.make("turn-item:message-steer"),
+        item: {
+          id: TurnItemId.make("turn-item:message-steer"),
+          threadId,
+          runId,
+          nodeId: null,
+          providerThreadId: null,
+          providerTurnId: null,
+          nativeItemRef: null,
+          parentItemId: null,
+          ordinal: 3,
+          status: "completed",
+          title: null,
+          startedAt: committedAt,
+          completedAt: committedAt,
+          updatedAt: committedAt,
+          createdBy: "user",
+          creationSource: "web",
+          type: "user_message",
+          messageId: steerId,
+          inputIntent: "steer",
+          text: "continue",
+          attachments: [],
+        },
+      },
+    ];
+
+    expect(deriveCommittedServerUserMessageIds(visibleTurnItems)).toEqual(
+      new Set([turnStartId, steerId]),
+    );
+  });
+});
+
+describe("agent browser close confirmation", () => {
+  const surfaces = [
+    { id: "browser:one", kind: "preview", resourceId: "tab-1" },
+    { id: "browser:two", kind: "preview", resourceId: "tab-2" },
+    { id: "diff", kind: "diff" },
+  ] satisfies RightPanelSurface[];
+
+  it("only warns for browsers under active agent control", () => {
+    expect(
+      agentControlledBrowserCloseConfirmation(surfaces, {
+        "tab-1": { controller: "none" },
+        "tab-2": { controller: "human" },
+      }),
+    ).toBeNull();
+
+    expect(
+      agentControlledBrowserCloseConfirmation([surfaces[0]!], {
+        "tab-1": { controller: "agent" },
+      }),
+    ).toBe(
+      [
+        "Close browser while the agent is using it?",
+        "The agent is actively controlling this browser. Closing it may interrupt the current browser action.",
+      ].join("\n"),
+    );
+  });
+
+  it("counts every agent-controlled browser in a bulk close", () => {
+    expect(
+      agentControlledBrowserCloseConfirmation(surfaces, {
+        "tab-1": { controller: "agent" },
+        "tab-2": { controller: "agent" },
+      }),
+    ).toContain("Close 2 browsers");
+  });
+});
+
+describe("floating browser preview", () => {
+  it("only hides the duplicate while the same browser is rendered in the panel", () => {
+    expect(shouldRenderPreviewMiniPlayer(null, null)).toBe(false);
+    expect(
+      shouldRenderPreviewMiniPlayer("tab-1", {
+        id: "browser:one",
+        kind: "preview",
+        resourceId: "tab-1",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRenderPreviewMiniPlayer("tab-1", {
+        id: "browser:two",
+        kind: "preview",
+        resourceId: "tab-2",
+      }),
+    ).toBe(true);
+    expect(shouldRenderPreviewMiniPlayer("tab-1", { id: "diff", kind: "diff" })).toBe(true);
+  });
+});
+
+describe("proactive panels", () => {
+  it("opens a pull request only after a newly observed link appears", () => {
+    expect(shouldOpenProactivePullRequest(undefined, "project:repo:42")).toBe(false);
+    expect(shouldOpenProactivePullRequest(null, "project:repo:42")).toBe(true);
+    expect(shouldOpenProactivePullRequest("project:repo:42", "project:repo:42")).toBe(false);
+    expect(shouldOpenProactivePullRequest("project:repo:42", null)).toBe(false);
+  });
+
+  it("opens the diff only when the observed running turn settles", () => {
+    const turnId = RunId.make("turn-1");
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: undefined,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: RunId.make("turn-2"),
+        settledTurnId: turnId,
+        turnCompleted: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldOpenProactiveTurnDiff({
+        previousRunningTurnId: turnId,
+        runningTurnId: null,
+        settledTurnId: turnId,
+        turnCompleted: false,
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("artifact template composer insertion", () => {
   it("does not insert an already-present prompt", () => {
     const prompt = "Create a document using this $artifact-template-hello-world about…";
@@ -551,7 +1140,7 @@ describe("draft hero submission transition", () => {
     expect(
       resolveDraftPromotionNavigationTarget({
         serverThreadRef: { environmentId, threadId },
-        serverThread: makeThread({ latestTurn: completedTurn }),
+        serverThread: makeThread({ latestRun: completedTurn }),
         backgroundSubmissionPending: true,
       }),
     ).toBeNull();
@@ -559,7 +1148,7 @@ describe("draft hero submission transition", () => {
 });
 
 describe("shouldReleaseTimelineAnchorForToolActivity", () => {
-  const activeTurnId = TurnId.make("active-turn");
+  const activeTurnId = RunId.make("active-turn");
   const anchorMessageId = MessageId.make("anchored-message");
   const activeToolEntry = {
     id: "tool-entry",
@@ -568,7 +1157,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
     entry: {
       id: "active-tool",
       createdAt: now,
-      turnId: activeTurnId,
+      runId: activeTurnId,
       label: "Run command",
       tone: "tool" as const,
       command: "git status",
@@ -608,7 +1197,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
             ...activeToolEntry,
             entry: {
               ...activeToolEntry.entry,
-              turnId: TurnId.make("previous-turn"),
+              runId: RunId.make("previous-turn"),
             },
           },
         ],
@@ -628,7 +1217,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
             entry: {
               id: "thinking-entry",
               createdAt: now,
-              turnId: activeTurnId,
+              runId: activeTurnId,
               label: "Thinking",
               tone: "thinking",
             },
@@ -639,7 +1228,7 @@ describe("shouldReleaseTimelineAnchorForToolActivity", () => {
             entry: {
               id: "error-entry",
               createdAt: now,
-              turnId: activeTurnId,
+              runId: activeTurnId,
               label: "Provider error",
               tone: "error",
             },
@@ -702,247 +1291,6 @@ describe("environment reconnect warning grace", () => {
   });
 });
 
-function makeThread(overrides: Partial<Thread> = {}): Thread {
-  return {
-    id: threadId,
-    environmentId,
-    projectId,
-    title: "Thread",
-    modelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.4",
-    },
-    runtimeMode: "full-access",
-    interactionMode: "default",
-    session: null,
-    messages: [],
-    proposedPlans: [],
-    activities: [],
-    checkpoints: [],
-    createdAt: now,
-    updatedAt: now,
-    archivedAt: null,
-    settledOverride: null,
-    settledAt: null,
-    deletedAt: null,
-    latestTurn: null,
-    branch: null,
-    worktreePath: null,
-    ...overrides,
-  };
-}
-
-const completedTurn = {
-  turnId: TurnId.make("turn-1"),
-  state: "completed" as const,
-  requestedAt: now,
-  startedAt: "2026-03-29T00:00:01.000Z",
-  completedAt: "2026-03-29T00:00:10.000Z",
-  assistantMessageId: null,
-};
-
-const readySession = {
-  threadId,
-  status: "ready" as const,
-  providerName: "codex",
-  providerInstanceId: ProviderInstanceId.make("codex"),
-  runtimeMode: "full-access" as const,
-  activeTurnId: null,
-  lastError: null,
-  updatedAt: "2026-03-29T00:00:10.000Z",
-};
-
-describe("draft promotion during worktree setup", () => {
-  const serverThreadRef = { environmentId, threadId };
-
-  it.each([null, "idle", "starting", "ready"] as const)(
-    "keeps the draft mounted while the first turn waits with session %s",
-    (status) => {
-      const serverThread = makeThread({
-        messages: [
-          {
-            id: MessageId.make("submitted-message"),
-            role: "user",
-            text: "Start in a new worktree",
-            turnId: null,
-            createdAt: now,
-            updatedAt: now,
-            streaming: false,
-          },
-        ],
-        session: status ? { ...readySession, status } : null,
-      });
-
-      expect(
-        resolveDraftPromotionNavigationTarget({
-          serverThreadRef,
-          serverThread,
-          backgroundSubmissionPending: false,
-        }),
-      ).toBeNull();
-    },
-  );
-
-  it("promotes when the provider starts the first turn", () => {
-    const latestTurn = { ...completedTurn, state: "running" as const, completedAt: null };
-
-    expect(
-      resolveDraftPromotionNavigationTarget({
-        serverThreadRef,
-        serverThread: makeThread({
-          latestTurn,
-          session: { ...readySession, status: "running", activeTurnId: latestTurn.turnId },
-        }),
-        backgroundSubmissionPending: false,
-      }),
-    ).toEqual(serverThreadRef);
-  });
-
-  it.each(["error", "stopped", "interrupted"] as const)(
-    "promotes a startup that ends as %s before a turn starts",
-    (status) => {
-      expect(
-        resolveDraftPromotionNavigationTarget({
-          serverThreadRef,
-          serverThread: makeThread({ session: { ...readySession, status } }),
-          backgroundSubmissionPending: false,
-        }),
-      ).toEqual(serverThreadRef);
-    },
-  );
-});
-
-describe("buildLoadingThreadFromShell", () => {
-  it("preserves shell metadata and supplies empty detail collections", () => {
-    const shell = {
-      environmentId,
-      id: threadId,
-      projectId,
-      title: "Loading thread",
-      modelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
-        model: "gpt-5.4",
-      },
-      runtimeMode: "full-access",
-      interactionMode: "default",
-      branch: "main",
-      worktreePath: null,
-      latestTurn: null,
-      createdAt: now,
-      updatedAt: now,
-      archivedAt: null,
-      settledOverride: null,
-      settledAt: null,
-      snoozedUntil: null,
-      snoozedAt: null,
-      session: null,
-      latestUserMessageAt: now,
-      hasPendingApprovals: false,
-      hasPendingUserInput: false,
-      hasActionableProposedPlan: false,
-    } satisfies ThreadShell;
-
-    expect(buildLoadingThreadFromShell(shell)).toMatchObject({
-      environmentId,
-      id: threadId,
-      projectId,
-      title: "Loading thread",
-      branch: "main",
-      deletedAt: null,
-      messages: [],
-      proposedPlans: [],
-      activities: [],
-      checkpoints: [],
-    });
-  });
-});
-
-describe("resolveThreadMetadataUpdateForNextTurn", () => {
-  const modelSelection = {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: "gpt-5.4",
-  };
-
-  it("updates a stale local thread branch to the active checkout", () => {
-    expect(
-      resolveThreadMetadataUpdateForNextTurn({
-        currentModelSelection: modelSelection,
-        currentBranch: "feature/thread",
-        nextBranch: "feature/checkout",
-      }),
-    ).toEqual({ branch: "feature/checkout", worktreePath: null });
-  });
-
-  it("does not write metadata when the model and branch are unchanged", () => {
-    expect(
-      resolveThreadMetadataUpdateForNextTurn({
-        currentModelSelection: modelSelection,
-        nextModelSelection: modelSelection,
-        currentBranch: "feature/current",
-        nextBranch: "feature/current",
-      }),
-    ).toBeNull();
-  });
-});
-
-describe("buildThreadTurnInterruptInput", () => {
-  it("targets the session's active running turn", () => {
-    const activeTurnId = TurnId.make("turn-running");
-
-    expect(
-      buildThreadTurnInterruptInput(
-        makeThread({
-          session: {
-            ...readySession,
-            status: "running",
-            activeTurnId,
-          },
-        }),
-      ),
-    ).toEqual({ threadId, turnId: activeTurnId });
-  });
-
-  it("omits a turn id when the session is not running", () => {
-    expect(buildThreadTurnInterruptInput(makeThread({ session: readySession }))).toEqual({
-      threadId,
-    });
-  });
-});
-
-describe("collectAuthoritativeProjectedMessageIds", () => {
-  it("tracks only transcript messages, not transient queued state", () => {
-    expect(
-      collectAuthoritativeProjectedMessageIds(
-        makeThread({
-          messages: [
-            {
-              id: MessageId.make("message-in-transcript"),
-              role: "user",
-              text: "Saved on the train",
-              turnId: null,
-              createdAt: now,
-              updatedAt: now,
-              streaming: false,
-            },
-          ],
-          queuedMessages: [
-            {
-              messageId: MessageId.make("message-still-queued"),
-              threadId,
-              text: "Still remote queued",
-              attachments: [],
-              runtimeMode: "full-access",
-              interactionMode: "default",
-              createdAt: now,
-              updatedAt: now,
-            },
-          ],
-        }),
-      ),
-    ).toEqual(new Set(["message-in-transcript"]));
-  });
-});
-
 describe("resolveComposerProviderSelection", () => {
   const catalogModels: ServerProvider["models"] = [
     { slug: "gemini-pro", name: "Gemini Pro", isCustom: false, capabilities: null },
@@ -966,113 +1314,6 @@ describe("resolveComposerProviderSelection", () => {
       },
     ])[0]!;
   }
-
-  function importedThread(instanceId: ProviderInstanceId) {
-    return makeThread({
-      modelSelection: { instanceId, model: "default" },
-      messages: [
-        {
-          id: MessageId.make(`import:${instanceId}:session:000000`),
-          role: "user",
-          text: "Continue the imported conversation",
-          turnId: null,
-          createdAt: now,
-          updatedAt: now,
-          streaming: false,
-        },
-      ],
-    });
-  }
-
-  it.each([
-    ["claudeAgent", "claude_work"],
-    ["codex", "codex_work"],
-    ["ollama", "local_models"],
-  ])("keeps imported %s history selectable through its custom instance", (driver, instanceId) => {
-    const importedEntry = entry(driver, instanceId);
-    const entries = [entry(driver === "codex" ? "claudeAgent" : "codex"), importedEntry];
-    const thread = importedThread(importedEntry.instanceId);
-    const lockedProvider = deriveLockedProvider({
-      thread,
-      selectedProvider: entries[0]!.instanceId,
-      threadProvider: thread.modelSelection.instanceId,
-      providers: entries.map((entry) => entry.snapshot),
-    });
-
-    expect(thread.session).toBeNull();
-    expect(lockedProvider).toBe(driver);
-    expect(
-      resolveComposerProviderSelection({
-        entries,
-        candidateInstanceIds: [thread.modelSelection.instanceId],
-        lockedProvider,
-        lockedInstanceId: thread.modelSelection.instanceId,
-      }).selectedProviderEntry?.instanceId,
-    ).toBe(importedEntry.instanceId);
-  });
-
-  it("keeps the session driver authoritative over instance and draft selections", () => {
-    const selected = entry("claudeAgent", "claude_work");
-    const sessionEntry = entry("ollama", "local_models");
-    const thread = importedThread(selected.instanceId);
-
-    expect(
-      deriveLockedProvider({
-        thread: {
-          ...thread,
-          session: {
-            ...readySession,
-            providerName: sessionEntry.driverKind,
-            providerInstanceId: sessionEntry.instanceId,
-          },
-        },
-        selectedProvider: selected.instanceId,
-        threadProvider: thread.modelSelection.instanceId,
-        providers: [selected.snapshot, sessionEntry.snapshot],
-      }),
-    ).toBe(sessionEntry.driverKind);
-  });
-
-  it.each(["missing", "disabled"] as const)(
-    "does not move imported history to another driver when its instance is %s",
-    (state) => {
-      const imported = entry("claudeAgent", "claude_work", { enabled: false });
-      const other = entry("codex");
-      const entries = state === "missing" ? [other] : [other, imported];
-      const thread = importedThread(imported.instanceId);
-      const lockedProvider = deriveLockedProvider({
-        thread,
-        selectedProvider: other.instanceId,
-        threadProvider: thread.modelSelection.instanceId,
-        providers: entries.map((entry) => entry.snapshot),
-      });
-
-      expect(lockedProvider).not.toBeNull();
-      expect(
-        resolveComposerProviderSelection({
-          entries,
-          candidateInstanceIds: [other.instanceId, imported.instanceId],
-          lockedProvider,
-          lockedInstanceId: imported.instanceId,
-        }).selectedProviderEntry,
-      ).toBeUndefined();
-    },
-  );
-
-  it("leaves a new draft free to select a different driver", () => {
-    const original = entry("claudeAgent", "claude_work");
-    const selected = entry("codex", "codex_work");
-    expect(
-      deriveLockedProvider({
-        thread: makeThread({
-          modelSelection: { instanceId: original.instanceId, model: "default" },
-        }),
-        selectedProvider: selected.instanceId,
-        threadProvider: original.instanceId,
-        providers: [original.snapshot, selected.snapshot],
-      }),
-    ).toBeNull();
-  });
 
   it("uses the custom instance's capability instead of the default instance", () => {
     const defaultEntry = entry("antigravity", "antigravity", {
@@ -1301,166 +1542,6 @@ describe("resolveComposerInteractionMode", () => {
   });
 });
 
-describe("deriveComposerSendState", () => {
-  it("treats expired terminal pills as non-sendable content", () => {
-    const state = deriveComposerSendState({
-      prompt: "\uFFFC",
-      imageCount: 0,
-      terminalContexts: [
-        {
-          id: "ctx-expired",
-          threadId,
-          terminalId: "default",
-          terminalLabel: "Terminal 1",
-          lineStart: 4,
-          lineEnd: 4,
-          text: "",
-          createdAt: now,
-        },
-      ],
-    });
-
-    expect(state.trimmedPrompt).toBe("");
-    expect(state.sendableTerminalContexts).toEqual([]);
-    expect(state.expiredTerminalContextCount).toBe(1);
-    expect(state.hasSendableContent).toBe(false);
-  });
-
-  it("keeps text sendable while excluding expired terminal pills", () => {
-    const state = deriveComposerSendState({
-      prompt: `yoo \uFFFC waddup`,
-      imageCount: 0,
-      terminalContexts: [
-        {
-          id: "ctx-expired",
-          threadId,
-          terminalId: "default",
-          terminalLabel: "Terminal 1",
-          lineStart: 4,
-          lineEnd: 4,
-          text: "",
-          createdAt: now,
-        },
-      ],
-    });
-
-    expect(state.trimmedPrompt).toBe("yoo  waddup");
-    expect(state.expiredTerminalContextCount).toBe(1);
-    expect(state.hasSendableContent).toBe(true);
-  });
-
-  it("treats element contexts as sendable content (no text, no images, no terminals)", () => {
-    const state = deriveComposerSendState({
-      prompt: "",
-      imageCount: 0,
-      terminalContexts: [],
-      elementContextCount: 1,
-    });
-
-    expect(state.trimmedPrompt).toBe("");
-    expect(state.expiredTerminalContextCount).toBe(0);
-    expect(state.hasSendableContent).toBe(true);
-  });
-
-  it("does NOT treat zero element contexts as sendable", () => {
-    expect(
-      deriveComposerSendState({
-        prompt: "",
-        imageCount: 0,
-        terminalContexts: [],
-        elementContextCount: 0,
-      }).hasSendableContent,
-    ).toBe(false);
-  });
-});
-
-describe("buildExpiredTerminalContextToastCopy", () => {
-  it("formats empty and omission guidance", () => {
-    expect(buildExpiredTerminalContextToastCopy(1, "empty")).toEqual({
-      title: "Expired terminal context won't be sent",
-      description: "Remove it or re-add it to include terminal output.",
-    });
-    expect(buildExpiredTerminalContextToastCopy(2, "omitted")).toEqual({
-      title: "Expired terminal contexts omitted from message",
-      description: "Re-add it if you want that terminal output included.",
-    });
-  });
-});
-
-describe("getStartedThreadModelChangeBlockReason", () => {
-  const providers = [
-    {
-      instanceId: ProviderInstanceId.make("codex"),
-    },
-    {
-      instanceId: ProviderInstanceId.make("grok"),
-      requiresNewThreadForModelChange: true,
-    },
-  ];
-
-  it("allows model changes before a provider session has started", () => {
-    expect(
-      getStartedThreadModelChangeBlockReason({
-        providers,
-        hasStartedSession: false,
-        currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
-        },
-        nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-other",
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it("allows unchanged model selections for restricted providers", () => {
-    expect(
-      getStartedThreadModelChangeBlockReason({
-        providers,
-        hasStartedSession: true,
-        currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
-        },
-        nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
-        },
-      }),
-    ).toBeNull();
-  });
-
-  it("blocks started-session model changes when either provider requires a new thread", () => {
-    expect(
-      getStartedThreadModelChangeBlockReason({
-        providers,
-        hasStartedSession: true,
-        currentModelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.4",
-        },
-        nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
-        },
-      }),
-    ).toEqual({
-      title: "Start a new chat to change models",
-      description:
-        "This provider does not allow switching models after a conversation has started.",
-    });
-  });
-});
-
-describe("resolveSendEnvMode", () => {
-  it("keeps workspace mode for git and non-git repositories", () => {
-    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: true })).toBe("worktree");
-    expect(resolveSendEnvMode({ requestedEnvMode: "worktree", isGitRepo: false })).toBe("worktree");
-  });
-});
-
 describe("resolveBackgroundDraftWorkspaceOptions", () => {
   it("keeps New worktree selected without reusing the launched worktree", () => {
     expect(
@@ -1478,502 +1559,78 @@ describe("resolveBackgroundDraftWorkspaceOptions", () => {
   });
 });
 
-describe("branchMismatchKey", () => {
-  it("builds a key from thread id and both branches", () => {
-    expect(branchMismatchKey("thread-1", { threadBranch: "feat/a", currentBranch: "feat/b" })).toBe(
-      "thread-1:feat/a:feat/b",
-    );
-  });
+describe("proactive completed diff guard", () => {
+  it("opens a completed turn diff only for changed files", () => {
+    const changedCheckpoint = {
+      status: "ready",
+      files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
+    const unchangedCheckpoint = {
+      status: "ready",
+      files: [],
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
 
-  it("returns null without a thread or mismatch", () => {
-    expect(branchMismatchKey(null, { threadBranch: "a", currentBranch: "b" })).toBeNull();
-    expect(branchMismatchKey("thread-1", null)).toBeNull();
-  });
-});
-
-describe("shouldShowBranchMismatchBanner", () => {
-  const base = {
-    hasMismatch: true,
-    isDismissed: false,
-    composerHasContent: false,
-    wasShownForCurrentMismatch: false,
-  };
-
-  it("stays hidden during passive browsing (even though the composer autofocuses)", () => {
-    expect(shouldShowBranchMismatchBanner(base)).toBe(false);
-  });
-
-  it("shows once the composer has draft content", () => {
-    expect(shouldShowBranchMismatchBanner({ ...base, composerHasContent: true })).toBe(true);
-  });
-
-  it("stays mounted after the draft clears once shown for the current mismatch", () => {
-    expect(shouldShowBranchMismatchBanner({ ...base, wasShownForCurrentMismatch: true })).toBe(
-      true,
-    );
-  });
-
-  it("never shows when dismissed or without a mismatch", () => {
     expect(
-      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, isDismissed: true }),
-    ).toBe(false);
-    expect(
-      shouldShowBranchMismatchBanner({ ...base, composerHasContent: true, hasMismatch: false }),
-    ).toBe(false);
-  });
-});
-
-describe("shouldShowPlanFollowUpPrompt", () => {
-  const base = {
-    pendingUserInputCount: 0,
-    interactionMode: "plan" as const,
-    latestTurnSettled: true,
-    hasActionableProposedPlan: true,
-    hasComposerAttachments: false,
-  };
-
-  it("shows plan actions for a settled actionable plan without attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt(base)).toBe(true);
-  });
-
-  it("hides plan actions while the composer has staged attachments", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasComposerAttachments: true })).toBe(false);
-  });
-
-  it("preserves the existing plan follow-up gates", () => {
-    expect(shouldShowPlanFollowUpPrompt({ ...base, pendingUserInputCount: 1 })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, interactionMode: "default" })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, latestTurnSettled: false })).toBe(false);
-    expect(shouldShowPlanFollowUpPrompt({ ...base, hasActionableProposedPlan: false })).toBe(false);
-  });
-});
-
-describe("session branch mismatch dismissal", () => {
-  it("tracks dismissed keys and treats other keys as active", () => {
-    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(false);
-    dismissBranchMismatchForSession("t1:a:b");
-    expect(isBranchMismatchDismissedForSession("t1:a:b")).toBe(true);
-    expect(isBranchMismatchDismissedForSession("t1:a:c")).toBe(false);
-    expect(isBranchMismatchDismissedForSession(null)).toBe(false);
-  });
-});
-
-describe("reconcileMountedTerminalThreadIds", () => {
-  it("keeps open threads and makes the active thread most recent", () => {
-    expect(
-      reconcileMountedTerminalThreadIds({
-        currentThreadIds: ["thread-a", "thread-b", "thread-c"],
-        openThreadIds: ["thread-a", "thread-b", "thread-c"],
-        activeThreadId: "thread-a",
-        activeThreadTerminalOpen: true,
-        maxHiddenThreadCount: 2,
+      resolveProactiveTurnDiffAction({
+        checkpoint: changedCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: null,
       }),
-    ).toEqual(["thread-b", "thread-c", "thread-a"]);
-  });
-
-  it("drops closed threads and enforces the hidden mounted cap", () => {
-    const ids = Array.from(
-      { length: MAX_HIDDEN_MOUNTED_TERMINAL_THREADS + 2 },
-      (_, index) => `thread-${index}`,
-    );
+    ).toBe("open");
     expect(
-      reconcileMountedTerminalThreadIds({
-        currentThreadIds: ids,
-        openThreadIds: ids.slice(1),
-        activeThreadId: null,
-        activeThreadTerminalOpen: false,
+      resolveProactiveTurnDiffAction({
+        checkpoint: unchangedCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: null,
       }),
-    ).toEqual(ids.slice(-MAX_HIDDEN_MOUNTED_TERMINAL_THREADS));
-  });
-});
-
-describe("reconcileRetainedMountedThreadIds", () => {
-  it("retains hidden open threads and adds the active open thread", () => {
-    expect(
-      reconcileRetainedMountedThreadIds({
-        currentThreadIds: [ThreadId.make("thread-hidden")],
-        openThreadIds: [ThreadId.make("thread-hidden")],
-        activeThreadId: ThreadId.make("thread-active"),
-        activeThreadOpen: true,
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
-      }),
-    ).toEqual([ThreadId.make("thread-hidden"), ThreadId.make("thread-active")]);
+    ).toBe("ignore");
   });
 
-  it("can retain the active thread as hidden when it is inactive", () => {
-    expect(
-      reconcileRetainedMountedThreadIds({
-        currentThreadIds: [ThreadId.make("thread-active")],
-        openThreadIds: [ThreadId.make("thread-active")],
-        activeThreadId: ThreadId.make("thread-active"),
-        activeThreadOpen: false,
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
-        retainInactiveActiveThread: true,
-      }),
-    ).toEqual([ThreadId.make("thread-active")]);
-  });
-
-  it("evicts the oldest hidden threads beyond the configured cap", () => {
-    const currentThreadIds = Array.from(
-      { length: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS + 2 },
-      (_, index) => ThreadId.make(`thread-${index + 1}`),
-    );
+  it("waits for definitive checkpoint and repository state", () => {
+    const missingCheckpoint = {
+      status: "missing",
+      files: [],
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
+    const changedCheckpoint = {
+      status: "ready",
+      files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
 
     expect(
-      reconcileRetainedMountedThreadIds({
-        currentThreadIds,
-        openThreadIds: currentThreadIds,
-        activeThreadId: null,
-        activeThreadOpen: false,
-        maxHiddenThreadCount: MAX_HIDDEN_MOUNTED_PREVIEW_THREADS,
+      resolveProactiveTurnDiffAction({
+        checkpoint: undefined,
+        isGitRepo: true,
+        activeSurfaceKind: null,
       }),
-    ).toEqual(currentThreadIds.slice(-MAX_HIDDEN_MOUNTED_PREVIEW_THREADS));
+    ).toBe("defer");
+    expect(
+      resolveProactiveTurnDiffAction({
+        checkpoint: missingCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: null,
+      }),
+    ).toBe("defer");
+    expect(
+      resolveProactiveTurnDiffAction({
+        checkpoint: changedCheckpoint,
+        isGitRepo: undefined,
+        activeSurfaceKind: null,
+      }),
+    ).toBe("defer");
   });
-});
 
-describe("shouldWriteThreadErrorToCurrentServerThread", () => {
-  it("writes errors for a shell-derived active server thread", () => {
-    const routeThreadRef = { environmentId, threadId };
+  it("keeps an active pull request above a completed turn diff", () => {
+    const changedCheckpoint = {
+      status: "ready",
+      files: [{ path: "src/app.ts", kind: "modified", additions: 1, deletions: 0 }],
+    } satisfies Pick<TurnDiffSummary, "status" | "files">;
 
     expect(
-      shouldWriteThreadErrorToCurrentServerThread({
-        activeServerThread: { environmentId, id: threadId },
-        routeThreadRef,
-        targetThreadId: threadId,
+      resolveProactiveTurnDiffAction({
+        checkpoint: changedCheckpoint,
+        isGitRepo: true,
+        activeSurfaceKind: "pull-request",
       }),
-    ).toBe(true);
-  });
-
-  it("requires an active server thread matching the environment, route, and target", () => {
-    const routeThreadRef = { environmentId, threadId };
-
-    expect(
-      shouldWriteThreadErrorToCurrentServerThread({
-        activeServerThread: null,
-        routeThreadRef,
-        targetThreadId: threadId,
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("startNewThreadForProject", () => {
-  it("starts a thread through the supplied shared handler for the active project", () => {
-    const calls: Array<{ environmentId: EnvironmentId; projectId: ProjectId }> = [];
-    const projectRef = { environmentId, projectId };
-
-    expect(
-      startNewThreadForProject(projectRef, (nextProjectRef) => {
-        calls.push(nextProjectRef);
-        return Promise.resolve();
-      }),
-    ).toBe(true);
-    expect(calls).toEqual([projectRef]);
-  });
-
-  it("does nothing when the active project is unavailable", () => {
-    let called = false;
-
-    expect(
-      startNewThreadForProject(null, () => {
-        called = true;
-        return Promise.resolve();
-      }),
-    ).toBe(false);
-    expect(called).toBe(false);
-  });
-});
-
-describe("hasServerAcknowledgedLocalDispatch", () => {
-  it("does not acknowledge unchanged server state", () => {
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
-    );
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "ready",
-        latestTurn: completedTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: readySession,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps a follow-up active while its provider session is starting", () => {
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
-    );
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "connecting",
-        latestTurn: completedTurn,
-        latestUserMessageId: MessageId.make("message-followup"),
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: {
-          ...readySession,
-          status: "starting",
-          updatedAt: "2026-03-29T00:01:00.000Z",
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("acknowledges a settled newer turn", () => {
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
-    );
-    const newerTurn = {
-      ...completedTurn,
-      turnId: TurnId.make("turn-2"),
-      requestedAt: "2026-03-29T00:01:00.000Z",
-      startedAt: "2026-03-29T00:01:01.000Z",
-      completedAt: "2026-03-29T00:01:30.000Z",
-    };
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "ready",
-        latestTurn: newerTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: { ...readySession, updatedAt: newerTurn.completedAt },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("waits for the matching running turn before acknowledging", () => {
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: completedTurn, session: readySession }),
-    );
-    const runningTurn = {
-      ...completedTurn,
-      turnId: TurnId.make("turn-2"),
-      state: "running" as const,
-      requestedAt: "2026-03-29T00:01:00.000Z",
-      startedAt: "2026-03-29T00:01:01.000Z",
-      completedAt: null,
-    };
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: {
-          ...readySession,
-          status: "running",
-          activeTurnId: TurnId.make("turn-other"),
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(false);
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: {
-          ...readySession,
-          status: "running",
-          activeTurnId: runningTurn.turnId,
-        },
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("acknowledges a steering message projected onto the current running turn", () => {
-    const runningTurn = {
-      ...completedTurn,
-      state: "running" as const,
-      completedAt: null,
-    };
-    const runningSession = {
-      ...readySession,
-      status: "running" as const,
-      activeTurnId: runningTurn.turnId,
-    };
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({
-        latestTurn: runningTurn,
-        session: runningSession,
-        messages: [
-          {
-            id: MessageId.make("message-before-steer"),
-            role: "user",
-            text: "Initial prompt",
-            turnId: runningTurn.turnId,
-            createdAt: runningTurn.requestedAt,
-            updatedAt: runningTurn.requestedAt,
-            streaming: false,
-          },
-        ],
-      }),
-    );
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: MessageId.make("message-steer"),
-        queuedMessageIds: localDispatch.queuedMessageIds,
-        session: runningSession,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("acknowledges a queued message while the current turn keeps running", () => {
-    const runningTurn = {
-      ...completedTurn,
-      state: "running" as const,
-      completedAt: null,
-    };
-    const runningSession = {
-      ...readySession,
-      status: "running" as const,
-      activeTurnId: runningTurn.turnId,
-    };
-    const localDispatch = createLocalDispatchSnapshot(
-      makeThread({ latestTurn: runningTurn, session: runningSession, queuedMessages: [] }),
-    );
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        localDispatch,
-        phase: "running",
-        latestTurn: runningTurn,
-        latestUserMessageId: localDispatch.latestUserMessageId,
-        queuedMessageIds: [MessageId.make("message-queued")],
-        session: runningSession,
-        hasPendingApproval: false,
-        hasPendingUserInput: false,
-        threadError: null,
-      }),
-    ).toBe(true);
-  });
-
-  it("acknowledges pending user interaction and errors immediately", () => {
-    const localDispatch = createLocalDispatchSnapshot(makeThread());
-    const common = {
-      localDispatch,
-      phase: "ready" as const,
-      latestTurn: null,
-      latestUserMessageId: localDispatch.latestUserMessageId,
-      queuedMessageIds: localDispatch.queuedMessageIds,
-      session: null,
-      hasPendingApproval: false,
-      hasPendingUserInput: false,
-      threadError: null,
-    };
-
-    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingApproval: true })).toBe(true);
-    expect(hasServerAcknowledgedLocalDispatch({ ...common, hasPendingUserInput: true })).toBe(true);
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        ...common,
-        latestTurnStartFailureId: "turn-start-failure-1",
-      }),
-    ).toBe(true);
-    expect(hasServerAcknowledgedLocalDispatch({ ...common, threadError: "failed" })).toBe(true);
-  });
-
-  it("acknowledges only a new turn-start failure", () => {
-    const localDispatch = {
-      ...createLocalDispatchSnapshot(makeThread()),
-      latestTurnStartFailureId: "turn-start-failure-old",
-    };
-    const common = {
-      localDispatch,
-      phase: "ready" as const,
-      latestTurn: null,
-      latestUserMessageId: localDispatch.latestUserMessageId,
-      queuedMessageIds: localDispatch.queuedMessageIds,
-      session: null,
-      hasPendingApproval: false,
-      hasPendingUserInput: false,
-      threadError: null,
-    };
-
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        ...common,
-        latestTurnStartFailureId: "turn-start-failure-old",
-      }),
-    ).toBe(false);
-    expect(
-      hasServerAcknowledgedLocalDispatch({
-        ...common,
-        latestTurnStartFailureId: "turn-start-failure-new",
-      }),
-    ).toBe(true);
-  });
-});
-
-describe("shouldRefocusComposerOnWindowFocus", () => {
-  function element(
-    tagName: string,
-    options?: { editable?: boolean; role?: string; within?: string },
-  ) {
-    return {
-      tagName,
-      isContentEditable: options?.editable ?? false,
-      getAttribute: (name: string) => (name === "role" ? (options?.role ?? null) : null),
-      closest: (selector: string) =>
-        options?.within !== undefined && selector.includes(options.within) ? ({} as Element) : null,
-    };
-  }
-
-  it("refocuses when nothing or the body holds focus", () => {
-    expect(shouldRefocusComposerOnWindowFocus(null)).toBe(true);
-    expect(shouldRefocusComposerOnWindowFocus(element("BODY"))).toBe(true);
-  });
-
-  it("refocuses away from a plain button, such as a pull request tab", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON"))).toBe(true);
-  });
-
-  it("leaves other text fields alone", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("INPUT"))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("TEXTAREA"))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { editable: true }))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("DIV", { role: "textbox" }))).toBe(false);
-  });
-
-  it("leaves a focused terminal alone in the drawer and the right panel", () => {
-    expect(
-      shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "data-terminal-owner" })),
-    ).toBe(false);
-  });
-
-  it("leaves focus inside a dialog or popup alone", () => {
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "dialog" }))).toBe(false);
-    expect(shouldRefocusComposerOnWindowFocus(element("BUTTON", { within: "-popup" }))).toBe(false);
+    ).toBe("ignore");
   });
 });

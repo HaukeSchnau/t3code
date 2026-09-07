@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 import { TurnId, type ProviderSession } from "@t3tools/contracts";
 
-import type { ProjectionRestartSafetyThread } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { decideProviderSessionReconciliation } from "./ProviderSessionReconciliation.ts";
+import {
+  decideProviderSessionReconciliation,
+  type ProjectionRestartSafetyThread,
+} from "./ProviderSessionReconciliation.ts";
 
 const runtimeStartedAt = "2026-07-16T08:29:00.000Z";
 

@@ -35,6 +35,7 @@ import {
   type ServerProviderDraft,
 } from "../providerSnapshot.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
+import { resolveProjectExecution } from "../../project/ProjectExecution.ts";
 import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
 import {
   codexRateLimitsFailureMessage,
@@ -400,16 +401,26 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(
         extendEnv: true,
       },
     );
+    const command = yield* resolveProjectExecution(
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: input.cwd,
+        env: environment,
+        extendEnv: true,
+        forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
+        shell: spawnCommand.shell,
+      }),
+      environment,
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new CodexErrors.CodexAppServerSpawnError({
+            command: `${input.binaryPath} app-server`,
+            cause,
+          }),
+      ),
+    );
     const child = yield* spawner
-      .spawn(
-        ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-          cwd: input.cwd,
-          env: environment,
-          extendEnv: true,
-          forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
-          shell: spawnCommand.shell,
-        }),
-      )
+      .spawn(command)
       .pipe(
         Effect.mapError(
           (cause) =>
@@ -519,16 +530,26 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
     codexAppServerArgs(input.launchArgs),
     { env: environment, extendEnv: true },
   );
+  const command = yield* resolveProjectExecution(
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      cwd: input.cwd,
+      env: environment,
+      extendEnv: true,
+      forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
+      shell: spawnCommand.shell,
+    }),
+    environment,
+  ).pipe(
+    Effect.mapError(
+      (cause) =>
+        new CodexErrors.CodexAppServerSpawnError({
+          command: `${input.binaryPath} app-server`,
+          cause,
+        }),
+    ),
+  );
   const child = yield* spawner
-    .spawn(
-      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-        cwd: input.cwd,
-        env: environment,
-        extendEnv: true,
-        forceKillAfter: CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER,
-        shell: spawnCommand.shell,
-      }),
-    )
+    .spawn(command)
     .pipe(
       Effect.mapError(
         (cause) =>
@@ -549,19 +570,7 @@ export const probeCodexSkillsForCwd = Effect.fn("probeCodexSkillsForCwd")(functi
 });
 
 const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvider["models"] => {
-  const models = new Set<string>();
-  for (const model of codexSettings.customModels) {
-    const trimmed = model.trim();
-    if (trimmed.length > 0) {
-      models.add(trimmed);
-    }
-  }
-  return Array.from(models, (model) => ({
-    slug: model,
-    name: model,
-    isCustom: true,
-    capabilities: null,
-  }));
+  return appendCustomCodexModels([], codexSettings.customModels);
 };
 
 const makePendingCodexProvider = (

@@ -26,7 +26,6 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
-  createEnvironmentQueryAtomFamily,
   createEnvironmentRpcQueryAtomFamily,
   createEnvironmentRpcSubscriptionAtomFamily,
   createRuntimeCommand,
@@ -458,7 +457,7 @@ export const makeEnvironmentServerConfigState = Effect.fn("EnvironmentServerConf
   },
 );
 
-function serverConfigStateChanges(
+export function serverConfigStateChanges(
   environmentId: EnvironmentId,
   subscription: ServerConfigSubscriptionOptions,
 ) {
@@ -481,11 +480,34 @@ function serverConfigStateChanges(
   );
 }
 
+export function projectServerWelcome(
+  current: Option.Option<ServerLifecycleWelcomePayload>,
+  event: {
+    readonly type: "welcome" | "ready" | "legacyThreadMigration";
+    readonly payload: unknown;
+  },
+): readonly [
+  Option.Option<ServerLifecycleWelcomePayload>,
+  ReadonlyArray<ServerLifecycleWelcomePayload>,
+] {
+  if (event.type !== "welcome") {
+    return [current, []];
+  }
+  const welcome = event.payload as ServerLifecycleWelcomePayload;
+  return [Option.some(welcome), [welcome]];
+}
+
+export interface EnvironmentServerWelcomeState {
+  readonly currentSession: RpcSession | null;
+  readonly welcomeSession: RpcSession | null;
+  readonly welcome: ServerLifecycleWelcomePayload | null;
+}
+
 export function applyServerWelcomeEvent(
   current: EnvironmentServerWelcomeState,
   session: RpcSession,
   event: {
-    readonly type: "welcome" | "ready";
+    readonly type: "welcome" | "ready" | "legacyThreadMigration";
     readonly payload: unknown;
   },
 ): EnvironmentServerWelcomeState {
@@ -496,12 +518,6 @@ export function applyServerWelcomeEvent(
         welcome: event.payload as ServerLifecycleWelcomePayload,
       }
     : current;
-}
-
-export interface EnvironmentServerWelcomeState {
-  readonly currentSession: RpcSession | null;
-  readonly welcomeSession: RpcSession | null;
-  readonly welcome: ServerLifecycleWelcomePayload | null;
 }
 
 export function resolveServerWelcomeState(
@@ -624,6 +640,7 @@ export function createServerEnvironmentAtoms<R, E>(
     readonly environmentThemes?: boolean;
     /** Whether this surface renders quota from configured usage-limit sources. */
     readonly usageLimitSources?: boolean;
+    /** Whether this surface can issue usage-limit management commands. */
     readonly usageLimitsCommand?: boolean;
   },
 ) {
@@ -955,10 +972,6 @@ export function createServerEnvironmentAtoms<R, E>(
         : AsyncResult.success(result.value, result);
     }).pipe(Atom.withLabel(`environment-data:server:welcome:${environmentId}`)),
   );
-  const welcome = (target: {
-    readonly environmentId: EnvironmentId;
-    readonly input: EnvironmentRpcInput<typeof WS_METHODS.subscribeServerLifecycle>;
-  }) => welcomeFamily(target.environmentId);
 
   return {
     configValueAtom,
@@ -1015,32 +1028,26 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:trace-diagnostics",
       tag: WS_METHODS.serverGetTraceDiagnostics,
     }),
-    readTraceDiagnostics: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:read-trace-diagnostics",
-      tag: WS_METHODS.serverGetTraceDiagnostics,
-    }),
     processDiagnostics: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-diagnostics",
       tag: WS_METHODS.serverGetProcessDiagnostics,
-    }),
-    readProcessDiagnostics: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:read-process-diagnostics",
-      tag: WS_METHODS.serverGetProcessDiagnostics,
-    }),
-    hostResources: createEnvironmentQueryAtomFamily(runtime, {
-      label: "environment-data:server:host-resources",
-      idleTtlMs: 0,
-      staleTimeMs: 5_000,
-      execute: (input: EnvironmentRpcInput<typeof WS_METHODS.serverGetHostResources>) =>
-        request(WS_METHODS.serverGetHostResources, input).pipe(Effect.timeout("5 seconds")),
     }),
     processResourceHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:server:process-resource-history",
       tag: WS_METHODS.serverGetProcessResourceHistory,
     }),
-    readProcessResourceHistory: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:read-process-resource-history",
-      tag: WS_METHODS.serverGetProcessResourceHistory,
+    /** Live scheduled-task list: snapshot on subscribe, fresh list after every server-side change. */
+    scheduledTasksLive: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:scheduled-tasks:live",
+      tag: WS_METHODS.scheduledTasksSubscribe,
+    }),
+    // A cold transcript scan is measured in seconds, so keep the result around
+    // long enough that switching windows or re-rendering does not rescan.
+    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:usage-summary",
+      tag: WS_METHODS.serverGetUsageSummary,
+      staleTimeMs: 60_000,
+      refreshTrigger: ({ environmentId }) => usagePricesAtom(environmentId),
     }),
     resourceTelemetry: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:resource-telemetry",
@@ -1052,27 +1059,31 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetResourceTelemetryHistory,
       staleTimeMs: 5_000,
     }),
-    // A cold transcript scan is measured in seconds, so keep the result around
-    // long enough that switching windows or re-rendering does not rescan.
-    usageSummary: createEnvironmentRpcQueryAtomFamily(runtime, {
-      label: "environment-data:server:usage-summary",
-      tag: WS_METHODS.serverGetUsageSummary,
-      staleTimeMs: 60_000,
-      refreshTrigger: ({ environmentId }) => usagePricesAtom(environmentId),
-    }),
     configProjection,
-    welcome,
+    welcome: (target: {
+      readonly environmentId: EnvironmentId;
+      readonly input: EnvironmentRpcInput<typeof WS_METHODS.subscribeServerLifecycle>;
+    }) => welcomeFamily(target.environmentId),
+    legacyThreadMigration: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
+      label: "environment-data:server:legacy-thread-migration",
+      tag: WS_METHODS.subscribeServerLifecycle,
+      transform: (stream) =>
+        stream.pipe(
+          Stream.filterMap((event) =>
+            event.type === "legacyThreadMigration"
+              ? Result.succeed(event.payload)
+              : Result.failVoid,
+          ),
+        ),
+    }),
     consumeResetCredit: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:consume-reset-credit",
       tag: WS_METHODS.providerConsumeResetCredit,
       concurrency: {
         mode: "singleFlight",
+        // Both ids are free-form strings; a delimiter could collide.
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
-    }),
-    energyDiagnosticsCaptureRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:server:energy-diagnostics-capture-requests",
-      tag: WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
     }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
@@ -1082,7 +1093,7 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) =>
           JSON.stringify([
             environmentId,
-            input.instanceId ?? null,
+            JSON.stringify(input),
             input.cwd ?? null,
             input.refreshModels ?? false,
           ]),
@@ -1117,21 +1128,30 @@ export function createServerEnvironmentAtoms<R, E>(
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
     }),
-    claimEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:claim-energy-diagnostics-capture",
-      tag: WS_METHODS.serverClaimEnergyDiagnosticsCapture,
+    upsertScheduledTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:upsert",
+      tag: WS_METHODS.scheduledTasksUpsert,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
     }),
-    releaseEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:release-energy-diagnostics-capture",
-      tag: WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
+    setScheduledTaskEnabled: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:set-enabled",
+      tag: WS_METHODS.scheduledTasksSetEnabled,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
     }),
-    completeEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:complete-energy-diagnostics-capture",
-      tag: WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
+    deleteScheduledTask: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:delete",
+      tag: WS_METHODS.scheduledTasksDelete,
+      scheduler: configScheduler,
+      concurrency: configConcurrency,
     }),
-    failEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:fail-energy-diagnostics-capture",
-      tag: WS_METHODS.serverFailEnergyDiagnosticsCapture,
+    // Deliberately not on the config lane: run-now blocks until the run is
+    // dispatched, and a slow run must not stall settings/keybinding/provider
+    // mutations (or other scheduled-task edits) queued behind it.
+    runScheduledTaskNow: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:server:scheduled-task:run-now",
+      tag: WS_METHODS.scheduledTasksRunNow,
     }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",

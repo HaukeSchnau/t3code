@@ -47,20 +47,23 @@ import {
   type ProviderInstanceConfigMap,
   ServerSettings,
 } from "@t3tools/contracts";
-import { withBundledProviderInstances } from "@t3tools/shared/bundledProviderInstances";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 
 import { ServerSettingsService } from "../../serverSettings.ts";
-import { ProviderTranscriptJournal } from "../../persistence/Services/ProviderTranscriptJournal.ts";
-import { TranscriptJournalTracker } from "../../observability/TranscriptJournalObservability.ts";
 import { BUILT_IN_DRIVERS, type BuiltInDriversEnv } from "../builtInDrivers.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
 import { ProviderInstanceRegistryMutator } from "../Services/ProviderInstanceRegistryMutator.ts";
-import { makeDurableRuntimeEventAcceptance } from "../ProviderRuntimeEventDurability.ts";
 import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistryLive.ts";
+import {
+  type ProviderOrchestrationAdapterInfrastructure,
+  ProviderOrchestrationAdapterInfrastructureLive,
+} from "./ProviderOrchestrationAdapterInfrastructure.ts";
+
+type ProviderInstanceRegistryHydrationEnv =
+  | Exclude<BuiltInDriversEnv, ProviderOrchestrationAdapterInfrastructure>
+  | ServerSettingsService;
 
 /**
  * Synthesize a `ProviderInstanceConfigMap` from a `ServerSettings` snapshot.
@@ -78,9 +81,7 @@ import { ProviderInstanceRegistryMutableLayer } from "./ProviderInstanceRegistry
 export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
 ): ProviderInstanceConfigMap => {
-  const merged: Record<string, ProviderInstanceConfig> = {
-    ...withBundledProviderInstances(settings.providerInstances),
-  };
+  const merged: Record<string, ProviderInstanceConfig> = { ...settings.providerInstances };
 
   for (const driver of BUILT_IN_DRIVERS) {
     const instanceId = defaultInstanceIdForDriver(driver.driverKind);
@@ -160,12 +161,10 @@ const SettingsWatcherLive = Layer.effectDiscard(
 export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
   ProviderInstanceRegistry,
   never,
-  BuiltInDriversEnv | ServerSettingsService | ProviderTranscriptJournal
+  ProviderInstanceRegistryHydrationEnv
 > = Layer.unwrap(
   Effect.gen(function* () {
     const serverSettings = yield* ServerSettingsService;
-    const transcriptJournal = yield* ProviderTranscriptJournal;
-    const transcriptJournalTracker = yield* Effect.serviceOption(TranscriptJournalTracker);
     const initialSettings: ServerSettings | undefined = yield* serverSettings.getSettings.pipe(
       Effect.orElseSucceed(() => undefined),
     );
@@ -177,16 +176,8 @@ export const ProviderInstanceRegistryHydrationLive: Layer.Layer<
     const mutableLayer = ProviderInstanceRegistryMutableLayer({
       drivers: BUILT_IN_DRIVERS,
       configMap: initialConfigMap,
-      acceptRuntimeEvent: makeDurableRuntimeEventAcceptance(
-        transcriptJournal,
-        Option.getOrUndefined(transcriptJournalTracker),
-      ),
-    });
+    }).pipe(Layer.provide(ProviderOrchestrationAdapterInfrastructureLive));
 
     return SettingsWatcherLive.pipe(Layer.provideMerge(mutableLayer));
   }),
-) as Layer.Layer<
-  ProviderInstanceRegistry,
-  never,
-  BuiltInDriversEnv | ServerSettingsService | ProviderTranscriptJournal
->;
+) as Layer.Layer<ProviderInstanceRegistry, never, ProviderInstanceRegistryHydrationEnv>;

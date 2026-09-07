@@ -2,7 +2,7 @@ import type { EnvironmentConnectionPhase } from "../connection/presentation.ts";
 import type {
   CommandId,
   EnvironmentId,
-  OrchestrationCommand,
+  ProjectMutation,
   ProjectId,
   SourceControlDiscoveryResult,
   SourceControlProviderKind,
@@ -302,8 +302,7 @@ export function buildProjectCreateCommand(input: {
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
-  readonly createdAt: string;
-}): Extract<OrchestrationCommand, { type: "project.create" }> {
+}): Extract<ProjectMutation, { type: "project.create" }> {
   return {
     type: "project.create",
     commandId: input.commandId,
@@ -313,6 +312,5 @@ export function buildProjectCreateCommand(input: {
     createWorkspaceRootIfMissing: true,
     ...(input.separateEnvironment ? { separateEnvironment: true } : {}),
     defaultModelSelection: null,
-    createdAt: input.createdAt,
   };
 }

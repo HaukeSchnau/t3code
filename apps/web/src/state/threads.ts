@@ -13,22 +13,15 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 
 import { environmentCatalog } from "../connection/catalog";
 import { connectionAtomRuntime } from "../connection/runtime";
-import { withFixtureCatalog } from "../components/orchestration-fixture/fixtureEnvironment";
 import { environmentSnapshotAtom } from "./shell";
 
 export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
-export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime, {
-  activityDetailMode: "compact",
-});
+export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime);
 export const environmentThreadDetails = createEnvironmentThreadDetailAtoms(
   environmentThreads.stateAtom,
 );
-/** The catalog the thread shells read; dev builds add the orchestration fixture's environment. */
-export const threadCatalogValueAtom = import.meta.env.DEV
-  ? withFixtureCatalog(environmentCatalog.catalogValueAtom)
-  : environmentCatalog.catalogValueAtom;
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
-  catalogValueAtom: threadCatalogValueAtom,
+  catalogValueAtom: environmentCatalog.catalogValueAtom,
   snapshotAtom: environmentSnapshotAtom,
 });
 
@@ -45,12 +38,14 @@ export function useEnvironmentThread(
       ? environmentThreads.stateAtom(environmentId, threadId)
       : EMPTY_THREAD_STATE_ATOM,
   );
-  return Option.getOrElse(
+  const state = Option.getOrElse(
     AsyncResult.value(result),
     () => EMPTY_ENVIRONMENT_THREAD_STATE,
   ) as EnvironmentThreadState;
+  return state;
 }
 
+/** Keeps a detail subscription warm for sidebar rows likely to be opened. */
 export function useEnvironmentThreadMount(environmentId: EnvironmentId, threadId: ThreadId): void {
   useAtomMount(environmentThreads.stateAtom(environmentId, threadId));
 }

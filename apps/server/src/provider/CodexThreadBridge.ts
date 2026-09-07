@@ -12,8 +12,12 @@ import { buildCodexInitializeParams } from "./Layers/CodexProvider.ts";
 export const CODEX_THREAD_BRIDGE_APP_SERVER_ARGS = ["app-server"] as const;
 const CODEX_THREAD_BRIDGE_FORCE_KILL_AFTER = "2 seconds" as const;
 
-type CodexThread = {
+export type CodexProviderThread = {
   readonly id: string;
+  readonly cwd?: string;
+  readonly name?: string | null;
+  readonly preview?: string | null;
+  readonly createdAt?: number | null;
   readonly turns: ReadonlyArray<{
     readonly id: string;
     readonly startedAt?: number | null;
@@ -75,7 +79,7 @@ export function codexThreadTimestamp(value: number | null | undefined, fallback:
 }
 
 export function codexThreadMessages(input: {
-  readonly thread: CodexThread;
+  readonly thread: CodexProviderThread;
   readonly importedAt: string;
   /**
    * Bound imports for an already-known T3 thread to the last provider turn the
@@ -127,7 +131,7 @@ export function codexThreadMessages(input: {
 }
 
 function codexThreadTurnsWithinImportBoundary(
-  turns: CodexThread["turns"],
+  turns: CodexProviderThread["turns"],
   importThroughTurnId: string | null | undefined,
 ) {
   if (importThroughTurnId === undefined) {

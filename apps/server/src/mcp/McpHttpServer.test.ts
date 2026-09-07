@@ -13,6 +13,14 @@ import { HttpBody, HttpClient, HttpRouter, HttpServerResponse } from "effect/uns
 import * as McpHttpServer from "./McpHttpServer.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
+import * as GitWorkflowService from "../git/GitWorkflowService.ts";
+import { ThreadManagementService } from "../orchestration-v2/ThreadManagementService.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
+import { ProviderRegistry } from "../provider/Services/ProviderRegistry.ts";
+import { ScheduledTaskService } from "../scheduledTasks/ScheduledTaskService.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import { VcsStatusBroadcaster } from "../vcs/VcsStatusBroadcaster.ts";
 
 const environmentId = EnvironmentId.make("environment-mcp-test");
 const threadId = ThreadId.make("thread-mcp-test");
@@ -41,8 +49,21 @@ const TestLayer = McpHttpServer.PreviewToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
   Layer.provideMerge(PreviewAutomationBroker.layer.pipe(Layer.provide(NodeServices.layer))),
 );
-const DisabledToolkitsTestLayer = McpHttpServer.McpToolkitRegistrationLive.pipe(
+
+const StubServicesLive = Layer.mergeAll(
+  Layer.mock(ThreadManagementService)({}),
+  Layer.mock(ProviderRegistry)({}),
+  Layer.mock(ScheduledTaskService)({}),
+  Layer.mock(ProjectService.ProjectService)({}),
+  ServerSettings.layerTest({}),
+  Layer.mock(GitWorkflowService.GitWorkflowService)({}),
+  Layer.mock(ProjectSetupScriptRunner.ProjectSetupScriptRunner)({}),
+  Layer.mock(VcsStatusBroadcaster)({}),
+);
+const NativeToolkitTestLayer = McpHttpServer.McpToolkitRegistrationLive.pipe(
   Layer.provideMerge(McpServer.McpServer.layer),
+  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(StubServicesLive),
 );
 
 it("normalizes empty successful notification responses to accepted", () => {
@@ -57,11 +78,21 @@ it("normalizes empty successful notification responses to accepted", () => {
   expect(resultResponse.status).toBe(200);
 });
 
-it.effect("does not register agent-facing MCP tools", () =>
+it.effect("registers native MCP tools without preview tools", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
-    expect(server.tools).toEqual([]);
-  }).pipe(Effect.provide(DisabledToolkitsTestLayer)),
+    const toolNames = server.tools.map(({ tool }) => tool.name);
+    expect(toolNames).toEqual(
+      expect.arrayContaining([
+        "orchestrator_capabilities",
+        "delegate_task",
+        "t3_thread_list",
+        "t3_worktree_handoff",
+        "t3_worktree_status",
+      ]),
+    );
+    expect(toolNames.some((name) => name.startsWith("preview_"))).toBe(false);
+  }).pipe(Effect.provide(NativeToolkitTestLayer)),
 );
 
 it.effect("returns bounded structural preview snapshot failures", () =>
@@ -123,7 +154,7 @@ it.effect("returns bounded structural preview snapshot failures", () =>
         const snapshot = yield* server
           .callTool({
             name: "preview_snapshot",
-            arguments: { ...input, tabId: alternateTabId },
+            arguments: { tabId: alternateTabId },
           })
           .pipe(
             Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
@@ -134,15 +165,11 @@ it.effect("returns bounded structural preview snapshot failures", () =>
         expect(snapshot.structuredContent).toEqual(metadata);
         expect(snapshot.content).toEqual([
           { type: "text", text: encodeJsonText(snapshot.structuredContent) },
-          ...(images
-            ? [
-                {
-                  type: "image",
-                  mimeType: "image/png",
-                  data: new Uint8Array(Buffer.from(png, "base64")),
-                },
-              ]
-            : []),
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: new Uint8Array(Buffer.from(png, "base64")),
+          },
         ]);
       }
 

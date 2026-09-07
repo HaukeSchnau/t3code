@@ -2,6 +2,7 @@ import { useEffect, useEffectEvent, useRef } from "react";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { DesktopOpenWorkspaceRequest } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
 import { readEnvironmentApi } from "../environmentApi";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
@@ -10,6 +11,8 @@ import { newCommandId, newProjectId } from "../lib/utils";
 import { openWorkspaceInApp } from "../lib/openWorkspaceInApp";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { useProjects, useThreadShells } from "../state/entities";
+import { projectEnvironment } from "../state/projects";
+import { useAtomCommand } from "../state/use-atom-command";
 import { buildThreadRouteParams } from "../threadRoutes";
 import { stackedThreadToast, toastManager } from "./ui/toast";
 
@@ -22,6 +25,7 @@ export function DesktopOpenWorkspaceEffect() {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const bootstrapComplete = primaryEnvironmentId !== null;
   const { handleNewThread } = useHandleNewThread();
+  const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
   const settings = usePrimarySettings((state) => ({
     defaultThreadEnvMode: state.defaultThreadEnvMode,
     sidebarThreadSortOrder: state.sidebarThreadSortOrder,
@@ -53,7 +57,11 @@ export function DesktopOpenWorkspaceEffect() {
       newCommandId,
       newProjectId,
       dispatchCreateProject: async (command) => {
-        await api.orchestration.dispatchCommand(command);
+        const result = await createProject({
+          environmentId: primaryEnvironmentId,
+          input: command as Parameters<typeof createProject>[0]["input"],
+        });
+        if (result._tag === "Failure") throw squashAtomCommandFailure(result);
       },
       handleNewThread: async (projectRef, options) => {
         await handleNewThread(projectRef, options);
@@ -141,7 +149,7 @@ export function DesktopOpenWorkspaceEffect() {
     return () => {
       unsubscribe?.();
     };
-  }, [bootstrapComplete, enqueueWorkspaceRequest, primaryEnvironmentId]);
+  }, [bootstrapComplete, createProject, enqueueWorkspaceRequest, primaryEnvironmentId]);
 
   return null;
 }

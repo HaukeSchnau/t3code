@@ -22,9 +22,9 @@ import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
 
-import { environmentSnapshotAtom } from "./shell";
+import { environmentCatalog } from "../connection/catalog";
 import { useThreadShells } from "./entities";
-import { threadCatalogValueAtom } from "./threads";
+import { environmentSnapshotAtom } from "./shell";
 
 const EMPTY_SOURCES: ReadonlyArray<EnvironmentCoordination> = Object.freeze([]);
 
@@ -38,13 +38,17 @@ const coordinationSourceAtom = Atom.family((environmentId: EnvironmentId) =>
 let previousSources: ReadonlyArray<EnvironmentCoordination> = EMPTY_SOURCES;
 const coordinationSourcesAtom = Atom.make((get) => {
   const next: EnvironmentCoordination[] = [];
-  for (const environmentId of get(threadCatalogValueAtom).entries.keys()) {
+  for (const environmentId of get(environmentCatalog.catalogValueAtom).entries.keys()) {
     const source = get(coordinationSourceAtom(environmentId));
     if (source !== null) next.push(source);
   }
   if (
     next.length === previousSources.length &&
-    next.every((source, index) => source.coordination === previousSources[index]?.coordination)
+    next.every(
+      (source, index) =>
+        source.environmentId === previousSources[index]?.environmentId &&
+        source.coordination === previousSources[index]?.coordination,
+    )
   ) {
     return previousSources;
   }

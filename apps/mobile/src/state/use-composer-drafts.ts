@@ -5,7 +5,8 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   RuntimeMode as RuntimeModeSchema,
   SkillPackId as SkillPackIdSchema,
-  type EnvironmentId,
+  EnvironmentId,
+  ProjectId,
   type SkillPackId,
   MessageId,
   type MessageId as MessageIdType,
@@ -35,6 +36,10 @@ import {
 } from "./thread-outbox-model";
 import { flushThreadOutbox, threadOutboxManager } from "./thread-outbox";
 import { composerDraftEnvironmentId } from "../lib/composerAttachmentUploadQueue";
+import { newTaskDraftKey, parseLegacyNewTaskDraftKey, isNewTaskDraftKey } from "./new-task-draft-key";
+import { uuidv4 } from "../lib/uuid";
+
+export { isNewTaskDraftKey } from "./new-task-draft-key";
 
 const COMPOSER_DRAFTS_SCHEMA_VERSION = 1;
 const COMPOSER_DRAFTS_DIRECTORY = "composer-drafts";
@@ -67,6 +72,14 @@ export interface ComposerDraft {
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
   /** Durable outbox intent currently copied into this draft for editing. */
   readonly editingQueuedMessageId?: MessageIdType;
+  /** Project binding for a new-task draft; empty stamped drafts remain in memory only. */
+  readonly project?: ComposerDraftProject;
+}
+
+export interface ComposerDraftProject {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+  readonly createdAt: string;
 }
 
 export interface ComposerDraftContent {
@@ -104,6 +117,13 @@ const ComposerDraftSchema = Schema.Struct({
   skillPackIds: Schema.optional(Schema.Array(SkillPackIdSchema)),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
   editingQueuedMessageId: Schema.optional(MessageId),
+  project: Schema.optional(
+    Schema.Struct({
+      environmentId: EnvironmentId,
+      projectId: ProjectId,
+      createdAt: Schema.String,
+    }),
+  ),
 });
 
 const PersistedComposerDraftsSchema = Schema.Struct({
@@ -193,6 +213,84 @@ export function getComposerDraftSnapshot(draftKey: string): ComposerDraft {
   return normalizeDraft(appAtomRegistry.get(composerDraftsAtom)[draftKey]);
 }
 
+/** Creates an id-keyed new-task draft and keeps its project binding durable. */
+export function createNewTaskDraft(project: {
+  readonly environmentId: EnvironmentId;
+  readonly projectId: ProjectId;
+}): string {
+  const draftKey = newTaskDraftKey(uuidv4());
+  const draft: ComposerDraft = {
+    ...EMPTY_DRAFT,
+    project: { ...project, createdAt: new Date().toISOString() },
+  };
+  updateComposerDrafts((current) => ({ ...current, [draftKey]: draft }));
+  return draftKey;
+}
+
+export function findNewTaskDraftKeys(
+  drafts: Readonly<Record<string, ComposerDraft>>,
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+): string[] {
+  return Object.entries(drafts)
+    .filter(
+      ([key, draft]) =>
+        isNewTaskDraftKey(key) &&
+        draft.project?.environmentId === project.environmentId &&
+        draft.project.projectId === project.projectId,
+    )
+    .map(([key]) => key);
+}
+
+/** Converts the pre-id-keyed project draft format without merging drafts. */
+export function migrateLegacyNewTaskDraft(
+  draftKey: string,
+  draft: ComposerDraft,
+  createdAt: string,
+): readonly [string, ComposerDraft] {
+  const legacy = parseLegacyNewTaskDraftKey(draftKey);
+  if (legacy === null || draft.project !== undefined) return [draftKey, draft];
+  return [
+    newTaskDraftKey(uuidv4()),
+    {
+      ...draft,
+      project: {
+        environmentId: EnvironmentId.make(legacy.environmentId),
+        projectId: ProjectId.make(legacy.projectId),
+        createdAt,
+      },
+    },
+  ];
+}
+
+/** Retargets a draft while retaining content and its original creation stamp. */
+export function retargetNewTaskDraft(
+  draftKey: string,
+  project: { readonly environmentId: EnvironmentId; readonly projectId: ProjectId },
+): void {
+  updateComposerDrafts((current) => {
+    const existing = current[draftKey];
+    if (existing === undefined || !isNewTaskDraftKey(draftKey)) return current;
+    const createdAt = existing.project?.createdAt ?? new Date().toISOString();
+    const attachments = existing.attachments.map((attachment) =>
+      attachment.uploadEnvironmentId !== undefined &&
+      attachment.uploadEnvironmentId !== project.environmentId
+        ? (({ uploadedAttachmentId: _uploadedAttachmentId, uploadEnvironmentId: _uploadEnvironmentId, ...rest }) => rest)(
+            attachment,
+          )
+        : attachment,
+    );
+    return {
+      ...current,
+      [draftKey]: {
+        ...existing,
+        attachments,
+        workspaceSelection: undefined,
+        project: { ...project, createdAt },
+      },
+    };
+  });
+}
+
 export function isComposerDraftEmpty(draft: ComposerDraft): boolean {
   return isEmptyDraft(draft);
 }
@@ -216,9 +314,15 @@ export function decodePersistedComposerState(value: unknown): {
   readonly cloudDrafts: ComposerCloudDraftState;
 } {
   const parsed = decodePersistedComposerDraftsDocument(value);
+  const migratedAt = new Date().toISOString();
+  const migrateRecord = (record: Record<string, ComposerDraft>) =>
+    Object.fromEntries(
+      Object.entries(record).map(([key, draft]) => migrateLegacyNewTaskDraft(key, draft, migratedAt)),
+    );
+  const migratedDrafts = migrateRecord(parsed.drafts);
   return {
     drafts: Object.fromEntries(
-      Object.entries(parsed.drafts)
+      Object.entries(migratedDrafts)
         .map(
           ([key, draft]) =>
             [
@@ -253,7 +357,7 @@ export function decodePersistedComposerState(value: unknown): {
         Object.entries(parsed.signedOutDrafts ?? {}).map(([id, saved]) => [
           id,
           {
-            drafts: saved.drafts,
+            drafts: migrateRecord(saved.drafts),
             queuedMessages: saved.queuedMessages.map(decodeQueuedThreadMessage),
           },
         ]),

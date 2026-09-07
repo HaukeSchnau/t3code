@@ -336,7 +336,7 @@ function createOptimisticMessage(input: {
     role: "user",
     text: input.text,
     ...(attachments.length > 0 ? { attachments } : {}),
-    turnId: null,
+    runId: null,
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
     streaming: false,

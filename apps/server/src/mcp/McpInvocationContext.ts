@@ -2,7 +2,8 @@ import { type EnvironmentId, type ProviderInstanceId, type ThreadId } from "@t3t
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 
-export type McpCapability = "preview" | "threads";
+export const ALL_MCP_CAPABILITIES = ["preview", "orchestration", "worktree", "threads"] as const;
+export type McpCapability = (typeof ALL_MCP_CAPABILITIES)[number];
 
 export interface McpInvocationScope {
   readonly environmentId: EnvironmentId;

@@ -119,13 +119,13 @@ export function deriveProviderSettingsFields(
     });
 }
 
-function readProviderConfigString(config: unknown, key: string): string {
+export function readProviderConfigString(config: unknown, key: string): string {
   if (config === null || typeof config !== "object") return "";
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "string" ? value : "";
 }
 
-function readProviderConfigBoolean(config: unknown, key: string, defaultValue = false): boolean {
+export function readProviderConfigBoolean(config: unknown, key: string, defaultValue = false): boolean {
   if (config === null || typeof config !== "object") return defaultValue;
   const value = (config as Record<string, unknown>)[key];
   return typeof value === "boolean" ? value : defaultValue;

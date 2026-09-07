@@ -32,6 +32,11 @@ export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, 
   Atom.withLabel("mobile:thread-outbox:editing-message-ids"),
 );
 
+export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-outbox:dispatching-message-id"),
+);
+
 export const effectiveEditingQueuedMessageIdsAtom = Atom.make((get) => {
   const editing: Record<MessageId, true> = {
     ...get(editingQueuedMessageIdsAtom),

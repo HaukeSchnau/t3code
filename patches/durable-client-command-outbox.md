@@ -53,6 +53,10 @@ storage and decide when to drain ready thread heads.
   Adapters should classify typed business rejections as permanent and may use the shared classifier for known
   unavailable and transport failures.
 
+## V2 compatibility
+
+New delivery plans use V2 launch and message commands. A saved V1 plan keeps its original envelope and command ID and uses `orchestration.replayLegacyOutbox`; it is never converted into a second launch. The server validates the historical receipt and setup journal before executing incomplete work. If the old server's normalized identity cannot be recovered, the entry remains visibly rejected for review rather than silently issuing a duplicate request.
+
 ## Integration notes
 
 - Web and mobile adapters must decode/migrate their platform records into document version 1 and implement an

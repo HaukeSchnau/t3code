@@ -20,8 +20,8 @@ import {
 } from "@t3tools/client-runtime/state/threads";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
-  activeThreadAnchorTimestampMs,
   resolveSettledThreadTimestamp,
+  sortActiveThreadsByOrderKey,
   sortPinnedThreadsByOrderKey,
   sortThreadsByAttention,
   type SidebarAttentionBand,
@@ -29,6 +29,7 @@ import {
 import type { EnvironmentId, ProjectId, ThreadLinkedPullRequest } from "@t3tools/contracts";
 
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
+import type { PendingThreadOrder } from "./threadOrder";
 
 export { snoozeWakeLabel };
 
@@ -36,11 +37,13 @@ export { snoozeWakeLabel };
  * Thread List v2 model, ported from the web sidebar v2
  * (apps/web/src/components/Sidebar.logic.ts + SidebarV2.tsx).
  *
- * Four visual states, three colors: color is reserved for "act now"
- * (approval), "in motion" (working), and "broken" (failed). Ready is the
- * unlabeled resting state.
+ * Six visual states. Color distinguishes approval, input, active work, and
+ * failures. Ready is the unlabeled resting state; waiting (runtime status "idle") is the agent
+ * parked on open background tasks, grey like working rather than a false Done.
+ * The orchestrator v2 presentation bridge parks runtime at idle when the
+ * post-settlement background roster is nonempty.
  */
-export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "ready";
+export type ThreadListV2Status = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
 export type ThreadListV2SwipeAction = "archive" | "settle" | "unsettle" | "snooze" | "unsnooze";
 
 export interface ThreadListV2ChangeRequestState extends ChangeRequestSettleSource {
@@ -130,7 +133,7 @@ export function resolveThreadListV2SwipeActions(input: {
 export function resolveThreadListV2SnoozeGateExpiryMs(
   thread: Pick<
     EnvironmentThreadShell,
-    "hasPendingApprovals" | "hasPendingUserInput" | "latestUserMessageAt" | "latestTurn" | "session"
+    "hasPendingApprovals" | "hasPendingUserInput" | "latestRun" | "latestUserMessageAt" | "runtime"
   >,
   options: { readonly now: string },
 ): number | null {
@@ -167,8 +170,29 @@ export function resolveThreadListV2Enabled(input: {
   return input.legacyPreference !== true;
 }
 
+/**
+ * Completed-but-not-yet-seen, mirroring the web sidebar's
+ * hasUnseenCompletion. The visited watermark is server state
+ * (thread.lastVisitedAt), so the marker agrees across web and mobile.
+ * Never-visited threads count as read — a fresh environment must not light
+ * up its whole history — and pre-tracking servers (field absent) never
+ * report unread.
+ */
+export function threadHasUnseenCompletion(
+  thread: Pick<EnvironmentThreadShell, "latestRun" | "lastVisitedAt">,
+): boolean {
+  const completedAt = thread.latestRun?.completedAt;
+  if (!completedAt) return false;
+  const completedAtMs = Date.parse(completedAt);
+  if (Number.isNaN(completedAtMs)) return false;
+  if (!thread.lastVisitedAt) return false;
+  const lastVisitedAtMs = Date.parse(thread.lastVisitedAt);
+  if (Number.isNaN(lastVisitedAtMs)) return true;
+  return completedAtMs > lastVisitedAtMs;
+}
+
 export function resolveThreadListV2Status(
-  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
+  thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "runtime">,
 ): ThreadListV2Status {
   if (thread.hasPendingApprovals) {
     return "approval";
@@ -176,10 +200,16 @@ export function resolveThreadListV2Status(
   if (thread.hasPendingUserInput) {
     return "input";
   }
-  if (thread.session?.status === "running" || thread.session?.status === "starting") {
+  if (
+    thread.runtime !== null &&
+    ["preparing", "queued", "starting", "running", "waiting"].includes(thread.runtime.status)
+  ) {
     return "working";
   }
-  if (thread.session?.status === "error") {
+  if (thread.runtime?.status === "idle") {
+    return "waiting";
+  }
+  if (thread.runtime?.status === "failed") {
     return "failed";
   }
   return "ready";
@@ -215,16 +245,71 @@ export function sortThreadsForListV2<
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
     readonly unsettledAt?: string | null | undefined;
+    readonly activeOrderKey?: string | null | undefined;
   },
 >(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
   if (getBand === undefined) {
-    return [...threads].sort(
-      (left, right) =>
-        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
-        left.id.localeCompare(right.id),
-    );
+    return sortActiveThreadsByOrderKey(threads);
   }
-  return sortThreadsByAttention(threads, getBand);
+  const attention: T[] = [];
+  const normal: T[] = [];
+  for (const thread of threads) {
+    (getBand(thread) === "attention" ? attention : normal).push(thread);
+  }
+  const sortBand = (band: T[]) =>
+    band.some((thread) => thread.activeOrderKey != null)
+      ? sortActiveThreadsByOrderKey(band)
+      : sortThreadsByAttention(band, getBand);
+  return [...sortBand(attention), ...sortBand(normal)];
+}
+
+/**
+ * Returns the complete reorderable section before search or presentation
+ * filtering. The sidebar and its pending-order reconciler must use the same
+ * membership rules as the visible list, including queued messages reopening a
+ * settled thread for the active block.
+ */
+export function getThreadListV2OrderedSection(input: {
+  readonly threads: ReadonlyArray<EnvironmentThreadShell>;
+  readonly section: "active" | "pinned";
+  readonly now: string;
+  readonly queuedThreadKeys?: ReadonlySet<string>;
+  readonly settlementEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly snoozeEnvironmentIds?: ReadonlySet<EnvironmentId>;
+  readonly pendingOrder?: PendingThreadOrder | null;
+}): EnvironmentThreadShell[] {
+  const rows: EnvironmentThreadShell[] = [];
+  for (const thread of input.threads) {
+    if (thread.archivedAt !== null) continue;
+    const supportsSnooze = input.snoozeEnvironmentIds?.has(thread.environmentId) ?? true;
+    if (supportsSnooze && effectiveSnoozed(thread, { now: input.now })) continue;
+    const supportsSettlement = input.settlementEnvironmentIds?.has(thread.environmentId) ?? true;
+    const settled =
+      supportsSettlement &&
+      effectiveSettled(thread, {
+        now: input.now,
+        autoSettleAfterDays: 3,
+        autoSettleOnMerge: true,
+      });
+    const queued = input.queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
+    if (input.section === "pinned") {
+      if (thread.pinnedAt === null || settled || queued) continue;
+    } else if (thread.pinnedAt !== null || (settled && !queued)) {
+      continue;
+    }
+    rows.push(thread);
+  }
+  const ordered =
+    input.section === "pinned"
+      ? sortPinnedThreadsByOrderKey(rows)
+      : sortActiveThreadsByOrderKey(rows);
+  if (input.pendingOrder?.section !== input.section) return ordered;
+  const rank = new Map(input.pendingOrder.orderedIds.map((id, index) => [id, index]));
+  return ordered.sort(
+    (left, right) =>
+      (rank.get(`${left.environmentId}:${left.id}`) ?? Number.POSITIVE_INFINITY) -
+      (rank.get(`${right.environmentId}:${right.id}`) ?? Number.POSITIVE_INFINITY),
+  );
 }
 
 export interface ThreadListV2Item {
@@ -517,6 +602,9 @@ export function buildThreadListV2Items(input: {
   /** The selected thread remains visible on an otherwise collapsed shelf so
       a split-view detail can never lose its navigation row. */
   readonly selectedThreadKey?: string | null;
+  readonly pendingOrder?: PendingThreadOrder | null;
+  /** Queued new messages reopen a settled thread in the active section. */
+  readonly queuedThreadKeys?: ReadonlySet<string>;
 }): ThreadListV2Layout {
   const now = input.now ?? new Date().toISOString();
   const snoozeNow = input.snoozeNow ?? now;
@@ -573,6 +661,7 @@ export function buildThreadListV2Items(input: {
       }
       continue;
     }
+    const queued = input.queuedThreadKeys?.has(`${thread.environmentId}:${thread.id}`) === true;
     if (
       supportsSettlement &&
       effectiveSettled(thread, {
@@ -580,10 +669,11 @@ export function buildThreadListV2Items(input: {
         autoSettleAfterDays,
         autoSettleOnMerge,
         changeRequest,
-      })
+      }) &&
+      !queued
     ) {
       settled.push(thread);
-    } else if (thread.pinnedAt != null) {
+    } else if (thread.pinnedAt != null && !queued) {
       pinned.push(thread);
     } else {
       active.push(thread);
@@ -591,6 +681,35 @@ export function buildThreadListV2Items(input: {
   }
 
   const orderedActive = sortThreadsForListV2(active, resolveThreadListV2AttentionBand);
+  const orderedPinned = sortPinnedThreadsByOrderKey(pinned);
+  const canApplyUnfilteredPendingOrder =
+    input.searchQuery.trim().length > 0 ||
+    ((input.pendingOrder?.section !== "active" ||
+      input.pendingOrder.before.size === orderedActive.length) &&
+      (input.pendingOrder?.section !== "pinned" ||
+        input.pendingOrder.before.size === orderedPinned.length));
+  const pendingRank =
+    input.pendingOrder?.section === "active" && canApplyUnfilteredPendingOrder
+      ? new Map(input.pendingOrder.orderedIds.map((id, index) => [id, index]))
+      : null;
+  if (pendingRank !== null) {
+    orderedActive.sort(
+      (left, right) =>
+        (pendingRank.get(`${left.environmentId}:${left.id}`) ?? Number.POSITIVE_INFINITY) -
+        (pendingRank.get(`${right.environmentId}:${right.id}`) ?? Number.POSITIVE_INFINITY),
+    );
+  }
+  const pinnedRank =
+    input.pendingOrder?.section === "pinned" && canApplyUnfilteredPendingOrder
+      ? new Map(input.pendingOrder.orderedIds.map((id, index) => [id, index]))
+      : null;
+  if (pinnedRank !== null) {
+    orderedPinned.sort(
+      (left, right) =>
+        (pinnedRank.get(`${left.environmentId}:${left.id}`) ?? Number.POSITIVE_INFINITY) -
+        (pinnedRank.get(`${right.environmentId}:${right.id}`) ?? Number.POSITIVE_INFINITY),
+    );
+  }
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
@@ -622,7 +741,7 @@ export function buildThreadListV2Items(input: {
         );
 
   const items: ThreadListV2Item[] = [];
-  for (const thread of sortPinnedThreadsByOrderKey(pinned)) {
+  for (const thread of orderedPinned) {
     items.push({
       thread,
       variant: "card",

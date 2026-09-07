@@ -11,7 +11,6 @@ import {
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
 import type {
   EnvironmentId,
-  OrchestrationThread,
   ProjectContentMatch,
   ProjectEntryKind,
   VcsListRefsResult,
@@ -53,14 +52,6 @@ const threadSearchResultsAtom = createThreadSearchResultsAtomFamily({
   labelPrefix: "web:thread-search",
 });
 
-export interface ThreadDetailView {
-  readonly data: OrchestrationThread | null;
-  readonly error: string | null;
-  readonly isPending: boolean;
-  readonly isDeleted: boolean;
-}
-
-/** Shared with the pull requests page, which debounces its search the same way. */
 export function useDebouncedValue<A>(value: A, delayMs: number): A {
   const [debounced, setDebounced] = useState(value);
 
@@ -99,6 +90,22 @@ export function useThreadSearch(
     matches: isDebouncing ? EMPTY_THREAD_SEARCH_MATCHES : result.matches,
     isPending: canSearch && (isDebouncing || result.isLoading),
   };
+}
+
+export function useBranches(target: VcsRefTarget) {
+  const query = target.query?.trim() ?? "";
+  return useEnvironmentQuery(
+    target.environmentId !== null && target.cwd !== null
+      ? vcsEnvironment.listRefs({
+          environmentId: target.environmentId,
+          input: {
+            cwd: target.cwd,
+            ...(query.length > 0 ? { query } : {}),
+            limit: VCS_REF_LIST_LIMIT,
+          },
+        })
+      : null,
+  );
 }
 
 export function usePaginatedBranches(target: VcsRefTarget) {

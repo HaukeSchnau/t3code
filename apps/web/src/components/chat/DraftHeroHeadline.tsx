@@ -15,8 +15,7 @@ import {
 } from "~/sidebarProjectGrouping";
 import { useProjects, useThreadShells } from "~/state/entities";
 import { useEnvironments, usePrimaryEnvironmentId } from "~/state/environments";
-import { sortLogicalProjectsByThreadOrder, sortLogicalProjectsForSidebar } from "../Sidebar.logic";
-import { useSidebarCardThreads } from "../sidebar/SidebarCardThreadsContext";
+import { sortLogicalProjectsForSidebar } from "../Sidebar.logic";
 import {
   Menu,
   MenuItem,
@@ -41,7 +40,6 @@ export function DraftHeroHeadline({
 }: DraftHeroHeadlineProps) {
   const projects = useProjects();
   const threads = useThreadShells();
-  const sidebarCardThreads = useSidebarCardThreads();
   const { environments } = useEnvironments();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
@@ -61,25 +59,28 @@ export function DraftHeroHeadline({
       ),
     [environments],
   );
-  const projectGroups = useMemo(() => {
-    const groups = buildSidebarProjectSnapshots({
-      projects,
-      settings: projectGroupingSettings,
+  const projectGroups = useMemo(
+    () =>
+      sortLogicalProjectsForSidebar(
+        buildSidebarProjectSnapshots({
+          projects,
+          settings: projectGroupingSettings,
+          primaryEnvironmentId,
+          resolveEnvironmentLabel: (environmentId) =>
+            environmentLabelById.get(environmentId) ?? null,
+        }),
+        threads,
+        projectSortOrder,
+      ),
+    [
+      environmentLabelById,
       primaryEnvironmentId,
-      resolveEnvironmentLabel: (environmentId) => environmentLabelById.get(environmentId) ?? null,
-    });
-    return sidebarCardThreads === null
-      ? sortLogicalProjectsForSidebar(groups, threads, projectSortOrder)
-      : sortLogicalProjectsByThreadOrder(groups, sidebarCardThreads);
-  }, [
-    environmentLabelById,
-    primaryEnvironmentId,
-    projectGroupingSettings,
-    projectSortOrder,
-    projects,
-    sidebarCardThreads,
-    threads,
-  ]);
+      projectGroupingSettings,
+      projectSortOrder,
+      projects,
+      threads,
+    ],
+  );
   const projectPickerEntries = useMemo(
     () =>
       buildSidebarProjectPickerEntries({
@@ -148,13 +149,8 @@ export function DraftHeroHeadline({
             );
             if (!hasExplicitComposerModelSelection(currentDraft)) {
               applyStickyState(draftId);
-              const defaultModelSelection =
-                project.defaultModelSelection ??
-                environments.find(
-                  (environment) => environment.environmentId === project.environmentId,
-                )?.serverConfig?.settings.defaultModelSelection;
-              if (defaultModelSelection) {
-                setModelSelection(draftId, defaultModelSelection, {
+              if (project.defaultModelSelection) {
+                setModelSelection(draftId, project.defaultModelSelection, {
                   replaceOptions: true,
                 });
               }

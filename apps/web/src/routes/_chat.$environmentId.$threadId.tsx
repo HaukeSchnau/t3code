@@ -3,66 +3,48 @@ import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
-import {
-  FixtureChatView,
-  FixtureNavigationContext,
-  isFixtureEnvironment,
-  startFixtureEnvironmentSync,
-} from "../components/orchestration-fixture";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
-import { resolveThreadSyncPhase } from "../threadSync";
 import { SidebarInset } from "~/components/ui/sidebar";
-import {
-  useEnvironmentThreadRefs,
-  useThreadDetail,
-  useThreadShell,
-  useThreadStatus,
-} from "../state/entities";
+import { useEnvironmentThreadRefs, useThreadShell } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
-if (import.meta.env.DEV) {
-  startFixtureEnvironmentSync();
-}
-
-function ServerChatThreadRouteView({
-  threadRef,
-}: {
-  readonly threadRef: NonNullable<ReturnType<typeof resolveThreadRouteRef>>;
-}) {
+function ChatThreadRouteView() {
   const navigate = useNavigate();
-  const shell = useEnvironmentQuery(environmentShell.stateAtom(threadRef.environmentId));
+  const threadRef = Route.useParams({
+    select: (params) => resolveThreadRouteRef(params),
+  });
+  const shell = useEnvironmentQuery(
+    threadRef === null ? null : environmentShell.stateAtom(threadRef.environmentId),
+  );
   const serverThreadShell = useThreadShell(threadRef);
-  const serverThreadDetail = useThreadDetail(threadRef);
-  const serverThreadStatus = useThreadStatus(threadRef);
-  const environmentThreadRefs = useEnvironmentThreadRefs(threadRef.environmentId);
+  const environmentThreadRefs = useEnvironmentThreadRefs(threadRef?.environmentId ?? null);
   const bootstrapComplete = shell.data?.snapshot._tag === "Some";
   const environmentHasServerThreads = environmentThreadRefs.length > 0;
-  const draftThreadExists = useComposerDraftStore(
-    (store) => store.getDraftThreadByRef(threadRef) !== null,
+  const draftThreadExists = useComposerDraftStore((store) =>
+    threadRef ? store.getDraftThreadByRef(threadRef) !== null : false,
   );
-  const draftThread = useComposerDraftStore((store) => store.getDraftThreadByRef(threadRef));
+  const draftThread = useComposerDraftStore((store) =>
+    threadRef ? store.getDraftThreadByRef(threadRef) : null,
+  );
   const environmentHasDraftThreads = useComposerDraftStore((store) => {
+    if (!threadRef) {
+      return false;
+    }
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
-    serverThreadShellExists: serverThreadShell !== null,
-    serverThreadDetailExists: serverThreadDetail !== null,
-    serverThreadDetailDeleted: serverThreadStatus === "deleted",
+    serverThreadExists: serverThreadShell !== null,
+    serverThreadDeleted: serverThreadShell?.deletedAt != null,
     draftThreadExists,
   });
-  const threadSyncPhase = resolveThreadSyncPhase({
-    detailExists: serverThreadDetail !== null,
-    shellExists: serverThreadShell !== null,
-    status: serverThreadStatus,
-  });
-  const serverThreadStarted = threadHasStarted(serverThreadDetail);
+  const serverThreadStarted = threadHasStarted(serverThreadShell);
   const environmentHasAnyThreads = environmentHasServerThreads || environmentHasDraftThreads;
 
   useEffect(() => {
-    if (!bootstrapComplete) {
+    if (!threadRef || !bootstrapComplete) {
       return;
     }
 
@@ -72,54 +54,25 @@ function ServerChatThreadRouteView({
   }, [bootstrapComplete, environmentHasAnyThreads, navigate, renderState, threadRef]);
 
   useEffect(() => {
-    if (!serverThreadStarted || !draftThread) {
+    if (!threadRef || !serverThreadStarted || !draftThread) {
       return;
     }
     finalizePromotedDraftThreadByRef(threadRef);
   }, [draftThread, serverThreadStarted, threadRef]);
 
-  return (
-    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      {renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
-        <ChatView
-          environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
-          routeKind="server"
-          threadSyncPhase={threadSyncPhase}
-        />
-      ) : null}
-    </SidebarInset>
-  );
-}
-
-function ChatThreadRouteView() {
-  const navigate = useNavigate();
-  const threadRef = Route.useParams({
-    select: (params) => resolveThreadRouteRef(params),
-  });
-
-  if (threadRef === null) return null;
-
-  if (import.meta.env.DEV && isFixtureEnvironment(threadRef.environmentId)) {
-    return (
-      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-        <FixtureNavigationContext
-          value={{
-            openThread: (threadId) => {
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: { environmentId: threadRef.environmentId, threadId },
-              });
-            },
-          }}
-        >
-          <FixtureChatView threadId={threadRef.threadId} />
-        </FixtureNavigationContext>
-      </SidebarInset>
-    );
+  if (!threadRef || renderState !== "ready") {
+    return null;
   }
 
-  return <ServerChatThreadRouteView threadRef={threadRef} />;
+  return (
+    <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
+      <ChatView
+        environmentId={threadRef.environmentId}
+        threadId={threadRef.threadId}
+        routeKind="server"
+      />
+    </SidebarInset>
+  );
 }
 
 export const Route = createFileRoute("/_chat/$environmentId/$threadId")({

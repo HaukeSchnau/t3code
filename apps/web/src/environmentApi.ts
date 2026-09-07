@@ -1,13 +1,14 @@
 import {
-  ORCHESTRATION_WS_METHODS,
+  ORCHESTRATION_V2_WS_METHODS,
   WS_METHODS,
-  type ClientOrchestrationCommand,
   type CodexThreadForkInput,
   type CodexThreadForkResult,
   type CodexThreadResumeInput,
   type CodexThreadResumeResult,
   type EnvironmentApi,
   type EnvironmentId,
+  type PersistChatAttachmentsInput,
+  type PersistChatAttachmentsResult,
 } from "@t3tools/contracts";
 import {
   createEnvironmentRpcCommand,
@@ -20,12 +21,17 @@ import { appAtomRegistry } from "./rpc/atomRegistry";
 
 type MinimalEnvironmentApi = {
   readonly codex: Pick<EnvironmentApi["codex"], "forkThread" | "resumeThread">;
-  readonly orchestration: Pick<EnvironmentApi["orchestration"], "dispatchCommand">;
+  readonly orchestrationV2: Pick<EnvironmentApi["orchestrationV2"], "dispatchCommand">;
 };
 
 const dispatchCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
-  label: "environment-api:orchestration:dispatch-command",
-  tag: ORCHESTRATION_WS_METHODS.dispatchCommand,
+  label: "environment-api:orchestration-v2:dispatch-command",
+  tag: ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
+});
+
+const persistChatAttachments = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-api:assets:persist-chat-attachments",
+  tag: WS_METHODS.assetsPersistChatAttachments,
 });
 
 const resumeCodexThread = createEnvironmentRpcCommand(connectionAtomRuntime, {
@@ -75,8 +81,8 @@ function createMinimalEnvironmentApi(environmentId: EnvironmentId): MinimalEnvir
           ),
         ),
     },
-    orchestration: {
-      dispatchCommand: (command: ClientOrchestrationCommand) =>
+    orchestrationV2: {
+      dispatchCommand: (command) =>
         unwrapEnvironmentCommand(
           runAtomCommand(
             appAtomRegistry,
@@ -87,6 +93,21 @@ function createMinimalEnvironmentApi(environmentId: EnvironmentId): MinimalEnvir
         ),
     },
   };
+}
+
+/** Persist upload-shaped composer attachments before replaying a V2 message. */
+export function persistEnvironmentChatAttachments(
+  environmentId: EnvironmentId,
+  input: PersistChatAttachmentsInput,
+): Promise<PersistChatAttachmentsResult> {
+  return unwrapEnvironmentCommand(
+    runAtomCommand(
+      appAtomRegistry,
+      persistChatAttachments,
+      { environmentId, input },
+      { reportFailure: false },
+    ),
+  );
 }
 
 export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi | undefined {

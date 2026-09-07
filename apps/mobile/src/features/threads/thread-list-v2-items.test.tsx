@@ -64,6 +64,7 @@ function thread(): EnvironmentThreadShell {
     interactionMode: "default",
     branch: null,
     worktreePath: null,
+    runtime: null,
     latestTurn: null,
     createdAt: NOW,
     updatedAt: NOW,
@@ -75,7 +76,7 @@ function thread(): EnvironmentThreadShell {
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
-  };
+  } as unknown as EnvironmentThreadShell;
 }
 
 function rowProps() {

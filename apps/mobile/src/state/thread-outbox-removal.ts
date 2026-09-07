@@ -11,7 +11,7 @@ import {
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 
-async function cleanUpRemovedMessages(
+export async function cleanUpRemovedMessages(
   removedMessages: ReadonlyArray<QueuedThreadMessage>,
 ): Promise<void> {
   const attachments = removedMessages.flatMap((message) => message.attachments);

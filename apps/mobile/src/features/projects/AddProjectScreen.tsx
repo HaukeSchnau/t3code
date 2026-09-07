@@ -72,7 +72,6 @@ interface EnvironmentOption {
   readonly environmentId: EnvironmentId;
   readonly label: string;
   readonly platform: string;
-  readonly separateProjectsSupported: boolean;
   readonly machine: EnvironmentMachineKind;
   readonly baseDirectory: string | null;
   readonly connectionState: EnvironmentConnectionPhase;
@@ -361,7 +360,6 @@ function useEnvironmentOptions(): ReadonlyArray<EnvironmentOption> {
         environmentId: connection.environmentId,
         label: connection.environmentLabel,
         platform: platformFromOs(config?.environment.platform.os ?? null),
-        separateProjectsSupported: config?.separateProjectsSupported === true,
         machine: resolveEnvironmentMachineKind(config ?? null),
         baseDirectory: config?.settings.addProjectBaseDirectory ?? null,
         connectionState: runtime?.connectionState ?? "available",
@@ -582,7 +580,7 @@ function useCreateProject(environment: EnvironmentOption | null) {
   const projects = useProjects();
 
   return useCallback(
-    async (workspaceRoot: string, separateEnvironment = false) => {
+    async (workspaceRoot: string) => {
       if (!environment || !canCreateProjectInEnvironment(environment.connectionState)) return;
 
       const existing = findExistingAddProject({
@@ -615,8 +613,6 @@ function useCreateProject(environment: EnvironmentOption | null) {
         commandId: CommandId.make(uuidv4()),
         projectId,
         workspaceRoot,
-        separateEnvironment,
-        createdAt: new Date().toISOString(),
       });
       const result = await createProject({
         environmentId: environment.environmentId,
@@ -847,7 +843,6 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
   const createProject = useCreateProject(environment);
   const { isBrowseNavigating, navigateToBrowsePath, pathInput, setPathInput } =
     useBrowsePathInput(environment);
-  const [separateEnvironment, setSeparateEnvironment] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -865,22 +860,12 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
     }
 
     setIsSubmitting(true);
-    const result = await createProject(
-      resolved.path,
-      separateEnvironment && environment.separateProjectsSupported,
-    );
+    const result = await createProject(resolved.path);
     if (result && AsyncResult.isFailure(result)) {
       setError(errorMessage(Cause.squash(result.cause)));
     }
     setIsSubmitting(false);
-  }, [
-    createProject,
-    environment,
-    isBrowseNavigating,
-    isSubmitting,
-    pathInput,
-    separateEnvironment,
-  ]);
+  }, [createProject, environment, isBrowseNavigating, isSubmitting, pathInput]);
 
   return (
     <AddProjectShell>
@@ -892,19 +877,6 @@ export function AddProjectLocalFolderScreen(props: { readonly environmentId?: st
             onChangeText={setPathInput}
             onSubmit={() => void submitPath()}
           />
-          {environment.separateProjectsSupported ? (
-            <Pressable
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: separateEnvironment }}
-              onPress={() => setSeparateEnvironment((value) => !value)}
-              className="px-4 py-3"
-            >
-              <Text>{separateEnvironment ? "✓ " : ""}Separate environment</Text>
-              <Text className="text-sm text-muted-foreground">
-                Start in an empty folder. Keep your tools and skills; other projects stay outside.
-              </Text>
-            </Pressable>
-          ) : null}
           <PrimaryActionButton
             label="Add project"
             disabled={isBrowseNavigating || isSubmitting}

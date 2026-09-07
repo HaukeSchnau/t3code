@@ -15,7 +15,8 @@ const EMPTY_SOURCES: ReadonlyArray<EnvironmentCoordination> = Object.freeze([]);
 
 const coordinationSourceAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get): EnvironmentCoordination | null => {
-    const coordination = get(environmentSnapshotAtom(environmentId))?.coordination;
+    const snapshot = get(environmentSnapshotAtom(environmentId));
+    const coordination = snapshot?.coordination;
     return coordination === undefined ? null : { environmentId, coordination };
   }).pipe(Atom.withLabel(`mobile-environment-coordination:${environmentId}`)),
 );
@@ -29,7 +30,11 @@ const coordinationSourcesAtom = Atom.make((get) => {
   }
   if (
     next.length === previousSources.length &&
-    next.every((source, index) => source.coordination === previousSources[index]?.coordination)
+    next.every(
+      (source, index) =>
+        source.environmentId === previousSources[index]?.environmentId &&
+        source.coordination === previousSources[index]?.coordination,
+    )
   ) {
     return previousSources;
   }

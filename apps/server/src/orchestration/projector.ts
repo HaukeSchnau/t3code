@@ -1,13 +1,14 @@
-import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
+import type { ThreadId } from "@t3tools/contracts";
+import type {
+  OrchestrationEvent,
+  OrchestrationReadModel,
+} from "@t3tools/contracts/legacy-orchestration";
 import {
-  isImportedAgentSessionMessageId,
   OrchestrationCheckpointSummary,
   OrchestrationMessage,
-  OrchestrationQueuedMessage,
   OrchestrationSession,
   OrchestrationThread,
-} from "@t3tools/contracts";
-import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
+} from "@t3tools/contracts/legacy-orchestration";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import * as Predicate from "effect/Predicate";
@@ -23,13 +24,8 @@ import {
   ThreadCreatedPayload,
   ThreadDeletedPayload,
   ThreadInteractionModeSetPayload,
-  ThreadSkillPacksSetPayload,
-  ThreadSkillScopeAppliedPayload,
-  ThreadMessageQueuedPayload,
   ThreadMetaUpdatedPayload,
   ThreadProposedPlanUpsertedPayload,
-  ThreadQueuedMessageDeletedPayload,
-  ThreadQueuedMessageDispatchedPayload,
   ThreadRuntimeModeSetPayload,
   ThreadSettledPayload,
   ThreadPinnedPayload,
@@ -40,10 +36,8 @@ import {
   ThreadUnsettledPayload,
   ThreadUnsnoozedPayload,
   ThreadRevertedPayload,
-  ThreadHistoryPrunedPayload,
   ThreadSessionSetPayload,
   ThreadTurnDiffCompletedPayload,
-  ProviderUsageLimitsUpdatedPayload,
 } from "./Schemas.ts";
 
 type ThreadPatch = Partial<Omit<OrchestrationThread, "id" | "projectId">>;
@@ -74,7 +68,7 @@ function retainThreadActivities(activities: OrchestrationThread["activities"]) {
 
 function checkpointStatusToLatestTurnState(status: "ready" | "missing" | "error") {
   if (status === "error") return "error" as const;
-  // Match SQL and client projections: a missing git ref is not an interruption.
+  if (status === "missing") return "interrupted" as const;
   return "completed" as const;
 }
 
@@ -127,7 +121,7 @@ function retainThreadMessagesAfterRevert(
 ): ReadonlyArray<OrchestrationMessage> {
   const retainedMessageIds = new Set<string>();
   for (const message of messages) {
-    if (message.role === "system" || isImportedAgentSessionMessageId(message.id)) {
+    if (message.role === "system") {
       retainedMessageIds.add(message.id);
       continue;
     }
@@ -137,10 +131,7 @@ function retainThreadMessagesAfterRevert(
   }
 
   const retainedUserCount = messages.filter(
-    (message) =>
-      message.role === "user" &&
-      !isImportedAgentSessionMessageId(message.id) &&
-      retainedMessageIds.has(message.id),
+    (message) => message.role === "user" && retainedMessageIds.has(message.id),
   ).length;
   const missingUserCount = Math.max(0, turnCount - retainedUserCount);
   if (missingUserCount > 0) {
@@ -153,8 +144,7 @@ function retainThreadMessagesAfterRevert(
       )
       .toSorted(
         (left, right) =>
-          compareDateTimeStrings(left.createdAt, right.createdAt) ||
-          left.id.localeCompare(right.id),
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
       )
       .slice(0, missingUserCount);
     for (const message of fallbackUserMessages) {
@@ -163,10 +153,7 @@ function retainThreadMessagesAfterRevert(
   }
 
   const retainedAssistantCount = messages.filter(
-    (message) =>
-      message.role === "assistant" &&
-      !isImportedAgentSessionMessageId(message.id) &&
-      retainedMessageIds.has(message.id),
+    (message) => message.role === "assistant" && retainedMessageIds.has(message.id),
   ).length;
   const missingAssistantCount = Math.max(0, turnCount - retainedAssistantCount);
   if (missingAssistantCount > 0) {
@@ -179,8 +166,7 @@ function retainThreadMessagesAfterRevert(
       )
       .toSorted(
         (left, right) =>
-          compareDateTimeStrings(left.createdAt, right.createdAt) ||
-          left.id.localeCompare(right.id),
+          left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id),
       )
       .slice(0, missingAssistantCount);
     for (const message of fallbackAssistantMessages) {
@@ -209,41 +195,6 @@ function retainThreadProposedPlansAfterRevert(
   );
 }
 
-function pruneThreadMessagesFromHistoryTarget(
-  messages: ReadonlyArray<OrchestrationMessage>,
-  messageId: string,
-): {
-  readonly messages: ReadonlyArray<OrchestrationMessage>;
-  readonly prunedTurnIds: ReadonlySet<string>;
-  readonly pruneFromCreatedAt: string;
-} | null {
-  const targetIndex = messages.findIndex(
-    (message) => message.id === messageId && message.role === "user",
-  );
-  if (targetIndex < 0) {
-    return null;
-  }
-
-  const prunedTurnIds = new Set<string>();
-  const retainedMessages: OrchestrationMessage[] = [];
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index]!;
-    if (message.role === "system" || index < targetIndex) {
-      retainedMessages.push(message);
-      continue;
-    }
-    if (message.turnId !== null) {
-      prunedTurnIds.add(message.turnId);
-    }
-  }
-
-  return {
-    messages: retainedMessages,
-    prunedTurnIds,
-    pruneFromCreatedAt: messages[targetIndex]!.createdAt,
-  };
-}
-
 function compareThreadActivities(
   left: OrchestrationThread["activities"][number],
   right: OrchestrationThread["activities"][number],
@@ -265,8 +216,8 @@ export function createEmptyReadModel(nowIso: string): OrchestrationReadModel {
   return {
     snapshotSequence: 0,
     projects: [],
-    threads: [],
     usageLimits: [],
+    threads: [],
     updatedAt: nowIso,
   };
 }
@@ -291,12 +242,12 @@ export function projectEvent(
             title: payload.title,
             workspaceRoot: payload.workspaceRoot,
             defaultModelSelection: payload.defaultModelSelection,
-            defaultSkillPackIds: payload.defaultSkillPackIds ?? [],
             defaultThreadEnvMode: null,
             autoPull: false,
             faviconPath: payload.faviconPath ?? null,
             projectIcon: payload.projectIcon ?? null,
             scripts: payload.scripts,
+            defaultSkillPackIds: payload.defaultSkillPackIds ?? [],
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
             deletedAt: null,
@@ -331,9 +282,6 @@ export function projectEvent(
                   ...(payload.defaultThreadEnvMode !== undefined
                     ? { defaultThreadEnvMode: payload.defaultThreadEnvMode }
                     : {}),
-                  ...(payload.defaultSkillPackIds !== undefined
-                    ? { defaultSkillPackIds: payload.defaultSkillPackIds }
-                    : {}),
                   ...(payload.autoPull !== undefined ? { autoPull: payload.autoPull } : {}),
                   ...(payload.faviconPath !== undefined
                     ? { faviconPath: payload.faviconPath }
@@ -342,6 +290,7 @@ export function projectEvent(
                     ? { projectIcon: payload.projectIcon }
                     : {}),
                   ...(payload.scripts !== undefined ? { scripts: payload.scripts } : {}),
+                  ...(payload.defaultSkillPackIds !== undefined ? { defaultSkillPackIds: payload.defaultSkillPackIds } : {}),
                   updatedAt: payload.updatedAt,
                 }
               : project,
@@ -379,15 +328,11 @@ export function projectEvent(
             id: payload.threadId,
             projectId: payload.projectId,
             title: payload.title,
-            ...(payload.titleMode !== undefined ? { titleMode: payload.titleMode } : {}),
             modelSelection: payload.modelSelection,
             runtimeMode: payload.runtimeMode,
             interactionMode: payload.interactionMode,
-            ...(payload.skillScope !== undefined ? { skillScope: payload.skillScope } : {}),
             branch: payload.branch,
             worktreePath: payload.worktreePath,
-            workspaceId: payload.workspaceId ?? null,
-            branchPullRequest: null,
             latestTurn: null,
             createdAt: payload.createdAt,
             updatedAt: payload.updatedAt,
@@ -395,12 +340,10 @@ export function projectEvent(
             settledOverride: null,
             settledAt: null,
             unsettledAt: null,
-            activeOrderKey: null,
             snoozedUntil: null,
             snoozedAt: null,
             deletedAt: null,
             messages: [],
-            queuedMessages: [],
             activities: [],
             checkpoints: [],
             session: null,
@@ -459,7 +402,6 @@ export function projectEvent(
             settledOverride: "settled",
             settledAt: payload.settledAt,
             unsettledAt: null,
-            activeOrderKey: null,
             updatedAt: payload.updatedAt,
           }),
         })),
@@ -554,10 +496,6 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             ...(payload.title !== undefined ? { title: payload.title } : {}),
-            ...(payload.titleMode !== undefined ? { titleMode: payload.titleMode } : {}),
-            ...(payload.activeOrderKey !== undefined
-              ? { activeOrderKey: payload.activeOrderKey }
-              : {}),
             ...(payload.titleRegeneration !== undefined
               ? { titleRegeneration: payload.titleRegeneration }
               : {}),
@@ -566,12 +504,8 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
-            ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
             ...(payload.linkedPullRequest !== undefined
               ? { linkedPullRequest: payload.linkedPullRequest }
-              : {}),
-            ...(payload.branchPullRequest !== undefined
-              ? { branchPullRequest: payload.branchPullRequest }
               : {}),
             updatedAt: payload.updatedAt,
           }),
@@ -605,147 +539,6 @@ export function projectEvent(
         })),
       );
 
-    case "thread.skill-packs-set":
-      return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          ThreadSkillPacksSetPayload,
-          event.payload,
-          event.type,
-          "payload",
-        );
-        return {
-          ...nextBase,
-          threads: nextBase.threads.map((thread) =>
-            thread.id === payload.threadId
-              ? {
-                  ...thread,
-                  skillScope: {
-                    version: payload.version,
-                    appliedVersion: thread.skillScope?.appliedVersion ?? 0,
-                    packIds: payload.packIds,
-                    state: "pending" as const,
-                  },
-                  updatedAt: payload.updatedAt,
-                }
-              : thread,
-          ),
-        };
-      });
-
-    case "thread.skill-scope-applied":
-      return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          ThreadSkillScopeAppliedPayload,
-          event.payload,
-          event.type,
-          "payload",
-        );
-        return {
-          ...nextBase,
-          threads: nextBase.threads.map((thread) =>
-            thread.id === payload.threadId && thread.skillScope?.version === payload.version
-              ? {
-                  ...thread,
-                  skillScope: {
-                    ...thread.skillScope,
-                    appliedVersion: payload.version,
-                    state: payload.state,
-                    ...(payload.issue !== undefined ? { issue: payload.issue } : {}),
-                  },
-                  updatedAt: payload.updatedAt,
-                }
-              : thread,
-          ),
-        };
-      });
-
-    case "thread.message-queued":
-      return Effect.gen(function* () {
-        const payload = yield* decodeForEvent(
-          ThreadMessageQueuedPayload,
-          event.payload,
-          event.type,
-          "payload",
-        );
-        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-        if (!thread) {
-          return nextBase;
-        }
-        const queuedMessage: OrchestrationQueuedMessage = yield* decodeForEvent(
-          OrchestrationQueuedMessage,
-          payload.queuedMessage,
-          event.type,
-          "queuedMessage",
-        );
-        const existingQueuedMessages = thread.queuedMessages ?? [];
-        const queuedMessages = existingQueuedMessages.some(
-          (entry) => entry.messageId === queuedMessage.messageId,
-        )
-          ? existingQueuedMessages.map((entry) =>
-              entry.messageId === queuedMessage.messageId ? queuedMessage : entry,
-            )
-          : [...existingQueuedMessages, queuedMessage];
-        return {
-          ...nextBase,
-          threads: updateThread(nextBase.threads, payload.threadId, {
-            queuedMessages: queuedMessages.toSorted(
-              (left, right) =>
-                left.createdAt.localeCompare(right.createdAt) ||
-                left.messageId.localeCompare(right.messageId),
-            ),
-            updatedAt: event.occurredAt,
-          }),
-        };
-      });
-
-    case "thread.queued-message-deleted":
-      return decodeForEvent(
-        ThreadQueuedMessageDeletedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              queuedMessages: (thread.queuedMessages ?? []).filter(
-                (entry) => entry.messageId !== payload.messageId,
-              ),
-              updatedAt: event.occurredAt,
-            }),
-          };
-        }),
-      );
-
-    case "thread.queued-message-dispatched":
-      return decodeForEvent(
-        ThreadQueuedMessageDispatchedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread) {
-            return nextBase;
-          }
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              queuedMessages: (thread.queuedMessages ?? []).filter(
-                (entry) => entry.messageId !== payload.messageId,
-              ),
-              updatedAt: event.occurredAt,
-            }),
-          };
-        }),
-      );
-
     case "thread.message-sent":
       return Effect.gen(function* () {
         const payload = yield* decodeForEvent(
@@ -766,7 +559,6 @@ export function projectEvent(
             role: payload.role,
             text: payload.text,
             ...(payload.attachments !== undefined ? { attachments: payload.attachments } : {}),
-            ...(payload.origin !== undefined ? { origin: payload.origin } : {}),
             turnId: payload.turnId,
             streaming: payload.streaming,
             createdAt: payload.createdAt,
@@ -782,10 +574,6 @@ export function projectEvent(
               entry.id === message.id
                 ? {
                     ...entry,
-                    createdAt:
-                      message.streaming || message.text.length === 0
-                        ? entry.createdAt
-                        : message.createdAt,
                     text: message.streaming
                       ? `${entry.text}${message.text}`
                       : message.text.length > 0
@@ -956,12 +744,6 @@ export function projectEvent(
         // checkpoint, but don't settle a turn its session is still running.
         const turnStillRunning =
           thread.session?.status === "running" && thread.session.activeTurnId === payload.turnId;
-        const existingLatestTurn =
-          thread.latestTurn?.turnId === payload.turnId ? thread.latestTurn : null;
-        const settledState =
-          existingLatestTurn?.state === "interrupted" || existingLatestTurn?.state === "error"
-            ? existingLatestTurn.state
-            : checkpointStatusToLatestTurnState(payload.status);
 
         return {
           ...nextBase,
@@ -971,12 +753,15 @@ export function projectEvent(
               ? thread.latestTurn
               : {
                   turnId: payload.turnId,
-                  // Checkpoint capture is bookkeeping after the provider turn
-                  // settles. It must not turn an interrupted/error turn into a
-                  // completed one when the ready checkpoint arrives afterward.
-                  state: settledState,
-                  requestedAt: existingLatestTurn?.requestedAt ?? payload.completedAt,
-                  startedAt: existingLatestTurn?.startedAt ?? payload.completedAt,
+                  state: checkpointStatusToLatestTurnState(payload.status),
+                  requestedAt:
+                    thread.latestTurn?.turnId === payload.turnId
+                      ? thread.latestTurn.requestedAt
+                      : payload.completedAt,
+                  startedAt:
+                    thread.latestTurn?.turnId === payload.turnId
+                      ? (thread.latestTurn.startedAt ?? payload.completedAt)
+                      : payload.completedAt,
                   completedAt: payload.completedAt,
                   assistantMessageId: payload.assistantMessageId,
                 },
@@ -1036,55 +821,6 @@ export function projectEvent(
         }),
       );
 
-    case "thread.history-pruned":
-      return decodeForEvent(ThreadHistoryPrunedPayload, event.payload, event.type, "payload").pipe(
-        Effect.map((payload) => {
-          const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
-          if (!thread) {
-            return nextBase;
-          }
-          const pruned = pruneThreadMessagesFromHistoryTarget(thread.messages, payload.messageId);
-          if (!pruned) {
-            return nextBase;
-          }
-
-          const prunedTurnIds = new Set<string>(payload.prunedTurnIds);
-          const pruneFromCreatedAt = payload.pruneFromCreatedAt;
-          const checkpoints = thread.checkpoints
-            .filter((entry) => !prunedTurnIds.has(entry.turnId))
-            .toSorted((left, right) => left.checkpointTurnCount - right.checkpointTurnCount)
-            .slice(-MAX_THREAD_CHECKPOINTS);
-          const proposedPlans = thread.proposedPlans
-            .filter((plan) =>
-              plan.turnId === null
-                ? plan.createdAt < pruneFromCreatedAt
-                : !prunedTurnIds.has(plan.turnId),
-            )
-            .slice(-200);
-          const activities = thread.activities.filter((activity) =>
-            activity.turnId === null
-              ? activity.createdAt < pruneFromCreatedAt
-              : !prunedTurnIds.has(activity.turnId),
-          );
-          const latestTurn =
-            thread.latestTurn === null || !prunedTurnIds.has(thread.latestTurn.turnId)
-              ? thread.latestTurn
-              : null;
-
-          return {
-            ...nextBase,
-            threads: updateThread(nextBase.threads, payload.threadId, {
-              checkpoints,
-              messages: pruned.messages.slice(-MAX_THREAD_MESSAGES),
-              proposedPlans,
-              activities,
-              latestTurn,
-              updatedAt: event.occurredAt,
-            }),
-          };
-        }),
-      );
-
     case "thread.activity-appended":
       return decodeForEvent(
         ThreadActivityAppendedPayload,
@@ -1112,30 +848,6 @@ export function projectEvent(
               updatedAt: event.occurredAt,
             }),
           };
-        }),
-      );
-
-    case "provider.usage-limits-updated":
-      return decodeForEvent(
-        ProviderUsageLimitsUpdatedPayload,
-        event.payload,
-        event.type,
-        "payload",
-      ).pipe(
-        Effect.map((payload) => {
-          const nextUsageLimits = {
-            provider: payload.provider,
-            providerInstanceId: payload.providerInstanceId,
-            usageLimits: payload.usageLimits,
-          };
-          const usageLimits = nextBase.usageLimits.some(
-            (entry) => entry.providerInstanceId === payload.providerInstanceId,
-          )
-            ? nextBase.usageLimits.map((entry) =>
-                entry.providerInstanceId === payload.providerInstanceId ? nextUsageLimits : entry,
-              )
-            : [...nextBase.usageLimits, nextUsageLimits];
-          return { ...nextBase, usageLimits };
         }),
       );
 

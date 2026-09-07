@@ -16,11 +16,19 @@ import {
   makeCommandOutbox,
   type CommandOutboxService,
 } from "@t3tools/client-runtime/state/command-outbox";
-import type { CommandId, EnvironmentId, ThreadId } from "@t3tools/contracts";
+import type {
+  CommandId,
+  ChatAttachment,
+  EnvironmentId,
+  OrchestrationV2Command,
+  PlanId,
+  ThreadId,
+  UploadChatAttachment,
+} from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import { useSyncExternalStore } from "react";
 
-import { readEnvironmentApi } from "./environmentApi";
+import { persistEnvironmentChatAttachments, readEnvironmentApi } from "./environmentApi";
 
 const DATABASE_NAME = "t3code:durable-command-outbox";
 const DATABASE_VERSION = 2;
@@ -29,6 +37,72 @@ const ACCEPTED_STORE_NAME = "accepted-awaiting-projection";
 const DOCUMENT_KEY = "document";
 
 type TimerHandle = unknown;
+
+/**
+ * Durable entries predate V2 and intentionally keep their upload-friendly
+ * shape. Convert at the delivery boundary so retries use the V2 command
+ * protocol while the on-device document remains backwards compatible.
+ */
+async function toV2MessageCommand(
+  environmentId: EnvironmentId,
+  command: DurableClientCommand,
+): Promise<OrchestrationV2Command> {
+  const uploads = command.message.attachments.filter(
+    (attachment): attachment is UploadChatAttachment => "dataUrl" in attachment,
+  );
+  if (uploads.length > 0) {
+    const uploadAttachments: UploadChatAttachment[] = uploads.map(
+      (attachment) => attachment as UploadChatAttachment,
+    );
+    const persisted = await persistEnvironmentChatAttachments(environmentId, {
+      threadId: command.threadId,
+      messageId: command.message.messageId,
+      attachments: uploadAttachments,
+    });
+    const byUpload = new Map(
+      uploadAttachments.map((upload, index) => [upload, persisted.attachments[index]]),
+    );
+    const attachments: ChatAttachment[] = command.message.attachments.flatMap((attachment) => {
+      if (!("dataUrl" in attachment)) return [attachment as ChatAttachment];
+      const stored = byUpload.get(attachment);
+      return stored === undefined ? [] : [stored];
+    });
+    return toV2MessageCommand(environmentId, {
+      ...command,
+      message: { ...command.message, attachments },
+    } as unknown as DurableClientCommand);
+  }
+
+  if (command.type === "thread.turn.start" && command.bootstrap !== undefined) {
+    throw new Error("Saved first messages cannot be replayed while creating a thread.");
+  }
+
+  return {
+    type: "message.dispatch",
+    commandId: command.commandId,
+    createdBy: "user",
+    creationSource: "web",
+    threadId: command.threadId,
+    messageId: command.message.messageId,
+    text: command.message.text,
+    attachments: command.message.attachments as ReadonlyArray<ChatAttachment>,
+    ...(command.message.origin === undefined ? {} : { origin: command.message.origin }),
+    ...(command.modelSelection === undefined ? {} : { modelSelection: command.modelSelection }),
+    ...(command.titleSeed === undefined ? {} : { titleSeed: command.titleSeed }),
+    ...(command.sourceProposedPlan === undefined
+      ? {}
+      : {
+          sourcePlanRef: {
+            threadId: command.sourceProposedPlan.threadId,
+            planId: command.sourceProposedPlan.planId as PlanId,
+          },
+        }),
+    dispatchMode:
+      command.type === "thread.message.queue"
+        ? { type: "queue_after_active" }
+        : { type: "start_immediately" },
+  };
+}
 
 export interface DurableCommandOutboxControllerOptions {
   readonly storage: CommandOutboxStorage["Service"];
@@ -525,7 +599,7 @@ export function durableCommandOutbox(): DurableCommandOutboxController {
     dispatch: async (environmentId, command) => {
       const api = readEnvironmentApi(environmentId);
       if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);
-      await api.orchestration.dispatchCommand(command);
+      await api.orchestrationV2.dispatchCommand(await toV2MessageCommand(environmentId, command));
     },
     withMutationLock: withBrowserMutationLock,
     withDrainLeadership: withBrowserDrainLeadership,

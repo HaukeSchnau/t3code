@@ -53,6 +53,9 @@ export const DurableCommandDeliveryPlan = Schema.Struct({
   environmentId: EnvironmentId,
   enqueuedAt: CommandOutboxTimestamp,
   command: DurableClientCommand,
+  // Plans written by the native V2 client are explicit. Older persisted
+  // plans omit this field and must retain their legacy replay envelope.
+  deliveryProtocol: Schema.optional(Schema.Literals(["native", "legacy"])),
 });
 export type DurableCommandDeliveryPlan = typeof DurableCommandDeliveryPlan.Type;
 
@@ -131,6 +134,7 @@ export function makeDurableCommandDeliveryPlan(input: {
   readonly environmentId: EnvironmentIdType;
   readonly enqueuedAt: IsoDateTimeType;
   readonly command: DurableClientCommand;
+  readonly deliveryProtocol?: "native" | "legacy";
 }): DurableCommandDeliveryPlan {
   return deepFreeze(
     decodeDeliveryPlan({

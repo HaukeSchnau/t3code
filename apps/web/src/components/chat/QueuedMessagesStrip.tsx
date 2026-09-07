@@ -1,6 +1,6 @@
 import { memo } from "react";
 import { CornerDownRightIcon, Trash2Icon } from "lucide-react";
-import type { QueuedMessage } from "~/types";
+import type { QueuedMessage } from "./useThreadDurableOutbox";
 import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 

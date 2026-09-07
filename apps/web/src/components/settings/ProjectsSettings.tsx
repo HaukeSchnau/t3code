@@ -152,7 +152,6 @@ export function ProjectsSettings({
       ) : (
         <ProjectSettingsPanel
           projectKey={projectKey}
-          environmentId={machine?.environmentId ?? null}
         />
       )}
     </div>

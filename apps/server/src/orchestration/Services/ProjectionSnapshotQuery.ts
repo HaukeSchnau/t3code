@@ -6,35 +6,21 @@
  *
  * @module ProjectionSnapshotQuery
  */
+import type { ApprovalRequestId, CheckpointRef, ProjectId, ThreadId } from "@t3tools/contracts";
 import type {
-  AgentSessionImportSource,
-  ApprovalRequestId,
-  CheckpointRef,
-  MessageId,
   OrchestrationCheckpointSummary,
-  OrchestrationCoordinationShell,
-  OrchestrationMessage,
   OrchestrationProject,
   OrchestrationProjectShell,
-  OrchestrationProviderUsageLimits,
   OrchestrationReadModel,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadActivity,
-  OrchestrationThreadActivityDetailMode,
   OrchestrationThreadDetailSnapshot,
   OrchestrationThreadDetailWindow,
-  OrchestrationTurnActivitiesSnapshot,
   OrchestrationThreadShell,
-  OrchestrationSession,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-  ThreadWorkspaceId,
-  TurnId,
-} from "@t3tools/contracts";
+} from "@t3tools/contracts/legacy-orchestration";
 import * as Context from "effect/Context";
 import type * as Option from "effect/Option";
 import type * as Effect from "effect/Effect";
@@ -55,32 +41,11 @@ export interface ProjectionEventReplayStats {
   readonly payloadBytes: number;
 }
 
-/**
- * Narrow durable state needed to decide whether restarting can interrupt work.
- * This intentionally excludes transcript, activity, and checkpoint bodies.
- */
-export interface ProjectionRestartSafetyThread {
-  readonly threadId: ThreadId;
-  readonly session: OrchestrationSession | null;
-  readonly latestTurnId: TurnId | null;
-  readonly latestTurnState: string | null;
-  readonly latestTurnUpdatedAt: string | null;
-  readonly queuedMessageCount: number;
-  readonly pendingApprovalCount: number;
-  readonly pendingUserInputCount: number;
-  readonly undeliveredTranscriptEventCount: number;
-}
-
-export interface ProjectionRestartSafetyState {
-  readonly threads: ReadonlyArray<ProjectionRestartSafetyThread>;
-}
-
 export interface ProjectionThreadCheckpointContext {
   readonly threadId: ThreadId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
   readonly worktreePath: string | null;
-  readonly workspaceId: ThreadWorkspaceId | null;
   readonly checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>;
 }
 
@@ -89,18 +54,8 @@ export interface ProjectionFullThreadDiffContext {
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
   readonly worktreePath: string | null;
-  readonly workspaceId: ThreadWorkspaceId | null;
   readonly latestCheckpointTurnCount: number;
   readonly toCheckpointRef: CheckpointRef | null;
-}
-
-export interface ProjectionThreadResultContext {
-  readonly thread: OrchestrationThreadShell;
-  readonly project: OrchestrationProjectShell;
-  readonly latestMessage: OrchestrationMessage | null;
-  readonly latestAssistantMessage: OrchestrationMessage | null;
-  readonly queuedMessageCount: number;
-  readonly activityCount: number;
 }
 
 export interface ProjectionThreadDetailQuery {
@@ -117,7 +72,7 @@ export interface ProjectionThreadDetailQuery {
  */
 export interface ProjectionSnapshotQueryShape {
   /** Read the latest request or resolution without loading the thread history. */
-  readonly getUserInputActivity?: (input: {
+  readonly getUserInputActivity: (input: {
     readonly threadId: ThreadId;
     readonly requestId: ApprovalRequestId;
   }) => Effect.Effect<Option.Option<OrchestrationThreadActivity>, ProjectionRepositoryError>;
@@ -150,10 +105,16 @@ export interface ProjectionSnapshotQueryShape {
     ProjectionRepositoryError
   >;
 
-  /** Read one provider's latest limits and bounded forecast history. */
-  readonly getProviderUsageLimitsByInstanceId?: (
-    providerInstanceId: ProviderInstanceId,
-  ) => Effect.Effect<Option.Option<OrchestrationProviderUsageLimits>, ProjectionRepositoryError>;
+  /**
+   * Read the shell snapshot with null optional repository metadata.
+   *
+   * Transactional callers use this method and enrich the returned projects
+   * only after their transaction has closed.
+   */
+  readonly getShellSnapshotWithoutEnrichment: () => Effect.Effect<
+    OrchestrationShellSnapshot,
+    ProjectionRepositoryError
+  >;
 
   /**
    * Read archived thread shell summaries for the archive page.
@@ -188,17 +149,13 @@ export interface ProjectionSnapshotQueryShape {
    */
   readonly getCounts: () => Effect.Effect<ProjectionSnapshotCounts, ProjectionRepositoryError>;
 
-  /** Measure a persisted event range without decoding its payload bodies. */
-  readonly getEventReplayStats?: (input: {
+  /**
+   * Measure a persisted event range without decoding its payload bodies.
+   */
+  readonly getEventReplayStats: (input: {
     readonly fromSequenceExclusive: number;
     readonly toSequenceInclusive: number;
   }) => Effect.Effect<ProjectionEventReplayStats, ProjectionRepositoryError>;
-
-  /** Read only projected lifecycle and durable actionable state relevant to restart safety. */
-  readonly getRestartSafetyState?: () => Effect.Effect<
-    ProjectionRestartSafetyState,
-    ProjectionRepositoryError
-  >;
 
   /**
    * Read the active project for an exact workspace root match.
@@ -214,21 +171,18 @@ export interface ProjectionSnapshotQueryShape {
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<OrchestrationProjectShell>, ProjectionRepositoryError>;
 
+  /** Read every active project shell without hydrating thread rows or enrichment. */
+  readonly getProjectShellsWithoutEnrichment: () => Effect.Effect<
+    ReadonlyArray<OrchestrationProjectShell>,
+    ProjectionRepositoryError
+  >;
+
   /**
    * Read the earliest active thread for a project.
    */
   readonly getFirstActiveThreadIdByProjectId: (
     projectId: ProjectId,
   ) => Effect.Effect<Option.Option<ThreadId>, ProjectionRepositoryError>;
-
-  /** Read completed import sources without loading thread history. */
-  readonly getImportedAgentSessionSources: (projectId: ProjectId) => Effect.Effect<
-    ReadonlyArray<{
-      readonly threadId: ThreadId;
-      readonly source: AgentSessionImportSource;
-    }>,
-    ProjectionRepositoryError
-  >;
 
   /**
    * Read the checkpoint context needed to resolve a single thread diff.
@@ -262,46 +216,6 @@ export interface ProjectionSnapshotQueryShape {
   >;
 
   /**
-   * Read the bounded data needed for compact thread orchestration results.
-   */
-  readonly getThreadResultContextById: (
-    threadId: ThreadId,
-  ) => Effect.Effect<Option.Option<ProjectionThreadResultContext>, ProjectionRepositoryError>;
-
-  /** Read only persisted thread-orchestration relationship activities. */
-  readonly listThreadRelationshipActivities: () => Effect.Effect<
-    ReadonlyArray<OrchestrationThreadActivity>,
-    ProjectionRepositoryError
-  >;
-
-  /** Read persisted batch lifecycle activities without hydrating thread transcripts. */
-  readonly listThreadOrchestrationBatchActivities?: () => Effect.Effect<
-    ReadonlyArray<OrchestrationThreadActivity>,
-    ProjectionRepositoryError
-  >;
-
-  /** Read the compact relationship, effort, and wait model used by shell clients. */
-  readonly getThreadCoordinationShell?: () => Effect.Effect<
-    OrchestrationCoordinationShell,
-    ProjectionRepositoryError
-  >;
-
-  /**
-   * Read one requested message and whether another non-compaction user message exists.
-   * Newer queued messages count too, preserving first-turn title eligibility.
-   */
-  readonly getTurnStartMessage: (input: {
-    readonly threadId: ThreadId;
-    readonly messageId: MessageId;
-  }) => Effect.Effect<
-    Option.Option<{
-      readonly message: OrchestrationMessage;
-      readonly hasOtherUserMessages: boolean;
-    }>,
-    ProjectionRepositoryError
-  >;
-
-  /**
    * Read a single active thread detail snapshot by id.
    */
   readonly getThreadDetailById: (
@@ -320,28 +234,11 @@ export interface ProjectionSnapshotQueryShape {
    * response carries `page` metadata (see `OrchestrationThreadDetailWindow`).
    * Without a window the full thread is returned with no `page` field —
    * pagination is strictly opt-in.
-   *
-   * Activity payloads are projected for clients as they are read in small
-   * sequential batches. Callers still apply the full snapshot projector for
-   * collection-level activity pruning.
    */
   readonly getThreadDetailSnapshot: (
     threadId: ThreadId,
-    activityDetailModeOrWindow?:
-      | OrchestrationThreadActivityDetailMode
-      | OrchestrationThreadDetailWindow,
     window?: OrchestrationThreadDetailWindow,
   ) => Effect.Effect<Option.Option<OrchestrationThreadDetailSnapshot>, ProjectionRepositoryError>;
-
-  /**
-   * Read one turn's lossless activity payloads together with the projection
-   * sequence in one transaction. Returns none when the active thread or turn
-   * does not exist.
-   */
-  readonly getTurnActivitiesSnapshot: (
-    threadId: ThreadId,
-    turnId: TurnId,
-  ) => Effect.Effect<Option.Option<OrchestrationTurnActivitiesSnapshot>, ProjectionRepositoryError>;
 }
 
 /**

@@ -23,6 +23,7 @@ import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../ho
 import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
 import { usePanelAnimationSettings } from "../panelAnimations";
 import LegacyThreadSidebar from "./LegacySidebar";
+import { useThreadVisitedMigration } from "../hooks/useThreadVisitedMigration";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";
 import { SidebarCardThreadsProvider } from "./sidebar/SidebarCardThreadsContext";
@@ -181,6 +182,8 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     usePanelAnimationSettings();
   // Settings routes show the settings nav in place of whichever thread
   // sidebar is active.
+  // Seeds server-side visited tracking from this browser's localStorage the
+  useThreadVisitedMigration();
   const pathname = useLocation({ select: (location) => location.pathname });
   const isOnSettings = pathname === "/settings" || pathname.startsWith("/settings/");
   const isMacosDesktop = isElectron && isMacPlatform(navigator.platform);

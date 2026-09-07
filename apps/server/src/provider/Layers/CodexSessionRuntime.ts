@@ -78,12 +78,8 @@ export const CodexResumeCursorSchema = Schema.Struct({
 const CodexUserInputAnswerObject = Schema.Struct({
   answers: Schema.Array(Schema.String),
 });
-const CodexUserInputRequestMetadata = Schema.Struct({
-  isBlocking: Schema.optionalKey(Schema.Boolean),
-});
 const isCodexResumeCursorSchema = Schema.is(CodexResumeCursorSchema);
 const isCodexUserInputAnswerObject = Schema.is(CodexUserInputAnswerObject);
-const isCodexUserInputRequestMetadata = Schema.is(CodexUserInputRequestMetadata);
 const NullableMcpElicitationString = Schema.NullOr(Schema.String);
 const McpElicitationMetadata = Schema.Struct({
   app: Schema.optionalKey(NullableMcpElicitationString),
@@ -2632,7 +2628,7 @@ export const makeCodexSessionRuntime = (
       }),
     );
 
-    yield* client.handleServerRequest("item/tool/requestUserInput", (payload, context) =>
+    yield* client.handleServerRequest("item/tool/requestUserInput", (payload) =>
       Effect.gen(function* () {
         const hasRenderableQuestion = payload.questions.some(
           (question) =>
@@ -2651,7 +2647,10 @@ export const makeCodexSessionRuntime = (
         }
 
         const requestId = ApprovalRequestId.make(yield* randomUUIDv4("user-input-request"));
-        const jsonRpcId = String(context.requestId);
+        // The native client owns the JSON-RPC request id and routes the
+        // handler result back to Codex. Use our durable request id for the
+        // local response correlation map; no transport context is required.
+        const jsonRpcId = String(requestId);
         const providerThreadId = providerThreadIdFromPayload(payload);
         const parentTurnId = providerThreadId
           ? (yield* Ref.get(collabReceiverTurnsRef)).get(providerThreadId)
@@ -2666,13 +2665,7 @@ export const makeCodexSessionRuntime = (
                 parentTurnId,
               }
             : undefined;
-        const rawMetadata = isCodexUserInputRequestMetadata(context.rawParams)
-          ? context.rawParams
-          : undefined;
-        const eventPayload = {
-          ...payload,
-          ...(rawMetadata?.isBlocking !== undefined ? { isBlocking: rawMetadata.isBlocking } : {}),
-        };
+        const eventPayload = payload;
 
         yield* Ref.update(pendingUserInputsRef, (current) => {
           const next = new Map(current);

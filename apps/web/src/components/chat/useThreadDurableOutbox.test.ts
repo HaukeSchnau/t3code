@@ -93,7 +93,7 @@ describe("thread outbox", () => {
         id: messageId,
         role: "user",
         text: "Queued locally",
-        turnId: null,
+        runId: null,
         createdAt: "2026-08-09T10:00:00.000Z",
         updatedAt: "2026-08-09T10:00:00.000Z",
         streaming: false,

@@ -1,6 +1,8 @@
 import {
   CommandId,
   type OrchestrationCommand,
+  type LegacyOutboxCommand,
+  type OrchestrationV2ThreadLaunchInput,
   type ProjectId,
   type ProviderInstanceId,
   type ThreadId,
@@ -15,6 +17,14 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { PersistenceSqlError, toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationCommandReceiptMismatchError } from "../Errors.ts";
 import { commandEnvelopeFingerprint } from "../CommandEnvelope.ts";
+
+type PreprocessingCommand =
+  | OrchestrationCommand
+  | LegacyOutboxCommand
+  | (OrchestrationV2ThreadLaunchInput & {
+      readonly type: "thread.launch";
+      readonly threadId: ThreadId;
+    });
 
 export type CommandPreprocessingStep =
   | "deferred-preprocessing-completed"
@@ -39,7 +49,7 @@ export interface CommandPreprocessingProgress {
   readonly commandId: CommandId;
   readonly aggregateKind: "project" | "thread" | "provider";
   readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
-  readonly commandVariant: OrchestrationCommand["type"];
+  readonly commandVariant: PreprocessingCommand["type"];
   readonly envelopeFingerprint: string;
   readonly deferredPreprocessingCompleted: boolean;
   readonly threadCreated: boolean;
@@ -51,7 +61,7 @@ interface ProgressRow {
   readonly commandId: CommandId;
   readonly aggregateKind: CommandPreprocessingProgress["aggregateKind"];
   readonly aggregateId: CommandPreprocessingProgress["aggregateId"];
-  readonly commandVariant: OrchestrationCommand["type"];
+  readonly commandVariant: PreprocessingCommand["type"];
   readonly envelopeFingerprint: string;
   readonly deferredPreprocessingCompleted: number;
   readonly threadCreated: number;
@@ -64,7 +74,7 @@ interface ProgressRow {
 
 type CommandPreprocessingError = PersistenceSqlError | OrchestrationCommandReceiptMismatchError;
 
-function aggregateRef(command: OrchestrationCommand): {
+function aggregateRef(command: PreprocessingCommand): {
   readonly aggregateKind: CommandPreprocessingProgress["aggregateKind"];
   readonly aggregateId: CommandPreprocessingProgress["aggregateId"];
 } {
@@ -121,20 +131,20 @@ export class CommandPreprocessingCoordinator extends Context.Service<
       effect: Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E, R>;
     readonly claim: (
-      command: OrchestrationCommand,
+      command: PreprocessingCommand,
     ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
     readonly markCompleted: (
-      command: OrchestrationCommand,
+      command: PreprocessingCommand,
       step: CommandPreprocessingStep,
     ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
     readonly claimSetup: (
-      command: OrchestrationCommand,
+      command: PreprocessingCommand,
       execution: SetupExecutionIdentity,
     ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
   }
 >()("t3/orchestration/Services/CommandPreprocessingCoordinator") {}
 
-export function preprocessingCommandId(command: OrchestrationCommand, phase: string): CommandId {
+export function preprocessingCommandId(command: PreprocessingCommand, phase: string): CommandId {
   const fingerprint = commandEnvelopeFingerprint(command).slice(0, 16);
   return CommandId.make(`preprocess:${command.commandId}:${fingerprint}:${phase}`);
 }
@@ -176,7 +186,7 @@ export const make = Effect.gen(function* () {
     );
 
   const validateProgress = (
-    command: OrchestrationCommand,
+    command: PreprocessingCommand,
     progress: CommandPreprocessingProgress,
   ) => {
     const aggregate = aggregateRef(command);

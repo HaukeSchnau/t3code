@@ -1,3 +1,5 @@
+import Migration0083 from "./Migrations/083_CoordinationActivityIndexes.ts";
+import Migration0084 from "./Migrations/084_ProviderEventJournal.ts";
 /**
  * MigrationsLive - Migration runner with inline loader
  *
@@ -84,6 +86,19 @@ import Migration0068 from "./Migrations/068_ProjectionSkillScopes.ts";
 import Migration0069 from "./Migrations/048_ProjectionThreadBranchPullRequest.ts";
 import Migration0070 from "./Migrations/049_ProjectionThreadsActiveOrderKey.ts";
 
+import Migration0071 from "./Migrations/048_OrchestrationV2.ts";
+import Migration0072 from "./Migrations/049_OrchestrationV2Subagents.ts";
+import Migration0073 from "./Migrations/050_OrchestrationV2Foundation.ts";
+import Migration0074 from "./Migrations/051_OrchestrationV2ProviderSessionBindings.ts";
+import Migration0075 from "./Migrations/052_OrchestrationV2ThreadLaunchWorkflows.ts";
+import Migration0076 from "./Migrations/053_ApplicationEventSource.ts";
+import Migration0077 from "./Migrations/054_OrchestrationV2EffectCancellation.ts";
+import Migration0078 from "./Migrations/055_ScheduledTasks.ts";
+import Migration0079 from "./Migrations/056_LegacyV1ImportState.ts";
+import Migration0080 from "./Migrations/057_ApplicationEventSequenceIndexes.ts";
+import Migration0081 from "./Migrations/058_OrchestrationV2RecoveryIndexes.ts";
+import Migration0082 from "./Migrations/059_OrchestrationV2ShellIndexes.ts";
+
 /**
  * Migration loader with all migrations defined inline.
  *
@@ -165,6 +180,20 @@ export const migrationEntries = [
   [68, "ProjectionSkillScopes", Migration0068],
   [69, "ProjectionThreadBranchPullRequest", Migration0069],
   [70, "ProjectionThreadsActiveOrderKey", Migration0070],
+  [71, "OrchestrationV2", Migration0071],
+  [72, "OrchestrationV2Subagents", Migration0072],
+  [73, "OrchestrationV2Foundation", Migration0073],
+  [74, "OrchestrationV2ProviderSessionBindings", Migration0074],
+  [75, "OrchestrationV2ThreadLaunchWorkflows", Migration0075],
+  [76, "ApplicationEventSource", Migration0076],
+  [77, "OrchestrationV2EffectCancellation", Migration0077],
+  [78, "ScheduledTasks", Migration0078],
+  [79, "LegacyV1ImportState", Migration0079],
+  [80, "ApplicationEventSequenceIndexes", Migration0080],
+  [81, "OrchestrationV2RecoveryIndexes", Migration0081],
+  [82, "OrchestrationV2ShellIndexes", Migration0082],
+  [83, "CoordinationActivityIndexes", Migration0083],
+  [84, "ProviderEventJournal", Migration0084],
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);

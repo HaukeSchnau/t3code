@@ -1,4 +1,4 @@
-import { ORCHESTRATION_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
+import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import type * as Duration from "effect/Duration";
@@ -44,11 +44,12 @@ type RpcMethod<TTag extends EnvironmentRpcTag> = WsRpcProtocolClient[TTag];
 export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.providerAuthSubscribe
   | typeof WS_METHODS.providerInstallSubscribe
-  | typeof ORCHESTRATION_WS_METHODS.subscribeShell
-  | typeof ORCHESTRATION_WS_METHODS.subscribeThread
+  | typeof ORCHESTRATION_V2_WS_METHODS.subscribeShell
+  | typeof ORCHESTRATION_V2_WS_METHODS.subscribeThread
   | typeof WS_METHODS.subscribeAuthAccess
   | typeof WS_METHODS.subscribeServerConfig
   | typeof WS_METHODS.subscribeServerLifecycle
+  | typeof WS_METHODS.scheduledTasksSubscribe
   | typeof WS_METHODS.subscribeTerminalEvents
   | typeof WS_METHODS.subscribeTerminalMetadata
   | typeof WS_METHODS.subscribePreviewEvents
@@ -296,6 +297,8 @@ export interface EnvironmentSubscribeOptions<TTag extends EnvironmentSubscriptio
   ) => Effect.Effect<void, never, never>;
   readonly retryExpectedFailureAfter?: Duration.Input;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
+  /** Observe defects without classifying them as expected subscription failures. */
+  readonly onDefect?: (cause: Cause.Cause<unknown>) => Effect.Effect<void, never, never>;
   readonly admission?: {
     readonly group: string;
     readonly maxConcurrent: number;
@@ -447,6 +450,12 @@ function subscribeMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                           ),
                         ).pipe(Stream.drain);
                       }
+                      if (!hasOnlyExpectedFailures && options?.onDefect !== undefined) {
+                        return Stream.fromEffect(options.onDefect(cause)).pipe(
+                          Stream.drain,
+                          Stream.concat(Stream.failCause(cause)),
+                        );
+                      }
                       if (hasOnlyExpectedFailures && options?.onExpectedFailure !== undefined) {
                         const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
                           Stream.drain,
@@ -534,6 +543,26 @@ export function subscribeWithSessionDynamic<TTag extends EnvironmentSubscription
     input,
     (session, generation, value) => ({ session, generation, value }),
     options,
+  );
+}
+
+/**
+ * Tuple-shaped compatibility surface for consumers that need the producer
+ * session alongside each event. The object-shaped API above is preferred by
+ * new V2 code; this keeps older durable observers source-compatible while
+ * preserving the V2 method and input-factory types.
+ */
+export function subscribeDynamicWithSession<TTag extends EnvironmentSubscriptionRpcTag>(
+  tag: TTag,
+  input: EnvironmentSubscriptionInputFactory<TTag>,
+  options?: EnvironmentSubscribeOptions<TTag>,
+): Stream.Stream<
+  readonly [session: RpcSession, value: EnvironmentRpcStreamValue<TTag>],
+  EnvironmentRpcStreamFailure<TTag>,
+  EnvironmentSupervisor
+> {
+  return subscribeWithSessionDynamic(tag, input, options).pipe(
+    Stream.map(({ session, value }) => [session, value] as const),
   );
 }
 

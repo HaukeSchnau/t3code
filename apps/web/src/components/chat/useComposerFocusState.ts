@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 
-export function useComposerFocusState() {
+export function useComposerFocusState(_isMobileViewport?: boolean) {
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [isComposerScrollCollapsed, setIsComposerScrollCollapsed] = useState(false);
 

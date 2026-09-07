@@ -11,6 +11,7 @@ import {
   toolGroupAction,
   toolGroupSummaryKind,
   type WorkLogPresentationEntry,
+  type WorkLogToolLifecycleStatus,
   workEntryViewedImagePath,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -137,70 +138,44 @@ describe("workEntryIndicatesToolFailure", () => {
 });
 
 describe("summarizeToolGroup", () => {
-  it.each(["command", "file-read", "file-change"])(
-    "keeps %s approvals out of tool execution counts",
-    (requestKind) => {
-      const approvals = [
-        {
-          label: "Approval requested",
-          sourceActivityKind: "approval.requested",
-          tone: "info",
-          requestKind,
-        },
-        {
-          label: "Approval resolved",
-          sourceActivityKind: "approval.resolved",
-          tone: "info",
-          requestKind,
-        },
-        {
-          label: "Provider approval response failed",
-          sourceActivityKind: "provider.approval.respond.failed",
-          tone: "error",
-        },
-      ] satisfies WorkLogPresentationEntry[];
-
-      expect(
-        summarizeToolGroup([
-          ...approvals,
-          { label: "Read", tone: "tool", itemType: "dynamic_tool_call" },
-        ]),
-      ).toBe("Received 3 updates and used 1 tool");
-      expect(summarizeToolGroup(approvals)).toBe("Received 3 updates");
-      expect(toolGroupSummaryKind(approvals)).toBe("update");
-    },
-  );
+  const entry = (
+    id: string,
+    overrides: Partial<WorkLogPresentationEntry>,
+  ): WorkLogPresentationEntry => ({
+    id,
+    createdAt: "2026-09-01T00:00:00Z",
+    label: "Tool call",
+    tone: "tool",
+    ...overrides,
+  });
 
   it("deduplicates named sources ahead of ordinary actions", () => {
     const source = { key: "browser-use:chrome", name: "Chrome", kind: "integration" as const };
     expect(
       summarizeToolGroup([
-        { label: "Open page", tone: "tool", toolSource: source },
-        { label: "Inspect page", tone: "tool", toolSource: source },
-        {
+        entry("open", { label: "Open page", toolSource: source }),
+        entry("inspect", { label: "Inspect page", toolSource: source }),
+        entry("command", {
           label: "Ran command",
-          tone: "tool",
           itemType: "command_execution",
           command: "git status",
-        },
-      ]),
+        }),
+      ]).summary,
     ).toBe("Used Chrome integration and ran 1 command");
   });
 
   it("omits the integration suffix for special browser and computer sources", () => {
     expect(
       summarizeToolGroup([
-        {
+        entry("inspect", {
           label: "Inspect page",
-          tone: "tool",
           toolSource: { key: "browser-use", name: "Browser", kind: "browser" },
-        },
-        {
+        }),
+        entry("click", {
           label: "Click",
-          tone: "tool",
           toolSource: { key: "computer-use", name: "Computer Use", kind: "computer" },
-        },
-      ]),
+        }),
+      ]).summary,
     ).toBe("Used Browser and Computer Use");
   });
 });
@@ -238,11 +213,11 @@ describe("resolveWorkEntryToolPresentation", () => {
     ["declined", "Declined to click in the preview browser"],
     ["stopped", "Stopped clicking in the preview browser"],
     ["unknown", "Clicking in the preview browser"],
-  ])("describes the tool's own %s state", (toolLifecycleStatus, displayName) => {
+  ] as const)("describes the tool's own %s state", (toolLifecycleStatus, displayName) => {
     expect(
       resolveWorkEntryToolPresentation({
         label: "T3-code.preview_click",
-        toolLifecycleStatus,
+        toolLifecycleStatus: toolLifecycleStatus as WorkLogToolLifecycleStatus,
       }),
     ).toEqual({ displayName, icon: "browser" });
   });
@@ -328,14 +303,20 @@ describe("resolveWorkEntryToolPresentation", () => {
 });
 
 describe("browser group summaries", () => {
+  const summarizeGroupLabel = (entries: ReadonlyArray<WorkLogPresentationEntry>) =>
+    summarizeToolGroup(entries).summary;
   const browserEntry: WorkLogPresentationEntry = {
+    id: "browser",
+    createdAt: "2026-09-01T00:00:00Z",
     label: "MCP tool call",
     toolData: { server: "t3-code", tool: "preview_click" },
-    itemType: "mcp_tool_call",
+    itemType: "dynamic_tool",
     toolLifecycleStatus: "completed",
     tone: "tool",
   };
   const commandEntry: WorkLogPresentationEntry = {
+    id: "command",
+    createdAt: "2026-09-01T00:00:00Z",
     label: "Ran command",
     command: "/bin/bash -lc 'vp test run'",
     itemType: "command_execution",
@@ -348,7 +329,7 @@ describe("browser group summaries", () => {
       ...browserEntry,
       toolCallId: `browser-${index}`,
     }));
-    expect(summarizeToolGroup(entries)).toBe(
+    expect(summarizeGroupLabel(entries)).toBe(
       `Used browser ${count} ${count === 1 ? "time" : "times"}`,
     );
     expect(toolGroupSummaryKind(entries)).toBe("browser");
@@ -359,13 +340,13 @@ describe("browser group summaries", () => {
       ...Array.from({ length: 4 }, () => commandEntry),
       ...Array.from({ length: 15 }, () => browserEntry),
     ];
-    expect(summarizeToolGroup(entries)).toBe("Ran 4 commands and used browser 15 times");
+    expect(summarizeGroupLabel(entries)).toBe("Ran 4 commands and used browser 15 times");
     expect(toolGroupSummaryKind(entries)).toBe("mixed");
   });
 
   it("preserves first-seen action ordering alongside non-browser tools", () => {
     expect(
-      summarizeToolGroup([
+      summarizeGroupLabel([
         browserEntry,
         commandEntry,
         {
@@ -373,12 +354,12 @@ describe("browser group summaries", () => {
           toolData: { server: "t3-code", tool: "task_status" },
         },
       ]),
-    ).toBe("Used browser 1 time, ran 1 command, and used 1 tool");
+    ).toBe("Used browser 1 time, ran 1 command, and performed 1 other action");
   });
 
   it("recognizes Claude browser identity without treating script metadata as a shell command", () => {
     expect(
-      summarizeToolGroup([
+      summarizeGroupLabel([
         {
           ...browserEntry,
           command: "node inspect-page.js",
@@ -390,21 +371,27 @@ describe("browser group summaries", () => {
 
   it("keeps foreign tools and web searches out of the browser count", () => {
     expect(
-      summarizeToolGroup([
+      summarizeGroupLabel([
         browserEntry,
         {
           ...browserEntry,
           label: "preview_click",
           toolData: { server: "another-server", tool: "preview_click" },
         },
-        { label: "Search", tone: "tool", itemType: "web_search" },
+        {
+          id: "search",
+          createdAt: "2026-09-01T00:00:00Z",
+          label: "Search",
+          tone: "tool",
+          itemType: "web_search",
+        },
       ]),
-    ).toBe("Used browser 1 time, used 1 tool, and searched the web 1 time");
+    ).toBe("Used browser 1 time, searched the web 1 time, and performed 1 other action");
   });
 
   it("keeps browser screenshots in the browser count while preserving their image path", () => {
     const entry = { ...browserEntry, viewedImagePath: "/workspace/page.png" };
-    expect(summarizeToolGroup([entry])).toBe("Used browser 1 time");
+    expect(summarizeGroupLabel([entry])).toBe("Used browser 1 time");
     expect(workEntryViewedImagePath(entry)).toBe("/workspace/page.png");
   });
 });
@@ -493,7 +480,12 @@ describe("command work-log details", () => {
 });
 
 describe("workEntryViewedImagePath", () => {
-  const entry = { label: "Read", tone: "tool" } as const;
+  const entry = {
+    id: "entry-1",
+    createdAt: "2026-01-01T00:00:00Z",
+    label: "Read",
+    tone: "tool",
+  } as const;
 
   it("returns a single image path from supported read entries", () => {
     expect(
@@ -502,7 +494,7 @@ describe("workEntryViewedImagePath", () => {
     expect(
       workEntryViewedImagePath({
         ...entry,
-        itemType: "dynamic_tool_call",
+        itemType: "dynamic_tool",
         toolTitle: "Read file",
         detail: "C:\\workspace\\a.webp",
       }),
@@ -510,7 +502,7 @@ describe("workEntryViewedImagePath", () => {
     expect(
       workEntryViewedImagePath({
         ...entry,
-        itemType: "dynamic_tool_call",
+        itemType: "dynamic_tool",
         detail: 'Read: {"file_path":"truncated..."}',
         viewedImagePath: " /workspace/reference image.webp ",
       }),
@@ -519,10 +511,10 @@ describe("workEntryViewedImagePath", () => {
 
   it("rejects non-image, multi-line, and non-read details", () => {
     expect(
-      workEntryViewedImagePath({ ...entry, itemType: "image_view", detail: "a.txt" }),
+      workEntryViewedImagePath({ ...entry, requestKind: "file-read", detail: "a.txt" }),
     ).toBeNull();
     expect(
-      workEntryViewedImagePath({ ...entry, itemType: "image_view", detail: "a.png\nb.png" }),
+      workEntryViewedImagePath({ ...entry, requestKind: "file-read", detail: "a.png\nb.png" }),
     ).toBeNull();
     expect(workEntryViewedImagePath({ ...entry, detail: "a.png" })).toBeNull();
   });
@@ -532,9 +524,11 @@ describe("toolGroupAction", () => {
   it("groups legacy Claude image reads with other reads", () => {
     expect(
       toolGroupAction({
+        id: "legacy-read",
+        createdAt: "2026-09-01T00:00:00Z",
         label: "Tool call",
         tone: "tool",
-        itemType: "dynamic_tool_call",
+        itemType: "dynamic_tool",
         viewedImagePath: "/workspace/reference.png",
       }),
     ).toBe("read");

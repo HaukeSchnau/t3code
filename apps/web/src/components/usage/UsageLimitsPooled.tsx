@@ -1,4 +1,7 @@
 import {
+  ProviderInstanceId,
+} from "@t3tools/contracts";
+import {
   collectLimitAccounts,
   collectLimitNotices,
   collectLimitPools,
@@ -73,6 +76,11 @@ function AccountAvatar({
   if (account.redeem) {
     return (
       <ProviderInstanceIcon
+        instanceId={
+          "instanceId" in account.redeem.input
+            ? account.redeem.input.instanceId
+            : ProviderInstanceId.make(account.key)
+        }
         driverKind={account.driver}
         displayName={
           account.displayName ?? getDriverOption(account.driver)?.label ?? String(account.driver)
@@ -513,6 +521,7 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
     <section className="flex flex-col gap-3">
       <h2 className="flex items-center gap-2 text-sm font-medium text-foreground">
         <ProviderInstanceIcon
+          instanceId={ProviderInstanceId.make(String(pool.driver))}
           driverKind={pool.driver}
           displayName={label}
           indicatorBackground="var(--background)"

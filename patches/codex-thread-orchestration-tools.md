@@ -1,10 +1,8 @@
 # Codex thread orchestration CLI
 
-T3 Code retains its Desktop-style thread orchestration implementation, but does
-not register those MCP tools or advertise them to Codex-backed agents. The
-operations are exposed through `t3 thread` commands instead. Codex provider
-processes receive `T3CODE_THREAD_ID`, which supplies caller identity and normal
-inheritance when the agent runs the CLI.
+Upstream V2 delegation and worktree MCP tools are enabled. The fork also keeps `t3 thread` for remote environments, durable waits and watches, effort groups, batches, and passive results. Both paths execute through V2; the separate legacy `threads` MCP toolkit stays unregistered.
+
+Provider processes receive `T3CODE_THREAD_ID` for CLI caller identity and inheritance. `V2Bridge.ts` adapts the existing CLI coordination contract to native thread commands and projections. Its legacy activity reads preserve existing relationships, waits, and watches without starting V1 reactors.
 
 `t3 thread projects` is the normal discovery entrypoint. It returns local and
 registered remote environments plus their projects. `t3 thread create` can
@@ -32,8 +30,7 @@ current environment and registered remotes. Agents pass the returned id through
 provider defaults.
 
 The CLI mapping is documented in `patches/desktop-thread-orchestration.md` and
-the user guide. The dormant MCP toolkit stays compiled and tested, but the CLI
-is the supported agent entrypoint.
+the user guide. The dormant legacy MCP toolkit stays compiled and tested. Native delegation tools and the CLI are both supported agent entrypoints.
 
 The CLI includes compact passive observability commands:
 
@@ -103,3 +100,11 @@ before another model turn runs.
 The WebSocket entrypoint only delegates Codex resume/fork RPCs. Keep provider selection, settings and
 environment resolution, shadow-home materialization, import deduplication, busy/fork-point validation,
 workspace cleanup, and relationship activities in `apps/server/src/provider/CodexThreadRpcWorkflow.ts`.
+
+### Native client coordination
+
+The V2 shell carries compact relationships, efforts, waits, and watches derived from retained
+legacy coordination records and native coordination activities. Coordination changes travel with
+the corresponding shell delta and its sequence, so reconnect replay and thread updates use one
+cursor. Web, desktop, and mobile display open watches from this shell state without loading an
+inactive thread's transcript. Closing a watch removes it from the open-watch display.

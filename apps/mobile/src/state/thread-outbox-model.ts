@@ -22,6 +22,10 @@ import {
   type SkillPackId as SkillPackIdType,
   type ServerProvider,
 } from "@t3tools/contracts";
+import {
+  clampFileAttachmentUploadBytes,
+  fileAttachmentTooLargeMessage,
+} from "@t3tools/client-runtime/state/attachments";
 import * as Schema from "effect/Schema";
 
 import type { UploadedMobileAttachment } from "../lib/attachmentUpload";
@@ -105,8 +109,11 @@ export interface QueuedThreadMessage {
   readonly createdAt: string;
 }
 
+export type QueuedThreadDeliveryProtocol = "native" | "legacy";
+
 export function makeQueuedThreadDeliveryPlan(
   message: QueuedThreadMessage,
+  deliveryProtocol: QueuedThreadDeliveryProtocol = "native",
 ): DurableCommandDeliveryPlan {
   const attachments = queuedMessageWireAttachments(message.attachments);
   const settings = {
@@ -154,6 +161,7 @@ export function makeQueuedThreadDeliveryPlan(
     environmentId: message.environmentId,
     enqueuedAt: message.createdAt,
     command,
+    deliveryProtocol,
   });
 }
 
@@ -255,6 +263,42 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 }
 
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
+
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "remove" }
+  | { readonly step: "retry" }
+  | { readonly step: "restore"; readonly reason: string }
+  | { readonly step: "send" };
+
+/**
+ * Capability checks belong after delivery policy resolution. A missing config
+ * is retriable while a known oversized file is recoverable in the composer.
+ */
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<Pick<DraftComposerAttachment, "name" | "sizeBytes">>;
+  readonly serverConfig: { readonly maxFileUploadBytes?: number } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction !== "send") {
+    return { step: input.deliveryAction };
+  }
+  if (input.serverConfig === null) {
+    return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
+  }
+  const advertisedMax = input.serverConfig.maxFileUploadBytes;
+  if (advertisedMax === undefined) {
+    return { step: "restore", reason: "This server does not support file attachments." };
+  }
+  const maxBytes = clampFileAttachmentUploadBytes(advertisedMax);
+  const oversized = input.fileAttachments.find((attachment) => attachment.sizeBytes > maxBytes);
+  return oversized === undefined
+    ? { step: "send" }
+    : { step: "restore", reason: fileAttachmentTooLargeMessage(oversized.name, maxBytes) };
+}
 
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;

@@ -1,9 +1,9 @@
 /**
- * OrchestrationEngineService - Service interface for orchestration command handling.
+ * Historical name for the application event-sourcing engine.
  *
- * Owns command validation/dispatch and in-memory read-model updates backed by
- * `OrchestrationEventStore` persistence. It does not own provider process
- * management or transport concerns (e.g. websocket request parsing).
+ * This is not the agent orchestrator. It retains serialized project-command
+ * validation, append, receipt, and projection transactions. Agent execution is
+ * owned by orchestration V2, whose thread events use the same event store.
  *
  * Uses Effect `Context.Service` for dependency injection. Command dispatch,
  * replay, and unknown-input decoding all return typed domain errors.
@@ -11,32 +11,17 @@
  * @module OrchestrationEngineService
  */
 import type {
-  OrchestrationAggregateKind,
   OrchestrationClientOrigin,
-  OrchestrationCommand,
   OrchestrationEvent,
-  ProjectId,
-  ProviderInstanceId,
-  ThreadId,
-} from "@t3tools/contracts";
+  ProjectOrchestrationCommand,
+} from "@t3tools/contracts/legacy-orchestration";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
-import type * as Option from "effect/Option";
 import type * as Scope from "effect/Scope";
 import type * as Stream from "effect/Stream";
 
 import type { OrchestrationDispatchError } from "../Errors.ts";
 import type { OrchestrationEventStoreError } from "../../persistence/Errors.ts";
-import type {
-  OrchestrationAggregateReplayStats,
-  OrchestrationReplayProbe,
-} from "../../persistence/Services/OrchestrationEventStore.ts";
-
-export interface OrchestrationThreadReplayRange {
-  readonly threadId: ThreadId;
-  readonly fromSequenceExclusive: number;
-  readonly toSequenceInclusive: number;
-}
 
 /**
  * OrchestrationEngineShape - Service API for orchestration command and event flow.
@@ -48,41 +33,14 @@ export interface OrchestrationEngineShape {
    * @param fromSequenceExclusive - Sequence cursor (exclusive).
    * @param limit - Maximum number of events to read. Defaults to the event
    *   store's page-bounded default; pass a higher value when the caller must
-   *   read a wider global range. Thread subscriptions use readThreadEvents.
+   *   read every event after the cursor (e.g. per-thread catch-up that filters
+   *   a small subset out of a potentially larger global range).
    * @returns Stream containing ordered events.
    */
   readonly readEvents: (
     fromSequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
-
-  /** Replay one aggregate without scanning unrelated global events. */
-  readonly readAggregateEvents?: (
-    aggregateKind: OrchestrationAggregateKind,
-    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
-    fromSequenceExclusive: number,
-    limit?: number,
-  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError, never>;
-
-  /**
-   * Explicit capability for payload-free replay planning. Consumers must test
-   * for this own property rather than probing optional service methods: Effect
-   * test mocks intentionally synthesize failures for unimplemented methods.
-   */
-  readonly replayProbeCapability?: OrchestrationReplayProbeCapability;
-
-  /** Explicit scoped live subscription acquisition for lossless catch-up. */
-  readonly liveSubscriptionCapability?: OrchestrationLiveSubscriptionCapability;
-
-  /** Read only this thread's events through a captured authoritative head. */
-  readonly readThreadEvents: (
-    input: OrchestrationThreadReplayRange & { readonly limit?: number },
-  ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
-
-  /** Measure a bounded thread replay without decoding its event bodies. */
-  readonly getThreadReplayStats: (
-    input: OrchestrationThreadReplayRange & { readonly maxEvents: number },
-  ) => Effect.Effect<OrchestrationAggregateReplayStats, OrchestrationEventStoreError>;
 
   /**
    * Dispatch a validated orchestration command.
@@ -96,21 +54,9 @@ export interface OrchestrationEngineShape {
    * command receipts.
    */
   readonly dispatch: (
-    command: OrchestrationCommand,
+    command: ProjectOrchestrationCommand,
     options?: { readonly origin?: OrchestrationClientOrigin },
   ) => Effect.Effect<{ sequence: number }, OrchestrationDispatchError, never>;
-
-  /**
-   * Validate a command against an existing immutable receipt without executing it.
-   * None means the command id has not yet reached the durable receipt boundary.
-   */
-  readonly resolveReceipt: (
-    command: OrchestrationCommand,
-  ) => Effect.Effect<
-    Option.Option<{ readonly sequence: number }>,
-    OrchestrationDispatchError,
-    never
-  >;
 
   /**
    * Stream persisted domain events in dispatch order.
@@ -119,8 +65,11 @@ export interface OrchestrationEngineShape {
    */
   readonly streamDomainEvents: Stream.Stream<OrchestrationEvent>;
 
-  /** Acquire a live domain-event subscription before starting a consumer. */
-  readonly subscribeDomainEvents?: Effect.Effect<
+  /**
+   * Acquire a domain-event subscription before starting a consumer.
+   * The subscription is ready when this effect returns and closes with the scope.
+   */
+  readonly subscribeDomainEvents: Effect.Effect<
     Stream.Stream<OrchestrationEvent>,
     never,
     Scope.Scope
@@ -132,25 +81,6 @@ export interface OrchestrationEngineShape {
    * choosing between an incremental replay and a fresh projected snapshot.
    */
   readonly latestSequence: Effect.Effect<number, never, never>;
-}
-
-export interface OrchestrationReplayProbeCapability {
-  readonly kind: "payload-free-v1";
-  readonly probeReplay: (
-    fromSequenceExclusive: number,
-    maxEvents: number,
-  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
-  readonly probeAggregateReplay: (
-    aggregateKind: OrchestrationAggregateKind,
-    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
-    fromSequenceExclusive: number,
-    maxEvents: number,
-  ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;
-}
-
-export interface OrchestrationLiveSubscriptionCapability {
-  readonly kind: "scoped-v1";
-  readonly subscribe: Effect.Effect<Stream.Stream<OrchestrationEvent>, never, Scope.Scope>;
 }
 
 /**

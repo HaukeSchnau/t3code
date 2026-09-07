@@ -73,12 +73,13 @@ adds the first direct server/provider recovery adapter without changing those pr
 
 ## NL1 direct Effect RPC recovery gate
 
-NL1 owns `apps/server/integration/NetworkRecoveryHarness.integration.ts` and
-`apps/server/integration/networkRecovery.integration.test.ts`, with read-only observation seams in
-the existing orchestration and deterministic-provider harnesses. It launches a real Node WebSocket
-server with the Effect RPC dispatch schema, calls the real orchestration engine and receipt store,
-and lets the deterministic provider adapter complete a turn. The version-1 profile still declares
-the origin path `unshaped`; no control is installed on the server or provider side.
+The original NL1 direct Effect RPC harness was tied to the removed V1 orchestration engine and is
+superseded by native V2 command receipt and replay coverage. The network-lab scenario/profile
+contracts remain the fork's recovery seam; a future native adapter can attach them to the V2
+WebSocket/RPC path without reintroducing the V1 runtime. Native command receipt and envelope replay
+behavior is covered by the focused orchestration-v2 and thread-orchestration bridge tests. The
+version-1 profile still declares the origin path `unshaped`; no control is installed on the server
+or provider side.
 
 The loss gate decorates only the client socket. It records the outgoing Effect RPC request, then
 examines origin-to-client frames. A successful terminal `Exit` is eligible for suppression only when

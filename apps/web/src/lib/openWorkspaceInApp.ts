@@ -104,7 +104,6 @@ export async function openWorkspaceInApp(
       commandId: input.newCommandId(),
       projectId,
       workspaceRoot: path.path,
-      createdAt: new Date().toISOString(),
     }),
   );
   await input.handleNewThread(scopeProjectRef(input.environmentId, projectId), {

@@ -480,8 +480,8 @@ export type WorkerState = "working" | "blocked" | "completed" | "failed" | "stop
 export interface WorkerStateInput {
   readonly hasPendingApprovals: boolean;
   readonly hasPendingUserInput: boolean;
-  readonly session: { readonly status: string } | null;
-  readonly latestTurn: { readonly state: string } | null;
+  readonly session?: { readonly status: string } | null;
+  readonly latestTurn?: { readonly state: string } | null;
   readonly backgroundLiveness?: "working" | "monitoring" | null | undefined;
 }
 

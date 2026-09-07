@@ -1,13 +1,10 @@
+import type { ProjectId } from "@t3tools/contracts";
 import type {
-  OrchestrationAggregateKind,
   OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
-  ProviderInstanceId,
-  ProjectId,
-  ThreadId,
-} from "@t3tools/contracts";
-import { OrchestrationCommand } from "@t3tools/contracts";
+  ProjectOrchestrationCommand,
+} from "@t3tools/contracts/legacy-orchestration";
 import * as Cause from "effect/Cause";
 import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
@@ -31,72 +28,97 @@ import {
   orchestrationCommandsTotal,
   orchestrationCommandDuration,
 } from "../../observability/Metrics.ts";
-import { PersistenceSqlError, toPersistenceSqlError } from "../../persistence/Errors.ts";
+import { commandEnvelopeFingerprint } from "../CommandEnvelope.ts";
+import { toPersistenceSqlError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
-import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
-import type { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
-  OrchestrationCommandInvariantError,
+  OrchestrationCommandReceiptRepository,
+  type OrchestrationCommandReceipt,
+} from "../../persistence/Services/OrchestrationCommandReceipts.ts";
+import {
   isOrchestrationCommandRejection,
+  OrchestrationCommandInvariantError,
+  type OrchestrationCommandRejection,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandReceiptMismatchError,
   type OrchestrationDispatchError,
   type OrchestrationProjectorDecodeError,
 } from "../Errors.ts";
 import { decideOrchestrationCommand } from "../decider.ts";
-import { commandEnvelopeFingerprint } from "../CommandEnvelope.ts";
 import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-import { incrementWorkloadCounter } from "../../diagnostics/WorkloadDiagnostics.ts";
+import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
-const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
-
-const isMissingAggregateInvariant = (error: unknown): error is OrchestrationCommandInvariantError =>
-  isOrchestrationCommandInvariantError(error) &&
-  error.detail.includes("does not exist for command");
+const isOrchestrationCommandPreviouslyRejectedError = Schema.is(
+  OrchestrationCommandPreviouslyRejectedError,
+);
+const isOrchestrationCommandReceiptMismatchError = Schema.is(
+  OrchestrationCommandReceiptMismatchError,
+);
 
 interface CommandEnvelope {
-  command: OrchestrationCommand;
+  command: ProjectOrchestrationCommand;
   origin: OrchestrationClientOrigin | undefined;
   result: Deferred.Deferred<{ sequence: number }, OrchestrationDispatchError>;
   startedAtMs: number;
 }
 
-interface CommandReceiptIdentity {
-  readonly commandId: OrchestrationCommand["commandId"];
-  readonly aggregateKind: "project" | "thread" | "provider";
-  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
-  readonly commandVariant: OrchestrationCommand["type"];
-  readonly envelopeFingerprint: string;
+function commandToAggregateRef(command: ProjectOrchestrationCommand): {
+  readonly aggregateKind: "project";
+  readonly aggregateId: ProjectId;
+} {
+  return { aggregateKind: "project", aggregateId: command.projectId };
 }
 
-function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread" | "provider";
-  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
-} {
-  switch (command.type) {
-    case "project.create":
-    case "project.meta.update":
-    case "project.delete":
-      return {
-        aggregateKind: "project",
-        aggregateId: command.projectId,
-      };
-    case "provider.usage-limits.update":
-      return {
-        aggregateKind: "provider",
-        aggregateId: command.providerInstanceId,
-      };
-    default:
-      return {
-        aggregateKind: "thread",
-        aggregateId: command.threadId,
-      };
+function validateCommandReceipt(
+  command: ProjectOrchestrationCommand,
+  receipt: OrchestrationCommandReceipt,
+  fingerprint: string,
+) {
+  const aggregate = commandToAggregateRef(command);
+  if (receipt.aggregateKind !== aggregate.aggregateKind || receipt.aggregateId !== aggregate.aggregateId) {
+    return Effect.fail(
+      new OrchestrationCommandReceiptMismatchError({
+        commandId: command.commandId,
+        reason: "aggregate-mismatch",
+        detail: "The command receipt belongs to a different project.",
+      }),
+    );
   }
+  // A receipt predating envelope fingerprints cannot prove that it represents
+  // this command. Keep those rows immutable and fail closed on replay.
+  if (receipt.envelopeFingerprint == null) {
+    return Effect.fail(
+      new OrchestrationCommandReceiptMismatchError({
+        commandId: command.commandId,
+        reason: "legacy-unverifiable",
+        detail: "The command receipt predates durable envelope identity.",
+      }),
+    );
+  }
+  if (receipt.commandType !== command.type || receipt.commandVariant !== command.type) {
+    return Effect.fail(
+      new OrchestrationCommandReceiptMismatchError({
+        commandId: command.commandId,
+        reason: "variant-mismatch",
+        detail: "The command receipt belongs to a different command variant.",
+      }),
+    );
+  }
+  if (receipt.envelopeFingerprint !== fingerprint) {
+    return Effect.fail(
+      new OrchestrationCommandReceiptMismatchError({
+        commandId: command.commandId,
+        reason: "payload-mismatch",
+        detail: "The canonical command envelope differs from the command receipt.",
+      }),
+    );
+  }
+  return Effect.void;
 }
 
 const makeOrchestrationEngine = Effect.gen(function* () {
@@ -105,6 +127,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -125,94 +148,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
       return nextReadModel;
     });
 
-  const commandReceiptIdentity = (command: OrchestrationCommand): CommandReceiptIdentity => {
-    const aggregateRef = commandToAggregateRef(command);
-    return {
-      commandId: command.commandId,
-      aggregateKind: aggregateRef.aggregateKind,
-      aggregateId: aggregateRef.aggregateId,
-      commandVariant: command.type,
-      envelopeFingerprint: commandEnvelopeFingerprint(command),
-    };
-  };
-
-  const resolveExistingReceipt = (
-    receipt: OrchestrationCommandReceipt,
-    receiptIdentity: CommandReceiptIdentity,
-  ): Effect.Effect<
-    { sequence: number },
-    OrchestrationCommandReceiptMismatchError | OrchestrationCommandPreviouslyRejectedError
-  > => {
-    if (
-      receipt.aggregateKind !== receiptIdentity.aggregateKind ||
-      receipt.aggregateId !== receiptIdentity.aggregateId
-    ) {
-      return Effect.fail(
-        new OrchestrationCommandReceiptMismatchError({
-          commandId: receiptIdentity.commandId,
-          reason: "aggregate-mismatch",
-          detail: `Receipt belongs to ${receipt.aggregateKind} '${receipt.aggregateId}', not ${receiptIdentity.aggregateKind} '${receiptIdentity.aggregateId}'.`,
-        }),
-      );
-    }
-    if (receipt.commandVariant === null || receipt.envelopeFingerprint === null) {
-      return Effect.fail(
-        new OrchestrationCommandReceiptMismatchError({
-          commandId: receiptIdentity.commandId,
-          reason: "legacy-unverifiable",
-          detail:
-            "The durable receipt predates command envelope fingerprints and cannot be replayed safely.",
-        }),
-      );
-    }
-    if (receipt.commandVariant !== receiptIdentity.commandVariant) {
-      return Effect.fail(
-        new OrchestrationCommandReceiptMismatchError({
-          commandId: receiptIdentity.commandId,
-          reason: "variant-mismatch",
-          detail: `Receipt variant '${receipt.commandVariant}' does not match '${receiptIdentity.commandVariant}'.`,
-        }),
-      );
-    }
-    if (receipt.envelopeFingerprint !== receiptIdentity.envelopeFingerprint) {
-      return Effect.fail(
-        new OrchestrationCommandReceiptMismatchError({
-          commandId: receiptIdentity.commandId,
-          reason: "payload-mismatch",
-          detail: "The canonical command envelope differs from the original command.",
-        }),
-      );
-    }
-    if (receipt.status === "accepted") {
-      return Effect.succeed({ sequence: receipt.resultSequence });
-    }
-    return Effect.fail(
-      new OrchestrationCommandPreviouslyRejectedError({
-        commandId: receiptIdentity.commandId,
-        detail: receipt.error ?? "Previously rejected.",
-      }),
-    );
-  };
-
-  const resolveReceipt: OrchestrationEngineShape["resolveReceipt"] = (command) => {
-    const receiptIdentity = commandReceiptIdentity(command);
-    return commandReceiptRepository.getByCommandId({ commandId: command.commandId }).pipe(
-      Effect.flatMap(
-        Option.match({
-          onNone: () => Effect.succeed(Option.none()),
-          onSome: (receipt) =>
-            resolveExistingReceipt(receipt, receiptIdentity).pipe(Effect.map(Option.some)),
-        }),
-      ),
-    );
-  };
-
   const processEnvelope = (envelope: CommandEnvelope): Effect.Effect<void> => {
     const dispatchStartSequence = commandReadModel.snapshotSequence;
     let processingStartedAtMs = 0;
-    let dispatchAttemptedEffects = false;
     const aggregateRef = commandToAggregateRef(envelope.command);
-    const receiptIdentity = commandReceiptIdentity(envelope.command);
+    const fingerprint = commandEnvelopeFingerprint(envelope.command);
     const baseMetricAttributes = {
       commandType: envelope.command.type,
       aggregateKind: aggregateRef.aggregateKind,
@@ -227,10 +167,69 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
       commandReadModel = yield* projectEventsOntoReadModel(commandReadModel, persistedEvents);
 
+      yield* eventStore.publishCommitted(
+        persistedEvents.filter(
+          (event) =>
+            event.type === "project.created" ||
+            event.type === "project.meta-updated" ||
+            event.type === "project.deleted",
+        ),
+      );
+
       for (const persistedEvent of persistedEvents) {
         yield* PubSub.publish(eventPubSub, persistedEvent);
       }
     });
+
+    // Rejected commands do not append events, so they used to claim their
+    // receipt only from the failure handler after read-model reconciliation.
+    // Claim and finalize the full envelope in one transaction first. This
+    // keeps a retry or a concurrent dispatcher from running rejection side
+    // effects before the command identity is durable.
+    const recordRejectedReceipt = (error: OrchestrationCommandRejection) =>
+      sql.withTransaction(
+        Effect.gen(function* () {
+          const acceptedAt = yield* nowIso;
+          const reserved = yield* commandReceiptRepository.insertIfAbsent({
+            commandId: envelope.command.commandId,
+            aggregateKind: aggregateRef.aggregateKind,
+            aggregateId: aggregateRef.aggregateId,
+            commandType: envelope.command.type,
+            commandVariant: envelope.command.type,
+            envelopeFingerprint: fingerprint,
+            acceptedAt,
+            resultSequence: 0,
+            status: "accepted",
+            error: null,
+          });
+          if (reserved) {
+            yield* commandReceiptRepository.upsert({
+              commandId: envelope.command.commandId,
+              aggregateKind: aggregateRef.aggregateKind,
+              aggregateId: aggregateRef.aggregateId,
+              commandType: envelope.command.type,
+              commandVariant: envelope.command.type,
+              envelopeFingerprint: fingerprint,
+              acceptedAt,
+              resultSequence: commandReadModel.snapshotSequence,
+              status: "rejected",
+              error: error.message,
+            });
+            return;
+          }
+
+          const existing = yield* commandReceiptRepository.getByCommandId({
+            commandId: envelope.command.commandId,
+          });
+          if (Option.isNone(existing)) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: envelope.command.type,
+              detail: "Command receipt disappeared after its transactional claim.",
+            });
+          }
+          yield* validateCommandReceipt(envelope.command, existing.value, fingerprint);
+        }),
+      );
 
     return Effect.exit(
       Effect.gen(function* () {
@@ -246,57 +245,31 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           commandId: envelope.command.commandId,
         });
         if (Option.isSome(existingReceipt)) {
-          return yield* resolveExistingReceipt(existingReceipt.value, receiptIdentity);
-        }
-
-        if (
-          envelope.command.type === "thread.pull-request.sync" &&
-          (yield* eventStore.hasEventAfter({
-            aggregateKind: "thread",
-            aggregateId: envelope.command.threadId,
-            sequenceExclusive: envelope.command.snapshotSequence,
-            type: "thread.created",
-          }))
-        ) {
-          return yield* new OrchestrationCommandInvariantError({
-            commandType: envelope.command.type,
-            detail: `thread ${envelope.command.threadId} was recreated before pull request discovery`,
+          yield* validateCommandReceipt(envelope.command, existingReceipt.value, fingerprint);
+          if (existingReceipt.value.status === "accepted") {
+            return {
+              sequence: existingReceipt.value.resultSequence,
+            };
+          }
+          return yield* new OrchestrationCommandPreviouslyRejectedError({
+            commandId: envelope.command.commandId,
+            detail: existingReceipt.value.error ?? "Previously rejected.",
           });
         }
-        const userInputActivity =
-          envelope.command.type === "thread.user-input.respond" ||
-          envelope.command.type === "thread.user-input.dismiss"
-            ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
-            : Option.none();
-        const decide = () =>
-          decideOrchestrationCommand({
-            command: envelope.command,
-            readModel: commandReadModel,
-            ...(Option.isSome(userInputActivity)
-              ? { userInputActivity: userInputActivity.value }
-              : {}),
-          }).pipe(
-            Effect.provideService(Crypto.Crypto, crypto),
-            Effect.mapError((cause) =>
-              isOrchestrationCommandRejection(cause)
-                ? cause
-                : new OrchestrationCommandInvariantError({
-                    commandType: envelope.command.type,
-                    detail: "Failed to generate an event identifier.",
-                    cause,
-                  }),
-            ),
-          );
-        const eventBase = yield* decide().pipe(
-          Effect.catchIf(isMissingAggregateInvariant, (initialError) =>
-            Effect.gen(function* () {
-              commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
-              return yield* decide().pipe(
-                Effect.mapError((refreshedError) =>
-                  isMissingAggregateInvariant(refreshedError) ? initialError : refreshedError,
-                ),
-              );
-            }),
+
+        const eventBase = yield* decideOrchestrationCommand({
+          command: envelope.command,
+          readModel: commandReadModel,
+        }).pipe(
+          Effect.provideService(Crypto.Crypto, crypto),
+          Effect.mapError((cause) =>
+            isOrchestrationCommandRejection(cause)
+              ? cause
+              : new OrchestrationCommandInvariantError({
+                  commandType: envelope.command.type,
+                  detail: "Failed to generate an event identifier.",
+                  cause,
+                }),
           ),
         );
         const plannedEvents = Array.isArray(eventBase) ? eventBase : [eventBase];
@@ -309,28 +282,40 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 ...planned,
                 metadata: { ...planned.metadata, origin: envelope.origin },
               }));
-        dispatchAttemptedEffects = true;
         const committedCommand = yield* sql
           .withTransaction(
             Effect.gen(function* () {
-              const claimed = yield* commandReceiptRepository.claimAccepted({
-                ...receiptIdentity,
+              const reserved = yield* commandReceiptRepository.insertIfAbsent({
+                commandId: envelope.command.commandId,
+                aggregateKind: aggregateRef.aggregateKind,
+                aggregateId: aggregateRef.aggregateId,
+                commandType: envelope.command.type,
+                commandVariant: envelope.command.type,
+                envelopeFingerprint: fingerprint,
                 acceptedAt: yield* nowIso,
+                resultSequence: 0,
+                status: "accepted",
+                error: null,
               });
-              if (!claimed) {
-                const winningReceipt = yield* commandReceiptRepository.getByCommandId({
+              if (!reserved) {
+                const existing = yield* commandReceiptRepository.getByCommandId({
                   commandId: envelope.command.commandId,
                 });
-                if (Option.isNone(winningReceipt)) {
-                  return yield* new PersistenceSqlError({
-                    operation: "OrchestrationEngine.processEnvelope:claim",
-                    detail: "Command receipt claim lost without a durable winning receipt.",
+                if (Option.isNone(existing)) {
+                  return yield* new OrchestrationCommandInvariantError({
+                    commandType: envelope.command.type,
+                    detail: "Command receipt disappeared after its transactional claim.",
                   });
                 }
+                yield* validateCommandReceipt(envelope.command, existing.value, fingerprint);
                 return {
-                  _tag: "replayed" as const,
-                  result: yield* resolveExistingReceipt(winningReceipt.value, receiptIdentity),
-                };
+                  committed: false as const,
+                  committedEvents: [] as OrchestrationEvent[],
+                  attachmentCleanups: [] as Effect.Effect<void>[],
+                  lastSequence: existing.value.resultSequence,
+                  nextCommandReadModel: commandReadModel,
+                  status: existing.value.status,
+                } as const;
               }
 
               const committedEvents: OrchestrationEvent[] = [];
@@ -346,29 +331,33 @@ const makeOrchestrationEngine = Effect.gen(function* () {
               }
 
               const lastSavedEvent = committedEvents.at(-1) ?? null;
-              // Idempotent commands can succeed without changing the event log. Their receipt
-              // points at the snapshot they observed so retries replay the same successful no-op.
-              const acceptedAt = lastSavedEvent?.occurredAt ?? (yield* nowIso);
-              const resultSequence = lastSavedEvent?.sequence ?? commandReadModel.snapshotSequence;
-
-              const finalized = yield* commandReceiptRepository.finalizeAccepted({
-                commandId: receiptIdentity.commandId,
-                acceptedAt,
-                resultSequence,
-              });
-              if (!finalized) {
-                return yield* new PersistenceSqlError({
-                  operation: "OrchestrationEngine.processEnvelope:finalizeClaim",
-                  detail: "Accepted command receipt claim could not be finalized.",
+              if (lastSavedEvent === null) {
+                return yield* new OrchestrationCommandInvariantError({
+                  commandType: envelope.command.type,
+                  detail: "Command produced no events.",
                 });
               }
 
+              yield* commandReceiptRepository.upsert({
+                commandId: envelope.command.commandId,
+                aggregateKind: lastSavedEvent.aggregateKind,
+                aggregateId: lastSavedEvent.aggregateId,
+                commandType: envelope.command.type,
+                commandVariant: envelope.command.type,
+                envelopeFingerprint: fingerprint,
+                acceptedAt: lastSavedEvent.occurredAt,
+                resultSequence: lastSavedEvent.sequence,
+                status: "accepted",
+                error: null,
+              });
+
               return {
-                _tag: "accepted" as const,
+                committed: true as const,
                 committedEvents,
                 attachmentCleanups,
-                lastSequence: resultSequence,
+                lastSequence: lastSavedEvent.sequence,
                 nextCommandReadModel,
+                status: "accepted" as const,
               } as const;
             }),
           )
@@ -380,17 +369,27 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             ),
           );
 
-        if (committedCommand._tag === "replayed") {
-          return committedCommand.result;
+        if (!committedCommand.committed) {
+          if (committedCommand.status === "rejected") {
+            return yield* new OrchestrationCommandPreviouslyRejectedError({
+              commandId: envelope.command.commandId,
+              detail: "Previously rejected.",
+            });
+          }
+          return { sequence: committedCommand.lastSequence };
         }
 
         commandReadModel = committedCommand.nextCommandReadModel;
         for (const cleanup of committedCommand.attachmentCleanups) {
           yield* cleanup;
         }
-        incrementWorkloadCounter(
-          "orchestration.events.durable",
-          committedCommand.committedEvents.length,
+        yield* eventStore.publishCommitted(
+          committedCommand.committedEvents.filter(
+            (event) =>
+              event.type === "project.created" ||
+              event.type === "project.meta-updated" ||
+              event.type === "project.deleted",
+          ),
         );
         for (const [index, event] of committedCommand.committedEvents.entries()) {
           yield* PubSub.publish(eventPubSub, event);
@@ -441,7 +440,21 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           }
 
           const error = Cause.squash(exit.cause) as OrchestrationDispatchError;
-          if (dispatchAttemptedEffects) {
+          if (
+            !isOrchestrationCommandPreviouslyRejectedError(error) &&
+            !isOrchestrationCommandReceiptMismatchError(error)
+          ) {
+            if (isOrchestrationCommandRejection(error)) {
+              yield* recordRejectedReceipt(error).pipe(
+                Effect.catch((cause) =>
+                  Effect.logWarning("failed to claim rejected orchestration command receipt", {
+                    commandId: envelope.command.commandId,
+                    cause,
+                  }),
+                ),
+              );
+            }
+
             yield* reconcileReadModelAfterDispatchFailure.pipe(
               Effect.catch(() =>
                 Effect.logWarning(
@@ -454,42 +467,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                 ),
               ),
             );
-          }
-
-          if (isOrchestrationCommandRejection(error)) {
-            const durableRejection = yield* Effect.exit(
-              Effect.gen(function* () {
-                const inserted = yield* commandReceiptRepository.insertRejected({
-                  ...receiptIdentity,
-                  acceptedAt: yield* nowIso,
-                  resultSequence: commandReadModel.snapshotSequence,
-                  error: error.message,
-                });
-                if (inserted) {
-                  return yield* error;
-                }
-                const winningReceipt = yield* commandReceiptRepository.getByCommandId({
-                  commandId: receiptIdentity.commandId,
-                });
-                if (Option.isNone(winningReceipt)) {
-                  return yield* new PersistenceSqlError({
-                    operation: "OrchestrationEngine.processEnvelope:reject",
-                    detail:
-                      "Rejected command receipt insert lost without a durable winning receipt.",
-                  });
-                }
-                return yield* resolveExistingReceipt(winningReceipt.value, receiptIdentity);
-              }),
-            );
-            if (Exit.isSuccess(durableRejection)) {
-              yield* Deferred.succeed(envelope.result, durableRejection.value);
-            } else {
-              yield* Deferred.fail(
-                envelope.result,
-                Cause.squash(durableRejection.cause) as OrchestrationDispatchError,
-              );
-            }
-            return;
           }
 
           yield* Deferred.fail(envelope.result, error);
@@ -509,63 +486,6 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   const readEvents: OrchestrationEngineShape["readEvents"] = (fromSequenceExclusive, limit) =>
     eventStore.readFromSequence(fromSequenceExclusive, limit);
-  const readAggregateEvents: OrchestrationEngineShape["readAggregateEvents"] = (
-    aggregateKind,
-    aggregateId,
-    fromSequenceExclusive,
-    limit,
-  ) => {
-    if (eventStore.readAggregateFromSequence !== undefined) {
-      return eventStore.readAggregateFromSequence(
-        aggregateKind,
-        aggregateId,
-        fromSequenceExclusive,
-        limit,
-      );
-    }
-    return eventStore.readFromSequence(fromSequenceExclusive, Number.MAX_SAFE_INTEGER).pipe(
-      Stream.filter(
-        (event) =>
-          event.aggregateKind === aggregateKind && event.aggregateId === String(aggregateId),
-      ),
-      Stream.take(limit ?? 1_000),
-    );
-  };
-  const probeFromSequence = eventStore.probeFromSequence;
-  const probeAggregateFromSequence = eventStore.probeAggregateFromSequence;
-  const replayProbeCapability =
-    probeFromSequence === undefined || probeAggregateFromSequence === undefined
-      ? undefined
-      : {
-          kind: "payload-free-v1" as const,
-          probeReplay: (fromSequenceExclusive: number, maxEvents: number) =>
-            probeFromSequence(fromSequenceExclusive, maxEvents),
-          probeAggregateReplay: (
-            aggregateKind: OrchestrationAggregateKind,
-            aggregateId: ProjectId | ThreadId | ProviderInstanceId,
-            fromSequenceExclusive: number,
-            maxEvents: number,
-          ) =>
-            probeAggregateFromSequence(
-              aggregateKind,
-              aggregateId,
-              fromSequenceExclusive,
-              maxEvents,
-            ),
-        };
-
-  const readThreadEvents: OrchestrationEngineShape["readThreadEvents"] = ({ threadId, ...range }) =>
-    eventStore.readAggregateRange({ ...range, aggregateKind: "thread", aggregateId: threadId });
-
-  const getThreadReplayStats: OrchestrationEngineShape["getThreadReplayStats"] = ({
-    threadId,
-    ...range
-  }) =>
-    eventStore.getAggregateReplayStats({
-      ...range,
-      aggregateKind: "thread",
-      aggregateId: threadId,
-    });
 
   const dispatch: OrchestrationEngineShape["dispatch"] = (command, options) =>
     Effect.gen(function* () {
@@ -581,21 +501,8 @@ const makeOrchestrationEngine = Effect.gen(function* () {
 
   return {
     readEvents,
-    readAggregateEvents,
-    ...(replayProbeCapability === undefined ? {} : { replayProbeCapability }),
-    liveSubscriptionCapability: {
-      kind: "scoped-v1",
-      subscribe: PubSub.subscribe(eventPubSub).pipe(
-        Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
-      ),
-    },
-    readThreadEvents,
-    getThreadReplayStats,
     dispatch,
-    resolveReceipt,
-    subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(
-      Effect.map((subscription) => Stream.fromEffectRepeat(PubSub.take(subscription))),
-    ),
+    subscribeDomainEvents: PubSub.subscribe(eventPubSub).pipe(Effect.map(Stream.fromSubscription)),
     // Each access creates a fresh PubSub subscription so that multiple
     // consumers (wsServer, ProviderRuntimeIngestion, CheckpointReactor, etc.)
     // each independently receive all domain events.

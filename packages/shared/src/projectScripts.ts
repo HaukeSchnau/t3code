@@ -3,9 +3,9 @@ import type { ProjectId, ProjectScript, ServerSettings } from "@t3tools/contract
 /** Missing entries preserve existing actions; null explicitly resets a checkout to machine defaults. */
 export function resolveProjectScripts(
   settings: Pick<ServerSettings, "defaultProjectScripts" | "projectScriptOverrides">,
-  project: { id: ProjectId; scripts: readonly ProjectScript[] },
+  project: { id?: ProjectId; scripts: readonly ProjectScript[] },
 ): readonly ProjectScript[] {
-  const override = settings.projectScriptOverrides[project.id];
+  const override = project.id === undefined ? undefined : settings.projectScriptOverrides[project.id];
   if (override === null) return settings.defaultProjectScripts;
   return (
     override ?? (project.scripts.length > 0 ? project.scripts : settings.defaultProjectScripts)

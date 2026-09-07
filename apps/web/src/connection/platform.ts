@@ -180,6 +180,7 @@ const capabilitiesLayer = Layer.effectContext(
       scopes: AuthStandardClientScopes,
     });
     const cloudSession = CloudSession.of({
+      identity: Effect.succeed(Option.none()),
       clerkToken: Effect.fail(
         new ConnectionBlockedError({
           reason: "unsupported",

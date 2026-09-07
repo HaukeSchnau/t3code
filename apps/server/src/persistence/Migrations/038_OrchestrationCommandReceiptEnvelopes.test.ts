@@ -43,7 +43,10 @@ layer("038_OrchestrationCommandReceiptEnvelopes", (it) => {
         )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 38 });
+      // The receipt repository reads command_type, which was added by the
+      // application-event migration after the envelope columns. Run through
+      // that schema boundary while keeping the legacy row itself pre-038.
+      yield* runMigrations({ toMigrationInclusive: 76 });
 
       const receipt = yield* receiptRepository.getByCommandId({
         commandId: CommandId.make("cmd-legacy-receipt"),
@@ -52,6 +55,7 @@ layer("038_OrchestrationCommandReceiptEnvelopes", (it) => {
         commandId: CommandId.make("cmd-legacy-receipt"),
         aggregateKind: "thread",
         aggregateId: ThreadId.make("thread-legacy-receipt"),
+        commandType: "legacy",
         commandVariant: null,
         envelopeFingerprint: null,
         acceptedAt: "2026-01-01T00:00:00.000Z",

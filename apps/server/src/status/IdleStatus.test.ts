@@ -1,147 +1,136 @@
 import { assert, it } from "@effect/vitest";
-import { ProviderInstanceId, ThreadId, TurnId, type ProviderSession } from "@t3tools/contracts";
+import {
+  type OrchestrationV2ThreadShell,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  RuntimeRequestId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as EffectDateTime from "effect/DateTime";
 
-import type { ProjectionRestartSafetyThread } from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { summarizeServerIdleStatus } from "./IdleStatus.ts";
 
-const runtimeStartedAt = "2026-07-16T08:29:00.000Z";
 const now = "2026-07-16T12:00:00.000Z";
+const checkedAt = now;
 
-function projected(
-  overrides: Partial<ProjectionRestartSafetyThread> = {},
-): ProjectionRestartSafetyThread {
+function shell(
+  overrides: Partial<OrchestrationV2ThreadShell> = {},
+): OrchestrationV2ThreadShell {
   return {
-    threadId: "thread-1",
-    session: null,
-    latestTurnId: null,
-    latestTurnState: null,
-    latestTurnUpdatedAt: null,
-    queuedMessageCount: 0,
-    pendingApprovalCount: 0,
-    pendingUserInputCount: 0,
-    undeliveredTranscriptEventCount: 0,
+    id: ThreadId.make("thread-1"),
+    projectId: ProjectId.make("project-1"),
+    title: "Thread",
+    providerInstanceId: ProviderInstanceId.make("codex"),
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "test-model" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    lineage: {
+      rootThreadId: ThreadId.make("thread-1"),
+      parentThreadId: null,
+      relationshipToParent: null,
+    },
+    forkedFrom: null,
+    activeProviderThreadId: null,
+    createdBy: "user",
+    creationSource: "web",
+    latestRunId: null,
+    latestRunRequestedAt: null,
+    latestRunStartedAt: null,
+    latestRunCompletedAt: null,
+    activeRunId: null,
+    activityRunStatus: null,
+    status: "idle",
+    pendingRuntimeRequest: null,
+    latestVisibleMessage: null,
+    latestUserMessageAt: null,
+    hasActionableProposedPlan: false,
+    pendingBackgroundTasks: [],
+    itemCount: 0,
+    visibleItemCount: 0,
+    createdAt: EffectDateTime.makeUnsafe(now),
+    updatedAt: EffectDateTime.makeUnsafe(now),
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    snoozedUntil: null,
+    snoozedAt: null,
+    pinnedAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
     ...overrides,
-  } as ProjectionRestartSafetyThread;
+  } as OrchestrationV2ThreadShell;
 }
 
-function summarize(input: {
-  liveSessions?: ReadonlyArray<ProviderSession>;
-  threads?: ReadonlyArray<ProjectionRestartSafetyThread>;
-  liveStateKnown?: boolean;
-}) {
-  return summarizeServerIdleStatus({
-    liveSessions: input.liveSessions ?? [],
-    projectedState: { threads: input.threads ?? [] },
-    checkedAt: now,
-    runtimeStartedAt,
-    liveStateKnown: input.liveStateKnown ?? true,
-  });
-}
-
-it("reports idle when live and projected state have no pending work", () => {
-  const status = summarize({});
+it("reports idle when the V2 shell has no active run", () => {
+  const status = summarizeServerIdleStatus({ threads: [], checkedAt });
   assert.isTrue(status.idle);
   assert.equal(status.busyThreadCount, 0);
 });
 
-it("treats live provider active turns as busy", () => {
-  const liveSession = {
-    provider: "codex",
-    providerInstanceId: "codex",
-    status: "running",
-    runtimeMode: "full-access",
-    threadId: "thread-live",
-    activeTurnId: "turn-live",
-    createdAt: now,
-    updatedAt: now,
-  } as ProviderSession;
-  const status = summarize({ liveSessions: [liveSession] });
+it("treats active V2 runs as busy", () => {
+  const status = summarizeServerIdleStatus({
+    threads: [
+      shell({
+        activeRunId: RunId.make("run-1"),
+        activityRunStatus: "running",
+        status: "running",
+      }),
+    ],
+    checkedAt,
+  });
   assert.isFalse(status.idle);
   assert.equal(status.liveActiveTurnCount, 1);
-  assert.equal(status.busyThreads[0]?.reason, "live-provider-active-turn");
-});
-
-for (const status of ["running", "connecting"] as const) {
-  it(`treats live ${status} provider sessions without a turn id as busy`, () => {
-    const liveSession = {
-      provider: "codex",
-      providerInstanceId: "codex",
-      status,
-      runtimeMode: "full-access",
-      threadId: `thread-live-${status}`,
-      createdAt: now,
-      updatedAt: now,
-    } as ProviderSession;
-
-    const result = summarize({ liveSessions: [liveSession] });
-    assert.isFalse(result.idle);
-    assert.equal(result.liveActiveTurnCount, 1);
-    assert.equal(result.busyThreads[0]?.reason, "live-provider-session-busy");
-    assert.equal(result.busyThreads[0]?.turnId, null);
-  });
-}
-
-it("does not let old orphaned projections block a live restart probe", () => {
-  const status = summarize({
-    threads: [
-      projected({
-        session: {
-          threadId: ThreadId.make("thread-1"),
-          status: "running",
-          providerName: "codex",
-          providerInstanceId: ProviderInstanceId.make("codex"),
-          runtimeMode: "full-access",
-          activeTurnId: TurnId.make("turn-old"),
-          lastError: null,
-          updatedAt: "2026-07-15T12:00:00.000Z",
-        },
-        latestTurnId: TurnId.make("turn-old"),
-        latestTurnState: "running",
-      }),
-    ],
-  });
-  assert.isTrue(status.idle);
   assert.equal(status.projectedActiveTurnCount, 1);
   assert.equal(status.projectedRunningTurnCount, 1);
+  assert.equal(status.busyThreads[0]?.reason, "projected-active-turn");
 });
 
-it("fails closed for current-epoch projected work and offline probes", () => {
-  const thread = projected({
-    session: {
-      threadId: ThreadId.make("thread-1"),
-      status: "starting",
-      providerName: "codex",
-      providerInstanceId: ProviderInstanceId.make("codex"),
-      runtimeMode: "full-access",
-      activeTurnId: null,
-      lastError: null,
-      updatedAt: "2026-07-16T08:30:00.000Z",
-    },
-  });
-  assert.isFalse(summarize({ threads: [thread] }).idle);
-  assert.isFalse(summarize({ threads: [thread], liveStateKnown: false }).idle);
-});
-
-it("counts durable actionable state without treating it as unsafe to restart", () => {
-  const status = summarize({
-    threads: [
-      projected({
-        queuedMessageCount: 2,
-        pendingApprovalCount: 1,
-        pendingUserInputCount: 3,
-      }),
-    ],
-  });
-  assert.isTrue(status.idle);
-  assert.equal(status.queuedMessageCount, 2);
-  assert.equal(status.pendingApprovalCount, 1);
-  assert.equal(status.pendingUserInputCount, 3);
-});
-
-it("blocks restart while durable transcript events await ingestion", () => {
-  const status = summarize({
-    threads: [projected({ undeliveredTranscriptEventCount: 4 })],
+it("fails closed while a V2 run is starting", () => {
+  const status = summarizeServerIdleStatus({
+    threads: [shell({ activityRunStatus: "starting", status: "starting" })],
+    checkedAt,
   });
   assert.isFalse(status.idle);
-  assert.equal(status.busyThreads[0]?.reason, "undelivered-transcript-events");
+  assert.equal(status.projectedStartingSessionCount, 1);
+  assert.equal(status.busyThreads[0]?.reason, "projected-session-starting");
+});
+
+it("keeps queued and pending requests visible without blocking restart", () => {
+  const status = summarizeServerIdleStatus({
+    threads: [
+      shell({
+        status: "queued",
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("request-1"),
+          kind: "command",
+          createdAt: EffectDateTime.makeUnsafe(now),
+        },
+      }),
+      shell({
+        id: ThreadId.make("thread-2"),
+        pendingRuntimeRequest: {
+          id: RuntimeRequestId.make("request-2"),
+          kind: "user_input",
+          createdAt: EffectDateTime.makeUnsafe(now),
+        },
+      }),
+    ],
+    checkedAt,
+  });
+  assert.isTrue(status.idle);
+  assert.equal(status.queuedMessageCount, 1);
+  assert.equal(status.pendingApprovalCount, 1);
+  assert.equal(status.pendingUserInputCount, 1);
+});
+
+it("keeps V2 waiting runs restart-blocking", () => {
+  const status = summarizeServerIdleStatus({
+    threads: [shell({ activityRunStatus: "waiting", status: "waiting" })],
+    checkedAt,
+  });
+  assert.isFalse(status.idle);
+  assert.equal(status.busyThreads[0]?.reason, "projected-latest-turn-running");
 });

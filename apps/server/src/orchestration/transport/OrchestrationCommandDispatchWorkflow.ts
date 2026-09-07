@@ -1,8 +1,7 @@
 import {
-  CommandId,
   EventId,
   OrchestrationDispatchCommandError,
-  type ClientOrchestrationCommand,
+  type LegacyOutboxCommand,
   type OrchestrationCommand,
   type ProjectId,
   type ThreadId,
@@ -17,23 +16,14 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import {
-  cleanupFailedUploadedAttachments,
-  normalizeDispatchCommand,
-  prepareDispatchCommand,
-} from "../Normalizer.ts";
-import type * as OrchestrationEngine from "../Services/OrchestrationEngine.ts";
-import type { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
-import {
   type CommandPreprocessingProgress,
   CommandPreprocessingCoordinator,
   preprocessingCommandId,
 } from "../Services/CommandPreprocessingCoordinator.ts";
-import type * as ProjectionSnapshotQuery from "../Services/ProjectionSnapshotQuery.ts";
 import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
+import type { ThreadCoordinationBackend } from "../../mcp/toolkits/thread-orchestration/V2Bridge.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import type * as ServerSettings from "../../serverSettings.ts";
-import * as ServerRuntimeStartup from "../../serverRuntimeStartup.ts";
-import * as TerminalManager from "../../terminal/Manager.ts";
 import type * as TextGeneration from "../../textGeneration/TextGeneration.ts";
 import {
   type BootstrapWorkspaceNaming,
@@ -57,6 +47,18 @@ type ThreadWorkspacePrepareRequest = {
   readonly displayNameSeed?: string | undefined;
   readonly retentionPolicy?: ThreadWorkspaceRetentionPolicy | undefined;
 };
+
+export interface PreparedLegacyOutboxCommand {
+  readonly receiptCommand?: LegacyOutboxCommand | OrchestrationCommand;
+  /** The native command body, with upload-only attachments materialized. */
+  readonly command: OrchestrationCommand;
+  /** Side effects that are safe to perform after receipt validation. */
+  readonly performDeferredPreprocessing: Effect.Effect<void, OrchestrationDispatchCommandError>;
+}
+
+type LegacyTurnStartCommand = Extract<LegacyOutboxCommand, { type: "thread.turn.start" }>;
+type NativeTurnStartCommand = Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
+type LegacyOrNativeTurnStartCommand = LegacyTurnStartCommand | NativeTurnStartCommand;
 
 function setupFailureDescription(cause: unknown): string {
   if (
@@ -85,23 +87,22 @@ function setupScriptFailureDetail(
 }
 
 export function makeOrchestrationCommandDispatchWorkflow(input: {
-  readonly orchestrationEngine: OrchestrationEngine.OrchestrationEngineShape;
+  readonly backend: ThreadCoordinationBackend["Service"];
   readonly commandPreprocessing: CommandPreprocessingCoordinator["Service"];
-  readonly startup: ServerRuntimeStartup.ServerRuntimeStartup["Service"];
-  readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
   readonly serverSettings: ServerSettings.ServerSettingsService["Service"];
   readonly threadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService["Service"];
   readonly projectSetupScriptRunner: ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"];
-  readonly terminalManager: TerminalManager.TerminalManager["Service"];
   readonly vcsStatusBroadcaster: VcsStatusBroadcaster.VcsStatusBroadcaster["Service"];
-  readonly threadDeletionReactor: ThreadDeletionReactor["Service"];
-  readonly dispatchCommand?: OrchestrationEngine.OrchestrationEngineShape["dispatch"];
+  readonly prepareLegacyOutboxCommand: (
+    original: LegacyOutboxCommand,
+  ) => Effect.Effect<PreparedLegacyOutboxCommand, OrchestrationDispatchCommandError>;
   readonly onCommandDispatched?: (
     command: OrchestrationCommand,
   ) => Effect.Effect<void, never, never>;
 }) {
-  const dispatchCommand = input.dispatchCommand ?? input.orchestrationEngine.dispatch;
+  const dispatchCommand = input.backend.engine.dispatch;
+  const dispatchWithinCommandLock = input.backend.engine.dispatchWithinCommandLock;
   const toDispatchCommandError = (cause: unknown, fallbackMessage: string) =>
     isOrchestrationDispatchCommandError(cause)
       ? cause
@@ -136,7 +137,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
     });
 
   const appendSetupScriptActivity = (activity: {
-    readonly parentCommand: Extract<OrchestrationCommand, { type: "thread.turn.start" }>;
+    readonly parentCommand: LegacyOrNativeTurnStartCommand;
     readonly phase: string;
     readonly threadId: ThreadId;
     readonly kind: "setup-script.requested" | "setup-script.started" | "setup-script.failed";
@@ -167,7 +168,8 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
   };
 
   const dispatchBootstrapTurnStart = (
-    command: Extract<OrchestrationCommand, { type: "thread.turn.start" }>,
+    command: LegacyOrNativeTurnStartCommand,
+    preparedCommand: NativeTurnStartCommand,
     initialProgress: CommandPreprocessingProgress,
   ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
     Effect.gen(function* () {
@@ -206,7 +208,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
               process.cwd(),
             message: command.message.text,
             provisionalTitle,
-            attachments: command.message.attachments,
+            attachments: preparedCommand.message.attachments,
             textGeneration: input.textGeneration,
             serverSettings: input.serverSettings,
           }).pipe(Effect.map((naming) => naming as BootstrapWorkspaceNaming | undefined))
@@ -350,15 +352,6 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const bootstrapProgram = Effect.gen(function* () {
         if (bootstrap?.createThread && !progress.threadCreated) {
-          // #region motel debug
-          // TODO: Remove after production skill selection is confirmed working.
-          yield* Effect.logInfo("motel debug: bootstrap skill selection", {
-            "debug.session": "skill-bootstrap-20260907",
-            "debug.hypothesis": "bootstrap-drops-selected-packs",
-            "debug.step": "before-thread-create",
-            requestedPackIds: bootstrap.createThread.skillPackIds,
-          });
-          // #endregion motel debug
           const bootstrapStart = yield* Effect.all(
             {
               created: dispatchCommand({
@@ -367,6 +360,8 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                 threadId: command.threadId,
                 projectId: bootstrap.createThread.projectId,
                 title: bootstrap.createThread.title,
+                titleMode: bootstrap.createThread.titleMode,
+                skillScope: bootstrap.createThread.skillScope,
                 modelSelection: bootstrap.createThread.modelSelection,
                 runtimeMode: bootstrap.createThread.runtimeMode,
                 interactionMode: bootstrap.createThread.interactionMode,
@@ -385,13 +380,12 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             },
           );
           workspaceNaming = bootstrapStart.naming;
-          yield* input.threadDeletionReactor.drainThrough(bootstrapStart.created.sequence);
           progress = yield* input.commandPreprocessing.markCompleted(command, "thread-created");
         }
 
         if (prepareWorkspace) {
           if (workspaceNaming === undefined) {
-            const thread = yield* input.projectionSnapshotQuery
+            const thread = yield* input.backend.snapshotQuery
               .getThreadShellById(command.threadId)
               .pipe(
                 Effect.mapError((cause) =>
@@ -452,7 +446,12 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
         // Bootstrap remains in the durable envelope fingerprint even though the
         // decider intentionally excludes it from emitted events.
-        return yield* dispatchCommand(command);
+        // The original command id is already locked by the replay workflow.
+        // Re-entering `engine.dispatch` here would wait forever on the same
+        // non-reentrant coordinator lock, and dropping bootstrap would make
+        // the final receipt unverifiable. Dispatch the exact envelope through
+        // the lock-free backend entrypoint.
+        return yield* dispatchWithinCommandLock(preparedCommand, command);
       });
 
       return yield* bootstrapProgram.pipe(
@@ -479,11 +478,11 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       void,
       OrchestrationDispatchCommandError
     > = Effect.void,
-  ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-    const dispatchAfterInitialMiss = input.commandPreprocessing.withCommandLock(
-      normalizedCommand.commandId,
-      input.startup.enqueueCommand(
-        input.orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+  ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> =>
+    input.commandPreprocessing
+      .withCommandLock(
+        normalizedCommand.commandId,
+        input.backend.engine.resolveReceipt(normalizedCommand).pipe(
           Effect.flatMap(
             Option.match({
               onSome: Effect.succeed,
@@ -501,113 +500,63 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                     normalizedCommand.type === "thread.turn.start" &&
                     normalizedCommand.bootstrap
                   ) {
-                    return yield* dispatchBootstrapTurnStart(normalizedCommand, progress);
+                    return yield* dispatchBootstrapTurnStart(
+                      normalizedCommand,
+                      normalizedCommand,
+                      progress,
+                    );
                   }
-                  return yield* dispatchCommand(normalizedCommand);
+                  return yield* dispatchWithinCommandLock(normalizedCommand, normalizedCommand);
                 }),
             }),
           ),
         ),
-      ),
-    );
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
+        ),
+      );
 
-    return input.orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-      Effect.flatMap(
-        Option.match({
-          onSome: Effect.succeed,
-          onNone: () => dispatchAfterInitialMiss,
+  /**
+   * Replays one pre-V2 durable outbox envelope. Receipt validation and the
+   * preprocessing claim deliberately use the untouched client envelope. The
+   * bootstrap command is therefore still part of its durable fingerprint when
+   * the native V2 message dispatch is committed.
+   */
+  const replayLegacyOutbox = (original: LegacyOutboxCommand) =>
+    input.commandPreprocessing
+      .withCommandLock(
+        original.commandId,
+        Effect.gen(function* () {
+          const prepared = yield* input.prepareLegacyOutboxCommand(original);
+          const command = prepared.receiptCommand ?? original;
+          const previous = yield* input.backend.engine.resolveReceipt(command);
+          if (Option.isSome(previous)) return previous.value;
+          let progress = yield* input.commandPreprocessing.claim(command);
+          if (!progress.deferredPreprocessingCompleted) {
+            yield* prepared.performDeferredPreprocessing;
+            progress = yield* input.commandPreprocessing.markCompleted(
+              command,
+              "deferred-preprocessing-completed",
+            );
+          }
+          const result =
+            command.type === "thread.turn.start" &&
+            command.bootstrap &&
+            prepared.command.type === "thread.turn.start"
+              ? yield* dispatchBootstrapTurnStart(command, prepared.command, progress)
+              : yield* dispatchWithinCommandLock(prepared.command, command);
+          if (input.onCommandDispatched) yield* input.onCommandDispatched(prepared.command);
+          return result;
         }),
-      ),
-      Effect.tap(({ sequence }) =>
-        normalizedCommand.type === "thread.create"
-          ? input.threadDeletionReactor.drainThrough(sequence)
-          : Effect.void,
-      ),
-      Effect.mapError((cause) =>
-        toDispatchCommandError(cause, "Failed to dispatch orchestration command"),
-      ),
-    );
-  };
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          toDispatchCommandError(cause, "Failed to replay legacy outbox command"),
+        ),
+        Effect.map(({ sequence }) => ({ sequence })),
+      );
 
-  const dispatch = (command: ClientOrchestrationCommand) =>
-    Effect.gen(function* () {
-      const preparedCommand = yield* prepareDispatchCommand(command);
-      const normalizedCommand = preparedCommand.command;
-      const parkingCommand =
-        normalizedCommand.type === "thread.archive" || normalizedCommand.type === "thread.settle"
-          ? normalizedCommand
-          : undefined;
-      const shouldStopSessionAfterCommand = parkingCommand
-        ? yield* input.projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
-            Effect.map(
-              Option.match({
-                onNone: () => false,
-                onSome: (thread) => thread.session !== null && thread.session.status !== "stopped",
-              }),
-            ),
-            Effect.catchCause((cause) =>
-              Effect.logWarning("failed to read thread session state before session-stop check", {
-                threadId: parkingCommand.threadId,
-                cause,
-              }).pipe(Effect.as(false)),
-            ),
-          )
-        : false;
-
-      const result = yield* dispatchNormalizedCommand(
-        normalizedCommand,
-        preparedCommand.performDeferredPreprocessing,
-      ).pipe(Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)));
-      if (input.onCommandDispatched) {
-        yield* input.onCommandDispatched(normalizedCommand);
-      }
-
-      if (parkingCommand) {
-        const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
-        if (shouldStopSessionAfterCommand) {
-          yield* Effect.gen(function* () {
-            const stopCommand = yield* normalizeDispatchCommand({
-              type: "thread.session.stop",
-              commandId: CommandId.make(
-                `session-stop-for-${parkingKind}:${parkingCommand.commandId}`,
-              ),
-              threadId: parkingCommand.threadId,
-              createdAt: yield* nowIso,
-              ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
-            });
-            yield* dispatchNormalizedCommand(stopCommand);
-          }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.logWarning(`failed to stop provider session during ${parkingKind}`, {
-                threadId: parkingCommand.threadId,
-                cause,
-              }),
-            ),
-          );
-        }
-
-        if (parkingCommand.type === "thread.archive") {
-          yield* input.terminalManager.close({ threadId: parkingCommand.threadId }).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("failed to close thread terminals after archive", {
-                threadId: parkingCommand.threadId,
-                error: error.message,
-              }),
-            ),
-          );
-        }
-      }
-      return result;
-    }).pipe(
-      Effect.mapError((cause) =>
-        isOrchestrationDispatchCommandError(cause)
-          ? cause
-          : new OrchestrationDispatchCommandError({
-              message: "Failed to dispatch orchestration command",
-              cause,
-            }),
-      ),
-    );
-
-  return { dispatch, dispatchNormalizedCommand };
+  return { replayLegacyOutbox, dispatch: replayLegacyOutbox, dispatchNormalizedCommand };
 }

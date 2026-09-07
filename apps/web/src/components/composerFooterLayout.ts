@@ -28,9 +28,13 @@ export function shouldUseRestingComposerLayout(input: {
   isMobileViewport: boolean;
   isScrollCollapsed: boolean;
   hasExpandedChrome: boolean;
-  hasMultilinePrompt: boolean;
+  hasMultilinePrompt?: boolean;
   /** Whether the timeline has more content than fits above the composer. */
-  timelineOverflows: boolean;
+  timelineOverflows?: boolean;
+  /** @deprecated Focus no longer controls the resting layout. */
+  isFocused?: boolean;
+  /** @deprecated Blur collapse was replaced by the explicit scroll gesture. */
+  collapseOnBlur?: boolean;
 }): boolean {
   // Multiline drafts stay readable. Resting only clamps a single prompt
   // line and overlays its actions; non-image attachment and context
@@ -52,9 +56,9 @@ export function shouldUseRestingComposerLayout(input: {
   return (
     input.isExistingThread &&
     !input.isMobileViewport &&
-    input.timelineOverflows &&
+    input.timelineOverflows === true &&
     input.isScrollCollapsed &&
-    !input.hasMultilinePrompt &&
+    input.hasMultilinePrompt !== true &&
     !input.hasExpandedChrome
   );
 }

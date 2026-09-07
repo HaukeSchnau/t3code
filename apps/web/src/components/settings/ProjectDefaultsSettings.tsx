@@ -161,7 +161,7 @@ export function ProjectDefaultsSettings({
   return (
     <SettingsPageContainer>
       <SettingsSection
-        id={searchableSetting("project-defaults").id}
+        id="project-defaults"
         title="Project defaults"
         hideTitle
       >
@@ -337,7 +337,7 @@ export function ProjectDefaultsSettings({
           }
         />
         <SettingsRow
-          id={searchableSetting("agent-browser-access").id}
+          id="agent-browser-access"
           title="Agent browser access"
           description="Allow agents to use the shared browser. Projects can override it."
           resetAction={

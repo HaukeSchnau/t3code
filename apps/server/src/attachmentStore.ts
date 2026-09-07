@@ -88,21 +88,19 @@ export function createAttachmentId(threadId: string, extension?: string): string
   return `${threadSegment}-${NodeCrypto.randomUUID()}${attachmentIdExtensionSuffix(extension)}`;
 }
 
-/**
- * Derive a stable attachment id for preprocessing a durable client command.
- * The UUID-shaped suffix keeps the existing attachment-path validation contract.
- */
-export function createDeterministicAttachmentId(threadId: string, identity: string): string | null {
+export function createDeterministicAttachmentId(
+  threadId: string,
+  stableKey: string,
+  extension?: string,
+): string | null {
   const threadSegment = toSafeThreadAttachmentSegment(threadId);
-  if (!threadSegment) {
-    return null;
-  }
-  const bytes = NodeCrypto.createHash("sha256").update(identity).digest();
-  bytes[6] = (bytes[6]! & 0x0f) | 0x50;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = bytes.toString("hex");
-  const uuid = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
-  return `${threadSegment}-${uuid}`;
+  if (!threadSegment) return null;
+  const hash = NodeCrypto.createHash("sha256")
+    .update(JSON.stringify([threadId, stableKey]))
+    .digest("hex")
+    .slice(0, 32);
+  const uuid = `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20)}`;
+  return `${threadSegment}-${uuid}${attachmentIdExtensionSuffix(extension)}`;
 }
 
 export function parseThreadSegmentFromAttachmentId(attachmentId: string): string | null {
@@ -180,7 +178,8 @@ export type AttachmentClaimPlan =
   | {
       readonly ok: true;
       readonly finalId: string;
-      readonly currentPath: string;
+      /** The pending source, or null when an accepted claim is being replayed. */
+      readonly currentPath: string | null;
       readonly finalPath: string;
     }
   | { readonly ok: false; readonly reason: string };
@@ -207,13 +206,33 @@ export function planAttachmentClaim(input: {
     attachmentsDir: input.attachmentsDir,
     attachmentId: input.attachmentId,
   });
-  if (!currentPath) {
-    return { ok: false, reason: "attachment not found (removed or expired)" };
-  }
   const fileExtension = parseAttachmentFileExtension(input.attachmentId) ?? undefined;
-  const finalId = createAttachmentId(input.threadId, fileExtension);
+  const finalId = createDeterministicAttachmentId(
+    input.threadId,
+    input.attachmentId,
+    fileExtension,
+  );
   if (!finalId) {
     return { ok: false, reason: "failed to create attachment id" };
+  }
+
+  // A pending source can be swept after the command was accepted. The
+  // deterministic target is the durable copy in that case, so let the claim
+  // replay use it without requiring the source to still be present.
+  if (!currentPath) {
+    const existingFinalPath = resolveAttachmentPathById({
+      attachmentsDir: input.attachmentsDir,
+      attachmentId: finalId,
+    });
+    if (!existingFinalPath) {
+      return { ok: false, reason: "attachment not found (removed or expired)" };
+    }
+    return {
+      ok: true,
+      finalId,
+      currentPath: null,
+      finalPath: existingFinalPath,
+    };
   }
 
   const expectedFinalPath = resolveAttachmentRelativePath({

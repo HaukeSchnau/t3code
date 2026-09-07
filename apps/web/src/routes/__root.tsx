@@ -7,7 +7,6 @@ import {
   type ErrorComponentProps,
   useLocation,
   useNavigate,
-  useRouter,
 } from "@tanstack/react-router";
 import { CheckIcon, CopyIcon } from "lucide-react";
 import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
@@ -20,6 +19,7 @@ import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
 import { ProviderUpdateLaunchNotification } from "../components/ProviderUpdateLaunchNotification";
+import { LegacyThreadMigrationToast } from "../components/LegacyThreadMigrationToast";
 import { SlowRpcRequestToastCoordinator } from "../components/SlowRpcRequestToastCoordinator";
 import { ThemeEditorHost } from "../components/settings/ThemeEditorHost";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
@@ -45,15 +45,7 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
-import { EnergyDiagnosticsCaptureRequestConsumer } from "../diagnostics/EnergyDiagnosticsCaptureRequestConsumer";
-import { EnergyDiagnosticsProfiler } from "../diagnostics/EnergyDiagnosticsProfiler";
-import {
-  clearOfflineAuthProof,
-  offlineAuthProofExpiresAtEpochMs,
-  resolveInitialServerAuthGateState,
-  revalidateOfflineServerAuthGateState,
-} from "../environments/primary";
-import { createOfflineAuthRevalidationController } from "../offlineAuthRevalidation";
+import { resolveInitialServerAuthGateState } from "../environments/primary";
 import { hasHostedPairingRequest, isHostedStaticApp } from "../hostedPairing";
 import { shellEnvironment } from "../state/shell";
 import { useAtomValue } from "@effect/atom-react";
@@ -72,12 +64,7 @@ import {
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    const currentUrl = new URL(location.href, window.location.origin);
-    const browserUrl = new URL(window.location.href);
-    if (
-      location.pathname === "/pair" &&
-      (hasHostedPairingRequest(currentUrl) || hasHostedPairingRequest(browserUrl))
-    ) {
+    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -85,7 +72,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (isHostedStaticApp(currentUrl)) {
+    if (isHostedStaticApp(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-static",
@@ -109,7 +96,6 @@ function RootRouteView() {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
-  const cachedAuthentication = authGateState.status === "offline-authenticated";
 
   useEffect(() => {
     const frame = window.requestAnimationFrame(() => {
@@ -120,7 +106,7 @@ function RootRouteView() {
     };
   }, [pathname]);
 
-  if (pathname === "/pair") {
+  if (pathname === "/pair" || pathname === "/connect" || pathname.startsWith("/connect/")) {
     return (
       <>
         <DocumentTitleSync />
@@ -129,11 +115,7 @@ function RootRouteView() {
     );
   }
 
-  if (
-    authGateState.status !== "authenticated" &&
-    authGateState.status !== "offline-authenticated" &&
-    authGateState.status !== "hosted-static"
-  ) {
+  if (authGateState.status !== "authenticated" && authGateState.status !== "hosted-static") {
     return (
       <>
         <DocumentTitleSync />
@@ -143,13 +125,11 @@ function RootRouteView() {
   }
 
   const appShell = (
-    <EnergyDiagnosticsProfiler id="app-shell">
-      <CommandPalette>
-        <AppSidebarLayout>
-          <Outlet />
-        </AppSidebarLayout>
-      </CommandPalette>
-    </EnergyDiagnosticsProfiler>
+    <CommandPalette>
+      <AppSidebarLayout>
+        <Outlet />
+      </AppSidebarLayout>
+    </CommandPalette>
   );
 
   return (
@@ -165,9 +145,8 @@ function RootRouteView() {
         <SshPasswordPromptDialog />
         <ConfirmDialogHost />
         <SlowRpcRequestToastCoordinator />
+        {primaryEnvironmentAuthenticated ? <LegacyThreadMigrationToast /> : null}
         <HostedStaticEnvironmentBootstrap />
-        {cachedAuthentication ? <OfflineAuthenticationRevalidator /> : null}
-        {primaryEnvironmentAuthenticated ? <EnergyDiagnosticsCaptureRequestConsumer /> : null}
         {primaryEnvironmentAuthenticated ? <EventRouter /> : null}
         {primaryEnvironmentAuthenticated ? <PlanAgentSelectionHeal /> : null}
         {primaryEnvironmentAuthenticated ? <ProviderUpdateLaunchNotification /> : null}
@@ -189,34 +168,6 @@ function EnvironmentThemeSync() {
   return null;
 }
 
-function OfflineAuthenticationRevalidator() {
-  const router = useRouter();
-
-  useEffect(() => {
-    const controller = createOfflineAuthRevalidationController({
-      revalidate: revalidateOfflineServerAuthGateState,
-      invalidate: () => router.invalidate(),
-      clearProof: clearOfflineAuthProof,
-      proofExpiresAtEpochMs: offlineAuthProofExpiresAtEpochMs,
-    });
-    const wake = () => {
-      if (document.visibilityState === "hidden") return;
-      controller.wake();
-    };
-
-    controller.start();
-    window.addEventListener("online", wake);
-    document.addEventListener("visibilitychange", wake);
-    return () => {
-      controller.stop();
-      window.removeEventListener("online", wake);
-      document.removeEventListener("visibilitychange", wake);
-    };
-  }, [router]);
-
-  return null;
-}
-
 function ContrastAppearanceSync() {
   const appearanceContrast = useClientSettings((settings) => settings.appearanceContrast);
 
@@ -226,6 +177,7 @@ function ContrastAppearanceSync() {
 
   return null;
 }
+
 function GlassAppearanceSync() {
   const glassOpacity = useClientSettings((settings) => settings.glassOpacity);
 

@@ -1,3 +1,4 @@
+import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import {
@@ -14,8 +15,8 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
-import { ProviderApprovalOption } from "./orchestration.ts";
+import { ProviderUsageLimitsUpdate } from "./providerUsageLimits.ts";
+import { ProviderApprovalOption } from "./providerPolicy.ts";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const UnknownRecordSchema = Schema.Record(Schema.String, Schema.Unknown);

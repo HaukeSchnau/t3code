@@ -1,62 +1,17 @@
 # Provider turn recovery
 
-T3 Code keeps provider runtime events and UI projection state separate. A user turn can be accepted by the
-provider while the projection still only knows about the local `thread.turn-start-requested` placeholder. If
-the bridge event that carries the concrete provider turn id is delayed, skipped, or lost during shutdown, that
-placeholder must not leave the thread looking permanently busy.
+The V1 provider-command and ingestion reactors are superseded by upstream V2 runs, attempts, provider turns, event persistence, and effect recovery. They must not be started alongside the native runtime.
 
-## Requirements
+## Retained requirements
 
-- When the command reactor begins an accepted turn, it must durably publish a `starting` session before
-  provider session resume/start work can block. Shell and detail clients already map `starting` to visible
-  connecting/working state.
-- When a `thread.session-set` event leaves `running` with no active turn, any pending turn-start placeholder
-  for the thread must become terminal instead of remaining `pending`.
-- Pending placeholders without a concrete provider turn id are settled as `interrupted` for ready, idle,
-  stopped, and interrupted sessions. They are settled as `error` for error sessions.
-- Concrete running turns keep the existing behavior: ready and idle settle them as completed, interrupted and
-  stopped settle them as interrupted, and error settles them as error.
-- Tool activity payloads projected from provider runtime events must preserve useful structured metadata while
-  bounding large strings, arrays, and objects so command output cannot create unbounded projection writes.
-- Durable parent assistant-text deltas are projected in bounded batches, including independent turns whose
-  provider tokens arrive interleaved. Ordering remains exact within a turn, and subagent/lifecycle events are
-  hard barriers.
-- Batch membership must be stable across crashes. Ingestion gives the durable adapter burst one frame, then
-  records one batch ID on every selected journal row before dispatch. Later rows cannot join that batch. A
-  restart therefore rebuilds the same command payload and receipt identity even when the process died between
-  orchestration dispatch and journal acknowledgement. Every original journal row stays associated with its batch.
-- Delivered/removal acknowledgment for every source row in a batch is atomic and chunked, avoiding thousands
-  of SQLite connection acquisitions without permitting a partially acknowledged replay batch.
-- Journal-backed assistant transcript events count as authoritative recovery for buffered delivery on every
-  provider. Adapter transcript capabilities are consulted only for events that bypass the durable acceptance
-  seam, so production Codex, Claude, Cursor, Grok, and OpenCode turns honor the server streaming preference
-  without weakening the conservative fallback for plugins and test harnesses.
+- Accepted work has durable preparing/starting state before provider I/O can block.
+- Provider failures and process loss must leave a terminal or recoverable native run, not a permanently busy placeholder.
+- Imported conversations retain native continuation references. A successful native resume must not receive its entire old transcript again as a handoff.
+- Assistant delivery and replay stay bounded. Provider lifecycle ordering and terminal barriers must survive buffered delivery.
+- Preserve the server streaming preference through the native execution path.
 
-## Files
+Current execution lives in `orchestration-v2/RunExecutionService.ts`, `ProviderTurnStartService.ts`, and `ProviderRuntimeRecoveryService.ts`. Historical V1 transcript-journal tables remain migration data. New semantic provider snapshots commit to `provider_event_journal` before adapter queue delivery. The native event sink retires journal identities in the same transaction as projection writes. Startup replays pending snapshots before terminalizing stale runs and before starting provider workers. Native provider-context resume alone is not transcript recovery.
 
-- `apps/server/src/orchestration/Layers/ProjectionPipeline.ts`
-- `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts`
-- `apps/server/src/orchestration/Layers/ProviderTranscriptJournalIngestion.ts`
-- `apps/server/src/orchestration/ProviderTranscriptJournalBatch.ts`
-- `apps/server/src/orchestration/Layers/ProviderCommandReactor.ts`
-- `apps/server/src/provider/ProviderRuntimeEventDurability.ts`
-- `apps/server/src/persistence/Services/ProviderTranscriptJournal.ts`
-- `apps/server/src/persistence/Layers/ProviderTranscriptJournal.ts`
-- `apps/server/src/persistence/Services/ProjectionTurns.ts`
-- `apps/server/src/persistence/Layers/ProjectionTurns.ts`
+Use native recovery and replay tests when updating this behavior. Do not retain an old test harness by reintroducing the removed V1 runtime services.
 
-## Verification
-
-- `vp test apps/server/src/orchestration/ProviderTranscriptJournalBatch.test.ts apps/server/src/persistence/Layers/ProviderTranscriptJournal.test.ts apps/server/src/orchestration/Layers/ProjectionPipeline.test.ts apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.test.ts apps/server/integration/coalescingHardKill.integration.test.ts`
-- `vp run --filter t3 typecheck`
-
-Keep recovery, batching, persistence retry, delivery/removal acknowledgement, tombstones, and buffered
-assistant promotion in `ProviderTranscriptJournalIngestion.ts`. The runtime ingestion layer should only
-compose that workflow with provider event policy.
-
-## Upstream Notes
-
-Revisit this patch if upstream introduces a durable provider-event inbox, provider-log replay, or first-class
-turn reconciliation that can recover concrete provider turn ids after projection missed the original runtime
-events. The pending-placeholder settlement should remain as a last-resort invariant even if richer replay is
-added.
+The journal implementation is `orchestration-v2/ProviderEventJournal.ts`; startup replay is `ProviderEventJournalReplay.ts`. `EventSinkJournal.test.ts` covers interrupted intake, atomic retirement, duplicate suppression, and parent/subagent replay. A later committed snapshot retires earlier pending snapshots of the same entity, so a deliberately withheld streaming update cannot overwrite the final answer after restart.

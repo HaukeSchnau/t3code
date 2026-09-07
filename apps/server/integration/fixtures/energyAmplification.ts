@@ -1,9 +1,11 @@
 import { EventId, ProviderDriverKind, ThreadId, TurnId } from "@t3tools/contracts";
 
-import type {
-  FixtureProviderRuntimeEvent,
-  TestTurnResponse,
-} from "../TestProviderAdapter.integration.ts";
+/** Shape kept intentionally loose because this fixture is a deterministic event generator.
+ * Native provider adapters decode their own V2 event unions at the integration boundary. */
+export type FixtureProviderRuntimeEvent = Record<string, unknown>;
+export interface TestTurnResponse {
+  readonly events: ReadonlyArray<FixtureProviderRuntimeEvent>;
+}
 
 export const ENERGY_AMPLIFICATION_SHAPE = {
   providerChunkCount: 9_200,

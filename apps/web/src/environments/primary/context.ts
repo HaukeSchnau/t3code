@@ -54,7 +54,7 @@ async function fetchPrimaryEnvironmentDescriptor(): Promise<ExecutionEnvironment
   });
 }
 
-function readPrimaryEnvironmentDescriptor(): ExecutionEnvironmentDescriptor | null {
+export function readPrimaryEnvironmentDescriptor(): ExecutionEnvironmentDescriptor | null {
   return primaryEnvironmentDescriptor;
 }
 

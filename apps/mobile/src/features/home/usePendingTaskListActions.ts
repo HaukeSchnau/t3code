@@ -32,6 +32,8 @@ export function usePendingTaskListActions(): {
 
   const confirmDeletePendingTask = useCallback((pendingTask: PendingNewTask) => {
     if (pendingTask.kind === "draft") {
+      const draftKey = pendingTask.draftKey;
+      if (draftKey === undefined) return;
       Alert.alert("Discard draft?", `“${pendingTask.title}” will be removed.`, [
         { text: "Cancel", style: "cancel" },
         {
@@ -40,7 +42,7 @@ export function usePendingTaskListActions(): {
           onPress: () => {
             // Same reset a submit performs: the next task in this project
             // re-resolves project defaults instead of inheriting the pick.
-            clearComposerDraftContent(pendingTask.draftKey, {
+            clearComposerDraftContent(draftKey, {
               clearModelSelection: true,
               clearWorkspaceSelection: true,
             });

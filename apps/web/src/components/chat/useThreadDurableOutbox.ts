@@ -11,12 +11,26 @@ import {
   useAcceptedCommandProjectionEntries,
   useDurableCommandOutboxEntries,
 } from "../../durableCommandOutbox";
-import { readEnvironmentApi } from "../../environmentApi";
 import { newCommandId } from "../../lib/utils";
 import { useEnvironment } from "../../state/environments";
-import type { ChatMessage, QueuedMessage, Thread } from "../../types";
-import { collectAuthoritativeProjectedMessageIds } from "../ChatView.logic";
+import type { ChatMessage, Thread } from "../../types";
 import { selectThreadDurableOutboxEntries } from "./durableOutboxPresentation";
+
+export interface QueuedMessage {
+  readonly messageId: MessageId;
+  readonly threadId: ScopedThreadRef["threadId"];
+  readonly text: string;
+  readonly attachments: DurableClientCommand["message"]["attachments"];
+  readonly modelSelection?: DurableClientCommand["modelSelection"];
+  readonly runtimeMode?: DurableClientCommand["runtimeMode"];
+  readonly interactionMode?: DurableClientCommand["interactionMode"];
+  readonly createdAt?: DurableClientCommand["createdAt"];
+  readonly updatedAt?: string;
+}
+
+type ThreadWithLegacyQueue = Pick<Thread, "environmentId" | "id"> & {
+  readonly queuedMessages?: ReadonlyArray<QueuedMessage>;
+};
 
 type QueuedMessageAction = "dispatch" | "delete";
 
@@ -64,15 +78,15 @@ export function useThreadQueuedMessageControls(input: {
   const { clearErrorBeforeAction = false, onError, threadRef } = input;
   const runAction = useCallback(
     async (action: QueuedMessageAction, message: QueuedMessage) => {
-      const api = readEnvironmentApi(threadRef.environmentId);
-      if (!api) return;
       if (clearErrorBeforeAction) onError(null);
       try {
         await runQueuedMessageAction({
           action,
           threadRef,
           messageId: message.messageId,
-          dispatch: (command) => api.orchestration.dispatchCommand(command),
+          dispatch: async () => {
+            throw new Error("Remote queued message controls are unavailable on V2 threads.");
+          },
           makeCommandId: newCommandId,
           now: currentIsoTime,
         });
@@ -91,14 +105,12 @@ export function useThreadQueuedMessageControls(input: {
 
 export function projectThreadDurableOptimisticMessages(
   entries: ReadonlyArray<DurableCommandOutboxEntry>,
-  thread: Pick<Thread, "environmentId" | "id" | "queuedMessages">,
+  thread: ThreadWithLegacyQueue,
 ): ReadonlyArray<ChatMessage> {
   const entryByMessageId = new Map(
     entries.map((entry) => [entry.plan.command.message.messageId, entry] as const),
   );
-  const alreadyVisibleMessageIds = new Set(
-    (thread.queuedMessages ?? []).map((message) => message.messageId),
-  );
+  const alreadyVisibleMessageIds = new Set((thread.queuedMessages ?? []).map((message) => message.messageId));
   return selectDurableOutboxMessages(
     entries.filter((entry) => entry.plan.command.type === "thread.turn.start"),
     thread.environmentId,
@@ -111,7 +123,7 @@ export function projectThreadDurableOptimisticMessages(
       id: message.messageId,
       role: "user",
       text: message.text,
-      turnId: null,
+      runId: null,
       createdAt,
       updatedAt: createdAt,
       streaming: false,
@@ -139,9 +151,10 @@ export function useThreadDurableOutbox(thread: Thread | undefined): {
   const environmentId = thread?.environmentId ?? null;
   const threadId = thread?.id ?? null;
   const environment = useEnvironment(environmentId);
+  const legacyQueue = thread as ThreadWithLegacyQueue | undefined;
   const queuedMessageIds = useMemo(
-    () => new Set((thread?.queuedMessages ?? []).map((message) => message.messageId)),
-    [thread?.queuedMessages],
+    () => new Set((legacyQueue?.queuedMessages ?? []).map((message) => message.messageId)),
+    [legacyQueue?.queuedMessages],
   );
   const entries = useMemo(
     () =>
@@ -161,23 +174,15 @@ export function useThreadDurableOutbox(thread: Thread | undefined): {
         ? projectThreadDurableOptimisticMessages([...pendingEntries, ...acceptedEntries], {
             environmentId,
             id: threadId,
-            queuedMessages: thread?.queuedMessages ?? [],
+            queuedMessages: legacyQueue?.queuedMessages ?? [],
           })
         : [],
-    [acceptedEntries, environmentId, pendingEntries, thread?.queuedMessages, threadId],
+    [acceptedEntries, environmentId, legacyQueue?.queuedMessages, pendingEntries, threadId],
   );
 
   useEffect(() => {
     if (environment?.connection.phase === "connected") durableCommandOutbox().wake();
   }, [environment?.connection.phase]);
-
-  useEffect(() => {
-    if (!thread || acceptedEntries.length === 0) return;
-    const projectedMessageIds = collectAuthoritativeProjectedMessageIds(thread);
-    if (projectedMessageIds.size > 0) {
-      void durableCommandOutbox().confirmProjected(projectedMessageIds);
-    }
-  }, [acceptedEntries.length, thread]);
 
   return {
     entries,

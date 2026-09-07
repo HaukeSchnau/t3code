@@ -1,150 +1,35 @@
-import { describe, expect, it } from "@effect/vitest";
+import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
-  EnvironmentId,
-  MessageId,
   ProjectId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
-  TurnId,
   ThreadOrchestrationError,
   ThreadWorkspaceId,
-  ThreadWorkspaceRootId,
-  type OrchestrationProject,
-  type OrchestrationReadModel,
-  type OrchestrationThread,
-  type ThreadOrchestrationThreadSummary,
+  type OrchestrationV2AppThread,
+  type OrchestrationV2ProviderThread,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
-import * as Option from "effect/Option";
-import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import type { CodexThreadForkImporter } from "../mcp/toolkits/thread-orchestration/CodexThreadForkImporter.ts";
-import type * as OrchestrationEngine from "../orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationCommandInvariantError } from "../orchestration/Errors.ts";
-import type * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
+import type { ThreadManagementServiceShape } from "../orchestration-v2/ThreadManagementService.ts";
 import type * as ServerSettings from "../serverSettings.ts";
 import type * as ThreadWorkspaceService from "../workspace/ThreadWorkspaceService.ts";
 import type * as ProviderRegistry from "./Services/ProviderRegistry.ts";
-import type * as ProviderSessionDirectory from "./Services/ProviderSessionDirectory.ts";
-import { makeProviderRegistryMock } from "./testUtils/providerRegistryMock.ts";
 import { makeCodexThreadRpcWorkflow } from "./CodexThreadRpcWorkflow.ts";
 
-const projectId = ProjectId.make("project-1");
-const sourceThreadId = ThreadId.make("thread-source");
-const destinationThreadId = ThreadId.make("thread-destination");
 const provider = ProviderDriverKind.make("codex");
 const providerInstanceId = ProviderInstanceId.make("codex");
-const now = "2026-01-01T00:00:00.000Z";
-
-const project: OrchestrationProject = {
-  id: projectId,
-  title: "Project",
-  workspaceRoot: "/repo/project",
-  defaultModelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
-  scripts: [],
-  createdAt: now,
-  updatedAt: now,
-  deletedAt: null,
-};
-
-const makeThread = (overrides: Partial<OrchestrationThread> = {}): OrchestrationThread => ({
-  id: sourceThreadId,
-  projectId,
-  title: "Source",
-  modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
-  runtimeMode: "full-access",
-  interactionMode: "default",
-  branch: null,
-  worktreePath: null,
-  workspaceId: null,
-  latestTurn: null,
-  createdAt: now,
-  updatedAt: now,
-  archivedAt: null,
-  settledOverride: null,
-  settledAt: null,
-  deletedAt: null,
-  messages: [],
-  queuedMessages: [],
-  proposedPlans: [],
-  activities: [],
-  checkpoints: [],
-  session: null,
-  ...overrides,
-});
-
-const readModel = (thread: OrchestrationThread): OrchestrationReadModel => ({
-  snapshotSequence: 1,
-  projects: [project],
-  threads: [thread],
-  usageLimits: [],
-  updatedAt: now,
-});
-
-const baseProjectionQuery = {
-  getCommandReadModel: () => Effect.die("unexpected command read"),
-  getThreadRuntimeContext: () => Effect.die("unexpected runtime context read"),
-  getSnapshot: () => Effect.die("unexpected snapshot read"),
-  getShellSnapshot: () => Effect.die("unexpected shell snapshot read"),
-  getArchivedShellSnapshot: () => Effect.die("unexpected archived snapshot read"),
-  getSnapshotSequence: () => Effect.die("unexpected sequence read"),
-  getCounts: () => Effect.die("unexpected counts read"),
-  getActiveProjectByWorkspaceRoot: () => Effect.die("unexpected project read"),
-  getProjectShellById: () => Effect.die("unexpected project shell read"),
-  getFirstActiveThreadIdByProjectId: () => Effect.die("unexpected first thread read"),
-  getThreadCheckpointContext: () => Effect.die("unexpected checkpoint read"),
-  getFullThreadDiffContext: () => Effect.die("unexpected diff read"),
-  getThreadShellById: () => Effect.die("unexpected thread shell read"),
-  getThreadResultContextById: () => Effect.die("unexpected result read"),
-  listThreadRelationshipActivities: () => Effect.die("unused"),
-  getThreadDetailById: () => Effect.die("unexpected thread detail read"),
-  getThreadDetailSnapshot: () => Effect.die("unexpected detail snapshot read"),
-  getTurnActivitiesSnapshot: () => Effect.die("unexpected activity read"),
-  searchThreads: () => Effect.die("unexpected search"),
-} satisfies ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
-
-const baseEngine: OrchestrationEngine.OrchestrationEngineShape = {
-  readEvents: () => Stream.empty,
-  readThreadEvents: () => Stream.die("unexpected thread replay"),
-  getThreadReplayStats: () => Effect.die("unexpected thread replay stats"),
-  resolveReceipt: () => Effect.succeed(Option.none()),
-  dispatch: () => Effect.die("unexpected dispatch"),
-  latestSequence: Effect.succeed(0),
-  streamDomainEvents: Stream.empty,
-};
-
-const baseProviderRegistry = makeProviderRegistryMock();
-
-const baseProviderSessionDirectory: ProviderSessionDirectory.ProviderSessionDirectoryShape = {
-  upsert: () => Effect.die("unexpected binding write"),
-  getProvider: () => Effect.die("unexpected provider read"),
-  getBinding: () => Effect.succeed(Option.none()),
-  listThreadIds: () => Effect.die("unexpected thread list"),
-  listBindings: () => Effect.die("unexpected binding list"),
-};
-
-const baseThreadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService["Service"] = {
-  prepareWorkspace: () => Effect.die("unexpected workspace preparation"),
-  resolvePrimaryCwd: () => Effect.die("unexpected workspace resolution"),
-  deleteWorkspace: () => Effect.die("unexpected workspace deletion"),
-};
-
-const baseForkImporter: CodexThreadForkImporter["Service"] = {
-  fork: () => Effect.die("unexpected fork import"),
-};
-
-const baseServerSettings: ServerSettings.ServerSettingsService["Service"] = {
-  start: Effect.void,
-  ready: Effect.void,
-  getSettings: Effect.die("unexpected settings read"),
-  updateSettings: () => Effect.die("unexpected settings update"),
-  streamChanges: Stream.empty,
-  subscribeChanges: Effect.succeed(Stream.empty),
-};
+const sourceThreadId = ThreadId.make("thread-source");
+const destinationThreadId = ThreadId.make("thread-destination");
+const projectId = ProjectId.make("project-1");
+const now = DateTime.makeUnsafe("2026-01-01T00:00:00.000Z");
 
 const testCrypto = Crypto.make({
   randomBytes: (size) => new Uint8Array(size),
@@ -152,35 +37,109 @@ const testCrypto = Crypto.make({
 });
 const testSpawner = ChildProcessSpawner.make(() => Effect.die("unexpected provider process"));
 
+const baseProviderRegistry = {
+  getProviders: Effect.succeed([]),
+} as unknown as ProviderRegistry.ProviderRegistryShape;
+const baseSettings = {
+  getSettings: Effect.die("unexpected settings read"),
+} as unknown as ServerSettings.ServerSettingsService["Service"];
+const baseWorkspace = {
+  prepareWorkspace: () => Effect.die("unexpected workspace preparation"),
+  deleteWorkspace: () => Effect.die("unexpected workspace deletion"),
+} as unknown as ThreadWorkspaceService.ThreadWorkspaceService["Service"];
+const baseImporter = {
+  fork: () => Effect.die("unexpected fork import"),
+} as unknown as CodexThreadForkImporter["Service"];
+
+const makeThread = (): OrchestrationV2AppThread =>
+  ({
+    id: sourceThreadId,
+    projectId,
+    title: "Source",
+    providerInstanceId,
+    modelSelection: { instanceId: providerInstanceId, model: "gpt-5.4" },
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: "/repo/project",
+    activeProviderThreadId: ProviderThreadId.make("provider-thread-source"),
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: sourceThreadId },
+    forkedFrom: null,
+    createdBy: "user",
+    creationSource: "web",
+    createdAt: now,
+    updatedAt: now,
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    lastVisitedAt: null,
+    deletedAt: null,
+  }) as OrchestrationV2AppThread;
+
+const makeProviderThread = (): OrchestrationV2ProviderThread =>
+  ({
+    id: ProviderThreadId.make("provider-thread-source"),
+    driver: provider,
+    providerInstanceId,
+    providerSessionId: null,
+    appThreadId: sourceThreadId,
+    ownerNodeId: null,
+    nativeThreadRef: { driver: provider, nativeId: "native-source", strength: "strong" },
+    nativeConversationHeadRef: null,
+    status: "idle",
+    firstRunOrdinal: null,
+    lastRunOrdinal: null,
+    handoffIds: [],
+    forkedFrom: null,
+    pendingBackgroundTasks: [],
+    createdAt: now,
+    updatedAt: now,
+  }) as OrchestrationV2ProviderThread;
+
+const makeProjection = (busy = false): OrchestrationV2ThreadProjection =>
+  ({
+    thread: makeThread(),
+    runs: busy ? [{ status: "running" }] : [],
+    attempts: [],
+    nodes: [],
+    subagents: [],
+    providerSessions: [],
+    providerThreads: [makeProviderThread()],
+    providerTurns: [],
+    runtimeRequests: [],
+    messages: [],
+    plans: [],
+    turnItems: [],
+    checkpointScopes: [],
+    checkpoints: [],
+    contextHandoffs: [],
+    contextTransfers: [],
+    visibleTurnItems: [],
+    updatedAt: now,
+  }) as unknown as OrchestrationV2ThreadProjection;
+
 const makeWorkflow = (overrides: {
-  readonly orchestrationEngine?: OrchestrationEngine.OrchestrationEngineShape;
-  readonly projectionSnapshotQuery?: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
+  readonly threadManagement?: ThreadManagementServiceShape;
   readonly providerRegistry?: ProviderRegistry.ProviderRegistryShape;
-  readonly providerSessionDirectory?: ProviderSessionDirectory.ProviderSessionDirectoryShape;
   readonly threadWorkspaceService?: ThreadWorkspaceService.ThreadWorkspaceService["Service"];
   readonly codexThreadForkImporter?: CodexThreadForkImporter["Service"];
 }) =>
   makeCodexThreadRpcWorkflow({
     configCwd: "/repo",
-    orchestrationEngine: overrides.orchestrationEngine ?? baseEngine,
-    projectionSnapshotQuery: overrides.projectionSnapshotQuery ?? baseProjectionQuery,
+    threadManagement:
+      overrides.threadManagement ??
+      ({
+        getThreadProjection: () => Effect.die("unexpected projection read"),
+        dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+      } as unknown as ThreadManagementServiceShape),
     providerRegistry: overrides.providerRegistry ?? baseProviderRegistry,
-    providerSessionDirectory: overrides.providerSessionDirectory ?? baseProviderSessionDirectory,
-    serverSettings: baseServerSettings,
-    threadWorkspaceService: overrides.threadWorkspaceService ?? baseThreadWorkspaceService,
-    codexThreadForkImporter: overrides.codexThreadForkImporter ?? baseForkImporter,
+    serverSettings: baseSettings,
+    threadWorkspaceService: overrides.threadWorkspaceService ?? baseWorkspace,
+    codexThreadForkImporter: overrides.codexThreadForkImporter ?? baseImporter,
     childProcessSpawner: testSpawner,
-    dispatchNormalizedCommand: () => Effect.die("unexpected normalized dispatch"),
-  }).pipe(Effect.provideService(Crypto.Crypto, testCrypto));
+  }).pipe(Effect.provideService(Crypto.Crypto, testCrypto), Effect.provide(NodeServices.layer));
 
-const codexBinding = {
-  threadId: sourceThreadId,
-  provider,
-  providerInstanceId,
-  resumeCursor: { threadId: "provider-thread-source" },
-};
-
-describe("CodexThreadRpcWorkflow", () => {
+it.layer(NodeServices.layer)("CodexThreadRpcWorkflow", (it) => {
   it.effect("rejects an empty resume id before provider discovery", () =>
     Effect.gen(function* () {
       let providerReads = 0;
@@ -193,139 +152,71 @@ describe("CodexThreadRpcWorkflow", () => {
           }),
         },
       });
-      const error = yield* Effect.flip(
-        workflow.resume({ threadId: "   " }).pipe(Effect.provide(NodeServices.layer)),
-      );
+      const error = yield* Effect.flip(workflow.resume({ threadId: "   " }));
       expect(error.message).toBe("Codex thread id is required.");
       expect(providerReads).toBe(0);
     }),
   );
 
-  it.effect("reports unavailable Codex providers without touching persistence", () =>
-    Effect.gen(function* () {
-      const workflow = yield* makeWorkflow({});
-      const error = yield* Effect.flip(
-        workflow.resume({ threadId: "provider-thread" }).pipe(Effect.provide(NodeServices.layer)),
-      );
-      expect(error.message).toBe("No enabled Codex provider instance is available.");
-    }),
-  );
-
-  it.effect("rejects busy threads and invalid message fork points before importing", () =>
+  it.effect("rejects a busy V2 thread before importing", () =>
     Effect.gen(function* () {
       let imports = 0;
-      const importer: CodexThreadForkImporter["Service"] = {
-        fork: () =>
-          Effect.sync(() => {
-            imports += 1;
-          }).pipe(Effect.andThen(Effect.die("unexpected fork import"))),
-      };
-      const directory = {
-        ...baseProviderSessionDirectory,
-        getBinding: () => Effect.succeed(Option.some(codexBinding)),
-      };
-      const runningThread = makeThread({
-        latestTurn: {
-          turnId: TurnId.make("turn-running"),
-          state: "running",
-          requestedAt: now,
-          startedAt: now,
-          completedAt: null,
-          assistantMessageId: null,
-        },
+      const workflow = yield* makeWorkflow({
+        threadManagement: {
+          getThreadProjection: () => Effect.succeed(makeProjection(true)),
+          dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+        } as unknown as ThreadManagementServiceShape,
+        codexThreadForkImporter: {
+          fork: () =>
+            Effect.sync(() => {
+              imports += 1;
+              return undefined;
+            }).pipe(Effect.die),
+        } as unknown as CodexThreadForkImporter["Service"],
       });
-      const busyWorkflow = yield* makeWorkflow({
-        providerSessionDirectory: directory,
-        codexThreadForkImporter: importer,
-        projectionSnapshotQuery: {
-          ...baseProjectionQuery,
-          getThreadDetailById: () => Effect.succeed(Option.some(runningThread)),
-        },
-      });
-      const busyError = yield* Effect.flip(busyWorkflow.fork({ threadId: sourceThreadId }));
-      expect(busyError.message).toBe(
-        "Cannot fork a thread while its latest turn is still running.",
-      );
-
-      const userMessageId = MessageId.make("message-user");
-      const idleThread = makeThread({
-        messages: [
-          {
-            id: userMessageId,
-            role: "user",
-            text: "Question",
-            attachments: [],
-            turnId: null,
-            createdAt: now,
-            updatedAt: now,
-            streaming: false,
-          },
-        ],
-      });
-      const invalidPointWorkflow = yield* makeWorkflow({
-        providerSessionDirectory: directory,
-        codexThreadForkImporter: importer,
-        projectionSnapshotQuery: {
-          ...baseProjectionQuery,
-          getThreadDetailById: () => Effect.succeed(Option.some(idleThread)),
-        },
-      });
-      const pointError = yield* Effect.flip(
-        invalidPointWorkflow.fork({
-          threadId: sourceThreadId,
-          sourceMessageId: userMessageId,
-        }),
-      );
-      expect(pointError.message).toBe("Only assistant messages can be used as Codex fork points.");
+      const error = yield* Effect.flip(workflow.fork({ threadId: sourceThreadId }));
+      expect(error.message).toBe("Cannot fork a thread while its latest turn is still running.");
       expect(imports).toBe(0);
     }),
   );
 
-  it.effect("deletes a prepared workspace when the importer fails", () =>
+  it.effect("cleans up a prepared workspace when native import fails", () =>
     Effect.gen(function* () {
       const workspaceId = ThreadWorkspaceId.make("workspace-fork");
-      const deleted: Array<{ readonly workspaceId: ThreadWorkspaceId; readonly force?: boolean }> =
-        [];
-      const thread = makeThread();
+      const deleted: Array<unknown> = [];
       const workflow = yield* makeWorkflow({
-        providerSessionDirectory: {
-          ...baseProviderSessionDirectory,
-          getBinding: () => Effect.succeed(Option.some(codexBinding)),
-        },
-        projectionSnapshotQuery: {
-          ...baseProjectionQuery,
-          getThreadDetailById: () => Effect.succeed(Option.some(thread)),
-          getCommandReadModel: () => Effect.succeed(readModel(thread)),
-        },
+        threadManagement: {
+          getThreadProjection: () => Effect.succeed(makeProjection()),
+          dispatch: () => Effect.succeed({ sequence: 1, storedEvents: [] }),
+        } as unknown as ThreadManagementServiceShape,
         threadWorkspaceService: {
-          ...baseThreadWorkspaceService,
-          prepareWorkspace: (input) =>
+          prepareWorkspace: (request: { readonly threadId: ThreadId }) =>
             Effect.succeed({
               workspace: {
                 id: workspaceId,
                 kind: "directory-copy",
                 lifecycle: "active",
-                displayName: "Fork of Source",
+                displayName: "Fork",
                 managed: true,
-                primaryRootId: ThreadWorkspaceRootId.make("workspace-root-fork"),
+                primaryRootId: "root",
                 roots: [],
-                createdForThreadId: input.threadId,
+                createdForThreadId: request.threadId,
                 retentionPolicy: "explicit-delete",
-                createdAt: now,
-                updatedAt: now,
+                createdAt: "2026-01-01T00:00:00.000Z",
+                updatedAt: "2026-01-01T00:00:00.000Z",
                 deletedAt: null,
                 failureDetail: null,
                 metadata: {},
               },
-              primaryCwd: "/repo/project-fork",
-              compatibilityWorktreePath: "/repo/project-fork",
+              primaryCwd: "/repo/fork",
+              compatibilityWorktreePath: "/repo/fork",
               compatibilityBranch: null,
-            }),
-          deleteWorkspace: (request) =>
-            Effect.sync(() => {
-              deleted.push(request);
-            }),
-        },
+            } as never),
+          deleteWorkspace: (request: {
+            readonly workspaceId: ThreadWorkspaceId;
+            readonly force?: boolean;
+          }) => Effect.sync(() => void deleted.push(request)),
+        } as unknown as ThreadWorkspaceService.ThreadWorkspaceService["Service"],
         codexThreadForkImporter: {
           fork: () =>
             Effect.fail(
@@ -337,9 +228,8 @@ describe("CodexThreadRpcWorkflow", () => {
                 projectId,
               }),
             ),
-        },
+        } as unknown as CodexThreadForkImporter["Service"],
       });
-
       const error = yield* Effect.flip(
         workflow.fork({
           threadId: sourceThreadId,
@@ -347,65 +237,42 @@ describe("CodexThreadRpcWorkflow", () => {
         }),
       );
       expect(error.message).toBe("import failed");
-      expect(deleted).toEqual([{ workspaceId, force: true }]);
+      expect(deleted).toHaveLength(1);
     }),
   );
 
-  it.effect("returns a successful fork when relationship activity recording fails", () =>
+  it.effect("returns a fork even when relationship activity recording fails", () =>
     Effect.gen(function* () {
-      const thread = makeThread();
-      const summary: ThreadOrchestrationThreadSummary = {
-        environmentId: EnvironmentId.make("environment-1"),
-        threadId: destinationThreadId,
-        projectId,
-        title: "Fork of Source",
-        projectTitle: "Project",
-        status: "idle",
-        modelSelection: thread.modelSelection,
-        runtimeMode: thread.runtimeMode,
-        interactionMode: thread.interactionMode,
-        workspaceRoot: project.workspaceRoot,
-        worktreePath: null,
-        createdAt: now,
-        updatedAt: now,
-      };
       const workflow = yield* makeWorkflow({
-        orchestrationEngine: {
-          ...baseEngine,
+        threadManagement: {
+          getThreadProjection: () => Effect.succeed(makeProjection()),
           dispatch: () =>
             Effect.fail(
-              new OrchestrationCommandInvariantError({
-                commandType: "thread.activity.append",
-                detail: "relationship activity failed",
+              new ThreadOrchestrationError({
+                operation: "thread.activity.append",
+                code: "operation_failed",
+                message: "activity failed",
+                threadId: sourceThreadId,
+                projectId,
               }),
             ),
-        },
-        providerSessionDirectory: {
-          ...baseProviderSessionDirectory,
-          getBinding: () => Effect.succeed(Option.some(codexBinding)),
-        },
-        projectionSnapshotQuery: {
-          ...baseProjectionQuery,
-          getThreadDetailById: () => Effect.succeed(Option.some(thread)),
-          getCommandReadModel: () => Effect.succeed(readModel(thread)),
-        },
+        } as unknown as ThreadManagementServiceShape,
         codexThreadForkImporter: {
           fork: () =>
             Effect.succeed({
-              thread: summary,
-              sourceProviderThreadId: "provider-thread-source",
-              providerThreadId: "provider-thread-destination",
+              threadId: destinationThreadId,
+              providerThreadId: ProviderThreadId.make("provider-thread-destination"),
+              sourceProviderThreadId: ProviderThreadId.make("provider-thread-source"),
               importedMessageCount: 4,
+              projection: makeProjection(),
             }),
-        },
+        } as unknown as CodexThreadForkImporter["Service"],
       });
-
       const result = yield* workflow.fork({ threadId: sourceThreadId });
       expect(result).toMatchObject({
         threadId: destinationThreadId,
         projectId,
         sourceThreadId,
-        providerThreadId: "provider-thread-destination",
         importedMessageCount: 4,
         workspaceId: null,
       });

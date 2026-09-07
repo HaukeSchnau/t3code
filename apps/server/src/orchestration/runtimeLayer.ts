@@ -5,7 +5,6 @@ import { OrchestrationEventStoreLive } from "../persistence/Layers/Orchestration
 import { OrchestrationEngineLive } from "./Layers/OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./Layers/ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./Layers/ProjectionSnapshotQuery.ts";
-import { OrchestrationProjectionSnapshotMaterializerLive } from "./Layers/ProjectionSnapshotMaterializer.ts";
 import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "./ThreadPlanProgress.ts";
 
@@ -25,9 +24,6 @@ const OrchestrationRuntimeStateLayerLive = Layer.merge(
 
 const OrchestrationInfrastructureCoreLayerLive = Layer.mergeAll(
   OrchestrationProjectionSnapshotQueryLive,
-  OrchestrationProjectionSnapshotMaterializerLive.pipe(
-    Layer.provide(OrchestrationProjectionSnapshotQueryLive),
-  ),
   OrchestrationEventInfrastructureLayerLive,
   OrchestrationProjectionPipelineLayerLive,
 );

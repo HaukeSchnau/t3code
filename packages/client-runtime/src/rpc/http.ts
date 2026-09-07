@@ -99,6 +99,11 @@ export const makeEnvironmentHttpApiClient = (httpBaseUrl: string) =>
     baseUrl: remoteApiBaseUrl(httpBaseUrl),
   });
 
+/** Stable name for the generated client shape used by UI service contexts. */
+export type EnvironmentHttpApiClient = Effect.Success<
+  ReturnType<typeof makeEnvironmentHttpApiClient>
+>;
+
 /** Contract-derived request URLs for authentication proofs, tracing, and structured errors. */
 export const makeEnvironmentHttpApiUrlBuilder = (httpBaseUrl: string) =>
   HttpApiClient.urlBuilder(EnvironmentHttpApi, {

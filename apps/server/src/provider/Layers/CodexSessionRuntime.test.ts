@@ -9,7 +9,11 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as CodexRpc from "effect-codex-app-server/rpc";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
-import { buildCodexDeveloperInstructions } from "../CodexDeveloperInstructions.ts";
+import {
+  buildCodexDeveloperInstructions,
+  codexDefaultModeDeveloperInstructions,
+  codexPlanModeDeveloperInstructions,
+} from "../CodexDeveloperInstructions.ts";
 import { codexSessionAppServerArgs } from "./codexLaunchArgs.ts";
 import {
   buildTurnStartParams,
@@ -464,9 +468,9 @@ describe("Codex MCP elicitation approvals", () => {
 
 describe("buildCodexDeveloperInstructions", () => {
   it("offers optional structured questions in default mode", () => {
-    NodeAssert.match(codexDefaultModeDeveloperInstructions, /request_user_input tool/);
-    NodeAssert.match(codexDefaultModeDeveloperInstructions, /questions are optional/);
-    NodeAssert.match(codexDefaultModeDeveloperInstructions, /continue with your best judgment/);
+    const instructions = codexDefaultModeDeveloperInstructions(false);
+    NodeAssert.match(instructions, /request_user_input.*tool/);
+    NodeAssert.match(instructions, /reasonable assumptions/);
   });
 
   it("appends runtime info after the mode instructions", () => {
@@ -475,7 +479,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "high",
     });
 
-    NodeAssert.match(instructions.startsWith(codexDefaultModeDeveloperInstructions));
+    NodeAssert.equal(instructions.startsWith(codexDefaultModeDeveloperInstructions(false)), true);
     NodeAssert.match(instructions, /T3 Code/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
@@ -500,7 +504,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "medium",
     });
 
-    NodeAssert.match(instructions.startsWith(codexPlanModeDeveloperInstructions));
+    NodeAssert.equal(instructions.startsWith(codexPlanModeDeveloperInstructions(false)), true);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
   });
 
@@ -531,8 +535,8 @@ describe("buildCodexDeveloperInstructions", () => {
 describe("T3 browser developer instructions", () => {
   it("does not advertise disabled preview tools", () => {
     for (const instructions of [
-      codexDefaultModeDeveloperInstructions,
-      codexPlanModeDeveloperInstructions,
+      codexDefaultModeDeveloperInstructions(false),
+      codexPlanModeDeveloperInstructions(false),
       buildCodexDeveloperInstructions("default", {
         model: "gpt-5.3-codex",
         reasoningEffort: "high",
@@ -551,11 +555,11 @@ describe("T3 browser developer instructions", () => {
 describe("T3 orchestration developer instructions", () => {
   it("advertises the CLI without advertising disabled MCP tools", () => {
     for (const instructions of [
-      codexDefaultModeDeveloperInstructions,
-      codexPlanModeDeveloperInstructions,
+      codexDefaultModeDeveloperInstructions(false),
+      codexPlanModeDeveloperInstructions(false),
     ]) {
       NodeAssert.doesNotMatch(instructions, /Desktop-style thread orchestration tools/);
-      NodeAssert.doesNotMatch(instructions, /create_thread/);
+      NodeAssert.doesNotMatch(instructions, /create_thread\b/);
       NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
       NodeAssert.match(instructions, /t3 thread --help/);
       NodeAssert.match(instructions, /T3CODE_THREAD_ID/);
@@ -859,6 +863,9 @@ describe("openCodexThread", () => {
             approvalPolicy: "on-request",
             sandbox: "workspace-write",
             approvalsReviewer: "auto_review",
+            config: {
+              "features.default_mode_request_user_input": true,
+            },
             excludeTurns: true,
           },
         },

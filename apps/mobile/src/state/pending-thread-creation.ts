@@ -121,7 +121,7 @@ export function pendingThreadCreationMessage(
     streaming: false,
     createdAt: message.createdAt,
     updatedAt: message.createdAt,
-  };
+  } as unknown as OrchestrationThread["messages"][number];
 }
 
 /**
@@ -159,5 +159,5 @@ export function pendingThreadCreationShell(
     hasPendingApprovals: false,
     hasPendingUserInput: false,
     hasActionableProposedPlan: false,
-  };
+  } as unknown as EnvironmentThreadShell;
 }

@@ -19,14 +19,42 @@ import {
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
-  it("derives stable safe ids from durable preprocessing identity", () => {
-    const first = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
-    const replay = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
-    const changed = createDeterministicAttachmentId("Thread.Foo", "command:attachment:changed");
+  it("derives stable attachment ids for idempotent message retries", () => {
+    const first = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const retry = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const next = createDeterministicAttachmentId("thread-1", "message-1:1");
 
-    expect(replay).toBe(first);
-    expect(changed).not.toBe(first);
-    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-foo");
+    expect(first).toBe(retry);
+    expect(next).not.toBe(first);
+    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-1");
+  });
+
+  it("keeps deterministic ids distinct by thread and preserves safe extensions", () => {
+    const pendingUpload = "pending-00000000-0000-4000-8000-000000000010-pdf";
+    const first = createDeterministicAttachmentId("thread-1", pendingUpload, ".PDF");
+    const retry = createDeterministicAttachmentId("thread-1", pendingUpload, ".pdf");
+    const otherThread = createDeterministicAttachmentId("thread-2", pendingUpload, ".pdf");
+    const otherUpload = createDeterministicAttachmentId(
+      "thread-1",
+      "pending-00000000-0000-4000-8000-000000000011-pdf",
+      ".pdf",
+    );
+
+    expect(first).toBe(retry);
+    expect(first).toMatch(/-pdf$/);
+    expect(otherThread).not.toBe(first);
+    expect(otherUpload).not.toBe(first);
+  });
+
+  it("keeps deterministic ids distinct when sanitized thread segments collide", () => {
+    const dotted = createDeterministicAttachmentId("thread.a", "message-1:0");
+    const dashed = createDeterministicAttachmentId("thread-a", "message-1:0");
+
+    expect(dotted).toBeTruthy();
+    expect(dashed).toBeTruthy();
+    expect(dotted).not.toBe(dashed);
+    expect(dotted && parseThreadSegmentFromAttachmentId(dotted)).toBe("thread-a");
+    expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
   });
 
   it("sanitizes thread ids when creating attachment ids", () => {
@@ -159,6 +187,58 @@ describe("attachmentStore", () => {
       expect(parseThreadSegmentFromAttachmentId(claim.finalId)).toBe("thread-1");
       expect(parseAttachmentUuid(claim.finalId)).not.toBe(uuid);
       expect(claim.finalPath).toBe(NodePath.join(attachmentsDir, `${claim.finalId}.png`));
+
+      const retry = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-1",
+        attachmentId: `pending-${uuid}`,
+      });
+      expect(retry).toEqual(claim);
+      expect(
+        planAttachmentClaim({
+          attachmentsDir,
+          threadId: "thread-2",
+          attachmentId: `pending-${uuid}`,
+        }),
+      ).not.toEqual(claim);
+    } finally {
+      NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
+    }
+  });
+
+  it("plans a retry from an existing delivered file after the pending source expires", () => {
+    const attachmentsDir = NodeFS.mkdtempSync(
+      NodePath.join(NodeOS.tmpdir(), "t3code-attachment-claim-replay-"),
+    );
+    try {
+      const uuid = "00000000-0000-4000-8000-000000000004";
+      const pendingId = `pending-${uuid}`;
+      const pendingPath = NodePath.join(attachmentsDir, `${pendingId}.png`);
+      NodeFS.writeFileSync(pendingPath, Buffer.from("pixels"));
+
+      const first = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-replay",
+        attachmentId: pendingId,
+      });
+      expect(first.ok).toBe(true);
+      if (!first.ok) {
+        return;
+      }
+      NodeFS.copyFileSync(pendingPath, first.finalPath);
+      NodeFS.unlinkSync(pendingPath);
+
+      const retry = planAttachmentClaim({
+        attachmentsDir,
+        threadId: "thread-replay",
+        attachmentId: pendingId,
+      });
+      expect(retry).toEqual({
+        ok: true,
+        finalId: first.finalId,
+        currentPath: null,
+        finalPath: first.finalPath,
+      });
     } finally {
       NodeFS.rmSync(attachmentsDir, { recursive: true, force: true });
     }

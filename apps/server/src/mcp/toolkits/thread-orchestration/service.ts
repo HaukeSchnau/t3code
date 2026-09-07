@@ -95,11 +95,11 @@ import { generateBootstrapWorkspaceNaming } from "../../../workspace/BootstrapWo
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as TextGeneration from "../../../textGeneration/TextGeneration.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import {
-  ProjectionSnapshotQuery,
+  ThreadCoordinationBackend,
+  layer as coordinationBackendLayer,
   type ProjectionThreadResultContext,
-} from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
+} from "./V2Bridge.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
@@ -679,8 +679,7 @@ function relationshipFromActivity(
 }
 
 const make = Effect.gen(function* () {
-  const engine = yield* OrchestrationEngineService;
-  const snapshotQuery = yield* ProjectionSnapshotQuery;
+  const { engine, snapshotQuery } = yield* ThreadCoordinationBackend;
   const workspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const textGeneration = yield* TextGeneration.TextGeneration;
@@ -1857,9 +1856,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
-          ? yield* engine.liveSubscriptionCapability!.subscribe
-          : engine.streamDomainEvents;
+        const eventStream = yield* engine.liveSubscriptionCapability.subscribe;
         const batch = yield* readBatch(scope, { batchId });
         if (isTerminalBatchStatus(batch.status)) {
           if (batch.status === "deadline-exceeded") {
@@ -2612,9 +2609,7 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
-          ? yield* engine.liveSubscriptionCapability!.subscribe
-          : engine.streamDomainEvents;
+        const eventStream = yield* engine.liveSubscriptionCapability.subscribe;
         const wait = yield* readWait(scope, { waitId });
         if (wait.state !== "open") return;
         const now = yield* Clock.currentTimeMillis;
@@ -3315,9 +3310,7 @@ const make = Effect.gen(function* () {
           }
           if (isTerminalBatchMemberOutcome(outcome) || coveredByWait) return;
         }
-        const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
-          ? yield* engine.liveSubscriptionCapability!.subscribe
-          : engine.streamDomainEvents;
+        const eventStream = yield* engine.liveSubscriptionCapability.subscribe;
         yield* eventStream.pipe(
           Stream.filter(
             (event) => event.aggregateKind === "thread" && event.aggregateId === targetThreadId,
@@ -3336,6 +3329,18 @@ const make = Effect.gen(function* () {
       const sourceThreadId = input.threadId ?? scope.threadId;
       const sourceContext = yield* readThreadResultContext(sourceThreadId, "fork_thread");
       const sourceThread = sourceContext.thread;
+      const nativeSource = yield* snapshotQuery
+        .getNativeThreadProjection(sourceThreadId)
+        .pipe(
+          Effect.mapError(
+            toThreadOrchestrationError("fork_thread.read_source", { threadId: sourceThreadId }),
+          ),
+        );
+      const sourceProviderThread = nativeSource.providerThreads.find(
+        (thread) =>
+          thread.id === nativeSource.thread.activeProviderThreadId &&
+          thread.nativeThreadRef?.driver === "codex",
+      );
       const project = sourceContext.project;
       const busyReason = forkSourceBusyReason(sourceContext);
       if (busyReason !== null) {
@@ -3462,28 +3467,33 @@ const make = Effect.gen(function* () {
               })
               .pipe(Effect.catch(() => Effect.void));
 
-      const codexFork = yield* codexThreadForkImporter
-        .fork({
-          threadId: nextThreadId,
-          sourceThread,
-          project,
-          title,
-          createdAt,
-          ...(prepared !== undefined ? { preparedWorkspace: prepared } : {}),
-        })
-        .pipe(
-          Effect.map((result) => ({ _tag: "Success" as const, result })),
-          Effect.catch((error) =>
-            isUnsupportedCodexForkSource(error)
-              ? Effect.succeed({ _tag: "Unsupported" as const })
-              : cleanupPreparedWorkspace.pipe(Effect.flatMap(() => Effect.fail(error))),
-          ),
-        );
+      const codexFork =
+        sourceProviderThread === undefined
+          ? { _tag: "Unsupported" as const }
+          : yield* codexThreadForkImporter
+              .fork({
+                threadId: nextThreadId,
+                sourceThread: nativeSource.thread,
+                sourceProviderThread,
+                project,
+                title,
+                createdAt: DateTime.makeUnsafe(createdAt),
+                ...(prepared !== undefined ? { preparedWorkspace: prepared } : {}),
+              })
+              .pipe(
+                Effect.map((result) => ({ _tag: "Success" as const, result })),
+                Effect.catch((error) =>
+                  isUnsupportedCodexForkSource(error)
+                    ? Effect.succeed({ _tag: "Unsupported" as const })
+                    : cleanupPreparedWorkspace.pipe(Effect.flatMap(() => Effect.fail(error))),
+                ),
+              );
 
       if (codexFork._tag === "Success") {
-        const membership = yield* recordCoordination(codexFork.result.thread);
+        const thread = yield* resolveThreadSummary(codexFork.result.threadId);
+        const membership = yield* recordCoordination(thread);
         return {
-          thread: codexFork.result.thread,
+          thread,
           transcriptCloned: true,
           ...(membership === undefined ? {} : { membership }),
         };
@@ -3856,7 +3866,8 @@ const make = Effect.gen(function* () {
   });
 });
 
-export const layer = Layer.effect(ThreadOrchestrationService, make);
+export const layerFromBackend = Layer.effect(ThreadOrchestrationService, make);
+export const layer = layerFromBackend.pipe(Layer.provide(coordinationBackendLayer));
 
 export const __testing = {
   deliveryForCoordinatorNotification,

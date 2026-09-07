@@ -1,4 +1,4 @@
-import type { OrchestrationShellSnapshot } from "@t3tools/contracts";
+import type { OrchestrationV2ShellSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 
@@ -15,13 +15,15 @@ import {
   retryRemainingMs,
 } from "./connectionFreshness.ts";
 
-const SNAPSHOT: OrchestrationShellSnapshot = {
+const SNAPSHOT_UPDATED_AT = "2026-07-15T12:00:00.000Z";
+const SNAPSHOT = {
+  schemaVersion: 1,
   snapshotSequence: 42,
-  projects: [],
   threads: [],
-  usageLimits: [],
-  updatedAt: "2026-07-15T12:00:00.000Z",
-};
+  archivedThreads: [],
+  // Project shells carry the authoritative server update watermark in V2.
+  projects: [{ updatedAt: SNAPSHOT_UPDATED_AT }],
+} as unknown as OrchestrationV2ShellSnapshot;
 
 function connectionState(
   overrides: Partial<SupervisorConnectionState> = {},
@@ -41,7 +43,7 @@ function connectionState(
 
 function shellState(
   status: EnvironmentShellState["status"],
-  snapshot: Option.Option<OrchestrationShellSnapshot>,
+  snapshot: Option.Option<OrchestrationV2ShellSnapshot>,
   error = Option.none<string>(),
 ): EnvironmentShellState {
   return { status, snapshot, error };
@@ -154,7 +156,7 @@ describe("connection freshness projection", () => {
   it("keeps snapshot sequence and update time coupled across freshness states", () => {
     const identity = {
       contentSequence: SNAPSHOT.snapshotSequence,
-      updatedAt: SNAPSHOT.updatedAt,
+      updatedAt: SNAPSHOT_UPDATED_AT,
     };
 
     expect(projectEnvironmentSnapshotFreshness(shellState("empty", Option.none()))).toEqual({

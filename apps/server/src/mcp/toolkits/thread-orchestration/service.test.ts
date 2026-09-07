@@ -5,6 +5,7 @@ import {
   EnvironmentId,
   ProviderDriverKind,
   ProviderInstanceId,
+  ProviderThreadId,
   ThreadId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationError,
@@ -12,12 +13,18 @@ import {
   ThreadWorkspaceRootId,
   type ServerProvider,
   type OrchestrationCommand,
+  type OrchestrationCoordinationShell,
+  type OrchestrationEvent,
+  type OrchestrationProjectShell,
   type ProjectId,
+  type Project,
   type OrchestrationProject,
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
+  type OrchestrationV2ThreadProjection,
 } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -27,9 +34,8 @@ import * as Sink from "effect/Sink";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { deriveThreadCoordinationShell } from "../../../orchestration/ThreadCoordinationProjection.ts";
 
-import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
-import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
 import { OrchestrationCommandInvariantError } from "../../../orchestration/Errors.ts";
+import { OrchestratorDispatchError } from "../../../orchestration-v2/Orchestrator.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
 import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
@@ -41,8 +47,12 @@ import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClie
 import {
   __testing,
   ThreadOrchestrationService,
-  layer as ThreadOrchestrationServiceLive,
+  layerFromBackend as ThreadOrchestrationServiceLive,
 } from "./service.ts";
+import {
+  ThreadCoordinationBackend,
+  type ProjectionThreadResultContext,
+} from "./V2Bridge.ts";
 
 const actorThreadId = ThreadId.make("thread-actor");
 const targetThreadId = ThreadId.make("thread-target");
@@ -61,6 +71,57 @@ const actorModelSelection = {
 };
 const actorRuntimeMode = "auto-accept-edits" as const;
 const actorInteractionMode = "plan" as const;
+
+const nativeSourceProviderThreadId = ProviderThreadId.make("provider-source-thread");
+const nativeSourceProjection = {
+  thread: {
+    createdBy: "user",
+    creationSource: "web",
+    id: targetThreadId,
+    projectId,
+    title: "Target",
+    providerInstanceId: actorModelSelection.instanceId,
+    modelSelection: actorModelSelection,
+    runtimeMode: "full-access",
+    interactionMode: "default",
+    branch: null,
+    worktreePath: null,
+    activeProviderThreadId: nativeSourceProviderThreadId,
+    historyOrigin: "native",
+    lineage: { parentThreadId: null, relationshipToParent: null, rootThreadId: targetThreadId },
+    forkedFrom: null,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    archivedAt: null,
+    settledOverride: null,
+    settledAt: null,
+    deletedAt: null,
+  },
+  providerThreads: [
+    {
+      id: nativeSourceProviderThreadId,
+      driver: ProviderDriverKind.make("codex"),
+      providerInstanceId: actorModelSelection.instanceId,
+      providerSessionId: null,
+      appThreadId: targetThreadId,
+      ownerNodeId: null,
+      nativeThreadRef: {
+        driver: ProviderDriverKind.make("codex"),
+        nativeId: "native-source-thread",
+        strength: "strong",
+      },
+      nativeConversationHeadRef: null,
+      status: "idle",
+      firstRunOrdinal: null,
+      lastRunOrdinal: null,
+      handoffIds: [],
+      forkedFrom: null,
+      pendingBackgroundTasks: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    },
+  ],
+} as unknown as OrchestrationV2ThreadProjection;
 
 it("keeps blocked batches open and cleanup-ineligible", () => {
   const outcomes = ["completed", "blocked-approval", "running"] as const;
@@ -206,7 +267,7 @@ const getProjectShellById =
       );
       if (!project) return Option.none();
       const { deletedAt: _deletedAt, ...projectShell } = project;
-      return Option.some(projectShell);
+      return Option.some({ ...projectShell, deletedAt: project.deletedAt });
     });
 
 const getThreadShellById =
@@ -264,6 +325,138 @@ const makeShellSnapshot = (
   usageLimits: model.usageLimits,
   updatedAt: model.updatedAt,
 });
+
+type TestCoordinationEngineShape = {
+  readonly dispatch: (
+    command: OrchestrationCommand,
+  ) => Effect.Effect<{ readonly sequence: number }, OrchestrationCommandInvariantError>;
+  readonly streamDomainEvents: typeof ThreadCoordinationBackend.Service.engine.streamDomainEvents;
+  readonly liveSubscriptionCapability?:
+    typeof ThreadCoordinationBackend.Service.engine.liveSubscriptionCapability;
+  readonly [key: string]: unknown;
+};
+
+const TestCoordinationEngine = Context.Service<TestCoordinationEngineShape>(
+  "t3/test-thread-coordination-engine",
+);
+
+type TestCoordinationSnapshotQueryShape = {
+  readonly getShellSnapshot?: () => Effect.Effect<OrchestrationShellSnapshot, never>;
+  readonly getThreadShellById?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationShellSnapshot["threads"][number]>, never>;
+  readonly getProjectShellById?: (
+    projectId: ProjectId,
+  ) => Effect.Effect<Option.Option<Project>, never>;
+  readonly getThreadDetailById?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<OrchestrationThread>, never>;
+  readonly getThreadResultContextById?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<Option.Option<ProjectionThreadResultContext>, never>;
+  readonly getNativeThreadProjection?: (
+    threadId: ThreadId,
+  ) => Effect.Effect<OrchestrationV2ThreadProjection, never>;
+  readonly getThreadCoordinationShell?: () => Effect.Effect<OrchestrationCoordinationShell, never>;
+  readonly listThreadRelationshipActivities?: () => Effect.Effect<
+    ReadonlyArray<OrchestrationThread["activities"][number]>,
+    never
+  >;
+  readonly listThreadOrchestrationBatchActivities?: () => Effect.Effect<
+    ReadonlyArray<OrchestrationThread["activities"][number]>,
+    never
+  >;
+  readonly [key: string]: unknown;
+};
+
+const TestCoordinationSnapshotQuery = Context.Service<TestCoordinationSnapshotQueryShape>(
+  "t3/test-thread-coordination-snapshot-query",
+);
+
+const testCoordinationBackendLayer = Layer.effect(
+  ThreadCoordinationBackend,
+  Effect.gen(function* () {
+    const engine = yield* TestCoordinationEngine;
+    const snapshotQuery = yield* TestCoordinationSnapshotQuery;
+    const dispatch = (command: OrchestrationCommand) =>
+      engine.dispatch(command).pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestratorDispatchError({
+              commandId: command.commandId,
+              commandType: command.type,
+              cause,
+            }),
+        ),
+        Effect.map(({ sequence }) => ({
+          sequence,
+          storedEvents: [],
+        })),
+      );
+    const backendEngine: typeof ThreadCoordinationBackend.Service.engine = {
+      dispatch,
+      dispatchWithinCommandLock: dispatch,
+      resolveReceipt: () => Effect.succeed(Option.none()),
+      streamDomainEvents: engine.streamDomainEvents,
+      liveSubscriptionCapability: engine.liveSubscriptionCapability ?? {
+        subscribe: Effect.succeed(Stream.empty),
+      },
+    };
+    const backendSnapshotQuery: typeof ThreadCoordinationBackend.Service.snapshotQuery = {
+      getShellSnapshot: () =>
+        (snapshotQuery.getShellSnapshot?.() ?? Effect.succeed(shellSnapshot)).pipe(
+          Effect.map((snapshot) => ({
+            snapshotSequence: snapshot.snapshotSequence,
+            projects: [...readModel.projects],
+            threads: [...snapshot.threads],
+            coordination: deriveThreadCoordinationShell([]),
+          })),
+        ),
+      getThreadShellById: (threadId) =>
+        snapshotQuery.getThreadShellById?.(threadId) ?? getThreadShellById()(threadId),
+      getProjectShellById: (projectId) =>
+        snapshotQuery.getProjectShellById?.(projectId) ?? getProjectShellById()(projectId),
+      getThreadDetailById: (threadId) =>
+        snapshotQuery.getThreadDetailById?.(threadId) ?? getThreadDetailById()(threadId),
+      getThreadResultContextById: (threadId) =>
+        (snapshotQuery.getThreadResultContextById?.(threadId) ??
+          getThreadResultContextById()(threadId)).pipe(
+          Effect.map(
+            Option.map((context) => ({
+              ...context,
+              project: {
+                ...context.project,
+                deletedAt:
+                  readModel.projects.find((project) => project.id === context.project.id)
+                    ?.deletedAt ?? null,
+              },
+            })),
+          ),
+        ),
+      getNativeThreadProjection: (threadId) =>
+        snapshotQuery.getNativeThreadProjection?.(threadId) ??
+        Effect.succeed({
+          thread: {},
+          providerThreads: [],
+        } as unknown as OrchestrationV2ThreadProjection),
+      getThreadCoordinationShell: () =>
+        snapshotQuery.getThreadCoordinationShell?.() ??
+        Effect.succeed(deriveThreadCoordinationShell([])),
+      listThreadRelationshipActivities: () =>
+        (snapshotQuery.listThreadRelationshipActivities?.() ?? listThreadRelationshipActivities()()).pipe(
+          Effect.map((activities) => [...activities]),
+        ),
+      listThreadOrchestrationBatchActivities: () =>
+        (snapshotQuery.listThreadOrchestrationBatchActivities?.() ?? Effect.succeed([])).pipe(
+          Effect.map((activities) => [...activities]),
+        ),
+    };
+    return {
+      engine: backendEngine,
+      snapshotQuery: backendSnapshotQuery,
+    };
+  }),
+);
 
 const unsupportedCodexForkImporterLayer = Layer.succeed(CodexThreadForkImporter, {
   fork: (input) =>
@@ -464,8 +657,9 @@ it.live("watch alerts request immediate delivery and compare previous observatio
         ),
       );
       const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
         Layer.provide(
-          Layer.mock(OrchestrationEngineService)({
+          Layer.mock(TestCoordinationEngine)({
             streamDomainEvents: Stream.empty,
             dispatch: (command) =>
               Effect.gen(function* () {
@@ -482,7 +676,7 @@ it.live("watch alerts request immediate delivery and compare previous observatio
           }),
         ),
         Layer.provide(
-          Layer.mock(ProjectionSnapshotQuery)({
+          Layer.mock(TestCoordinationSnapshotQuery)({
             getShellSnapshot: () => Effect.succeed(shellSnapshot),
             getThreadShellById: getThreadShellById(),
             getProjectShellById: getProjectShellById(),
@@ -538,9 +732,10 @@ it.live("watch alerts request immediate delivery and compare previous observatio
 
 it.effect("lists thread model choices with curated model selections and reasoning options", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -551,7 +746,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -648,9 +843,10 @@ it.effect("lists thread model choices with curated model selections and reasonin
 
 it.effect("lists environments and projects without provider model metadata", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -661,7 +857,7 @@ it.effect("lists environments and projects without provider model metadata", () 
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -767,9 +963,10 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -780,7 +977,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -857,9 +1054,10 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
     ],
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -877,7 +1075,7 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1022,9 +1220,10 @@ it.effect("rejects hidden and legacy models unless legacy use is explicit", () =
     model: "gpt-5.4",
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1039,7 +1238,7 @@ it.effect("rejects hidden and legacy models unless legacy use is explicit", () =
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1194,9 +1393,10 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1207,7 +1407,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1263,9 +1463,10 @@ it.effect("uses generated names for worktree threads before starting their initi
     ThreadWorkspaceService.ThreadWorkspaceService["Service"]["prepareWorkspace"]
   >[0][] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1280,7 +1481,7 @@ it.effect("uses generated names for worktree threads before starting their initi
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1469,9 +1670,10 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     setThreadTitle: () => Effect.die("unused remote setThreadTitle"),
   });
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1486,7 +1688,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1574,9 +1776,10 @@ it.effect("prepares requested worktrees for forked threads", () => {
     ThreadWorkspaceService.ThreadWorkspaceService["Service"]["prepareWorkspace"]
   >[0][] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1591,7 +1794,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1790,13 +1993,14 @@ it.effect("rejects fork requests while the source thread is running", () => {
     ),
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(
       Layer.succeed(CodexThreadForkImporter, {
         fork: () => Effect.die("fork importer should not be called for a running source thread"),
       }),
     ),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1807,7 +2011,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(runningReadModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1861,9 +2065,10 @@ it.effect("rejects fork requests while the source thread is running", () => {
 it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () => {
   const deletedWorkspaceIds: ThreadWorkspaceId[] = [];
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1880,7 +2085,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -1958,31 +2163,19 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
       Effect.sync(() => {
         importerInputs.push(input);
         return {
-          thread: {
-            environmentId: scope.environmentId,
-            threadId: input.threadId,
-            projectId: input.project.id,
-            title: input.title,
-            projectTitle: input.project.title,
-            status: "idle" as const,
-            modelSelection: input.sourceThread.modelSelection,
-            runtimeMode: input.sourceThread.runtimeMode,
-            interactionMode: input.sourceThread.interactionMode,
-            workspaceRoot: input.project.workspaceRoot,
-            worktreePath: input.sourceThread.worktreePath,
-            createdAt: input.createdAt,
-            updatedAt: input.createdAt,
-          },
-          sourceProviderThreadId: "provider-source-thread",
-          providerThreadId: "provider-fork-thread",
+          threadId: input.threadId,
+          projection: nativeSourceProjection,
+          sourceProviderThreadId: nativeSourceProviderThreadId,
+          providerThreadId: ProviderThreadId.make("provider-fork-thread"),
           importedMessageCount: 2,
         };
       }),
   });
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(codexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -1997,7 +2190,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -2010,8 +2203,13 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
         getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
         getThreadCheckpointContext: () => Effect.succeed(Option.none()),
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
-        getThreadShellById: getThreadShellById(),
+        getThreadShellById: (threadId) =>
+          Effect.sync(() => {
+            const existing = readModel.threads.find((candidate) => candidate.id === threadId);
+            return Option.some(makeThreadShell(existing ?? { ...makeThread(targetThreadId), id: threadId }));
+          }),
         getThreadResultContextById: getThreadResultContextById(),
+        getNativeThreadProjection: () => Effect.succeed(nativeSourceProjection),
         listThreadRelationshipActivities: listThreadRelationshipActivities(),
         getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
@@ -2090,9 +2288,10 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
       ),
   });
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(codexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -2107,7 +2306,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(readModel),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -2122,6 +2321,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
         getFullThreadDiffContext: () => Effect.succeed(Option.none()),
         getThreadShellById: getThreadShellById(),
         getThreadResultContextById: getThreadResultContextById(),
+        getNativeThreadProjection: () => Effect.succeed(nativeSourceProjection),
         listThreadRelationshipActivities: listThreadRelationshipActivities(),
         getThreadDetailById: getThreadDetailById(),
         getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
@@ -2239,9 +2439,10 @@ it.effect("returns provider availability failures in compact coordinator results
     ],
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -2256,7 +2457,7 @@ it.effect("returns provider availability failures in compact coordinator results
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),
@@ -2350,9 +2551,10 @@ it.effect("reads relationship graphs without adding read edges", () => {
     ],
   };
   const testLayer = ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(testCoordinationBackendLayer),
     Layer.provide(unsupportedCodexForkImporterLayer),
     Layer.provide(
-      Layer.succeed(OrchestrationEngineService, {
+      Layer.succeed(TestCoordinationEngine, {
         readEvents: () => Stream.empty,
         readThreadEvents: () => Stream.die("unused thread replay"),
         getThreadReplayStats: () => Effect.die("unused thread replay stats"),
@@ -2367,7 +2569,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
       }),
     ),
     Layer.provide(
-      Layer.succeed(ProjectionSnapshotQuery, {
+      Layer.succeed(TestCoordinationSnapshotQuery, {
         getCommandReadModel: () => Effect.succeed(model),
         getThreadRuntimeContext: () => Effect.die("unused"),
         getSnapshot: () => Effect.die("full snapshot should not be read"),

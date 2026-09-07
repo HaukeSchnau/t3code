@@ -1,5 +1,6 @@
 import {
   type EnvironmentId,
+  type ProviderConsumeResetCreditInput,
   type ProviderConsumeResetCreditOutcome,
   ProviderInstanceId,
   ServerProvider,
@@ -19,10 +20,9 @@ import {
   limitsNotice,
   type LimitPace,
   paceOf,
-  providerLimitsLabel,
 } from "@t3tools/shared/usageLimits";
 import { GaugeIcon, TrendingDownIcon, TrendingUpIcon } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, useCallback, useState } from "react";
 
 import { usePrimarySettings } from "../../hooks/useSettings";
 import { environmentPresentations } from "../../state/presentation";
@@ -52,14 +52,14 @@ const PACE: Record<LimitPace, { readonly label: string; readonly icon: typeof Ga
 };
 
 /** The series colour the cost chart uses for this driver, so the two views read as one. */
-function barColor(driver: ServerProvider["driver"]): string {
+export function barColor(driver: ServerProvider["driver"]): string {
   const kind: UsageProviderKind | undefined =
     driver === "codex" ? "codex" : driver === "claudeAgent" ? "claude" : undefined;
   return kind ? PROVIDER_PRESENTATION[kind].color : "var(--foreground)";
 }
 
 /** Pace as a glyph with the words on hover. */
-function PaceIcon({ pace }: { readonly pace: LimitPace }) {
+export function PaceIcon({ pace }: { readonly pace: LimitPace }) {
   const Icon = PACE[pace].icon;
   return (
     <Tooltip>
@@ -154,14 +154,16 @@ function WindowBar({
 }
 
 /** One account's windows as rows: label and percent, bar, pace and countdown. */
-function LimitWindows({
+export function LimitWindows({
   driver,
   windows,
   now,
+  compact: _compact,
 }: {
   readonly driver: ServerProvider["driver"];
   readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
   readonly now: number;
+  readonly compact?: boolean;
 }) {
   const color = barColor(driver);
   return (
@@ -198,16 +200,16 @@ function LimitWindows({
  * and the signed-in email blurred until clicked, as provider settings do.
  */
 function AccountHeading({
-  instanceId,
   driver,
+  instanceId,
   label,
   instanceLabel,
   plan,
   email,
   accentColor,
 }: {
-  readonly instanceId?: ProviderInstanceId;
   readonly driver: ServerProvider["driver"];
+  readonly instanceId?: ProviderInstanceId;
   readonly label: string;
   readonly instanceLabel: string;
   readonly plan: string | undefined;
@@ -217,7 +219,7 @@ function AccountHeading({
   return (
     <h2 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-medium text-foreground">
       <ProviderInstanceIcon
-        instanceId={instanceId ?? ProviderInstanceId.make(driver)}
+        instanceId={instanceId ?? ProviderInstanceId.make(String(driver))}
         driverKind={driver}
         displayName={instanceLabel}
         accentColor={accentColor}
@@ -260,10 +262,10 @@ function ProviderLimits({
   return (
     <section className="flex flex-col gap-3">
       <AccountHeading
-        instanceId={provider.instanceId}
         driver={provider.driver}
+        instanceId={provider.instanceId}
         label={getDriverOption(provider.driver)?.label ?? String(provider.driver)}
-        instanceLabel={providerLimitsLabel(provider, (driver) => getDriverOption(driver)?.label)}
+        instanceLabel={provider.displayName?.trim() || getDriverOption(provider.driver)?.label || String(provider.driver)}
         plan={provider.auth.label}
         email={provider.auth.email}
         accentColor={provider.accentColor}
@@ -276,7 +278,7 @@ function ProviderLimits({
       {limits.resetCredits ? (
         <ResetCredits
           environmentId={environmentId}
-          instanceId={provider.instanceId}
+          input={{ instanceId: provider.instanceId }}
           credits={limits.resetCredits}
           now={now}
         />
@@ -292,18 +294,81 @@ const OUTCOME_TEXT: Record<ProviderConsumeResetCreditOutcome, string> = {
   alreadyRedeemed: "That credit was already redeemed.",
 };
 
+export function resetCreditsSummary(
+  credits: ServerProviderResetCredits,
+  now: number,
+  _compact = false,
+): string {
+  if (credits.availableCount === 0) return "No reset credits banked";
+  const expiresIn = credits.nextExpiresAt
+    ? formatDuration(Date.parse(credits.nextExpiresAt) - now)
+    : null;
+  return `${credits.availableCount} ${credits.availableCount === 1 ? "reset credit" : "reset credits"} banked${expiresIn ? ` · next expires in ${expiresIn}` : ""}`;
+}
+
+export function ResetCreditDialog(props: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onConfirm: () => void;
+}) {
+  return (
+    <AlertDialog open={props.open} onOpenChange={props.onOpenChange}>
+      <AlertDialogPopup>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Use a reset credit?</AlertDialogTitle>
+          <AlertDialogDescription>
+            This redeems one credit on your account and clears the current rate-limit windows. It
+            cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
+          <Button onClick={props.onConfirm}>Use credit</Button>
+        </AlertDialogFooter>
+      </AlertDialogPopup>
+    </AlertDialog>
+  );
+}
+
+export function useResetCredit(
+  environmentId: EnvironmentId,
+  input: ProviderConsumeResetCreditInput,
+) {
+  const consume = useAtomCommand(serverEnvironment.consumeResetCredit, { reportFailure: false });
+  const [confirming, setConfirming] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const redeem = useCallback(async () => {
+    setConfirming(false);
+    setBusy(true);
+    setStatus(null);
+    const result = await consume({ environmentId, input });
+    setBusy(false);
+    if (result._tag === "Success") {
+      setStatus(OUTCOME_TEXT[result.value.outcome]);
+      return;
+    }
+    setStatus(
+      "error" in result.cause && result.cause.error instanceof Error
+        ? result.cause.error.message
+        : "Could not use the reset credit.",
+    );
+  }, [consume, environmentId, input]);
+  return { busy, confirming, setConfirming, status, redeem };
+}
+
 /**
  * Banked reset credits with a confirmed redeem action. Redeeming spends a
  * credit the provider granted the user, so it never fires on a bare click.
  */
-function ResetCredits({
+export function ResetCredits({
   environmentId,
-  instanceId,
+  input,
   credits,
   now,
 }: {
   readonly environmentId: EnvironmentId;
-  readonly instanceId: ProviderInstanceId;
+  readonly input: ProviderConsumeResetCreditInput;
   readonly credits: ServerProviderResetCredits;
   readonly now: number;
 }) {
@@ -313,21 +378,13 @@ function ResetCredits({
   const [status, setStatus] = useState<string | null>(null);
   if (credits.availableCount === 0 && status === null) return null;
 
-  const expiresIn = credits.nextExpiresAt
-    ? formatDuration(Date.parse(credits.nextExpiresAt) - now)
-    : null;
-  const summary =
-    credits.availableCount === 0
-      ? "No reset credits banked"
-      : `${credits.availableCount} ${credits.availableCount === 1 ? "reset credit" : "reset credits"} banked${
-          expiresIn ? ` · next expires in ${expiresIn}` : ""
-        }`;
+  const summary = resetCreditsSummary(credits, now);
 
   const redeem = async () => {
     setConfirming(false);
     setBusy(true);
     setStatus(null);
-    const result = await consume({ environmentId, input: { instanceId } });
+    const result = await consume({ environmentId, input });
     setBusy(false);
     if (result._tag === "Success") {
       setStatus(OUTCOME_TEXT[result.value.outcome]);
@@ -383,6 +440,7 @@ function SourceAccountLimits({
     <section className="flex flex-col gap-3">
       <AccountHeading
         driver={account.driver}
+        instanceId={ProviderInstanceId.make(`${sourceKind}:${account.id}`)}
         label={getDriverOption(account.driver)?.label ?? String(account.driver)}
         instanceLabel={sourceKind}
         plan={account.plan}
@@ -430,10 +488,18 @@ function SourceLimits({ source, now }: { readonly source: LimitsSource; readonly
  * Countdowns anchor to render time rather than ticking: a live clock would
  * repaint the page every minute for no decision-changing gain.
  */
-export function UsageLimitsSection() {
+export function UsageLimitsSection({
+  selectedEnvironmentIds,
+}: {
+  readonly selectedEnvironmentIds: ReadonlySet<EnvironmentId> | null;
+}) {
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
-  const groups = collectLimitsGroups(presentations);
-  const sources = collectLimitSources(presentations);
+  const selected =
+    selectedEnvironmentIds === null
+      ? presentations
+      : new Map([...presentations].filter(([id]) => selectedEnvironmentIds.has(id)));
+  const groups = collectLimitsGroups(selected);
+  const sources = collectLimitSources(selected);
   // Anchored once per mount on purpose: countdowns must not tick (see below).
   const [now] = useState(() => Date.now());
 
@@ -441,7 +507,7 @@ export function UsageLimitsSection() {
     <div className="flex flex-col gap-8">
       {groups.length === 0 && sources.length === 0 ? (
         <p className="text-sm text-muted-foreground">
-          No provider on a connected environment reports subscription limits.
+          No provider on the selected environments reports subscription limits.
         </p>
       ) : null}
       {sources.map((source) => (

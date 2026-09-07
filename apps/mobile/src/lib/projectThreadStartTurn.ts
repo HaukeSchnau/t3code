@@ -7,20 +7,14 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type SkillPackId,
+  type ThreadSkillScope,
+  type ThreadTitleMode,
+  type ThreadWorkspaceId,
 } from "@t3tools/contracts";
+import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
 import type { UploadedMobileAttachment } from "./attachmentUpload";
-
-export function deriveThreadTitleFromPrompt(value: string): string {
-  const trimmed = assistantCitationsToPlainText(value).trim();
-  if (trimmed.length === 0) {
-    return "New thread";
-  }
-
-  const compact = trimmed.replace(/\s+/g, " ");
-  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
-}
 
 export interface ProjectThreadStartTurnSpec {
   readonly projectId: ProjectId;
@@ -37,6 +31,9 @@ export interface ProjectThreadStartTurnSpec {
   readonly interactionMode: ProviderInteractionMode;
   /** Draft-chosen packs; absent inherits the project default. */
   readonly skillPackIds?: ReadonlyArray<SkillPackId>;
+  readonly skillScope?: ThreadSkillScope;
+  readonly titleMode?: ThreadTitleMode;
+  readonly workspaceId?: ThreadWorkspaceId | null;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
@@ -51,10 +48,11 @@ export interface ProjectThreadStartTurnSpec {
  * offline outbox drain so both deliver identical commands.
  */
 export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpec) {
-  const title = deriveThreadTitleFromPrompt(spec.text);
+  const title = deriveThreadTitleSeed({ text: spec.text, attachments: spec.uploadedAttachments });
   const isWorktree = spec.workspaceMode === "worktree";
   return {
     commandId: CommandId.make(spec.commandId),
+    creationSource: "mobile" as const,
     threadId: ThreadId.make(spec.threadId),
     message: {
       messageId: MessageId.make(spec.messageId),
@@ -73,7 +71,10 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,
         interactionMode: spec.interactionMode,
+        ...(spec.titleMode === undefined ? {} : { titleMode: spec.titleMode }),
         ...(spec.skillPackIds ? { skillPackIds: spec.skillPackIds } : {}),
+        ...(spec.skillScope === undefined ? {} : { skillScope: spec.skillScope }),
+        ...(spec.workspaceId === undefined ? {} : { workspaceId: spec.workspaceId }),
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
         createdAt: spec.createdAt,
@@ -92,4 +93,14 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     },
     createdAt: spec.createdAt,
   };
+}
+
+export function deriveThreadTitleFromPrompt(value: string): string {
+  const trimmed = assistantCitationsToPlainText(value).trim();
+  if (trimmed.length === 0) {
+    return "New thread";
+  }
+
+  const compact = trimmed.replace(/\s+/g, " ");
+  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 }

@@ -24,6 +24,7 @@ import {
   flattenQueuedThreadMessages,
   groupQueuedThreadMessages,
   makeQueuedThreadDeliveryPlan,
+  type QueuedThreadDeliveryProtocol,
   type QueuedThreadMessage,
 } from "./thread-outbox-model";
 import type { ThreadOutboxStorage } from "./thread-outbox-storage";
@@ -77,6 +78,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
   const bumpRevision = (messageId: MessageId): void => {
     revisions.set(messageId, (revisions.get(messageId) ?? 0) + 1);
   };
+  const deliveryProtocolFor = (
+    entry: DurableCommandOutboxEntry | undefined,
+  ): QueuedThreadDeliveryProtocol => entry?.plan.deliveryProtocol ?? "legacy";
 
   const commandStorage = CommandOutboxStorage.of({
     load: Effect.tryPromise({
@@ -137,7 +141,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return loadPromise;
     }
     loadPromise = serialize(async () => {
-      const persistedMessages = await options.storage.load();
+      const persisted = await options.storage.load();
+      for (const error of persisted.errors) {
+        warn("[thread-outbox] skipped an unreadable persisted message", error);
+      }
+      const persistedMessages = persisted.messages;
       let messages = flattenQueuedThreadMessages(
         groupQueuedThreadMessages([...persistedMessages, ...currentMessages()]),
       );
@@ -323,7 +331,14 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       if (existing?.state._tag === "Pending") {
         await Effect.runPromise(service.cancelPending(message.commandId));
       }
-      await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
+      await Effect.runPromise(
+        service.enqueue(
+          makeQueuedThreadDeliveryPlan(
+            message,
+            existing === undefined ? "native" : deliveryProtocolFor(existing),
+          ),
+        ),
+      );
       await refreshDeliveryStates(service);
     });
   };
@@ -359,6 +374,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         return false;
       }
       const service = await outbox();
+      const previousEntry = (await Effect.runPromise(service.entries)).find(
+        (entry) => entry.plan.command.commandId === previous.commandId,
+      );
+      const deliveryProtocol =
+        previousEntry === undefined ? "native" : deliveryProtocolFor(previousEntry);
       const replacingIdentity = message.commandId !== previous.commandId;
       const replacement: QueuedThreadMessage = replacingIdentity
         ? {
@@ -385,11 +405,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       try {
         if (replacingIdentity) {
           await Effect.runPromise(
-            service.replacePending(previous.commandId, makeQueuedThreadDeliveryPlan(replacement)),
+            service.replacePending(
+              previous.commandId,
+              makeQueuedThreadDeliveryPlan(replacement, deliveryProtocol),
+            ),
           );
         } else {
           await Effect.runPromise(service.cancelPending(previous.commandId));
-          await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(replacement)));
+          await Effect.runPromise(
+            service.enqueue(makeQueuedThreadDeliveryPlan(replacement, deliveryProtocol)),
+          );
         }
       } catch (cause) {
         await options.storage.remove(replacement).catch(() => undefined);
@@ -423,6 +448,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const removed =
         currentMessages().find((candidate) => candidate.messageId === message.messageId) ?? message;
       const service = await outbox();
+      const existingEntry = (await Effect.runPromise(service.entries)).find(
+        (entry) => entry.plan.command.commandId === message.commandId,
+      );
+      const deliveryProtocol =
+        existingEntry === undefined ? "native" : deliveryProtocolFor(existingEntry);
       await Effect.runPromise(service.cancelPending(message.commandId));
       await refreshDeliveryStates(service);
       try {
@@ -430,7 +460,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       } catch (cause) {
         // Keep both durable views aligned when presentation-file cleanup
         // fails after the shared cancellation was persisted.
-        await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
+        await Effect.runPromise(
+          service.enqueue(makeQueuedThreadDeliveryPlan(message, deliveryProtocol)),
+        );
         await refreshDeliveryStates(service);
         throw new ThreadOutboxManagerError({
           operation: "remove",
@@ -450,7 +482,9 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         );
         if (retained !== undefined) {
           await options.storage.write(retained);
-          await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(retained)));
+          await Effect.runPromise(
+            service.enqueue(makeQueuedThreadDeliveryPlan(retained, deliveryProtocol)),
+          );
           await refreshDeliveryStates(service);
         }
         return null;
@@ -476,7 +510,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         });
       });
       const allMessages = flattenQueuedThreadMessages(
-        groupQueuedThreadMessages([...persisted, ...currentMessages()]),
+        groupQueuedThreadMessages([...persisted.messages, ...currentMessages()]),
       );
       const removedMessageIds = new Set<MessageId>();
 

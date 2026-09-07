@@ -14,11 +14,12 @@ import {
 } from "../../logicalProject";
 import type {
   ContextMenuItem,
+  EnvironmentId,
   ModelSelection,
+  ProjectScript,
   ProjectIconOverride,
   ProviderDriverKind,
   SidebarProjectGroupingMode,
-  SkillPackId,
   T3ProjectFileScript,
   ThreadEnvMode,
 } from "@t3tools/contracts";
@@ -72,13 +73,7 @@ import {
   type SidebarProjectSnapshot,
 } from "../../sidebarProjectGrouping";
 import { useEnvironments, usePrimaryEnvironmentId } from "../../state/environments";
-import { useProjects, useServerConfigs, useThreadShells } from "../../state/entities";
-import {
-  formatSkillPackSelectionLabel,
-  resolveSkillPackSelection,
-} from "@t3tools/client-runtime/skillPacks";
-import { SkillPacksPanel } from "../chat/SkillPacksControl";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { useProjects, useThreadShells } from "../../state/entities";
 import { projectEnvironment } from "../../state/projects";
 import { EMPTY_SERVER_PROVIDERS, serverEnvironment } from "../../state/server";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -139,6 +134,63 @@ export const PROJECT_GROUPING_MODE_LABELS: Record<SidebarProjectGroupingMode, st
   repository_path: "Group by repository path",
   separate: "Keep separate",
 };
+
+/** Shared editor persistence for server-wide default project actions. */
+export function useProjectScriptSettings(
+  targets: ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly settings: { readonly defaultProjectScripts: ReadonlyArray<ProjectScript> };
+  }>,
+) {
+  const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
+  const savingRef = useRef(false);
+  const [saving, setSaving] = useState(false);
+  const persist = useCallback(
+    async (
+      update: (current: ReadonlyArray<ProjectScript>) => ReadonlyArray<ProjectScript>,
+      _scriptId?: string | null,
+      _keybinding?: string | null,
+    ): Promise<AtomCommandResult<void, unknown>> => {
+      if (savingRef.current) {
+        return AsyncResult.failure(Cause.fail(new Error("Another action change is still saving.")));
+      }
+      savingRef.current = true;
+      setSaving(true);
+      try {
+        for (const target of targets) {
+          const result = mapAtomCommandResult(
+            await updateSettings({
+              environmentId: target.environmentId,
+              input: {
+                patch: { defaultProjectScripts: update(target.settings.defaultProjectScripts) },
+              },
+            }),
+            () => undefined,
+          );
+          if (result._tag === "Failure") return result;
+        }
+        return AsyncResult.success(undefined);
+      } finally {
+        savingRef.current = false;
+        setSaving(false);
+      }
+    },
+    [targets, updateSettings],
+  );
+  const submit = useCallback(
+    async (scriptId: string | null, input: NewProjectScriptInput) =>
+      persist((current) => {
+        if (scriptId === null) {
+          const nextId = nextProjectScriptId(input.name, current.map((script) => script.id));
+          return [...current, buildProjectScript(nextId, input)];
+        }
+        const updated = buildProjectScript(scriptId, input);
+        return current.map((script) => (script.id === scriptId ? updated : script));
+      }, scriptId, input.keybinding),
+    [persist],
+  );
+  return { saving, persist, submit };
+}
 
 /** Logical project groups for the settings page, sorted by display name. */
 export function useSettingsProjectGroups(): SidebarProjectSnapshot[] {
@@ -390,7 +442,6 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
         title: string;
         defaultModelSelection: ModelSelection | null;
         defaultThreadEnvMode: ThreadEnvMode | null;
-        defaultSkillPackIds: ReadonlyArray<SkillPackId>;
         autoPull: boolean;
         faviconPath: string | null;
         projectIcon: ProjectIconOverride | null;
@@ -472,29 +523,6 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const setDefaultModel = useCallback(
     (selection: ModelSelection | null) =>
       void updateAllMembers({ defaultModelSelection: selection }, "Failed to update default model"),
-    [updateAllMembers],
-  );
-
-  // ----- default skill packs -----
-  const skillPackCatalog =
-    useServerConfigs().get(representative.environmentId)?.skillPackCatalog ?? null;
-  const defaultSkillPackIds = representative.defaultSkillPackIds;
-  const defaultSkillPackSelection = useMemo(
-    () =>
-      skillPackCatalog
-        ? resolveSkillPackSelection({
-            catalog: skillPackCatalog,
-            projectDefaultPackIds: defaultSkillPackIds,
-          })
-        : null,
-    [defaultSkillPackIds, skillPackCatalog],
-  );
-  const setDefaultSkillPackIds = useCallback(
-    (packIds: ReadonlyArray<SkillPackId>) =>
-      void updateAllMembers(
-        { defaultSkillPackIds: packIds },
-        "Failed to update the project's default skills",
-      ),
     [updateAllMembers],
   );
 
@@ -1018,45 +1046,14 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
               </Select>
             }
           />
-          {skillPackCatalog && defaultSkillPackSelection ? (
-            <SettingsRow
-              title="Skills"
-              description="Skill packs new threads in this project start with. Core skills are always on; a thread can still pick its own packs."
-              resetAction={
-                defaultSkillPackSelection.packIds.length > 0 ? (
-                  <SettingResetButton
-                    label="project default skills"
-                    onClick={() => setDefaultSkillPackIds([])}
-                  />
-                ) : null
-              }
-              control={
-                <Popover>
-                  <PopoverTrigger
-                    render={<Button variant="outline" size="sm" aria-label="Default skills" />}
-                  >
-                    {formatSkillPackSelectionLabel(skillPackCatalog, defaultSkillPackSelection)}
-                    <ChevronDownIcon className="size-3.5 text-icon-muted" />
-                  </PopoverTrigger>
-                  <PopoverPopup
-                    align="end"
-                    className="w-80"
-                    viewportClassName="py-3 [--viewport-inline-padding:--spacing(3)]"
-                  >
-                    <SkillPacksPanel
-                      catalog={skillPackCatalog}
-                      selection={defaultSkillPackSelection}
-                      providerWarning={null}
-                      onPackIdsChange={setDefaultSkillPackIds}
-                    />
-                  </PopoverPopup>
-                </Popover>
-              }
-            />
-          ) : null}
           <SettingsRow
             title="Automatically pull"
             description="Keeps the default branch current in the background when the checkout has no local changes or commits."
+            resetAction={
+              autoPull ? (
+                <SettingResetButton label="automatic pull" onClick={() => setAutoPull(false)} />
+              ) : null
+            }
             control={
               <Switch
                 checked={autoPull}

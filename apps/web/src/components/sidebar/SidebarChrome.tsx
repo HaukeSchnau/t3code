@@ -1,9 +1,7 @@
-import { useAtomValue } from "@effect/atom-react";
 import {
   ArrowLeftIcon,
   ChartNoAxesColumnIcon,
   GitPullRequestIcon,
-  LayoutDashboardIcon,
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -11,10 +9,8 @@ import { memo, useCallback } from "react";
 import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { shortcutLabelForCommand } from "../../keybindings";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
-import { primaryServerKeybindingsAtom } from "../../state/server";
 import { T3Wordmark } from "../T3Wordmark";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -139,15 +135,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const navigate = useNavigate();
   const canGoBack = useCanGoBack();
   const { isMobile, setOpenMobile } = useSidebar();
-  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const monitorShortcutLabel = shortcutLabelForCommand(keybindings, "monitor.toggle");
-  const monitorLabel = monitorShortcutLabel ? `Monitor (${monitorShortcutLabel})` : "Monitor";
   const currentFooterPage = useLocation({
     select: (location) =>
       /^\/settings(?:\/|$)/.test(location.pathname)
         ? "settings"
-        : location.pathname === "/monitor"
-          ? "monitor"
+        : /^\/projects\/[^/]+\/?$/.test(location.pathname)
+          ? "project-settings"
           : location.pathname === "/usage"
             ? "usage"
             : location.pathname === "/pull-requests"
@@ -172,19 +165,17 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
       search: readPullRequestListPreferences(),
     });
   }, [closeMobileSidebar, navigate]);
-  const handleMonitorClick = useCallback(() => {
-    closeMobileSidebar();
-    void navigate({ to: "/monitor" });
-  }, [closeMobileSidebar, navigate]);
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
   const handleUsageClick = useCallback(() => {
-    closeMobileSidebar();
+    if (isMobile) {
+      setOpenMobile(false);
+    }
     void navigate({ to: "/usage" });
-  }, [closeMobileSidebar, navigate]);
+  }, [isMobile, navigate, setOpenMobile]);
 
   const handleBackClick = useCallback(() => {
     closeMobileSidebar();
@@ -210,11 +201,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
             icon={<SettingsIcon />}
             label="Settings"
             onClick={handleSettingsClick}
-          />
-          <SidebarUtilityItem
-            icon={<LayoutDashboardIcon />}
-            label={monitorLabel}
-            onClick={handleMonitorClick}
           />
           {pullRequestsSupported ? (
             <SidebarUtilityItem

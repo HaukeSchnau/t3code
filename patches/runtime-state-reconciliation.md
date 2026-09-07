@@ -1,58 +1,23 @@
 # Runtime state reconciliation
 
-Provider processes and orchestration projections have different lifetimes. If a server exits before a
-provider terminal event is ingested, the durable session and latest-turn projections can remain `running`
-after the process that owned the turn is gone. Those historical rows must not block every later deferred
-restart, but same-process provider startup and ingestion races must remain fail-closed.
+Upstream V2 owns process-loss recovery through `ProviderRuntimeRecoveryService`, its durable effect outbox, and native provider/session projections. The fork no longer starts V1 reconciliation or turn reactors alongside it.
 
-## Requirements
+## Retained requirements
 
-- Capture one process-start epoch shared by restart-safety checks and provider-session reconciliation.
-- After provider adapters and orchestration reactors are available, compare the narrow projected restart
-  state with `ProviderService.listSessions()`.
-- Only repair active lifecycle projections whose session or latest-turn update predates the current process,
-  has no positive evidence of a running live provider session, and has no undelivered transcript journal
-  events.
-- Repair session-backed state by durably dispatching `thread.session.set`. Repair legacy running-turn rows
-  that have no session with an explicit `thread.turn.interrupt`; never invent session fields or mutate
-  projection tables directly.
-- Retry reconciliation on the reaper interval so a transcript backlog or ambiguous dispatch acknowledgement
-  cannot strand state indefinitely. Freeze repair command ids, timestamps, and payloads to the process epoch
-  and projected identity so retries are idempotent.
-- Preserve provider runtime rows, resume cursors, runtime payloads, provider instance selection, and runtime
-  mode. An absent live provider turn interrupts the historical turn but does not erase continuation state.
-- A current-process starting/running projection remains restart-blocking even when the adapter has not yet
-  exposed a live active turn.
-- Live idle probes use real provider sessions. Offline probes remain conservative.
-- A live adapter session in `running` or `connecting` status blocks restart even when its concrete
-  `activeTurnId` has not been observed yet.
-- Queued messages and pending approval/user-input state remain counted and visible but do not block restart,
-  because those records are durable. Undelivered transcript journal entries do block restart.
-- Read restart safety through a narrow projection query using normalized pending counters; do not hydrate all
-  messages, activities, checkpoints, or transcripts.
-- Emit bounded reconciliation metrics and structured decision/repair logs without thread ids in metric labels.
-- Start reconciliation through the same scoped production startup seam as orchestration reactors, after the
-  reactors are available and before command readiness.
+- Restart probes must remain conservative about active provider work, including startup before a concrete provider turn ID is available.
+- Probes use bounded shell/runtime summaries rather than loading conversations.
+- Durable queued messages and runtime requests stay visible across restart. Queued work paused by a failure or interruption must not start merely because the server restarted.
+- Import native provider continuation references from the old runtime rows. Recovery must not erase that continuation or inject a second copy of the imported transcript when the native conversation can resume.
+- Recovery writes native events and receipts rather than editing projections directly.
 
-## Files
+The native idle probe treats the V2 shell as the restart-safety authority after
+`ProviderRuntimeRecoveryService` has reconciled startup state. An active run or
+`preparing`, `starting`, `running`, or `waiting` activity status blocks restart,
+including for archived shells and when a provider has not assigned a turn ID
+yet. Provider adapters must publish those native run states before exposing a
+live runtime; the probe intentionally has no separate V1 session directory to
+consult.
 
-- `apps/server/src/provider/ProviderSessionReconciliation.ts`
-- `apps/server/src/provider/Layers/ProviderSessionReaper.ts`
-- `apps/server/src/status/IdleStatus.ts`
-- `apps/server/src/status/http.ts`
-- `apps/server/src/orchestration/Services/ProjectionSnapshotQuery.ts`
-- `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts`
-- `apps/server/src/orchestration/Layers/ProjectionOperationalReads.ts`
+The native importer, queue pause policy, and idle-status endpoint retain the fork-specific behavior. Existing V1 persistence tables remain readable for migration; they do not own current thread execution.
 
-## Verification
-
-- `vp test apps/server/src/provider/ProviderSessionReconciliation.test.ts apps/server/src/provider/Layers/ProviderSessionReaper.test.ts apps/server/src/status/IdleStatus.test.ts apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.test.ts apps/server/src/serverRuntimeStartup.test.ts`
-- `vp run --filter t3 typecheck`
-
-Restart-safety reads belong in `ProjectionOperationalReads.ts`. Keep
-`ProjectionSnapshotQuery.ts` as the stable public service facade so operational changes do not overlap
-snapshot, search, or activity-history implementation.
-
-Production verification should compare idle-probe latency, projected active/running counts, undelivered journal
-depth, and provider runtime cursor rows before and after restart. Repaired projections must become interrupted
-while their persisted continuation state remains byte-for-byte intact.
+Review `LegacyV1ThreadImporter`, `ProviderRuntimeRecoveryService`, `QueuedRunOrder`, and `status/IdleStatus` when updating upstream. Prefer their native extension points over restoring the deleted `ProjectionOperationalReads` or legacy session reactor.
