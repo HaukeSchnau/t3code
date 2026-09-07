@@ -135,6 +135,7 @@ export const materializeSkillScope = Effect.fn("SkillPackRuntime.materializeScop
     const digest = NodeCrypto.createHash("sha256")
       .update(
         encodeJson({
+          pluginName: "skills",
           version: input.catalog.version,
           packs: [...input.packIds].sort(),
           skills: skills.map((skill) => [skill.id, skill.path]).sort(),
@@ -151,8 +152,8 @@ export const materializeSkillScope = Effect.fn("SkillPackRuntime.materializeScop
     yield* fileSystem.writeFileString(
       pluginManifestPath,
       `${encodeJson({
-        name: `t3-skill-scope-${digest}`,
-        description: "Additional skills selected for this T3 Code thread.",
+        name: "skills",
+        description: "Additional skills selected for this conversation.",
         version: "1.0.0",
       })}\n`,
     );

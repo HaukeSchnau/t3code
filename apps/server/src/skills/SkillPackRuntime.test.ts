@@ -64,7 +64,7 @@ describe("SkillPackRuntime", () => {
           yield* fileSystem.readFileString(
             path.join(result.scope.pluginPath, ".claude-plugin", "plugin.json"),
           ),
-          /t3-skill-scope-/u,
+          /"name":"skills"/u,
         );
 
         const repeated = yield* materializeSkillScope({
