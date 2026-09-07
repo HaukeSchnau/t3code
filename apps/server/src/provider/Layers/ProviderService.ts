@@ -1237,15 +1237,19 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 cause,
               }),
           });
-          if (
-            separate &&
-            (!environment.T3CODE_EXECUTION_LAUNCHER ||
-              !["codex", "claude"].includes(resolvedProvider))
-          ) {
-            return yield* toValidationError(
-              "ProviderService.startSession",
-              "Separate projects currently require the managed launcher and a Codex or Claude provider.",
-            );
+          if (separate) {
+            if (!environment.T3CODE_EXECUTION_LAUNCHER) {
+              return yield* toValidationError(
+                "ProviderService.startSession",
+                "Separate projects require the managed execution launcher.",
+              );
+            }
+            if (resolvedProvider !== "codex" && resolvedProvider !== "claudeAgent") {
+              return yield* toValidationError(
+                "ProviderService.startSession",
+                `Separate projects do not support provider driver '${resolvedProvider}'.`,
+              );
+            }
           }
         }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);

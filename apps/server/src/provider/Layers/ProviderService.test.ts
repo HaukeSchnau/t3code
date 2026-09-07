@@ -1,4 +1,5 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import * as NodeCrypto from "node:crypto";
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
@@ -30,6 +31,7 @@ import {
   expandAssistantCitationsForProvider,
   serializeAssistantCitation,
 } from "@t3tools/shared/assistantCitations";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { createModelSelection } from "@t3tools/shared/model";
 import { it, assert, describe, vi } from "@effect/vitest";
 
@@ -105,6 +107,15 @@ const assistantCitation = {
 const decodeAssistantQuoteContext = Schema.decodeUnknownEffect(
   Schema.fromJsonString(
     Schema.Array(Schema.Struct({ id: Schema.String, citation: AssistantCitation })),
+  ),
+);
+const encodeSeparateProjectRegistration = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Number,
+      root: Schema.String,
+      projectId: Schema.String,
+    }),
   ),
 );
 
@@ -1053,6 +1064,7 @@ it.effect("ProviderServiceLive rejects new sessions for disabled custom instance
 );
 
 const routing = makeProviderServiceLayer();
+const separateProject = makeProviderServiceLayer();
 
 const antigravityDriver = ProviderDriverKind.make("antigravity");
 const replacementAntigravity = makeFakeCodexAdapter(antigravityDriver);
@@ -1487,6 +1499,104 @@ it.effect(
       NodeFS.rmSync(tempDir, { recursive: true, force: true });
     }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+separateProject.layer("ProviderServiceLive separate project guard", (it) => {
+  it.effect("accepts claudeAgent and distinguishes launcher and driver failures", () =>
+    Effect.gen(function* () {
+      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-separate-"));
+      const projectRootPath = NodePath.join(tempDir, "project");
+      const stateDirectory = NodePath.join(tempDir, "agent-exec");
+      NodeFS.mkdirSync(projectRootPath, { recursive: true });
+      const projectRoot = NodeFS.realpathSync(projectRootPath);
+      NodeFS.mkdirSync(NodePath.join(stateDirectory, "projects"), { recursive: true });
+      const registrationId = NodeCrypto.createHash("sha256")
+        .update(projectRoot)
+        .digest("hex")
+        .slice(0, 20);
+      NodeFS.writeFileSync(
+        NodePath.join(stateDirectory, "projects", `${registrationId}.json`),
+        encodeSeparateProjectRegistration({
+          version: 1,
+          root: projectRoot,
+          projectId: "provider-service-test",
+        }),
+      );
+
+      const environment = (launcher: string | undefined): NodeJS.ProcessEnv => ({
+        ...process.env,
+        AGENT_EXEC_STATE: stateDirectory,
+        T3CODE_EXECUTION_LAUNCHER: launcher,
+      });
+
+      try {
+        const provider = yield* ProviderService.ProviderService;
+        const claudeThreadId = asThreadId("thread-separate-claude");
+        const session = yield* provider
+          .startSession(claudeThreadId, {
+            provider: CLAUDE_AGENT_DRIVER,
+            providerInstanceId: claudeAgentInstanceId,
+            threadId: claudeThreadId,
+            cwd: projectRoot,
+            runtimeMode: "full-access",
+          })
+          .pipe(
+            Effect.provideService(
+              HostProcessEnvironment,
+              environment("/run/current-system/sw/bin/agent-exec"),
+            ),
+          );
+
+        assert.equal(session.provider, "claudeAgent");
+        assert.equal(separateProject.claude.startSession.mock.calls.length, 1);
+
+        const missingLauncherThreadId = asThreadId("thread-separate-missing-launcher");
+        const missingLauncher = yield* Effect.flip(
+          provider
+            .startSession(missingLauncherThreadId, {
+              provider: CLAUDE_AGENT_DRIVER,
+              providerInstanceId: claudeAgentInstanceId,
+              threadId: missingLauncherThreadId,
+              cwd: projectRoot,
+              runtimeMode: "full-access",
+            })
+            .pipe(Effect.provideService(HostProcessEnvironment, environment(undefined))),
+        );
+        assert.instanceOf(missingLauncher, ProviderValidationError);
+        assert.equal(
+          missingLauncher.issue,
+          "Separate projects require the managed execution launcher.",
+        );
+
+        const unsupportedDriverThreadId = asThreadId("thread-separate-unsupported-driver");
+        const unsupportedDriver = yield* Effect.flip(
+          provider
+            .startSession(unsupportedDriverThreadId, {
+              provider: CURSOR_DRIVER,
+              providerInstanceId: ProviderInstanceId.make("cursor"),
+              threadId: unsupportedDriverThreadId,
+              cwd: projectRoot,
+              runtimeMode: "full-access",
+            })
+            .pipe(
+              Effect.provideService(
+                HostProcessEnvironment,
+                environment("/run/current-system/sw/bin/agent-exec"),
+              ),
+            ),
+        );
+        assert.instanceOf(unsupportedDriver, ProviderValidationError);
+        assert.equal(
+          unsupportedDriver.issue,
+          "Separate projects do not support provider driver 'cursor'.",
+        );
+        assert.equal(separateProject.claude.startSession.mock.calls.length, 1);
+        assert.equal(separateProject.cursor.startSession.mock.calls.length, 0);
+      } finally {
+        NodeFS.rmSync(tempDir, { recursive: true, force: true });
+      }
+    }),
+  );
+});
 
 routing.layer("ProviderServiceLive routing", (it) => {
   it.effect("routes provider operations and rollback conversation", () =>
