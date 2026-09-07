@@ -81,7 +81,7 @@ export function makeDesktopContentSecurityPolicy(input: DesktopProtocolRegistrat
     "style-src 'self' 'unsafe-inline'",
     `font-src 'self' ${input.scheme}: data:`,
     "worker-src 'self' blob:",
-    "frame-src 'self'",
+    "frame-src 'self' https://files.schnau.dev",
     "form-action 'self'",
   ].join("; ");
 }

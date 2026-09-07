@@ -214,6 +214,7 @@ describe("ElectronProtocol", () => {
       "https:",
     ]);
     assert.deepEqual(directives["media-src"], ["'self'", "t3code:", "blob:", "http:", "https:"]);
+    assert.deepEqual(directives["frame-src"], ["'self'", "https://files.schnau.dev"]);
     assert.deepEqual(directives["font-src"], ["'self'", "t3code:", "data:"]);
   });
 });

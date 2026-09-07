@@ -37,10 +37,15 @@ const EXTERNAL_LINK_CONTEXT_MENU_ITEMS = [
  */
 export function externalLinkContextMenuItems(options: {
   readonly canOpenInPreview: boolean;
+  readonly previewLabel?: string | undefined;
   readonly threadLinkAction?: "link-to-thread" | "unlink-from-thread" | undefined;
 }): readonly ContextMenuItem<ExternalLinkContextMenuAction>[] {
   const items = options.canOpenInPreview
-    ? EXTERNAL_LINK_CONTEXT_MENU_ITEMS
+    ? EXTERNAL_LINK_CONTEXT_MENU_ITEMS.map((item) =>
+        item.id === "open-in-preview" && options.previewLabel
+          ? { ...item, label: options.previewLabel }
+          : item,
+      )
     : EXTERNAL_LINK_CONTEXT_MENU_ITEMS.filter((item) => item.id !== "open-in-preview");
   if (options.threadLinkAction === undefined) return items;
   return [
@@ -58,6 +63,7 @@ interface ShowExternalLinkContextMenuOptions {
   readonly position: { readonly x: number; readonly y: number };
   /** Absent means yes, which is what every caller before the browser could be missing meant. */
   readonly canOpenInPreview?: boolean;
+  readonly previewLabel?: string | undefined;
   readonly threadLinkAction?: "link-to-thread" | "unlink-from-thread" | undefined;
   readonly showContextMenu: (
     items: readonly ContextMenuItem<ExternalLinkContextMenuAction>[],
@@ -88,6 +94,7 @@ export async function showExternalLinkContextMenu({
   href,
   position,
   canOpenInPreview = true,
+  previewLabel,
   threadLinkAction,
   showContextMenu,
   openInPreview,
@@ -99,7 +106,7 @@ export async function showExternalLinkContextMenu({
   let action: ExternalLinkContextMenuAction | null;
   try {
     action = await showContextMenu(
-      externalLinkContextMenuItems({ canOpenInPreview, threadLinkAction }),
+      externalLinkContextMenuItems({ canOpenInPreview, previewLabel, threadLinkAction }),
       position,
     );
   } catch (cause) {

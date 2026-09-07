@@ -5,7 +5,8 @@
  * surface descriptors and the active surface, while each feature continues to
  * own its durable resource state. Browser surfaces point at preview tab ids,
  * terminal surfaces point at terminal session ids, file surfaces point at
- * workspace paths, and diff/files remain singleton surfaces.
+ * workspace paths, artifact surfaces point at published URLs, and diff/files
+ * remain singleton surfaces.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ChatFileAttachment, ScopedThreadRef } from "@t3tools/contracts";
@@ -13,11 +14,13 @@ import { create } from "zustand";
 import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
+import { parseArtifactLink } from "./lib/artifactLink";
 
 export const RIGHT_PANEL_KINDS = [
   "diff",
   "files",
   "file",
+  "artifact",
   "preview",
   "terminal",
   "pull-request",
@@ -51,6 +54,12 @@ export type RightPanelSurface =
       attachment?: ChatFileAttachment;
     }
   | {
+      id: `artifact:${string}`;
+      kind: "artifact";
+      url: string;
+      title: string;
+    }
+  | {
       /**
        * A change request opened beside a thread or in the pull-request list's shared panel.
        * The reference lives in the id so several pull requests can remain open as peer tabs.
@@ -75,7 +84,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v9 removed the "plan" surface kind (plans render inline in the transcript).
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
-const RIGHT_PANEL_STORAGE_VERSION = 11;
+// v12 adds validated artifact surfaces.
+const RIGHT_PANEL_STORAGE_VERSION = 12;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -93,10 +103,11 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "artifact" | "terminal" | "pull-request">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  openArtifact: (ref: ScopedThreadRef, href: string, title?: string) => void;
   openAttachment: (ref: ScopedThreadRef, attachment: ChatFileAttachment) => void;
   openPullRequest: (
     ref: ScopedThreadRef,
@@ -123,7 +134,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+    kind: Exclude<RightPanelKind, "file" | "artifact" | "terminal" | "pull-request">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -135,7 +146,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
+  kind: Exclude<RightPanelKind, "file" | "artifact" | "preview" | "terminal" | "pull-request">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -164,6 +175,13 @@ const fileSurface = (
   relativePath,
   revealLine,
   revealRequestId,
+});
+
+const artifactSurface = (url: string, title: string): RightPanelSurface => ({
+  id: `artifact:${url}`,
+  kind: "artifact",
+  url,
+  title,
 });
 
 const attachmentSurface = (attachment: ChatFileAttachment): RightPanelSurface => ({
@@ -281,6 +299,16 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                           ? surface.revealRequestId
                           : 0;
                       return [{ ...surface, revealLine, revealRequestId }];
+                    }
+                    if (surface.kind === "artifact") {
+                      if (typeof surface.url !== "string") return [];
+                      const parsed = parseArtifactLink(surface.url);
+                      if (parsed === null) return [];
+                      const title =
+                        typeof surface.title === "string" && surface.title.trim().length > 0
+                          ? surface.title.trim()
+                          : parsed.title;
+                      return [artifactSurface(parsed.url, title)];
                     }
                     if (surface.kind === "pull-request") {
                       if (
@@ -419,6 +447,18 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
             };
           }),
         })),
+      openArtifact: (ref, href, requestedTitle) =>
+        set((state) => {
+          const parsed = parseArtifactLink(href);
+          if (parsed === null) return state;
+          const title = requestedTitle?.trim() || parsed.title;
+          const surface = artifactSurface(parsed.url, title);
+          return {
+            byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+              return upsertSurface(current, surface);
+            }),
+          };
+        }),
       openAttachment: (ref, attachment) =>
         set((state) => ({
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {

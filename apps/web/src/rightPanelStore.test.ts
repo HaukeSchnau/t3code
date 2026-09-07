@@ -358,6 +358,103 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("deduplicates artifact surfaces by canonical URL and trims labels", () => {
+    useRightPanelStore
+      .getState()
+      .openArtifact(refA, "HTTPS://FILES.SCHNAU.DEV/reports/summary.html", "  Summary  ");
+    useRightPanelStore
+      .getState()
+      .openArtifact(refA, "https://files.schnau.dev/reports/summary.html");
+
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "artifact:https://files.schnau.dev/reports/summary.html",
+      surfaces: [
+        {
+          id: "artifact:https://files.schnau.dev/reports/summary.html",
+          kind: "artifact",
+          url: "https://files.schnau.dev/reports/summary.html",
+          title: "Summary",
+        },
+      ],
+    });
+  });
+
+  it("keeps artifact surfaces scoped to their thread", () => {
+    const href = "https://files.schnau.dev/reports/summary.html";
+    useRightPanelStore.getState().openArtifact(refA, href);
+    useRightPanelStore.getState().openArtifact(refB, href);
+
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA).surfaces,
+    ).toEqual([{ id: `artifact:${href}`, kind: "artifact", url: href, title: "summary.html" }]);
+    expect(
+      selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refB).surfaces,
+    ).toEqual([{ id: `artifact:${href}`, kind: "artifact", url: href, title: "summary.html" }]);
+  });
+
+  it("removes and reopens an artifact surface through the regular tab lifecycle", () => {
+    const href = "https://files.schnau.dev/reports/summary.html";
+    useRightPanelStore.getState().openArtifact(refA, href);
+    useRightPanelStore.getState().closeSurface(refA, `artifact:${href}`);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: false,
+      activeSurfaceId: null,
+      surfaces: [],
+    });
+
+    useRightPanelStore.getState().openArtifact(refA, href);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: `artifact:${href}`,
+      kind: "artifact",
+      url: href,
+      title: "summary.html",
+    });
+  });
+
+  it("drops persisted artifacts from other origins during migration", () => {
+    const validUrl = "https://files.schnau.dev/reports/summary.html";
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: `artifact:${validUrl}`,
+            surfaces: [
+              {
+                id: `artifact:${validUrl}`,
+                kind: "artifact",
+                url: validUrl,
+                title: "Summary",
+              },
+              {
+                id: "artifact:https://evil.example/report.html",
+                kind: "artifact",
+                url: "https://evil.example/report.html",
+                title: "Evil",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: `artifact:${validUrl}`,
+          surfaces: [
+            {
+              id: `artifact:${validUrl}`,
+              kind: "artifact",
+              url: validUrl,
+              title: "Summary",
+            },
+          ],
+        },
+      },
+    });
+  });
+
   it("removes persisted file surfaces when their workspace no longer exists", () => {
     useRightPanelStore.getState().openFile(refA, "src/index.ts");
     useRightPanelStore.getState().open(refA, "agents");

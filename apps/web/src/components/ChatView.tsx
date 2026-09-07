@@ -541,6 +541,7 @@ const PreviewPanel = lazy(() =>
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
+const ArtifactPreviewPanel = lazy(() => import("./files/ArtifactPreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
   "input",
@@ -7617,6 +7618,14 @@ export default function ChatView(props: ChatViewProps) {
       />
     ) : activeRightPanelSurface?.kind === "work" ? (
       <WorkPanel threadRef={activeThreadRef} />
+    ) : renderedRightPanelSurface?.kind === "artifact" ? (
+      <Suspense fallback={null}>
+        <ArtifactPreviewPanel
+          key={renderedRightPanelSurface.url}
+          url={renderedRightPanelSurface.url}
+          title={renderedRightPanelSurface.title}
+        />
+      </Suspense>
     ) : (renderedRightPanelSurface?.kind === "files" ||
         renderedRightPanelSurface?.kind === "file") &&
       ((activeProject && activeWorkspaceRoot) ||
