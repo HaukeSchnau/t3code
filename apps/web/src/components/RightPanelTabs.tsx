@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FileDiff,
+  FileText,
   Files,
   GitPullRequest,
   Globe2,
@@ -618,6 +619,8 @@ function surfaceTitle(
       return surface.relativePath.slice(
         Math.max(surface.relativePath.lastIndexOf("/"), surface.relativePath.lastIndexOf("\\")) + 1,
       );
+    case "artifact":
+      return surface.title;
     case "terminal":
       return (
         terminalLabelsById.get(surface.activeTerminalId) ??
@@ -698,6 +701,8 @@ function SurfaceIcon({
           className="size-3"
         />
       );
+    case "artifact":
+      return <FileText className="size-3 shrink-0" />;
     case "terminal":
       return <TerminalSquare className="size-3 shrink-0" />;
     case "pull-request":

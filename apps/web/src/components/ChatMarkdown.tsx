@@ -141,6 +141,7 @@ import { useAssetUrlRefresh, useAssetUrlState } from "../assets/assetUrls";
 import { cn } from "../lib/utils";
 import { useRemoteOpenResolution, type RemoteOpenMode } from "../remoteOpen";
 import { useRightPanelStore } from "../rightPanelStore";
+import { parseArtifactLink, shouldOpenArtifactInPanel } from "../lib/artifactLink";
 import { readThreadShell, useProjects } from "../state/entities";
 import { serverEnvironment } from "../state/server";
 import { shellEnvironment } from "../state/shell";
@@ -2547,6 +2548,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
             };
       const isSameDocumentLink = href?.startsWith("#") ?? false;
       const onClick = props.onClick;
+      const artifact = href && threadRef ? parseArtifactLink(href) : null;
       const canOpenInPreview = Boolean(threadRef) && isPreviewSupportedInRuntime();
       const linkChildren = <MarkdownLinkContext value>{children}</MarkdownLinkContext>;
       const link = (
@@ -2576,6 +2578,19 @@ const CHAT_MARKDOWN_COMPONENTS = {
               event.preventDefault();
               event.stopPropagation();
               openMarkdownMedia(href);
+              return;
+            }
+            if (artifact && threadRef && shouldOpenArtifactInPanel(event)) {
+              event.preventDefault();
+              event.stopPropagation();
+              const label = event.currentTarget.textContent?.trim();
+              useRightPanelStore
+                .getState()
+                .openArtifact(
+                  threadRef,
+                  artifact.url,
+                  label && !parseArtifactLink(label) ? label : undefined,
+                );
               return;
             }
             // A link to a change request in a workspace project opens beside the
@@ -2627,11 +2642,16 @@ const CHAT_MARKDOWN_COMPONENTS = {
                   : "link-to-thread";
             void showExternalLinkContextMenu({
               href,
-              canOpenInPreview,
+              canOpenInPreview: artifact !== null || canOpenInPreview,
+              previewLabel: artifact ? "Open beside conversation" : undefined,
               threadLinkAction,
               position: { x: event.clientX, y: event.clientY },
               showContextMenu: (items, position) => api.contextMenu.show(items, position),
               openInPreview: async (target) => {
+                if (artifact && threadRef) {
+                  useRightPanelStore.getState().openArtifact(threadRef, target);
+                  return;
+                }
                 const result = await openExternalLinkInPreview(target);
                 if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
                   reportMarkdownActionFailure(
