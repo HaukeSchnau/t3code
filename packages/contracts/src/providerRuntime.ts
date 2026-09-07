@@ -529,7 +529,10 @@ export type RequestResolvedPayload = typeof RequestResolvedPayload.Type;
 
 const UserInputQuestionOption = Schema.Struct({
   label: TrimmedNonEmptyStringSchema,
-  description: TrimmedNonEmptyStringSchema,
+  // Some providers omit option descriptions. Keep the field in the contract so
+  // clients can render it consistently, but do not reject an otherwise valid
+  // saved question when the description is empty.
+  description: Schema.String,
   value: Schema.optional(Schema.String),
 });
 export type UserInputQuestionOption = typeof UserInputQuestionOption.Type;
