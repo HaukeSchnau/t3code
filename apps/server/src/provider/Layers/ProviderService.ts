@@ -1,3 +1,5 @@
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { isSeparateProject } from "../../project/SeparateProjectRegistry.ts";
 /**
  * ProviderServiceLive - Cross-provider orchestration layer.
  *
@@ -1224,6 +1226,28 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
                 : "none",
           "provider.cwd.effective": effectiveCwd ?? "",
         });
+        if (effectiveCwd) {
+          const environment = yield* HostProcessEnvironment;
+          const separate = yield* Effect.tryPromise({
+            try: () => isSeparateProject(effectiveCwd, environment.AGENT_EXEC_STATE),
+            catch: (cause) =>
+              new ProviderValidationError({
+                operation: "ProviderService.startSession",
+                issue: "Could not inspect the project execution environment.",
+                cause,
+              }),
+          });
+          if (
+            separate &&
+            (!environment.T3CODE_EXECUTION_LAUNCHER ||
+              !["codex", "claude"].includes(resolvedProvider))
+          ) {
+            return yield* toValidationError(
+              "ProviderService.startSession",
+              "Separate projects currently require the managed launcher and a Codex or Claude provider.",
+            );
+          }
+        }
         const adapter = yield* registry.getByInstance(resolvedInstanceId);
         yield* stopBoundSessionBeforeInstanceChange({
           threadId,

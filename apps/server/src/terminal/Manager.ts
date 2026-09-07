@@ -1,3 +1,4 @@
+import { executionLauncherForCwd, projectExecutionArguments } from "../project/ProjectExecution.ts";
 /**
  * TerminalManager - Terminal session orchestration service interface.
  *
@@ -1190,6 +1191,7 @@ function toSessionKey(threadId: string, terminalId: string): string {
 
 function shouldExcludeTerminalEnvKey(key: string): boolean {
   const normalizedKey = key.toUpperCase();
+  if (normalizedKey === "T3CODE_EXECUTION_LAUNCHER") return false;
   if (normalizedKey.startsWith("T3CODE_")) {
     return true;
   }
@@ -2001,10 +2003,17 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       );
     }
 
+    const executionLauncher = yield* executionLauncherForCwd(session.cwd, spawnEnv).pipe(
+      Effect.mapError(
+        (cause) => new PtyAdapter.PtySpawnError({ adapter: "project-environment", cause }),
+      ),
+    );
     const attempt = yield* Effect.result(
       options.ptyAdapter.spawn({
-        shell: candidate.shell,
-        ...(candidate.args ? { args: candidate.args } : {}),
+        shell: executionLauncher || candidate.shell,
+        args: executionLauncher
+          ? projectExecutionArguments(session.cwd, candidate.shell, candidate.args ?? [])
+          : (candidate.args ?? []),
         cwd: session.cwd,
         cols: session.cols,
         rows: session.rows,

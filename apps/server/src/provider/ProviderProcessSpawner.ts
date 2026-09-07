@@ -1,3 +1,4 @@
+import { resolveProjectExecution } from "../project/ProjectExecution.ts";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Crypto from "effect/Crypto";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
@@ -39,13 +40,16 @@ export const make = (
     readonly ownerId: string;
   },
 ): ChildProcessSpawner.ChildProcessSpawner["Service"] => {
-  if (!shouldUseProviderSystemdScopes(options.platform, options.environment)) {
-    return spawner;
-  }
-
   let nextScopeId = 0;
   return ChildProcessSpawner.make((command) =>
-    spawner.spawn(makeSystemdScopedCommand(command, ++nextScopeId, options.ownerId)),
+    Effect.gen(function* () {
+      const execution = yield* resolveProjectExecution(command, options.environment);
+      return yield* spawner.spawn(
+        shouldUseProviderSystemdScopes(options.platform, options.environment)
+          ? makeSystemdScopedCommand(execution, ++nextScopeId, options.ownerId)
+          : execution,
+      );
+    }),
   );
 };
 

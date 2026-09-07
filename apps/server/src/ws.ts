@@ -1,3 +1,4 @@
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as DateTime from "effect/DateTime";
 import * as Cause from "effect/Cause";
 import * as Duration from "effect/Duration";
@@ -604,6 +605,7 @@ const makeWsRpcLayer = (
         );
 
       const loadServerConfig = Effect.gen(function* () {
+        const hostEnvironment = yield* HostProcessEnvironment;
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
         const settings = ServerSettings.redactServerSettingsForClient(
@@ -654,6 +656,7 @@ const makeWsRpcLayer = (
             otlpMetricsEnabled: config.otlpMetricsUrl !== undefined,
           },
           settings,
+          separateProjectsSupported: Boolean(hostEnvironment.T3CODE_EXECUTION_LAUNCHER),
           shellResumeCompletionMarker: true,
           ...(fileManagerRevealKind === undefined
             ? {}

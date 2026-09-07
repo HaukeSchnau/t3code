@@ -1,4 +1,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
+import { assertSeparateProjectRootUnchanged } from "../project/SeparateProjectRegistry.ts";
+import * as NodeChildProcess from "node:child_process";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as NodeCrypto from "node:crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -122,16 +125,46 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
       const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(
         canonicalCommand.workspaceRoot,
       );
+      const environment = yield* HostProcessEnvironment;
+      const launcher = environment.T3CODE_EXECUTION_LAUNCHER;
+      const prepareSeparate = Effect.tryPromise({
+        try: () =>
+          new Promise<void>((resolve, reject) => {
+            if (!launcher) {
+              reject(new Error("This host does not support separate project environments."));
+              return;
+            }
+            NodeChildProcess.execFile(
+              launcher,
+              ["create", workspaceRoot, "--project-id", canonicalCommand.projectId],
+              { timeout: 30_000 },
+              (error, _stdout, stderr) => {
+                if (error) reject(new Error(stderr.trim() || error.message));
+                else resolve();
+              },
+            );
+          }),
+        catch: (cause) =>
+          new OrchestrationDispatchCommandError({
+            message:
+              cause instanceof Error
+                ? cause.message
+                : "Failed to prepare separate project environment.",
+            cause,
+          }),
+      });
       return {
         command: {
           ...canonicalCommand,
           workspaceRoot,
           createWorkspaceRootIfMissing: canonicalCommand.createWorkspaceRootIfMissing === true,
         },
-        performDeferredPreprocessing: normalizeProjectWorkspaceRootForCreate(
-          workspaceRoot,
-          canonicalCommand.createWorkspaceRootIfMissing,
-        ).pipe(Effect.asVoid),
+        performDeferredPreprocessing: canonicalCommand.separateEnvironment
+          ? prepareSeparate
+          : normalizeProjectWorkspaceRootForCreate(
+              workspaceRoot,
+              canonicalCommand.createWorkspaceRootIfMissing,
+            ).pipe(Effect.asVoid),
       } satisfies PreparedDispatchCommand;
     }
 
@@ -142,14 +175,26 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
       const workspaceRoot = workspacePaths.canonicalizeWorkspaceRoot(
         canonicalCommand.workspaceRoot,
       );
+      const hostEnvironment = yield* HostProcessEnvironment;
       return {
         command: {
           ...canonicalCommand,
           workspaceRoot,
         },
-        performDeferredPreprocessing: normalizeProjectWorkspaceRoot(workspaceRoot).pipe(
-          Effect.asVoid,
-        ),
+        performDeferredPreprocessing: Effect.tryPromise({
+          try: () =>
+            assertSeparateProjectRootUnchanged(
+              canonicalCommand.projectId,
+              workspaceRoot,
+              hostEnvironment.AGENT_EXEC_STATE,
+            ),
+          catch: (cause) =>
+            new OrchestrationDispatchCommandError({
+              message:
+                cause instanceof Error ? cause.message : "Could not inspect project registration.",
+              cause,
+            }),
+        }).pipe(Effect.andThen(normalizeProjectWorkspaceRoot(workspaceRoot)), Effect.asVoid),
       } satisfies PreparedDispatchCommand;
     }
 

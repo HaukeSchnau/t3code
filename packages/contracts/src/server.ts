@@ -609,6 +609,7 @@ export const ServerConfig = Schema.Struct({
   providers: ServerProviders,
   /** Optional because older servers and installations without a catalog omit it. */
   skillPackCatalog: Schema.optional(SkillPackCatalog),
+  separateProjectsSupported: Schema.optionalKey(Schema.Boolean),
   // Editor ids grow over time; drop ones this build does not know rather than
   // failing the whole config decode.
   availableEditors: ForwardCompatibleArray(EditorId),
