@@ -188,6 +188,30 @@ describe("ProviderRuntimeEvent", () => {
     expect(optional.payload.optional).toBe(true);
   });
 
+  it("accepts saved questions with empty option descriptions", () => {
+    const parsed = decodeRuntimeEvent({
+      type: "user-input.requested",
+      eventId: "event-empty-option-description",
+      provider: "codex",
+      sessionId: "runtime-session-empty-description",
+      createdAt: "2026-02-28T00:00:01.000Z",
+      threadId: "thread-empty-description",
+      requestId: "request-empty-description",
+      payload: {
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Which option?",
+            options: [{ label: "First", description: "" }],
+          },
+        ],
+      },
+    });
+
+    expect(parsed.type).toBe("user-input.requested");
+  });
+
   it("decodes user-input.resolved with answer map", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.resolved",
