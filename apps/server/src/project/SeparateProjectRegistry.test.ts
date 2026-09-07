@@ -6,11 +6,22 @@ import * as NodePath from "node:path";
 import { afterEach, expect } from "vite-plus/test";
 import { it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Schema from "effect/Schema";
 import { executionLauncherForCwd } from "./ProjectExecution.ts";
 import {
   isSeparateProject,
   assertSeparateProjectRootUnchanged,
 } from "./SeparateProjectRegistry.ts";
+
+const encodeRegistration = Schema.encodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      version: Schema.Number,
+      root: Schema.String,
+      projectId: Schema.String,
+    }),
+  ),
+);
 
 const roots: string[] = [];
 afterEach(() => {
@@ -39,7 +50,7 @@ it.effect(
       const id = NodeCrypto.createHash("sha256").update(root).digest("hex").slice(0, 20);
       NodeFS.writeFileSync(
         NodePath.join(state, "projects", `${id}.json`),
-        JSON.stringify({ version: 1, root, projectId: "project-1" }),
+        yield* encodeRegistration({ version: 1, root, projectId: "project-1" }),
       );
       expect(
         yield* Effect.promise(() => isSeparateProject(NodePath.join(root, "src"), state)),
