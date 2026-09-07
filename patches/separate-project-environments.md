@@ -13,7 +13,7 @@ Fresh projects can opt into an infra-managed filesystem environment while retain
 
 ## Initial limits
 
-Codex and Claude/Claudex are supported. Other providers are rejected for registered projects until their execution paths are verified. Separate projects use local threads; managed workspaces are rejected to avoid leaving the registered directory. Native session forks/imports are not verified for private provider homes.
+Codex (`codex`) and Claude/Claudex (`claudeAgent`) are supported. Other providers are rejected for registered projects until their execution paths are verified. Separate projects use local threads; managed workspaces are rejected to avoid leaving the registered directory. Native session forks/imports are not verified for private provider homes.
 
 This feature reduces accidental context discovery. It is not a security boundary: network access, Nix's daemon, global plugins, personal integrations, and explicit T3 thread tools remain available. T3's attachment directory is read-only and shared so attachments added after provider startup remain readable. Source project directories and T3's database/transcripts are not mounted.
 
