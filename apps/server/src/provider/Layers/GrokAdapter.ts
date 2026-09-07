@@ -2140,6 +2140,7 @@ export function makeGrokAdapter(grokSettings: GrokSettings, options?: GrokAdapte
         assistantTranscriptRecovery: "none",
         turnContinuation: "unsupported",
       },
+      compaction: { type: "slash-command", command: "/compact" },
       startSession,
       sendTurn,
       interruptTurn,

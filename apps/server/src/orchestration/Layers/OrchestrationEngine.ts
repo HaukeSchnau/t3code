@@ -37,6 +37,7 @@ import { OrchestrationCommandReceiptRepository } from "../../persistence/Service
 import type { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   OrchestrationCommandInvariantError,
+  isOrchestrationCommandRejection,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandReceiptMismatchError,
   type OrchestrationDispatchError,
@@ -54,7 +55,8 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
-const isMissingAggregateInvariant = (error: OrchestrationCommandInvariantError) =>
+const isMissingAggregateInvariant = (error: unknown): error is OrchestrationCommandInvariantError =>
+  isOrchestrationCommandInvariantError(error) &&
   error.detail.includes("does not exist for command");
 
 interface CommandEnvelope {
@@ -247,14 +249,36 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return yield* resolveExistingReceipt(existingReceipt.value, receiptIdentity);
         }
 
+        if (
+          envelope.command.type === "thread.pull-request.sync" &&
+          (yield* eventStore.hasEventAfter({
+            aggregateKind: "thread",
+            aggregateId: envelope.command.threadId,
+            sequenceExclusive: envelope.command.snapshotSequence,
+            type: "thread.created",
+          }))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: `thread ${envelope.command.threadId} was recreated before pull request discovery`,
+          });
+        }
+        const userInputActivity =
+          envelope.command.type === "thread.user-input.respond" ||
+          envelope.command.type === "thread.user-input.dismiss"
+            ? yield* projectionSnapshotQuery.getUserInputActivity(envelope.command)
+            : Option.none();
         const decide = () =>
           decideOrchestrationCommand({
             command: envelope.command,
             readModel: commandReadModel,
+            ...(Option.isSome(userInputActivity)
+              ? { userInputActivity: userInputActivity.value }
+              : {}),
           }).pipe(
             Effect.provideService(Crypto.Crypto, crypto),
             Effect.mapError((cause) =>
-              isOrchestrationCommandInvariantError(cause)
+              isOrchestrationCommandRejection(cause)
                 ? cause
                 : new OrchestrationCommandInvariantError({
                     commandType: envelope.command.type,
@@ -432,7 +456,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             );
           }
 
-          if (isOrchestrationCommandInvariantError(error)) {
+          if (isOrchestrationCommandRejection(error)) {
             const durableRejection = yield* Effect.exit(
               Effect.gen(function* () {
                 const inserted = yield* commandReceiptRepository.insertRejected({

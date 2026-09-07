@@ -111,6 +111,9 @@ const capabilitiesLayer = Layer.effectContext(
     return Context.make(
       CloudSession,
       CloudSession.of({
+        identity: Effect.sync(() =>
+          Option.fromNullishOr(appAtomRegistry.get(managedRelaySessionAtom)),
+        ),
         clerkToken: Effect.fail(
           new ConnectionBlockedError({
             reason: "unsupported",

@@ -220,6 +220,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ...(position === undefined ? {} : { position }),
     }),
   openExternal: (url: string) => invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  openSystemSettings: (pane: string) =>
+    invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
   consumePendingOpenWorkspaceRequests: () =>
     invoke(IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL),
   onOpenWorkspaceRequest: (listener) => {

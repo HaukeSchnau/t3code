@@ -4,6 +4,7 @@ export const PICK_THEME_FILES_CHANNEL = "desktop:pick-theme-files";
 export const SET_THEME_CHANNEL = "desktop:set-theme";
 export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
+export const OPEN_SYSTEM_SETTINGS_CHANNEL = "desktop:open-system-settings";
 export const CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL =
   "desktop:consume-pending-open-workspace-requests";
 export const OPEN_WORKSPACE_REQUEST_CHANNEL = "desktop:open-workspace-request";

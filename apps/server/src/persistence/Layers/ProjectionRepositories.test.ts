@@ -5,20 +5,24 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
+import * as Statement from "effect/unstable/sql/Statement";
 
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionProviderUsageLimitsRepositoryLive } from "./ProjectionProviderUsageLimits.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
+import { ProjectionThreadProposedPlanRepositoryLive } from "./ProjectionThreadProposedPlans.ts";
 import { ProjectionProjectRepository } from "../Services/ProjectionProjects.ts";
 import { ProjectionProviderUsageLimitsRepository } from "../Services/ProjectionProviderUsageLimits.ts";
 import { ProjectionThreadRepository } from "../Services/ProjectionThreads.ts";
+import { ProjectionThreadProposedPlanRepository } from "../Services/ProjectionThreadProposedPlans.ts";
 
 const projectionRepositoriesLayer = it.layer(
   Layer.mergeAll(
     ProjectionProjectRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionProviderUsageLimitsRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
+    ProjectionThreadProposedPlanRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
@@ -272,7 +276,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
     }),
   );
 
-  it.effect("round-trips a linked pull request through the thread row", () =>
+  it.effect("round-trips manual and branch pull requests through the thread row", () =>
     Effect.gen(function* () {
       const threads = yield* ProjectionThreadRepository;
       const linkedPullRequest = {
@@ -280,6 +284,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         repository: "pingdotgg/t3code",
         number: 42,
         url: "https://github.com/pingdotgg/t3code/pull/42",
+      };
+      const branchPullRequest = {
+        ...linkedPullRequest,
+        number: 43,
+        url: "https://github.com/pingdotgg/t3code/pull/43",
       };
 
       yield* threads.upsert({
@@ -297,6 +306,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         worktreePath: null,
         workspaceId: null,
         linkedPullRequest,
+        branchPullRequest,
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
@@ -316,6 +326,10 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const persisted = yield* threads.getById({ threadId: ThreadId.make("thread-linked-pr") });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.linkedPullRequest, linkedPullRequest);
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.branchPullRequest, branchPullRequest);
+
+      const listed = yield* threads.listByProjectId({ projectId: linkedPullRequest.projectId });
+      assert.deepStrictEqual(listed[0]?.branchPullRequest, branchPullRequest);
 
       const row = Option.getOrNull(persisted);
       if (row === null) return yield* Effect.die("Expected linked thread row to exist.");
@@ -323,6 +337,12 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
 
       const cleared = yield* threads.getById({ threadId: ThreadId.make("thread-linked-pr") });
       assert.strictEqual(Option.getOrNull(cleared)?.linkedPullRequest, null);
+      assert.deepStrictEqual(Option.getOrNull(cleared)?.branchPullRequest, branchPullRequest);
+
+      yield* threads.upsert({ ...row, branchPullRequest: null });
+      const branchCleared = yield* threads.getById({ threadId: row.threadId });
+      assert.strictEqual(Option.getOrNull(branchCleared)?.branchPullRequest, null);
+      assert.deepStrictEqual(Option.getOrNull(branchCleared)?.linkedPullRequest, linkedPullRequest);
     }),
   );
 });

@@ -1,14 +1,13 @@
 # Keybindings
 
-Edit keybindings from **Settings** → **Keybindings**. That page lists every command, its current
-shortcut, whether it is a default or your own, and warns about conflicts.
+Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
+also lists the command IDs and defaults available in your version.
 
-The same configuration lives in `~/.t3/userdata/keybindings.json` on the machine running the
-server, if you prefer editing it directly. T3 Code writes the built-in defaults into that file on
-first run, and adds any new defaults on later startups unless a rule of yours already claims the
-command or the shortcut.
+## Edit the configuration file
 
-The file is a JSON array of rules.
+Keybindings live on the environment's machine, in
+`~/.t3/userdata/keybindings.json` by default. You can edit this file directly.
+It is a JSON array of rules:
 
 ```json
 [
@@ -126,7 +125,32 @@ Examples:
 
 ## Precedence
 
-- Rules are evaluated in array order.
-- For a key event, the last rule where both `key` matches and `when` evaluates to `true` wins.
-- Precedence is across commands, not only within the same command. A later rule for a different
-  command can take a key away from an earlier one.
+The last rule whose key and condition both match wins, even if it belongs to a
+different command. Put a more specific rule after a general one when they share
+a shortcut.
+
+## Commands with special behavior
+
+`chat.new` may ask you to choose a project when there is more than one.
+`chat.newLocal` skips that chooser. Both use your
+[new-thread defaults](./thread-sidebar.md#start-a-thread).
+
+## Reserved shortcuts
+
+In the desktop app, `mod+w` closes the focused terminal or the active right-panel
+tab. When nothing remains to close, it closes the window. In a browser, `mod+w`
+closes the browser tab; rebind `rightPanel.close` and `terminal.close` to an available
+shortcut such as `alt+w`.
+
+Many defaults include `!terminalFocus` so they do not intercept terminal input.
+Keep that condition when remapping them if you want the same behavior.
+
+## Desktop quit shortcut
+
+Use `Cmd+Q` on macOS or `Ctrl+Q` on Windows and Linux. In the default **Hold** mode,
+hold for 1.2 seconds or press twice within 500 milliseconds. Holding requires
+keyboard repeat; if repeat is disabled, use two presses or the application menu.
+
+Change **Settings → General → Confirmations → Quit shortcut** to **Direct** for a
+single press or **Double press** for two presses only. Choosing **Quit** from the
+application menu always quits immediately.

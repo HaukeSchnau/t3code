@@ -58,14 +58,40 @@ Shadow home path: empty
 Log in with Codex normally:
 
 ```bash
-codex login
+mkdir -p ~/.codex_personal
+CODEX_HOME=~/.codex_personal codex login
 ```
 
-## Send feedback to OpenAI
+Then add a second Codex instance in **Settings > Providers**:
 
-In an existing Codex thread, send `/feedback` or `/feedback` followed by a description of the
-issue. T3 Code uploads the thread and Codex logs to OpenAI and shows a thread ID that you can copy
-and share with OpenAI employees.
+| Instance       | CODEX_HOME path | Shadow home path    |
+| -------------- | --------------- | ------------------- |
+| Codex Work     | `~/.codex`      | Leave empty         |
+| Codex Personal | `~/.codex`      | `~/.codex_personal` |
+
+Both instances must use the same **CODEX_HOME path**. T3 Code prepares the shared
+state in the shadow directory; do not populate it by copying your whole Codex
+home.
+
+The shadow account needs its own `auth.json` file. If Codex uses an OS credential
+store, configure file storage for this setup. See
+[OpenAI's credential storage guide](https://learn.chatgpt.com/docs/auth#credential-storage).
+
+Use a completely separate **CODEX_HOME path**, with no shadow home, when you want
+separate Codex sessions and configuration. That instance cannot continue threads
+from the other home.
+
+## Switch accounts in an existing thread
+
+Choose the other account from the thread's model picker. T3 Code offers compatible
+Codex instances that share the thread's **CODEX_HOME path**. Changing accounts does
+not move the conversation into a separate Codex home.
+
+If the account is missing from the picker, compare the home paths in provider
+settings. If two instances show the same unexpected account or models, check their
+reported accounts, refresh provider status, and confirm the second instance has
+its own shadow path and login. A shadow-home conflict usually means the directory
+contains a copied Codex setup. Use a fresh shadow directory and sign in again.
 
 ## Answer questions while Codex works
 

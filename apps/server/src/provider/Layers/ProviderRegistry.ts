@@ -127,6 +127,27 @@ const shouldRetainMissingOpenCodeMetadata = (provider: ServerProvider): boolean 
   provider.driver === ProviderDriverKind.make("opencode") &&
   shouldRetainMissingProviderModels(provider);
 
+const carrySavedAntigravityAccount = (
+  previousProvider: ServerProvider,
+  nextProvider: ServerProvider,
+): Pick<ServerProvider, "auth" | "status"> | undefined => {
+  const antigravity = ProviderDriverKind.make("antigravity");
+  if (
+    nextProvider.driver !== antigravity ||
+    previousProvider.driver !== antigravity ||
+    !nextProvider.enabled ||
+    nextProvider.auth.status !== "unknown" ||
+    previousProvider.auth.status !== "authenticated" ||
+    (nextProvider.auth.type !== undefined && nextProvider.auth.type !== previousProvider.auth.type) ||
+    (!nextProvider.installed && nextProvider.status !== "warning")
+  ) {
+    return undefined;
+  }
+  const status =
+    nextProvider.installed && nextProvider.status === "warning" ? "ready" : nextProvider.status;
+  return { auth: previousProvider.auth, status };
+};
+
 const mergeProviderModels = (
   provider: ServerProvider,
   previousModels: ReadonlyArray<ServerProvider["models"][number]>,
@@ -174,9 +195,12 @@ export const mergeProviderSnapshot = (
   const composerCatalogChanged =
     !Equal.equals(previousProvider.slashCommands, slashCommands) ||
     !Equal.equals(previousProvider.skills, skills);
+  const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
+  const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
 
   return {
-    ...nextProvider,
+    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
+    ...savedAccount,
     models: isClaudexInstance(nextProvider.instanceId)
       ? nextProvider.models
       : mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
