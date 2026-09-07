@@ -35,6 +35,7 @@ import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
+import { OrchestrationCommandInvariantError } from "../Errors.ts";
 
 import { deriveServerPaths, ServerConfig } from "../../config.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -4080,6 +4081,242 @@ describe("ProviderCommandReactor", () => {
       requestId: "approval-request-1",
       decision: "accept",
     });
+  });
+
+  async function appendAsyncQuestion(harness: Awaited<ReturnType<typeof createHarness>>) {
+    const threadId = ThreadId.make("thread-1");
+    const requestId = asApprovalRequestId("codex-async:question-1");
+    const createdAt = "2026-01-01T00:00:01.000Z";
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("async-question"),
+        threadId,
+        activity: {
+          id: EventId.make("async-question"),
+          kind: "user-input.requested",
+          tone: "info",
+          summary: "Input requested",
+          turnId: null,
+          createdAt,
+          payload: {
+            requestId,
+            responseMode: "message",
+            questions: [{ id: "0", header: "Question", question: "Which name?", options: [] }],
+          },
+        },
+        createdAt,
+      }),
+    );
+    return { threadId, requestId, createdAt };
+  }
+
+  it.each(["running", "ready", "stopped", null] as const)(
+    "delivers an async question answer as a durable message with session %s",
+    async (status) => {
+      const harness = await createHarness();
+      const { threadId, requestId, createdAt } = await appendAsyncQuestion(harness);
+      if (status !== null) {
+        await Effect.runPromise(
+          harness.engine.dispatch({
+            type: "thread.session.set",
+            commandId: CommandId.make("async-session"),
+            threadId,
+            session: {
+              threadId,
+              status,
+              providerName: "codex",
+              runtimeMode: "approval-required",
+              activeTurnId: status === "running" ? asTurnId("active-turn") : null,
+              lastError: null,
+              updatedAt: createdAt,
+            },
+            createdAt,
+          }),
+        );
+      }
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.user-input.respond",
+          commandId: CommandId.make("async-answer"),
+          threadId,
+          requestId,
+          answers: { "0": "Example name" },
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      const thread = (await harness.readModel()).threads[0]!;
+      expect(harness.respondToUserInput).not.toHaveBeenCalled();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.sendTurn.mock.calls[0]?.[0]).toMatchObject({
+        input: "Answers to your questions:\n\nWhich name?\nExample name",
+      });
+      expect(thread.messages.filter((message) => message.role === "user")).toMatchObject([
+        { text: "Answers to your questions:\n\nWhich name?\nExample name" },
+      ]);
+      expect(
+        thread.activities.find((activity) => activity.kind === "user-input.resolved")?.payload,
+      ).toMatchObject({ requestId, responseMode: "message" });
+
+      // A second device or a retried command must not send the answer twice.
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.user-input.respond",
+          commandId: CommandId.make("async-answer-duplicate"),
+          threadId,
+          requestId,
+          answers: { "0": "Example name" },
+          createdAt,
+        }),
+      );
+      await harness.drain();
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.respondToUserInput).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["queue", "resolve"] as const)(
+    "keeps async answers retryable when %s persistence fails without duplicating an accepted message",
+    async (phase) => {
+      const harness = await createHarness();
+      const { threadId, requestId, createdAt } = await appendAsyncQuestion(harness);
+      const dispatch = harness.engine.dispatch;
+      const spy = vi.spyOn(harness.engine, "dispatch").mockImplementation((command) => {
+        if (
+          (phase === "queue" && command.type === "thread.message.queue") ||
+          (phase === "resolve" &&
+            command.type === "thread.activity.append" &&
+            command.activity.kind === "user-input.resolved")
+        ) {
+          return Effect.fail(
+            new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: "Simulated persistence failure",
+            }),
+          );
+        }
+        return dispatch(command);
+      });
+      const answer = {
+        type: "thread.user-input.respond" as const,
+        threadId,
+        requestId,
+        answers: { "0": "Example name" },
+        createdAt,
+      };
+      await Effect.runPromise(
+        harness.engine.dispatch({ ...answer, commandId: CommandId.make("failed-answer") }),
+      );
+      await harness.drain();
+      const failed = (await harness.readModel()).threads[0]!;
+      expect(failed.activities.some((activity) => activity.kind === "user-input.resolved")).toBe(
+        false,
+      );
+      expect(
+        failed.activities.find((activity) => activity.kind === "provider.user-input.respond.failed")
+          ?.payload,
+      ).toMatchObject({ requestId, responseMode: "message" });
+      expect(harness.sendTurn).toHaveBeenCalledTimes(phase === "queue" ? 0 : 1);
+      spy.mockRestore();
+
+      await Effect.runPromise(
+        harness.engine.dispatch({ ...answer, commandId: CommandId.make("retried-answer") }),
+      );
+      await harness.drain();
+      const retried = (await harness.readModel()).threads[0]!;
+      expect(retried.messages.filter((message) => message.role === "user")).toHaveLength(1);
+      expect(retried.activities.some((activity) => activity.kind === "user-input.resolved")).toBe(
+        true,
+      );
+      expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+      expect(harness.respondToUserInput).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects malformed async answers without exposing their values or closing the question", async () => {
+    const harness = await createHarness();
+    const { threadId, requestId, createdAt } = await appendAsyncQuestion(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make("invalid-answer"),
+        threadId,
+        requestId,
+        createdAt,
+        answers: { "0": { unexpected: "sensitive-test-value" } },
+      }),
+    );
+    await harness.drain();
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.messages.filter((message) => message.role === "user")).toHaveLength(0);
+    expect(thread.activities.some((activity) => activity.kind === "user-input.resolved")).toBe(
+      false,
+    );
+    const failure = thread.activities.find(
+      (activity) => activity.kind === "provider.user-input.respond.failed",
+    );
+    expect(failure?.summary).toBe("Async question answer was not accepted");
+    expect(JSON.stringify(failure)).not.toContain("sensitive-test-value");
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
+  });
+
+  it.each([{ answer: ["One", "Two"] }, { answer: { answers: ["One", "Two"] } }])(
+    "preserves structured async answers %j",
+    async ({ answer }) => {
+      const harness = await createHarness();
+      const { threadId, requestId, createdAt } = await appendAsyncQuestion(harness);
+      await Effect.runPromise(
+        harness.engine.dispatch({
+          type: "thread.user-input.respond",
+          commandId: CommandId.make("structured-answer"),
+          threadId,
+          requestId,
+          createdAt,
+          answers: { "0": answer },
+        }),
+      );
+      await harness.drain();
+      expect((await harness.readModel()).threads[0]?.messages[0]?.text).toBe(
+        "Answers to your questions:\n\nWhich name?\nOne\nTwo",
+      );
+    },
+  );
+
+  it("retains an accepted async answer when the recovered provider fails to start", async () => {
+    const harness = await createHarness({
+      startSessionEffect: () =>
+        Effect.fail(
+          new ProviderAdapterRequestError({
+            provider: "codex",
+            method: "thread/start",
+            detail: "Provider unavailable for test",
+          }),
+        ),
+    });
+    const { threadId, requestId, createdAt } = await appendAsyncQuestion(harness);
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.user-input.respond",
+        commandId: CommandId.make("provider-failed-answer"),
+        threadId,
+        requestId,
+        createdAt,
+        answers: { "0": "Example name" },
+      }),
+    );
+    await harness.drain();
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.messages.filter((message) => message.role === "user")).toMatchObject([
+      { text: "Answers to your questions:\n\nWhich name?\nExample name" },
+    ]);
+    expect(thread.activities.some((activity) => activity.kind === "user-input.resolved")).toBe(
+      true,
+    );
+    expect(
+      thread.activities.some((activity) => activity.kind === "provider.turn.start.failed"),
+    ).toBe(true);
+    expect(harness.respondToUserInput).not.toHaveBeenCalled();
   });
 
   it("reacts to thread.user-input.respond by forwarding structured user input answers", async () => {

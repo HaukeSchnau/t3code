@@ -76,6 +76,11 @@ Your answers are sent as a new message. They reach the current turn while Codex 
 start a new turn if it has finished. Unanswered questions stay available after you reconnect.
 This works in the web, desktop, and mobile apps. Codex must support async questions.
 
+Your submitted answers appear as a message in the conversation, together with their questions.
+If T3 cannot save the answer, the question stays open so you can retry. If the answer was saved
+but Codex could not receive it, the message remains in the conversation with the normal delivery
+failure state. Retrying a question does not create a second copy of an already accepted answer.
+
 ## Sub-agent models
 
 The web and desktop Agents panel shows each sub-agent's model and reasoning effort when Codex

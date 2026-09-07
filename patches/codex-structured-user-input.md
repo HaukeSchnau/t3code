@@ -40,3 +40,26 @@ When updating Codex protocol bindings, keep the raw request context until genera
 - Web and mobile state tests cover optional prompt derivation; package typechecks cover the shared
   Skip controls on every client surface.
 - Exercise a live Codex prompt at desktop and narrow viewport widths after composer or banner syncs.
+
+## Async answer delivery
+
+Codex async agent messages with questions are persisted with `responseMode: "message"`.
+They never register a provider callback. The provider-command reactor reads the saved request
+with `getUserInputActivity`, then dispatches an immediate queued user message using the existing
+turn pipeline. That pipeline handles steering a running turn and recovering an inactive session.
+Web, desktop and mobile submit the same typed answer command; clients do not choose the transport.
+Callback-based questions and approvals keep their existing response path.
+
+The message includes each original question and its submitted answer. Resolve the question only
+after message persistence succeeds. A stable message ID derived from thread and request prevents
+double delivery after repeated submissions or an interrupted resolution write. Before enqueueing, check whether that message
+already exists in the durable thread. Command IDs belong to each response attempt so corrected
+answers can retry a rejected save without conflicting with its command receipt. Persistence
+failures keep the question open; provider delivery failures remain visible on the durable message.
+Invalid answer payloads produce a failure without echoing submitted values. Response mode and request
+ID are span attributes and failure-activity fields; answer contents are not diagnostic attributes.
+
+Focused reactor tests cover active, ready, stopped and absent sessions, duplicate submissions,
+failed message/resolution writes followed by retry, malformed inputs and structured answer forms.
+The same suite retains the callback-response and stale-callback tests. The database lookup must
+select `activity_revision` as required by the activity row schema.
