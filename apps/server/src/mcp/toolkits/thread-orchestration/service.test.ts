@@ -22,6 +22,10 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
+import * as Queue from "effect/Queue";
+import * as Sink from "effect/Sink";
+import { ChildProcessSpawner } from "effect/unstable/process";
+import { deriveThreadCoordinationShell } from "../../../orchestration/ThreadCoordinationProjection.ts";
 
 import { ProjectionSnapshotQuery } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../../orchestration/Services/OrchestrationEngine.ts";
@@ -432,6 +436,105 @@ const makeTestThreadDiscoveryDependencies = (
     }),
   );
 const testThreadDiscoveryDependencies = makeTestThreadDiscoveryDependencies();
+
+it.live("watch alerts request immediate delivery and compare previous observations", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const output = yield* Queue.unbounded<string>();
+      const notifications =
+        yield* Queue.unbounded<Extract<OrchestrationCommand, { type: "thread.message.queue" }>>();
+      const observations = yield* Queue.unbounded<string>();
+      const activities: OrchestrationThread["activities"][number][] = [];
+      const prompts: string[] = [];
+      const spawner = ChildProcessSpawner.make(() =>
+        Effect.succeed(
+          ChildProcessSpawner.makeHandle({
+            pid: ChildProcessSpawner.ProcessId(1),
+            exitCode: Effect.never,
+            isRunning: Effect.succeed(true),
+            kill: () => Effect.void,
+            stdin: Sink.drain,
+            stdout: Stream.fromQueue(output).pipe(Stream.encodeText),
+            stderr: Stream.empty,
+            all: Stream.empty,
+            getInputFd: () => Sink.drain,
+            getOutputFd: () => Stream.empty,
+            unref: Effect.succeed(Effect.void),
+          }),
+        ),
+      );
+      const testLayer = ThreadOrchestrationServiceLive.pipe(
+        Layer.provide(
+          Layer.mock(OrchestrationEngineService)({
+            streamDomainEvents: Stream.empty,
+            dispatch: (command) =>
+              Effect.gen(function* () {
+                if (command.type === "thread.activity.append") {
+                  activities.push(command.activity);
+                  if (command.activity.kind === "thread-orchestration.watch.event") {
+                    yield* Queue.offer(observations, command.activity.summary);
+                  }
+                }
+                if (command.type === "thread.message.queue")
+                  yield* Queue.offer(notifications, command);
+                return { sequence: activities.length };
+              }),
+          }),
+        ),
+        Layer.provide(
+          Layer.mock(ProjectionSnapshotQuery)({
+            getShellSnapshot: () => Effect.succeed(shellSnapshot),
+            getThreadShellById: getThreadShellById(),
+            getProjectShellById: getProjectShellById(),
+            getThreadCoordinationShell: () =>
+              Effect.sync(() => deriveThreadCoordinationShell(activities)),
+            listThreadRelationshipActivities: () => Effect.succeed([]),
+          }),
+        ),
+        Layer.provide(Layer.mock(ThreadWorkspaceService.ThreadWorkspaceService)({})),
+        Layer.provide(unsupportedCodexForkImporterLayer),
+        Layer.provide(
+          Layer.mock(TextGeneration.TextGeneration)({
+            generateNotification: (input) =>
+              Effect.sync(() => {
+                prompts.push(input.prompt);
+                return {
+                  kind: "watchDecision" as const,
+                  result: {
+                    action: prompts.length === 1 ? ("wake" as const) : ("ignore" as const),
+                    summary:
+                      prompts.length === 1
+                        ? "Run 372 failed"
+                        : "Retry in progress; old failure unchanged",
+                  },
+                };
+              }),
+          }),
+        ),
+        Layer.provide(Layer.succeed(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+        Layer.provide(testThreadDiscoveryDependencies),
+      );
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadOrchestrationService;
+        const watch = yield* service.createWatch(scope, {
+          source: { type: "shell", command: "test-source" },
+          policy: { type: "model", instruction: "Report new CI failures" },
+        });
+        yield* Queue.offer(output, "Run 372 failed; run 371 failed\n");
+        const notification = yield* Queue.take(notifications);
+        expect(notification.delivery).toBe("immediate");
+        expect(notification.message.origin?.type).toBe("watch");
+        yield* Queue.take(observations);
+        yield* Queue.offer(output, "Run 372 retry in progress; run 371 failed\n");
+        yield* Queue.take(observations);
+        expect(prompts[1]).toContain("Run 372 failed; run 371 failed");
+        expect(prompts[1]).toContain("Run 372 failed");
+        expect(prompts[1]).toContain("unchanged");
+        yield* service.cancelWatch(scope, { watchId: watch.watchId });
+      }).pipe(Effect.provide(testLayer));
+    }),
+  ),
+);
 
 it.effect("lists thread model choices with curated model selections and reasoning options", () => {
   const testLayer = ThreadOrchestrationServiceLive.pipe(

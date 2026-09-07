@@ -10,8 +10,10 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import type { OrchestrationWatchSource } from "@t3tools/contracts";
 
 const BATCH_WINDOW = Duration.millis(200);
-const MAX_EVENT_CHARS = 500;
 const MAX_BATCH_CHARS = 3_000;
+// A CLI report often exceeds 64 short lines. Keep its burst together before
+// applying the character budget and deciding whether to notify.
+const MAX_BATCH_EVENTS = 1_024;
 
 /** Mark shutdown synchronously, before child-process exit callbacks can close durable watches. */
 export const makeWatchShutdownGuard = Effect.fn("makeWatchShutdownGuard")(function* (
@@ -72,7 +74,7 @@ export function boundWatchEvents(events: ReadonlyArray<string>): [string, ...str
   const bounded: string[] = [];
   let remaining = MAX_BATCH_CHARS;
   for (const raw of events) {
-    const event = raw.trim().slice(0, MAX_EVENT_CHARS);
+    const event = raw.trim();
     if (event.length === 0 || remaining <= 0) continue;
     const accepted = event.slice(0, remaining);
     bounded.push(accepted);
@@ -159,7 +161,7 @@ const runWebSocket = (
   onBatch: (events: [string, ...string[]]) => Effect.Effect<void, WatchSourceError>,
 ): Effect.Effect<void, WatchSourceError> =>
   websocketStream(url).pipe(
-    Stream.groupedWithin(64, BATCH_WINDOW),
+    Stream.groupedWithin(MAX_BATCH_EVENTS, BATCH_WINDOW),
     Stream.map((chunk) => boundWatchEvents([...chunk])),
     Stream.filter((events): events is [string, ...string[]] => events !== null),
     Stream.runForEach(onBatch),
@@ -222,7 +224,7 @@ export const runWatchSource = Effect.fn("runWatchSource")(function* (
             child.stdout.pipe(
               Stream.decodeText(),
               Stream.splitLines,
-              Stream.groupedWithin(64, BATCH_WINDOW),
+              Stream.groupedWithin(MAX_BATCH_EVENTS, BATCH_WINDOW),
               Stream.map((chunk) => boundWatchEvents([...chunk])),
               Stream.filter((events): events is [string, ...string[]] => events !== null),
               Stream.runForEach(onBatch),

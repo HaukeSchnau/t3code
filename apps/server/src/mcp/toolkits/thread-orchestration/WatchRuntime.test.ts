@@ -12,6 +12,28 @@ import {
 } from "./WatchRuntime.ts";
 
 describe("watch shutdown and command failures", () => {
+  it.effect("keeps a command report longer than 64 lines in one notification batch", () =>
+    Effect.gen(function* () {
+      const batches: string[][] = [];
+      yield* runWatchSource(
+        {
+          type: "process",
+          argv: [
+            process.execPath,
+            "-e",
+            'process.stdout.write(Array.from({length:105},(_,i)=>`line ${i}`).join("\\n")+"\\n")',
+          ],
+        },
+        process.cwd(),
+        (events) =>
+          Effect.sync(() => {
+            batches.push(events);
+          }),
+      ).pipe(Effect.provide(NodeServices.layer));
+      expect(batches).toHaveLength(1);
+      expect(batches[0]).toHaveLength(105);
+    }),
+  );
   it.effect("registers and removes listeners on the real process by default", () =>
     Effect.gen(function* () {
       const before = process.listenerCount("SIGTERM");
@@ -88,8 +110,8 @@ describe("durable watch event pacing", () => {
     const bounded = boundWatchEvents(["  first  ", "x".repeat(600), "y".repeat(3_000)]);
 
     expect(bounded?.[0]).toBe("first");
-    expect(bounded?.[1]).toHaveLength(500);
-    expect(bounded?.join("")).toHaveLength(1_005);
+    expect(bounded?.[1]).toHaveLength(600);
+    expect(bounded?.join("")).toHaveLength(3_000);
     expect(
       boundWatchEvents(Array.from({ length: 10 }, () => "z".repeat(500)))?.join(""),
     ).toHaveLength(3_000);

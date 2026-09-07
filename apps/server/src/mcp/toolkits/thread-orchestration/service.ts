@@ -2866,6 +2866,8 @@ const make = Effect.gen(function* () {
     watch: OrchestrationWatchShell,
     cwd: string,
     events: [string, ...string[]],
+    previousEvents: ReadonlyArray<string> | undefined,
+    lastNotificationSummary: string | undefined,
   ) =>
     Effect.gen(function* () {
       const rawSummary = events.join("\n");
@@ -2882,8 +2884,15 @@ const make = Effect.gen(function* () {
           "Return ignore when the event does not satisfy the instruction, wake when it does,",
           "or close when it satisfies the instruction and further monitoring is unnecessary.",
           "Do not use tools. Keep summary factual and concise.",
+          "Compare the current events with the previous observation. Ignore unchanged facts,",
+          "including old failures in a snapshot or continuation lines of a report already notified.",
+          "Wake only for a new actionable change satisfying the instruction. A retry starting is not a new failure.",
           `Instruction: ${watch.policy.instruction}`,
-          "Events:",
+          `Previous decision: ${watch.lastSummary ?? "None"}`,
+          `Last notification: ${lastNotificationSummary ?? "None in this execution"}`,
+          "Previous observation:",
+          previousEvents?.join("\n") ?? "None in this execution",
+          "Current events:",
           rawSummary,
         ].join("\n"),
       });
@@ -2944,7 +2953,7 @@ const make = Effect.gen(function* () {
         },
         runtimeMode: coordinator.value.runtimeMode,
         interactionMode: coordinator.value.interactionMode,
-        delivery: "queued",
+        delivery: "immediate",
         createdAt,
       });
     }).pipe(
@@ -2980,6 +2989,8 @@ const make = Effect.gen(function* () {
       const gate = makeWatchFloodGate();
       const changed = makeWatchChangeGate();
       let sequence = watch.lastSequence;
+      let previousEvents: ReadonlyArray<string> | undefined;
+      let lastNotificationSummary: string | undefined;
       const runningWatch = { ...watch, generation };
       const onBatch = (events: [string, ...string[]]) =>
         Effect.gen(function* () {
@@ -3004,7 +3015,14 @@ const make = Effect.gen(function* () {
           if (current.state !== "open" || current.generation !== generation) return;
           if (current.policy.type === "model" && !changed(events)) return;
           sequence += 1;
-          const decision = yield* decideWatchBatch(current, cwd, events).pipe(
+          const decisionStartedAt = yield* Clock.currentTimeMillis;
+          const decision = yield* decideWatchBatch(
+            current,
+            cwd,
+            events,
+            previousEvents,
+            lastNotificationSummary,
+          ).pipe(
             Effect.mapError(
               (cause) =>
                 new WatchSourceError({
@@ -3014,7 +3032,23 @@ const make = Effect.gen(function* () {
                 }),
             ),
           );
+          previousEvents = events;
           const observedAt = yield* nowIso;
+          // #region motel debug
+          // TODO: Remove after duplicate and delayed watch delivery is confirmed fixed in production.
+          yield* Effect.logInfo("Watch notification decision", {
+            "debug.session": "watch-alerts-20260907",
+            "debug.hypothesis": "fragmented-stateless-queued-alerts",
+            "debug.step": "decision-completed",
+            watchId,
+            generation,
+            sequence,
+            eventCount: events.length,
+            decision: decision.action,
+            decisionDurationMs: (yield* Clock.currentTimeMillis) - decisionStartedAt,
+            delivery: "immediate",
+          });
+          // #endregion motel debug
           yield* appendCoordinationActivity({
             threadId: watch.coordinator.threadId,
             kind: "thread-orchestration.watch.event",
@@ -3062,6 +3096,7 @@ const make = Effect.gen(function* () {
                 }),
             ),
           );
+          lastNotificationSummary = decision.summary;
           if (decision.action === "close") {
             yield* closeWatchInternal(
               scope,
