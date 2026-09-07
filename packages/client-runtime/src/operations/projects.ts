@@ -298,6 +298,7 @@ export function findExistingAddProject(input: {
 }
 
 export function buildProjectCreateCommand(input: {
+  readonly separateEnvironment?: boolean;
   readonly commandId: CommandId;
   readonly projectId: ProjectId;
   readonly workspaceRoot: string;
@@ -310,6 +311,7 @@ export function buildProjectCreateCommand(input: {
     title: inferProjectTitleFromPath(input.workspaceRoot),
     workspaceRoot: input.workspaceRoot,
     createWorkspaceRootIfMissing: true,
+    ...(input.separateEnvironment ? { separateEnvironment: true } : {}),
     defaultModelSelection: null,
     createdAt: input.createdAt,
   };

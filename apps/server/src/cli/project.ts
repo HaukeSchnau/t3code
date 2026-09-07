@@ -47,6 +47,15 @@ type ProjectCliDispatchCommand = Extract<
   { type: "project.create" | "project.meta.update" | "project.delete" }
 >;
 
+class SeparateProjectRequiresServerError extends Schema.TaggedErrorClass<SeparateProjectRequiresServerError>()(
+  "SeparateProjectRequiresServerError",
+  {},
+) {
+  override get message() {
+    return "Start the T3 server before creating a separate project.";
+  }
+}
+
 const isEnvironmentHttpCommonError = Schema.is(EnvironmentHttpCommonError);
 
 export class ProjectCommandIdGenerationError extends Schema.TaggedErrorClass<ProjectCommandIdGenerationError>()(
@@ -438,6 +447,12 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
 });
 
 const projectAddCommand = Command.make("add", {
+  separate: Flag.boolean("separate").pipe(
+    Flag.withDescription(
+      "Create a fresh project in a separate filesystem environment. Requires a managed Linux host.",
+    ),
+    Flag.withDefault(false),
+  ),
   ...projectLocationFlags,
   workspaceRoot: Argument.string("path").pipe(
     Argument.withDescription("Workspace root to add as a project."),
@@ -451,13 +466,21 @@ const projectAddCommand = Command.make("add", {
       Effect.fn("projectAddMutation")(function* ({
         snapshot,
         dispatch,
+        mode,
       }: {
         readonly snapshot: OrchestrationReadModel;
+        readonly mode: ProjectCommandExecutionMode;
         readonly dispatch: (
           command: ProjectCliDispatchCommand,
         ) => Effect.Effect<void, Error, FileSystem.FileSystem | HttpClient.HttpClient | Path.Path>;
       }) {
-        const workspaceRoot = yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
+        if (flags.separate && mode === "offline") {
+          return yield* new SeparateProjectRequiresServerError();
+        }
+        const workspacePaths = yield* WorkspacePaths.WorkspacePaths;
+        const workspaceRoot = flags.separate
+          ? workspacePaths.canonicalizeWorkspaceRoot(flags.workspaceRoot)
+          : yield* normalizeWorkspaceRootForProjectCommand(flags.workspaceRoot);
         const existingProject = snapshot.projects.find(
           (project) => project.deletedAt === null && project.workspaceRoot === workspaceRoot,
         );
@@ -477,6 +500,9 @@ const projectAddCommand = Command.make("add", {
           projectId,
           title,
           workspaceRoot,
+          ...(flags.separate
+            ? { separateEnvironment: true, createWorkspaceRootIfMissing: true }
+            : {}),
           defaultModelSelection: ServerRuntimeStartup.getAutoBootstrapThreadModelSelection(),
           createdAt: DateTime.formatIso(yield* DateTime.now),
         });

@@ -1,3 +1,9 @@
+// @effect-diagnostics nodeBuiltinImport:off -- Claude SDK requires a synchronous Node-compatible spawn callback.
+import * as NodeChildProcess from "node:child_process";
+import {
+  executionLauncherForCwd,
+  projectExecutionArguments,
+} from "../../project/ProjectExecution.ts";
 /**
  * ClaudeAdapterLive - Scoped live implementation for the Claude Agent provider adapter.
  *
@@ -4906,10 +4912,43 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(input.cwd ? [input.cwd] : []),
         serverConfig.attachmentsDir,
       ];
+      const executionCwd = input.cwd;
+      const executionLauncher = executionCwd
+        ? yield* executionLauncherForCwd(executionCwd, claudeEnvironment).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "startSession",
+                  detail: "Could not prepare project execution.",
+                  cause,
+                }),
+            ),
+          )
+        : undefined;
       const queryOptions: ClaudeQueryOptions = {
         ...(input.cwd ? { cwd: input.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
+        ...(executionLauncher && executionCwd
+          ? ({
+              spawnClaudeCodeProcess: (options) =>
+                NodeChildProcess.spawn(
+                  executionLauncher,
+                  projectExecutionArguments(
+                    options.cwd ?? executionCwd,
+                    options.command,
+                    options.args,
+                  ),
+                  {
+                    cwd: options.cwd,
+                    env: options.env,
+                    signal: options.signal,
+                    stdio: ["pipe", "pipe", "pipe"],
+                  },
+                ),
+            } satisfies Partial<ClaudeQueryOptions>)
+          : {}),
         systemPrompt: {
           type: "preset",
           preset: "claude_code",

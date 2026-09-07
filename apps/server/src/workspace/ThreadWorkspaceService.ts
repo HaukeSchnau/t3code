@@ -1,3 +1,4 @@
+import { isSeparateProject } from "../project/SeparateProjectRegistry.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalDate:off
 // @effect-diagnostics globalTimers:off
@@ -9,7 +10,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 import * as NodeTimers from "node:timers";
 
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import {
   ProjectId,
   ThreadId,
@@ -824,6 +825,7 @@ export const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const processRunner = yield* ProcessRunner.ProcessRunner;
   const hostPlatform = yield* HostProcessPlatform;
+  const hostEnvironment = yield* HostProcessEnvironment;
 
   const workspacesDir = NodePath.join(config.baseDir, "workspaces");
 
@@ -1719,6 +1721,24 @@ export const make = Effect.gen(function* () {
   const prepareWorkspace: ThreadWorkspaceService["Service"]["prepareWorkspace"] = Effect.fn(
     "ThreadWorkspaceService.prepareWorkspace",
   )(function* (input) {
+    for (const root of input.roots) {
+      const separate = yield* Effect.tryPromise({
+        try: () => isSeparateProject(root.sourcePath, hostEnvironment.AGENT_EXEC_STATE),
+        catch: (cause) =>
+          new ThreadWorkspaceError({
+            operation: "prepareWorkspace",
+            detail: "Could not inspect project execution environment.",
+            cause,
+          }),
+      });
+      if (separate)
+        return yield* new ThreadWorkspaceError({
+          operation: "prepareWorkspace",
+          detail:
+            "Separate projects currently use the project directory. Choose Local instead of a managed workspace.",
+        });
+    }
+
     const existing = yield* getPreparedWorkspace({ threadId: input.threadId });
     if (Option.isSome(existing)) {
       return existing.value;

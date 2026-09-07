@@ -1,3 +1,4 @@
+import { resolveProjectExecution } from "./project/ProjectExecution.ts";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -9,7 +10,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import {
   collectUint8StreamText,
@@ -403,7 +404,13 @@ const runProcessCore = Effect.fn("processRunner.runProcessCore")(function* (
 });
 
 export const make = Effect.fn("ProcessRunner.make")(function* () {
-  const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const underlying = yield* ChildProcessSpawner.ChildProcessSpawner;
+  const environment = yield* HostProcessEnvironment;
+  const spawner = ChildProcessSpawner.make((command) =>
+    resolveProjectExecution(command, environment).pipe(
+      Effect.flatMap((resolved) => underlying.spawn(resolved)),
+    ),
+  );
 
   const run: ProcessRunner["Service"]["run"] = (input) =>
     finalizeRunProcess(runProcessCore(spawner, input), input);
