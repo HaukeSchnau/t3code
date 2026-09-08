@@ -24,6 +24,9 @@ restart, but same-process provider startup and ingestion races must remain fail-
 - A current-process starting/running projection remains restart-blocking even when the adapter has not yet
   exposed a live active turn.
 - Live idle probes use real provider sessions. Offline probes remain conservative.
+- Supply one shared background-liveness registry to ingestion, snapshot queries, and the command engine.
+  Snapshot queries must receive it from the runtime layer instead of constructing a private instance, so
+  automatic settlement observes live background work recorded by ingestion.
 - A live adapter session in `running` or `connecting` status blocks restart even when its concrete
   `activeTurnId` has not been observed yet.
 - Queued messages and pending approval/user-input state remain counted and visible but do not block restart,

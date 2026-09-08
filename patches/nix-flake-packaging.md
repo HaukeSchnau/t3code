@@ -52,6 +52,8 @@ Production Nix builds disable web and server source maps. Local and development 
 default; set `T3CODE_WEB_SOURCEMAP=false` or `T3CODE_SERVER_SOURCEMAP=false` to reproduce the production mode.
 Production configs use Vite without importing the test configuration. Vitest has dedicated config files, so
 the test resolver plugin is not loaded during production bundling.
+Upstream test setup belongs in these dedicated Vitest configs, including the shared temporary-directory
+setup and the server Git configuration fixture.
 
 The flake pins pnpm 11.10 and uses fetcher version 4 with `trustLockfile`. This avoids re-resolving and
 re-verifying an already frozen lockfile while retaining Nix's fixed-output dependency hash as the integrity

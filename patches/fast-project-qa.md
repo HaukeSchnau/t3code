@@ -34,6 +34,8 @@ and fork lockfile check.
   limit.
 - T3 Code jobs request the `t3code-ci` runner pool. Its two instances have separate stable workspace
   slots, so they can run concurrently without claiming the runner reserved for another project.
+- The non-server test job has a 25-minute limit. Package tests alone took almost 13 minutes in
+  run 378, leaving too little of the former 15-minute budget for the desktop suite.
 
 The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
 keeps a matching shim until its existing infrastructure input can be upgraded independently; the

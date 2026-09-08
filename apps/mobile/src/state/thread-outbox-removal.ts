@@ -11,7 +11,7 @@ import {
   waitForComposerDraftsLoaded,
 } from "./use-composer-drafts";
 
-async function cleanUpRemovedMessages(
+export async function cleanUpRemovedThreadOutboxMessages(
   removedMessages: ReadonlyArray<QueuedThreadMessage>,
 ): Promise<void> {
   const attachments = removedMessages.flatMap((message) => message.attachments);
@@ -77,7 +77,7 @@ export async function removeThreadOutboxMessage(
   }
   // The removed payload, not the caller's snapshot: an accepted update may
   // have added files the snapshot never saw.
-  await cleanUpRemovedMessages([removed]);
+  await cleanUpRemovedThreadOutboxMessages([removed]);
   return true;
 }
 
@@ -87,5 +87,5 @@ export async function clearThreadOutboxEnvironment(environmentId: EnvironmentId)
   // what it actually removed, so the release set cannot miss messages a
   // failed earlier hydration would have hidden.
   const removed = await threadOutboxManager.clearEnvironment(environmentId);
-  await cleanUpRemovedMessages(removed);
+  await cleanUpRemovedThreadOutboxMessages(removed);
 }

@@ -40,12 +40,12 @@ export interface ApnsDeliveryResult {
   readonly apnsId: string | null;
 }
 
-export class ApnsProviderConfigurationError extends Schema.TaggedErrorClass<ApnsProviderConfigurationError>()(
+export class ApnsProviderConfigurationError extends Schema.TaggedError<ApnsProviderConfigurationError>()(
   "ApnsProviderConfigurationError",
   { message: Schema.String },
 ) {}
 
-export class ApnsProviderDeliveryError extends Schema.TaggedErrorClass<ApnsProviderDeliveryError>()(
+export class ApnsProviderDeliveryError extends Schema.TaggedError<ApnsProviderDeliveryError>()(
   "ApnsProviderDeliveryError",
   {
     message: Schema.String,

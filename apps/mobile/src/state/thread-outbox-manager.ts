@@ -28,7 +28,7 @@ import {
 } from "./thread-outbox-model";
 import type { ThreadOutboxStorage } from "./thread-outbox-storage";
 
-export class ThreadOutboxManagerError extends Schema.TaggedErrorClass<ThreadOutboxManagerError>()(
+export class ThreadOutboxManagerError extends Schema.TaggedError<ThreadOutboxManagerError>()(
   "ThreadOutboxManagerError",
   {
     operation: Schema.Literals([
@@ -137,10 +137,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return loadPromise;
     }
     loadPromise = serialize(async () => {
-      const persistedMessages = await options.storage.load();
+      const loaded = await options.storage.load();
+      const persistedMessages = "messages" in loaded ? loaded.messages : loaded;
+      const hasReadErrors = "messages" in loaded && loaded.errors.length > 0;
       let messages = flattenQueuedThreadMessages(
         groupQueuedThreadMessages([...persistedMessages, ...currentMessages()]),
       );
+      // Publish records before reconciliation so a partial read still leaves
+      // the successfully decoded messages available for confirmation. The
+      // final publication below reflects any cleanup that completed.
+      setMessages(messages);
       const service = await outbox();
       let entries = await Effect.runPromise(service.entries);
       let queuedIds = new Set(entries.map((entry) => entry.plan.command.commandId));
@@ -238,12 +244,15 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
         if (!revisions.has(message.messageId)) {
           revisions.set(message.messageId, 1);
         }
-        if (!queuedIds.has(message.commandId)) {
+        if (!queuedIds.has(message.commandId) && !hasReadErrors) {
           await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
         }
       }
       await refreshDeliveryStates(service);
       setMessages(messages);
+      if ("messages" in loaded && loaded.errors.length > 0) {
+        throw new AggregateError(loaded.errors, "Some queued messages could not be read.");
+      }
       return true;
     }).catch((cause) => {
       loadPromise = null;
@@ -423,13 +432,27 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       const removed =
         currentMessages().find((candidate) => candidate.messageId === message.messageId) ?? message;
       const service = await outbox();
-      await Effect.runPromise(service.cancelPending(message.commandId));
+      let hadLifecycleEntry = true;
+      try {
+        await Effect.runPromise(service.cancelPending(message.commandId));
+      } catch (cause) {
+        if (!(cause instanceof CommandOutboxStateError) || cause.reason !== "missing-command") {
+          throw cause;
+        }
+        // A presentation record can survive a crash before its shared
+        // lifecycle entry is persisted. Removing that record is still a
+        // successful outbox removal.
+        hadLifecycleEntry = false;
+      }
       await refreshDeliveryStates(service);
       try {
         await options.storage.remove(message);
       } catch (cause) {
         // Keep both durable views aligned when presentation-file cleanup
         // fails after the shared cancellation was persisted.
+        if (!hadLifecycleEntry) {
+          throw cause;
+        }
         await Effect.runPromise(service.enqueue(makeQueuedThreadDeliveryPlan(message)));
         await refreshDeliveryStates(service);
         throw new ThreadOutboxManagerError({
@@ -466,7 +489,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
     environmentId: EnvironmentId,
   ): Promise<ReadonlyArray<QueuedThreadMessage>> =>
     serialize(async () => {
-      const persisted = await options.storage.load().catch((cause) => {
+      const loaded = await options.storage.load().catch((cause) => {
         throw new ThreadOutboxManagerError({
           operation: "clear-environment-load",
           environmentId,
@@ -475,6 +498,16 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
           cause,
         });
       });
+      const persisted = "messages" in loaded ? loaded.messages : loaded;
+      if ("messages" in loaded && loaded.errors.length > 0) {
+        throw new ThreadOutboxManagerError({
+          operation: "clear-environment-load",
+          environmentId,
+          threadId: null,
+          messageId: null,
+          cause: new AggregateError(loaded.errors, "Some queued messages could not be read."),
+        });
+      }
       const allMessages = flattenQueuedThreadMessages(
         groupQueuedThreadMessages([...persisted, ...currentMessages()]),
       );
@@ -527,8 +560,19 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return entry;
     });
 
-  const complete = (message: QueuedThreadMessage): Promise<void> =>
+  const complete = (
+    message: QueuedThreadMessage,
+    expectedRevision?: number,
+    canComplete?: () => boolean,
+  ): Promise<boolean> =>
     serialize(async () => {
+      if (
+        (expectedRevision !== undefined &&
+          (revisions.get(message.messageId) ?? 0) !== expectedRevision) ||
+        canComplete?.() === false
+      ) {
+        return false;
+      }
       const service = await outbox();
       const acknowledged = { ...message, acknowledgedAt: new Date().toISOString() };
       await options.storage.write(acknowledged);
@@ -541,6 +585,7 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       );
       bumpRevision(message.messageId);
       await refreshDeliveryStates(service);
+      return true;
     });
 
   const fail = (

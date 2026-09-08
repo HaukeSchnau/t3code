@@ -16,12 +16,12 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
-import { FetchHttpClient } from "effect/unstable/http";
-import type { ProviderListResponse } from "@opencode-ai/sdk/v2";
-import { beforeEach } from "vite-plus/test";
+import { HttpClient, HttpClientResponse } from "effect/unstable/http";
+import { beforeEach, vi } from "vite-plus/test";
 import type {
   Event as OpenCodeEvent,
   PermissionRequest,
+  ProviderListResponse,
   QuestionRequest,
   ToolPart,
 } from "@opencode-ai/sdk/v2";
@@ -36,6 +36,7 @@ import {
 import { createModelSelection } from "@t3tools/shared/model";
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS } from "../ThreadOrchestrationInstructions.ts";
 import { ProviderSessionDirectory } from "../Services/ProviderSessionDirectory.ts";
 import type { OpenCodeAdapterShape } from "../Services/OpenCodeAdapter.ts";
@@ -45,7 +46,6 @@ import {
   type OpenCodeRuntimeShape,
 } from "../opencodeRuntime.ts";
 import {
-  appendOpenCodeAssistantTextDelta,
   isOpenCodeNotFound,
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
@@ -53,6 +53,7 @@ import {
   openCodeZaiUsageSource,
 } from "./OpenCodeAdapter.ts";
 import type { ZaiUsageLimits, ZaiUsageSource } from "../zaiUsage.ts";
+import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
 class OpenCodeAdapter extends Context.Service<OpenCodeAdapter, OpenCodeAdapterShape>()(
@@ -153,10 +154,12 @@ const runtimeMock = {
       | ((sessionID: string) => Promise<Array<{ id: string }>>)
       | null,
     closeCalls: [] as string[],
+    revertMessageID: undefined as string | undefined,
     revertCalls: [] as Array<{ sessionID: string; messageID?: string }>,
     messageCalls: [] as Array<{ sessionID: string; messageID: string }>,
     messageFailures: 0,
     promptCalls: [] as Array<unknown>,
+    summarizeCalls: [] as Array<unknown>,
     promptAsyncError: null as Error | null,
     promptAsyncImplementation: null as (() => Promise<void>) | null,
     autoPromptEcho: true,
@@ -216,10 +219,12 @@ const runtimeMock = {
     this.state.sessionChildrenById.clear();
     this.state.sessionChildrenImplementation = null;
     this.state.closeCalls.length = 0;
+    this.state.revertMessageID = undefined;
     this.state.revertCalls.length = 0;
     this.state.messageCalls.length = 0;
     this.state.messageFailures = 0;
     this.state.promptCalls.length = 0;
+    this.state.summarizeCalls.length = 0;
     this.state.promptAsyncError = null;
     this.state.promptAsyncImplementation = null;
     this.state.autoPromptEcho = true;
@@ -340,6 +345,9 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
           return {
             data: {
               id: sessionID,
+              ...(runtimeMock.state.revertMessageID
+                ? { revert: { messageID: runtimeMock.state.revertMessageID } }
+                : {}),
               ...(directory ? { directory } : {}),
               ...(parentID ? { parentID } : {}),
             },
@@ -424,6 +432,10 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
             });
           }
         },
+        summarize: async (input: unknown) => {
+          runtimeMock.state.summarizeCalls.push(input);
+          return { data: true };
+        },
         messages: async () => ({ data: runtimeMock.state.messages }),
         message: async ({ sessionID, messageID }: { sessionID: string; messageID: string }) => {
           runtimeMock.state.messageCalls.push({ sessionID, messageID });
@@ -445,17 +457,16 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
             ...(messageID ? { messageID } : {}),
           });
           if (!messageID) {
-            runtimeMock.state.messages = [];
-            return;
+            throw new Error("Expected messageID");
           }
-
-          const targetIndex = runtimeMock.state.messages.findIndex(
-            (entry) => entry.info.id === messageID,
-          );
-          runtimeMock.state.messages =
-            targetIndex >= 0
-              ? runtimeMock.state.messages.slice(0, targetIndex + 1)
-              : runtimeMock.state.messages;
+          let lastUserID: string | undefined;
+          for (const entry of runtimeMock.state.messages) {
+            if (entry.info.role === "user") lastUserID = entry.info.id;
+            if (entry.info.id === messageID && entry.parts.length > 0) {
+              runtimeMock.state.revertMessageID = lastUserID ?? messageID;
+              break;
+            }
+          }
         },
       },
       event: {
@@ -596,12 +607,20 @@ const OpenCodeRuntimeTestDouble: OpenCodeRuntimeShape = {
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
   upsert: () => Effect.void,
+  recordImportedTranscript: () => Effect.die("unused"),
   getProvider: () =>
     Effect.die(new Error("ProviderSessionDirectory.getProvider is not used in test")),
   getBinding: () => Effect.succeed(Option.none()),
   listThreadIds: () => Effect.succeed([]),
   listBindings: () => Effect.succeed([]),
 });
+
+const TestHttpClientLive = Layer.succeed(
+  HttpClient.HttpClient,
+  HttpClient.make((request) =>
+    Effect.succeed(HttpClientResponse.fromWeb(request, Response.json({ version: "0.0.0" }))),
+  ),
+);
 
 // The adapter now receives its settings as a plain argument (the old design
 // read from `ServerSettingsService` internally). The test-only
@@ -640,8 +659,8 @@ const OpenCodeAdapterTestLayer = Layer.effect(
     }),
   ),
   Layer.provideMerge(providerSessionDirectoryTestLayer),
+  Layer.provideMerge(TestHttpClientLive),
   Layer.provideMerge(NodeServices.layer),
-  Layer.provideMerge(FetchHttpClient.layer),
 );
 
 beforeEach(() => {
@@ -659,6 +678,18 @@ function promiseWithResolvers<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+function makeOpenCodeEventQueue() {
+  let pending = promiseWithResolvers<unknown>();
+  const events = [pending.promise];
+  runtimeMock.state.subscribedEvents = events;
+  return (event: unknown) => {
+    const current = pending;
+    pending = promiseWithResolvers<unknown>();
+    events.push(pending.promise);
+    current.resolve(event);
+  };
 }
 
 const permissionRequest = (id: string, sessionID: string): PermissionRequest => ({
@@ -1294,6 +1325,40 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
+  it.effect("compacts through the native OpenCode session API", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-compact");
+      runtimeMock.state.subscribedEvents.push({
+        type: "session.compacted",
+        properties: { sessionID: "http://127.0.0.1:9999/session" },
+      });
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.take(3),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+      NodeAssert.ok(adapter.compaction?.type === "native");
+      yield* adapter.compaction.start(
+        threadId,
+        createModelSelection(ProviderInstanceId.make("opencode"), "openai/gpt-5"),
+      );
+      const summarizeCall = runtimeMock.state.summarizeCalls[0] as Record<string, unknown>;
+      NodeAssert.equal(summarizeCall.modelID, "gpt-5");
+      const events = Array.from(yield* Fiber.join(eventsFiber));
+      yield* adapter.stopSession(threadId);
+      const compacted = events.some(
+        (event) => event.type === "thread.state.changed" && event.payload.state === "compacted",
+      );
+      NodeAssert.equal(compacted, true);
+    }),
+  );
   it.effect("falls back to a fresh session when the persisted session is gone", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
@@ -1583,8 +1648,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
           Layer.provideMerge(ServerSettingsService.layerTest()),
           Layer.provideMerge(providerSessionDirectoryTestLayer),
+          Layer.provideMerge(TestHttpClientLive),
           Layer.provideMerge(NodeServices.layer),
-          Layer.provideMerge(FetchHttpClient.layer),
         );
         const context = yield* Layer.buildWithScope(adapterLayer, scope);
         const adapter = yield* Effect.service(OpenCodeAdapter).pipe(Effect.provide(context));
@@ -2678,7 +2743,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           },
           close: () => Effect.void,
         },
-      }).pipe(Effect.provideService(Crypto.Crypto, gatedCrypto));
+      }).pipe(
+        Effect.provideService(Crypto.Crypto, gatedCrypto),
+        Effect.provide(TestHttpClientLive),
+      );
 
       const completedFiber = yield* adapter.streamEvents.pipe(
         Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
@@ -6381,8 +6449,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(TestHttpClientLive),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -6424,7 +6492,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         },
         agent: "github-copilot",
         variant: "high",
-        system: T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS,
+        system: `${buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: "anthropic/claude-sonnet-4-5",
+        })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
         parts: [{ type: "text", text: "Fix it" }],
       });
       const started = yield* Fiber.join(startedFiber);
@@ -6445,8 +6516,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(TestHttpClientLive),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -6478,7 +6549,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           providerID: "anthropic",
           modelID: "claude-sonnet-4-5",
         },
-        system: T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS,
+        system: `${buildRuntimeInstructions({
+          harness: "OpenCode",
+          model: "anthropic/claude-sonnet-4-5",
+        })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
         parts: [{ type: "text", text: "Fix it" }],
       });
     }).pipe(Effect.provide(adapterLayer));
@@ -6494,8 +6568,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(providerSessionDirectoryTestLayer),
+      Layer.provideMerge(TestHttpClientLive),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provideMerge(FetchHttpClient.layer),
     );
 
     return Effect.gen(function* () {
@@ -6530,7 +6604,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }).pipe(Effect.provide(adapterLayer));
   });
 
-  it.effect("reverts the full thread when rollback removes every assistant turn", () =>
+  it.effect("reverts the first removed assistant message and returns only retained turns", () =>
     Effect.gen(function* () {
       const adapter = yield* OpenCodeAdapter;
       const threadId = asThreadId("thread-rollback-all");
@@ -6541,22 +6615,62 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       });
 
       runtimeMock.state.messages = [
+        { info: { id: "user-1", role: "user" }, parts: [] },
         {
           info: { id: "assistant-1", role: "assistant" },
-          parts: [],
+          parts: [{ id: "part-1", type: "text", text: "first answer" }],
         },
+        { info: { id: "user-2", role: "user" }, parts: [] },
         {
           info: { id: "assistant-2", role: "assistant" },
-          parts: [],
+          parts: [{ id: "part-2", type: "text", text: "second answer" }],
         },
       ];
 
-      const snapshot = yield* adapter.rollbackThread(threadId, 2);
+      for (const numTurns of [0, 1, 2, 3]) {
+        runtimeMock.state.revertMessageID = undefined;
+        runtimeMock.state.revertCalls.length = 0;
+        const snapshot = yield* adapter.rollbackThread(threadId, numTurns);
+        NodeAssert.deepEqual(
+          runtimeMock.state.revertCalls,
+          numTurns === 0
+            ? []
+            : [
+                {
+                  sessionID: "http://127.0.0.1:9999/session",
+                  messageID: numTurns === 1 ? "assistant-2" : "assistant-1",
+                },
+              ],
+        );
+        NodeAssert.deepEqual(
+          snapshot.turns.map((turn) => turn.id),
+          ["assistant-1", "assistant-2"].slice(0, Math.max(0, 2 - numTurns)),
+        );
+      }
+      runtimeMock.state.revertMessageID = undefined;
+      for (const remaining of [1, 0]) {
+        const snapshot = yield* adapter.rollbackThread(threadId, 1);
+        NodeAssert.equal(snapshot.turns.length, remaining);
+        NodeAssert.deepEqual((yield* adapter.readThread(threadId)).turns, snapshot.turns);
+      }
+      NodeAssert.deepEqual(
+        runtimeMock.state.revertCalls.slice(-2).map((call) => call.messageID),
+        ["assistant-2", "assistant-1"],
+      );
+      runtimeMock.state.revertMessageID = undefined;
+      runtimeMock.state.messages = runtimeMock.state.messages.filter(
+        (entry) => entry.info.id !== "user-2",
+      );
+      const sharedUserSnapshot = yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.equal(runtimeMock.state.revertMessageID, "user-1");
+      NodeAssert.deepEqual(sharedUserSnapshot.turns, []);
+      NodeAssert.deepEqual((yield* adapter.readThread(threadId)).turns, []);
 
-      NodeAssert.deepEqual(runtimeMock.state.revertCalls, [
-        { sessionID: "http://127.0.0.1:9999/session" },
-      ]);
-      NodeAssert.deepEqual(snapshot.turns, []);
+      runtimeMock.state.messages = [];
+      runtimeMock.state.revertCalls.length = 0;
+      const emptySnapshot = yield* adapter.rollbackThread(threadId, 1);
+      NodeAssert.deepEqual(runtimeMock.state.revertCalls, []);
+      NodeAssert.deepEqual(emptySnapshot.turns, []);
     }),
   );
 
@@ -6616,46 +6730,45 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
     }),
   );
 
-  it.effect("treats lexically or physically identical directories as the same", () =>
-    Effect.gen(function* () {
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
-      const sameDirectory = (left: string, right: string) =>
-        isSameOpenCodeDirectory(fileSystem, path, left, right);
+  it.effect.skipIf(!symlinksSupported)(
+    "treats lexically or physically identical directories as the same",
+    () =>
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sameDirectory = (left: string, right: string) =>
+          isSameOpenCodeDirectory(fileSystem, path, left, right);
 
-      // Lexical-only differences (trailing slash, dot segments) short-circuit
-      // without touching the filesystem — the paths need not exist.
-      NodeAssert.equal(yield* sameDirectory("/repo/project/", "/repo/project"), true);
-      NodeAssert.equal(yield* sameDirectory("/repo/nested/../project", "/repo/project"), true);
-      // Nonexistent paths degrade to the lexical comparison instead of failing.
-      NodeAssert.equal(yield* sameDirectory("/repo/project", "/repo/other"), false);
+        // Lexical-only differences (trailing slash, dot segments) short-circuit
+        // without touching the filesystem — the paths need not exist.
+        NodeAssert.equal(yield* sameDirectory("/repo/project/", "/repo/project"), true);
+        NodeAssert.equal(yield* sameDirectory("/repo/nested/../project", "/repo/project"), true);
+        // Nonexistent paths degrade to the lexical comparison instead of failing.
+        NodeAssert.equal(yield* sameDirectory("/repo/project", "/repo/other"), false);
 
-      // A symlinked cwd (the macOS `/tmp` → `/private/tmp` shape) resolves to
-      // the directory it points at, so the two spellings compare equal.
-      const base = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-opencode-dir-" });
-      const real = path.join(base, "real");
-      const link = path.join(base, "link");
-      yield* fileSystem.makeDirectory(real);
-      yield* fileSystem.symlink(real, link);
-      NodeAssert.equal(yield* sameDirectory(link, real), true);
-      NodeAssert.equal(yield* sameDirectory(link, path.join(base, "other")), false);
-    }).pipe(Effect.scoped),
+        // A symlinked cwd (the macOS `/tmp` → `/private/tmp` shape) resolves to
+        // the directory it points at, so the two spellings compare equal.
+        const base = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-opencode-dir-" });
+        const real = path.join(base, "real");
+        const link = path.join(base, "link");
+        yield* fileSystem.makeDirectory(real);
+        yield* fileSystem.symlink(real, link);
+        NodeAssert.equal(yield* sameDirectory(link, real), true);
+        NodeAssert.equal(yield* sameDirectory(link, path.join(base, "other")), false);
+      }).pipe(Effect.scoped),
   );
 
-  it.effect("appends raw assistant text deltas and reconciles part update snapshots", () =>
+  it.effect("reconciles assistant text snapshots", () =>
     Effect.sync(() => {
       const firstUpdate = mergeOpenCodeAssistantText(undefined, "Hello");
-      const overlapDelta = appendOpenCodeAssistantTextDelta(firstUpdate.latestText, "lo world");
-      const secondUpdate = mergeOpenCodeAssistantText(overlapDelta.nextText, "Hellolo world");
       const appendedUpdate = mergeOpenCodeAssistantText("Hello", "Hello world");
       const changedUpdate = mergeOpenCodeAssistantText("Hello world", "Hello there");
       const staleUpdate = mergeOpenCodeAssistantText("Hello world", "Hello");
 
-      NodeAssert.deepEqual(
-        [firstUpdate.deltaToEmit, overlapDelta.deltaToEmit, secondUpdate.deltaToEmit],
-        ["Hello", "lo world", ""],
-      );
-      NodeAssert.equal(secondUpdate.latestText, "Hellolo world");
+      NodeAssert.deepEqual(firstUpdate, {
+        latestText: "Hello",
+        deltaToEmit: "Hello",
+      });
       NodeAssert.deepEqual(appendedUpdate, {
         latestText: "Hello world",
         deltaToEmit: " world",
@@ -6876,6 +6989,301 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           .map((event) => event.payload.delta),
         ["Tool results received"],
       );
+    }),
+  );
+
+  it.effect("processes late assistant metadata without visiting completed turns", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-indexed-opencode-parts");
+      const sessionID = "http://127.0.0.1:9999/session";
+      const enqueue = makeOpenCodeEventQueue();
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      for (let index = 0; index < 24; index += 1) {
+        const completed = yield* adapter.streamEvents.pipe(
+          Stream.filter((event) => event.threadId === threadId && event.type === "turn.completed"),
+          Stream.runHead,
+          Effect.forkChild,
+        );
+        yield* adapter.sendTurn({
+          threadId,
+          input: `Complete turn ${index}`,
+          modelSelection: createModelSelection(
+            ProviderInstanceId.make("opencode"),
+            "opencode/kimi-k3",
+          ),
+        });
+        enqueue({
+          type: "message.updated",
+          properties: { sessionID, info: { id: `history-message-${index}`, role: "assistant" } },
+        });
+        enqueue({
+          type: "message.part.updated",
+          properties: {
+            sessionID,
+            part: {
+              id: `history-part-${index}`,
+              messageID: `history-message-${index}`,
+              sessionID,
+              type: "text",
+              text: `Completed turn ${index}`,
+              time: { start: 1, end: 2 },
+            },
+          },
+        });
+        enqueue({
+          type: "session.status",
+          properties: { sessionID, status: { type: "idle" } },
+        });
+        yield* Fiber.join(completed);
+      }
+
+      let visitedHistoryParts = 0;
+      const values = Map.prototype.values;
+      yield* Effect.acquireRelease(
+        Effect.sync(() =>
+          vi
+            .spyOn(Map.prototype, "values")
+            .mockImplementation(function (this: Map<unknown, unknown>) {
+              const iterator = values.call(this);
+              const next = iterator.next.bind(iterator);
+              iterator.next = () => {
+                const result = next();
+                const value: unknown = result.value;
+                if (
+                  typeof value === "object" &&
+                  value !== null &&
+                  "id" in value &&
+                  typeof value.id === "string" &&
+                  value.id.startsWith("history-part-")
+                ) {
+                  visitedHistoryParts += 1;
+                }
+                return result;
+              };
+              return iterator;
+            }),
+        ),
+        (spy) => Effect.sync(() => spy.mockRestore()),
+      );
+
+      const stepProcessed = yield* Deferred.make<void>();
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.tap((event) =>
+          event.type === "thread.state.changed"
+            ? Deferred.succeed(stepProcessed, undefined)
+            : Effect.void,
+        ),
+        Stream.takeUntil((event) => event.type === "turn.completed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Process late metadata",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      const promptMessageId = (runtimeMock.state.promptCalls.at(-1) as { messageID: string })
+        .messageID;
+      const part = {
+        id: "current-part",
+        messageID: "current-message",
+        sessionID,
+        type: "text",
+        text: "Current response",
+        time: { start: 3, end: 4 },
+      };
+      const step = {
+        id: "current-step",
+        messageID: "current-message",
+        sessionID,
+        type: "step-finish",
+        reason: "stop",
+        cost: 0,
+        tokens: { input: 40, output: 10, reasoning: 2, cache: { read: 5, write: 1 } },
+      };
+      enqueue({ type: "message.part.updated", properties: { sessionID, part } });
+      enqueue({ type: "message.part.updated", properties: { sessionID, part: step } });
+      enqueue({ type: "session.compacted", properties: { sessionID } });
+      yield* Deferred.await(stepProcessed);
+      yield* adapter.sendTurn({
+        threadId,
+        input: "Steer before metadata arrives",
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("opencode"),
+          "opencode/kimi-k3",
+        ),
+      });
+      for (const parentID of ["", promptMessageId]) {
+        enqueue({
+          type: "message.updated",
+          properties: { sessionID, info: { id: "current-message", role: "assistant", parentID } },
+        });
+      }
+      enqueue({ type: "message.part.updated", properties: { sessionID, part } });
+      enqueue({ type: "message.part.updated", properties: { sessionID, part: step } });
+      enqueue({
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          part: {
+            id: "history-part-0",
+            messageID: "history-message-0",
+            sessionID,
+            type: "text",
+            text: "Completed turn zero",
+            time: { start: 1, end: 2 },
+          },
+        },
+      });
+      enqueue({ type: "session.status", properties: { sessionID, status: { type: "idle" } } });
+
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.equal(visitedHistoryParts, 0);
+      NodeAssert.deepEqual(
+        events
+          .filter((event) => event.type === "content.delta")
+          .map((event) => event.payload.delta),
+        ["Current response", "zero"],
+      );
+      NodeAssert.equal(events.filter((event) => event.type === "item.completed").length, 1);
+      const completed = events.find((event) => event.type === "turn.completed");
+      NodeAssert.deepEqual(completed?.payload.tokenUsage, {
+        usageStatus: "complete",
+        usageScope: "main_agent",
+        inputTokens: 46,
+        cachedInputTokens: 5,
+        cacheCreationTokens: 1,
+        outputTokens: 12,
+        reasoningTokens: 2,
+        hasSubagents: false,
+      });
+      yield* adapter.stopSession(threadId);
+    }).pipe(Effect.scoped),
+  );
+
+  it.effect("keeps completed text edits and clears removed parts across reconnects", () =>
+    Effect.gen(function* () {
+      const adapter = yield* OpenCodeAdapter;
+      const threadId = asThreadId("thread-opencode-text-retention");
+      const sessionID = "http://127.0.0.1:9999/session";
+      const messageID = "retained-message";
+      const metadata = {
+        type: "message.updated",
+        properties: {
+          sessionID,
+          info: { id: messageID, role: "assistant", time: { created: 1, completed: 2 } },
+        },
+      };
+      const snapshot = (
+        text: string,
+        id = "retained-part",
+        type: "text" | "reasoning" = "text",
+      ) => ({
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          part: { id, sessionID, messageID, type, text, time: { start: 1, end: 2 } },
+        },
+      });
+      const delta = (text: string) => ({
+        type: "message.part.delta",
+        properties: { sessionID, messageID, partID: "retained-part", field: "text", delta: text },
+      });
+      const nonTextReplacement = {
+        type: "message.part.updated",
+        properties: {
+          sessionID,
+          part: {
+            id: "retained-part",
+            sessionID,
+            messageID,
+            type: "file",
+            mime: "text/plain",
+            url: "file:///repo/result.txt",
+          },
+        },
+      };
+      runtimeMock.state.subscribedEvents = [
+        snapshot("Replaced before metadata"),
+        nonTextReplacement,
+        metadata,
+        snapshot("Thinking", "reasoning-part", "reasoning"),
+        snapshot("Hello world"),
+        { type: "server.connected", properties: {} },
+        metadata,
+        snapshot("Thinking", "reasoning-part", "reasoning"),
+        snapshot("Thinking more", "reasoning-part", "reasoning"),
+        snapshot("Hello world"),
+        snapshot("Hello"),
+        snapshot("Hello there"),
+        delta(" again"),
+        snapshot("Hello there again"),
+        nonTextReplacement,
+        delta("ignored while file"),
+        metadata,
+        snapshot("Hello there again!"),
+        {
+          type: "message.part.removed",
+          properties: { sessionID, messageID, partID: "retained-part" },
+        },
+        delta("removed part"),
+        metadata,
+        snapshot("Fresh"),
+        snapshot("Second", "second-part"),
+        { type: "message.removed", properties: { sessionID, messageID } },
+        delta("removed message"),
+        metadata,
+        snapshot("New thoughts", "reasoning-part", "reasoning"),
+        snapshot("New"),
+        { type: "session.compacted", properties: { sessionID } },
+      ];
+      const eventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.filter((event) => event.threadId === threadId),
+        Stream.takeUntil((event) => event.type === "thread.state.changed"),
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        runtimeMode: "full-access",
+      });
+
+      const events = yield* Fiber.join(eventsFiber);
+      NodeAssert.deepEqual(
+        events
+          .filter((event) => event.type === "content.delta")
+          .map((event) => [event.payload.streamKind, event.payload.delta]),
+        [
+          ["reasoning_text", "Thinking"],
+          ["assistant_text", "Hello world"],
+          ["reasoning_text", " more"],
+          ["assistant_text", "there"],
+          ["assistant_text", " again"],
+          ["assistant_text", "!"],
+          ["assistant_text", "Fresh"],
+          ["assistant_text", "Second"],
+          ["reasoning_text", "New thoughts"],
+          ["assistant_text", "New"],
+        ],
+      );
+      NodeAssert.deepEqual(
+        events
+          .filter((event) => event.type === "item.completed")
+          .map((event) => event.payload.detail),
+        ["Hello world", "Fresh", "Second", "New"],
+      );
+      yield* adapter.stopSession(threadId);
     }),
   );
 
@@ -7336,8 +7744,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           }),
         ),
         Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(TestHttpClientLive),
         Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(FetchHttpClient.layer),
       );
 
       const session = yield* Effect.gen(function* () {
@@ -7419,8 +7827,8 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
           }),
         ),
         Layer.provideMerge(providerSessionDirectoryTestLayer),
+        Layer.provideMerge(TestHttpClientLive),
         Layer.provideMerge(NodeServices.layer),
-        Layer.provideMerge(FetchHttpClient.layer),
       );
 
       // Capture closeCalls *inside* the provided layer scope: the adapter's

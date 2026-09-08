@@ -28,7 +28,7 @@ import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } fr
 const orchestrationScopes = [AuthOrchestrationReadScope, AuthOrchestrationOperateScope] as const;
 const encodeJsonString = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
-class RemoteRegisterInputError extends Schema.TaggedErrorClass<RemoteRegisterInputError>()(
+class RemoteRegisterInputError extends Schema.TaggedError<RemoteRegisterInputError>()(
   "RemoteRegisterInputError",
   {
     message: Schema.String,

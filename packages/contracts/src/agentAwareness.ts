@@ -20,7 +20,7 @@ export const AgentAwarenessRegistrationResult = Schema.Struct({
 });
 export type AgentAwarenessRegistrationResult = typeof AgentAwarenessRegistrationResult.Type;
 
-export class AgentAwarenessServiceError extends Schema.TaggedErrorClass<AgentAwarenessServiceError>()(
+export class AgentAwarenessServiceError extends Schema.TaggedError<AgentAwarenessServiceError>()(
   "AgentAwarenessServiceError",
   {
     message: Schema.String,

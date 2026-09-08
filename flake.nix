@@ -55,9 +55,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-5sI+Lbbr16WO/e4lFdSJVRk3S67ZoiZcqrP4Xqoo+Mo=";
-            server = "sha256-StAf8GteFBSSEw6u5QGwyBJLiDppt2R13wRVl7hnkyM=";
-            runtime = "sha256-WBdBwAWS/D81C9vyBKsuG1V/Uo796DfYppkjvz7mMiE=";
+            web = "sha256-Lz6lPqv6HyqZYSwa9SeV+kHmtx9jBDeI04uDS0H4B84=";
+            server = "sha256-L1VKHXoPOUNFXShrPQkT2FP2H8+uzWWK0ti/7ez8NlA=";
+            runtime = "sha256-runjpCCmjkAOytS7eTH4kjYHrAActMqyE2PZKAMp50U=";
           },
         }:
         let

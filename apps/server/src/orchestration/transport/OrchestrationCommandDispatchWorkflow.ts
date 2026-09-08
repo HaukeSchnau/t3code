@@ -458,17 +458,40 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       return yield* bootstrapProgram.pipe(
         Effect.catchCause((cause) => {
           const error = Cause.squash(cause);
-          return Effect.fail(
-            isOrchestrationDispatchCommandError(error)
-              ? error
-              : new OrchestrationDispatchCommandError({
-                  message:
-                    error instanceof Error
-                      ? error.message
-                      : "Failed to bootstrap thread turn start.",
-                  cause,
-                }),
-          );
+          return Effect.gen(function* () {
+            const bootstrapThreadDisposition =
+              bootstrap?.createThread && progress.threadCreated && !progress.workspacePrepared
+                ? yield* dispatchCommand({
+                    type: "thread.delete",
+                    commandId: preprocessingCommandId(command, "bootstrap-thread-cleanup"),
+                    threadId: command.threadId,
+                  }).pipe(
+                    Effect.as("deleted" as const),
+                    Effect.tapError((cleanupCause) =>
+                      Effect.logWarning(
+                        "failed to clean up bootstrap thread after dispatch error",
+                        {
+                          threadId: command.threadId,
+                          cause: cleanupCause,
+                        },
+                      ),
+                    ),
+                    Effect.orElseSucceed(() => undefined),
+                  )
+                : undefined;
+            return yield* Effect.fail(
+              isOrchestrationDispatchCommandError(error)
+                ? error
+                : new OrchestrationDispatchCommandError({
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : "Failed to bootstrap thread turn start.",
+                    cause,
+                    ...(bootstrapThreadDisposition ? { bootstrapThreadDisposition } : {}),
+                  }),
+            );
+          });
         }),
       );
     });
@@ -533,12 +556,10 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
     Effect.gen(function* () {
       const preparedCommand = yield* prepareDispatchCommand(command);
       const normalizedCommand = preparedCommand.command;
-      const parkingCommand =
-        normalizedCommand.type === "thread.archive" || normalizedCommand.type === "thread.settle"
-          ? normalizedCommand
-          : undefined;
-      const shouldStopSessionAfterCommand = parkingCommand
-        ? yield* input.projectionSnapshotQuery.getThreadShellById(parkingCommand.threadId).pipe(
+      const archiveCommand =
+        normalizedCommand.type === "thread.archive" ? normalizedCommand : undefined;
+      const shouldStopSessionAfterCommand = archiveCommand
+        ? yield* input.projectionSnapshotQuery.getThreadShellById(archiveCommand.threadId).pipe(
             Effect.map(
               Option.match({
                 onNone: () => false,
@@ -547,7 +568,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             ),
             Effect.catchCause((cause) =>
               Effect.logWarning("failed to read thread session state before session-stop check", {
-                threadId: parkingCommand.threadId,
+                threadId: archiveCommand.threadId,
                 cause,
               }).pipe(Effect.as(false)),
             ),
@@ -562,40 +583,34 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
         yield* input.onCommandDispatched(normalizedCommand);
       }
 
-      if (parkingCommand) {
-        const parkingKind = parkingCommand.type === "thread.archive" ? "archive" : "settle";
+      if (archiveCommand) {
         if (shouldStopSessionAfterCommand) {
           yield* Effect.gen(function* () {
             const stopCommand = yield* normalizeDispatchCommand({
               type: "thread.session.stop",
-              commandId: CommandId.make(
-                `session-stop-for-${parkingKind}:${parkingCommand.commandId}`,
-              ),
-              threadId: parkingCommand.threadId,
+              commandId: CommandId.make(`session-stop-for-archive:${archiveCommand.commandId}`),
+              threadId: archiveCommand.threadId,
               createdAt: yield* nowIso,
-              ...(parkingKind === "settle" ? { onlyIfSettled: true } : {}),
             });
             yield* dispatchNormalizedCommand(stopCommand);
           }).pipe(
             Effect.catchCause((cause) =>
-              Effect.logWarning(`failed to stop provider session during ${parkingKind}`, {
-                threadId: parkingCommand.threadId,
+              Effect.logWarning("failed to stop provider session during archive", {
+                threadId: archiveCommand.threadId,
                 cause,
               }),
             ),
           );
         }
 
-        if (parkingCommand.type === "thread.archive") {
-          yield* input.terminalManager.close({ threadId: parkingCommand.threadId }).pipe(
-            Effect.catch((error) =>
-              Effect.logWarning("failed to close thread terminals after archive", {
-                threadId: parkingCommand.threadId,
-                error: error.message,
-              }),
-            ),
-          );
-        }
+        yield* input.terminalManager.close({ threadId: archiveCommand.threadId }).pipe(
+          Effect.catch((error) =>
+            Effect.logWarning("failed to close thread terminals after archive", {
+              threadId: archiveCommand.threadId,
+              error: error.message,
+            }),
+          ),
+        );
       }
       return result;
     }).pipe(

@@ -36,6 +36,7 @@ import { OrchestrationEventStore } from "../../persistence/Services/Orchestratio
 import { OrchestrationCommandReceiptRepository } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import type { OrchestrationCommandReceipt } from "../../persistence/Services/OrchestrationCommandReceipts.ts";
 import {
+  isOrchestrationCommandRejection,
   OrchestrationCommandInvariantError,
   OrchestrationCommandPreviouslyRejectedError,
   OrchestrationCommandReceiptMismatchError,
@@ -48,13 +49,17 @@ import { createEmptyReadModel, projectEvent } from "../projector.ts";
 import { OrchestrationProjectionPipeline } from "../Services/ProjectionPipeline.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { incrementWorkloadCounter } from "../../diagnostics/WorkloadDiagnostics.ts";
+import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import {
   OrchestrationEngineService,
   type OrchestrationEngineShape,
 } from "../Services/OrchestrationEngine.ts";
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
-const isMissingAggregateInvariant = (error: OrchestrationCommandInvariantError) =>
+const isMissingAggregateInvariant = (
+  error: unknown,
+): error is OrchestrationCommandInvariantError =>
+  isOrchestrationCommandInvariantError(error) &&
   error.detail.includes("does not exist for command");
 
 interface CommandEnvelope {
@@ -103,6 +108,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const projectionPipeline = yield* OrchestrationProjectionPipeline;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
+  const threadBackgroundLiveness = yield* ThreadBackgroundLivenessService;
   const crypto = yield* Crypto.Crypto;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -149,7 +155,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
         new OrchestrationCommandReceiptMismatchError({
           commandId: receiptIdentity.commandId,
           reason: "aggregate-mismatch",
-          detail: `Receipt belongs to ${receipt.aggregateKind} '${receipt.aggregateId}', not ${receiptIdentity.aggregateKind} '${receiptIdentity.aggregateId}'.`,
+          detail: `Command id '${receiptIdentity.commandId}' already used for ${receipt.aggregateKind} '${receipt.aggregateId}'; refusing to replay its receipt for ${receiptIdentity.aggregateKind} '${receiptIdentity.aggregateId}'.`,
         }),
       );
     }
@@ -247,14 +253,65 @@ const makeOrchestrationEngine = Effect.gen(function* () {
           return yield* resolveExistingReceipt(existingReceipt.value, receiptIdentity);
         }
 
-        const decide = () =>
+        if (
+          envelope.command.type === "thread.auto-settle" &&
+          (yield* eventStore.hasEventAfter({
+            aggregateKind: "thread",
+            aggregateId: envelope.command.threadId,
+            sequenceExclusive: envelope.command.snapshotSequence,
+          }))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: `thread ${envelope.command.threadId} changed before automatic settlement`,
+          });
+        }
+
+        if (
+          envelope.command.type === "thread.pull-request.sync" &&
+          (yield* eventStore.hasEventAfter({
+            aggregateKind: "thread",
+            aggregateId: envelope.command.threadId,
+            sequenceExclusive: envelope.command.snapshotSequence,
+            type: "thread.created",
+          }))
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: `thread ${envelope.command.threadId} was recreated before pull request discovery`,
+          });
+        }
+
+        if (
+          envelope.command.type === "thread.auto-settle" &&
+          threadBackgroundLiveness.getThreadBackgroundLiveness(envelope.command.threadId) !== null
+        ) {
+          return yield* new OrchestrationCommandInvariantError({
+            commandType: envelope.command.type,
+            detail: `thread ${envelope.command.threadId} has live background work`,
+          });
+        }
+
+        const userInputActivity =
+          (envelope.command.type === "thread.user-input.respond" ||
+            envelope.command.type === "thread.user-input.dismiss") &&
+          projectionSnapshotQuery.getUserInputActivity !== undefined
+            ? yield* projectionSnapshotQuery.getUserInputActivity({
+                threadId: envelope.command.threadId,
+                requestId: envelope.command.requestId,
+              })
+            : Option.none();
+        const decide = (readModel: OrchestrationReadModel) =>
           decideOrchestrationCommand({
             command: envelope.command,
-            readModel: commandReadModel,
+            readModel,
+            ...(Option.isSome(userInputActivity)
+              ? { userInputActivity: userInputActivity.value }
+              : {}),
           }).pipe(
             Effect.provideService(Crypto.Crypto, crypto),
             Effect.mapError((cause) =>
-              isOrchestrationCommandInvariantError(cause)
+              isOrchestrationCommandRejection(cause)
                 ? cause
                 : new OrchestrationCommandInvariantError({
                     commandType: envelope.command.type,
@@ -263,11 +320,11 @@ const makeOrchestrationEngine = Effect.gen(function* () {
                   }),
             ),
           );
-        const eventBase = yield* decide().pipe(
+        const eventBase = yield* decide(commandReadModel).pipe(
           Effect.catchIf(isMissingAggregateInvariant, (initialError) =>
             Effect.gen(function* () {
               commandReadModel = yield* projectionSnapshotQuery.getCommandReadModel();
-              return yield* decide().pipe(
+              return yield* decide(commandReadModel).pipe(
                 Effect.mapError((refreshedError) =>
                   isMissingAggregateInvariant(refreshedError) ? initialError : refreshedError,
                 ),
@@ -432,7 +489,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             );
           }
 
-          if (isOrchestrationCommandInvariantError(error)) {
+          if (isOrchestrationCommandRejection(error)) {
             const durableRejection = yield* Effect.exit(
               Effect.gen(function* () {
                 const inserted = yield* commandReceiptRepository.insertRejected({

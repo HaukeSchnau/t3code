@@ -58,7 +58,7 @@ const AgentAwarenessOperation = Schema.Literals([
   "prime-live-activity",
 ]);
 
-export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentAwarenessOperationError>()(
+export class AgentAwarenessOperationError extends Schema.TaggedError<AgentAwarenessOperationError>()(
   "AgentAwarenessOperationError",
   {
     operation: AgentAwarenessOperation,
@@ -70,7 +70,7 @@ export class AgentAwarenessOperationError extends Schema.TaggedErrorClass<AgentA
   }
 }
 
-export class AgentAwarenessDeliveryUnavailableError extends Schema.TaggedErrorClass<AgentAwarenessDeliveryUnavailableError>()(
+export class AgentAwarenessDeliveryUnavailableError extends Schema.TaggedError<AgentAwarenessDeliveryUnavailableError>()(
   "AgentAwarenessDeliveryUnavailableError",
   {},
 ) {
@@ -336,7 +336,7 @@ function registerDeviceWithEnvironment(
     });
     if (!result.deliveryConfigured) {
       setRegistrationStatus("failed");
-      return yield* new AgentAwarenessDeliveryUnavailableError();
+      return yield* new AgentAwarenessDeliveryUnavailableError({});
     }
     if (expectedGeneration !== deviceRegistrationGeneration) {
       logRegistrationDebug(

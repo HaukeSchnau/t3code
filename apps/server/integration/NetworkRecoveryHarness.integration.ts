@@ -14,9 +14,9 @@ import {
   MessageId,
   ORCHESTRATION_WS_METHODS,
   OrchestrationDispatchCommandError,
+  OrchestrationRpcSchemas,
   ProjectId,
   ThreadId,
-  WsOrchestrationDispatchCommandRpc,
   defaultInstanceIdForDriver,
   type ClientOrchestrationCommand,
   type OrchestrationCommand,
@@ -32,6 +32,7 @@ import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { HttpRouter } from "effect/unstable/http";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
 import * as Socket from "effect/unstable/socket/Socket";
 
@@ -58,7 +59,12 @@ import {
 } from "./OrchestrationEngineHarness.integration.ts";
 import { codexTurnTextFixture } from "./fixtures/providerRuntime.ts";
 
-const RecoveryRpcGroup = RpcGroup.make(WsOrchestrationDispatchCommandRpc);
+const RecoveryRpc = Rpc.make(ORCHESTRATION_WS_METHODS.dispatchCommand, {
+  payload: OrchestrationRpcSchemas.dispatchCommand.input,
+  success: OrchestrationRpcSchemas.dispatchCommand.output,
+  error: OrchestrationDispatchCommandError,
+});
+const RecoveryRpcGroup = RpcGroup.make(RecoveryRpc);
 const makeRecoveryRpcClient = RpcClient.make(RecoveryRpcGroup);
 
 export const NETWORK_RECOVERY_PROVENANCE = {
@@ -344,7 +350,7 @@ function makeDecoratedSocket(input: {
   readonly harness: OrchestrationIntegrationHarness;
   readonly receiptProof: "available" | "unavailable";
 }): Socket.Socket {
-  const onClientFrame = (frame: string | Uint8Array) =>
+  const onClientFrame = (frame: string | Uint8Array): Effect.Effect<void, never, never> =>
     Effect.sync(() => {
       const decoded = parseFrame(frame);
       if (
@@ -366,7 +372,7 @@ function makeDecoratedSocket(input: {
       });
     }).pipe(Effect.orDie);
 
-  const inspectOriginFrame = (frame: string | Uint8Array) =>
+  const inspectOriginFrame = (frame: string | Uint8Array): Effect.Effect<boolean, never, never> =>
     Effect.gen(function* () {
       const decoded = parseFrame(frame);
       if (
@@ -422,8 +428,8 @@ function makeDecoratedSocket(input: {
       return true;
     });
 
-  const runRaw: Socket.Socket["runRaw"] = <_, E, R>(
-    handler: (frame: string | Uint8Array) => Effect.Effect<_, E, R> | void,
+  const runRaw: Socket.Socket["runRaw"] = <A, E, R>(
+    handler: (frame: string | Uint8Array) => Effect.Effect<A, E, R> | void,
     options?: { readonly onOpen?: Effect.Effect<void> | undefined },
   ): Effect.Effect<void, Socket.SocketError | E, R> =>
     Effect.scopedWith((scope) =>
@@ -686,6 +692,8 @@ export function makeNetworkRecoveryAdapter(
   ): Promise<CorrectnessEvidence> => {
     const { harness } = requirePrepared(state);
     operation.signal.throwIfAborted();
+    await Effect.runPromise(harness.drainProviderRuntime, { signal: operation.signal });
+    await Effect.runPromise(harness.drainCheckpointReactor, { signal: operation.signal });
     const thread = await Effect.runPromise(
       harness.waitForThread(
         THREAD_ID,

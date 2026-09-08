@@ -34,7 +34,7 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
 import { SkillPackId } from "./skillPacks.ts";
 
-export class ThreadOrchestrationError extends Schema.TaggedErrorClass<ThreadOrchestrationError>()(
+export class ThreadOrchestrationError extends Schema.TaggedError<ThreadOrchestrationError>()(
   "ThreadOrchestrationError",
   {
     operation: TrimmedNonEmptyString,

@@ -208,6 +208,28 @@ const ComposerPendingUserInputCard = memo(function ComposerPendingUserInputCard(
             </span>
           ) : null}
           <ComposerBanner.ToggleIcon expanded={!isCollapsed} />
+          {prompt.dismissible ? (
+            // Sits inside the trigger button, so stop the click from toggling
+            // the disclosure. Dismiss closes the question without a reply.
+            <ComposerBanner.Dismiss
+              render={<span role="button" tabIndex={0} />}
+              aria-label="Dismiss question without answering"
+              title="Dismiss question without answering"
+              disabled={isResponding}
+              data-pending-user-input-dismiss
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onSkip();
+              }}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                event.stopPropagation();
+                onSkip();
+              }}
+            />
+          ) : null}
         </ComposerBanner.Actions>
       </CollapsibleTrigger>
       <CollapsiblePanel>

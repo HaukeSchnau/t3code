@@ -16,6 +16,7 @@ import * as HttpApiClient from "effect/unstable/httpapi/HttpApiClient";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerConfig from "../config.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "../orchestration/Layers/ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../orchestration/ThreadBackgroundLiveness.ts";
 import { layerConfig as SqlitePersistenceLayerLive } from "../persistence/Layers/Sqlite.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
@@ -69,6 +70,7 @@ const withStatusCliSessionToken = <A, E, R>(
   );
 
 const StatusOfflineRuntimeLive = OrchestrationProjectionSnapshotQueryLive.pipe(
+  Layer.provideMerge(ThreadBackgroundLiveness.layer),
   Layer.provideMerge(RepositoryIdentityResolver.layer),
   Layer.provideMerge(SqlitePersistenceLayerLive),
 );

@@ -38,6 +38,8 @@ vi.hoisted(() => {
   process.env.NODE_ENV = "development";
 });
 
+vi.mock("react-native", () => ({ Alert: { alert: vi.fn() } }));
+
 const mocks = vi.hoisted(() => ({
   startTurn: vi.fn(),
   begin: vi.fn(),
@@ -106,6 +108,7 @@ vi.mock("./thread-outbox", async () => {
     updateThreadOutboxMessage: vi.fn(async () => true),
     threadOutboxManager: {
       ...atoms,
+      load: vi.fn(async () => true),
       begin: mocks.begin,
       complete: mocks.complete,
       fail: vi.fn(),

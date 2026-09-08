@@ -1,4 +1,5 @@
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
+import { fileAttachmentTooLargeMessage } from "@t3tools/client-runtime/state/attachments";
 import {
   makeDurableCommandDeliveryPlan,
   type DurableCommandDeliveryPlan,
@@ -26,7 +27,8 @@ import * as Schema from "effect/Schema";
 
 import type { UploadedMobileAttachment } from "../lib/attachmentUpload";
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
-import { toUploadChatImageAttachments, type DraftComposerAttachment } from "../lib/composerImages";
+import { toUploadChatImageAttachments } from "../lib/composerImageAttachments";
+import type { DraftComposerAttachment } from "../lib/composerImages";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
@@ -256,6 +258,33 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
 
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "retry" }
+  | { readonly step: "send" }
+  | { readonly step: "restore"; readonly reason: string };
+
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  readonly serverConfig: { readonly maxFileUploadBytes?: number } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction === "wait") return { step: "wait" };
+  if (input.deliveryAction === "remove") return { step: "send" };
+  if (input.serverConfig === null) return { step: "retry" };
+  const maxBytes = input.serverConfig.maxFileUploadBytes;
+  if (maxBytes !== undefined) {
+    const oversized = input.fileAttachments.find((attachment) => attachment.sizeBytes > maxBytes);
+    if (oversized) {
+      return {
+        step: "restore",
+        reason: fileAttachmentTooLargeMessage(oversized.name, maxBytes),
+      };
+    }
+  }
+  return { step: "send" };
+}
+
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;
   readonly threadExists: boolean;
@@ -304,14 +333,30 @@ function errorMessage(error: unknown): string | null {
   return typeof error === "string" ? error : null;
 }
 
+/**
+ * Only a failure the server actually decided (`OrchestrationDispatchCommandError`,
+ * or an authorization rejection) means the payload itself is bad. The other
+ * typed failures a queued send can hit are transport-shaped: a socket that
+ * dropped mid-request (`RpcClientError` wrapping a Socket read/write/close
+ * reason), or an environment that is not connected or not registered. Those
+ * are matched by tag, not by message text, because a `SocketReadError` message
+ * is just "An error occurred during Read". A wrong answer here restores the
+ * pending task into a draft and it disappears from the list.
+ */
 export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "_tag" in error &&
-    error._tag === "ConnectionTransientError"
-  ) {
-    return true;
+  if (typeof error === "object" && error !== null && "_tag" in error) {
+    switch (error._tag) {
+      case "OrchestrationDispatchCommandError":
+      case "EnvironmentAuthorizationError":
+        return false;
+      case "ConnectionTransientError":
+      case "RpcClientError":
+      case "EnvironmentRpcUnavailableError":
+      case "EnvironmentNotRegisteredError":
+        return true;
+      default:
+        break;
+    }
   }
   return isTransportConnectionErrorMessage(errorMessage(error));
 }

@@ -36,7 +36,7 @@ const RemoteOrchestrationEnvironmentFileJson = Schema.fromJsonString(
 const decodeRegistryFile = Schema.decodeEffect(RemoteOrchestrationEnvironmentFileJson);
 const encodeRegistryFile = Schema.encodeEffect(RemoteOrchestrationEnvironmentFileJson);
 
-export class RemoteEnvironmentRegistryError extends Schema.TaggedErrorClass<RemoteEnvironmentRegistryError>()(
+export class RemoteEnvironmentRegistryError extends Schema.TaggedError<RemoteEnvironmentRegistryError>()(
   "RemoteEnvironmentRegistryError",
   {
     operation: TrimmedNonEmptyString,

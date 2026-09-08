@@ -4,7 +4,7 @@ import * as Schema from "effect/Schema";
 
 import type { DurableCommandOutboxDocument } from "../operations/commandOutbox.ts";
 
-export class CommandOutboxStorageError extends Schema.TaggedErrorClass<CommandOutboxStorageError>()(
+export class CommandOutboxStorageError extends Schema.TaggedError<CommandOutboxStorageError>()(
   "CommandOutboxStorageError",
   {
     operation: Schema.Literals(["load", "save"]),
