@@ -21,7 +21,7 @@ import { CommandOutboxStorage, type CommandOutboxStorageError } from "../platfor
 
 const MAX_RETRY_DELAY_MS = 16_000;
 
-export class CommandOutboxStateError extends Schema.TaggedErrorClass<CommandOutboxStateError>()(
+export class CommandOutboxStateError extends Schema.TaggedError<CommandOutboxStateError>()(
   "CommandOutboxStateError",
   {
     reason: Schema.Literals([

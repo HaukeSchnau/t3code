@@ -85,7 +85,7 @@ export type ProjectSetupScriptResolution =
   | { readonly status: "no-script" }
   | { readonly status: "resolved"; readonly execution: SetupExecutionIdentity };
 
-export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<ProjectSetupScriptOperationError>()(
+export class ProjectSetupScriptOperationError extends Schema.TaggedError<ProjectSetupScriptOperationError>()(
   "ProjectSetupScriptOperationError",
   {
     threadId: Schema.String,
@@ -107,7 +107,7 @@ export class ProjectSetupScriptOperationError extends Schema.TaggedErrorClass<Pr
   }
 }
 
-export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorClass<ProjectSetupScriptProjectNotFoundError>()(
+export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedError<ProjectSetupScriptProjectNotFoundError>()(
   "ProjectSetupScriptProjectNotFoundError",
   {
     threadId: Schema.String,
@@ -121,7 +121,7 @@ export class ProjectSetupScriptProjectNotFoundError extends Schema.TaggedErrorCl
   }
 }
 
-export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedErrorClass<ProjectSetupScriptReconciliationTimeoutError>()(
+export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedError<ProjectSetupScriptReconciliationTimeoutError>()(
   "ProjectSetupScriptReconciliationTimeoutError",
   {
     threadId: Schema.String,
@@ -135,7 +135,7 @@ export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedE
   }
 }
 
-export class ProjectSetupScriptIdentityMismatchError extends Schema.TaggedErrorClass<ProjectSetupScriptIdentityMismatchError>()(
+export class ProjectSetupScriptIdentityMismatchError extends Schema.TaggedError<ProjectSetupScriptIdentityMismatchError>()(
   "ProjectSetupScriptIdentityMismatchError",
   {
     threadId: Schema.String,

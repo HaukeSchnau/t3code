@@ -7,7 +7,7 @@ import type {
   ProviderInteractionMode,
   ProviderOptionSelection,
   RuntimeMode,
-  ServerProviderSkill,
+  ServerProvider,
   SkillPackId,
 } from "@t3tools/contracts";
 import {
@@ -27,13 +27,14 @@ import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
 import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
-import { makeTurnCommandMetadata, type TurnCommandMetadata } from "../../lib/commandMetadata";
+import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
 import {
   buildModelOptions,
   groupByProvider,
   resolveDefaultableModelSelection,
+  resolveNewTaskModelSelection,
   resolveSelectableModelSelection,
 } from "../../lib/modelOptions";
 import { scopedProjectKey } from "../../lib/scopedEntities";
@@ -43,21 +44,30 @@ import { useEnvironmentQuery } from "../../state/query";
 import {
   appendComposerDraftAttachments,
   clearComposerDraft,
-  copyComposerDraftContentIfEmpty,
+  composerDraftsAtom,
+  createNewTaskDraft,
   getComposerDraftSnapshot,
   isComposerDraftEmpty,
+  isNewTaskDraftKey,
   removeComposerDraftAttachment,
   replaceComposerDraftAttachments,
+  retargetNewTaskDraft,
+  scheduleUnusedComposerAttachmentCleanup,
   setComposerDraftText,
+  setStickyComposerModelSelection,
   updateComposerDraftSettings,
   useComposerDraft,
+  useStickyComposerModelSelection,
 } from "../../state/use-composer-drafts";
+import {
+  capturePendingTaskEditorWriteBaseline,
+  flushPendingTaskEditorWrite,
+} from "../../state/pending-task-editor-writes";
 import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
 import {
   flattenQueuedThreadMessages,
   threadOutboxManager,
-  updateThreadOutboxMessage,
   type QueuedThreadMessage,
 } from "../../state/thread-outbox";
 import {
@@ -86,6 +96,8 @@ import {
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
 } from "./new-task-context-presentation";
+import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
 type WorkspaceMode = "local" | "worktree";
 
@@ -147,7 +159,6 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /** Draft-chosen packs; undefined inherits the project default. */
   readonly skillPackIds: ReadonlyArray<SkillPackId> | undefined;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
@@ -159,11 +170,17 @@ type NewTaskFlowContextValue = {
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
-  readonly selectedProviderSkills: ReadonlyArray<ServerProviderSkill>;
+  readonly selectedProviderStatus: ServerProvider | null;
   readonly providerGroups: ReadonlyArray<ProviderGroup>;
   readonly filteredBranches: ReadonlyArray<VcsRef>;
   readonly reset: () => void;
   readonly setProject: (project: EnvironmentProject) => void;
+  /**
+   * Binds the composer to an existing new-task draft (a row in the thread
+   * list). Returns false when the draft is gone, so the caller can fall back
+   * to a fresh one.
+   */
+  readonly openDraft: (draftKey: string) => boolean;
   readonly selectEnvironment: (environmentId: EnvironmentId) => void;
   readonly setSelectedModelKey: (
     key: string | null,
@@ -172,13 +189,21 @@ type NewTaskFlowContextValue = {
   readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
   readonly selectBranch: (branch: VcsRef) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
+  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly beginEditingPendingTask: (messageId: string) => boolean;
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
-  readonly buildPendingTaskMessage: (metadata: TurnCommandMetadata) => QueuedThreadMessage | null;
+  readonly buildPendingTaskMessage: (
+    metadata: TurnCommandMetadata,
+    options?: {
+      /** The live checkout, recorded as a local task's branch when it sends now. */
+      readonly currentCheckoutBranch?: string | null;
+    },
+  ) => QueuedThreadMessage | null;
   readonly setPrompt: (value: string) => void;
   readonly replaceAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
-  readonly appendAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => void;
+  /** Appends draft attachments; returns how many the live cap rejected. */
+  readonly appendAttachments: (attachments: ReadonlyArray<DraftComposerAttachment>) => number;
   readonly removeAttachment: (imageId: string) => void;
   readonly clearAttachments: () => void;
   readonly setSubmitting: (value: boolean) => void;
@@ -187,7 +212,6 @@ type NewTaskFlowContextValue = {
   readonly loadMoreBranches: () => void;
   readonly setRuntimeMode: (value: RuntimeMode) => void;
   readonly setInteractionMode: (value: ProviderInteractionMode) => void;
-  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly setSelectedModelOptions: (
     value: ReadonlyArray<ProviderOptionSelection> | undefined,
   ) => void;
@@ -227,6 +251,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ? selectedEnvironmentIdOverride
       : (projects[0]?.environmentId ?? null);
   const [selectedProjectKey, setSelectedProjectKey] = useState<string | null>(null);
+  // The new-task draft the composer is bound to. Null until a project is
+  // chosen; each New Task entry mints its own, so a project can hold several.
+  const [activeDraftKey, setActiveDraftKey] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
   const [expandedProvider, setExpandedProvider] = useState<string | null>(null);
@@ -235,10 +262,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   // Mirrors `editingPendingTask` synchronously so the unmount flush cannot act
   // on a task whose editing session already ended this render.
   const editingPendingTaskRef = useRef<QueuedThreadMessage | null>(null);
+  // Outbox revision this editor session may write after its predecessor save.
+  // Unrelated accepted writes still beat the dismissed session's CAS.
+  const editingRevisionRef = useRef(Promise.resolve(0));
 
   const reset = useCallback(() => {
     setSelectedEnvironmentId(null);
     setSelectedProjectKey(null);
+    setActiveDraftKey(null);
     setSubmitting(false);
     setBranchQuery("");
     setExpandedProvider(null);
@@ -359,12 +390,28 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedProject?.environmentId ?? null,
   );
   // While a queued pending task is being edited its draft lives under a key
-  // scoped to the queued message, so per-project new-task drafts stay intact.
+  // scoped to the queued message, so new-task drafts stay intact.
   const selectedProjectDraftKey = editingPendingTask
     ? pendingTaskDraftKey(editingPendingTask.messageId)
     : selectedProject
-      ? `new-task:${scopedProjectKey(selectedProject.environmentId, selectedProject.id)}`
+      ? activeDraftKey
       : null;
+  // selectedProject can resolve without setProject ever running (the
+  // environment's first project is the fallback, and the draft screen skips
+  // setProject when the route's project already matches it). The composer
+  // still needs a draft to write into, so bind one the moment a project is
+  // in view and nothing else owns the key.
+  useEffect(() => {
+    if (activeDraftKey !== null || editingPendingTask !== null || selectedProject === null) {
+      return;
+    }
+    setActiveDraftKey(
+      createNewTaskDraft({
+        environmentId: selectedProject.environmentId,
+        projectId: selectedProject.id,
+      }),
+    );
+  }, [activeDraftKey, editingPendingTask, selectedProject]);
   const selectedProjectDraft = useComposerDraft(selectedProjectDraftKey);
   const prompt = selectedProjectDraft.text;
   const attachments = selectedProjectDraft.attachments;
@@ -409,7 +456,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     selectedEnvironmentServerConfig?.settings.newWorktreesStartFromOrigin ??
     true;
   const runtimeMode = selectedProjectDraft.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const skillPackIds = selectedProjectDraft.skillPackIds;
 
   // Antigravity keeps unavailable selections so sign-out or a catalog change
   // cannot switch the user's model. Other providers retain their fallback
@@ -420,23 +466,37 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
   const projectDefaultModelSelection = resolveDefaultableModelSelection(
     selectedEnvironmentServerConfig,
-    selectedProject?.defaultModelSelection ?? null,
+    selectedProject?.defaultModelSelection ??
+      selectedEnvironmentServerConfig?.settings.defaultModelSelection ??
+      null,
+  );
+  const storedStickyModelSelection = useStickyComposerModelSelection();
+  const stickyModelSelection = resolveDefaultableModelSelection(
+    selectedEnvironmentServerConfig,
+    storedStickyModelSelection,
   );
   const modelOptions = useMemo(
     () =>
       buildModelOptions(
         selectedEnvironmentServerConfig,
-        draftModelSelection ?? projectDefaultModelSelection,
+        draftModelSelection ?? projectDefaultModelSelection ?? stickyModelSelection,
       ),
-    [selectedEnvironmentServerConfig, draftModelSelection, projectDefaultModelSelection],
+    [
+      selectedEnvironmentServerConfig,
+      draftModelSelection,
+      projectDefaultModelSelection,
+      stickyModelSelection,
+    ],
   );
 
-  const selectedModel =
-    draftModelSelection ??
-    projectDefaultModelSelection ??
-    modelOptions.find((option) => option.isDefault)?.selection ??
-    modelOptions[0]?.selection ??
-    null;
+  // An unsent draft keeps its explicit pick. Fresh drafts resolve the project
+  // default before the last manual app-wide selection and provider default.
+  const selectedModel = resolveNewTaskModelSelection({
+    draftSelection: draftModelSelection,
+    projectDefaultSelection: projectDefaultModelSelection,
+    stickySelection: stickyModelSelection,
+    modelOptions,
+  });
   const selectedModelKey = selectedModel
     ? `${selectedModel.instanceId}:${selectedModel.model}`
     : null;
@@ -448,22 +508,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         option.selection.instanceId === selectedModel.instanceId &&
         option.selection.model === selectedModel.model,
     ) ?? null;
-  const selectedProviderStatus =
-    selectedEnvironmentServerConfig?.providers.find(
-      (provider) => provider.instanceId === selectedModel?.instanceId,
-    ) ?? null;
+  const selectedProviderStatus = useMemo(
+    () =>
+      selectedEnvironmentServerConfig?.providers.find(
+        (provider) => provider.instanceId === selectedModel?.instanceId,
+      ) ?? null,
+    [selectedEnvironmentServerConfig, selectedModel?.instanceId],
+  );
   const planModeEnabled =
     legacyPlanModeEnabled && selectedProviderStatus?.showInteractionModeToggle !== false;
   const interactionMode = planModeEnabled
     ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
     : DEFAULT_PROVIDER_INTERACTION_MODE;
-  const selectedProviderSkills = useMemo(
-    () =>
-      selectedEnvironmentServerConfig?.providers.find(
-        (provider) => provider.instanceId === selectedModel?.instanceId,
-      )?.skills ?? [],
-    [selectedEnvironmentServerConfig, selectedModel?.instanceId],
-  );
+  const skillPackIds = selectedProjectDraft.skillPackIds;
   const setSelectedModelKey = useCallback(
     // Options ride along in the same write: a follow-up setSelectedModelOptions
     // call would rebuild the selection from the stale pre-switch model.
@@ -485,6 +542,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ? { interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE }
           : {}),
       });
+      setStickyComposerModelSelection(selection);
     },
     [modelOptions, selectedEnvironmentServerConfig, selectedProjectDraftKey],
   );
@@ -502,6 +560,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       updateComposerDraftSettings(selectedProjectDraftKey, {
         modelSelection: nextSelection,
       });
+      setStickyComposerModelSelection(nextSelection);
     },
     [selectedModel, selectedProjectDraftKey],
   );
@@ -525,12 +584,14 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     },
     [selectedProjectDraftKey],
   );
+  // Returns how many attachments the live cap rejected so the caller can
+  // tell the user (a concurrent add can fill the draft mid-pick).
   const appendAttachments = useCallback(
-    (nextAttachments: ReadonlyArray<DraftComposerAttachment>) => {
+    (nextAttachments: ReadonlyArray<DraftComposerAttachment>): number => {
       if (!selectedProjectDraftKey) {
-        return;
+        return 0;
       }
-      appendComposerDraftAttachments(selectedProjectDraftKey, nextAttachments);
+      return appendComposerDraftAttachments(selectedProjectDraftKey, nextAttachments);
     },
     [selectedProjectDraftKey],
   );
@@ -604,51 +665,68 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     );
   }, [availableBranches, branchQuery]);
 
+  // The composer's draft follows the project it will be sent to: switching
+  // mid-compose keeps the same draft and moves it, so typed text follows the
+  // user. A pending-task edit owns its own key and is untouched here.
+  const carryDraftContentTo = useCallback(
+    (project: EnvironmentProject) => {
+      const target = { environmentId: project.environmentId, projectId: project.id };
+      if (activeDraftKey !== null && isNewTaskDraftKey(activeDraftKey)) {
+        retargetNewTaskDraft(activeDraftKey, target);
+      } else if (!editingPendingTaskRef.current) {
+        setActiveDraftKey(createNewTaskDraft(target));
+      }
+    },
+    [activeDraftKey],
+  );
+
   const setProject = useCallback(
     (project: EnvironmentProject) => {
-      const nextProjectKey = scopedProjectKey(project.environmentId, project.id);
-      const nextDraftKey = `new-task:${nextProjectKey}`;
-      if (
-        selectedProjectDraftKey?.startsWith("new-task:") &&
-        selectedProjectDraftKey !== nextDraftKey
-      ) {
-        void copyComposerDraftContentIfEmpty(selectedProjectDraftKey, nextDraftKey);
-      }
+      carryDraftContentTo(project);
       setSelectedEnvironmentId(project.environmentId);
-      setSelectedProjectKey(nextProjectKey);
+      setSelectedProjectKey(scopedProjectKey(project.environmentId, project.id));
     },
-    [selectedProjectDraftKey],
+    [carryDraftContentTo],
+  );
+
+  const openDraft = useCallback(
+    (draftKey: string): boolean => {
+      const draft = appAtomRegistry.get(composerDraftsAtom)[draftKey];
+      const stamp = draft?.project;
+      if (!isNewTaskDraftKey(draftKey) || !stamp) {
+        return false;
+      }
+      // The stamped project must be loaded: selectedProject falls back to
+      // the environment's first project otherwise, and the draft would be
+      // sent somewhere the user never chose.
+      const projectLoaded = projects.some(
+        (project) =>
+          project.environmentId === stamp.environmentId && project.id === stamp.projectId,
+      );
+      if (!projectLoaded) {
+        return false;
+      }
+      setActiveDraftKey(draftKey);
+      setSelectedEnvironmentId(stamp.environmentId);
+      setSelectedProjectKey(scopedProjectKey(stamp.environmentId, stamp.projectId));
+      return true;
+    },
+    [projects],
   );
 
   const selectEnvironment = useCallback(
     (environmentId: EnvironmentId) => {
-      const projectsOnTarget = projects.filter(
-        (project) => project.environmentId === environmentId,
+      const match = resolveEnvironmentProjectMatch(
+        projects.filter((project) => project.environmentId === environmentId),
+        selectedProject,
       );
-      const repositoryKey = selectedProject?.repositoryIdentity?.canonicalKey ?? null;
-      // Prefer the repository identity; projects without one (e.g. not yet
-      // indexed) fall back to workspace basename, then title, so switching
-      // computers still follows the same repo instead of resetting to
-      // whatever project is first on the target machine.
-      const workspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
-      const match =
-        (repositoryKey !== null
-          ? projectsOnTarget.find(
-              (project) => (project.repositoryIdentity?.canonicalKey ?? null) === repositoryKey,
-            )
-          : undefined) ??
-        (workspaceBasename !== null
-          ? projectsOnTarget.find(
-              (project) => project.workspaceRoot.split("/").at(-1) === workspaceBasename,
-            )
-          : undefined) ??
-        (selectedProject !== null
-          ? projectsOnTarget.find((project) => project.title === selectedProject.title)
-          : undefined);
+      if (match) {
+        carryDraftContentTo(match);
+      }
       setSelectedEnvironmentId(environmentId);
       setSelectedProjectKey(match ? scopedProjectKey(match.environmentId, match.id) : null);
     },
-    [projects, selectedProject],
+    [projects, selectedProject, carryDraftContentTo],
   );
 
   const setWorkspaceMode = useCallback(
@@ -760,6 +838,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
   );
 
+  const setSkillPackIds = useCallback(
+    (value: ReadonlyArray<SkillPackId> | undefined) => {
+      if (selectedProjectDraftKey) {
+        updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
+      }
+    },
+    [selectedProjectDraftKey],
+  );
+
   const refreshBranches = branchState.refresh;
   const loadMoreBranches = branchState.loadNext;
   const loadBranches = useCallback(() => {
@@ -804,14 +891,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     },
     [selectedProjectDraftKey],
   );
-  const setSkillPackIds = useCallback(
-    (value: ReadonlyArray<SkillPackId> | undefined) => {
-      if (selectedProjectDraftKey) {
-        updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
-      }
-    },
-    [selectedProjectDraftKey],
-  );
   const setInteractionMode = useCallback(
     (value: ProviderInteractionMode) => {
       if (selectedProjectDraftKey) {
@@ -850,6 +929,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     setSelectedProjectKey(scopedProjectKey(message.environmentId, message.creation.projectId));
     activeEditingMessageId = message.messageId;
     editingPendingTaskRef.current = message;
+    editingRevisionRef.current = capturePendingTaskEditorWriteBaseline(message.messageId);
     setEditingPendingTask(message);
     // Hold the outbox drain off this task while it is open in the editor.
     holdEditingQueuedMessage(message.messageId);
@@ -857,7 +937,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   }, []);
 
   const buildPendingTaskMessage = useCallback(
-    (metadata: TurnCommandMetadata): QueuedThreadMessage | null => {
+    (
+      metadata: TurnCommandMetadata,
+      options?: { readonly currentCheckoutBranch?: string | null },
+    ): QueuedThreadMessage | null => {
       if (!selectedProject || !selectedProjectDraftKey) {
         return null;
       }
@@ -911,11 +994,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           ...(projectTitle !== undefined ? { projectTitle } : {}),
           ...(projectCwd !== undefined ? { projectCwd } : {}),
           workspaceMode: mode,
-          // Only an explicit picker choice, never the current checkout: a
-          // queued local task drains days later against whatever is checked
-          // out then, so recording a queue-time guess would pin a stale label
-          // to a thread that ran somewhere else.
-          branch: workspaceSelection?.branch ?? null,
+          // An explicit picker choice wins. Otherwise only a task sending now
+          // records the current checkout: a queued local task drains days
+          // later against whatever is checked out then, so a queue-time
+          // guess would pin a stale label to a thread that ran somewhere else.
+          branch: resolveProjectThreadCreationBranch({
+            workspaceMode: mode,
+            selectedBranch: workspaceSelection?.branch ?? null,
+            currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
+          }),
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
           // The draft only carries the flag when the user touched it; fall
           // back to the resolved default (server settings) so queued tasks
@@ -951,6 +1038,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       }
       clearComposerDraft(pendingTaskDraftKey(editing.messageId));
       releaseEditingQueuedMessage(editing.messageId);
+      scheduleUnusedComposerAttachmentCleanup(editing.attachments);
     }
     setEditingPendingTask(null);
   }, []);
@@ -988,12 +1076,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         activeEditingMessageId = null;
       }
 
-      // Editing is replacement, not mutation: fresh identities prevent a
-      // stale ready snapshot from delivering the superseded payload.
-      const freshIdentity = makeTurnCommandMetadata();
       const message = buildPendingTaskMessage({
-        ...freshIdentity,
         threadId: editing.threadId,
+        commandId: editing.commandId,
+        messageId: editing.messageId,
+        createdAt: editing.createdAt,
       });
 
       if (!message) {
@@ -1004,17 +1091,28 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         return;
       }
 
-      // update() rewrites the task only if it is still queued — a concurrent
-      // delete or delivery wins, so the flush cannot resurrect it.
-      void updateThreadOutboxMessage(editing, message)
-        .then(() => {
+      // The write handoff lets a reopened editor follow this editor's pending
+      // save. Its CAS still rejects unrelated queue edits, deletes, and
+      // deliveries, so the flush cannot resurrect or overwrite them.
+      void flushPendingTaskEditorWrite({
+        message,
+        baseline: editingRevisionRef.current,
+        draftKey: pendingTaskDraftKey(editing.messageId),
+      })
+        .then((savedDraftStillCurrent) => {
           // If this task was reopened (possibly in a fresh provider) while
           // the save was in flight, that session owns the draft and the lock.
           if (activeEditingMessageId === editing.messageId) {
             return;
           }
+          if (!savedDraftStillCurrent) {
+            // A newer queue write won the CAS, or a newer editor changed this
+            // draft. Keep the draft and drain lock so reopening can retry it.
+            return;
+          }
           clearComposerDraft(pendingTaskDraftKey(editing.messageId));
           releaseEditingQueuedMessage(editing.messageId);
+          scheduleUnusedComposerAttachmentCleanup(editing.attachments);
         })
         .catch((error) => {
           // Keep the drain lock and the draft: delivering the stale payload
@@ -1065,16 +1163,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       modelOptions,
       selectedModel,
       selectedModelOption,
-      selectedProviderSkills,
+      selectedProviderStatus,
       providerGroups,
       filteredBranches,
       reset,
       setProject,
+      openDraft,
       selectEnvironment,
       setSelectedModelKey,
       setWorkspaceMode,
       selectBranch,
       setStartFromOrigin,
+      setSkillPackIds,
       beginEditingPendingTask,
       finishEditingPendingTask,
       cancelEditingPendingTask,
@@ -1090,7 +1190,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       loadMoreBranches,
       setRuntimeMode,
       setInteractionMode,
-      setSkillPackIds,
       setSelectedModelOptions,
       setExpandedProvider,
     }),
@@ -1111,6 +1210,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       filteredBranches,
       finishEditingPendingTask,
       interactionMode,
+      skillPackIds,
       planModeEnabled,
       loadBranches,
       loadMoreBranches,
@@ -1121,7 +1221,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       replaceAttachments,
       reset,
       runtimeMode,
-      skillPackIds,
       selectedBranchName,
       hasMoreBranches,
       selectedEnvironmentId,
@@ -1129,20 +1228,21 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedModelKey,
       selectedModelOption,
       selectedProjectDraftKey,
-      selectedProviderSkills,
+      selectedProviderStatus,
       setSelectedModelOptions,
       selectedProject,
       selectedProjectKey,
       selectedWorktreePath,
       setProject,
+      openDraft,
       selectBranch,
       selectEnvironment,
       setInteractionMode,
-      setSkillPackIds,
       setPrompt,
       setRuntimeMode,
       setSelectedModelKey,
       setStartFromOrigin,
+      setSkillPackIds,
       setWorkspaceMode,
       startFromOrigin,
       submitting,

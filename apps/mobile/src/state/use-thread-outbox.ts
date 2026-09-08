@@ -40,6 +40,23 @@ export const effectiveEditingQueuedMessageIdsAtom = Atom.make((get) => {
   return editing as Readonly<Record<MessageId, true>>;
 }).pipe(Atom.withLabel("mobile:thread-outbox:effective-editing-message-ids"));
 
+export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("mobile:thread-outbox:dispatching-message-id"),
+);
+
+export const queuedThreadKeysAtom = Atom.make((get): ReadonlySet<string> => {
+  const keys = new Set<string>();
+  for (const [threadKey, queue] of Object.entries(
+    get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+  )) {
+    if (queue.some((message) => message.creation === undefined)) {
+      keys.add(threadKey);
+    }
+  }
+  return keys;
+}).pipe(Atom.withLabel("mobile:thread-outbox:queued-thread-keys"));
+
 export function holdEditingQueuedMessage(messageId: MessageId): void {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
   if (current[messageId]) {
@@ -60,6 +77,10 @@ export function releaseEditingQueuedMessage(messageId: MessageId): void {
 
 export function useThreadOutboxMessages() {
   return useAtomValue(threadOutboxManager.queuedMessagesByThreadKeyAtom);
+}
+
+export function useQueuedThreadKeys(): ReadonlySet<string> {
+  return useAtomValue(queuedThreadKeysAtom);
 }
 
 export function useThreadOutboxDeliveryStates() {

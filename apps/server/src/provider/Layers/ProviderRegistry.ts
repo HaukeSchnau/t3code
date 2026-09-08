@@ -29,6 +29,7 @@ import {
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
+import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -39,7 +40,6 @@ import * as PubSub from "effect/PubSub";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 import * as Semaphore from "effect/Semaphore";
-import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 
 import { ServerConfig } from "../../config.ts";
 import { ProviderInstanceRegistry } from "../Services/ProviderInstanceRegistry.ts";
@@ -103,15 +103,19 @@ export function upsertProviderWorkspaceSnapshot(
 
 const shouldRetainMissingProviderModels = (provider: ServerProvider): boolean => {
   const isAntigravity = provider.driver === ProviderDriverKind.make("antigravity");
-  if (!isAntigravity && provider.driver !== ProviderDriverKind.make("opencode")) {
+  const isCodex = provider.driver === ProviderDriverKind.make("codex");
+  if (!isAntigravity && !isCodex && provider.driver !== ProviderDriverKind.make("opencode")) {
     return true;
   }
 
-  if (isAntigravity && (!provider.enabled || provider.auth.status === "unauthenticated")) {
+  if (
+    (isAntigravity || isCodex) &&
+    (!provider.enabled || provider.auth.status === "unauthenticated")
+  ) {
     return false;
   }
 
-  // Both drivers replace their inventories after successful catalog discovery.
+  // Successful discovery replaces these inventories so cached retired models disappear.
   // Antigravity's local health check does not authenticate or discover models.
   const isPendingAntigravityAuthentication =
     isAntigravity && provider.status === "warning" && provider.auth.status === "unknown";
@@ -133,6 +137,9 @@ const mergeProviderModels = (
   nextModels: ReadonlyArray<ServerProvider["models"][number]>,
 ): ReadonlyArray<ServerProvider["models"][number]> => {
   const shouldRetainMissingModels = shouldRetainMissingProviderModels(provider);
+  // Custom rows are derived from settings and every snapshot carries the full
+  // current list, so a custom model missing from `nextModels` was removed by
+  // the user and must not be resurrected from the previous snapshot.
   const retainablePreviousModels = previousModels.filter((model) => !model.isCustom);
 
   if (shouldRetainMissingModels && nextModels.length === 0 && retainablePreviousModels.length > 0) {
@@ -156,12 +163,45 @@ const mergeProviderModels = (
     : mergedModels;
 };
 
+/**
+ * Antigravity's health check only initializes the agent, so after a server
+ * restart it reports the account as unchecked. The saved Google login still
+ * works, and the previous snapshot proves it. Carry that account state until
+ * a session, refresh, or sign-out reports something new. A confirmed missing
+ * installation, sign-out, disabled instance, or a changed sign-in method is
+ * never overridden.
+ */
+const carrySavedAntigravityAccount = (
+  previousProvider: ServerProvider,
+  nextProvider: ServerProvider,
+): Pick<ServerProvider, "auth" | "status"> | undefined => {
+  const antigravity = ProviderDriverKind.make("antigravity");
+  if (
+    nextProvider.driver !== antigravity ||
+    previousProvider.driver !== antigravity ||
+    !nextProvider.enabled ||
+    nextProvider.auth.status !== "unknown" ||
+    previousProvider.auth.status !== "authenticated" ||
+    (nextProvider.auth.type !== undefined &&
+      nextProvider.auth.type !== previousProvider.auth.type) ||
+    (!nextProvider.installed && nextProvider.status !== "warning")
+  ) {
+    return undefined;
+  }
+  // The pending boot probe (`installed: false`, warning) and a failed probe
+  // keep their own status; only a passed health check reads as ready.
+  const status =
+    nextProvider.installed && nextProvider.status === "warning" ? "ready" : nextProvider.status;
+  return { auth: previousProvider.auth, status };
+};
+
 export const mergeProviderSnapshot = (
   previousProvider: ServerProvider | undefined,
   nextProvider: ServerProvider,
 ): ServerProvider => {
-  if (!previousProvider) return nextProvider;
-
+  if (!previousProvider) {
+    return nextProvider;
+  }
   const retainMissingMetadata = shouldRetainMissingOpenCodeMetadata(nextProvider);
   const slashCommands =
     retainMissingMetadata && nextProvider.slashCommands.length === 0
@@ -174,9 +214,13 @@ export const mergeProviderSnapshot = (
   const composerCatalogChanged =
     !Equal.equals(previousProvider.slashCommands, slashCommands) ||
     !Equal.equals(previousProvider.skills, skills);
-
+  const savedAccount = carrySavedAntigravityAccount(previousProvider, nextProvider);
+  // "Google account access is not checked yet" describes the probe, not the
+  // account; it must not outlive the state it explained.
+  const { message: _uncheckedMessage, ...nextWithoutMessage } = nextProvider;
   return {
-    ...nextProvider,
+    ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
+    ...savedAccount,
     models: isClaudexInstance(nextProvider.instanceId)
       ? nextProvider.models
       : mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
@@ -188,30 +232,6 @@ export const mergeProviderSnapshot = (
     ...(retainMissingMetadata ? { slashCommands, skills } : {}),
   };
 };
-
-export const mergeProviderSnapshots = (
-  previousProviders: ReadonlyArray<ServerProvider>,
-  nextProviders: ReadonlyArray<ServerProvider>,
-): ReadonlyArray<ServerProvider> => {
-  const mergedProviders = new Map(
-    previousProviders.map((provider) => [snapshotInstanceKey(provider), provider] as const),
-  );
-
-  for (const provider of nextProviders) {
-    mergedProviders.set(
-      snapshotInstanceKey(provider),
-      mergeProviderSnapshot(mergedProviders.get(snapshotInstanceKey(provider)), provider),
-    );
-  }
-
-  return orderProviderSnapshots([...mergedProviders.values()]);
-};
-
-export const selectProvidersByKind = (
-  providers: ReadonlyArray<ServerProvider>,
-  providerKinds: ReadonlySet<ProviderDriverKind>,
-): ReadonlyArray<ServerProvider> =>
-  providers.filter((provider) => providerKinds.has(provider.driver));
 
 export const haveProvidersChanged = (
   previousProviders: ReadonlyArray<ServerProvider>,
@@ -557,14 +577,19 @@ export const ProviderRegistryLive = Layer.effect(
 
     const getProviderMaintenanceCapabilitiesForInstance = Effect.fn(
       "getProviderMaintenanceCapabilitiesForInstance",
-    )(function* (instanceId: ProviderInstanceId, provider: ProviderDriverKind) {
-      const instance = Array.from((yield* Ref.get(liveSubsRef)).values()).find(
-        (candidate) => candidate.instanceId === instanceId,
-      );
-      return (
-        instance?.snapshot.maintenanceCapabilities ??
-        makeManualProviderMaintenanceCapabilities(provider)
-      );
+    )(function* (
+      instanceId: ProviderInstanceId,
+      provider: ProviderDriverKind,
+      options?: { readonly fresh?: boolean },
+    ) {
+      // Read the instance registry, not `liveSubsRef`: the latter trails
+      // reconciliation, and an update must never run a retired instance's
+      // command against a freshly configured executable.
+      const instance = yield* instanceRegistry.getInstance(instanceId);
+      if (!instance || instance.driverKind !== provider) {
+        return makeManualProviderMaintenanceCapabilities(provider);
+      }
+      return yield* instance.snapshot.resolveMaintenance(options);
     });
 
     /**
@@ -622,6 +647,28 @@ export const ProviderRegistryLive = Layer.effect(
           newlyAdded.push([instanceId, instance] as const);
         }
 
+        const rebuiltInstanceIds = new Set(
+          newlyAdded
+            .map(([instanceId]) => instanceId)
+            .filter((instanceId) => previousSubs.has(instanceId)),
+        );
+        if (rebuiltInstanceIds.size > 0) {
+          const [previousProviders, providers] = yield* Ref.modify(
+            providersRef,
+            (previousProviders) => {
+              const providers = previousProviders.map((provider) => {
+                if (!rebuiltInstanceIds.has(provider.instanceId)) return provider;
+                const { workspaceSnapshots: _workspaceSnapshots, ...machineSnapshot } = provider;
+                return machineSnapshot;
+              });
+              return [[previousProviders, providers] as const, providers];
+            },
+          );
+          if (haveProvidersChanged(previousProviders, providers)) {
+            yield* PubSub.publish(changesPubSub, providers);
+          }
+        }
+
         // Fork long-lived subscriptions to each new/rebuilt instance's
         // change stream before reading its current snapshot. If the
         // driver's own initial probe finishes during this sync, either
@@ -640,14 +687,12 @@ export const ProviderRegistryLive = Layer.effect(
         // or HTTP server construction path.
         yield* Effect.forEach(
           newlyAdded,
-          ([instanceId, instance]) =>
+          ([, instance]) =>
             Effect.gen(function* () {
               const source = buildSnapshotSource(instance);
               const provider = yield* source.getSnapshot;
               yield* correlateSnapshotWithSource(source, provider).pipe(
-                Effect.flatMap((provider) =>
-                  upsertProviders([provider], { replace: previousSubs.has(instanceId) }),
-                ),
+                Effect.flatMap(syncProvider),
               );
             }).pipe(Effect.ignoreCause({ log: true })),
           { concurrency: "unbounded", discard: true },
@@ -774,7 +819,7 @@ export const ProviderRegistryLive = Layer.effect(
       if (
         !provider ||
         !provider.enabled ||
-        provider.workspaceSnapshots?.some((snapshot) => snapshot.cwd === input.cwd)
+        provider.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
       ) {
         return providers;
       }
@@ -798,7 +843,7 @@ export const ProviderRegistryLive = Layer.effect(
                   return Ref.modify(providersRef, (currentProviders) => {
                     const nextProviders = currentProviders.map((candidate) =>
                       candidate.instanceId === input.instanceId &&
-                      !candidate.workspaceSnapshots?.some((snapshot) => snapshot.cwd === input.cwd)
+                      !candidate.workspaceSnapshots?.some((s) => s.cwd === input.cwd)
                         ? upsertProviderWorkspaceSnapshot(candidate, input.cwd, scopedSnapshot)
                         : candidate,
                     );
@@ -819,7 +864,7 @@ export const ProviderRegistryLive = Layer.effect(
             const next = new Map(refreshes);
             const current = new Set(next.get(instance));
             current.delete(input.cwd);
-            if (current.size > 0) next.set(instance, current);
+            if (current.size) next.set(instance, current);
             else next.delete(instance);
             return next;
           }),

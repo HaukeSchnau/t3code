@@ -65,7 +65,7 @@ export function makeWatchChangeGate() {
   };
 }
 
-export class WatchSourceError extends Schema.TaggedErrorClass<WatchSourceError>()(
+export class WatchSourceError extends Schema.TaggedError<WatchSourceError>()(
   "WatchSourceError",
   { detail: Schema.String, retryable: Schema.Boolean, cause: Schema.optional(Schema.Defect()) },
 ) {}

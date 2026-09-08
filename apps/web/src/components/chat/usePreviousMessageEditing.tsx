@@ -171,6 +171,7 @@ export function usePreviousMessageEditing({
   const lockedProvider = deriveLockedProvider({
     thread: activeThread,
     selectedProvider,
+    providers: providerStatuses,
     threadProvider:
       activeThread?.modelSelection.instanceId ??
       activeProject?.defaultModelSelection?.instanceId ??

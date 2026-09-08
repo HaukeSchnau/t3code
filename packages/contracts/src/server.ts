@@ -260,7 +260,7 @@ export const CodexThreadResumeResult = Schema.Struct({
 });
 export type CodexThreadResumeResult = typeof CodexThreadResumeResult.Type;
 
-export class CodexThreadResumeError extends Schema.TaggedErrorClass<CodexThreadResumeError>()(
+export class CodexThreadResumeError extends Schema.TaggedError<CodexThreadResumeError>()(
   "CodexThreadResumeError",
   {
     message: TrimmedNonEmptyString,
@@ -291,7 +291,7 @@ export const CodexThreadForkResult = Schema.Struct({
 });
 export type CodexThreadForkResult = typeof CodexThreadForkResult.Type;
 
-export class CodexThreadForkError extends Schema.TaggedErrorClass<CodexThreadForkError>()(
+export class CodexThreadForkError extends Schema.TaggedError<CodexThreadForkError>()(
   "CodexThreadForkError",
   {
     message: TrimmedNonEmptyString,
@@ -808,8 +808,11 @@ export const ServerLifecycleWelcomePayload = Schema.Struct({
   environment: ExecutionEnvironmentDescriptor,
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
+  bootstrapStatus: Schema.optional(Schema.Literals(["pending", "complete"])),
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
+  bootstrapProjectCreated: Schema.optional(Schema.Boolean),
+  bootstrapThreadCreated: Schema.optional(Schema.Boolean),
 });
 export type ServerLifecycleWelcomePayload = typeof ServerLifecycleWelcomePayload.Type;
 
@@ -885,7 +888,7 @@ export const ServerProviderUpdateInput = Schema.Struct({
 });
 export type ServerProviderUpdateInput = typeof ServerProviderUpdateInput.Type;
 
-export class ServerProviderUpdateError extends Schema.TaggedErrorClass<ServerProviderUpdateError>()(
+export class ServerProviderUpdateError extends Schema.TaggedError<ServerProviderUpdateError>()(
   "ServerProviderUpdateError",
   {
     provider: ProviderDriverKind,
@@ -941,7 +944,7 @@ export const ServerSelfUpdateProgressEvent = Schema.Union([
 ]);
 export type ServerSelfUpdateProgressEvent = typeof ServerSelfUpdateProgressEvent.Type;
 
-export class ServerSelfUpdateError extends Schema.TaggedErrorClass<ServerSelfUpdateError>()(
+export class ServerSelfUpdateError extends Schema.TaggedError<ServerSelfUpdateError>()(
   "ServerSelfUpdateError",
   {
     reason: TrimmedNonEmptyString,

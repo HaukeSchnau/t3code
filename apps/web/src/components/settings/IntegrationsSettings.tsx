@@ -13,7 +13,6 @@ import {
   type EnvironmentId,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
-  DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
   DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_LINK_TARGET,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
@@ -64,7 +63,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
-import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   useClientSettings,
@@ -74,6 +72,7 @@ import {
 } from "~/hooks/useSettings";
 
 import {
+  SettingsUnavailableGroup,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -233,7 +232,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
   return (
     <SettingsRow
       {...searchableSetting("browser-default-viewport")}
-      description="The viewport a browser tab opens at, for both you and agents. Fill sizes the page to the panel; any other choice opens the device toolbar at that size."
+      description="The viewport new browser tabs open at. Fill sizes the page to the panel; any other choice opens the device toolbar at that size."
       resetAction={
         !disabled && viewport._tag !== DEFAULT_BROWSER_VIEWPORT._tag ? (
           <SettingResetButton
@@ -520,40 +519,6 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
-function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
-  const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
-  const updateSettings = useUpdatePrimarySettings();
-
-  return (
-    <SettingsRow
-      {...searchableSetting("browser-auto-show-floating-preview")}
-      description="Pop the floating preview into view when an agent opens a browser. An agent that explicitly asks to show or hide its preview still gets what it asked for."
-      resetAction={
-        !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
-          <SettingResetButton
-            label="auto-show floating preview"
-            onClick={() =>
-              updateSettings({
-                browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
-              })
-            }
-          />
-        ) : null
-      }
-      control={
-        <Switch
-          disabled={disabled}
-          checked={autoShow}
-          onCheckedChange={(checked) =>
-            updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
-          }
-          aria-label="Auto-show floating preview"
-        />
-      }
-    />
-  );
-}
-
 /**
  * Frames the client-local preview defaults as one unavailable block.
  *
@@ -820,7 +785,7 @@ function BrowserDefaultProfileSetting({ disabled }: { readonly disabled: boolean
   return (
     <SettingsRow
       {...searchableSetting("browser-default-profile")}
-      description="Profile new browser tabs open under, including tabs an agent opens."
+      description="Profile new browser tabs open under."
       resetAction={
         !profileWritesDisabled && defaultProfileId !== DEFAULT_BROWSER_PROFILE_ID ? (
           <SettingResetButton
@@ -885,7 +850,6 @@ export function IntegrationsSettingsPanel() {
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
       <BrowserLinkTargetSetting disabled={previewDefaultsDisabled} />
-      <BrowserAutoShowFloatingPreviewSetting disabled={previewDefaultsDisabled} />
     </>
   );
 
@@ -893,7 +857,9 @@ export function IntegrationsSettingsPanel() {
     <SettingsPageContainer>
       <SettingsSection id="browser" title="Browser">
         {previewDefaultsDisabled ? (
-          <DesktopOnlyBrowserDefaults>{previewDefaults}</DesktopOnlyBrowserDefaults>
+          <SettingsUnavailableGroup message="Only available in the desktop app.">
+            {previewDefaults}
+          </SettingsUnavailableGroup>
         ) : (
           previewDefaults
         )}

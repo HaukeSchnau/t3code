@@ -19,6 +19,11 @@ export default defineConfig({
   },
   test: {
     environment: "node",
+    setupFiles: [
+      NodeURL.fileURLToPath(
+        new URL("./packages/shared/src/testing/longTempDir.ts", import.meta.url),
+      ),
+    ],
     exclude: [
       "**/.repos/**",
       "**/node_modules/**",

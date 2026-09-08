@@ -4,16 +4,9 @@ import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 
 import { getProviderInstanceIcon } from "./providerIconUtils";
 import { cn } from "~/lib/utils";
+import { providerInstanceInitials } from "@t3tools/client-runtime/state/provider-instance-display";
 
-export function providerInstanceInitials(label: string): string {
-  const words = label.replace(/[_-]+/g, " ").split(/\s+/u).filter(Boolean);
-  if (words.length === 0) return "";
-  if (words.length === 1) return words[0]!.slice(0, 2).toUpperCase();
-  return words
-    .slice(0, 2)
-    .map((word) => word[0]?.toUpperCase() ?? "")
-    .join("");
-}
+export { providerInstanceInitials };
 
 export const ProviderInstanceIcon = memo(function ProviderInstanceIcon(props: {
   instanceId: ProviderInstanceId;

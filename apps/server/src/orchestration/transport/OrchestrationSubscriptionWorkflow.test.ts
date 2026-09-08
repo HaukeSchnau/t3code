@@ -20,11 +20,13 @@ import type * as OrchestrationEngine from "../Services/OrchestrationEngine.ts";
 import type * as ProjectionSnapshotMaterializer from "../Services/ProjectionSnapshotMaterializer.ts";
 import type * as ProjectionSnapshotQuery from "../Services/ProjectionSnapshotQuery.ts";
 import type * as ReplayLogPublisher from "../../observability/ReplayLogPublisher.ts";
-import { LIVE_STREAM_MAX_ITEMS } from "../LiveStreamBudget.ts";
 import { makeOrchestrationSubscriptionWorkflow } from "./OrchestrationSubscriptionWorkflow.ts";
 
 const threadId = ThreadId.make("thread-slow-client");
 const now = "2026-01-01T00:00:00.000Z";
+// The budget deliberately keeps this implementation detail private. Keep the
+// overflow fixture just above the production default without exporting it.
+const LIVE_STREAM_MAX_ITEMS = 1_000;
 
 function makeMessageEvent(sequence: number): OrchestrationEvent {
   return {

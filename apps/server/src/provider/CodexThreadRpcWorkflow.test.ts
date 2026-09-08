@@ -11,6 +11,7 @@ import {
   ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
+  type ServerProvider,
   type OrchestrationProject,
   type OrchestrationReadModel,
   type OrchestrationThread,
@@ -30,7 +31,7 @@ import type * as ServerSettings from "../serverSettings.ts";
 import type * as ThreadWorkspaceService from "../workspace/ThreadWorkspaceService.ts";
 import type * as ProviderRegistry from "./Services/ProviderRegistry.ts";
 import type * as ProviderSessionDirectory from "./Services/ProviderSessionDirectory.ts";
-import { makeProviderRegistryMock } from "./testUtils/providerRegistryMock.ts";
+import { makeManualOnlyProviderMaintenanceCapabilities } from "./providerMaintenance.ts";
 import { makeCodexThreadRpcWorkflow } from "./CodexThreadRpcWorkflow.ts";
 
 const projectId = ProjectId.make("project-1");
@@ -104,6 +105,8 @@ const baseProjectionQuery = {
   getThreadDetailById: () => Effect.die("unexpected thread detail read"),
   getThreadDetailSnapshot: () => Effect.die("unexpected detail snapshot read"),
   getTurnActivitiesSnapshot: () => Effect.die("unexpected activity read"),
+  getImportedAgentSessionSources: () => Effect.die("unexpected imported session source read"),
+  getTurnStartMessage: () => Effect.die("unexpected turn start message read"),
   searchThreads: () => Effect.die("unexpected search"),
 } satisfies ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
 
@@ -117,10 +120,24 @@ const baseEngine: OrchestrationEngine.OrchestrationEngineShape = {
   streamDomainEvents: Stream.empty,
 };
 
+const makeProviderRegistryMock = (
+  providers: ReadonlyArray<ServerProvider> = [],
+): ProviderRegistry.ProviderRegistryShape => ({
+  getProviders: Effect.succeed(providers),
+  refresh: () => Effect.succeed(providers),
+  refreshInstance: () => Effect.succeed(providers),
+  refreshWorkspaceSnapshot: () => Effect.succeed(providers),
+  getProviderMaintenanceCapabilitiesForInstance: (_instanceId, provider) =>
+    Effect.succeed(makeManualOnlyProviderMaintenanceCapabilities({ provider, packageName: null })),
+  setProviderMaintenanceActionState: () => Effect.succeed(providers),
+  streamChanges: Stream.empty,
+});
+
 const baseProviderRegistry = makeProviderRegistryMock();
 
 const baseProviderSessionDirectory: ProviderSessionDirectory.ProviderSessionDirectoryShape = {
   upsert: () => Effect.die("unexpected binding write"),
+  recordImportedTranscript: () => Effect.die("unexpected imported transcript write"),
   getProvider: () => Effect.die("unexpected provider read"),
   getBinding: () => Effect.succeed(Option.none()),
   listThreadIds: () => Effect.die("unexpected thread list"),

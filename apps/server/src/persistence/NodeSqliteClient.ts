@@ -50,7 +50,7 @@ export interface SqliteMemoryClientConfig extends Omit<
   "filename" | "readonly"
 > {}
 
-export class UnsupportedNodeSqliteVersionError extends Schema.TaggedErrorClass<UnsupportedNodeSqliteVersionError>()(
+export class UnsupportedNodeSqliteVersionError extends Schema.TaggedError<UnsupportedNodeSqliteVersionError>()(
   "UnsupportedNodeSqliteVersionError",
   {
     nodeVersion: Schema.String,
@@ -62,7 +62,7 @@ export class UnsupportedNodeSqliteVersionError extends Schema.TaggedErrorClass<U
   }
 }
 
-export class UnsupportedNodeSqliteOperationError extends Schema.TaggedErrorClass<UnsupportedNodeSqliteOperationError>()(
+export class UnsupportedNodeSqliteOperationError extends Schema.TaggedError<UnsupportedNodeSqliteOperationError>()(
   "UnsupportedNodeSqliteOperationError",
   {},
 ) {

@@ -10,9 +10,11 @@ import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
 import {
   type ClientOrchestrationCommand,
+  type UserInputAttachments,
   type IsoDateTime,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
+  PROVIDER_SEND_TURN_MAX_ATTACHMENTS,
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 
@@ -200,7 +202,8 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
 
     if (
       canonicalCommand.type !== "thread.turn.start" &&
-      canonicalCommand.type !== "thread.message.queue"
+      canonicalCommand.type !== "thread.message.queue" &&
+      canonicalCommand.type !== "thread.user-input.respond"
     ) {
       return {
         command: canonicalCommand as OrchestrationCommand,
@@ -208,9 +211,22 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
       } satisfies PreparedDispatchCommand;
     }
 
+    const attachments =
+      canonicalCommand.type === "thread.user-input.respond"
+        ? Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat()
+        : canonicalCommand.message.attachments;
+    if (
+      canonicalCommand.type === "thread.user-input.respond" &&
+      attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS
+    ) {
+      return yield* new OrchestrationDispatchCommandError({
+        message: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per question response.`,
+      });
+    }
+
     const claimedAttachmentPaths: string[] = [];
     const preparedAttachments = yield* Effect.forEach(
-      canonicalCommand.message.attachments,
+      attachments,
       (attachment, index) =>
         Effect.gen(function* () {
           if (!("dataUrl" in attachment)) {
@@ -380,14 +396,38 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
       { concurrency: 1 },
     ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
+    const normalizedAttachments = preparedAttachments.map(({ attachment }) => attachment);
+    const normalizedCommand =
+      canonicalCommand.type === "thread.user-input.respond"
+        ? (() => {
+            let index = 0;
+            const attachmentsByQuestionId = Object.fromEntries(
+              Object.entries(canonicalCommand.attachmentsByQuestionId ?? {}).map(
+                ([questionId, original]) => {
+                  const claimed = normalizedAttachments.slice(
+                    index,
+                    index + original.length,
+                  ) as UserInputAttachments[string];
+                  index += original.length;
+                  return [questionId, claimed];
+                },
+              ),
+            );
+            return {
+              ...canonicalCommand,
+              ...(attachments.length > 0 ? { attachmentsByQuestionId } : {}),
+            } satisfies OrchestrationCommand;
+          })()
+        : {
+            ...canonicalCommand,
+            message: {
+              ...canonicalCommand.message,
+              attachments: normalizedAttachments,
+            },
+          } satisfies OrchestrationCommand;
+
     return {
-      command: {
-        ...canonicalCommand,
-        message: {
-          ...canonicalCommand.message,
-          attachments: preparedAttachments.map(({ attachment }) => attachment),
-        },
-      },
+      command: normalizedCommand,
       performDeferredPreprocessing: Effect.forEach(
         preparedAttachments,
         ({ materialize }) => materialize,
@@ -405,14 +445,28 @@ export const normalizeDispatchCommand = (command: ClientOrchestrationCommand) =>
 export const cleanupFailedUploadedAttachments = Effect.fn(
   "Normalizer.cleanupFailedUploadedAttachments",
 )(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
-  if (command.type !== "thread.turn.start" || normalizedCommand.type !== "thread.turn.start") {
+  if (
+    (command.type !== "thread.turn.start" && command.type !== "thread.user-input.respond") ||
+    (normalizedCommand.type !== "thread.turn.start" &&
+      normalizedCommand.type !== "thread.user-input.respond")
+  ) {
     return;
   }
 
+  const originalAttachments =
+    command.type === "thread.turn.start"
+      ? command.message.attachments
+      : Object.values(command.attachmentsByQuestionId ?? {}).flat();
+  const normalizedAttachments =
+    normalizedCommand.type === "thread.turn.start"
+      ? normalizedCommand.message.attachments
+      : Object.values(normalizedCommand.attachmentsByQuestionId ?? {}).flat();
+  if (normalizedAttachments.length === 0) return;
+
   const serverConfig = yield* ServerConfig;
   const claimedPaths: string[] = [];
-  for (const [index, attachment] of normalizedCommand.message.attachments.entries()) {
-    const original = command.message.attachments[index];
+  for (const [index, attachment] of normalizedAttachments.entries()) {
+    const original = originalAttachments[index];
     if (
       !original ||
       "dataUrl" in original ||

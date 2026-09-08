@@ -53,7 +53,7 @@ export interface CodexTextGenerationOptions {
   readonly refreshManagedAuth?: () => Effect.Effect<void, CodexManagedAuthRefreshError>;
 }
 
-export class CodexManagedAuthRefreshError extends Schema.TaggedErrorClass<CodexManagedAuthRefreshError>()(
+export class CodexManagedAuthRefreshError extends Schema.TaggedError<CodexManagedAuthRefreshError>()(
   "CodexManagedAuthRefreshError",
   { cause: Schema.Defect() },
 ) {}

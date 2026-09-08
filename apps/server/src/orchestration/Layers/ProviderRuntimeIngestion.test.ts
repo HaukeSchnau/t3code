@@ -1,8 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
-/* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- These legacy ingestion tests share a ManagedRuntime harness so async test bodies can drive the real event worker and projection pipeline. */
+/* oxlint-disable t3code/no-manual-effect-runtime-in-tests -- These ingestion tests share a ManagedRuntime harness so async bodies can drive the real event worker and projection pipeline. */
 import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
+import * as NodeChildProcess from "node:child_process";
 
 import {
   OrchestrationReadModel,
@@ -21,6 +22,7 @@ import {
   type OrchestrationCommand,
   ProjectId,
   ProviderItemId,
+  RuntimeRequestId,
   type ServerSettings,
   ThreadId,
   TurnId,
@@ -31,6 +33,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
@@ -47,15 +50,18 @@ import {
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
+import * as CheckpointStore from "../../checkpointing/CheckpointStore.ts";
+import * as VcsDriverRegistry from "../../vcs/VcsDriverRegistry.ts";
+import * as VcsProcess from "../../vcs/VcsProcess.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
 import { OrchestrationProjectionSnapshotQueryLive } from "./ProjectionSnapshotQuery.ts";
+import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
+import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import {
   ProviderRuntimeIngestionLive,
   subagentActivityIdForRuntime,
 } from "./ProviderRuntimeIngestion.ts";
-import * as ThreadBackgroundLiveness from "../ThreadBackgroundLiveness.ts";
-import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
@@ -189,6 +195,10 @@ function createProviderServiceHarness(options?: {
     return event as ProviderRuntimeEvent;
   };
 
+  const emit = (event: LegacyProviderRuntimeEvent): void => {
+    Effect.runSync(PubSub.publish(runtimeEventPubSub, { events: [normalizeLegacyEvent(event)] }));
+  };
+
   const publish = (
     events: ReadonlyArray<ProviderRuntimeEvent>,
     enqueued?: Deferred.Deferred<void>,
@@ -207,6 +217,7 @@ function createProviderServiceHarness(options?: {
 
   return {
     service,
+    emit,
     normalizeLegacyEvent,
     publish,
     emitAndWaitForEnqueue,
@@ -294,9 +305,15 @@ describe("ProviderRuntimeIngestion", () => {
     serverSettings?: Partial<ServerSettings>;
     assistantTranscriptRecovery?: "none" | "authoritative";
     threadTitle?: string;
+    workspaceSubdirectory?: string;
   }) {
-    const workspaceRoot = makeTempDir("t3-provider-project-");
-    NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
+    const repositoryRoot = makeTempDir("t3-provider-project-");
+    NodeChildProcess.execFileSync("git", ["init", "--initial-branch=main"], {
+      cwd: repositoryRoot,
+      stdio: "ignore",
+    });
+    const workspaceRoot = NodePath.join(repositoryRoot, options?.workspaceSubdirectory ?? "");
+    NodeFS.mkdirSync(workspaceRoot, { recursive: true });
     const provider = createProviderServiceHarness(
       options?.assistantTranscriptRecovery
         ? { assistantTranscriptRecovery: options.assistantTranscriptRecovery }
@@ -315,9 +332,20 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const ingestionProjectionSnapshotLayer = Layer.effect(
+      ProjectionSnapshotQuery,
+      Effect.gen(function* () {
+        const query = yield* ProjectionSnapshotQuery;
+        return ProjectionSnapshotQuery.of({
+          ...query,
+          getThreadDetailById: () =>
+            Effect.die("provider runtime ingestion must not hydrate thread detail"),
+        });
+      }),
+    ).pipe(Layer.provide(projectionSnapshotLayer));
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
-      Layer.provideMerge(projectionSnapshotLayer),
+      Layer.provideMerge(ingestionProjectionSnapshotLayer),
       // Single shared liveness instance across ingestion (writer), the
       // engine, and the snapshot query (reader).
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
@@ -328,6 +356,8 @@ describe("ProviderRuntimeIngestion", () => {
       ),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
+      Layer.provideMerge(CheckpointStore.layer.pipe(Layer.provide(VcsDriverRegistry.layer))),
+      Layer.provideMerge(VcsProcess.layer),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
       Layer.provideMerge(TranscriptJournalTrackerLive),
@@ -446,6 +476,12 @@ describe("ProviderRuntimeIngestion", () => {
         await drain();
         return testRuntime.runPromise(snapshotQuery.getSnapshot());
       },
+      readThreadShell: () =>
+        testRuntime.runPromise(
+          snapshotQuery
+            .getThreadShellById(asThreadId("thread-1"))
+            .pipe(Effect.map(Option.getOrThrow)),
+        ),
       emit,
       emitAndDrain,
       sqlCount: sqlCounter.count,
@@ -494,182 +530,6 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("turn failed");
-  });
-
-  it("persists a scheduled retry for an overloaded Codex turn", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-overloaded");
-    const message = "Selected model is at capacity. Please try a different model.";
-
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-overloaded-started"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      turnId,
-      payload: {},
-    });
-    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
-
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-turn-overloaded-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: "2026-01-01T00:00:01.000Z",
-      turnId,
-      payload: {
-        state: "failed",
-        errorMessage: message,
-        errorClass: "provider_overloaded",
-      },
-    });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.session?.turnRetry?.phase === "scheduled",
-    );
-    expect(thread.session).toMatchObject({
-      lastErrorClass: "provider_overloaded",
-      turnRetry: {
-        phase: "scheduled",
-        sourceTurnId: turnId,
-        attempt: 1,
-      },
-    });
-    expect(
-      thread.session?.turnRetry?.phase === "scheduled" && thread.session.turnRetry.retryAt,
-    ).toMatch(/^2026-01-01T00:00:0[5-7]\./);
-  });
-
-  it("dispatches the oldest queued message when the active turn completes", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-for-queue"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: now,
-      turnId: asTurnId("turn-queue-active"),
-    });
-
-    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
-
-    await runtime!.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.queue",
-        commandId: CommandId.make("cmd-queue-message-for-completed-turn"),
-        threadId: asThreadId("thread-1"),
-        message: {
-          messageId: asMessageId("message-queued-after-complete"),
-          role: "user",
-          text: "queued follow-up after completion",
-          attachments: [],
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-
-    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
-
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-turn-completed-for-queue-dispatch"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: "2026-01-01T00:00:02.000Z",
-      turnId: asTurnId("turn-queue-active"),
-      payload: {
-        state: "completed",
-      },
-    });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.session?.status === "ready" &&
-        (entry.queuedMessages ?? []).length === 0 &&
-        entry.messages.some((message) => message.id === "message-queued-after-complete"),
-    );
-    expect(thread.queuedMessages ?? []).toEqual([]);
-    expect(thread.messages.map((message) => message.id)).toContain("message-queued-after-complete");
-  });
-
-  it("clears active turn state on turn.aborted without dropping queued messages", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-before-abort"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: now,
-      turnId: asTurnId("turn-aborted-active"),
-    });
-
-    await waitForThread(
-      harness.readModel,
-      (thread) => thread.session?.activeTurnId === "turn-aborted-active",
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.message.queue",
-        commandId: CommandId.make("cmd-queue-message-before-abort"),
-        threadId: asThreadId("thread-1"),
-        message: {
-          messageId: asMessageId("message-queued-before-abort"),
-          role: "user",
-          text: "queued follow-up before abort",
-          attachments: [],
-        },
-        modelSelection: {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5-codex",
-        },
-        runtimeMode: "approval-required",
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        createdAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-
-    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
-
-    harness.emit({
-      type: "turn.aborted",
-      eventId: asEventId("evt-turn-aborted-with-queue"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: "2026-01-01T00:00:02.000Z",
-      turnId: asTurnId("turn-aborted-active"),
-      payload: {
-        reason: "Interrupted by user.",
-      },
-    });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.session?.status === "interrupted" &&
-        entry.session.activeTurnId === null &&
-        entry.session.lastError === "Interrupted by user." &&
-        (entry.queuedMessages ?? []).length === 1,
-    );
-    expect(thread.queuedMessages?.[0]?.messageId).toBe("message-queued-before-abort");
-    expect(thread.messages.some((message) => message.id === "message-queued-before-abort")).toBe(
-      false,
-    );
-    expect(thread.latestTurn?.state).toBe("interrupted");
   });
 
   it.each([
@@ -724,6 +584,89 @@ describe("ProviderRuntimeIngestion", () => {
       }),
     ]);
   });
+
+  it.each(["turn.completed", "turn.aborted"] as const)(
+    "finalizes old buffered text on late %s without stopping the newer turn",
+    async (terminalType) => {
+      const harness = await createHarness({
+        serverSettings: { enableLegacyTokenStreaming: false },
+      });
+      const threadId = asThreadId("thread-1");
+      const oldTurnId = asTurnId("old-buffered-turn");
+      const newTurnId = asTurnId("new-active-turn");
+      const base = {
+        provider: ProviderDriverKind.make("opencode"),
+        threadId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      };
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "turn.started",
+          eventId: asEventId("old-buffered-started"),
+          turnId: oldTurnId,
+        },
+        {
+          ...base,
+          type: "content.delta",
+          eventId: asEventId("old-buffered-delta"),
+          turnId: oldTurnId,
+          itemId: asItemId("old-buffered-message"),
+          payload: { streamKind: "assistant_text", delta: "Keep the old answer." },
+        },
+      ]);
+      await harness.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("start-new-while-old-finishes"),
+        threadId,
+        message: {
+          messageId: asMessageId("new-turn-prompt"),
+          role: "user",
+          text: "Continue",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: base.createdAt,
+      });
+      harness.setProviderSession({
+        provider: base.provider,
+        status: "running",
+        runtimeMode: "approval-required",
+        threadId,
+        createdAt: base.createdAt,
+        updatedAt: base.createdAt,
+        activeTurnId: newTurnId,
+      });
+      await harness.emitAndDrain([
+        {
+          ...base,
+          type: "turn.started",
+          eventId: asEventId("new-active-started"),
+          turnId: newTurnId,
+        },
+        {
+          ...base,
+          type: terminalType,
+          eventId: asEventId("old-buffered-terminal"),
+          turnId: oldTurnId,
+          payload:
+            terminalType === "turn.completed"
+              ? { state: "completed" }
+              : { reason: "Interrupted by user." },
+        },
+      ]);
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+      expect(thread?.session).toMatchObject({ activeTurnId: newTurnId, status: "running" });
+      expect(thread?.messages).toContainEqual(
+        expect.objectContaining({
+          turnId: oldTurnId,
+          text: "Keep the old answer.",
+          streaming: false,
+        }),
+      );
+    },
+  );
 
   it.each([
     { source: "the previous turn", turnId: asTurnId("opencode-stopped-turn") },
@@ -1466,6 +1409,29 @@ describe("ProviderRuntimeIngestion", () => {
     );
   });
 
+  it("ignores provider content deltas that cannot change thread state", async () => {
+    const harness = await createHarness();
+    const initial = await harness.readModel();
+
+    for (const streamKind of ["reasoning_text", "command_output", "file_change_output"] as const) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-ignored-${streamKind}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-ignored"),
+        payload: {
+          streamKind,
+          delta: "ignored output",
+        },
+      });
+    }
+
+    await harness.drain();
+    expect(await harness.readModel()).toEqual(initial);
+  });
+
   it("maps canonical content delta/item completed into finalized assistant messages", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -1555,655 +1521,6 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
-  it("projects subagent assistant text into a subagent activity without parent transcript rows", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-parent"),
-      itemId: asItemId("item-subagent-message"),
-      agentContext: {
-        providerThreadId: "provider-child-thread",
-        parentTurnId: asTurnId("turn-parent"),
-      },
-      payload: {
-        streamKind: "assistant_text",
-        delta: "child agent findings",
-      },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-subagent-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:01.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-parent"),
-      itemId: asItemId("item-subagent-message"),
-      agentContext: {
-        providerThreadId: "provider-child-thread",
-        parentTurnId: asTurnId("turn-parent"),
-      },
-      payload: {
-        itemType: "assistant_message",
-        title: "Assistant message",
-      },
-    });
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => {
-        const payload =
-          activity.payload && typeof activity.payload === "object"
-            ? (activity.payload as Record<string, unknown>)
-            : null;
-        return (
-          activity.kind === "subagent.thread" &&
-          payload?.providerThreadId === "provider-child-thread" &&
-          payload?.status === "completed"
-        );
-      }),
-    );
-    const subagentActivity = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.kind === "subagent.thread",
-    );
-    const payload =
-      subagentActivity?.payload && typeof subagentActivity.payload === "object"
-        ? (subagentActivity.payload as Record<string, unknown>)
-        : null;
-
-    expect(thread.messages).toHaveLength(0);
-    expect(subagentActivity?.id).toBe("subagent:thread-1:codex:codex:provider-child-thread");
-    expect(subagentActivity?.turnId).toBe("turn-parent");
-    expect(payload?.transcript).toBe("child agent findings");
-    expect(payload?.parentTurnId).toBe("turn-parent");
-  });
-
-  it("suppresses unchanged subagent command-output updates and exact duplicates", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-output-flood");
-    const agentContext = {
-      providerThreadId: "provider-child-output-flood",
-      parentTurnId: turnId,
-    } as const;
-    const beforeEvents = Array.from(
-      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
-    ).length;
-
-    harness.emit({
-      type: "item.started",
-      eventId: asEventId("evt-subagent-output-started"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-output"),
-      agentContext,
-      payload: {
-        itemType: "assistant_message",
-        title: "Assistant message",
-      },
-    });
-    for (let index = 0; index < 100; index += 1) {
-      harness.emit({
-        type: "content.delta",
-        eventId: asEventId(`evt-subagent-command-output-${index}`),
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: `2026-01-01T00:00:00.${String(index + 10).padStart(3, "0")}Z`,
-        threadId: asThreadId("thread-1"),
-        turnId,
-        itemId: asItemId("item-subagent-command"),
-        agentContext,
-        payload: {
-          streamKind: "command_output",
-          delta: `chunk ${index}\n`,
-        },
-      });
-    }
-    const completedEvent = {
-      type: "item.completed" as const,
-      eventId: asEventId("evt-subagent-output-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:01.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-output"),
-      agentContext,
-      payload: {
-        itemType: "assistant_message" as const,
-        status: "completed" as const,
-        detail: "byte-exact child result",
-      },
-    };
-    harness.emit(completedEvent);
-    harness.emit(completedEvent);
-    await harness.drain();
-
-    const events = Array.from(
-      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
-    ).slice(beforeEvents);
-    const subagentEvents = events.filter(
-      (event) =>
-        event.type === "thread.activity-appended" &&
-        event.payload.activity.kind === "subagent.thread",
-    );
-    expect(subagentEvents).toHaveLength(2);
-    const finalEvent = subagentEvents.at(-1);
-    if (finalEvent?.type !== "thread.activity-appended") {
-      throw new Error("Expected a final subagent activity event.");
-    }
-    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
-    expect(finalPayload.transcript).toBe("byte-exact child result");
-    expect(finalPayload.status).toBe("completed");
-  });
-
-  it("retains dirty transcript state for more than one thousand concurrent subagents", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-many-children");
-    for (let index = 0; index < 1_001; index += 1) {
-      harness.emit({
-        type: "content.delta",
-        eventId: asEventId(`evt-subagent-many-${index}`),
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: "2026-01-01T00:00:00.000Z",
-        threadId: asThreadId("thread-1"),
-        turnId,
-        itemId: asItemId(`item-subagent-many-${index}`),
-        agentContext: {
-          providerThreadId: `provider-child-many-${index}`,
-          parentTurnId: turnId,
-        },
-        payload: { streamKind: "assistant_text", delta: `head-${index}` },
-      });
-    }
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-many-first-tail"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-many-0"),
-      agentContext: {
-        providerThreadId: "provider-child-many-0",
-        parentTurnId: turnId,
-      },
-      payload: { streamKind: "assistant_text", delta: "-tail" },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => {
-        if (activity.kind !== "subagent.thread") return false;
-        const payload = activity.payload as Record<string, unknown>;
-        return (
-          payload.providerThreadId === "provider-child-many-0" &&
-          payload.transcript === "head-0-tail"
-        );
-      }),
-    );
-    expect(
-      thread.activities.filter((activity) => activity.kind === "subagent.thread"),
-    ).toHaveLength(1_001);
-  }, 120_000);
-
-  it("coalesces subagent transcript deltas only with authoritative recovery", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
-    const turnId = asTurnId("turn-subagent-coalesced");
-    const agentContext = {
-      providerThreadId: "provider-child-coalesced",
-      parentTurnId: turnId,
-    } as const;
-    const chunks = Array.from({ length: 120 }, (_, index) => `${index}:`);
-    const beforeEvents = Array.from(
-      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
-    ).length;
-
-    for (let index = 0; index < chunks.length; index += 1) {
-      harness.emit({
-        type: "content.delta",
-        eventId: asEventId(`evt-subagent-text-${index}`),
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: `2026-01-01T00:00:0${Math.floor((index * 10) / 1_000)}.${String(
-          (index * 10) % 1_000,
-        ).padStart(3, "0")}Z`,
-        threadId: asThreadId("thread-1"),
-        turnId,
-        itemId: asItemId("item-subagent-text"),
-        agentContext,
-        payload: {
-          streamKind: "assistant_text",
-          delta: chunks[index]!,
-        },
-      });
-    }
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-subagent-text-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:01.200Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-text"),
-      agentContext,
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-      },
-    });
-    await harness.drain();
-
-    const events = Array.from(
-      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
-    ).slice(beforeEvents);
-    const subagentEvents = events.filter(
-      (event) =>
-        event.type === "thread.activity-appended" &&
-        event.payload.activity.kind === "subagent.thread",
-    );
-    expect(subagentEvents.length).toBeLessThanOrEqual(4);
-    const finalEvent = subagentEvents.at(-1);
-    if (finalEvent?.type !== "thread.activity-appended") {
-      throw new Error("Expected a final subagent activity event.");
-    }
-    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
-    expect(finalPayload.transcript).toBe(chunks.join(""));
-    expect(finalPayload.status).toBe("completed");
-  });
-
-  it("preserves large multi-item subagent text and authoritative completion suffixes", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-large-transcript");
-    const agentContext = {
-      providerThreadId: "provider-child-large-transcript",
-      parentTurnId: turnId,
-    } as const;
-    const firstFinal = `${"a".repeat(60_000)} corrected suffix`;
-    const secondFinal = "\nsecond item final text";
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-large-first-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-large-first"),
-      agentContext,
-      payload: { streamKind: "assistant_text", delta: `${"a".repeat(60_000)} partial` },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-subagent-large-first-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-large-first"),
-      agentContext,
-      payload: { itemType: "assistant_message", status: "completed", detail: firstFinal },
-    });
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-large-second-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.200Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-large-second"),
-      agentContext,
-      payload: { streamKind: "assistant_text", delta: "\nsecond item partial" },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-subagent-large-second-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.300Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-large-second"),
-      agentContext,
-      payload: { itemType: "assistant_message", status: "completed", detail: secondFinal },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((candidate) => {
-        if (candidate.kind !== "subagent.thread") return false;
-        const payload = candidate.payload as Record<string, unknown>;
-        return payload.transcript === `${firstFinal}${secondFinal}`;
-      }),
-    );
-    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
-    if (!subagent) {
-      throw new Error("Expected a large subagent transcript activity.");
-    }
-    expect((subagent.payload as Record<string, unknown>).transcript).toBe(
-      `${firstFinal}${secondFinal}`,
-    );
-  });
-
-  it("preserves legacy cumulative transcript bytes when a new item completes", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-legacy-transcript");
-    const agentContext = {
-      providerThreadId: "provider-child-legacy-transcript",
-      parentTurnId: turnId,
-    } as const;
-    const event = {
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-legacy-new-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: RuntimeItemId.make("item-subagent-legacy-new"),
-      agentContext,
-      payload: { streamKind: "assistant_text", delta: "new partial" },
-    } as const satisfies ProviderRuntimeEvent;
-    const activityId = subagentActivityIdForRuntime(
-      asThreadId("thread-1"),
-      event,
-      agentContext.providerThreadId,
-    );
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make("cmd-subagent-legacy-activity"),
-        threadId: asThreadId("thread-1"),
-        activity: {
-          id: activityId,
-          kind: "subagent.thread",
-          tone: "info",
-          summary: "Subagent running",
-          createdAt: "2026-01-01T00:00:00.000Z",
-          turnId,
-          payload: {
-            providerThreadId: agentContext.providerThreadId,
-            status: "running",
-            transcript: "legacy bytes ",
-            updatedAt: "2026-01-01T00:00:00.000Z",
-          },
-        },
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    );
-
-    harness.emit(event);
-    harness.emit({
-      ...event,
-      type: "item.completed",
-      eventId: asEventId("evt-subagent-legacy-new-completed"),
-      createdAt: "2026-01-01T00:00:00.200Z",
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: "new final",
-      },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (candidate) =>
-          candidate.id === activityId &&
-          (candidate.payload as Record<string, unknown>).transcript === "legacy bytes new final",
-      ),
-    );
-    const activity = thread.activities.find((candidate) => candidate.id === activityId);
-    expect((activity?.payload as Record<string, unknown> | undefined)?.transcript).toBe(
-      "legacy bytes new final",
-    );
-  });
-
-  it("keeps turnless item dedupe isolated from later items and session exit", async () => {
-    const harness = await createHarness();
-    const agentContext = { providerThreadId: "provider-child-turnless" } as const;
-    const base = {
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      agentContext,
-    } as const;
-
-    harness.emit({
-      ...base,
-      type: "content.delta",
-      eventId: asEventId("evt-turnless-item-a-delta"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      itemId: asItemId("item-turnless-a"),
-      payload: { streamKind: "assistant_text", delta: "A" },
-    });
-    harness.emit({
-      ...base,
-      type: "item.completed",
-      eventId: asEventId("evt-turnless-item-a-completed"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      itemId: asItemId("item-turnless-a"),
-      payload: { itemType: "assistant_message", status: "completed", detail: "A" },
-    });
-    harness.emit({
-      ...base,
-      type: "content.delta",
-      eventId: asEventId("evt-turnless-item-a-replayed-with-new-id"),
-      createdAt: "2026-01-01T00:00:00.200Z",
-      itemId: asItemId("item-turnless-a"),
-      payload: { streamKind: "assistant_text", delta: "CORRUPT" },
-    });
-    harness.emit({
-      ...base,
-      type: "content.delta",
-      eventId: asEventId("evt-turnless-item-b-delta"),
-      createdAt: "2026-01-01T00:00:00.300Z",
-      itemId: asItemId("item-turnless-b"),
-      payload: { streamKind: "assistant_text", delta: "B" },
-    });
-    harness.emit({
-      ...base,
-      type: "item.completed",
-      eventId: asEventId("evt-turnless-item-b-completed"),
-      createdAt: "2026-01-01T00:00:00.400Z",
-      itemId: asItemId("item-turnless-b"),
-      payload: { itemType: "assistant_message", status: "completed", detail: "B" },
-    });
-    harness.emit({
-      type: "session.exited",
-      eventId: asEventId("evt-turnless-session-exited"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      createdAt: "2026-01-01T00:00:00.500Z",
-      payload: { reason: "done" },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.session?.status === "stopped",
-    );
-    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
-    expect((subagent?.payload as Record<string, unknown> | undefined)?.transcript).toBe("AB");
-  });
-
-  it("keeps anonymous item completion distinct from parent turn completion", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-anonymous-item-completion");
-    const agentContext = {
-      providerThreadId: "provider-child-anonymous-item",
-      parentTurnId: turnId,
-    } as const;
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-anonymous-item-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-known-before-anonymous-completion"),
-      agentContext,
-      createdAt: "2026-01-01T00:00:00.000Z",
-      payload: { streamKind: "assistant_text", delta: "partial" },
-    });
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-anonymous-item-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      turnId,
-      agentContext,
-      createdAt: "2026-01-01T00:00:00.100Z",
-      payload: { itemType: "assistant_message", status: "completed", detail: "final" },
-    });
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-after-anonymous-item-completed"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-after-anonymous-completion"),
-      agentContext,
-      createdAt: "2026-01-01T00:00:00.150Z",
-      payload: { streamKind: "assistant_text", delta: "!" },
-    });
-    harness.emit({
-      type: "turn.completed",
-      eventId: asEventId("evt-parent-after-anonymous-item"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId: asThreadId("thread-1"),
-      turnId,
-      createdAt: "2026-01-01T00:00:00.200Z",
-      payload: { state: "completed" },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((candidate) => {
-        if (candidate.kind !== "subagent.thread") return false;
-        const payload = candidate.payload as Record<string, unknown>;
-        return payload.status === "completed" && payload.transcript === "final!";
-      }),
-    );
-    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
-    expect((subagent?.payload as Record<string, unknown> | undefined)?.latestEventType).toBe(
-      "turn.completed",
-    );
-  });
-
-  it("derives globally distinct subagent activity ids without lossy punctuation", () => {
-    const baseEvent = {
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-identity"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("provider-thread"),
-      payload: { streamKind: "assistant_text", delta: "text" },
-    } as ProviderRuntimeEvent;
-
-    const first = subagentActivityIdForRuntime(asThreadId("parent/a"), baseEvent, "child/a");
-    const second = subagentActivityIdForRuntime(asThreadId("parent?a"), baseEvent, "child?a");
-    expect(first).not.toBe(second);
-    expect(first).toContain("parent%2Fa");
-    expect(second).toContain("child%3Fa");
-  });
-
-  it("flushes pending subagent text when a parent-only interruption arrives", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-interrupted");
-    const agentContext = {
-      providerThreadId: "provider-child-interrupted",
-      parentTurnId: turnId,
-    } as const;
-
-    for (const [index, delta] of ["first", " second"].entries()) {
-      harness.emit({
-        type: "content.delta",
-        eventId: asEventId(`evt-subagent-interrupted-${index}`),
-        provider: ProviderDriverKind.make("codex"),
-        createdAt: `2026-01-01T00:00:00.${index === 0 ? "000" : "100"}Z`,
-        threadId: asThreadId("thread-1"),
-        turnId,
-        itemId: asItemId("item-subagent-interrupted"),
-        agentContext,
-        payload: {
-          streamKind: "assistant_text",
-          delta,
-        },
-      });
-    }
-    harness.emit({
-      type: "turn.aborted",
-      eventId: asEventId("evt-parent-turn-aborted"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.200Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      payload: { reason: "Interrupted by user." },
-    });
-    await harness.drain();
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => {
-        if (activity.kind !== "subagent.thread") return false;
-        const payload = activity.payload as Record<string, unknown>;
-        return payload.status === "failed" && payload.transcript === "first second";
-      }),
-    );
-    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
-    if (!subagent) {
-      throw new Error("Expected a terminal subagent activity.");
-    }
-    expect((subagent.payload as Record<string, unknown>).latestEventType).toBe("turn.aborted");
-  });
-
-  it("settles a clean running subagent as failed when its provider session exits", async () => {
-    const harness = await createHarness();
-    const turnId = asTurnId("turn-subagent-session-exit");
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-subagent-before-session-exit"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-subagent-session-exit"),
-      agentContext: {
-        providerThreadId: "provider-child-session-exit",
-        parentTurnId: turnId,
-      },
-      payload: { streamKind: "assistant_text", delta: "preserved before exit" },
-    });
-    await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => activity.kind === "subagent.thread"),
-    );
-
-    harness.emit({
-      type: "session.exited",
-      eventId: asEventId("evt-provider-session-exited"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      threadId: asThreadId("thread-1"),
-      payload: { reason: "provider exited", recoverable: false },
-    });
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some((activity) => {
-        if (activity.kind !== "subagent.thread") return false;
-        const payload = activity.payload as Record<string, unknown>;
-        return (
-          payload.status === "failed" &&
-          payload.transcript === "preserved before exit" &&
-          payload.latestEventType === "session.exited"
-        );
-      }),
-    );
-    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
-    if (!subagent) {
-      throw new Error("Expected a terminal subagent activity after session exit.");
-    }
-    expect((subagent.payload as Record<string, unknown>).status).toBe("failed");
-  });
-
   it("preserves completed tool metadata on projected tool activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -2258,60 +1575,6 @@ describe("ProviderRuntimeIngestion", () => {
     expect(data?.toolCallId).toBe("tool-read-1");
     expect(data?.kind).toBe("read");
     expect(rawOutput?.content).toBe('import * as Effect from "effect/Effect"\n');
-  });
-
-  it("compacts large completed tool payloads before projecting activities", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-    const largeOutput = "x".repeat(20_000);
-
-    harness.emit({
-      type: "item.completed",
-      eventId: asEventId("evt-tool-completed-large-data"),
-      provider: ProviderDriverKind.make("cursor"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-tool-completed-large"),
-      itemId: asItemId("item-tool-completed-large"),
-      payload: {
-        itemType: "command_execution",
-        status: "completed",
-        title: "Ran command",
-        data: {
-          toolCallId: "tool-command-large",
-          rawOutput: {
-            content: largeOutput,
-          },
-        },
-      },
-    });
-
-    const thread = await waitForThread(harness.readModel, (entry) =>
-      entry.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-tool-completed-large-data",
-      ),
-    );
-    const activity = thread.activities.find(
-      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-tool-completed-large-data",
-    );
-    const payload =
-      activity?.payload && typeof activity.payload === "object"
-        ? (activity.payload as Record<string, unknown>)
-        : undefined;
-    const data =
-      payload?.data && typeof payload.data === "object"
-        ? (payload.data as Record<string, unknown>)
-        : undefined;
-    const rawOutput =
-      data?.rawOutput && typeof data.rawOutput === "object"
-        ? (data.rawOutput as Record<string, unknown>)
-        : undefined;
-    const rawOutputContent = rawOutput?.content;
-
-    expect(typeof rawOutputContent).toBe("string");
-    expect((rawOutputContent as string).length).toBeLessThan(largeOutput.length);
-    expect(rawOutputContent).toContain("[truncated 8000 chars]");
-    expect(data?.toolCallId).toBe("tool-command-large");
   });
 
   it("normalizes command execution activities to ran-command summaries", async () => {
@@ -2612,6 +1875,31 @@ describe("ProviderRuntimeIngestion", () => {
     ).toMatchObject({
       implementationThreadId: "thread-implement",
     });
+    const implementedPlan = sourceThreadAfterStart.proposedPlans.find(
+      (entry) => entry.id === sourcePlan.id,
+    );
+    await harness.emitAndDrain([
+      {
+        type: "turn.proposed.completed",
+        eventId: asEventId("evt-plan-source-late-completion"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:01:00.000Z",
+        threadId: sourceThreadId,
+        turnId: sourceTurnId,
+        payload: { planMarkdown: "# Source plan with late details" },
+      },
+    ]);
+    const sourceAfterLateCompletion = (await harness.readModel()).threads.find(
+      (entry) => entry.id === sourceThreadId,
+    );
+    expect(
+      sourceAfterLateCompletion?.proposedPlans.find((entry) => entry.id === sourcePlan.id),
+    ).toMatchObject({
+      planMarkdown: "# Source plan with late details",
+      createdAt: sourcePlan.createdAt,
+      implementedAt: implementedPlan?.implementedAt,
+      implementationThreadId: targetThreadId,
+    });
   });
 
   it("does not mark the source proposed plan implemented for a rejected turn.started event", async () => {
@@ -2853,67 +2141,6 @@ describe("ProviderRuntimeIngestion", () => {
     expect(threadAfterSteer.latestTurn?.state).toBe("running");
   });
 
-  it("preserves a running turn across a ready pulse while a same-turn steer is pending", async () => {
-    const harness = await createHarness();
-    const threadId = asThreadId("thread-1");
-    const turnId = asTurnId("turn-same-turn-steer");
-    const createdAt = "2026-01-01T00:00:00.000Z";
-
-    harness.setProviderSession({
-      provider: ProviderDriverKind.make("codex"),
-      status: "running",
-      runtimeMode: "approval-required",
-      threadId,
-      createdAt,
-      updatedAt: createdAt,
-      activeTurnId: turnId,
-    });
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-turn-started-before-same-turn-steer"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt,
-      threadId,
-      turnId,
-    });
-    await waitForThread(
-      harness.readModel,
-      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
-      2_000,
-      threadId,
-    );
-
-    await Effect.runPromise(
-      harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-same-turn-steer"),
-        threadId,
-        message: {
-          messageId: asMessageId("msg-same-turn-steer"),
-          role: "user",
-          text: "change direction without opening a new turn",
-          attachments: [],
-        },
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: "2026-01-01T00:00:01.000Z",
-      }),
-    );
-    harness.emit({
-      type: "session.state.changed",
-      eventId: asEventId("evt-ready-during-same-turn-steer"),
-      provider: ProviderDriverKind.make("codex"),
-      threadId,
-      createdAt: "2026-01-01T00:00:02.000Z",
-      payload: { state: "ready" },
-    });
-    await harness.drain();
-
-    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
-    expect(thread?.session?.status).toBe("running");
-    expect(thread?.session?.activeTurnId).toBe(turnId);
-  });
-
   it("does not mark the source proposed plan implemented for an unrelated turn.started when no thread active turn is tracked", async () => {
     const harness = await createHarness();
     const sourceThreadId = asThreadId("thread-plan");
@@ -3103,7 +2330,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "turn.proposed.delta",
       eventId: asEventId("evt-plan-delta-1"),
       provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
+      createdAt: "",
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-plan-buffer"),
       payload: {
@@ -3114,7 +2341,7 @@ describe("ProviderRuntimeIngestion", () => {
       type: "turn.proposed.delta",
       eventId: asEventId("evt-plan-delta-2"),
       provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
+      createdAt: "",
       threadId: asThreadId("thread-1"),
       turnId: asTurnId("turn-plan-buffer"),
       payload: {
@@ -3144,10 +2371,46 @@ describe("ProviderRuntimeIngestion", () => {
         entry.id === "plan:thread-1:turn:turn-plan-buffer",
     );
     expect(proposedPlan?.planMarkdown).toBe("## Buffered plan\n\n- first\n- second");
+    expect(proposedPlan?.createdAt).toBe(now);
   });
 
-  it("bounds lifecycle queries while buffering assistant deltas until completion", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+  it("releases a blank completed plan before a late replacement", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("blank-plan-turn");
+    const base = { provider: ProviderDriverKind.make("codex"), threadId, turnId };
+    const replacementTime = "2026-01-01T00:00:02.000Z";
+    await harness.emitAndDrain([
+      {
+        ...base,
+        type: "turn.proposed.delta",
+        eventId: asEventId("blank-plan-delta"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        payload: { delta: " \n " },
+      },
+      {
+        ...base,
+        type: "turn.completed",
+        eventId: asEventId("blank-plan-completed"),
+        createdAt: "2026-01-01T00:00:01.000Z",
+        payload: { state: "completed" },
+      },
+      {
+        ...base,
+        type: "turn.proposed.completed",
+        eventId: asEventId("late-plan-completed"),
+        createdAt: replacementTime,
+        payload: { planMarkdown: "# Replacement plan" },
+      },
+    ]);
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.proposedPlans).toEqual([
+      expect.objectContaining({ planMarkdown: "# Replacement plan", createdAt: replacementTime }),
+    ]);
+  });
+
+  it("buffers assistant deltas with one lifecycle query per event until completion", async () => {
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     await harness.emitAndDrain([
@@ -3178,8 +2441,11 @@ describe("ProviderRuntimeIngestion", () => {
         },
       })),
     );
+    // Durable transcript journaling adds bounded list/mark statements around
+    // the one lifecycle read per delta; keep the assertion on the same
+    // linear query bound as the upstream test.
     const lifecycleQueryCount = harness.sqlCount() - before;
-    expect(lifecycleQueryCount).toBeGreaterThan(0);
+    expect(lifecycleQueryCount).toBeGreaterThanOrEqual(eventCount);
     expect(lifecycleQueryCount).toBeLessThanOrEqual(eventCount * 2);
 
     const midReadModel = await harness.readModel();
@@ -3213,7 +2479,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("flushes and completes buffered assistant text when an approval request opens", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
@@ -3273,7 +2539,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("flushes and completes buffered assistant text when user input is requested", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
@@ -3339,6 +2605,185 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  function userInputEvent(
+    turnId: string,
+    requestId: string,
+    responseMode?: "message",
+  ): ProviderRuntimeEvent {
+    return {
+      type: "user-input.requested",
+      eventId: asEventId(`requested:${requestId}`),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId(turnId),
+      requestId: RuntimeRequestId.make(requestId),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      payload: {
+        ...(responseMode ? { responseMode } : {}),
+        questions: ["first", "second"].map((id) => ({
+          id,
+          header: id,
+          question: `Choose ${id}`,
+          options: [{ label: "yes", description: "Continue" }],
+          multiSelect: false,
+        })),
+      },
+    };
+  }
+
+  it.each(["completed", "interrupted", "failed", "aborted"] as const)(
+    "resolves native questions when their turn is %s",
+    async (state) => {
+      const harness = await createHarness();
+      const request = userInputEvent("question-turn", "question-request");
+      await harness.emitAndDrain([
+        {
+          type: "turn.started",
+          eventId: asEventId("question-started"),
+          provider: request.provider,
+          threadId: request.threadId,
+          turnId: request.turnId,
+          createdAt: request.createdAt,
+        },
+        request,
+      ]);
+      expect((await harness.readThreadShell()).hasPendingUserInput).toBe(true);
+      if (state === "interrupted") {
+        await harness.dispatch({
+          type: "thread.turn.interrupt",
+          commandId: CommandId.make("question-interrupt"),
+          threadId: request.threadId,
+          createdAt: "2026-01-01T00:00:02.000Z",
+        });
+      }
+      const completed: ProviderRuntimeEvent = {
+        ...(state === "aborted"
+          ? ({ type: "turn.aborted", payload: { reason: "Interrupted by user." } } as const)
+          : ({ type: "turn.completed", payload: { state } } as const)),
+        eventId: asEventId("question-completed"),
+        provider: request.provider,
+        threadId: request.threadId,
+        turnId: request.turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      };
+      await harness.emitAndDrain([completed]);
+      const thread = (await harness.readModel()).threads[0]!;
+      expect(thread.session?.activeTurnId).toBeNull();
+      expect((await harness.readThreadShell()).hasPendingUserInput).toBe(false);
+      expect(
+        thread.activities.filter((activity) => activity.kind === "user-input.resolved"),
+      ).toMatchObject([{ turnId: request.turnId, payload: { requestId: request.requestId } }]);
+
+      await harness.emitAndDrain([completed]);
+      expect(
+        (await harness.readModel()).threads[0]!.activities.filter(
+          (activity) => activity.kind === "user-input.resolved",
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("keeps a stale request dismissed when its turn later completes", async () => {
+    const harness = await createHarness();
+    const request = userInputEvent("stale-turn", "stale-question");
+    await harness.emitAndDrain([request]);
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make("stale-question-response"),
+      threadId: request.threadId,
+      activity: {
+        id: asEventId("stale-question-failed"),
+        kind: "provider.user-input.respond.failed",
+        tone: "error",
+        summary: "User input response failed",
+        turnId: request.turnId ?? null,
+        payload: {
+          requestId: request.requestId,
+          detail: "Unknown pending user input request",
+        },
+        createdAt: "2026-01-01T00:00:02.000Z",
+      },
+      createdAt: "2026-01-01T00:00:02.000Z",
+    });
+    expect((await harness.readThreadShell()).hasPendingUserInput).toBe(false);
+    await harness.emitAndDrain([
+      {
+        type: "turn.completed",
+        eventId: asEventId("stale-turn-completed"),
+        provider: request.provider,
+        threadId: request.threadId,
+        turnId: request.turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        payload: { state: "completed" },
+      },
+    ]);
+    expect((await harness.readThreadShell()).hasPendingUserInput).toBe(false);
+    expect(
+      (await harness.readModel()).threads[0]!.activities.filter(
+        (activity) => activity.kind === "user-input.resolved",
+      ),
+    ).toMatchObject([{ payload: { requestId: request.requestId } }]);
+  });
+
+  it("preserves answered questions and leaves newer, child and async questions pending", async () => {
+    const harness = await createHarness();
+    const answered = userInputEvent("old-turn", "answered-question");
+    const unresolved = userInputEvent("old-turn", "old-question");
+    const newer = userInputEvent("new-turn", "new-question");
+    const child = userInputEvent("child-turn", "child-question");
+    const asynchronous = userInputEvent("old-turn", "async-question", "message");
+    const answer: ProviderRuntimeEvent = {
+      type: "user-input.resolved",
+      eventId: asEventId("normal-answer"),
+      provider: answered.provider,
+      threadId: answered.threadId,
+      turnId: answered.turnId,
+      requestId: answered.requestId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { answers: { first: "yes", second: "yes" } },
+    };
+    await harness.emitAndDrain([
+      answered,
+      unresolved,
+      newer,
+      child,
+      asynchronous,
+      answer,
+      {
+        type: "turn.started",
+        eventId: asEventId("new-turn-started"),
+        provider: newer.provider,
+        threadId: newer.threadId,
+        turnId: newer.turnId,
+        createdAt: "2026-01-01T00:00:03.000Z",
+      },
+    ]);
+    expect((await harness.readThreadShell()).hasPendingUserInput).toBe(true);
+    await harness.emitAndDrain([
+      {
+        type: "turn.completed",
+        eventId: asEventId("old-turn-completed"),
+        provider: answered.provider,
+        threadId: answered.threadId,
+        turnId: answered.turnId,
+        createdAt: "2026-01-01T00:00:04.000Z",
+        payload: { state: "interrupted" },
+      },
+    ]);
+    const thread = (await harness.readModel()).threads[0]!;
+    expect(thread.session?.activeTurnId).toBe(newer.turnId);
+    expect((await harness.readThreadShell()).hasPendingUserInput).toBe(true);
+    expect(
+      thread.activities.filter((activity) => activity.kind === "user-input.resolved"),
+    ).toMatchObject([
+      {
+        id: answer.eventId,
+        payload: { requestId: answered.requestId, answers: answer.payload.answers },
+      },
+      { turnId: unresolved.turnId, payload: { requestId: unresolved.requestId } },
+    ]);
+  });
+
   it("keeps streaming while an async question is pending", async () => {
     const harness = await createHarness({ serverSettings: { enableLegacyTokenStreaming: true } });
     const base = {
@@ -3390,7 +2835,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("does not create assistant segments for whitespace-only buffered text at approval boundaries", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const startedAt = "2026-03-28T06:28:00.000Z";
     const pausedAt = "2026-03-28T06:28:01.000Z";
 
@@ -3450,7 +2895,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("starts a new buffered assistant message segment after approval and completes without duplication", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const startedAt = "2026-03-28T06:07:00.000Z";
     const pausedAt = "2026-03-28T06:07:01.000Z";
     const resumedAt = "2026-03-28T06:07:02.000Z";
@@ -3554,7 +2999,7 @@ describe("ProviderRuntimeIngestion", () => {
     expect(resumedMessage?.text).toBe(" second half");
     expect(resumedMessage?.streaming).toBe(false);
 
-    const events = await runtime!.runPromise(
+    const events = await Effect.runPromise(
       Stream.runCollect(harness.engine.readEvents(0)).pipe(
         Effect.map((chunk) => Array.from(chunk)),
       ),
@@ -3781,7 +3226,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("spills oversized buffered deltas and still finalizes full assistant text", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const oversizedText = "x".repeat(40_000);
 
@@ -4018,57 +3463,6 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(thread.session?.status).toBe("error");
     expect(thread.session?.lastError).toBe("runtime exploded");
-    expect(thread.session?.providerUnavailable).toBeNull();
-  });
-
-  it("finalizes buffered parent text when a provider session exits", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
-    const turnId = asTurnId("turn-buffered-session-exit");
-
-    harness.emit({
-      type: "turn.started",
-      eventId: asEventId("evt-buffered-session-exit-started"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-    });
-    await waitForThread(harness.readModel, (thread) => thread.session?.activeTurnId === turnId);
-
-    harness.emit({
-      type: "content.delta",
-      eventId: asEventId("evt-buffered-session-exit-delta"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.100Z",
-      threadId: asThreadId("thread-1"),
-      turnId,
-      itemId: asItemId("item-buffered-session-exit"),
-      payload: { streamKind: "assistant_text", delta: "survives session exit" },
-    });
-    harness.emit({
-      type: "session.exited",
-      eventId: asEventId("evt-buffered-session-exit-terminal"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.200Z",
-      threadId: asThreadId("thread-1"),
-      payload: { reason: "provider crashed" },
-    });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) =>
-        entry.session?.status === "stopped" &&
-        entry.messages.some(
-          (message) =>
-            message.id === "assistant:item-buffered-session-exit" &&
-            !message.streaming &&
-            message.text === "survives session exit",
-        ),
-    );
-    expect(
-      thread.messages.find((message) => message.id === "assistant:item-buffered-session-exit")
-        ?.text,
-    ).toBe("survives session exit");
   });
 
   it("records runtime.error activities from the typed payload message", async () => {
@@ -4099,58 +3493,7 @@ describe("ProviderRuntimeIngestion", () => {
         : undefined;
 
     expect(activity?.kind).toBe("runtime.error");
-    expect(activity?.summary).toBe("Runtime error");
     expect(activityPayload?.message).toBe("runtime activity exploded");
-  });
-
-  it("persists provider availability and gives its activity a concise status", async () => {
-    const harness = await createHarness();
-    const now = "2026-09-03T10:43:23.775Z";
-    const providerUnavailable = {
-      type: "provider_unavailable" as const,
-      cause: "rate_limited" as const,
-      scope: "provider_instance" as const,
-      provider: ProviderDriverKind.make("opencode"),
-      providerInstanceId: ProviderInstanceId.make("opencode"),
-      model: "zai-coding-plan/glm-5.3-flash",
-      reason: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-03 18:43:23",
-      retryable: true,
-      retryAt: now,
-    };
-
-    harness.emit({
-      type: "runtime.error",
-      eventId: asEventId("evt-provider-rate-limited"),
-      provider: ProviderDriverKind.make("opencode"),
-      providerInstanceId: ProviderInstanceId.make("opencode"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-provider-rate-limited"),
-      payload: {
-        message: providerUnavailable.reason,
-        class: "rate_limited",
-        providerUnavailable,
-      },
-    });
-
-    const thread = await waitForThread(
-      harness.readModel,
-      (entry) => entry.session?.providerUnavailable?.retryAt === now,
-    );
-    const activity = thread.activities.find(
-      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-provider-rate-limited",
-    );
-
-    expect(thread.session?.providerUnavailable).toEqual(providerUnavailable);
-    expect(activity).toMatchObject({
-      kind: "runtime.error",
-      summary: "Provider usage limit reached",
-      payload: {
-        message: providerUnavailable.reason,
-        class: "rate_limited",
-        providerUnavailable,
-      },
-    });
   });
 
   it("keeps the session running when a runtime.warning arrives during an active turn", async () => {
@@ -4283,6 +3626,33 @@ describe("ProviderRuntimeIngestion", () => {
       },
     });
   });
+
+  effectIt.effect("tracks provider diff updates from a nested Git workspace", () =>
+    Effect.gen(function* () {
+      const harness = yield* Effect.promise(() =>
+        createHarness({ workspaceSubdirectory: "apps/server" }),
+      );
+      yield* Effect.promise(() =>
+        harness.emitAndDrain([
+          {
+            type: "turn.diff.updated",
+            eventId: asEventId("evt-nested-diff"),
+            provider: ProviderDriverKind.make("codex"),
+            createdAt: "2026-01-01T00:00:00.000Z",
+            threadId: asThreadId("thread-1"),
+            turnId: asTurnId("nested-turn"),
+            payload: {
+              unifiedDiff: "diff --git a/apps/server/file.ts b/apps/server/file.ts\n+new\n",
+            },
+          },
+        ]),
+      );
+      const snapshot = yield* Effect.promise(harness.readModel);
+      expect(snapshot.threads[0]?.checkpoints).toEqual([
+        expect.objectContaining({ turnId: "nested-turn", status: "missing" }),
+      ]);
+    }),
+  );
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
     const harness = await createHarness();
@@ -4513,129 +3883,6 @@ describe("ProviderRuntimeIngestion", () => {
       reasoningOutputTokens: 25,
       lastUsedTokens: 1075,
       compactsAutomatically: true,
-    });
-  });
-
-  it("projects Codex rate limit updates into provider usage limits", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    harness.emit({
-      type: "account.rate-limits.updated",
-      eventId: asEventId("evt-account-rate-limits-updated"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      payload: {
-        rateLimits: {
-          rateLimits: {
-            limitId: "codex",
-            limitName: "Codex",
-            planType: "plus",
-            rateLimitReachedType: null,
-            credits: {
-              balance: "12.50",
-              hasCredits: true,
-              unlimited: false,
-            },
-            primary: {
-              usedPercent: 40,
-              resetsAt: 1_746_052_800,
-              windowDurationMins: 300,
-            },
-            secondary: {
-              usedPercent: 10,
-              resetsAt: "2026-01-08T00:00:00.000Z",
-              windowDurationMins: 10080,
-            },
-          },
-        },
-      },
-    });
-
-    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
-      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
-    );
-
-    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
-    expect(usageLimits).toBeDefined();
-    expect(usageLimits?.provider).toBe("codex");
-    expect(usageLimits?.usageLimits).toMatchObject({
-      limitId: "codex",
-      limitName: "Codex",
-      planType: "plus",
-      updatedAt: now,
-      credits: {
-        balance: "12.50",
-        hasCredits: true,
-        unlimited: false,
-      },
-      primary: {
-        usedPercent: 40,
-        resetsAt: "2025-04-30T22:40:00.000Z",
-        windowDurationMins: 300,
-      },
-      secondary: {
-        usedPercent: 10,
-        resetsAt: "2026-01-08T00:00:00.000Z",
-        windowDurationMins: 10080,
-      },
-    });
-    expect(
-      readModel.threads[0]?.activities.some(
-        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
-      ),
-    ).toBe(false);
-  });
-
-  it("projects Codex individual limits into the weekly usage window", async () => {
-    const harness = await createHarness();
-    const now = "2026-01-01T00:00:00.000Z";
-
-    harness.emit({
-      type: "account.rate-limits.updated",
-      eventId: asEventId("evt-account-rate-limits-individual"),
-      provider: ProviderDriverKind.make("codex"),
-      createdAt: now,
-      threadId: asThreadId("thread-1"),
-      payload: {
-        rateLimits: {
-          limitId: "codex",
-          primary: {
-            usedPercent: 25,
-            resetsAt: "2026-01-01T05:00:00.000Z",
-            windowDurationMins: 300,
-          },
-          secondary: {
-            usedPercent: 0,
-            resetsAt: "2026-01-08T00:00:00.000Z",
-            windowDurationMins: 10080,
-          },
-          individualLimit: {
-            remainingPercent: 73,
-            resetsAt: 1_767_830_400,
-            limit: "100",
-            used: "27",
-          },
-        },
-      },
-    });
-
-    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
-      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
-    );
-
-    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
-    expect(usageLimits?.usageLimits).toMatchObject({
-      limitId: "codex",
-      primary: {
-        usedPercent: 25,
-      },
-      secondary: {
-        usedPercent: 27,
-        resetsAt: "2026-01-08T00:00:00.000Z",
-        windowDurationMins: null,
-      },
     });
   });
 
@@ -5041,6 +4288,181 @@ describe("ProviderRuntimeIngestion", () => {
     expect(completedPayload?.title).toBe("wait for codex review to finish");
   });
 
+  it("recovers a task title past untitled progress after the cache is swept", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-swept-task");
+    const provider = ProviderDriverKind.make("claudeAgent");
+
+    await harness.emitAndDrain([
+      {
+        type: "task.started",
+        eventId: asEventId("evt-swept-task-started"),
+        provider,
+        createdAt: now,
+        threadId,
+        turnId,
+        payload: { taskId: "swept-task-1", description: "Watch round-3 CI and bots" },
+      },
+    ]);
+    // Older saved progress rows can have no title even when the start has one.
+    await harness.dispatch({
+      type: "thread.activity.append",
+      commandId: CommandId.make("cmd-swept-task-progress"),
+      threadId,
+      activity: {
+        id: asEventId("evt-swept-task-progress"),
+        kind: "task.progress",
+        tone: "info",
+        summary: "Polling CI checks.",
+        payload: { taskId: "swept-task-1" },
+        turnId,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    await harness.emitAndDrain([
+      {
+        type: "session.exited",
+        eventId: asEventId("evt-swept-task-session-exited"),
+        provider,
+        createdAt: "2026-01-01T00:00:02.000Z",
+        threadId,
+        payload: {},
+      },
+      {
+        type: "task.completed",
+        eventId: asEventId("evt-swept-task-completed"),
+        provider,
+        createdAt: "2026-01-01T00:00:03.000Z",
+        threadId,
+        turnId,
+        payload: { taskId: "swept-task-1", status: "completed", summary: "CI is green." },
+      },
+    ]);
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    const completed = thread?.activities.find(
+      (activity) => activity.id === "evt-swept-task-completed",
+    );
+    expect(completed?.payload).toMatchObject({ title: "Watch round-3 CI and bots" });
+  });
+
+  it("projects structured user input request and resolution as thread activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "user-input.requested",
+      eventId: asEventId("evt-user-input-requested"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-user-input"),
+      requestId: ApprovalRequestId.make("req-user-input-1"),
+      payload: {
+        questions: [
+          {
+            id: "sandbox_mode",
+            header: "Sandbox",
+            question: "Which mode should be used?",
+            options: [
+              {
+                label: "workspace-write",
+                description: "Allow workspace writes only",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    harness.emit({
+      type: "user-input.resolved",
+      eventId: asEventId("evt-user-input-resolved"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-user-input"),
+      requestId: ApprovalRequestId.make("req-user-input-1"),
+      payload: {
+        answers: {
+          sandbox_mode: "workspace-write",
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.requested",
+        ) &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.resolved",
+        ),
+    );
+
+    const requested = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-requested",
+    );
+    expect(requested?.kind).toBe("user-input.requested");
+
+    const resolved = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-resolved",
+    );
+    const resolvedPayload =
+      resolved?.payload && typeof resolved.payload === "object"
+        ? (resolved.payload as Record<string, unknown>)
+        : undefined;
+    expect(resolved?.kind).toBe("user-input.resolved");
+    expect(resolvedPayload?.answers).toEqual({
+      sandbox_mode: "workspace-write",
+    });
+  });
+
+  it("continues processing runtime events after a single event handler failure", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-invalid-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-invalid"),
+      itemId: asItemId("item-invalid"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: undefined,
+      },
+    } as unknown as ProviderRuntimeEvent);
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-runtime-error-after-failure"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-after-failure"),
+      payload: {
+        message: "runtime still processed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "error" &&
+        entry.session?.activeTurnId === "turn-after-failure" &&
+        entry.session?.lastError === "runtime still processed",
+    );
+    expect(thread.session?.status).toBe("error");
+    expect(thread.session?.lastError).toBe("runtime still processed");
+  });
+  // Fork-specific coverage restored below the upstream test union.
   it("titles task completion from persisted activities after the description cache is swept", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
@@ -5107,120 +4529,1213 @@ describe("ProviderRuntimeIngestion", () => {
 
     expect(completedPayload?.title).toBe("Watch round-3 CI and bots");
   });
-
-  it("projects structured user input request and resolution as thread activities", async () => {
+  it("projects Codex individual limits into the weekly usage window", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
-      type: "user-input.requested",
-      eventId: asEventId("evt-user-input-requested"),
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits-individual"),
       provider: ProviderDriverKind.make("codex"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-user-input"),
-      requestId: ApprovalRequestId.make("req-user-input-1"),
       payload: {
-        optional: true,
-        questions: [
-          {
-            id: "sandbox_mode",
-            header: "Sandbox",
-            question: "Which mode should be used?",
-            options: [
-              {
-                label: "workspace-write",
-                description: "Allow workspace writes only",
-              },
-            ],
+        rateLimits: {
+          limitId: "codex",
+          primary: {
+            usedPercent: 25,
+            resetsAt: "2026-01-01T05:00:00.000Z",
+            windowDurationMins: 300,
           },
-        ],
+          secondary: {
+            usedPercent: 0,
+            resetsAt: "2026-01-08T00:00:00.000Z",
+            windowDurationMins: 10080,
+          },
+          individualLimit: {
+            remainingPercent: 73,
+            resetsAt: 1_767_830_400,
+            limit: "100",
+            used: "27",
+          },
+        },
       },
     });
 
+    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
+      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
+    );
+
+    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
+    expect(usageLimits?.usageLimits).toMatchObject({
+      limitId: "codex",
+      primary: {
+        usedPercent: 25,
+      },
+      secondary: {
+        usedPercent: 27,
+        resetsAt: "2026-01-08T00:00:00.000Z",
+        windowDurationMins: null,
+      },
+    });
+  });
+  it("projects Codex rate limit updates into provider usage limits", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
     harness.emit({
-      type: "user-input.resolved",
-      eventId: asEventId("evt-user-input-resolved"),
+      type: "account.rate-limits.updated",
+      eventId: asEventId("evt-account-rate-limits-updated"),
       provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
+      createdAt: now,
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-user-input"),
-      requestId: ApprovalRequestId.make("req-user-input-1"),
       payload: {
-        answers: {
-          sandbox_mode: "workspace-write",
+        rateLimits: {
+          rateLimits: {
+            limitId: "codex",
+            limitName: "Codex",
+            planType: "plus",
+            rateLimitReachedType: null,
+            credits: {
+              balance: "12.50",
+              hasCredits: true,
+              unlimited: false,
+            },
+            primary: {
+              usedPercent: 40,
+              resetsAt: 1_746_052_800,
+              windowDurationMins: 300,
+            },
+            secondary: {
+              usedPercent: 10,
+              resetsAt: "2026-01-08T00:00:00.000Z",
+              windowDurationMins: 10080,
+            },
+          },
         },
+      },
+    });
+
+    const readModel = await waitForReadModel(harness.readModel, (snapshot) =>
+      snapshot.usageLimits.some((entry) => entry.providerInstanceId === "codex"),
+    );
+
+    const usageLimits = readModel.usageLimits.find((entry) => entry.providerInstanceId === "codex");
+    expect(usageLimits).toBeDefined();
+    expect(usageLimits?.provider).toBe("codex");
+    expect(usageLimits?.usageLimits).toMatchObject({
+      limitId: "codex",
+      limitName: "Codex",
+      planType: "plus",
+      updatedAt: now,
+      credits: {
+        balance: "12.50",
+        hasCredits: true,
+        unlimited: false,
+      },
+      primary: {
+        usedPercent: 40,
+        resetsAt: "2025-04-30T22:40:00.000Z",
+        windowDurationMins: 300,
+      },
+      secondary: {
+        usedPercent: 10,
+        resetsAt: "2026-01-08T00:00:00.000Z",
+        windowDurationMins: 10080,
+      },
+    });
+    expect(
+      readModel.threads[0]?.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "account.rate-limits.updated",
+      ),
+    ).toBe(false);
+  });
+  it("persists provider availability and gives its activity a concise status", async () => {
+    const harness = await createHarness();
+    const now = "2026-09-03T10:43:23.775Z";
+    const providerUnavailable = {
+      type: "provider_unavailable" as const,
+      cause: "rate_limited" as const,
+      scope: "provider_instance" as const,
+      provider: ProviderDriverKind.make("opencode"),
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      model: "zai-coding-plan/glm-5.3-flash",
+      reason: "Usage limit reached for 5 hour. Your limit will reset at 2026-09-03 18:43:23",
+      retryable: true,
+      retryAt: now,
+    };
+
+    harness.emit({
+      type: "runtime.error",
+      eventId: asEventId("evt-provider-rate-limited"),
+      provider: ProviderDriverKind.make("opencode"),
+      providerInstanceId: ProviderInstanceId.make("opencode"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-provider-rate-limited"),
+      payload: {
+        message: providerUnavailable.reason,
+        class: "rate_limited",
+        providerUnavailable,
       },
     });
 
     const thread = await waitForThread(
       harness.readModel,
-      (entry) =>
-        entry.activities.some(
-          (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.requested",
-        ) &&
-        entry.activities.some(
-          (activity: ProviderRuntimeTestActivity) => activity.kind === "user-input.resolved",
-        ),
+      (entry) => entry.session?.providerUnavailable?.retryAt === now,
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-provider-rate-limited",
     );
 
-    const requested = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-requested",
-    );
-    expect(requested?.kind).toBe("user-input.requested");
-    expect(requested?.payload).toMatchObject({ optional: true });
-
-    const resolved = thread.activities.find(
-      (activity: ProviderRuntimeTestActivity) => activity.id === "evt-user-input-resolved",
-    );
-    const resolvedPayload =
-      resolved?.payload && typeof resolved.payload === "object"
-        ? (resolved.payload as Record<string, unknown>)
-        : undefined;
-    expect(resolved?.kind).toBe("user-input.resolved");
-    expect(resolvedPayload?.answers).toEqual({
-      sandbox_mode: "workspace-write",
+    expect(thread.session?.providerUnavailable).toEqual(providerUnavailable);
+    expect(activity).toMatchObject({
+      kind: "runtime.error",
+      summary: "Provider usage limit reached",
+      payload: {
+        message: providerUnavailable.reason,
+        class: "rate_limited",
+        providerUnavailable,
+      },
     });
   });
+  it("finalizes buffered parent text when a provider session exits", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const turnId = asTurnId("turn-buffered-session-exit");
 
-  it("continues processing runtime events after a single event handler failure", async () => {
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-buffered-session-exit-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    await waitForThread(harness.readModel, (thread) => thread.session?.activeTurnId === turnId);
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-buffered-session-exit-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-buffered-session-exit"),
+      payload: { streamKind: "assistant_text", delta: "survives session exit" },
+    });
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-buffered-session-exit-terminal"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      payload: { reason: "provider crashed" },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "stopped" &&
+        entry.messages.some(
+          (message) =>
+            message.id === "assistant:item-buffered-session-exit" &&
+            !message.streaming &&
+            message.text === "survives session exit",
+        ),
+    );
+    expect(
+      thread.messages.find((message) => message.id === "assistant:item-buffered-session-exit")
+        ?.text,
+    ).toBe("survives session exit");
+  });
+  it("bounds lifecycle queries while buffering assistant deltas until completion", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const now = "2026-01-01T00:00:00.000Z";
+
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+      },
+    ]);
+
+    const eventCount = 1_000;
+    const before = harness.sqlCount();
+    await harness.emitAndDrain(
+      Array.from({ length: eventCount }, (_, index) => ({
+        type: "content.delta",
+        eventId: asEventId(`evt-message-delta-buffered-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          streamKind: "assistant_text",
+          delta: "a",
+        },
+      })),
+    );
+    const lifecycleQueryCount = harness.sqlCount() - before;
+    expect(lifecycleQueryCount).toBeGreaterThan(0);
+    expect(lifecycleQueryCount).toBeLessThanOrEqual(eventCount * 2);
+
+    const midReadModel = await harness.readModel();
+    const midThread = midReadModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
+    expect(
+      midThread?.messages.some(
+        (message: ProviderRuntimeTestMessage) => message.id === "assistant:item-buffered",
+      ),
+    ).toBe(false);
+
+    await harness.emitAndDrain([
+      {
+        type: "item.completed",
+        eventId: asEventId("evt-message-completed-buffered"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-buffered"),
+        itemId: asItemId("item-buffered"),
+        payload: {
+          itemType: "assistant_message",
+          status: "completed",
+        },
+      },
+    ]);
+    const readModel = await harness.readModel();
+    const thread = readModel.threads.find((entry) => entry.id === asThreadId("thread-1"));
+    const message = thread?.messages.find((entry) => entry.id === "assistant:item-buffered");
+    expect(message?.text).toBe("a".repeat(eventCount));
+    expect(message?.streaming).toBe(false);
+  });
+  it("preserves a running turn across a ready pulse while a same-turn steer is pending", async () => {
+    const harness = await createHarness();
+    const threadId = asThreadId("thread-1");
+    const turnId = asTurnId("turn-same-turn-steer");
+    const createdAt = "2026-01-01T00:00:00.000Z";
+
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make("codex"),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId,
+      createdAt,
+      updatedAt: createdAt,
+      activeTurnId: turnId,
+    });
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-same-turn-steer"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt,
+      threadId,
+      turnId,
+    });
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.status === "running" && thread.session.activeTurnId === turnId,
+      2_000,
+      threadId,
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-same-turn-steer"),
+        threadId,
+        message: {
+          messageId: asMessageId("msg-same-turn-steer"),
+          role: "user",
+          text: "change direction without opening a new turn",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+    harness.emit({
+      type: "session.state.changed",
+      eventId: asEventId("evt-ready-during-same-turn-steer"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId,
+      createdAt: "2026-01-01T00:00:02.000Z",
+      payload: { state: "ready" },
+    });
+    await harness.drain();
+
+    const thread = (await harness.readModel()).threads.find((entry) => entry.id === threadId);
+    expect(thread?.session?.status).toBe("running");
+    expect(thread?.session?.activeTurnId).toBe(turnId);
+  });
+  it("compacts large completed tool payloads before projecting activities", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const largeOutput = "x".repeat(20_000);
+
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-tool-completed-large-data"),
+      provider: ProviderDriverKind.make("cursor"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-tool-completed-large"),
+      itemId: asItemId("item-tool-completed-large"),
+      payload: {
+        itemType: "command_execution",
+        status: "completed",
+        title: "Ran command",
+        data: {
+          toolCallId: "tool-command-large",
+          rawOutput: {
+            content: largeOutput,
+          },
+        },
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (activity: ProviderRuntimeTestActivity) => activity.id === "evt-tool-completed-large-data",
+      ),
+    );
+    const activity = thread.activities.find(
+      (entry: ProviderRuntimeTestActivity) => entry.id === "evt-tool-completed-large-data",
+    );
+    const payload =
+      activity?.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : undefined;
+    const data =
+      payload?.data && typeof payload.data === "object"
+        ? (payload.data as Record<string, unknown>)
+        : undefined;
+    const rawOutput =
+      data?.rawOutput && typeof data.rawOutput === "object"
+        ? (data.rawOutput as Record<string, unknown>)
+        : undefined;
+    const rawOutputContent = rawOutput?.content;
+
+    expect(typeof rawOutputContent).toBe("string");
+    expect((rawOutputContent as string).length).toBeLessThan(largeOutput.length);
+    expect(rawOutputContent).toContain("[truncated 8000 chars]");
+    expect(data?.toolCallId).toBe("tool-command-large");
+  });
+  it("settles a clean running subagent as failed when its provider session exits", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-session-exit");
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-before-session-exit"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-session-exit"),
+      agentContext: {
+        providerThreadId: "provider-child-session-exit",
+        parentTurnId: turnId,
+      },
+      payload: { streamKind: "assistant_text", delta: "preserved before exit" },
+    });
+    await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => activity.kind === "subagent.thread"),
+    );
+
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-provider-session-exited"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      payload: { reason: "provider exited", recoverable: false },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return (
+          payload.status === "failed" &&
+          payload.transcript === "preserved before exit" &&
+          payload.latestEventType === "session.exited"
+        );
+      }),
+    );
+    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a terminal subagent activity after session exit.");
+    }
+    expect((subagent.payload as Record<string, unknown>).status).toBe("failed");
+  });
+  it("flushes pending subagent text when a parent-only interruption arrives", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-interrupted");
+    const agentContext = {
+      providerThreadId: "provider-child-interrupted",
+      parentTurnId: turnId,
+    } as const;
+
+    for (const [index, delta] of ["first", " second"].entries()) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-interrupted-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:00.${index === 0 ? "000" : "100"}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-interrupted"),
+        agentContext,
+        payload: {
+          streamKind: "assistant_text",
+          delta,
+        },
+      });
+    }
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-parent-turn-aborted"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: { reason: "Interrupted by user." },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return payload.status === "failed" && payload.transcript === "first second";
+      }),
+    );
+    const subagent = thread.activities.find((activity) => activity.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a terminal subagent activity.");
+    }
+    expect((subagent.payload as Record<string, unknown>).latestEventType).toBe("turn.aborted");
+  });
+  it("derives globally distinct subagent activity ids without lossy punctuation", () => {
+    const baseEvent = {
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-identity"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("provider-thread"),
+      payload: { streamKind: "assistant_text", delta: "text" },
+    } as ProviderRuntimeEvent;
+
+    const first = subagentActivityIdForRuntime(asThreadId("parent/a"), baseEvent, "child/a");
+    const second = subagentActivityIdForRuntime(asThreadId("parent?a"), baseEvent, "child?a");
+    expect(first).not.toBe(second);
+    expect(first).toContain("parent%2Fa");
+    expect(second).toContain("child%3Fa");
+  });
+  it("keeps anonymous item completion distinct from parent turn completion", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-anonymous-item-completion");
+    const agentContext = {
+      providerThreadId: "provider-child-anonymous-item",
+      parentTurnId: turnId,
+    } as const;
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-anonymous-item-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-known-before-anonymous-completion"),
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      payload: { streamKind: "assistant_text", delta: "partial" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-anonymous-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.100Z",
+      payload: { itemType: "assistant_message", status: "completed", detail: "final" },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-after-anonymous-item-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-after-anonymous-completion"),
+      agentContext,
+      createdAt: "2026-01-01T00:00:00.150Z",
+      payload: { streamKind: "assistant_text", delta: "!" },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-parent-after-anonymous-item"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      turnId,
+      createdAt: "2026-01-01T00:00:00.200Z",
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((candidate) => {
+        if (candidate.kind !== "subagent.thread") return false;
+        const payload = candidate.payload as Record<string, unknown>;
+        return payload.status === "completed" && payload.transcript === "final!";
+      }),
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    expect((subagent?.payload as Record<string, unknown> | undefined)?.latestEventType).toBe(
+      "turn.completed",
+    );
+  });
+  it("keeps turnless item dedupe isolated from later items and session exit", async () => {
+    const harness = await createHarness();
+    const agentContext = { providerThreadId: "provider-child-turnless" } as const;
+    const base = {
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      agentContext,
+    } as const;
+
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-a-delta"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { streamKind: "assistant_text", delta: "A" },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("evt-turnless-item-a-completed"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { itemType: "assistant_message", status: "completed", detail: "A" },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-a-replayed-with-new-id"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      itemId: asItemId("item-turnless-a"),
+      payload: { streamKind: "assistant_text", delta: "CORRUPT" },
+    });
+    harness.emit({
+      ...base,
+      type: "content.delta",
+      eventId: asEventId("evt-turnless-item-b-delta"),
+      createdAt: "2026-01-01T00:00:00.300Z",
+      itemId: asItemId("item-turnless-b"),
+      payload: { streamKind: "assistant_text", delta: "B" },
+    });
+    harness.emit({
+      ...base,
+      type: "item.completed",
+      eventId: asEventId("evt-turnless-item-b-completed"),
+      createdAt: "2026-01-01T00:00:00.400Z",
+      itemId: asItemId("item-turnless-b"),
+      payload: { itemType: "assistant_message", status: "completed", detail: "B" },
+    });
+    harness.emit({
+      type: "session.exited",
+      eventId: asEventId("evt-turnless-session-exited"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.500Z",
+      payload: { reason: "done" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "stopped",
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    expect((subagent?.payload as Record<string, unknown> | undefined)?.transcript).toBe("AB");
+  });
+  it("preserves legacy cumulative transcript bytes when a new item completes", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-legacy-transcript");
+    const agentContext = {
+      providerThreadId: "provider-child-legacy-transcript",
+      parentTurnId: turnId,
+    } as const;
+    const event = {
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-legacy-new-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: RuntimeItemId.make("item-subagent-legacy-new"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: "new partial" },
+    } as const satisfies ProviderRuntimeEvent;
+    const activityId = subagentActivityIdForRuntime(
+      asThreadId("thread-1"),
+      event,
+      agentContext.providerThreadId,
+    );
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.activity.append",
+        commandId: CommandId.make("cmd-subagent-legacy-activity"),
+        threadId: asThreadId("thread-1"),
+        activity: {
+          id: activityId,
+          kind: "subagent.thread",
+          tone: "info",
+          summary: "Subagent running",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          turnId,
+          payload: {
+            providerThreadId: agentContext.providerThreadId,
+            status: "running",
+            transcript: "legacy bytes ",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    harness.emit(event);
+    harness.emit({
+      ...event,
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-legacy-new-completed"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "new final",
+      },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some(
+        (candidate) =>
+          candidate.id === activityId &&
+          (candidate.payload as Record<string, unknown>).transcript === "legacy bytes new final",
+      ),
+    );
+    const activity = thread.activities.find((candidate) => candidate.id === activityId);
+    expect((activity?.payload as Record<string, unknown> | undefined)?.transcript).toBe(
+      "legacy bytes new final",
+    );
+  });
+  it("preserves large multi-item subagent text and authoritative completion suffixes", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-large-transcript");
+    const agentContext = {
+      providerThreadId: "provider-child-large-transcript",
+      parentTurnId: turnId,
+    } as const;
+    const firstFinal = `${"a".repeat(60_000)} corrected suffix`;
+    const secondFinal = "\nsecond item final text";
+
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-large-first-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-first"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: `${"a".repeat(60_000)} partial` },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-large-first-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-first"),
+      agentContext,
+      payload: { itemType: "assistant_message", status: "completed", detail: firstFinal },
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-large-second-delta"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-second"),
+      agentContext,
+      payload: { streamKind: "assistant_text", delta: "\nsecond item partial" },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-large-second-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.300Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-large-second"),
+      agentContext,
+      payload: { itemType: "assistant_message", status: "completed", detail: secondFinal },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((candidate) => {
+        if (candidate.kind !== "subagent.thread") return false;
+        const payload = candidate.payload as Record<string, unknown>;
+        return payload.transcript === `${firstFinal}${secondFinal}`;
+      }),
+    );
+    const subagent = thread.activities.find((candidate) => candidate.kind === "subagent.thread");
+    if (!subagent) {
+      throw new Error("Expected a large subagent transcript activity.");
+    }
+    expect((subagent.payload as Record<string, unknown>).transcript).toBe(
+      `${firstFinal}${secondFinal}`,
+    );
+  });
+  it("coalesces subagent transcript deltas only with authoritative recovery", async () => {
+    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const turnId = asTurnId("turn-subagent-coalesced");
+    const agentContext = {
+      providerThreadId: "provider-child-coalesced",
+      parentTurnId: turnId,
+    } as const;
+    const chunks = Array.from({ length: 120 }, (_, index) => `${index}:`);
+    const beforeEvents = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).length;
+
+    for (let index = 0; index < chunks.length; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-text-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:0${Math.floor((index * 10) / 1_000)}.${String(
+          (index * 10) % 1_000,
+        ).padStart(3, "0")}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-text"),
+        agentContext,
+        payload: {
+          streamKind: "assistant_text",
+          delta: chunks[index]!,
+        },
+      });
+    }
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-text-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.200Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-text"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    await harness.drain();
+
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).slice(beforeEvents);
+    const subagentEvents = events.filter(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "subagent.thread",
+    );
+    expect(subagentEvents.length).toBeLessThanOrEqual(4);
+    const finalEvent = subagentEvents.at(-1);
+    if (finalEvent?.type !== "thread.activity-appended") {
+      throw new Error("Expected a final subagent activity event.");
+    }
+    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
+    expect(finalPayload.transcript).toBe(chunks.join(""));
+    expect(finalPayload.status).toBe("completed");
+  });
+  it("retains dirty transcript state for more than one thousand concurrent subagents", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-many-children");
+    for (let index = 0; index < 1_001; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-many-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: "2026-01-01T00:00:00.000Z",
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId(`item-subagent-many-${index}`),
+        agentContext: {
+          providerThreadId: `provider-child-many-${index}`,
+          parentTurnId: turnId,
+        },
+        payload: { streamKind: "assistant_text", delta: `head-${index}` },
+      });
+    }
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-subagent-many-first-tail"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.100Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-many-0"),
+      agentContext: {
+        providerThreadId: "provider-child-many-0",
+        parentTurnId: turnId,
+      },
+      payload: { streamKind: "assistant_text", delta: "-tail" },
+    });
+    await harness.drain();
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        if (activity.kind !== "subagent.thread") return false;
+        const payload = activity.payload as Record<string, unknown>;
+        return (
+          payload.providerThreadId === "provider-child-many-0" &&
+          payload.transcript === "head-0-tail"
+        );
+      }),
+    );
+    expect(
+      thread.activities.filter((activity) => activity.kind === "subagent.thread"),
+    ).toHaveLength(1_001);
+  }, 120_000);
+  it("suppresses unchanged subagent command-output updates and exact duplicates", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-subagent-output-flood");
+    const agentContext = {
+      providerThreadId: "provider-child-output-flood",
+      parentTurnId: turnId,
+    } as const;
+    const beforeEvents = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).length;
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-subagent-output-started"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-output"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message",
+        title: "Assistant message",
+      },
+    });
+    for (let index = 0; index < 100; index += 1) {
+      harness.emit({
+        type: "content.delta",
+        eventId: asEventId(`evt-subagent-command-output-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: `2026-01-01T00:00:00.${String(index + 10).padStart(3, "0")}Z`,
+        threadId: asThreadId("thread-1"),
+        turnId,
+        itemId: asItemId("item-subagent-command"),
+        agentContext,
+        payload: {
+          streamKind: "command_output",
+          delta: `chunk ${index}\n`,
+        },
+      });
+    }
+    const completedEvent = {
+      type: "item.completed" as const,
+      eventId: asEventId("evt-subagent-output-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-subagent-output"),
+      agentContext,
+      payload: {
+        itemType: "assistant_message" as const,
+        status: "completed" as const,
+        detail: "byte-exact child result",
+      },
+    };
+    harness.emit(completedEvent);
+    harness.emit(completedEvent);
+    await harness.drain();
+
+    const events = Array.from(
+      await Effect.runPromise(Stream.runCollect(harness.engine.readEvents(0))),
+    ).slice(beforeEvents);
+    const subagentEvents = events.filter(
+      (event) =>
+        event.type === "thread.activity-appended" &&
+        event.payload.activity.kind === "subagent.thread",
+    );
+    expect(subagentEvents).toHaveLength(2);
+    const finalEvent = subagentEvents.at(-1);
+    if (finalEvent?.type !== "thread.activity-appended") {
+      throw new Error("Expected a final subagent activity event.");
+    }
+    const finalPayload = finalEvent.payload.activity.payload as Record<string, unknown>;
+    expect(finalPayload.transcript).toBe("byte-exact child result");
+    expect(finalPayload.status).toBe("completed");
+  });
+  it("projects subagent assistant text into a subagent activity without parent transcript rows", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
       type: "content.delta",
-      eventId: asEventId("evt-invalid-delta"),
+      eventId: asEventId("evt-subagent-delta"),
       provider: ProviderDriverKind.make("codex"),
       createdAt: now,
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-invalid"),
-      itemId: asItemId("item-invalid"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-subagent-message"),
+      agentContext: {
+        providerThreadId: "provider-child-thread",
+        parentTurnId: asTurnId("turn-parent"),
+      },
       payload: {
         streamKind: "assistant_text",
-        delta: undefined,
+        delta: "child agent findings",
       },
-    } as unknown as ProviderRuntimeEvent);
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-subagent-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-parent"),
+      itemId: asItemId("item-subagent-message"),
+      agentContext: {
+        providerThreadId: "provider-child-thread",
+        parentTurnId: asTurnId("turn-parent"),
+      },
+      payload: {
+        itemType: "assistant_message",
+        title: "Assistant message",
+      },
+    });
+
+    const thread = await waitForThread(harness.readModel, (entry) =>
+      entry.activities.some((activity) => {
+        const payload =
+          activity.payload && typeof activity.payload === "object"
+            ? (activity.payload as Record<string, unknown>)
+            : null;
+        return (
+          activity.kind === "subagent.thread" &&
+          payload?.providerThreadId === "provider-child-thread" &&
+          payload?.status === "completed"
+        );
+      }),
+    );
+    const subagentActivity = thread.activities.find(
+      (activity: ProviderRuntimeTestActivity) => activity.kind === "subagent.thread",
+    );
+    const payload =
+      subagentActivity?.payload && typeof subagentActivity.payload === "object"
+        ? (subagentActivity.payload as Record<string, unknown>)
+        : null;
+
+    expect(thread.messages).toHaveLength(0);
+    expect(subagentActivity?.id).toBe("subagent:thread-1:codex:codex:provider-child-thread");
+    expect(subagentActivity?.turnId).toBe("turn-parent");
+    expect(payload?.transcript).toBe("child agent findings");
+    expect(payload?.parentTurnId).toBe("turn-parent");
+  });
+  it("clears active turn state on turn.aborted without dropping queued messages", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
-      type: "runtime.error",
-      eventId: asEventId("evt-runtime-error-after-failure"),
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-before-abort"),
       provider: ProviderDriverKind.make("codex"),
-      createdAt: "2026-01-01T00:00:00.000Z",
       threadId: asThreadId("thread-1"),
-      turnId: asTurnId("turn-after-failure"),
+      createdAt: now,
+      turnId: asTurnId("turn-aborted-active"),
+    });
+
+    await waitForThread(
+      harness.readModel,
+      (thread) => thread.session?.activeTurnId === "turn-aborted-active",
+    );
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.queue",
+        commandId: CommandId.make("cmd-queue-message-before-abort"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-queued-before-abort"),
+          role: "user",
+          text: "queued follow-up before abort",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
+
+    harness.emit({
+      type: "turn.aborted",
+      eventId: asEventId("evt-turn-aborted-with-queue"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-aborted-active"),
       payload: {
-        message: "runtime still processed",
+        reason: "Interrupted by user.",
       },
     });
 
     const thread = await waitForThread(
       harness.readModel,
       (entry) =>
-        entry.session?.status === "error" &&
-        entry.session?.activeTurnId === "turn-after-failure" &&
-        entry.session?.lastError === "runtime still processed",
+        entry.session?.status === "interrupted" &&
+        entry.session.activeTurnId === null &&
+        entry.session.lastError === "Interrupted by user." &&
+        (entry.queuedMessages ?? []).length === 1,
     );
-    expect(thread.session?.status).toBe("error");
-    expect(thread.session?.lastError).toBe("runtime still processed");
+    expect(thread.queuedMessages?.[0]?.messageId).toBe("message-queued-before-abort");
+    expect(thread.messages.some((message) => message.id === "message-queued-before-abort")).toBe(
+      false,
+    );
+    expect(thread.latestTurn?.state).toBe("interrupted");
+  });
+  it("dispatches the oldest queued message when the active turn completes", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-for-queue"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: now,
+      turnId: asTurnId("turn-queue-active"),
+    });
+
+    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
+
+    await runtime!.runPromise(
+      harness.engine.dispatch({
+        type: "thread.message.queue",
+        commandId: CommandId.make("cmd-queue-message-for-completed-turn"),
+        threadId: asThreadId("thread-1"),
+        message: {
+          messageId: asMessageId("message-queued-after-complete"),
+          role: "user",
+          text: "queued follow-up after completion",
+          attachments: [],
+        },
+        modelSelection: {
+          instanceId: ProviderInstanceId.make("codex"),
+          model: "gpt-5-codex",
+        },
+        runtimeMode: "approval-required",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        createdAt: "2026-01-01T00:00:01.000Z",
+      }),
+    );
+
+    await waitForThread(harness.readModel, (thread) => (thread.queuedMessages ?? []).length === 1);
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-for-queue-dispatch"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:02.000Z",
+      turnId: asTurnId("turn-queue-active"),
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        (entry.queuedMessages ?? []).length === 0 &&
+        entry.messages.some((message) => message.id === "message-queued-after-complete"),
+    );
+    expect(thread.queuedMessages ?? []).toEqual([]);
+    expect(thread.messages.map((message) => message.id)).toContain("message-queued-after-complete");
+  });
+
+  it("persists a scheduled retry for an overloaded Codex turn", async () => {
+    const harness = await createHarness();
+    const turnId = asTurnId("turn-overloaded");
+    const message = "Selected model is at capacity. Please try a different model.";
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-overloaded-started"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId,
+      payload: {},
+    });
+    await waitForThread(harness.readModel, (thread) => thread.session?.status === "running");
+
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-overloaded-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+      turnId,
+      payload: {
+        state: "failed",
+        errorMessage: message,
+        errorClass: "provider_overloaded",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.turnRetry?.phase === "scheduled",
+    );
+    expect(thread.session).toMatchObject({
+      lastErrorClass: "provider_overloaded",
+      turnRetry: {
+        phase: "scheduled",
+        sourceTurnId: turnId,
+        attempt: 1,
+      },
+    });
+    expect(
+      thread.session?.turnRetry?.phase === "scheduled" && thread.session.turnRetry.retryAt,
+    ).toMatch(/^2026-01-01T00:00:0[5-7]\./);
   });
 });

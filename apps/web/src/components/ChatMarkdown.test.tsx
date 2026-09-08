@@ -5,6 +5,7 @@ import { create, type ReactTestRenderer } from "react-test-renderer";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { getSyntaxHighlighterPromise } from "../lib/syntaxHighlighting";
+import { GitHubIcon } from "./Icons";
 import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
@@ -63,7 +64,6 @@ vi.mock("~/lib/openPullRequestLink", () => ({
 import ChatMarkdown, {
   canUseMarkdownFileShellActions,
   hasMarkdownFilePrimaryAction,
-  orderedListGutterStyle,
   shouldUseMarkdownFileBrowserPrimaryAction,
 } from "./ChatMarkdown";
 
@@ -74,6 +74,43 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
   if (!button) throw new Error(`Missing code button: ${label}`);
   return button.props as ComponentProps<typeof Button>;
 }
+
+describe("ChatMarkdown favicon privacy", () => {
+  it("suppresses private link images while preserving public links across updates", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    const markdown = (url: string) => <ChatMarkdown cwd="/tmp/project" text={`[Link](${url})`} />;
+    try {
+      await act(async () => {
+        renderer = create(markdown("https://example.com"));
+      });
+      expect(renderer!.root.findAllByType("img").map((image) => image.props.src)).toEqual([
+        "https://www.google.com/s2/favicons?domain=example.com&sz=32",
+      ]);
+      for (const url of ["http://192.168.1.10:8080", "http://localhost:3000", "http://home.arpa"]) {
+        await act(async () => {
+          renderer!.update(markdown(url));
+        });
+        expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      }
+      await act(async () => {
+        renderer!.update(markdown("https://example.com"));
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(1);
+      // GitHub links draw the brand mark in currentColor instead of fetching a favicon.
+      await act(async () => {
+        renderer!.update(markdown("https://github.com/pingdotgg/t3code/pull/1"));
+      });
+      expect(renderer!.root.findAllByType("img")).toHaveLength(0);
+      expect(renderer!.root.findAllByType(GitHubIcon)).toHaveLength(1);
+    } finally {
+      await act(async () => {
+        renderer?.unmount();
+      });
+      vi.unstubAllGlobals();
+    }
+  });
+});
 
 describe("ChatMarkdown streaming", () => {
   it("toggles Mermaid source and copies the original diagram code", async () => {
@@ -288,6 +325,46 @@ describe("hasMarkdownFilePrimaryAction", () => {
         canOpenInPanel: false,
       }),
     ).toBe(false);
+  });
+});
+
+describe("ChatMarkdown skill chips", () => {
+  it("updates digit-leading skill labels when discovered skills change", async () => {
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    const text = "Use $2spec with a $20k budget.";
+    try {
+      await act(async () => {
+        renderer = create(<ChatMarkdown cwd="/tmp/project" text={text} />);
+      });
+      const mounted = renderer!;
+      const labels = (label: string) =>
+        mounted.root.findAllByType("span").filter((node) => node.children.includes(label));
+      expect(labels("2Spec")).toHaveLength(0);
+
+      await act(async () => {
+        mounted.update(
+          <ChatMarkdown
+            cwd="/tmp/project"
+            text={text}
+            skills={[
+              { name: "2spec", displayName: "2Spec" },
+              { name: "20k", displayName: "MoneySkill" },
+            ]}
+          />,
+        );
+      });
+      expect(labels("2Spec")).toHaveLength(1);
+      expect(labels("MoneySkill")).toHaveLength(0);
+
+      await act(async () => {
+        mounted.update(<ChatMarkdown cwd="/tmp/project" text={text} skills={[]} />);
+      });
+      expect(labels("2Spec")).toHaveLength(0);
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -551,47 +628,6 @@ describe("shouldUseMarkdownFileBrowserPrimaryAction", () => {
         canOpenInPanel: true,
       }),
     ).toBe(true);
-  });
-});
-
-describe("orderedListGutterStyle", () => {
-  it("leaves the default gutter alone for single-digit lists", () => {
-    expect(orderedListGutterStyle(9, undefined)).toBeUndefined();
-  });
-
-  it("widens the gutter for two-digit lists", () => {
-    expect(orderedListGutterStyle(99, undefined)).toEqual({ "--list-gutter": "3ch" });
-  });
-
-  it("widens the gutter for a two-digit list that starts above 1", () => {
-    // start=50 + 49 items => last marker is "98", still two digits.
-    expect(orderedListGutterStyle(49, 50)).toEqual({ "--list-gutter": "3ch" });
-  });
-
-  it("widens the gutter once the last marker reaches three digits", () => {
-    // item 100 is the bug from #6512: a 100-item list starting at 1.
-    expect(orderedListGutterStyle(100, undefined)).toEqual({ "--list-gutter": "4ch" });
-  });
-
-  it("accounts for a non-default start attribute", () => {
-    // start=95 + 9 items => last marker is "103", three digits.
-    expect(orderedListGutterStyle(9, 95)).toEqual({ "--list-gutter": "4ch" });
-    expect(orderedListGutterStyle(5, "999995")).toEqual({ "--list-gutter": "7ch" });
-  });
-
-  it("scales further for four-digit markers", () => {
-    expect(orderedListGutterStyle(1000, undefined)).toEqual({ "--list-gutter": "5ch" });
-  });
-
-  it("uses the widest marker and includes a negative start's minus sign", () => {
-    expect(orderedListGutterStyle(1001, -1000)).toEqual({ "--list-gutter": "6ch" });
-    expect(orderedListGutterStyle(3, -15)).toEqual({ "--list-gutter": "4ch" });
-    expect(orderedListGutterStyle(3, -5)).toEqual({ "--list-gutter": "3ch" });
-  });
-
-  it("treats a missing/zero item count as a single item", () => {
-    expect(orderedListGutterStyle(0, undefined)).toBeUndefined();
-    expect(orderedListGutterStyle(0, 100)).toEqual({ "--list-gutter": "4ch" });
   });
 });
 

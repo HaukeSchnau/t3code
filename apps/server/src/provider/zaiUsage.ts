@@ -42,7 +42,7 @@ export interface ZaiUsageSource {
   readonly quotaUrl: string;
 }
 
-export class ZaiUsageError extends Schema.TaggedErrorClass<ZaiUsageError>()("ZaiUsageError", {
+export class ZaiUsageError extends Schema.TaggedError<ZaiUsageError>()("ZaiUsageError", {
   detail: Schema.String,
   cause: Schema.optional(Schema.Defect()),
 }) {}

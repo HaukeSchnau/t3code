@@ -29,7 +29,7 @@ const CodexDirectResponse = Schema.Struct({
   ),
 });
 
-export class CodexDirectTextGenerationError extends Schema.TaggedErrorClass<CodexDirectTextGenerationError>()(
+export class CodexDirectTextGenerationError extends Schema.TaggedError<CodexDirectTextGenerationError>()(
   "CodexDirectTextGenerationError",
   {
     detail: Schema.String,

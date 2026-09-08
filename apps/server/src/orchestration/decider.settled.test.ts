@@ -19,6 +19,8 @@ import { projectEvent } from "./projector.ts";
 
 const NOW = "2026-01-01T00:00:00.000Z";
 const SETTLED_AT = "2025-12-30T00:00:00.000Z";
+const SETTLE_BLOCKED_MESSAGE =
+  "This thread still needs attention. Resolve or interrupt it first, then try again.";
 
 function makeReadModel(
   settledOverride: OrchestrationThread["settledOverride"],
@@ -199,7 +201,11 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           },
           readModel: makeReadModel(null, null, makeSession(status)),
         }).pipe(Effect.flip);
-        expect(error._tag).toBe("OrchestrationCommandInvariantError");
+        expect(error).toMatchObject({
+          _tag: "OrchestrationThreadSettleBlockedError",
+          threadId: ThreadId.make("thread-1"),
+          message: SETTLE_BLOCKED_MESSAGE,
+        });
       }
       // Stopped/error sessions are settleable — only live work is protected.
       const settled = yield* decideOrchestrationCommand({
@@ -239,7 +245,11 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           requestActivity("approval.requested", "req-1", NOW),
         ]),
       }).pipe(Effect.flip);
-      expect(openError._tag).toBe("OrchestrationCommandInvariantError");
+      expect(openError).toMatchObject({
+        _tag: "OrchestrationThreadSettleBlockedError",
+        threadId: ThreadId.make("thread-1"),
+        message: SETTLE_BLOCKED_MESSAGE,
+      });
 
       // Same request later resolved: settleable again.
       const settled = yield* decideOrchestrationCommand({
@@ -267,7 +277,117 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           requestActivity("user-input.requested", "req-2", NOW),
         ]),
       }).pipe(Effect.flip);
-      expect(inputError._tag).toBe("OrchestrationCommandInvariantError");
+      expect(inputError).toMatchObject({
+        _tag: "OrchestrationThreadSettleBlockedError",
+        threadId: ThreadId.make("thread-1"),
+        message: SETTLE_BLOCKED_MESSAGE,
+      });
+    }),
+  );
+
+  it.effect("manual settlement dismisses async questions without starting a turn", () =>
+    Effect.gen(function* () {
+      const question = (requestId: string): OrchestrationThread["activities"][number] => ({
+        id: EventId.make(requestId),
+        kind: "user-input.requested",
+        summary: "Question",
+        tone: "approval",
+        turnId: null,
+        createdAt: "1969-12-31T00:00:00.000Z",
+        payload: { requestId, responseMode: "message" },
+      });
+      const readModel = makeReadModel(null, null, makeSession("ready"), [
+        question("first"),
+        question("second"),
+        question("answered"),
+        {
+          ...question("answered"),
+          id: EventId.make("answer"),
+          createdAt: "1969-12-31T01:00:00.000Z",
+          kind: "user-input.resolved",
+        },
+      ]);
+      const command = {
+        type: "thread.settle" as const,
+        commandId: CommandId.make("settle-async"),
+        threadId: ThreadId.make("thread-1"),
+      };
+      const result = yield* decideOrchestrationCommand({ command, readModel });
+      const events = Array.isArray(result) ? result : [result];
+      expect(events.map((event) => event.type)).toEqual([
+        "thread.settled",
+        "thread.activity-appended",
+        "thread.activity-appended",
+      ]);
+      expect(events.slice(1).map((event) => event.payload)).toEqual(
+        ["first", "second"].map((requestId) => ({
+          threadId: command.threadId,
+          activity: expect.objectContaining({
+            kind: "user-input.resolved",
+            summary: "User input dismissed",
+            payload: { requestId, responseMode: "message" },
+          }),
+        })),
+      );
+      let projected = readModel;
+      for (const [index, event] of events.entries()) {
+        projected = yield* projectEvent(projected, { ...event, sequence: index + 1 });
+      }
+      expect(projected.threads[0]?.settledOverride).toBe("settled");
+      expect(projected.threads[0]?.messages).toEqual([]);
+      const repeated = yield* decideOrchestrationCommand({ command, readModel: projected });
+      expect(repeated).toMatchObject({ type: "thread.settled" });
+    }),
+  );
+
+  it.effect("async questions do not bypass automatic settlement or other blockers", () =>
+    Effect.gen(function* () {
+      const question: OrchestrationThread["activities"][number] = {
+        id: EventId.make("async-question"),
+        kind: "user-input.requested",
+        summary: "Question",
+        tone: "approval",
+        turnId: null,
+        createdAt: NOW,
+        payload: { requestId: "async-question", responseMode: "message" },
+      };
+      for (const blocker of ["auto", "running", "starting", "approval", "native"] as const) {
+        const error = yield* decideOrchestrationCommand({
+          command:
+            blocker === "auto"
+              ? {
+                  type: "thread.auto-settle",
+                  commandId: CommandId.make(`settle-${blocker}`),
+                  threadId: ThreadId.make("thread-1"),
+                  snapshotSequence: 0,
+                  settledAt: NOW,
+                }
+              : {
+                  type: "thread.settle",
+                  commandId: CommandId.make(`settle-${blocker}`),
+                  threadId: ThreadId.make("thread-1"),
+                },
+          readModel: makeReadModel(
+            null,
+            null,
+            makeSession(blocker === "running" || blocker === "starting" ? blocker : "ready"),
+            [
+              question,
+              ...(blocker === "approval" || blocker === "native"
+                ? [
+                    {
+                      ...question,
+                      id: EventId.make("blocking-request"),
+                      kind: blocker === "approval" ? "approval.requested" : "user-input.requested",
+                      payload: { requestId: "blocking-request" },
+                    },
+                  ]
+                : []),
+            ],
+          ),
+        }).pipe(Effect.flip);
+        expect(error).toMatchObject({ _tag: "OrchestrationThreadSettleBlockedError" });
+      }
     }),
   );
 
@@ -325,7 +445,11 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
           }),
         ]),
       }).pipe(Effect.flip);
-      expect(stillOpen._tag).toBe("OrchestrationCommandInvariantError");
+      expect(stillOpen).toMatchObject({
+        _tag: "OrchestrationThreadSettleBlockedError",
+        threadId: ThreadId.make("thread-1"),
+        message: SETTLE_BLOCKED_MESSAGE,
+      });
     }),
   );
 
@@ -353,7 +477,11 @@ it.layer(NodeServices.layer)("settled thread decider", (it) => {
         },
         readModel: makeReadModel(null, null, null, [], [userMessage("1969-12-31T23:59:30.000Z")]),
       }).pipe(Effect.flip);
-      expect(queuedError._tag).toBe("OrchestrationCommandInvariantError");
+      expect(queuedError).toMatchObject({
+        _tag: "OrchestrationThreadSettleBlockedError",
+        threadId: ThreadId.make("thread-1"),
+        message: SETTLE_BLOCKED_MESSAGE,
+      });
 
       // Message timestamp far in the FUTURE (client clock ahead of server):
       // a negative age must not read as queued forever — past the grace

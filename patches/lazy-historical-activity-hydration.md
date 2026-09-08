@@ -28,6 +28,9 @@ collapsed in the timeline.
   sequence is absent. Every persisted revert/prune event re-stamps retained rows with the mutation
   event sequence, including events whose filters retain every row, so server descriptors and client
   groups advance under the same authoritative revision rule.
+- Durable question-state lookup orders by activity revision before display sequence or timestamp, so
+  an answered request cannot become pending again when its request and resolution have no display
+  sequence and share a timestamp.
 - Activity identity has immutable membership: once an `activity_id` is stored, its `thread_id` and
   nullable `turn_id` cannot change. Migration 43 installs a null-safe SQLite trigger that aborts
   membership-changing updates while allowing same-membership payload/revision upserts. This keeps

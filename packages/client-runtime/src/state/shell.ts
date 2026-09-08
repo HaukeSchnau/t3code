@@ -20,7 +20,7 @@ import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import * as ConnectionWakeups from "../connection/wakeups.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
 import { EnvironmentCacheStore } from "../platform/persistence.ts";
-import { subscribeWithSessionDynamic } from "../rpc/client.ts";
+import { subscribeDynamic } from "../rpc/client.ts";
 import type { RpcSession } from "../rpc/session.ts";
 import { ShellSnapshotLoader } from "./shellSnapshotHttp.ts";
 import { applyShellStreamEvent } from "./shellReducer.ts";
@@ -78,6 +78,8 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
     }),
   );
   const awaitingCompletion = yield* Ref.make(false);
+  const activeSubscriptionSession = yield* Ref.make<RpcSession | null>(null);
+  const activeSubscriptionGeneration = yield* Ref.make(-1);
   const persistence = yield* Queue.sliding<OrchestrationShellSnapshot>(1);
   const subscriptionSynchronization = yield* Ref.make({
     generation: -1,
@@ -170,81 +172,96 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
       ),
     );
 
-  const applyItem = Effect.fn("EnvironmentShellState.applyItem")(function* (
-    item: OrchestrationShellStreamItem,
-    itemSession?: RpcSession,
-    itemGeneration?: number,
+  // Apply each received RPC chunk with one state write. The RPC client's
+  // bounded buffer can split a server chunk, so each write still contains all
+  // events that arrived in that chunk.
+  const applyItems = Effect.fn("EnvironmentShellState.applyItems")(function* (
+    items: ReadonlyArray<OrchestrationShellStreamItem>,
   ) {
-    if (item.kind === "synchronized") {
-      const [currentSession, connectionState] = yield* Effect.all([
-        SubscriptionRef.get(supervisor.session),
-        SubscriptionRef.get(supervisor.state),
-      ]);
-      if (
-        itemSession === undefined ||
-        itemGeneration === undefined ||
-        Option.isNone(currentSession) ||
-        currentSession.value !== itemSession ||
-        connectionState.generation !== itemGeneration
-      ) {
-        return;
-      }
-      const accepted = yield* Ref.modify(subscriptionSynchronization, (current) =>
-        current.generation > itemGeneration
-          ? [false, current]
-          : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
-      );
-      if (!accepted) return;
-      yield* Ref.set(awaitingCompletion, false);
-      yield* SubscriptionRef.update(state, (current) =>
-        Option.isSome(current.snapshot)
-          ? { ...current, status: "live" as const, error: Option.none() }
-          : current,
-      );
-      return;
-    }
+    const initial = yield* SubscriptionRef.get(state);
+    let waiting = yield* Ref.get(awaitingCompletion);
+    let next = initial;
+    let nextPersistence: OrchestrationShellSnapshot | undefined;
+    let sequence = yield* SubscriptionRef.get(lastSequence);
 
-    if (item.kind === "snapshot") {
-      const waiting = yield* Ref.get(awaitingCompletion);
-      yield* SubscriptionRef.set(lastSequence, item.snapshot.snapshotSequence);
-      yield* SubscriptionRef.set(state, {
-        snapshot: Option.some(item.snapshot),
+    for (const item of items) {
+      if (item.kind === "synchronized") {
+        const [currentSession, connectionState, subscriptionSession, subscriptionGeneration] =
+          yield* Effect.all([
+            SubscriptionRef.get(supervisor.session),
+            SubscriptionRef.get(supervisor.state),
+            Ref.get(activeSubscriptionSession),
+            Ref.get(activeSubscriptionGeneration),
+          ]);
+        if (
+          Option.isNone(currentSession) ||
+          subscriptionSession === null ||
+          currentSession.value !== subscriptionSession ||
+          connectionState.generation !== subscriptionGeneration
+        ) {
+          continue;
+        }
+        const accepted = yield* Ref.modify(subscriptionSynchronization, (current) =>
+          current.generation > subscriptionGeneration
+            ? [false, current]
+            : [
+                true,
+                {
+                  generation: subscriptionGeneration,
+                  session: subscriptionSession,
+                  synchronized: true,
+                },
+              ],
+        );
+        if (!accepted) continue;
+        waiting = false;
+        if (Option.isSome(next.snapshot)) {
+          next = { ...next, status: "live", error: Option.none() };
+        }
+        continue;
+      }
+
+      if (item.kind === "snapshot") {
+        sequence = item.snapshot.snapshotSequence;
+        next = {
+          snapshot: Option.some(item.snapshot),
+          status: waiting ? "synchronizing" : "live",
+          error: Option.none(),
+        };
+        nextPersistence = item.snapshot;
+        continue;
+      }
+
+      if (item.sequence <= sequence) continue;
+      sequence = item.sequence;
+      if (item.kind === "cursor") {
+        if (Option.isSome(next.snapshot)) {
+          nextPersistence = { ...next.snapshot.value, snapshotSequence: item.sequence };
+        }
+        continue;
+      }
+
+      const nextSnapshot = Option.match(next.snapshot, {
+        onNone: () => null,
+        onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
+      });
+      if (nextSnapshot === null) continue;
+      next = {
+        snapshot: Option.some(nextSnapshot),
         status: waiting ? "synchronizing" : "live",
         error: Option.none(),
-      });
-      yield* Queue.offer(persistence, item.snapshot);
-      return;
+      };
+      nextPersistence = nextSnapshot;
     }
 
-    const sequence = yield* SubscriptionRef.get(lastSequence);
-    if (item.sequence <= sequence) return;
-    yield* SubscriptionRef.set(lastSequence, item.sequence);
-    if (item.kind === "cursor") {
-      const current = yield* SubscriptionRef.get(state);
-      yield* Option.match(current.snapshot, {
-        onNone: () => Effect.void,
-        onSome: (snapshot) =>
-          Queue.offer(persistence, { ...snapshot, snapshotSequence: item.sequence }),
-      });
-      return;
+    yield* Ref.set(awaitingCompletion, waiting);
+    yield* SubscriptionRef.set(lastSequence, sequence);
+    if (next !== initial) {
+      yield* SubscriptionRef.set(state, next);
     }
-
-    const current = yield* SubscriptionRef.get(state);
-    const nextSnapshot = Option.match(current.snapshot, {
-      onNone: () => null,
-      onSome: (snapshot) => applyShellStreamEvent(snapshot, item),
-    });
-    if (nextSnapshot === null) {
-      return;
+    if (nextPersistence !== undefined) {
+      yield* Queue.offer(persistence, nextPersistence);
     }
-
-    const waiting = yield* Ref.get(awaitingCompletion);
-    yield* SubscriptionRef.set(state, {
-      snapshot: Option.some(nextSnapshot),
-      status: waiting ? "synchronizing" : "live",
-      error: Option.none(),
-    });
-    yield* Queue.offer(persistence, nextSnapshot);
   });
 
   const foregroundResubscriptions = Option.match(wakeups, {
@@ -255,9 +272,14 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
 
   yield* setSynchronizing;
   yield* Effect.forkScoped(
-    subscribeWithSessionDynamic(
+    subscribeDynamic(
       ORCHESTRATION_WS_METHODS.subscribeShell,
       Effect.fn("EnvironmentShellState.makeSubscribeInput")(function* (session) {
+        yield* Ref.set(activeSubscriptionSession, session);
+        yield* Ref.set(
+          activeSubscriptionGeneration,
+          (yield* SubscriptionRef.get(supervisor.state)).generation,
+        );
         const supportsCompletionMarker = yield* session.initialConfig.pipe(
           Effect.map((config) => config.shellResumeCompletionMarker === true),
           Effect.orElseSucceed(() => false),
@@ -289,7 +311,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
             ...(supportsCompletionMarker ? { requestCompletionMarker: true as const } : {}),
           };
         }
-        yield* applyItem({ kind: "snapshot", snapshot: httpSnapshot.value });
+        yield* applyItems([{ kind: "snapshot", snapshot: httpSnapshot.value }]);
         if (!supportsCompletionMarker) {
           // Without a completion marker there is no synchronized signal for a
           // resumed subscription, so report live immediately, like threads.
@@ -310,7 +332,7 @@ export const makeEnvironmentShellState = Effect.fn("EnvironmentShellState.make")
         retryExpectedFailureAfter: "250 millis",
         resubscribe: foregroundResubscriptions,
       },
-    ).pipe(Stream.runForEach((item) => applyItem(item.value, item.session, item.generation))),
+    ).pipe(Stream.runForEachArray(applyItems)),
   );
   yield* SubscriptionRef.changes(supervisor.state).pipe(
     Stream.runForEach((connectionState) => {

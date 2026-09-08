@@ -19,6 +19,7 @@ function makeHarness() {
     focusedMainOrFirst: Effect.succeed(Option.some(mainWindow as never)),
     setMain: () => Effect.void,
     clearMain: () => Effect.void,
+    prepareReveal: () => Effect.succeed(false),
     reveal: (target) =>
       Effect.sync(() => {
         reveals.push(target);

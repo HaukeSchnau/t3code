@@ -8,7 +8,6 @@ import {
   CodexSettings,
   defaultInstanceIdForDriver,
   ProviderDriverKind,
-  ThreadId,
   type OrchestrationEvent,
   type OrchestrationThread,
   type ProviderApprovalDecision,
@@ -25,6 +24,7 @@ import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as Tracer from "effect/Tracer";
 
 import * as CheckpointStore from "../src/checkpointing/CheckpointStore.ts";
 import { TextGeneration } from "../src/textGeneration/TextGeneration.ts";
@@ -33,10 +33,9 @@ import { OrchestrationEventStoreLive } from "../src/persistence/Layers/Orchestra
 import { ProjectionCheckpointRepositoryLive } from "../src/persistence/Layers/ProjectionCheckpoints.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../src/persistence/Layers/ProjectionPendingApprovals.ts";
 import { ProjectionTurnRepositoryLive } from "../src/persistence/Layers/ProjectionTurns.ts";
-import { ProviderSessionRuntimeRepositoryLive } from "../src/persistence/Layers/ProviderSessionRuntime.ts";
-import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import { ProviderTranscriptJournalLive } from "../src/persistence/Layers/ProviderTranscriptJournal.ts";
-import { ProviderTranscriptJournal } from "../src/persistence/Services/ProviderTranscriptJournal.ts";
+import * as ProviderSessionRuntime from "../src/persistence/ProviderSessionRuntime.ts";
+import { makeSqlitePersistenceLive } from "../src/persistence/Layers/Sqlite.ts";
 import {
   OrchestrationCommandReceiptRepository,
   type OrchestrationCommandReceipt,
@@ -47,22 +46,19 @@ import { makeAdapterRegistryMock } from "../src/provider/testUtils/providerAdapt
 import { ProviderAdapterRegistry } from "../src/provider/Services/ProviderAdapterRegistry.ts";
 import { makeProviderRegistryLayer } from "../src/provider/testUtils/providerRegistryMock.ts";
 import { ProviderSessionDirectoryLive } from "../src/provider/Layers/ProviderSessionDirectory.ts";
+import { bindProviderInstanceRuntimeEventAcceptance } from "../src/provider/Layers/ProviderInstanceRegistryLive.ts";
+import { makeDurableRuntimeEventAcceptance } from "../src/provider/ProviderRuntimeEventDurability.ts";
 import { ServerSettingsService } from "../src/serverSettings.ts";
 import { makeProviderServiceLive } from "../src/provider/Layers/ProviderService.ts";
-import { bindProviderInstanceRuntimeEventAcceptance } from "../src/provider/Layers/ProviderInstanceRegistryLive.ts";
 import { makeCodexAdapter } from "../src/provider/Layers/CodexAdapter.ts";
 import {
   NoOpProviderEventLoggers,
   ProviderEventLoggers,
 } from "../src/provider/Layers/ProviderEventLoggers.ts";
 import { ProviderService } from "../src/provider/Services/ProviderService.ts";
-import { makeDurableRuntimeEventAcceptance } from "../src/provider/ProviderRuntimeEventDurability.ts";
-import {
-  TranscriptJournalTracker,
-  TranscriptJournalTrackerLive,
-} from "../src/observability/TranscriptJournalObservability.ts";
-import { AnalyticsService } from "../src/telemetry/Services/AnalyticsService.ts";
+import { ProviderTranscriptJournal } from "../src/persistence/Services/ProviderTranscriptJournal.ts";
 import { ProviderAuthService } from "../src/provider/Services/ProviderAuthService.ts";
+import { AnalyticsService } from "../src/telemetry/AnalyticsService.ts";
 import { CheckpointReactorLive } from "../src/orchestration/Layers/CheckpointReactor.ts";
 import * as RepositoryIdentityResolver from "../src/project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "../src/orchestration/Layers/OrchestrationEngine.ts";
@@ -81,6 +77,8 @@ import {
   type OrchestrationEngineShape,
 } from "../src/orchestration/Services/OrchestrationEngine.ts";
 import { ThreadDeletionReactor } from "../src/orchestration/Services/ThreadDeletionReactor.ts";
+import * as ThreadSettlementReactor from "../src/orchestration/ThreadSettlementReactor.ts";
+import * as ThreadPullRequestReactor from "../src/orchestration/ThreadPullRequestReactor.ts";
 import { OrchestrationReactor } from "../src/orchestration/Services/OrchestrationReactor.ts";
 import { ProjectionSnapshotQuery } from "../src/orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
@@ -137,12 +135,9 @@ export function gitShowFileAtRef(cwd: string, ref: string, filePath: string): st
   return runGit(cwd, ["show", `${ref}:${filePath}`]);
 }
 
-class WaitForTimeoutError extends Schema.TaggedErrorClass<WaitForTimeoutError>()(
-  "WaitForTimeoutError",
-  {
-    description: Schema.String,
-  },
-) {}
+class WaitForTimeoutError extends Schema.TaggedError<WaitForTimeoutError>()("WaitForTimeoutError", {
+  description: Schema.String,
+}) {}
 
 function waitFor<A, E>(
   read: Effect.Effect<A, E>,
@@ -181,7 +176,7 @@ function waitFor<A, E>(
   );
 }
 
-class OrchestrationHarnessRuntimeError extends Schema.TaggedErrorClass<OrchestrationHarnessRuntimeError>()(
+class OrchestrationHarnessRuntimeError extends Schema.TaggedError<OrchestrationHarnessRuntimeError>()(
   "OrchestrationHarnessRuntimeError",
   {
     operation: Schema.String,
@@ -253,6 +248,8 @@ interface MakeOrchestrationIntegrationHarnessOptions {
   readonly provider?: ProviderDriverKind;
   readonly realCodex?: boolean;
   readonly rootDir?: string;
+  /** Tracer for every fiber the harness runtime runs, including reactors. */
+  readonly tracer?: Tracer.Tracer;
 }
 
 export const makeOrchestrationIntegrationHarness = (
@@ -298,7 +295,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provide(OrchestrationCommandReceiptRepositoryLive),
     );
     const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
-      Layer.provide(ProviderSessionRuntimeRepositoryLive),
+      Layer.provide(ProviderSessionRuntime.layer),
     );
     const realCodexRegistry = Layer.effect(
       ProviderAdapterRegistry,
@@ -312,7 +309,6 @@ export const makeOrchestrationIntegrationHarness = (
     ).pipe(
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provideMerge(TranscriptJournalTrackerLive),
       Layer.provideMerge(providerSessionDirectoryLayer),
     );
     const providerEventLoggersLayer = Layer.succeed(ProviderEventLoggers, NoOpProviderEventLoggers);
@@ -339,10 +335,11 @@ export const makeOrchestrationIntegrationHarness = (
       ProjectionCheckpointRepositoryLive,
       ProjectionPendingApprovalRepositoryLive,
       OrchestrationCommandReceiptRepositoryLive,
+      ProjectionTurnRepositoryLive,
+      ProviderTranscriptJournalLive,
       checkpointStoreLayer,
       providerLayer,
       RuntimeReceiptBusTest,
-      ProviderTranscriptJournalLive,
     ).pipe(
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
@@ -370,7 +367,6 @@ export const makeOrchestrationIntegrationHarness = (
         }),
       ),
       Layer.provideMerge(runtimeServicesLayer),
-      Layer.provideMerge(ProjectionTurnRepositoryLive),
       Layer.provideMerge(gitWorkflowLayer),
       Layer.provideMerge(textGenerationLayer),
       Layer.provideMerge(
@@ -428,6 +424,18 @@ export const makeOrchestrationIntegrationHarness = (
         }),
       ),
       Layer.provideMerge(
+        Layer.succeed(ThreadPullRequestReactor.ThreadPullRequestReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
+        Layer.succeed(ThreadSettlementReactor.ThreadSettlementReactor, {
+          start: () => Effect.void,
+          drain: Effect.void,
+        }),
+      ),
+      Layer.provideMerge(
         Layer.succeed(AgentAwarenessRelay.AgentAwarenessRelay, {
           publishThread: () => Effect.void,
           start: () => Effect.void,
@@ -443,7 +451,9 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(ServerSettingsService.layerTest()),
       Layer.provideMerge(ServerConfig.layerTest(workspaceDir, rootDir)),
       Layer.provideMerge(NodeServices.layer),
-      Layer.provideMerge(TranscriptJournalTrackerLive),
+      Layer.provideMerge(
+        options?.tracer ? Layer.succeed(Tracer.Tracer, options.tracer) : Layer.empty,
+      ),
     );
 
     const runtime = ManagedRuntime.make(layer);
@@ -477,14 +487,12 @@ export const makeOrchestrationIntegrationHarness = (
       "load ProjectionPendingApprovalRepository service",
       () => runtime.runPromise(Effect.service(ProjectionPendingApprovalRepository)),
     ).pipe(Effect.orDie);
+    const commandReceiptRepository = yield* tryRuntimePromise(
+      "load OrchestrationCommandReceiptRepository service",
+      () => runtime.runPromise(Effect.service(OrchestrationCommandReceiptRepository)),
+    ).pipe(Effect.orDie);
     const getCommandReceipt = (commandId: CommandId) =>
-      tryRuntimePromise("read OrchestrationCommandReceipt", () =>
-        runtime.runPromise(
-          Effect.flatMap(OrchestrationCommandReceiptRepository, (repository) =>
-            repository.getByCommandId({ commandId }),
-          ),
-        ),
-      ).pipe(Effect.orDie);
+      commandReceiptRepository.getByCommandId({ commandId }).pipe(Effect.orDie);
     const runtimeReceiptBus = yield* tryRuntimePromise("load RuntimeReceiptBus service", () =>
       runtime.runPromise(Effect.service(RuntimeReceiptBus)),
     ).pipe(Effect.orDie);
@@ -493,14 +501,10 @@ export const makeOrchestrationIntegrationHarness = (
         "load ProviderTranscriptJournal service",
         () => runtime.runPromise(Effect.service(ProviderTranscriptJournal)),
       ).pipe(Effect.orDie);
-      const transcriptJournalTracker = yield* tryRuntimePromise(
-        "load TranscriptJournalTracker service",
-        () => runtime.runPromise(Effect.service(TranscriptJournalTracker)),
-      ).pipe(Effect.orDie);
       adapterHarness.setRuntimeEventAcceptance(
         bindProviderInstanceRuntimeEventAcceptance(
           defaultInstanceIdForDriver(adapterHarness.provider),
-          makeDurableRuntimeEventAcceptance(transcriptJournal, transcriptJournalTracker),
+          makeDurableRuntimeEventAcceptance(transcriptJournal),
         ),
       );
     }
@@ -522,8 +526,12 @@ export const makeOrchestrationIntegrationHarness = (
     ) =>
       waitFor(
         snapshotQuery
-          .getThreadDetailById(ThreadId.make(threadId))
-          .pipe(Effect.map(Option.getOrNull)),
+          .getSnapshot()
+          .pipe(
+            Effect.map(
+              (snapshot) => snapshot.threads.find((thread) => thread.id === threadId) ?? null,
+            ),
+          ),
         (thread): thread is OrchestrationThread => thread !== null && predicate(thread),
         `projected thread '${threadId}'`,
         timeoutMs,

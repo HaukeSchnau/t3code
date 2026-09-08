@@ -20,7 +20,8 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type SDKMessage,
-  type SDKControlGetContextUsageResponse,
+  type SDKControlGetUsageResponse,
+  type SDKRateLimitInfo,
   type SDKResultMessage,
   type SettingSource,
   type SDKUserMessage,
@@ -28,6 +29,12 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
+import {
+  type ClaudeScopedLimitNames,
+  claudeRateLimitEventToUpdate,
+  claudeUsageResponseToLimits,
+  recordClaudeUsageResponse,
+} from "./claudeUsageLimits.ts";
 import {
   ApprovalRequestId,
   classifyTaskAgentKind,
@@ -78,20 +85,23 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
+
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import { T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS } from "../ThreadOrchestrationInstructions.ts";
 import { withThreadCliEnvironment } from "../threadCliEnvironment.ts";
 import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
-import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
+import { claudeSignedOutMessage, makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import { planClaudeSkillDispatch } from "../Drivers/ClaudeSkillDispatch.ts";
 import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
+import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import {
   BUNDLED_CLAUDE_MODEL_CATALOG,
   type ClaudeModelCatalog,
@@ -99,15 +109,11 @@ import {
   isClaudeCatalogUltracodeEffort,
   normalizeClaudeCatalogEffort,
   resolveClaudeCatalogApiModelId,
-  resolveClaudeCatalogModel,
   resolveClaudeCatalogContextWindowTokens,
+  resolveClaudeCatalogEffort,
   resolveClaudeModelSlug,
   scopeClaudeModelCatalog,
 } from "../ClaudeModelCatalog.ts";
-import {
-  getClaudeModelCapabilities as getLegacyClaudeModelCapabilities,
-  resolveClaudeEffort,
-} from "./ClaudeProvider.ts";
 import {
   ProviderAdapterProcessError,
   ProviderAdapterRequestError,
@@ -117,176 +123,9 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
-import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
-
-const ClaudeUsageLimitEntry = Schema.Struct({
-  kind: Schema.String,
-  group: Schema.optional(Schema.String),
-  percent: Schema.Number,
-  resets_at: Schema.optional(Schema.NullOr(Schema.String)),
-  scope: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        model: Schema.optional(
-          Schema.NullOr(
-            Schema.Struct({
-              id: Schema.optional(Schema.NullOr(Schema.String)),
-              display_name: Schema.optional(Schema.NullOr(Schema.String)),
-            }),
-          ),
-        ),
-        surface: Schema.optional(Schema.NullOr(Schema.String)),
-      }),
-    ),
-  ),
-});
-const decodeClaudeUsageLimitEntry = Schema.decodeUnknownExit(ClaudeUsageLimitEntry);
-
-const ClaudeUsageLegacyWindow = Schema.Struct({
-  utilization: Schema.NullOr(Schema.Number),
-  resets_at: Schema.NullOr(Schema.String),
-});
-const decodeClaudeUsageLegacyWindow = Schema.decodeUnknownExit(ClaudeUsageLegacyWindow);
-
-const ClaudeUsageControlResponse = Schema.Struct({
-  rate_limits_available: Schema.Boolean,
-  rate_limits: Schema.NullOr(
-    Schema.Struct({
-      limits: Schema.optional(Schema.Array(Schema.Unknown)),
-      five_hour: Schema.optional(Schema.Unknown),
-      seven_day: Schema.optional(Schema.Unknown),
-    }),
-  ),
-});
-const decodeClaudeUsageControlResponse = Schema.decodeUnknownExit(ClaudeUsageControlResponse);
-
-interface ClaudeUsageWindowSnapshot {
-  readonly key: string;
-  readonly label: string;
-  readonly usedPercent: number;
-  readonly resetsAt: string | null;
-  readonly windowDurationMins: number;
-}
-
-function usageScopeKey(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function normalizeClaudeUsageLimitEntry(value: unknown): ClaudeUsageWindowSnapshot | null {
-  const decoded = decodeClaudeUsageLimitEntry(value);
-  if (Exit.isFailure(decoded) || !Number.isFinite(decoded.value.percent)) {
-    return null;
-  }
-
-  const modelId = decoded.value.scope?.model?.id?.trim() || null;
-  const modelName = decoded.value.scope?.model?.display_name?.trim() || null;
-  const surface = decoded.value.scope?.surface?.trim() || null;
-  const scopedId = modelId ?? modelName ?? surface;
-
-  switch (decoded.value.kind) {
-    case "session":
-      return {
-        key: "session",
-        label: "Current session",
-        usedPercent: Math.max(0, decoded.value.percent),
-        resetsAt: decoded.value.resets_at ?? null,
-        windowDurationMins: 5 * 60,
-      };
-    case "weekly_all":
-      return {
-        key: "weekly-all",
-        label: "All models",
-        usedPercent: Math.max(0, decoded.value.percent),
-        resetsAt: decoded.value.resets_at ?? null,
-        windowDurationMins: 7 * 24 * 60,
-      };
-    case "weekly_scoped":
-      if (!scopedId) return null;
-      return {
-        key: `weekly-scoped:${usageScopeKey(scopedId)}`,
-        label: modelName ?? modelId ?? surface ?? "Scoped weekly limit",
-        usedPercent: Math.max(0, decoded.value.percent),
-        resetsAt: decoded.value.resets_at ?? null,
-        windowDurationMins: 7 * 24 * 60,
-      };
-    default:
-      return null;
-  }
-}
-
-function normalizeClaudeLegacyUsageWindow(
-  value: unknown,
-  input: Pick<ClaudeUsageWindowSnapshot, "key" | "label" | "windowDurationMins">,
-): ClaudeUsageWindowSnapshot | null {
-  const decoded = decodeClaudeUsageLegacyWindow(value);
-  if (
-    Exit.isFailure(decoded) ||
-    decoded.value.utilization === null ||
-    !Number.isFinite(decoded.value.utilization)
-  ) {
-    return null;
-  }
-  return {
-    ...input,
-    usedPercent: Math.max(0, decoded.value.utilization),
-    resetsAt: decoded.value.resets_at,
-  };
-}
-
-/** Normalizes the experimental Claude `/usage` response without retaining its transcript analysis. */
-export function claudeUsageLimitsFromControlResponse(value: unknown) {
-  const decoded = decodeClaudeUsageControlResponse(value);
-  if (Exit.isFailure(decoded) || !decoded.value.rate_limits_available) {
-    return undefined;
-  }
-
-  const rateLimits = decoded.value.rate_limits;
-  const genericWindows = (rateLimits?.limits ?? []).flatMap((entry) => {
-    const normalized = normalizeClaudeUsageLimitEntry(entry);
-    return normalized ? [normalized] : [];
-  });
-  const legacyWindows = [
-    normalizeClaudeLegacyUsageWindow(rateLimits?.five_hour, {
-      key: "session",
-      label: "Current session",
-      windowDurationMins: 5 * 60,
-    }),
-    normalizeClaudeLegacyUsageWindow(rateLimits?.seven_day, {
-      key: "weekly-all",
-      label: "All models",
-      windowDurationMins: 7 * 24 * 60,
-    }),
-  ].filter((window): window is ClaudeUsageWindowSnapshot => window !== null);
-  const windows = [
-    ...genericWindows,
-    ...legacyWindows.filter(
-      (legacyWindow) => !genericWindows.some((window) => window.key === legacyWindow.key),
-    ),
-  ];
-  const primary = windows.find((window) => window.key === "session") ?? null;
-  const secondary = windows.find((window) => window.key === "weekly-all") ?? null;
-  if (windows.length === 0) {
-    return undefined;
-  }
-
-  return {
-    limitId: "claude",
-    limitName: "Claude usage",
-    planType: null,
-    rateLimitReachedType: null,
-    credits: null,
-    primary,
-    secondary,
-    windows,
-  };
-}
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
 const CLAUDE_USAGE_MIN_REFRESH_INTERVAL_MS = 60 * 1000;
@@ -337,6 +176,9 @@ interface ClaudeTurnState {
   compactedSinceLatestAssistantUsage: boolean;
   hasSubagents: boolean;
   nextSyntheticAssistantBlockIndex: number;
+  authenticationFailureMessage: string | undefined;
+  rejectedRateLimitTypes: Set<string>;
+  latestAssistantRateLimited: boolean;
 }
 
 interface AssistantTextBlockState {
@@ -506,23 +348,18 @@ interface ClaudeSessionContext {
   lastKnownTotalProcessedTokens: number | undefined;
   lastAssistantUuid: string | undefined;
   lastThreadStartedId: string | undefined;
+  /** Limits already announced for the running turn, keyed `window:resetsAt`. */
+  announcedUsageLimits: { turnId: string; keys: Set<string> } | undefined;
   readonly scheduleUsageLimitsRefresh: (force?: boolean) => void;
   stopped: boolean;
-}
-
-interface ClaudeUsageLimitsRefreshRequest {
-  readonly threadId: ThreadId;
-  readonly force: boolean;
 }
 
 interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setModel: (model?: string) => Promise<void>;
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
-  readonly getContextUsage?: () => Promise<SDKControlGetContextUsageResponse>;
-  // TODO: Replace this with the stable SDK usage control once Anthropic publishes it.
-  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
   readonly close: () => void;
+  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
 }
 
 export interface ClaudeAdapterLiveOptions {
@@ -534,8 +371,9 @@ export interface ClaudeAdapterLiveOptions {
   }) => ClaudeQueryRuntime;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
-  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
   readonly modelCatalog?: Effect.Effect<ClaudeModelCatalog>;
+  /** Scoped-bucket names the driver's status probe last saw; see `claudeUsageLimits`. */
+  readonly scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>;
 }
 
 function isUuid(value: string): boolean {
@@ -592,24 +430,6 @@ function getEffectiveClaudeAgentEffort(
   return normalized ? (normalized as ClaudeSdkEffort) : null;
 }
 
-function getClaudeRuntimeModelCapabilities(
-  sourceCatalog: ClaudeModelCatalog,
-  scopedCatalog: ClaudeModelCatalog,
-  customModels: ReadonlyArray<string>,
-  model: string | null | undefined,
-) {
-  const catalogCapabilities = getClaudeCatalogModelCapabilities(scopedCatalog, model);
-  if (
-    getProviderOptionDescriptors({ caps: catalogCapabilities }).length > 0 ||
-    !model ||
-    !customModels.includes(model) ||
-    resolveClaudeCatalogModel(sourceCatalog, model)
-  ) {
-    return catalogCapabilities;
-  }
-  return getLegacyClaudeModelCapabilities(model, customModels);
-}
-
 function isClaudeInterruptedMessage(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
@@ -636,28 +456,14 @@ function resultErrorsText(result: SDKResultMessage): string {
     : "";
 }
 
-/**
- * First user-facing error from a non-success result. "[ede_diagnostic] ..."
- * entries are CLI-internal telemetry (the CLI hides them from its own UI too),
- * so they must never become the error banner.
- */
-function resultUserFacingError(result: SDKResultMessage): string | undefined {
-  const listed =
-    result.subtype === "success" || !Array.isArray(result.errors)
-      ? undefined
-      : result.errors.find((error) => !error.startsWith("[ede_diagnostic]"));
-  if (listed) {
-    return listed;
-  }
-  // Structured failure markers for results whose error list is empty or
-  // diagnostic-only: an overloaded API (529) and the terminal reasons the
-  // CLI stamps when it gives up on a turn.
-  if (isOverloadedResult(result)) {
-    return "Claude API is overloaded (529). Try again shortly.";
-  }
-  switch (result.terminal_reason) {
+/** Failure text for structured terminal reasons, including success-tagged failures. */
+function terminalResultError(
+  reason: SDKResultMessage["terminal_reason"],
+  failureHint?: string,
+): string | undefined {
+  switch (reason) {
     case "api_error":
-      return "Claude gave up after repeated API errors.";
+      return failureHint ?? "Claude gave up after repeated API errors.";
     case "malformed_tool_use_exhausted":
       return "Claude gave up after repeated malformed tool calls.";
     case "budget_exhausted":
@@ -706,6 +512,55 @@ function isInterruptedResult(result: SDKResultMessage): boolean {
       errors.includes("interrupted by user") ||
       errors.includes("aborted"))
   );
+}
+
+const CLAUDE_USAGE_LIMIT_WINDOWS = {
+  five_hour: "5-hour",
+  seven_day: "7-day",
+  seven_day_opus: "7-day Opus",
+  seven_day_sonnet: "7-day Sonnet",
+  seven_day_overage_included: "7-day model",
+  overage: "overage",
+} satisfies Record<NonNullable<SDKRateLimitInfo["rateLimitType"]>, string>;
+
+/** Beyond this the reset time is not credible, so the row ships without a wait. */
+const CLAUDE_USAGE_LIMIT_MAX_WAIT_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * `resetsAt` is epoch seconds. The row states the remaining wait rather than a
+ * wall-clock time: this renders on the server, while the row is read on clients
+ * that may sit in another timezone and locale, and that carry their own
+ * timestamp preference. A wait reads the same everywhere.
+ */
+function describeClaudeUsageLimit(
+  info: SDKRateLimitInfo,
+  nowMs: number,
+  names: ClaudeScopedLimitNames,
+): string {
+  const label =
+    info.rateLimitType === "seven_day_overage_included" && names.overageIncluded
+      ? `7-day ${names.overageIncluded}`
+      : info.rateLimitType
+        ? CLAUDE_USAGE_LIMIT_WINDOWS[info.rateLimitType]
+        : undefined;
+  const resetsAtMs = info.resetsAt === undefined ? undefined : info.resetsAt * 1000;
+  const waitMs =
+    resetsAtMs === undefined || !Number.isFinite(nowMs) ? undefined : resetsAtMs - nowMs;
+  const wait =
+    waitMs !== undefined && waitMs > 0 && waitMs <= CLAUDE_USAGE_LIMIT_MAX_WAIT_MS
+      ? formatClaudeUsageLimitWait(waitMs)
+      : undefined;
+  return `Claude usage limit reached. This turn is paused until the ${
+    label ? `${label} ` : ""
+  }limit resets${wait ? ` in ${wait}` : ""}.`;
+}
+
+function formatClaudeUsageLimitWait(waitMs: number): string {
+  const totalMinutes = Math.ceil(waitMs / 60_000);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${totalMinutes}m`;
+  return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
 }
 
 function asRuntimeItemId(value: string): RuntimeItemId {
@@ -947,12 +802,17 @@ function compactBoundaryTokenUsageSnapshot(
   }
 
   const preTokens = finiteNonNegativeInteger(compactMetadata.pre_tokens);
-  return makeClaudeTokenUsageSnapshot({
+  const snapshot = makeClaudeTokenUsageSnapshot({
     activeTokens: postTokens,
     ...(preTokens !== undefined ? { lastUsedTokens: preTokens } : {}),
     ...(contextWindow !== undefined ? { contextWindow } : {}),
     ...(totalProcessedTokens !== undefined ? { totalProcessedTokens } : {}),
   });
+  if (snapshot === undefined || preTokens !== undefined) {
+    return snapshot;
+  }
+  const { lastUsedTokens: _lastUsedTokens, ...snapshotWithoutBeforeTokens } = snapshot;
+  return snapshotWithoutBeforeTokens;
 }
 
 function normalizeClaudeTaskProgressTokenUsage(
@@ -1637,6 +1497,10 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
   const text = buildPromptText(input, dependencies.boundInstanceId, dependencies.modelCatalog);
   const sdkContent: Array<Record<string, unknown>> = [];
 
+  // Claude Code expands a skill only from the LAST text block, and only when
+  // `/name` is its first character. A `$skill` chip anywhere in the prompt is
+  // therefore split into [leading text, "/name trailing text"] so the CLI
+  // runs it natively and the prose around it survives. See ClaudeSkillDispatch.
   const dispatch = planClaudeSkillDispatch(text, dependencies.skillNames);
   if (dispatch?.leadingText !== undefined) {
     sdkContent.push({ type: "text", text: dispatch.leadingText });
@@ -1704,27 +1568,6 @@ const buildUserMessageEffect = Effect.fn("buildUserMessageEffect")(function* (
 });
 
 /**
- * terminal_reason values the CLI classifies as dead turns: the turn died
- * rather than finished, even when the result subtype is success and the
- * error list is empty. Kept in sync with the messages in
- * resultUserFacingError.
- */
-const FAILED_TERMINAL_REASONS: ReadonlySet<NonNullable<SDKResultMessage["terminal_reason"]>> =
-  new Set([
-    "api_error",
-    "malformed_tool_use_exhausted",
-    "budget_exhausted",
-    "structured_output_retry_exhausted",
-    "tool_deferred_unavailable",
-    "turn_setup_failed",
-    "blocking_limit",
-    "rapid_refill_breaker",
-    "prompt_too_long",
-    "image_error",
-    "model_error",
-  ]);
-
-/**
  * The CLI reports repeated 529 overload failures as a success-subtype result
  * with api_error_status 529 and an empty error list; the status code is the
  * only structured failure signal.
@@ -1733,25 +1576,40 @@ function isOverloadedResult(result: SDKResultMessage): boolean {
   return result.subtype === "success" && result.api_error_status === 529;
 }
 
-function turnStatusFromResult(result: SDKResultMessage): ProviderRuntimeTurnStatus {
-  if (
-    isOverloadedResult(result) ||
-    (result.terminal_reason !== undefined && FAILED_TERMINAL_REASONS.has(result.terminal_reason))
-  ) {
-    return "failed";
-  }
-  if (result.subtype === "success") {
-    return "completed";
-  }
-
-  const errors = resultErrorsText(result);
-  if (isInterruptedResult(result)) {
-    return "interrupted";
-  }
-  if (errors.includes("cancel")) {
-    return "cancelled";
-  }
-  return "failed";
+/** Derives turn status and its error from the same provider result. */
+function resultOutcome(
+  result: SDKResultMessage,
+  failureHint?: string,
+): {
+  status: ProviderRuntimeTurnStatus;
+  errorMessage: string | undefined;
+} {
+  // A success result flagged is_error only fails when the turn already
+  // reported its cause (expired login, rejected usage window).
+  const successTaggedFailure = result.subtype === "success" && result.is_error === true;
+  const structuredError = isOverloadedResult(result)
+    ? "Claude API is overloaded (529). Try again shortly."
+    : (terminalResultError(result.terminal_reason, failureHint) ??
+      (successTaggedFailure ? failureHint : undefined));
+  // CLI diagnostic entries must not become the error banner. Success results
+  // carry no typed error list, but a success-tagged failure may still list one.
+  const listedErrors: ReadonlyArray<unknown> =
+    "errors" in result && Array.isArray(result.errors) ? result.errors : [];
+  const listedError =
+    result.subtype === "success" && !successTaggedFailure
+      ? undefined
+      : listedErrors.find(
+          (error): error is string =>
+            typeof error === "string" && !error.startsWith("[ede_diagnostic]"),
+        );
+  const errorMessage = listedError || structuredError;
+  if (structuredError !== undefined) return { status: "failed", errorMessage };
+  if (result.subtype === "success") return { status: "completed", errorMessage };
+  if (isInterruptedResult(result)) return { status: "interrupted", errorMessage };
+  return {
+    status: resultErrorsText(result).includes("cancel") ? "cancelled" : "failed",
+    errorMessage,
+  };
 }
 
 function streamKindFromDeltaType(deltaType: string): ClaudeTextStreamKind {
@@ -2083,12 +1941,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
   const modelCatalogEffect = (
     options?.modelCatalog ?? Effect.succeed(BUNDLED_CLAUDE_MODEL_CATALOG)
-  ).pipe(
-    Effect.map((sourceCatalog) => ({
-      sourceCatalog,
-      scopedCatalog: scopeClaudeModelCatalog(sourceCatalog, claudeSettings.customModels),
-    })),
-  );
+  ).pipe(Effect.map((catalog) => scopeClaudeModelCatalog(catalog, claudeSettings.customModels)));
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
@@ -2123,8 +1976,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
-  const usageLimitsRefreshQueue = yield* Queue.unbounded<ClaudeUsageLimitsRefreshRequest>();
-  const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
+  const usageLimitsRefreshQueue = yield* Queue.unbounded<{
+    readonly threadId: ThreadId;
+    readonly force: boolean;
+  }>();
   let nextUsageLimitsRefreshAtMs = 0;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -2143,49 +1998,28 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-    acceptRuntimeEvent(event).pipe(
-      Effect.flatMap((accepted) =>
-        accepted ? Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid) : Effect.void,
-      ),
-    );
+    Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
 
   const refreshClaudeUsageLimits = Effect.fn("refreshClaudeUsageLimits")(function* (
     context: ClaudeSessionContext,
   ) {
     const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (!readUsage || context.stopped) {
-      return;
-    }
+    if (!readUsage || context.stopped) return;
 
     const response = yield* Effect.tryPromise({
       try: () => readUsage.call(context.query),
-      catch: (cause) =>
-        new ProviderAdapterRequestError({
-          provider: PROVIDER,
-          method: "usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET",
-          detail: "Failed to refresh Claude usage limits.",
-          cause,
-        }),
-    }).pipe(
-      Effect.catchCause((cause) =>
-        Effect.logWarning("claude.usage-limits.refresh-failed", {
-          threadId: context.session.threadId,
-          cause,
-        }).pipe(Effect.as(undefined)),
-      ),
-    );
-    if (response === undefined) {
-      return;
-    }
+      catch: () => undefined,
+    });
+    if (!response || typeof response !== "object") return;
 
-    const rateLimits = claudeUsageLimitsFromControlResponse(response);
-    if (!rateLimits) {
-      yield* Effect.logWarning("claude.usage-limits.invalid-response", {
-        threadId: context.session.threadId,
-      });
-      return;
-    }
-
+    const checkedAt = yield* nowIso;
+    const decoded = response as SDKControlGetUsageResponse;
+    const rateLimits = options?.scopedLimitNames
+      ? yield* recordClaudeUsageResponse(options.scopedLimitNames, {
+          response: decoded,
+          checkedAt,
+        })
+      : claudeUsageResponseToLimits({ response: decoded, checkedAt }).limits;
     const stamp = yield* makeEventStamp();
     yield* offerRuntimeEvent({
       type: "account.rate-limits.updated",
@@ -2196,14 +2030,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       payload: { rateLimits },
       providerRefs: {},
     });
-  });
-
-  const mergeUsageLimitsRefreshRequests = (
-    first: ClaudeUsageLimitsRefreshRequest,
-    rest: ReadonlyArray<ClaudeUsageLimitsRefreshRequest>,
-  ): ClaudeUsageLimitsRefreshRequest => ({
-    threadId: rest.at(-1)?.threadId ?? first.threadId,
-    force: first.force || rest.some((request) => request.force),
   });
 
   const selectUsageLimitsContext = (threadId: ThreadId): ClaudeSessionContext | undefined => {
@@ -2218,7 +2044,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     for (const context of sessions.values()) {
       if (
         !context.stopped &&
-        context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET !== undefined
+        context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
       ) {
         return context;
       }
@@ -2226,64 +2052,31 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     return undefined;
   };
 
-  const waitForUsageLimitsCooldown = Effect.fn("waitForUsageLimitsCooldown")(function* (
-    initialRequest: ClaudeUsageLimitsRefreshRequest,
-  ) {
-    let request = initialRequest;
-    while (!request.force) {
-      const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-      const waitMs = nextUsageLimitsRefreshAtMs - nowMs;
-      if (waitMs <= 0) {
-        break;
-      }
-
-      const outcome = yield* Effect.race(
-        Effect.sleep(waitMs).pipe(Effect.as({ _tag: "Ready" as const })),
-        Queue.take(usageLimitsRefreshQueue).pipe(
-          Effect.map((queued) => ({ _tag: "Queued" as const, queued })),
-        ),
-      );
-      if (outcome._tag === "Ready") {
-        break;
-      }
-      const queued = yield* Queue.takeBetween(usageLimitsRefreshQueue, 0, Number.POSITIVE_INFINITY);
-      request = mergeUsageLimitsRefreshRequests(request, [outcome.queued, ...queued]);
-    }
-    return request;
-  });
-
   const runUsageLimitsRefresh = Effect.gen(function* () {
-    const queued = yield* Queue.takeAll(usageLimitsRefreshQueue);
-    const [first, ...rest] = queued;
-    if (!first) {
-      return;
+    const first = yield* Queue.take(usageLimitsRefreshQueue);
+    const rest = [] as Array<typeof first>;
+    while (true) {
+      const next = yield* Queue.poll(usageLimitsRefreshQueue);
+      if (Option.isNone(next)) break;
+      rest.push(next.value);
     }
-    const request = yield* waitForUsageLimitsCooldown(mergeUsageLimitsRefreshRequests(first, rest));
-    const context = selectUsageLimitsContext(request.threadId);
-    if (!context) {
-      return;
+    const force = first.force || rest.some((request) => request.force);
+    if (!force) {
+      const waitMs = nextUsageLimitsRefreshAtMs - DateTime.toEpochMillis(yield* DateTime.now);
+      if (waitMs > 0) yield* Effect.sleep(waitMs);
     }
-
-    const nowMs = DateTime.toEpochMillis(yield* DateTime.now);
-    nextUsageLimitsRefreshAtMs = nowMs + CLAUDE_USAGE_MIN_REFRESH_INTERVAL_MS;
-
+    const context = selectUsageLimitsContext(rest.at(-1)?.threadId ?? first.threadId);
+    if (!context) return;
+    nextUsageLimitsRefreshAtMs =
+      DateTime.toEpochMillis(yield* DateTime.now) + CLAUDE_USAGE_MIN_REFRESH_INTERVAL_MS;
     yield* refreshClaudeUsageLimits(context);
-  }).pipe(
-    Effect.catch((cause) => Effect.logWarning("claude.usage-limits.scheduler-failed", { cause })),
-  );
+  }).pipe(Effect.catch(() => Effect.void));
 
   yield* runUsageLimitsRefresh.pipe(Effect.forever, Effect.forkScoped);
-
   yield* Effect.sleep(CLAUDE_USAGE_POLL_INTERVAL_MS).pipe(
     Effect.andThen(
       Effect.suspend(() => {
-        let context: ClaudeSessionContext | undefined;
-        for (const candidate of sessions.values()) {
-          if (!candidate.stopped) {
-            context = candidate;
-            break;
-          }
-        }
+        const context = Array.from(sessions.values()).find((candidate) => !candidate.stopped);
         return context
           ? Queue.offer(usageLimitsRefreshQueue, {
               threadId: context.session.threadId,
@@ -3489,6 +3282,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         compactedSinceLatestAssistantUsage: false,
         hasSubagents: false,
         nextSyntheticAssistantBlockIndex: -1,
+        authenticationFailureMessage: undefined,
+        rejectedRateLimitTypes: new Set(),
+        latestAssistantRateLimited: false,
       };
       context.session = {
         ...context.session,
@@ -3547,6 +3343,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (context.turnState) {
+      // Limited retries may only carry an assistant error, without a new window
+      // event. Later parent responses replace this evidence if the turn recovers.
+      context.turnState.latestAssistantRateLimited = message.error === "rate_limit";
+      // The CLI can report authentication failure before ending the turn as a
+      // generic API error, so retain that evidence for the result fallback.
+      if (message.error === "authentication_failed") {
+        context.turnState.authenticationFailureMessage = claudeSignedOutMessage({
+          configDir: claudeEnvironment.CLAUDE_CONFIG_DIR,
+          cwd: path.resolve(context.session.cwd ?? "."),
+        });
+      }
       context.turnState.items.push(message.message);
       if (
         normalizeClaudeActiveTokenUsage(
@@ -3573,8 +3380,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       return;
     }
 
-    const status = turnStatusFromResult(message);
-    const errorMessage = resultUserFacingError(message);
+    const turn = context.turnState;
+    const failureHint =
+      turn?.authenticationFailureMessage ??
+      (turn && (turn.rejectedRateLimitTypes.size > 0 || turn.latestAssistantRateLimited)
+        ? "Claude usage limit reached. Send the message again once the limit resets."
+        : undefined);
+    const { status, errorMessage } = resultOutcome(message, failureHint);
 
     if (status === "failed") {
       yield* emitRuntimeError(context, errorMessage ?? "Claude turn failed.");
@@ -3717,32 +3529,36 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
-      case "compact_boundary":
+      case "compact_boundary": {
         if (context.turnState) {
           context.turnState.latestAssistantUsage = undefined;
           context.turnState.compactedSinceLatestAssistantUsage = true;
         }
-        yield* emitThreadTokenUsage(
-          context,
-          compactBoundaryTokenUsageSnapshot(
-            message as unknown as Record<string, unknown>,
-            context.lastKnownContextWindow,
-            context.lastKnownTotalProcessedTokens,
-          ),
-          {
-            rawMethod: "claude/system/compact_boundary",
-            rawPayload: message,
-          },
+        const compactedUsage = compactBoundaryTokenUsageSnapshot(
+          message as unknown as Record<string, unknown>,
+          context.lastKnownContextWindow,
+          context.lastKnownTotalProcessedTokens,
         );
+        yield* emitThreadTokenUsage(context, compactedUsage, {
+          rawMethod: "claude/system/compact_boundary",
+          rawPayload: message,
+        });
         yield* offerRuntimeEvent({
           ...base,
           type: "thread.state.changed",
           payload: {
             state: "compacted",
+            ...(compactedUsage?.lastUsedTokens !== undefined
+              ? { beforeTokens: compactedUsage.lastUsedTokens }
+              : {}),
+            ...(compactedUsage?.usedTokens !== undefined
+              ? { afterTokens: compactedUsage.usedTokens }
+              : {}),
             detail: message,
           },
         });
         return;
+      }
       case "hook_started":
         yield* offerRuntimeEvent({
           ...base,
@@ -4008,6 +3824,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           yield* emitRuntimeWarning(context, message.text, message);
         }
         return;
+      case "model_refusal_fallback":
+        // A safety fallback switched the model mid-session (e.g. Fable 5
+        // retried on Opus 4.8 after a flagged request). The CLI ships the
+        // user-facing notice in `content`; surface it like high-priority
+        // notifications so the rest of the session isn't silently served
+        // by a different model.
+        yield* emitRuntimeWarning(context, message.content, message);
+        return;
       // Inner protocol/UX details with no T3 surface today — consumed
       // deliberately so they don't masquerade as unknown-subtype warnings.
       // `background_tasks_changed` is a roster snapshot ({tasks: [...]}); the
@@ -4016,7 +3840,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       // source. `control_request_progress` is a liveness heartbeat for an
       // in-flight control request. `worker_shutting_down` is a Remote
       // Control worker notice; the session close path reports the outcome.
-      case "model_refusal_fallback":
       case "local_command_output":
       case "plugin_install":
       case "commands_changed":
@@ -4149,13 +3972,65 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
     if (message.type === "rate_limit_event") {
       context.scheduleUsageLimitsRefresh(true);
-      yield* offerRuntimeEvent({
-        ...base,
-        type: "account.rate-limits.updated",
-        payload: {
-          rateLimits: message,
-        },
-      });
+      const rateLimitInfo = message.rate_limit_info;
+      if (!rateLimitInfo) return;
+      const names = options?.scopedLimitNames
+        ? yield* Ref.get(options.scopedLimitNames)
+        : { overageIncluded: undefined };
+      const limits = claudeRateLimitEventToUpdate(rateLimitInfo, names);
+      if (limits) {
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "account.rate-limits.updated",
+          payload: { rateLimits: limits },
+        });
+      }
+      // A rejected window parks the turn inside the SDK: no further messages
+      // arrive and no result lands, so without a row the thread just spins.
+      // Warnings (allowed_warning) still have headroom and stay quiet, an
+      // account spending provisioned overage keeps running despite the reject,
+      // and between turns there is no turn to report as paused.
+      const overageAllowed =
+        rateLimitInfo.overageStatus === "allowed" ||
+        rateLimitInfo.overageStatus === "allowed_warning" ||
+        rateLimitInfo.isUsingOverage === true ||
+        rateLimitInfo.overageInUse === true;
+      const blocked = rateLimitInfo.status === "rejected" && !overageAllowed;
+      const limitType = rateLimitInfo.rateLimitType ?? "unknown";
+      const limitKey = `${limitType}:${rateLimitInfo.resetsAt ?? "unknown"}`;
+      if (context.turnState) {
+        // Current blocking evidence is independent of whether its warning has
+        // already been shown. A recovery can omit or advance the reset time;
+        // its window type remains stable without clearing another window.
+        if (blocked) context.turnState.rejectedRateLimitTypes.add(limitType);
+        else if (
+          rateLimitInfo.status === "allowed" ||
+          rateLimitInfo.status === "allowed_warning" ||
+          overageAllowed
+        ) {
+          context.turnState.rejectedRateLimitTypes.delete(limitType);
+        }
+      }
+      if (blocked && context.turnState !== undefined) {
+        // Tracked per turn as a set of limit identities, not as the rendered
+        // row: a parked window re-fires while the remaining wait shrinks, and a
+        // turn can park on more than one window, so a single slot would let an
+        // interleaved repeat through. A new turn — including a synthetic one —
+        // starts a fresh set and announces its pause again.
+        const turnId = context.turnState.turnId;
+        if (context.announcedUsageLimits?.turnId !== turnId) {
+          context.announcedUsageLimits = { turnId, keys: new Set() };
+        }
+        if (!context.announcedUsageLimits.keys.has(limitKey)) {
+          context.announcedUsageLimits.keys.add(limitKey);
+          const notice = describeClaudeUsageLimit(
+            rateLimitInfo,
+            Date.parse(stamp.createdAt),
+            names,
+          );
+          yield* emitRuntimeWarning(context, notice, rateLimitInfo);
+        }
+      }
       return;
     }
   });
@@ -4411,7 +4286,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const startSession: ClaudeAdapterShape["startSession"] = Effect.fn("startSession")(
     function* (input) {
-      const { sourceCatalog, scopedCatalog: modelCatalog } = yield* modelCatalogEffect;
+      const modelCatalog = yield* modelCatalogEffect;
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
           provider: PROVIDER,
@@ -4858,19 +4733,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             model: resolveClaudeModelSlug(modelCatalog, selectedModel.model),
           }
         : undefined;
-      const caps = getClaudeRuntimeModelCapabilities(
-        sourceCatalog,
-        modelCatalog,
-        claudeSettings.customModels,
-        modelSelection?.model,
-      );
+      const caps = getClaudeCatalogModelCapabilities(modelCatalog, modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
       const apiModelId = modelSelection
         ? resolveClaudeCatalogApiModelId(modelCatalog, modelSelection)
         : undefined;
       const initialContextWindow = selectedClaudeContextWindow(modelCatalog, modelSelection);
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
-      const effort = resolveClaudeEffort(caps, rawEffort) ?? null;
+      const effort =
+        resolveClaudeCatalogEffort(modelCatalog, modelSelection?.model, rawEffort) ?? null;
       const fastModeSupported = descriptors.some(
         (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
       );
@@ -4952,7 +4823,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         systemPrompt: {
           type: "preset",
           preset: "claude_code",
-          append: T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS,
+          // Model and effort can change after this session-level prompt is set.
+          append: `${buildRuntimeInstructions({ harness: "Claude Code" })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
         },
         settingSources: [...CLAUDE_SETTING_SOURCES],
         ...(input.skillScope
@@ -5078,6 +4950,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastKnownTotalProcessedTokens: undefined,
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
+        announcedUsageLimits: undefined,
         scheduleUsageLimitsRefresh: (force = false) => {
           runFork(
             Queue.offer(usageLimitsRefreshQueue, {
@@ -5168,7 +5041,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sendTurn: ClaudeAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSession(input.threadId);
-    const { sourceCatalog, scopedCatalog: modelCatalog } = yield* modelCatalogEffect;
+    const modelCatalog = yield* modelCatalogEffect;
     const selectedModel =
       input.modelSelection !== undefined && input.modelSelection.instanceId === boundInstanceId
         ? input.modelSelection
@@ -5201,14 +5074,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...context.session,
         model: modelSelection.model,
       };
-      const turnCaps = getClaudeRuntimeModelCapabilities(
-        sourceCatalog,
+      const turnEffort = resolveClaudeCatalogEffort(
         modelCatalog,
-        claudeSettings.customModels,
         modelSelection.model,
-      );
-      const turnEffort = resolveClaudeEffort(
-        turnCaps,
         getModelSelectionStringOptionValue(modelSelection, "effort"),
       );
       context.currentEffort =
@@ -5245,6 +5113,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         compactedSinceLatestAssistantUsage: false,
         hasSubagents: false,
         nextSyntheticAssistantBlockIndex: -1,
+        authenticationFailureMessage: undefined,
+        rejectedRateLimitTypes: new Set(),
+        latestAssistantRateLimited: false,
       };
 
       const updatedAt = yield* nowIso;
@@ -5269,6 +5140,11 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       });
     }
 
+    // Re-scan on every send: skills are added and switched off mid-session,
+    // and the scan is a few directory reads. A skill switched off via
+    // skillOverrides, or reserved for the agent with `user-invocable: false`,
+    // is left as prose: the CLI would answer `/name` with a notice instead of
+    // running it.
     const skills = yield* discoverClaudeSkills(
       claudeSettings,
       context.session.cwd,
@@ -5405,8 +5281,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       Effect.catch((cause) =>
         Effect.logError("Failed to emit Claude session shutdown event.", { cause }),
       ),
-      Effect.tap(() => Queue.shutdown(usageLimitsRefreshQueue)),
       Effect.tap(() => Queue.shutdown(runtimeEventQueue)),
+      Effect.tap(() => Queue.shutdown(usageLimitsRefreshQueue)),
       Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
     ),
   );
@@ -5415,9 +5291,8 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     provider: PROVIDER,
     capabilities: {
       sessionModelSwitch: "in-session",
-      assistantTranscriptRecovery: "none",
-      turnContinuation: "unsupported",
     },
+    compaction: { type: "slash-command", command: "/compact" },
     startSession,
     sendTurn,
     interruptTurn,

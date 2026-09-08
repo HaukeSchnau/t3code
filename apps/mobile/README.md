@@ -90,6 +90,10 @@ Build and run the local iOS dev client:
 vp run ios:dev
 ```
 
+After changing a native dependency patch, rerun CocoaPods before rebuilding an existing iOS
+project. pnpm gives each patch hash a new package path; Pods can otherwise keep compiling the
+previous directory.
+
 If your Xcode account only has a Personal Team, use a bundle identifier you control and opt into the
 reduced-capability local build. Personal Team builds omit the widget and share extensions, push
 entitlement, and native Sign in with Apple entitlement; builds without this opt-in are unchanged.

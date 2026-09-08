@@ -111,6 +111,7 @@ const capabilitiesLayer = Layer.effectContext(
     return Context.make(
       CloudSession,
       CloudSession.of({
+        identity: Effect.succeed(Option.none()),
         clerkToken: Effect.fail(
           new ConnectionBlockedError({
             reason: "unsupported",

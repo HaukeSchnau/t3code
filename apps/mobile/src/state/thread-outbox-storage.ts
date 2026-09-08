@@ -52,7 +52,7 @@ export async function flushThreadOutboxWrites(): Promise<void> {
   }
 }
 
-export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutboxStorageError>()(
+export class ThreadOutboxStorageError extends Schema.TaggedError<ThreadOutboxStorageError>()(
   "ThreadOutboxStorageError",
   {
     operation: Schema.Literals(["load", "read-message", "write", "remove"]),
@@ -69,7 +69,13 @@ export class ThreadOutboxStorageError extends Schema.TaggedErrorClass<ThreadOutb
 }
 
 export interface ThreadOutboxStorage {
-  readonly load: () => Promise<ReadonlyArray<QueuedThreadMessage>>;
+  readonly load: () => Promise<
+    | ReadonlyArray<QueuedThreadMessage>
+    | {
+        readonly messages: ReadonlyArray<QueuedThreadMessage>;
+        readonly errors: ReadonlyArray<ThreadOutboxStorageError>;
+      }
+  >;
   readonly write: (message: QueuedThreadMessage) => Promise<void>;
   readonly remove: (message: QueuedThreadMessage) => Promise<void>;
   readonly loadCommandOutbox?: () => Promise<DurableCommandOutboxDocument>;
@@ -325,11 +331,17 @@ const expoFileSystem: ThreadOutboxFileSystem = {
     return new File(directory as InstanceType<typeof Directory>, name);
   },
   move: async (source, destination, options) => {
-    const { File } = await import("expo-file-system");
-    await (source as InstanceType<typeof File>).move(
-      destination as InstanceType<typeof File>,
-      options,
-    );
+    const relocatable = source as unknown as {
+      readonly move?: (destination: unknown, options: unknown) => Promise<void> | void;
+      readonly moveSync?: (destination: unknown, options: unknown) => void;
+    };
+    if (relocatable.move !== undefined) {
+      await relocatable.move(destination, options);
+    } else if (relocatable.moveSync !== undefined) {
+      relocatable.moveSync(destination, options);
+    } else {
+      throw new Error("Expo file does not support moving files");
+    }
   },
 };
 

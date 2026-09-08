@@ -38,7 +38,7 @@ import type {
   PrepareThreadWorkspaceRootInput,
 } from "./ThreadWorkspaceDriver.ts";
 
-export class ThreadWorkspaceError extends Schema.TaggedErrorClass<ThreadWorkspaceError>()(
+export class ThreadWorkspaceError extends Schema.TaggedError<ThreadWorkspaceError>()(
   "ThreadWorkspaceError",
   {
     operation: Schema.String,

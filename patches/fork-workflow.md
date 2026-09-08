@@ -36,6 +36,9 @@ merge conflicts easier to reason about.
 - For large upstream merge conflicts, delegate investigation/resolution to a subagent and then
   review the result before committing.
 - Run required checks before committing sync merges.
+- Preserve the fork's applied migration IDs and names. Append upstream migrations to the existing
+  registry instead of replacing it with upstream's numbering. Upstream migrations 48 and 49 run as
+  fork migrations 69 and 70; the source filenames remain upstream-compatible.
 - Push completed fork work directly to `main` with `jj-push main`.
 - Use Jujutsu for VCS operations unless explicitly instructed otherwise.
 - Keep new fork patches minimally invasive:
