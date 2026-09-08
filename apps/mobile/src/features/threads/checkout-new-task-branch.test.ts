@@ -88,7 +88,7 @@ describe("new-task branch checkout", () => {
     const result = await selectBranch(switchRef);
     expect(result._tag).toBe("Failure");
     if (result._tag !== "Failure") throw new Error("Expected checkout to fail");
-    expect(String(squashAtomCommandFailure(result))).toContain("would be overwritten");
+    expect(String(squashAtomCommandFailure(result))).toContain(branch.name);
     expect((await git("branch", "--show-current")).stdout.trim()).toBe("main");
     expect(await NodeFSP.readFile(NodePath.join(cwd, "file.txt"), "utf8")).toBe(
       "unsaved local changes\n",
