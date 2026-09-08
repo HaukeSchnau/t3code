@@ -29,9 +29,11 @@ export const isEntrypoint = (input: {
   }
   // npm and npx install the CLI as a symlink. Without `--preserve-symlinks` the
   // module URL is the resolved real path while `process.argv[1]` keeps the link
-  // path, so the comparison above misses.
+  // path, so the comparison above misses. Resolve both sides because sandboxed
+  // runners can expose the same directory through two mount aliases.
   try {
-    return input.moduleUrl === NodeURL.pathToFileURL(NodeFS.realpathSync(input.entryPath)).href;
+    const modulePath = NodeURL.fileURLToPath(input.moduleUrl);
+    return NodeFS.realpathSync(modulePath) === NodeFS.realpathSync(input.entryPath);
   } catch {
     return false;
   }

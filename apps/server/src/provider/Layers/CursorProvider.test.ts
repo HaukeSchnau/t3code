@@ -408,18 +408,15 @@ describe("Cursor skills", () => {
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const userHome = yield* fileSystem.makeTempDirectory({
-          directory: NodeOS.tmpdir(),
-          prefix: "cursor-skills-home-",
-        });
-        const workspace = yield* fileSystem.makeTempDirectory({
-          directory: NodeOS.tmpdir(),
-          prefix: "cursor-skills-workspace-",
-        });
-        const library = yield* fileSystem.makeTempDirectory({
-          directory: NodeOS.tmpdir(),
-          prefix: "cursor-skills-library-",
-        });
+        const userHome = yield* fileSystem
+          .makeTempDirectory({ directory: NodeOS.tmpdir(), prefix: "cursor-skills-home-" })
+          .pipe(Effect.flatMap(fileSystem.realPath));
+        const workspace = yield* fileSystem
+          .makeTempDirectory({ directory: NodeOS.tmpdir(), prefix: "cursor-skills-workspace-" })
+          .pipe(Effect.flatMap(fileSystem.realPath));
+        const library = yield* fileSystem
+          .makeTempDirectory({ directory: NodeOS.tmpdir(), prefix: "cursor-skills-library-" })
+          .pipe(Effect.flatMap(fileSystem.realPath));
         const writeSkill = Effect.fn("writeCursorSkill")(function* (
           directory: string,
           contents: string,

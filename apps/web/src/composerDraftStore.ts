@@ -3284,7 +3284,10 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ? existing.startFromOrigin
                 : options.startFromOrigin;
             const environmentSelection =
-              options.environmentSelection ?? existing.environmentSelection;
+              options.environmentSelection ??
+              (options.branch != null || options.worktreePath != null
+                ? "manual"
+                : existing.environmentSelection);
             const nextSkillPackIds =
               options.skillPackIds === undefined
                 ? existing.skillPackIds

@@ -7,7 +7,10 @@ import {
 import type { ContextMenuItem } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import type { AsyncResult } from "effect/unstable/reactivity";
-import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
+import {
+  planPinnedReorder,
+  sortActiveThreadsByOrderKey,
+} from "@t3tools/client-runtime/state/thread-sort";
 import {
   getThreadSortTimestamp,
   sortThreadsByAttention,
@@ -35,16 +38,6 @@ export const SIDEBAR_THREAD_PREWARM_LIMIT = 2;
 // A small buffer keeps the next few rows warm without leasing every row that
 // content-visibility leaves mounted below the scroll viewport.
 const SIDEBAR_ROW_SUBSCRIPTION_OVERSCAN_PX = 160;
-
-function activeThreadAnchorTimestampMs(thread: {
-  readonly createdAt: string;
-  readonly unsettledAt?: string | null | undefined;
-}): number {
-  return Math.max(
-    toSortableTimestamp(thread.createdAt) ?? 0,
-    toSortableTimestamp(thread.unsettledAt ?? undefined) ?? 0,
-  );
-}
 
 export function useSidebarRowSubscriptionLease(isActive: boolean): {
   readonly leaseLiveStatus: boolean;
@@ -926,16 +919,20 @@ export function sortThreadsForSidebar<
     readonly createdAt: string;
     readonly latestUserMessageAt?: string | null;
     readonly unsettledAt?: string | null | undefined;
+    readonly activeOrderKey?: string | null | undefined;
   },
 >(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
   if (getBand === undefined) {
-    return [...threads].toSorted(
-      (left, right) =>
-        activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
-        left.id.localeCompare(right.id),
-    );
+    return sortActiveThreadsByOrderKey(threads);
   }
-  return sortThreadsByAttention(threads, getBand);
+  const attentionOrdered = sortThreadsByAttention(threads, getBand);
+  const sortBand = (band: SidebarAttentionBand) => {
+    const bandThreads = attentionOrdered.filter((thread) => getBand(thread) === band);
+    return bandThreads.some((thread) => thread.activeOrderKey != null)
+      ? sortActiveThreadsByOrderKey(bandThreads)
+      : bandThreads;
+  };
+  return [...sortBand("attention"), ...sortBand("normal")];
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime

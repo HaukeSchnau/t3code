@@ -1,9 +1,9 @@
 // @effect-diagnostics nodeBuiltinImport:off
 /**
- * Best-effort provider event logging with one shared writer per thread.
+ * Best-effort, metadata-only provider event logging.
  *
- * Native and canonical views share batching, rotation, and retention state so
- * they cannot race while appending to the same thread-scoped file.
+ * Each logger owns one globally rotated stream file. Provider payload values
+ * are never persisted; high-frequency deltas are deterministically sampled.
  */
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
@@ -19,8 +19,13 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as SynchronizedRef from "effect/SynchronizedRef";
 
-import { toSafeThreadAttachmentSegment } from "../../attachmentStore.ts";
+import { incrementWorkloadCounter } from "../../diagnostics/WorkloadDiagnostics.ts";
 import type { ResourceAttribution } from "../../resourceTelemetry/ResourceAttribution.ts";
+import {
+  isHighFrequencyProviderEvent,
+  makeProviderEventMetadata,
+  type ProviderEventMetadataRecord,
+} from "./ProviderEventMetadata.ts";
 
 const MEBIBYTE = 1024 * 1024;
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -33,29 +38,12 @@ const DEFAULT_RETENTION_CHECK_INTERVAL_MS = 5 * 60 * 1_000;
 const DEFAULT_MAX_BUFFERED_BYTES = MEBIBYTE;
 const DEFAULT_MAX_BUFFERED_RECORDS = 512;
 const GLOBAL_THREAD_SEGMENT = "_global";
+const MAX_METADATA_RECORD_BYTES = 1024;
+const HIGH_FREQUENCY_FIRST_RECORDS = 8;
+const HIGH_FREQUENCY_SAMPLE_INTERVAL = 256;
+const HIGH_FREQUENCY_SAMPLE_KEY_CAPACITY = 2_048;
 const LOG_SCOPE = "provider-observability";
 const encodeUnknownJsonString = Schema.encodeUnknownEffect(Schema.fromJsonString(Schema.Unknown));
-
-const transientCanonicalEventTypes = new Set([
-  "content.delta",
-  "hook.progress",
-  "item.updated",
-  "task.progress",
-  "thread.realtime.audio.delta",
-  "tool.progress",
-  "turn.proposed.delta",
-]);
-const transientNativeMethods = new Set([
-  "item/agentMessage/delta",
-  "item/commandExecution/outputDelta",
-  "item/fileChange/outputDelta",
-  "item/plan/delta",
-  "item/reasoning/summaryTextDelta",
-  "item/reasoning/textDelta",
-  "thread/realtime/outputAudio/delta",
-  "thread/realtime/transcript/delta",
-]);
-const transientAcpUpdates = new Set(["agent_message_chunk", "agent_thought_chunk"]);
 
 export type EventNdjsonStream = "native" | "canonical" | "orchestration";
 
@@ -129,6 +117,11 @@ interface ResolvedOptions {
   readonly attribution: ResourceAttribution["Service"] | undefined;
 }
 
+interface SampleState {
+  occurrence: number;
+  lastEmitted: number;
+}
+
 export interface PendingRecord {
   readonly stream: EventNdjsonStream;
   readonly threadSegment: string;
@@ -169,81 +162,52 @@ function logWarning(message: string, context: Record<string, unknown>): Effect.E
   return Effect.logWarning(message, context).pipe(Effect.annotateLogs({ scope: LOG_SCOPE }));
 }
 
-function resolveThreadSegment(raw: string | null | undefined): string {
-  const normalized = typeof raw === "string" ? toSafeThreadAttachmentSegment(raw) : null;
-  return normalized ?? GLOBAL_THREAD_SEGMENT;
-}
-
 function resolveStreamLabel(stream: EventNdjsonStream): string {
   return stream === "native" ? "NTIVE" : stream === "orchestration" ? "ORCH" : "CANON";
 }
 
 function providerLogPrefix(filePath: string): string {
-  const basename = NodePath.basename(filePath);
-  const extension = NodePath.extname(basename);
-  return `${extension.length > 0 ? basename.slice(0, -extension.length) : basename}.`;
+  return NodePath.basename(filePath);
 }
 
-function providerLogPath(directory: string, prefix: string, threadSegment: string): string {
-  return NodePath.join(directory, `${prefix}${threadSegment}.log`);
+function providerLogPath(directory: string, prefix: string, _threadSegment: string): string {
+  return NodePath.join(directory, prefix);
 }
 
-function shouldPersist(stream: EventNdjsonStream, event: unknown): boolean {
-  if (stream === "orchestration" || typeof event !== "object" || event === null) {
-    return true;
-  }
+/** OpenCode republishes the full growing tool output for every running update. */
+function isRunningOpenCodeToolSnapshot(event: unknown): boolean {
+  if (typeof event !== "object" || event === null) return false;
   try {
-    const type = Reflect.get(event, "type");
-    if (typeof type === "string" && transientCanonicalEventTypes.has(type)) {
-      return false;
-    }
-    if (stream !== "native") return true;
-
     const nested = Reflect.get(event, "event");
     const nativeEvent = typeof nested === "object" && nested !== null ? nested : event;
-    const method = Reflect.get(nativeEvent, "method");
-    if (
-      typeof method === "string" &&
-      (transientNativeMethods.has(method) ||
-        method.startsWith("claude/stream_event/content_block_delta/"))
-    ) {
+    if (Reflect.get(nativeEvent, "type") !== "message.part.updated") return false;
+    const payload = Reflect.get(nativeEvent, "payload");
+    if (typeof payload !== "object" || payload === null) return false;
+    const properties = Reflect.get(payload, "properties");
+    if (typeof properties !== "object" || properties === null) return false;
+    const part = Reflect.get(properties, "part");
+    if (typeof part !== "object" || part === null || Reflect.get(part, "type") !== "tool") {
       return false;
     }
-
-    const nativeType = Reflect.get(nativeEvent, "type");
-    if (nativeType === "message.part.delta") return false;
-
-    const payload = Reflect.get(nativeEvent, "payload");
-    if (typeof payload !== "object" || payload === null) return true;
-
-    if (method === "session/update") {
-      const update = Reflect.get(payload, "update");
-      if (typeof update !== "object" || update === null) return true;
-      const updateType = Reflect.get(update, "sessionUpdate");
-      return typeof updateType !== "string" || !transientAcpUpdates.has(updateType);
-    }
-
-    if (nativeType === "message.part.updated") {
-      const properties = Reflect.get(payload, "properties");
-      if (typeof properties !== "object" || properties === null) return true;
-      const part = Reflect.get(properties, "part");
-      if (typeof part !== "object" || part === null) return true;
-      const partType = Reflect.get(part, "type");
-      if (partType === "text" || partType === "reasoning") return false;
-      if (partType === "tool") {
-        // Running snapshots repeat growing output. Pending and terminal states stay in the log.
-        const state = Reflect.get(part, "state");
-        if (typeof state === "object" && state !== null) {
-          return Reflect.get(state, "status") !== "running";
-        }
-      }
-      return true;
-    }
-
-    return true;
+    const state = Reflect.get(part, "state");
+    return (
+      typeof state === "object" && state !== null && Reflect.get(state, "status") === "running"
+    );
   } catch {
-    return true;
+    return false;
   }
+}
+
+function fallbackMetadata(record: ProviderEventMetadataRecord): ProviderEventMetadataRecord {
+  return {
+    schemaVersion: 1,
+    stream: record.stream,
+    threadId: record.threadId,
+    event: { name: record.event.name },
+    body: { valueType: "missing" },
+    ...(record.sampling ? { sampling: record.sampling } : {}),
+    metadataTruncated: true,
+  };
 }
 
 export function writeBatchedMessages(
@@ -494,13 +458,18 @@ function drainPending(input: {
   ];
 }
 
-const serializeEvent = Effect.fnUntraced(function* (event: unknown) {
-  return yield* encodeUnknownJsonString(event).pipe(
+const serializeMetadata = Effect.fnUntraced(function* (metadata: ProviderEventMetadataRecord) {
+  const encoded = yield* encodeUnknownJsonString(metadata).pipe(
     Effect.catch((error) =>
-      logWarning("failed to serialize provider event log record", {
+      logWarning("failed to serialize provider event metadata record", {
         errorTag: errorTag(error),
       }).pipe(Effect.as(undefined)),
     ),
+  );
+  if (encoded === undefined) return undefined;
+  if (Buffer.byteLength(encoded) <= MAX_METADATA_RECORD_BYTES) return encoded;
+  return yield* encodeUnknownJsonString(fallbackMetadata(metadata)).pipe(
+    Effect.orElseSucceed(() => undefined),
   );
 });
 
@@ -610,21 +579,62 @@ export const makeEventNdjsonLogStore = Effect.fnUntraced(function* (
   const logger = (stream: EventNdjsonStream): EventNdjsonLogger => {
     const existing = loggerViews.get(stream);
     if (existing) return existing;
+    const sampleStates = new Map<string, SampleState>();
+
+    const sampledMetadata = (event: unknown, threadId: ThreadId | null) => {
+      const base = makeProviderEventMetadata({ event, stream, threadId });
+      if (!isHighFrequencyProviderEvent(stream, base.event.name)) return base;
+
+      const key = `${stream}\0${threadId ?? GLOBAL_THREAD_SEGMENT}\0${base.event.name}`;
+      let state = sampleStates.get(key);
+      if (!state) {
+        if (sampleStates.size >= HIGH_FREQUENCY_SAMPLE_KEY_CAPACITY) {
+          const oldest = sampleStates.keys().next().value;
+          if (oldest !== undefined) sampleStates.delete(oldest);
+        }
+        state = { occurrence: 0, lastEmitted: 0 };
+        sampleStates.set(key, state);
+      }
+
+      state.occurrence += 1;
+      const shouldEmit =
+        state.occurrence <= HIGH_FREQUENCY_FIRST_RECORDS ||
+        state.occurrence % HIGH_FREQUENCY_SAMPLE_INTERVAL === 0;
+      if (!shouldEmit) {
+        incrementWorkloadCounter("provider_log.sampled_suppressed");
+        return null;
+      }
+
+      const sampling = {
+        occurrence: state.occurrence,
+        suppressedSincePrevious: Math.max(0, state.occurrence - state.lastEmitted - 1),
+      };
+      state.lastEmitted = state.occurrence;
+      return { ...base, sampling } satisfies ProviderEventMetadataRecord;
+    };
 
     const write = Effect.fnUntraced(function* (event: unknown, threadId: ThreadId | null) {
-      if (!shouldPersist(stream, event)) return;
-      const payload = yield* serializeEvent(event);
+      incrementWorkloadCounter("provider_log.candidates");
+      if (stream === "native" && isRunningOpenCodeToolSnapshot(event)) {
+        incrementWorkloadCounter("provider_log.sampled_suppressed");
+        return;
+      }
+      const metadata = sampledMetadata(event, threadId);
+      if (metadata === null) return;
+      const payload = yield* serializeMetadata(metadata);
       if (payload === undefined) return;
 
       const observedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const line = `[${observedAt}] ${resolveStreamLabel(stream)}: ${payload}\n`;
       const bytes = Buffer.byteLength(line);
+      incrementWorkloadCounter("provider_log.records");
+      incrementWorkloadCounter("provider_log.bytes", Buffer.byteLength(payload));
       const action = yield* SynchronizedRef.modifyEffect(stateRef, (state) => {
         if (state.closed) {
           return Effect.succeed([{ flush: false }, state] as const);
         }
         const pending = state.pending;
-        pending.push({ stream, threadSegment: resolveThreadSegment(threadId), line, bytes });
+        pending.push({ stream, threadSegment: GLOBAL_THREAD_SEGMENT, line, bytes });
         const pendingBytes = state.pendingBytes + bytes;
         const flush =
           resolved.batchWindowMs === 0 ||

@@ -625,8 +625,14 @@ export const make = Effect.gen(function* () {
   const serverConfig = yield* ServerConfig.ServerConfig;
   const serverSettings = yield* ServerSettings.ServerSettingsService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const baseDir = path.resolve(serverConfig.baseDir);
-  const worktreesDir = path.resolve(serverConfig.worktreesDir);
+  const resolvedBaseDir = path.resolve(serverConfig.baseDir);
+  const resolvedWorktreesDir = path.resolve(serverConfig.worktreesDir);
+  const baseDir = yield* fileSystem
+    .realPath(resolvedBaseDir)
+    .pipe(Effect.orElseSucceed(() => resolvedBaseDir));
+  const worktreesDir = yield* fileSystem
+    .realPath(resolvedWorktreesDir)
+    .pipe(Effect.orElseSucceed(() => resolvedWorktreesDir));
   // Windows filesystems are case-insensitive, so path prefix checks there
   // must case fold.
   const foldWorktreeCase = (yield* HostProcessPlatform) === "win32";

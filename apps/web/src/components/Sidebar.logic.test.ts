@@ -945,6 +945,25 @@ describe("sortThreadsForSidebar", () => {
 
     expect(sorted.map((thread) => thread.id)).toEqual(["newest", "stale-stamp"]);
   });
+
+  it("keeps attention threads ahead while respecting manual order within each band", () => {
+    const sorted = sortThreadsForSidebar(
+      [
+        { id: "normal-last", createdAt: "2026-03-09T12:00:00.000Z", activeOrderKey: "t" },
+        { id: "attention-last", createdAt: "2026-03-09T08:00:00.000Z", activeOrderKey: "t" },
+        { id: "normal-first", createdAt: "2026-03-09T08:00:00.000Z", activeOrderKey: "f" },
+        { id: "attention-first", createdAt: "2026-03-09T12:00:00.000Z", activeOrderKey: "f" },
+      ],
+      (thread) => (thread.id.startsWith("attention") ? "attention" : "normal"),
+    );
+
+    expect(sorted.map((thread) => thread.id)).toEqual([
+      "attention-first",
+      "attention-last",
+      "normal-first",
+      "normal-last",
+    ]);
+  });
 });
 
 describe("resolveSidebarThreadAttentionBand", () => {

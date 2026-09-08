@@ -417,6 +417,7 @@ describe("derivePendingUserInputs", () => {
         requestId: "req-user-input-1",
         createdAt: "2026-02-23T00:00:01.000Z",
         optional: true,
+        dismissible: true,
         questions: [
           {
             id: "sandbox_mode",
