@@ -141,7 +141,7 @@ it("validates symlinked configs from their original directory so relative includ
   await NodeFSP.appendFile(path, 'include "keys.kdl"\n');
   await NodeFSP.writeFile(NodePath.join(active, "keys.kdl"), "binds {}\n");
   tools.validateNiri.mockImplementation(async (file) => {
-    expect(NodePath.dirname(file)).toBe(active);
+    expect(NodePath.dirname(file)).toBe(await NodeFSP.realpath(active));
     expect(await NodeFSP.readFile(file, "utf8")).toContain("Ctrl+Shift+2");
     expect(await NodeFSP.readFile(NodePath.join(NodePath.dirname(file), "keys.kdl"), "utf8")).toBe(
       "binds {}\n",
