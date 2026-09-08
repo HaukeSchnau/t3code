@@ -265,10 +265,10 @@ export class CaptureShortcutConfig {
       await NodeFSP.chmod(temporary, root.stat.mode & 0o777);
       if (desktop === "niri") {
         // Niri resolves includes against the selected path, not a dotfile symlink's target.
-        const validationPath = NodePath.join(
+        const validationDirectory = await NodeFSP.realpath(NodePath.dirname(root.path)).catch(() =>
           NodePath.dirname(root.path),
-          NodePath.basename(temporary),
         );
+        const validationPath = NodePath.join(validationDirectory, NodePath.basename(temporary));
         if (NodePath.resolve(validationPath) === NodePath.resolve(temporary)) {
           await this.tools.validateNiri(temporary);
         } else {
