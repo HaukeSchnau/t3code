@@ -23,7 +23,9 @@ function readLines(filePath: string): ReadonlyArray<string> {
 describe("EventNdjsonLogger", () => {
   it.effect("writes metadata-only records to the exact global stream path", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const filePath = NodePath.join(tempDir, "native.log");
       const secret = "secret-provider-output";
 
@@ -65,7 +67,9 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("bounds giant and circular payload metadata", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const filePath = NodePath.join(tempDir, "canonical.log");
       const secret = "secret-circular-value";
       const circular: Record<string, unknown> = { secret, delta: "x".repeat(2_000_000) };
@@ -93,7 +97,9 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("samples 9,200 high-frequency deltas deterministically", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const filePath = NodePath.join(tempDir, "canonical.log");
 
       try {
@@ -125,7 +131,9 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("omits running OpenCode tool snapshots but keeps lifecycle states", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const filePath = NodePath.join(tempDir, "native.log");
       const threadId = ThreadId.make("thread-tool-lifecycle");
 
@@ -169,7 +177,9 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("does not sample lifecycle events", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const filePath = NodePath.join(tempDir, "canonical.log");
       try {
         const logger = yield* makeEventNdjsonLogger(filePath, {
@@ -194,7 +204,9 @@ describe("EventNdjsonLogger", () => {
 
   it.effect("keeps native and canonical rotation files distinct and bounded", () =>
     Effect.gen(function* () {
-      const tempDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-"));
+      const tempDir = NodeFS.realpathSync(
+        NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-provider-log-")),
+      );
       const nativePath = NodePath.join(tempDir, "native.log");
       const canonicalPath = NodePath.join(tempDir, "canonical.log");
       try {

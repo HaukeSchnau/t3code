@@ -2791,8 +2791,8 @@ scopedFailureLayer("CodexAdapterLive scoped startup failure", (it) => {
 
 it.effect("flushes managed native logs when the adapter layer shuts down", () =>
   Effect.gen(function* () {
-    const tempDir = NodeFS.mkdtempSync(
-      NodePath.join(NodeOS.tmpdir(), "t3-codex-adapter-native-log-"),
+    const tempDir = NodeFS.realpathSync(
+      NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-codex-adapter-native-log-")),
     );
     const basePath = NodePath.join(tempDir, "provider-native.ndjson");
     const runtimeFactory = makeRuntimeFactory();

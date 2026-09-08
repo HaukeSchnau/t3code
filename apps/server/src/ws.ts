@@ -298,18 +298,26 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   {
     type:
       | "thread.message-sent"
+      | "thread.message-queued"
+      | "thread.queued-message-deleted"
+      | "thread.queued-message-dispatched"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
+      | "thread.history-pruned"
       | "thread.reverted"
       | "thread.session-set";
   }
 > {
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.message-queued" ||
+    event.type === "thread.queued-message-deleted" ||
+    event.type === "thread.queued-message-dispatched" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
+    event.type === "thread.history-pruned" ||
     event.type === "thread.reverted" ||
     event.type === "thread.session-set"
   );
