@@ -9,6 +9,9 @@ import { Button } from "./ui/button";
 import { setMarkdownTaskChecked } from "./files/filePreviewMode";
 
 vi.mock("@effect/atom-react", () => ({ useAtomValue: () => null }));
+vi.mock("../lib/mermaid", () => ({
+  renderMermaidDiagram: vi.fn(async () => "data:image/svg+xml,diagram"),
+}));
 vi.mock("../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("../hooks/useSettings", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../hooks/useSettings")>();
@@ -73,6 +76,32 @@ function codeButton(renderer: ReactTestRenderer, label: string) {
 }
 
 describe("ChatMarkdown streaming", () => {
+  it("toggles Mermaid source and copies the original diagram code", async () => {
+    const source = "flowchart LR\n  A[Agent] --> B[Diagram]\n";
+    const writeText = vi.fn(async (_text: string) => {});
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(
+          <ChatMarkdown cwd="/tmp/project" text={`\`\`\`mermaid\n${source}\`\`\``} />,
+        );
+      });
+      const mounted = renderer!;
+      expect(mounted.root.findByType("img").props.src).toBe("data:image/svg+xml,diagram");
+      await act(async () => codeButton(mounted, "Copy code").onClick?.({} as never));
+      expect(writeText).toHaveBeenCalledWith(source);
+      await act(async () => codeButton(mounted, "Show source").onClick?.({} as never));
+      expect(mounted.root.findAllByType("img")).toHaveLength(0);
+      await act(async () => codeButton(mounted, "Show diagram").onClick?.({} as never));
+      expect(mounted.root.findByType("img").props.src).toBe("data:image/svg+xml,diagram");
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("preserves code controls and details without highlighting an unchanged fence again", async () => {
     const highlighter = await getSyntaxHighlighterPromise("text");
     const highlight = vi.spyOn(highlighter, "codeToHtml");

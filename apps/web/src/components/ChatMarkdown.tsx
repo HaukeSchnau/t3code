@@ -71,6 +71,7 @@ import rehypeSanitize, { defaultSchema } from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import { parseAssistantCitationHref } from "@t3tools/shared/assistantCitations";
 import { AssistantCitationChip } from "./chat/AssistantCitationChip";
+import { MermaidDiagram } from "./MermaidDiagram";
 import remarkGfm from "remark-gfm";
 import { remarkGithubAlerts } from "../markdown-github-alerts";
 import {
@@ -796,14 +797,18 @@ function MarkdownCodeBlock({
   language,
   fenceTitle,
   theme,
+  isStreaming,
   children,
 }: {
   code: string;
   language: string;
   fenceTitle: string | null;
   theme: "light" | "dark";
+  isStreaming: boolean;
   children: ReactNode;
 }) {
+  const [showSource, setShowSource] = useState(false);
+  const isMermaid = language.toLowerCase() === "mermaid";
   const [copied, setCopied] = useState(false);
   const [wrapped, setWrapped] = useState(readInitialWordWrapSetting);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -863,6 +868,18 @@ function MarkdownCodeBlock({
           />
         </span>
         <span className="flex items-center gap-0.5" role="toolbar" aria-label="Code block actions">
+          {isMermaid && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              className="chat-markdown-chrome-action"
+              aria-label={showSource ? "Show diagram" : "Show source"}
+              onClick={() => setShowSource((value) => !value)}
+            >
+              {showSource ? "Diagram" : "Source"}
+            </Button>
+          )}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -900,7 +917,11 @@ function MarkdownCodeBlock({
           </Tooltip>
         </span>
       </div>
-      {children}
+      {isMermaid && !showSource ? (
+        <MermaidDiagram code={code} theme={theme} isStreaming={isStreaming} fallback={children} />
+      ) : (
+        children
+      )}
     </div>
   );
 }
@@ -2869,6 +2890,7 @@ const CHAT_MARKDOWN_COMPONENTS = {
         language={language}
         fenceTitle={fenceTitle}
         theme={resolvedTheme}
+        isStreaming={isStreaming}
       >
         <RenderErrorBoundary fallback={<pre {...props}>{children}</pre>}>
           <Suspense fallback={<pre {...props}>{children}</pre>}>
