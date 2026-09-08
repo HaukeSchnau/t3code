@@ -21,10 +21,7 @@ import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../mo
 import { primaryServerKeybindingsAtom } from "../state/server";
 import { useEnvironmentIdentificationMode, useLegacySidebarEnabled } from "../hooks/useSettings";
 import { DesktopOpenWorkspaceEffect } from "./DesktopOpenWorkspaceEffect";
-import {
-  usePanelAnimationSettings,
-  usePanelNavigationSuppression,
-} from "../panelAnimations";
+import { usePanelAnimationSettings, usePanelNavigationSuppression } from "../panelAnimations";
 import LegacyThreadSidebar from "./LegacySidebar";
 import ThreadSidebar from "./Sidebar";
 import { SidebarChromeHeader } from "./sidebar/SidebarChrome";

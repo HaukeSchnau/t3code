@@ -623,10 +623,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
   if (!capabilities && authenticated !== true) {
-    const fallbackAuthenticated = yield* probeClaudeAuthStatus(
-      claudeSettings,
-      resolvedEnvironment,
-    );
+    const fallbackAuthenticated = yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment);
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,

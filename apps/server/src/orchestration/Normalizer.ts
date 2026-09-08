@@ -418,13 +418,13 @@ export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
               ...(attachments.length > 0 ? { attachmentsByQuestionId } : {}),
             } satisfies OrchestrationCommand;
           })()
-        : {
+        : ({
             ...canonicalCommand,
             message: {
               ...canonicalCommand.message,
               attachments: normalizedAttachments,
             },
-          } satisfies OrchestrationCommand;
+          } satisfies OrchestrationCommand);
 
     return {
       command: normalizedCommand,

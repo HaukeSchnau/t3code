@@ -613,9 +613,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         expandedWorkGroupIds,
         isWorking,
         activeTurnStartedAt,
-        ...(turnDiffSummaryByAssistantMessageId
-          ? { turnDiffSummaryByAssistantMessageId }
-          : {}),
+        ...(turnDiffSummaryByAssistantMessageId ? { turnDiffSummaryByAssistantMessageId } : {}),
         ...(revertTurnCountByUserMessageId ? { revertTurnCountByUserMessageId } : {}),
         turnDiffSummaries,
         supportsConversationRollback,
@@ -3862,7 +3860,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           />
         </div>
       ) : null}
-      {workEntry.questionAnswer ? <QuestionAnswerHistory answer={workEntry.questionAnswer} /> : null}
+      {workEntry.questionAnswer ? (
+        <QuestionAnswerHistory answer={workEntry.questionAnswer} />
+      ) : null}
       {expanded && canExpand ? (
         <div
           className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"

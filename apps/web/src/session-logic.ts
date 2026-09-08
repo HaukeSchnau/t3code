@@ -1,6 +1,4 @@
-import {
-  requestKindFromRequestType,
-} from "@t3tools/client-runtime/pending-requests";
+import { requestKindFromRequestType } from "@t3tools/client-runtime/pending-requests";
 import {
   ApprovalRequestId,
   ProviderApprovalOption,

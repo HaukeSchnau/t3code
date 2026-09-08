@@ -65,10 +65,11 @@ export function makeWatchChangeGate() {
   };
 }
 
-export class WatchSourceError extends Schema.TaggedError<WatchSourceError>()(
-  "WatchSourceError",
-  { detail: Schema.String, retryable: Schema.Boolean, cause: Schema.optional(Schema.Defect()) },
-) {}
+export class WatchSourceError extends Schema.TaggedError<WatchSourceError>()("WatchSourceError", {
+  detail: Schema.String,
+  retryable: Schema.Boolean,
+  cause: Schema.optional(Schema.Defect()),
+}) {}
 
 export function boundWatchEvents(events: ReadonlyArray<string>): [string, ...string[]] | null {
   const bounded: string[] = [];

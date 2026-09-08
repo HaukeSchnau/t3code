@@ -56,9 +56,7 @@ import {
 } from "../Services/OrchestrationEngine.ts";
 const isOrchestrationCommandInvariantError = Schema.is(OrchestrationCommandInvariantError);
 
-const isMissingAggregateInvariant = (
-  error: unknown,
-): error is OrchestrationCommandInvariantError =>
+const isMissingAggregateInvariant = (error: unknown): error is OrchestrationCommandInvariantError =>
   isOrchestrationCommandInvariantError(error) &&
   error.detail.includes("does not exist for command");
 
