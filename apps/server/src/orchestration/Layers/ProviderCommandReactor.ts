@@ -1683,7 +1683,8 @@ const make = Effect.gen(function* () {
       return;
     }
 
-    const isCompactCommand = !isContinuation && message !== null && isCompactCommandMessage(message);
+    const isCompactCommand =
+      !isContinuation && message !== null && isCompactCommandMessage(message);
     if (isCompactCommand) {
       if (!hasOtherUserMessages) {
         yield* appendProviderFailureActivity({
