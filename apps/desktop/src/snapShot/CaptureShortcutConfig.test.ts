@@ -106,10 +106,21 @@ it("preserves symlink-managed dotfiles and identifies their actual target", asyn
   await NodeFSP.symlink(path, link);
   const preview = await setup.preview({ ...target(), path: link }, install);
   expect(preview.path).toBe(link);
-  expect(preview.resolvedPath).toBe(path);
+  expect(preview.resolvedPath).toBe(await NodeFSP.realpath(path));
   await setup.apply(preview.id, "niri");
   expect((await NodeFSP.lstat(link)).isSymbolicLink()).toBe(true);
   expect(await NodeFSP.readFile(link, "utf8")).toBe(preview.after);
+});
+it("applies configs reached through an aliased parent directory", async () => {
+  const aliasDirectory = NodePath.join(directory, "alias");
+  await NodeFSP.symlink(".", aliasDirectory);
+  const preview = await setup.preview(
+    { ...target(), path: NodePath.join(aliasDirectory, "config.kdl") },
+    install,
+  );
+  await setup.apply(preview.id, "niri");
+  expect(await NodeFSP.readFile(path, "utf8")).toBe(preview.after);
+  expect(tools.validateNiri).toHaveBeenCalledWith(expect.stringMatching(/\.t3-capture-.*\.tmp$/u));
 });
 it("refuses a symlink retargeted since preview", async () => {
   const link = NodePath.join(directory, "linked.kdl");
