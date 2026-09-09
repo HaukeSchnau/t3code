@@ -156,16 +156,35 @@ const openDatabase = Effect.fn("web.connectionStorage.openDatabase")(function* (
   });
 });
 
-function readDatabaseValue(database: IDBDatabase, storeName: string, key: IDBValidKey) {
-  return Effect.callback<unknown, ConnectionTransientError>((resume) => {
-    const request = database.transaction(storeName, "readonly").objectStore(storeName).get(key);
+export function readDatabaseValue(database: IDBDatabase, storeName: string, key: IDBValidKey) {
+  const read = Effect.callback<unknown, ConnectionTransientError>((resume) => {
+    const transaction = database.transaction(storeName, "readonly");
+    const request = transaction.objectStore(storeName).get(key);
     request.addEventListener("error", () => {
       resume(Effect.fail(catalogError("read", request.error ?? "Unknown IndexedDB read error")));
     });
     request.addEventListener("success", () => {
       resume(Effect.succeed(request.result));
     });
-  }).pipe(Effect.withSpan("web.connectionStorage.readDatabaseValue"));
+    return Effect.sync(() => {
+      // Interruption must release a pending read so it cannot hold up cache writes.
+      try {
+        transaction.abort();
+      } catch {
+        // The transaction may already have completed before interruption won the race.
+      }
+    });
+  });
+  // A stuck browser cache must not prevent loading authoritative server data.
+  // The connection catalog contains credentials and is not a disposable cache.
+  return (
+    storeName === CATALOG_STORE_NAME
+      ? read
+      : read.pipe(
+          Effect.timeout("2 seconds"),
+          Effect.mapError((cause) => catalogError("read cache", cause)),
+        )
+  ).pipe(Effect.withSpan("web.connectionStorage.readDatabaseValue"));
 }
 
 function writeDatabaseValue(
