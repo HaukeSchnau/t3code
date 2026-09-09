@@ -302,6 +302,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   async function createHarness(options?: {
+    readonly journalEvents?: boolean;
     serverSettings?: Partial<ServerSettings>;
     assistantTranscriptRecovery?: "none" | "authoritative";
     threadTitle?: string;
@@ -403,7 +404,7 @@ describe("ProviderRuntimeIngestion", () => {
           yield* Effect.forEach(
             normalizedEvents,
             (event) =>
-              isTranscriptDurabilityEvent(event)
+              options?.journalEvents !== false && isTranscriptDurabilityEvent(event)
                 ? transcriptJournal.append(event).pipe(Effect.asVoid)
                 : Effect.void,
             { discard: true },
@@ -489,6 +490,65 @@ describe("ProviderRuntimeIngestion", () => {
       drain,
     };
   }
+
+  it.each([false, true])(
+    "preserves every assistant chunk in a burst with journaling=%s",
+    async (journalEvents) => {
+      const harness = await createHarness({
+        journalEvents,
+        serverSettings: { enableLegacyTokenStreaming: true },
+      });
+      await harness.emitAndDrain([
+        {
+          type: "turn.started",
+          eventId: asEventId("burst-started"),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("burst-turn"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+        },
+      ]);
+      const chunks = [
+        "I’ll start the two",
+        "-en",
+        "vironment experiment: independent",
+        " jj",
+        " repositories",
+        ",",
+        " automatic project tooling",
+        ", and identical internal paths.",
+      ];
+      await harness.emitAndDrain(
+        chunks.map((delta, index) => ({
+          type: "content.delta",
+          eventId: asEventId(`burst-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId("burst-turn"),
+          itemId: asItemId("burst-message"),
+          createdAt: "2026-01-01T00:00:01.000Z",
+          payload: { streamKind: "assistant_text", delta },
+        })),
+      );
+      const thread = (await harness.readModel()).threads.find((entry) => entry.id === "thread-1");
+      // #region motel debug
+      // TODO: Remove after the live transcript fix is confirmed.
+      await Effect.runPromise(
+        Effect.logInfo("transcript burst evidence", {
+          journalEvents,
+          expectedCharacters: chunks.join("").length,
+          actualCharacters: thread?.messages[0]?.text.length,
+        }).pipe(
+          Effect.annotateLogs({
+            "debug.session": "garbled-transcripts",
+            "debug.hypothesis": "unjournaled-queue-replacement",
+          }),
+        ),
+      );
+      // #endregion motel debug
+      expect(thread?.messages.map((message) => message.text).join("")).toBe(chunks.join(""));
+    },
+  );
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

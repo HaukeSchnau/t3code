@@ -83,7 +83,10 @@ import {
   sanitizeAntigravityToolPayload,
   selectAntigravityPermissionOptionId,
 } from "../acp/AntigravityProtocol.ts";
-import type { ProviderAdapterShape } from "../Services/ProviderAdapter.ts";
+import type {
+  ProviderAdapterShape,
+  ProviderRuntimeEventAcceptance,
+} from "../Services/ProviderAdapter.ts";
 import type { EventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = ProviderDriverKind.make("antigravity");
@@ -124,6 +127,7 @@ function mapAntigravityError(threadId: ThreadId, method: string, cause: EffectAc
 }
 
 export interface AntigravityAdapterOptions {
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
   readonly instanceId: ProviderInstanceId;
   readonly makeRuntime: (
     input: Omit<AntigravityAcpRuntimeInput, "spawn" | "childProcessSpawner" | "onAuthorizationUrl">,
@@ -350,7 +354,12 @@ export const makeAntigravityAdapter = Effect.fn("makeAntigravityAdapter")(functi
     eventId: Effect.map(randomId, EventId.make),
     createdAt: nowIso,
   });
-  const emit = (event: ProviderRuntimeEvent) => PubSub.publish(events, event).pipe(Effect.asVoid);
+  const acceptRuntimeEvent = options.acceptRuntimeEvent ?? (() => Effect.succeed(true));
+  const emit = (event: ProviderRuntimeEvent) =>
+    acceptRuntimeEvent(event).pipe(
+      Effect.flatMap((accepted) => (accepted ? PubSub.publish(events, event) : Effect.void)),
+      Effect.asVoid,
+    );
 
   const withThreadLock = <A, E, R>(threadId: ThreadId, task: Effect.Effect<A, E, R>) =>
     SynchronizedRef.modifyEffect(locks, (current) => {

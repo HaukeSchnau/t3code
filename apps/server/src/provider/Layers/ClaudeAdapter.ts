@@ -123,6 +123,7 @@ import {
   type ProviderAdapterError,
 } from "../Errors.ts";
 import { type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
+import type { ProviderRuntimeEventAcceptance } from "../Services/ProviderAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 const encodeUnknownJsonStringExit = Schema.encodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
 const decodeUnknownJsonStringExit = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
@@ -363,6 +364,7 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
 }
 
 export interface ClaudeAdapterLiveOptions {
+  readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly createQuery?: (input: {
@@ -1997,8 +1999,14 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
   const nextEventId = Effect.map(randomUUIDv4, (id) => EventId.make(id));
   const makeEventStamp = () => Effect.all({ eventId: nextEventId, createdAt: nowIso });
 
+  const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
   const offerRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
-    Queue.offer(runtimeEventQueue, event).pipe(Effect.asVoid);
+    acceptRuntimeEvent(event).pipe(
+      Effect.flatMap((accepted) =>
+        accepted ? Queue.offer(runtimeEventQueue, event) : Effect.void,
+      ),
+      Effect.asVoid,
+    );
 
   const refreshClaudeUsageLimits = Effect.fn("refreshClaudeUsageLimits")(function* (
     context: ClaudeSessionContext,

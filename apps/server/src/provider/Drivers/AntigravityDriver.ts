@@ -73,7 +73,15 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
   metadata: { displayName: "Antigravity", supportsMultipleInstances: true },
   configSchema: AntigravitySettings,
   defaultConfig: () => decodeSettings({}),
-  create: ({ instanceId, displayName, accentColor, environment, enabled, config }) =>
+  create: ({
+    instanceId,
+    displayName,
+    accentColor,
+    environment,
+    enabled,
+    config,
+    acceptRuntimeEvent,
+  }) =>
     Effect.gen(function* () {
       const crypto = yield* Crypto.Crypto;
       const fileSystem = yield* FileSystem.FileSystem;
@@ -301,6 +309,7 @@ export const AntigravityDriver: ProviderDriver<AntigravitySettings, AntigravityD
       );
       const adapter = yield* makeAntigravityAdapter(settings, {
         instanceId,
+        acceptRuntimeEvent,
         makeRuntime,
         withProcess: authFlow.withProcess,
         defaultModel,
