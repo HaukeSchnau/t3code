@@ -1,3 +1,7 @@
+import {
+  projectProviderCwd,
+  projectProviderEndpoint,
+} from "../../project/SeparateProjectRegistry.ts";
 // @effect-diagnostics nodeBuiltinImport:off -- Claude SDK requires a synchronous Node-compatible spawn callback.
 import * as NodeChildProcess from "node:child_process";
 import {
@@ -4783,12 +4787,33 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           : {}),
       };
       const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+      const providerPaths = yield* Effect.tryPromise({
+        try: async () => ({
+          cwd: input.cwd
+            ? await projectProviderCwd(input.cwd, claudeEnvironment.AGENT_EXEC_STATE)
+            : undefined,
+          endpoint: mcpSession
+            ? await projectProviderEndpoint(
+                input.cwd,
+                mcpSession.endpoint,
+                claudeEnvironment.AGENT_EXEC_STATE,
+              )
+            : undefined,
+        }),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "startSession",
+            detail: "Could not resolve the project environment.",
+            cause,
+          }),
+      });
       // The attachments dir grant lets the agent Read/copy pasted images at
       // the paths ProviderService injects into the turn text, without an
       // approval prompt. It is a leaf directory holding only attachment
       // files; siblings like secrets/ and state.sqlite stay ungranted.
       const additionalDirectories = [
-        ...(input.cwd ? [input.cwd] : []),
+        ...(providerPaths.cwd ? [providerPaths.cwd] : []),
         serverConfig.attachmentsDir,
       ];
       const executionCwd = input.cwd;
@@ -4806,7 +4831,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           )
         : undefined;
       const queryOptions: ClaudeQueryOptions = {
-        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(providerPaths.cwd ? { cwd: providerPaths.cwd } : {}),
         ...(apiModelId ? { model: apiModelId } : {}),
         pathToClaudeCodeExecutable: claudeBinaryPath,
         ...(executionLauncher && executionCwd
@@ -4814,13 +4839,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               spawnClaudeCodeProcess: (options) =>
                 NodeChildProcess.spawn(
                   executionLauncher,
-                  projectExecutionArguments(
-                    options.cwd ?? executionCwd,
-                    options.command,
-                    options.args,
-                  ),
+                  projectExecutionArguments(executionCwd, options.command, options.args),
                   {
-                    cwd: options.cwd,
+                    cwd: executionCwd,
                     env: options.env,
                     signal: options.signal,
                     stdio: ["pipe", "pipe", "pipe"],
@@ -4864,7 +4885,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
               mcpServers: {
                 "t3-code": {
                   type: "http",
-                  url: mcpSession.endpoint,
+                  url: providerPaths.endpoint ?? mcpSession.endpoint,
                   headers: {
                     Authorization: mcpSession.authorizationHeader,
                   },

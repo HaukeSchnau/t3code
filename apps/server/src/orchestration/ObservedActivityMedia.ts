@@ -11,6 +11,7 @@ import * as Path from "effect/Path";
 import { ServerConfig } from "../config.ts";
 import { inferImageExtension } from "../imageMime.ts";
 import { createObservedMediaId, resolveObservedMediaPath } from "../observedMediaStore.ts";
+import { projectHostPath } from "../project/SeparateProjectRegistry.ts";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
@@ -83,6 +84,7 @@ export const makeObservedActivityMedia = Effect.gen(function* () {
   const enrich = (input: {
     readonly activity: OrchestrationThreadActivity;
     readonly threadId: ThreadId;
+    readonly resolveWorkspaceRoot?: Effect.Effect<string | undefined>;
   }): Effect.Effect<OrchestrationThreadActivity> =>
     Effect.gen(function* () {
       const payload = asRecord(input.activity.payload);
@@ -94,7 +96,14 @@ export const makeObservedActivityMedia = Effect.gen(function* () {
       const mediaId = createObservedMediaId(input.threadId);
       if (!mediaId) return input.activity;
 
-      const bytes = yield* fileSystem.readFile(sourcePath);
+      const cwd = input.resolveWorkspaceRoot ? yield* input.resolveWorkspaceRoot : undefined;
+      if (input.resolveWorkspaceRoot && !cwd) return input.activity;
+      const hostPath = cwd
+        ? yield* Effect.tryPromise(() =>
+            projectHostPath(cwd, sourcePath, process.env.AGENT_EXEC_STATE),
+          )
+        : sourcePath;
+      const bytes = yield* fileSystem.readFile(hostPath);
       const extension = inferImageExtension({ mimeType, fileName: sourcePath });
       const targetPath = resolveObservedMediaPath({
         observedMediaDir: serverConfig.observedMediaDir,
