@@ -63,6 +63,7 @@ const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
   skillScopeInjection: "supported",
+  reportsContextWindow: true,
 } as const;
 
 export interface CodexAppServerProviderSnapshot {

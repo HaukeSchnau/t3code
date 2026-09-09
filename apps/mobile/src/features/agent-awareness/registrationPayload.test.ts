@@ -5,6 +5,14 @@ vi.mock("expo-constants", () => ({
   default: { expoConfig: { extra: { iosPersonalTeamBuild: false } } },
 }));
 
+vi.mock("react-native", () => ({
+  Platform: { OS: "ios" },
+}));
+
+vi.mock("./androidNotifications", () => ({
+  supportsAndroidAgentNotifications: () => true,
+}));
+
 import {
   makeAgentAwarenessDeviceRegistrationInput,
   resolveApsEnvironment,
