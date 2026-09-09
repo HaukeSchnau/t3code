@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it } from "vite-plus/test";
 import { ThreadWorkspaceId } from "@t3tools/contracts";
-import { filterWorkspaceGroups, groupThreadsByWorkspace } from "./workspaceThreads";
+import { filterWorkspaceGroups, groupThreadsByWorkspace } from "./workspaceThreads.js";
 
 const thread = (id: string, extra: Partial<ReturnType<typeof base>> = {}) => ({
   ...base(id),
