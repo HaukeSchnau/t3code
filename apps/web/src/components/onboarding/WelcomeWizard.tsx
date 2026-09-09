@@ -203,7 +203,7 @@ export function WelcomeWizard({
             />
           </DialogHeader>
 
-          <WizardPanel className="min-w-0" holdHeight={isLoadingProjects}>
+          <WizardPanel holdHeight={isLoadingProjects}>
             {step === "connection" ? (
               <ConnectionStep
                 expandPairingInitially={!localAvailable}
