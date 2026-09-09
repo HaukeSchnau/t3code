@@ -38,6 +38,10 @@ vi.mock("../../lib/useUniwindTheme", () => ({
   }),
 }));
 vi.mock("../../state/use-thread-pr", () => ({ useThreadPr: () => null }));
+vi.mock("../../state/thread-order", async () => {
+  const { Atom } = await import("effect/unstable/reactivity");
+  return { threadArrangementOpenAtom: Atom.make(false) };
+});
 vi.mock("../home/thread-swipe-actions", async () => {
   const React = await import("react");
   return {
