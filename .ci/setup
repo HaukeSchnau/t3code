@@ -29,6 +29,8 @@ if [[ -f node_modules/.modules.yaml && -f "$stamp_file" ]] \
   exit 0
 fi
 
-pnpm install --frozen-lockfile
+# Match the Nix release build: CI consumes the committed lockfile. Rechecking
+# every locked version against live registry policy metadata stalls cold installs.
+pnpm install --frozen-lockfile --trust-lockfile
 printf '%s\n' "$dependency_key" > "$stamp_file.next"
 mv "$stamp_file.next" "$stamp_file"
