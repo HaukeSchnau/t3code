@@ -21,6 +21,11 @@ showed a fatal 502 screen before the durable outbox and cached shell/thread stat
 
 ## Cached primary identity
 
+Browser cache reads for the shell, server configuration, thread history, and VCS refs have a two-second
+deadline. If IndexedDB leaves a read pending, cancellation aborts that read-only transaction and the normal
+cache-error path loads from the server. The credential-bearing connection catalog is not subject to this
+cache deadline. A local cache stall must not make a healthy server appear to have no projects.
+
 The web connection platform persists the schema-decoded, non-secret primary environment descriptor under the
 same exact origin/HTTP/WS signature. During cold offline startup it reconstructs a primary registration so the
 existing environment-scoped IndexedDB caches can attach. The registration remains refreshable; if the live
