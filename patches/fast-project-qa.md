@@ -13,6 +13,10 @@ and fork lockfile check.
   treats project setup and QA commands as opaque executables and contains no Node or TypeScript
   behavior.
 - `.ci/` owns T3 Code's retained paths, environment, and dependency fingerprint.
+- CI installs the committed lockfile with `--frozen-lockfile --trust-lockfile`, matching Nix release
+  builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
+  not recheck every locked version against live registry metadata. That pnpm 11.10 verification
+  exhausted the 15-minute setup budget in run 387 before any QA command ran.
 - Server-test temporary files live below T3 Code's persistent CI cache. The runner's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
 - `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
