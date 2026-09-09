@@ -1,3 +1,10 @@
+import { useAtomValue } from "@effect/atom-react";
+import type { ScopedThreadRef } from "@t3tools/contracts";
+import { isPublishedMarkdownUrl } from "@t3tools/shared/markdownLinks";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
+import ChatMarkdown from "~/components/ChatMarkdown";
+import { artifactMarkdown } from "~/state/projects";
 import { ExternalLinkIcon, RefreshCwIcon } from "lucide-react";
 import { useState } from "react";
 
@@ -6,6 +13,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { artifactReloadUrl } from "~/lib/artifactLink";
 
 interface ArtifactPreviewPanelProps {
+  readonly threadRef: ScopedThreadRef | null;
   readonly url: string;
   readonly title: string;
 }
@@ -16,6 +24,48 @@ function isPdfUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function PublishedMarkdown({
+  url,
+  documentUrl,
+  threadRef,
+}: {
+  url: string;
+  documentUrl: string;
+  threadRef: ScopedThreadRef;
+}) {
+  const result = useAtomValue(
+    artifactMarkdown({ environmentId: threadRef.environmentId, input: { url } }),
+  );
+  if (result._tag === "Failure") {
+    const error = Cause.squash(result.cause);
+    return (
+      <div role="alert" className="p-6 text-sm text-muted-foreground">
+        {error instanceof Error ? error.message : "Could not load Markdown."} Reload or open
+        externally.
+      </div>
+    );
+  }
+  const value = AsyncResult.value(result);
+  if (value._tag === "None") {
+    return (
+      <div role="status" className="p-6 text-sm text-muted-foreground">
+        Loading Markdown…
+      </div>
+    );
+  }
+  return (
+    <div className="min-h-0 flex-1 overflow-auto">
+      <ChatMarkdown
+        text={value.value.contents}
+        cwd={undefined}
+        threadRef={threadRef}
+        documentUrl={documentUrl}
+        className="mx-auto max-w-4xl px-6 py-5"
+      />
+    </div>
+  );
 }
 
 /** Shows a published document beside its conversation. */
@@ -53,18 +103,27 @@ export default function ArtifactPreviewPanel(props: ArtifactPreviewPanelProps) {
           Open externally
         </Button>
       </div>
-      {/* The validated external origin needs module, fetch, and storage access. PDFs use the browser viewer. */}
-      <iframe
-        key={src}
-        src={src}
-        title={props.title}
-        className="min-h-0 flex-1 border-0 bg-white"
-        sandbox={
-          pdf
-            ? undefined
-            : "allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-same-origin"
-        }
-      />
+      {isPublishedMarkdownUrl(props.url) && props.threadRef ? (
+        <PublishedMarkdown
+          key={src}
+          url={src}
+          documentUrl={props.url}
+          threadRef={props.threadRef}
+        />
+      ) : (
+        /* The validated external origin needs module, fetch, and storage access. PDFs use the browser viewer. */
+        <iframe
+          key={src}
+          src={src}
+          title={props.title}
+          className="min-h-0 flex-1 border-0 bg-white"
+          sandbox={
+            pdf
+              ? undefined
+              : "allow-scripts allow-forms allow-modals allow-popups allow-downloads allow-same-origin"
+          }
+        />
+      )}
     </div>
   );
 }

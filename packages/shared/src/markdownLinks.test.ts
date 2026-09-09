@@ -1,3 +1,4 @@
+import { isPublishedMarkdownUrl, resolvePublishedMarkdownDestination } from "./markdownLinks.ts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { resolveInlineCodeWebLink } from "./markdownLinks.js";
@@ -34,5 +35,24 @@ describe("resolveInlineCodeWebLink", () => {
   it("rejects non-web protocols", () => {
     expect(resolveInlineCodeWebLink("javascript:alert(1)")).toBeNull();
     expect(resolveInlineCodeWebLink("file:///tmp/report.html")).toBeNull();
+  });
+});
+
+describe("published Markdown destinations", () => {
+  const base = "https://files.schnau.dev/reports/incident.md?revision=2#summary";
+  it.each([
+    ["./diagram.svg", "https://files.schnau.dev/reports/diagram.svg"],
+    ["../appendix.md#evidence", "https://files.schnau.dev/appendix.md#evidence"],
+    ["/assets/image.png", "https://files.schnau.dev/assets/image.png"],
+    ["#timeline", "#timeline"],
+    ["https://example.com/doc", "https://example.com/doc"],
+    ["", ""],
+  ])("resolves %s against the document", (href, expected) => {
+    expect(resolvePublishedMarkdownDestination(href, base)).toBe(expected);
+  });
+  it.each(["report.md", "report.MD", "report.markdown", "report%2Emd"])("recognizes %s", (path) => {
+    expect(isPublishedMarkdownUrl(`https://files.schnau.dev/${path}?revision=2#summary`)).toBe(
+      true,
+    );
   });
 });

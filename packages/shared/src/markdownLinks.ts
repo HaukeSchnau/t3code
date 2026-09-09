@@ -95,3 +95,28 @@ export function resolveInlineCodeWebLink(value: string): InlineCodeWebLink | nul
     return null;
   }
 }
+
+/** Only published Markdown documents can be fetched through the artifact reader. */
+export function isPublishedMarkdownUrl(href: string): boolean {
+  try {
+    const url = new URL(href);
+    return (
+      url.origin === "https://files.schnau.dev" &&
+      !url.username &&
+      !url.password &&
+      /\.(?:md|markdown)$/i.test(decodeURIComponent(url.pathname))
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve a sanitized Markdown destination against its published document. */
+export function resolvePublishedMarkdownDestination(href: string, documentUrl: string): string {
+  if (!href || href.startsWith("#")) return href;
+  try {
+    return new URL(href, documentUrl).href;
+  } catch {
+    return "";
+  }
+}

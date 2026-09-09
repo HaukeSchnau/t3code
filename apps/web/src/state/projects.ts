@@ -20,6 +20,13 @@ export const projectContentSearch = createEnvironmentRpcQueryAtomFamily(connecti
   staleTimeMs: 5_000,
   idleTtlMs: 60_000,
 });
+export const artifactMarkdown = createEnvironmentRpcQueryAtomFamily(connectionAtomRuntime, {
+  label: "environment-data:artifacts:markdown",
+  tag: WS_METHODS.artifactsReadMarkdown,
+  staleTimeMs: 30_000,
+  idleTtlMs: 60_000,
+});
+
 const projectCatalogValueAtom = import.meta.env.DEV
   ? withFixtureCatalog(environmentCatalog.catalogValueAtom)
   : environmentCatalog.catalogValueAtom;

@@ -8195,6 +8195,7 @@ export default function ChatView(props: ChatViewProps) {
       <Suspense fallback={null}>
         <ArtifactPreviewPanel
           key={renderedRightPanelSurface.url}
+          threadRef={activeThreadRef}
           url={renderedRightPanelSurface.url}
           title={renderedRightPanelSurface.title}
         />

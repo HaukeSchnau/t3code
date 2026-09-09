@@ -23,7 +23,11 @@ export function parseArtifactLink(href: string) {
   const name = path.replace(/\/$/, "").split("/").at(-1) ?? "Artifact";
   // Extensionless routes and directories can be published HTML apps. Known
   // document extensions render in the browser; media keeps its existing viewer.
-  if (!path.endsWith("/") && name.includes(".") && !/\.(?:html?|pdf|txt|md|json)$/i.test(name)) {
+  if (
+    !path.endsWith("/") &&
+    name.includes(".") &&
+    !/\.(?:html?|pdf|txt|md|markdown|json)$/i.test(name)
+  ) {
     return null;
   }
   return { url: url.href, title: name };
