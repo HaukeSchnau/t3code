@@ -1,3 +1,7 @@
+import {
+  groupThreadsByWorkspace,
+  type ThreadWorkspaceGroup,
+} from "@t3tools/client-runtime/state/workspaces";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -9,6 +13,7 @@ import type {
   RuntimeMode,
   ServerProvider,
   SkillPackId,
+  WorkspaceProfile,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -142,6 +147,11 @@ type NewTaskFlowContextValue = {
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
+  readonly workspaces: ReadonlyArray<ThreadWorkspaceGroup<unknown>>;
+  readonly workspaceProfile: WorkspaceProfile;
+  readonly isolatedWorkspaces: boolean;
+  readonly selectWorkspace: (workspace: ThreadWorkspaceGroup<unknown>) => void;
+  readonly setWorkspaceProfile: (profile: WorkspaceProfile) => void;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
@@ -447,6 +457,58 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
+  const workspaceProfile = selectedProjectDraft.workspaceSelection?.workspaceProfile ?? "familiar";
+  const isolatedWorkspaces =
+    selectedEnvironmentServerConfig?.environment.capabilities.isolatedWorkspaces === true;
+  const workspaces = useMemo(
+    () =>
+      groupThreadsByWorkspace(
+        threads.filter(
+          (thread) =>
+            thread.environmentId === selectedProject?.environmentId &&
+            thread.projectId === selectedProject.id,
+        ),
+        (thread) => thread.settledAt !== null,
+      ),
+    [threads, selectedProject],
+  );
+  const selectWorkspace = useCallback(
+    (workspace: ThreadWorkspaceGroup<unknown>) => {
+      if (!selectedProjectDraftKey) return;
+      pendingLocalBranchSyncDraftKeysRef.current.delete(selectedProjectDraftKey);
+      updateComposerDraftSettings(selectedProjectDraftKey, {
+        workspaceSelection: {
+          mode: "local",
+          branch: workspace.branch,
+          worktreePath: workspace.checkoutPath,
+          ...(workspace.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
+          workspaceProfile,
+        },
+      });
+    },
+    [selectedProjectDraftKey, workspaceProfile],
+  );
+  const setWorkspaceProfile = useCallback(
+    (profile: WorkspaceProfile) => {
+      if (!selectedProjectDraftKey) return;
+      updateComposerDraftSettings(selectedProjectDraftKey, {
+        workspaceSelection: {
+          mode: workspaceMode,
+          branch: selectedBranchName,
+          worktreePath: selectedWorktreePath,
+          ...selectedProjectDraft.workspaceSelection,
+          workspaceProfile: profile,
+        },
+      });
+    },
+    [
+      selectedProjectDraftKey,
+      selectedProjectDraft.workspaceSelection,
+      workspaceMode,
+      selectedBranchName,
+      selectedWorktreePath,
+    ],
+  );
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
   // value keeps tracking the server setting when the config loads late.
@@ -615,10 +677,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     () => ({
       environmentId: selectedProject?.environmentId ?? null,
       // `|| null` also skips the stand-in project's empty workspaceRoot.
-      cwd: selectedProject?.workspaceRoot || null,
+      cwd: selectedWorktreePath ?? (selectedProject?.workspaceRoot || null),
       query: debouncedBranchQuery,
     }),
-    [debouncedBranchQuery, selectedProject?.environmentId, selectedProject?.workspaceRoot],
+    [
+      debouncedBranchQuery,
+      selectedProject?.environmentId,
+      selectedProject?.workspaceRoot,
+      selectedWorktreePath,
+    ],
   );
   const branchState = usePaginatedBranches(branchTarget);
   const branchSearchIsDebouncing = branchQuery.trim() !== debouncedBranchQuery.trim();
@@ -750,7 +817,8 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode,
           branch: mode === "local" ? localSelection.branch : selectedBranchName,
-          worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
+          worktreePath: null,
+          workspaceProfile,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
@@ -761,7 +829,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedBranchName,
       selectedProject,
       selectedProjectDraftKey,
-      selectedWorktreePath,
+      workspaceProfile,
     ],
   );
 
@@ -809,16 +877,30 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode: workspaceMode,
           branch: branch.name,
-          worktreePath: resolveNewTaskBranchWorktreePath({
-            workspaceMode,
-            projectCwd: selectedProject.workspaceRoot,
-            branchWorktreePath: branch.worktreePath,
-          }),
+          worktreePath:
+            selectedWorktreePath ??
+            resolveNewTaskBranchWorktreePath({
+              workspaceMode,
+              projectCwd: selectedProject.workspaceRoot,
+              branchWorktreePath: branch.worktreePath,
+            }),
+          ...(selectedWorktreePath && selectedProjectDraft.workspaceSelection?.workspaceId
+            ? { workspaceId: selectedProjectDraft.workspaceSelection.workspaceId }
+            : {}),
+          workspaceProfile,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
     },
-    [draftStartFromOrigin, selectedProject, selectedProjectDraftKey, workspaceMode],
+    [
+      draftStartFromOrigin,
+      selectedProject,
+      selectedProjectDraftKey,
+      workspaceMode,
+      selectedWorktreePath,
+      selectedProjectDraft.workspaceSelection?.workspaceId,
+      workspaceProfile,
+    ],
   );
 
   const setStartFromOrigin = useCallback(
@@ -831,11 +913,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           mode: workspaceMode,
           branch: selectedBranchName,
           worktreePath: selectedWorktreePath,
+          ...selectedProjectDraft.workspaceSelection,
           startFromOrigin: value,
         },
       });
     },
-    [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
+    [
+      selectedBranchName,
+      selectedProjectDraftKey,
+      selectedWorktreePath,
+      workspaceMode,
+      selectedProjectDraft.workspaceSelection,
+    ],
   );
 
   const setSkillPackIds = useCallback(
@@ -922,6 +1011,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
+          ...(message.creation.workspaceId ? { workspaceId: message.creation.workspaceId } : {}),
+          ...(message.creation.workspaceProfile
+            ? { workspaceProfile: message.creation.workspaceProfile }
+            : {}),
         },
       });
     }
@@ -1004,6 +1097,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
             currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
           }),
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
+          ...(mode === "local" && workspaceSelection?.workspaceId
+            ? { workspaceId: workspaceSelection.workspaceId }
+            : {}),
+          ...(workspaceSelection?.workspaceProfile
+            ? { workspaceProfile: workspaceSelection.workspaceProfile }
+            : {}),
           // The draft only carries the flag when the user touched it; fall
           // back to the resolved default (server settings) so queued tasks
           // drain with the same origin mode the composer displayed.
@@ -1138,6 +1237,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectKey,
       selectedModelKey,
       workspaceMode,
+      workspaces,
+      workspaceProfile,
+      isolatedWorkspaces,
+      selectWorkspace,
+      setWorkspaceProfile,
       selectedBranchName,
       selectedWorktreePath,
       startFromOrigin,
@@ -1247,6 +1351,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       startFromOrigin,
       submitting,
       workspaceMode,
+      workspaces,
+      workspaceProfile,
+      isolatedWorkspaces,
+      selectWorkspace,
+      setWorkspaceProfile,
       appendAttachments,
       clearAttachments,
       removeAttachment,

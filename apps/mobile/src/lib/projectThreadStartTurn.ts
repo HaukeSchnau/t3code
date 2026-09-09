@@ -7,6 +7,8 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type SkillPackId,
+  type ThreadWorkspaceId,
+  type WorkspaceProfile,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
@@ -40,6 +42,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly workspaceId?: ThreadWorkspaceId;
+  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
@@ -52,7 +56,7 @@ export interface ProjectThreadStartTurnSpec {
  */
 export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpec) {
   const title = deriveThreadTitleFromPrompt(spec.text);
-  const isWorktree = spec.workspaceMode === "worktree";
+  const isWorktree = spec.workspaceMode === "worktree" && spec.worktreePath === null;
   return {
     commandId: CommandId.make(spec.commandId),
     threadId: ThreadId.make(spec.threadId),
@@ -76,15 +80,23 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         ...(spec.skillPackIds ? { skillPackIds: spec.skillPackIds } : {}),
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
+        ...(spec.workspaceId ? { workspaceId: spec.workspaceId } : {}),
         createdAt: spec.createdAt,
       },
       ...(isWorktree
         ? {
-            prepareWorktree: {
-              projectCwd: spec.projectCwd,
-              baseBranch: spec.branch!,
-              branch: spec.worktreeBranchName,
-              ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
+            prepareWorkspace: {
+              kind: "auto" as const,
+              roots: [
+                {
+                  projectId: spec.projectId,
+                  sourcePath: spec.projectCwd,
+                  role: "primary" as const,
+                  ...(spec.branch ? { baseRevision: spec.branch } : {}),
+                  ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
+                },
+              ],
+              ...(spec.workspaceProfile ? { profile: spec.workspaceProfile } : {}),
             },
             runSetupScript: true,
           }

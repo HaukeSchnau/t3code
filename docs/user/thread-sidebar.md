@@ -28,8 +28,16 @@ the Snoozed and Settled shelves remain flat so a thread still has one predictabl
 When a coordinator has efforts and unassigned children, those children appear under **Other delegated
 work**. A coordinator with no efforts continues to show its children without a section header.
 
-Use a new thread for a separate task. Choose **New worktree** when its code changes
-need a separate branch and working directory.
+Use a new thread for a separate task. In the workspace picker, choose **New workspace**
+for a separate copy of the project, an existing workspace to continue its work in a fresh
+conversation, or **Project checkout** to use the original files. Conversations sharing a
+workspace see each other's file changes. The picker shows when another thread is running.
+
+Workspaces stay in the normal picker while any of their threads remain active. When all
+threads settle or archive, use search or **Show settled** to find the retained workspace.
+Starting another thread there reuses its files. Settling a thread does not delete or merge
+its changes. On hosts with isolated workspaces, **Advanced** lets you choose whether a new
+workspace keeps your global agent instructions and skills.
 
 Pinning applies to the individual thread, not its whole delegation tree. When a parent and child
 have different pin states, each starts a top-level row in its own pinned or active section. Children

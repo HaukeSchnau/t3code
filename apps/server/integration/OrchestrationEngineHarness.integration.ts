@@ -372,6 +372,7 @@ export const makeOrchestrationIntegrationHarness = (
       Layer.provideMerge(
         Layer.succeed(ThreadWorkspaceService, {
           prepareWorkspace: () => Effect.die("prepareWorkspace should not be called in this test"),
+          selectWorkspace: () => Effect.succeed(undefined),
           resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
           deleteWorkspace: () => Effect.die("deleteWorkspace should not be called in this test"),
         }),

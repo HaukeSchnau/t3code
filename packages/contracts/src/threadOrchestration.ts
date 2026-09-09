@@ -8,6 +8,7 @@ import {
   PositiveInt,
   ProjectId,
   ThreadId,
+  ThreadWorkspaceId,
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
@@ -33,6 +34,7 @@ import {
 import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import { ProviderErrorClass, ProviderUnavailable } from "./providerError.ts";
 import { SkillPackId } from "./skillPacks.ts";
+import { WorkspaceProfile } from "./workspace.ts";
 
 export class ThreadOrchestrationError extends Schema.TaggedError<ThreadOrchestrationError>()(
   "ThreadOrchestrationError",
@@ -119,6 +121,7 @@ export const ThreadOrchestrationThreadSummary = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   workspaceRoot: TrimmedNonEmptyString,
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
+  workspaceId: Schema.optional(Schema.NullOr(ThreadWorkspaceId)),
   outcome: Schema.optional(
     Schema.Literals([
       "unknown",
@@ -189,7 +192,8 @@ export type ThreadOrchestrationThreadResult = typeof ThreadOrchestrationThreadRe
 
 export const ThreadOrchestrationCreateEnvironment = Schema.Union([
   Schema.Struct({ type: Schema.Literal("local") }),
-  Schema.Struct({ type: Schema.Literal("worktree") }),
+  Schema.Struct({ type: Schema.Literal("worktree"), profile: Schema.optional(WorkspaceProfile) }),
+  Schema.Struct({ type: Schema.Literal("workspace"), workspaceId: ThreadWorkspaceId }),
 ]);
 export type ThreadOrchestrationCreateEnvironment = typeof ThreadOrchestrationCreateEnvironment.Type;
 

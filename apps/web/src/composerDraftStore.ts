@@ -19,6 +19,8 @@ import {
   SkillPackId,
   ThreadId,
   SnapShotSource,
+  ThreadWorkspaceId,
+  WorkspaceProfile,
 } from "@t3tools/contracts";
 import {
   parseScopedProjectKey,
@@ -339,6 +341,8 @@ const PersistedDraftThreadState = Schema.Struct({
   interactionMode: ProviderInteractionMode,
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workspaceId: Schema.optionalKey(Schema.NullOr(ThreadWorkspaceId)),
+  workspaceProfile: Schema.optionalKey(WorkspaceProfile),
   envMode: DraftThreadEnvModeSchema,
   startFromOrigin: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   skillPackIds: Schema.optionalKey(Schema.Array(SkillPackId)),
@@ -459,6 +463,8 @@ export interface DraftSessionState {
   interactionMode: ProviderInteractionMode;
   branch: string | null;
   worktreePath: string | null;
+  workspaceId?: ThreadWorkspaceId | null;
+  workspaceProfile?: WorkspaceProfile;
   envMode: DraftThreadEnvMode;
   startFromOrigin: boolean;
   /** Packs chosen for the thread before it exists; undefined inherits the project default. */
@@ -550,6 +556,8 @@ interface ComposerDraftStoreState {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
+      workspaceId?: ThreadWorkspaceId | null;
+      workspaceProfile?: WorkspaceProfile;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
@@ -567,6 +575,8 @@ interface ComposerDraftStoreState {
       threadId?: ThreadId;
       branch?: string | null;
       worktreePath?: string | null;
+      workspaceId?: ThreadWorkspaceId | null;
+      workspaceProfile?: WorkspaceProfile;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
       startFromOrigin?: boolean;
@@ -582,6 +592,8 @@ interface ComposerDraftStoreState {
     options: {
       branch?: string | null;
       worktreePath?: string | null;
+      workspaceId?: ThreadWorkspaceId | null;
+      workspaceProfile?: WorkspaceProfile;
       projectRef?: ScopedProjectRef;
       createdAt?: string;
       envMode?: DraftThreadEnvMode;
@@ -1698,6 +1710,8 @@ function createDraftThreadState(
     threadId?: ThreadId;
     branch?: string | null;
     worktreePath?: string | null;
+    workspaceId?: ThreadWorkspaceId | null;
+    workspaceProfile?: WorkspaceProfile;
     createdAt?: string;
     envMode?: DraftThreadEnvMode;
     startFromOrigin?: boolean;
@@ -1733,6 +1747,7 @@ function createDraftThreadState(
       : options.startFromOrigin;
   const environmentSelection =
     options?.environmentSelection ?? existingThread?.environmentSelection;
+  const workspaceProfile = options?.workspaceProfile ?? existingThread?.workspaceProfile;
   return {
     threadId,
     environmentId: projectRef.environmentId,
@@ -1754,6 +1769,14 @@ function createDraftThreadState(
       options?.interactionMode ?? existingThread?.interactionMode ?? DEFAULT_INTERACTION_MODE,
     branch: nextBranch,
     worktreePath: nextWorktreePath,
+    ...(options?.workspaceId
+      ? { workspaceId: options.workspaceId }
+      : !projectChanged &&
+          nextWorktreePath === existingThread?.worktreePath &&
+          existingThread?.workspaceId
+        ? { workspaceId: existingThread.workspaceId }
+        : {}),
+    ...(workspaceProfile ? { workspaceProfile } : {}),
     envMode:
       options?.envMode ?? (nextWorktreePath ? "worktree" : (existingThread?.envMode ?? "local")),
     startFromOrigin: nextStartFromOrigin,
@@ -1790,6 +1813,8 @@ function draftThreadsEqual(left: DraftThreadState | undefined, right: DraftThrea
     left.interactionMode === right.interactionMode &&
     left.branch === right.branch &&
     left.worktreePath === right.worktreePath &&
+    left.workspaceId === right.workspaceId &&
+    left.workspaceProfile === right.workspaceProfile &&
     left.envMode === right.envMode &&
     left.startFromOrigin === right.startFromOrigin &&
     skillPackIdsEqual(left.skillPackIds, right.skillPackIds) &&
@@ -1948,6 +1973,12 @@ function normalizePersistedDraftThreads(
             : DEFAULT_INTERACTION_MODE,
         branch: typeof branch === "string" ? branch : null,
         worktreePath: normalizedWorktreePath,
+        ...(typeof candidateDraftThread.workspaceId === "string"
+          ? { workspaceId: ThreadWorkspaceId.make(candidateDraftThread.workspaceId) }
+          : {}),
+        ...(Schema.is(WorkspaceProfile)(candidateDraftThread.workspaceProfile)
+          ? { workspaceProfile: candidateDraftThread.workspaceProfile }
+          : {}),
         envMode: normalizeDraftThreadEnvMode(candidateDraftThread.envMode, normalizedWorktreePath),
         startFromOrigin,
         ...(candidateDraftThread.environmentSelection === "manual" ||
@@ -2818,6 +2849,10 @@ function toHydratedDraftThreadState(
     interactionMode: persistedDraftThread.interactionMode,
     branch: persistedDraftThread.branch,
     worktreePath: persistedDraftThread.worktreePath,
+    ...(persistedDraftThread.workspaceId ? { workspaceId: persistedDraftThread.workspaceId } : {}),
+    ...(persistedDraftThread.workspaceProfile
+      ? { workspaceProfile: persistedDraftThread.workspaceProfile }
+      : {}),
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
     ...(persistedDraftThread.skillPackIds
@@ -3312,6 +3347,18 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               interactionMode: options.interactionMode ?? existing.interactionMode,
               branch: nextBranch,
               worktreePath: nextWorktreePath,
+              ...(options.workspaceId
+                ? { workspaceId: options.workspaceId }
+                : !projectChanged &&
+                    nextWorktreePath === existing.worktreePath &&
+                    existing.workspaceId
+                  ? { workspaceId: existing.workspaceId }
+                  : {}),
+              ...(options.workspaceProfile
+                ? { workspaceProfile: options.workspaceProfile }
+                : existing.workspaceProfile
+                  ? { workspaceProfile: existing.workspaceProfile }
+                  : {}),
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
@@ -3329,6 +3376,8 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               nextDraftThread.interactionMode === existing.interactionMode &&
               nextDraftThread.branch === existing.branch &&
               nextDraftThread.worktreePath === existing.worktreePath &&
+              nextDraftThread.workspaceId === existing.workspaceId &&
+              nextDraftThread.workspaceProfile === existing.workspaceProfile &&
               nextDraftThread.envMode === existing.envMode &&
               nextDraftThread.startFromOrigin === existing.startFromOrigin &&
               skillPackIdsEqual(nextDraftThread.skillPackIds, existing.skillPackIds) &&

@@ -146,6 +146,7 @@ const baseProviderSessionDirectory: ProviderSessionDirectory.ProviderSessionDire
 
 const baseThreadWorkspaceService: ThreadWorkspaceService.ThreadWorkspaceService["Service"] = {
   prepareWorkspace: () => Effect.die("unexpected workspace preparation"),
+  selectWorkspace: () => Effect.succeed(undefined),
   resolvePrimaryCwd: () => Effect.die("unexpected workspace resolution"),
   deleteWorkspace: () => Effect.die("unexpected workspace deletion"),
 };

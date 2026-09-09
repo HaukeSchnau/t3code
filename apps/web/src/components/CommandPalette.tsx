@@ -648,7 +648,6 @@ function OpenCommandPaletteDialog(props: {
     null,
   );
   const [isPickingProjectFolder, setIsPickingProjectFolder] = useState(false);
-  const [separateEnvironment, setSeparateEnvironment] = useState(false);
   const [addProjectCloneFlow, setAddProjectCloneFlow] = useState<AddProjectCloneFlow | null>(null);
   const [isRemoteProjectLookingUp, setIsRemoteProjectLookingUp] = useState(false);
   const [isRemoteProjectCloning, setIsRemoteProjectCloning] = useState(false);
@@ -1781,11 +1780,6 @@ function OpenCommandPaletteDialog(props: {
           title: inferProjectTitleFromPath(cwd),
           workspaceRoot: cwd,
           createWorkspaceRootIfMissing: true,
-          ...(separateEnvironment &&
-          !addProjectCloneFlow &&
-          environment?.serverConfig?.separateProjectsSupported
-            ? { separateEnvironment: true }
-            : {}),
           defaultModelSelection: null,
         },
       });
@@ -1822,7 +1816,6 @@ function OpenCommandPaletteDialog(props: {
     [
       handleNewThread,
       createProject,
-      separateEnvironment,
       addProjectCloneFlow,
       environments,
       navigate,
@@ -2448,17 +2441,7 @@ function OpenCommandPaletteDialog(props: {
       aria-label="Command palette"
       autoHighlight={isBrowsing || isRemoteProjectCloneFlow ? false : "always"}
       footerActionLabel={footerActionLabel}
-      footerTrailing={
-        isBrowsing &&
-        !addProjectCloneFlow &&
-        browseEnvironment?.serverConfig?.separateProjectsSupported ? (
-          <CommandFooterAction onClick={() => setSeparateEnvironment((value) => !value)}>
-            {separateEnvironment ? "✓ Separate environment" : "Separate environment"}
-          </CommandFooterAction>
-        ) : (
-          footerTrailing
-        )
-      }
+      footerTrailing={footerTrailing}
       inputAccessory={inputAccessory}
       inputProps={{
         // The submit button is absolutely positioned over the field, so the

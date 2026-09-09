@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { afterEach, assert, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
@@ -20,6 +21,15 @@ import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as ThreadWorkspaceService from "./ThreadWorkspaceService.ts";
+
+const encodeIsolatedRegistration = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      root: Schema.String,
+      workspace: Schema.Struct({ id: Schema.String, sourceRevision: Schema.String }),
+    }),
+  ),
+);
 
 const originalMaxBytesEnv = process.env.T3CODE_DIRECTORY_COPY_MAX_BYTES;
 
@@ -35,11 +45,12 @@ const makeTestLayer = (
   options: {
     readonly baseDir?: string;
     readonly platform?: NodeJS.Platform;
+    readonly environment?: NodeJS.ProcessEnv;
     readonly processRunner?: Partial<ProcessRunner.ProcessRunner["Service"]>;
     readonly gitWorkflow?: Partial<GitWorkflowService.GitWorkflowService["Service"]>;
   } = {},
 ) => {
-  const layer = ThreadWorkspaceService.layer.pipe(
+  let layer = ThreadWorkspaceService.layer.pipe(
     Layer.provideMerge(SqlitePersistenceMemory),
     Layer.provideMerge(
       ServerConfig.layerTest(
@@ -64,6 +75,10 @@ const makeTestLayer = (
     ),
     Layer.provideMerge(NodeServices.layer),
   );
+  if (options.environment)
+    layer = layer.pipe(
+      Layer.provideMerge(Layer.succeed(HostProcessEnvironment, options.environment)),
+    );
   return options.platform
     ? layer.pipe(Layer.provideMerge(Layer.succeed(HostProcessPlatform, options.platform)))
     : layer;
@@ -705,6 +720,109 @@ layer("ThreadWorkspaceService", (it) => {
       assert.equal(NodeFS.existsSync(checkoutPath), false);
 
       NodeFS.chmodSync(readOnlyDir, 0o700);
+    }),
+  );
+  it.effect("reuses a provisioned isolated workspace without replacing its files", () => {
+    const sourcePath = makeTempDir("t3-isolated-source-");
+    const baseDir = makeTempDir("t3-isolated-base-");
+    const calls: ProcessRunner.ProcessRunInput[] = [];
+    return Effect.gen(function* () {
+      const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+      const projectId = ProjectId.make("isolated-project");
+      const request = {
+        threadId: ThreadId.make("isolated-first"),
+        kind: "isolated" as const,
+        roots: [{ projectId, sourcePath, role: "primary" as const }],
+        retentionPolicy: "explicit-delete" as const,
+        profile: "minimal" as const,
+      };
+      const first = yield* service.prepareWorkspace(request);
+      NodeFS.writeFileSync(NodePath.join(first.primaryCwd, "unfinished.txt"), "keep this work");
+      const retried = yield* service.prepareWorkspace(request);
+      assert.equal(retried.workspace.id, first.workspace.id);
+      assert.equal(retried.primaryCwd, first.primaryCwd);
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(retried.primaryCwd, "unfinished.txt"), "utf8"),
+        "keep this work",
+      );
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0]?.cwd, "/");
+      assert.include(calls[0]?.args ?? [], "minimal");
+      assert.equal(first.workspace.roots[0]?.baseRevision, "source-commit");
+      const selected = yield* service.selectWorkspace({
+        projectId,
+        workspaceId: first.workspace.id,
+      });
+      assert.equal(selected?.primaryCwd, first.primaryCwd);
+      const legacy = yield* service.selectWorkspace({ projectId, checkoutPath: first.primaryCwd });
+      assert.equal(legacy?.workspace.id, first.workspace.id);
+      const wrongProject = yield* Effect.exit(
+        service.selectWorkspace({
+          projectId: ProjectId.make("another-project"),
+          workspaceId: first.workspace.id,
+        }),
+      );
+      assert.equal(Exit.isFailure(wrongProject), true);
+    }).pipe(
+      Effect.provide(
+        makeTestLayer({
+          baseDir,
+          platform: "linux",
+          environment: { T3CODE_EXECUTION_LAUNCHER: "/test/agent-exec" },
+          processRunner: {
+            run: (input) =>
+              Effect.sync(() => {
+                calls.push(input);
+                assert.equal(input.command, "/test/agent-exec");
+                const checkoutPath = input.args[2]!;
+                NodeFS.mkdirSync(checkoutPath, { recursive: true });
+                return makeProcessOutput({
+                  stdout: encodeIsolatedRegistration({
+                    root: checkoutPath,
+                    workspace: {
+                      id: input.args[input.args.indexOf("--workspace-id") + 1]!,
+                      sourceRevision: "source-commit",
+                    },
+                  }),
+                });
+              }),
+          },
+        }),
+      ),
+    );
+  });
+
+  it.effect("blocks explicit deletion until every thread sharing the checkout is settled", () =>
+    Effect.gen(function* () {
+      const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+      const sql = yield* SqlClient.SqlClient;
+      const sourcePath = makeTempDir("t3-shared-workspace-source-");
+      NodeFS.writeFileSync(NodePath.join(sourcePath, "work.txt"), "retained");
+      const projectId = ProjectId.make("shared-project");
+      const prepared = yield* service.prepareWorkspace({
+        threadId: ThreadId.make("shared-first"),
+        kind: "directory-copy",
+        roots: [{ projectId, sourcePath, role: "primary" }],
+        retentionPolicy: "explicit-delete",
+      });
+      for (const id of ["shared-first", "shared-follow-up"]) {
+        yield* sql`INSERT INTO projection_threads (thread_id, project_id, title, model_selection_json, worktree_path, workspace_id, created_at, updated_at)
+          VALUES (${id}, ${projectId}, 'Shared work', '{}', ${prepared.primaryCwd}, ${id === "shared-first" ? prepared.workspace.id : null}, '2026-09-09T12:00:00Z', '2026-09-09T12:00:00Z')`;
+      }
+      yield* sql`UPDATE projection_threads SET settled_override = 'settled', settled_at = '2026-09-09T12:10:00Z' WHERE thread_id = 'shared-first'`;
+      const blocked = yield* Effect.exit(
+        service.deleteWorkspace({ workspaceId: prepared.workspace.id, force: true }),
+      );
+      assert.equal(Exit.isFailure(blocked), true);
+      assert.equal(NodeFS.existsSync(prepared.primaryCwd), true);
+      yield* sql`UPDATE projection_threads SET settled_override = 'settled', settled_at = '2026-09-09T12:11:00Z' WHERE thread_id = 'shared-follow-up'`;
+      // Settlement changes visibility; files remain until explicit deletion.
+      assert.equal(
+        NodeFS.readFileSync(NodePath.join(prepared.primaryCwd, "work.txt"), "utf8"),
+        "retained",
+      );
+      yield* service.deleteWorkspace({ workspaceId: prepared.workspace.id, force: true });
+      assert.equal(NodeFS.existsSync(prepared.primaryCwd), false);
     }),
   );
 });

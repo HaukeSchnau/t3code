@@ -11,6 +11,8 @@ import {
   type ServerProvider,
   type SkillPackId,
   type ThreadId,
+  type ThreadWorkspaceId,
+  type WorkspaceProfile,
   type UploadChatAttachment,
 } from "@t3tools/contracts";
 import {
@@ -95,6 +97,8 @@ export interface ThreadTurnSubmissionTarget {
   readonly isFirstMessage: boolean;
   readonly queue: boolean;
   readonly prepareWorkspace: boolean;
+  readonly workspaceId?: ThreadWorkspaceId | null | undefined;
+  readonly workspaceProfile?: WorkspaceProfile | undefined;
   readonly activeBranch: string | null;
   readonly baseRevision: string | null;
   readonly startFromOrigin: boolean;
@@ -392,7 +396,7 @@ function createCommand(input: {
                   ...(input.target.skillPackIds ? { skillPackIds: input.target.skillPackIds } : {}),
                   branch: input.target.activeBranch,
                   worktreePath: input.target.threadWorktreePath,
-                  workspaceId: null,
+                  workspaceId: input.target.workspaceId ?? null,
                   createdAt: input.target.threadCreatedAt,
                 },
               }
@@ -401,6 +405,9 @@ function createCommand(input: {
             ? {
                 prepareWorkspace: {
                   kind: "auto" as const,
+                  ...(input.target.workspaceProfile
+                    ? { profile: input.target.workspaceProfile }
+                    : {}),
                   roots: [
                     {
                       projectId: input.target.projectId,

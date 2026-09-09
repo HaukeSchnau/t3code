@@ -32,7 +32,11 @@ import {
   ProviderErrorClass,
   ProviderUnavailable,
 } from "./providerError.ts";
-import { ThreadWorkspaceRetentionPolicy, ThreadWorkspaceRootRole } from "./workspace.ts";
+import {
+  ThreadWorkspaceRetentionPolicy,
+  ThreadWorkspaceRootRole,
+  WorkspaceProfile,
+} from "./workspace.ts";
 import { SkillPackId, ThreadSkillScope } from "./skillPacks.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
@@ -1484,7 +1488,7 @@ const ThreadTurnStartBootstrapPrepareWorktree = Schema.Struct({
 
 const ThreadTurnStartBootstrapPrepareWorkspace = Schema.Struct({
   kind: Schema.optional(
-    Schema.Literals(["auto", "git-detached", "jj-workspace", "directory-copy"]),
+    Schema.Literals(["auto", "git-detached", "jj-workspace", "directory-copy", "isolated"]),
   ),
   roots: Schema.Array(
     Schema.Struct({
@@ -1497,6 +1501,7 @@ const ThreadTurnStartBootstrapPrepareWorkspace = Schema.Struct({
   ),
   displayNameSeed: Schema.optional(TrimmedNonEmptyString),
   retentionPolicy: Schema.optional(ThreadWorkspaceRetentionPolicy),
+  profile: Schema.optional(WorkspaceProfile),
 });
 
 const ThreadTurnStartBootstrap = Schema.Struct({

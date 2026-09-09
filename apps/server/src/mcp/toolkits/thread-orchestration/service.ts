@@ -525,6 +525,7 @@ function summaryForThread(
     interactionMode: thread.interactionMode,
     workspaceRoot: project.workspaceRoot,
     worktreePath: thread.worktreePath,
+    ...(thread.workspaceId ? { workspaceId: thread.workspaceId } : {}),
     outcome: outcomeForThread(thread),
     backgroundLiveness: "backgroundLiveness" in thread ? (thread.backgroundLiveness ?? null) : null,
     createdAt: thread.createdAt,
@@ -1393,6 +1394,7 @@ const make = Effect.gen(function* () {
               .prepareWorkspace({
                 threadId: nextThreadId,
                 kind: "auto",
+                ...(environment.profile ? { profile: environment.profile } : {}),
                 roots: [
                   {
                     projectId: project.id,
@@ -1411,10 +1413,20 @@ const make = Effect.gen(function* () {
                   }),
                 ),
               )
-          : undefined;
+          : environment.type === "workspace"
+            ? yield* workspaceService
+                .selectWorkspace({ projectId: project.id, workspaceId: environment.workspaceId })
+                .pipe(
+                  Effect.mapError(
+                    toThreadOrchestrationError("create_thread.select_workspace", {
+                      projectId: project.id,
+                    }),
+                  ),
+                )
+            : undefined;
 
       const cleanupPreparedWorkspace =
-        prepared === undefined
+        prepared === undefined || environment.type !== "worktree"
           ? Effect.void
           : workspaceService
               .deleteWorkspace({ workspaceId: prepared.workspace.id, force: true })
@@ -1537,6 +1549,7 @@ const make = Effect.gen(function* () {
           interactionMode: resolvedInput.interactionMode,
           workspaceRoot: project.workspaceRoot,
           worktreePath: prepared?.compatibilityWorktreePath ?? null,
+          ...(prepared === undefined ? {} : { workspaceId: prepared.workspace.id }),
           outcome: "running" as const,
           backgroundLiveness: null,
           createdAt,
@@ -3502,7 +3515,7 @@ const make = Effect.gen(function* () {
           ...(sourceThread.skillScope ? { skillPackIds: sourceThread.skillScope.packIds } : {}),
           branch: prepared?.compatibilityBranch ?? null,
           worktreePath: prepared?.compatibilityWorktreePath ?? sourceThread.worktreePath,
-          workspaceId: prepared?.workspace.id ?? null,
+          workspaceId: prepared?.workspace.id ?? sourceThread.workspaceId ?? null,
           createdAt,
         })
         .pipe(
@@ -3528,6 +3541,9 @@ const make = Effect.gen(function* () {
         interactionMode: sourceThread.interactionMode,
         workspaceRoot: project.workspaceRoot,
         worktreePath: prepared?.compatibilityWorktreePath ?? sourceThread.worktreePath,
+        ...((prepared?.workspace.id ?? sourceThread.workspaceId) == null
+          ? {}
+          : { workspaceId: prepared?.workspace.id ?? sourceThread.workspaceId }),
         outcome: "queued" as const,
         backgroundLiveness: null,
         createdAt,

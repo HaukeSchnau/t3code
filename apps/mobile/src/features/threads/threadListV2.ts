@@ -1,3 +1,4 @@
+import { workspaceLabel } from "@t3tools/client-runtime/state/workspaces";
 import {
   effectiveSnoozed,
   hasQueuedTurnStart,
@@ -267,7 +268,14 @@ export interface ThreadListV2SettledShelfListItem {
   readonly expanded: boolean;
 }
 
+export interface ThreadListV2WorkspaceHeader {
+  readonly type: "v2-workspace";
+  readonly key: string;
+  readonly label: string;
+}
+
 export type ThreadListV2ListItem =
+  | ThreadListV2WorkspaceHeader
   | ThreadListV2ThreadListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
@@ -288,8 +296,9 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfExpanded?: boolean;
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
+  readonly groupWorkspaces?: boolean;
 }): ThreadListV2ListItem[] {
-  const threadItems = input.items.map((item): ThreadListV2ListItem => ({
+  const threadItems = input.items.map((item): ThreadListV2ThreadListItem => ({
     type: "v2-thread",
     key: `v2-thread:${item.thread.environmentId}:${item.thread.id}`,
     item,
@@ -310,7 +319,32 @@ export function buildThreadListV2ListItems(input: {
   const settledShelfHeaderIndex = input.settledShelfHeaderIndex ?? null;
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
-  const result: ThreadListV2ListItem[] = [...threadItems.slice(0, activeEnd), ...pendingItems];
+  const activeItems = threadItems.slice(0, activeEnd);
+  const result: ThreadListV2ListItem[] = [];
+  if (input.groupWorkspaces) {
+    const groups = new Map<string, { label: string; items: ThreadListV2ThreadListItem[] }>();
+    for (const item of activeItems) {
+      if (item.item.pinned) {
+        result.push(item);
+        continue;
+      }
+      const thread = item.item.thread;
+      const key = JSON.stringify([thread.environmentId, thread.projectId, thread.worktreePath]);
+      const group = groups.get(key);
+      if (group) group.items.push(item);
+      else
+        groups.set(key, {
+          label: thread.worktreePath ? workspaceLabel(thread.worktreePath) : "Project checkout",
+          items: [item],
+        });
+    }
+    for (const [key, group] of groups)
+      result.push(
+        { type: "v2-workspace", key: `workspace:${key}`, label: group.label },
+        ...group.items,
+      );
+  } else result.push(...activeItems);
+  result.push(...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
       type: "v2-snoozed-shelf",

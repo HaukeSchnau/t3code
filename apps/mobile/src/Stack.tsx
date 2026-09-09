@@ -40,6 +40,7 @@ import { AddProjectSourceRoute } from "./features/projects/AddProjectSourceRoute
 import { NewTaskDraftRouteScreen } from "./features/threads/NewTaskDraftRouteScreen";
 import {
   NewTaskBranchPickerRouteScreen,
+  NewTaskWorkspacePickerRouteScreen,
   NewTaskEnvironmentPickerRouteScreen,
 } from "./features/threads/NewTaskContextPickerScreens";
 import {
@@ -266,6 +267,11 @@ const NewTaskSheetStack = createNativeStackNavigator({
       options: {
         title: "Environment",
       },
+    }),
+    NewTaskWorkspace: createNativeStackScreen({
+      screen: NewTaskWorkspacePickerRouteScreen,
+      linking: "draft/workspace",
+      options: { title: "Workspace" },
     }),
     NewTaskBranch: createNativeStackScreen({
       screen: NewTaskBranchPickerRouteScreen,

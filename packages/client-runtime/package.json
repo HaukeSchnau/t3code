@@ -3,6 +3,10 @@
   "private": true,
   "type": "module",
   "exports": {
+    "./state/workspaces": {
+      "types": "./src/state/workspaceThreads.ts",
+      "default": "./src/state/workspaceThreads.ts"
+    },
     "./load-balancing": {
       "types": "./src/load-balancing.ts",
       "default": "./src/load-balancing.ts"

@@ -9,6 +9,7 @@ import {
   type ThreadWorkspaceKind,
   type ThreadWorkspaceRetentionPolicy,
   type ThreadWorkspaceRootRole,
+  type WorkspaceProfile,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
@@ -56,6 +57,7 @@ type ThreadWorkspacePrepareRequest = {
   }>;
   readonly displayNameSeed?: string | undefined;
   readonly retentionPolicy?: ThreadWorkspaceRetentionPolicy | undefined;
+  readonly profile?: WorkspaceProfile | undefined;
 };
 
 function setupFailureDescription(cause: unknown): string {
@@ -133,6 +135,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
         ? { displayNameSeed: request.request.displayNameSeed }
         : {}),
       retentionPolicy: request.request.retentionPolicy ?? "explicit-delete",
+      ...(request.request.profile !== undefined ? { profile: request.request.profile } : {}),
     });
 
   const appendSetupScriptActivity = (activity: {
@@ -552,9 +555,70 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
     );
   };
 
+  const bindSelectedWorkspace = (command: ClientOrchestrationCommand) =>
+    Effect.gen(function* () {
+      if (
+        command.type === "thread.meta.update" &&
+        (command.worktreePath !== undefined || command.workspaceId !== undefined)
+      ) {
+        const shell = yield* input.projectionSnapshotQuery
+          .getThreadShellById(command.threadId)
+          .pipe(
+            Effect.mapError((cause) => toDispatchCommandError(cause, "Thread is unavailable.")),
+          );
+        if (Option.isNone(shell)) return command;
+        const selected = yield* input.threadWorkspaceService
+          .selectWorkspace({
+            projectId: shell.value.projectId,
+            workspaceId: command.workspaceId ?? null,
+            checkoutPath: command.worktreePath ?? null,
+          })
+          .pipe(
+            Effect.mapError((cause) => toDispatchCommandError(cause, "Workspace is unavailable.")),
+          );
+        return {
+          ...command,
+          workspaceId: selected?.workspace.id ?? null,
+          ...(selected ? { worktreePath: selected.compatibilityWorktreePath } : {}),
+        };
+      }
+      const selection =
+        command.type === "thread.create"
+          ? command
+          : command.type === "thread.turn.start"
+            ? command.bootstrap?.createThread
+            : undefined;
+      if (!selection || (!selection.worktreePath && !selection.workspaceId)) return command;
+      const selected = yield* input.threadWorkspaceService
+        .selectWorkspace({
+          projectId: selection.projectId,
+          workspaceId: selection.workspaceId ?? null,
+          checkoutPath: selection.worktreePath,
+        })
+        .pipe(
+          Effect.mapError((cause) => toDispatchCommandError(cause, "Workspace is unavailable.")),
+        );
+      if (!selected) return command;
+      const binding = {
+        workspaceId: selected.workspace.id,
+        worktreePath: selected.compatibilityWorktreePath,
+      };
+      if (command.type === "thread.create") return { ...command, ...binding };
+      if (command.type === "thread.turn.start" && command.bootstrap?.createThread) {
+        return {
+          ...command,
+          bootstrap: {
+            ...command.bootstrap,
+            createThread: { ...command.bootstrap.createThread, ...binding },
+          },
+        };
+      }
+      return command;
+    });
+
   const dispatch = (command: ClientOrchestrationCommand) =>
     Effect.gen(function* () {
-      const preparedCommand = yield* prepareDispatchCommand(command);
+      const preparedCommand = yield* prepareDispatchCommand(yield* bindSelectedWorkspace(command));
       const normalizedCommand = preparedCommand.command;
       const archiveCommand =
         normalizedCommand.type === "thread.archive" ? normalizedCommand : undefined;

@@ -9,6 +9,7 @@ import {
   DEFAULT_SERVER_SETTINGS,
   type ScopedProjectRef,
   type ThreadId,
+  type ThreadWorkspaceId,
 } from "@t3tools/contracts";
 import { useParams, useRouter } from "@tanstack/react-router";
 import { useCallback, useMemo } from "react";
@@ -43,6 +44,7 @@ import { useClientSettings } from "./useSettings";
 interface NewThreadWorkspaceOptions {
   branch?: string | null;
   worktreePath?: string | null;
+  workspaceId?: ThreadWorkspaceId | null;
   envMode?: DraftThreadEnvMode;
   startFromOrigin?: boolean;
 }
@@ -54,6 +56,7 @@ function pickExplicitWorkspaceOptions(options: NewThreadWorkspaceOptions | undef
   return {
     ...(options?.branch !== undefined ? { branch: options.branch } : {}),
     ...(options?.worktreePath !== undefined ? { worktreePath: options.worktreePath } : {}),
+    ...(options?.workspaceId !== undefined ? { workspaceId: options.workspaceId } : {}),
     ...(options?.envMode !== undefined ? { envMode: options.envMode } : {}),
     ...(options?.startFromOrigin !== undefined ? { startFromOrigin: options.startFromOrigin } : {}),
   };
@@ -75,6 +78,7 @@ export function useNewThreadHandler() {
       options?: {
         branch?: string | null;
         worktreePath?: string | null;
+        workspaceId?: ThreadWorkspaceId | null;
         envMode?: DraftThreadEnvMode;
         startFromOrigin?: boolean;
         replace?: boolean;

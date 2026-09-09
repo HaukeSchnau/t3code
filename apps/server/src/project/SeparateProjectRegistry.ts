@@ -32,7 +32,14 @@ const Registration = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
     home: Schema.optional(Schema.String),
-    workspace: Schema.optional(Schema.Struct({ visibleRoot: Schema.String })),
+    workspace: Schema.optional(
+      Schema.Struct({
+        visibleRoot: Schema.String,
+        id: Schema.optional(Schema.NullOr(Schema.String)),
+        sourceRevision: Schema.optional(Schema.String),
+        profile: Schema.optional(Schema.Literals(["familiar", "minimal"])),
+      }),
+    ),
     projectId: Schema.optional(Schema.NullOr(Schema.String)),
   }),
 );
@@ -153,7 +160,7 @@ export async function assertSeparateProjectRootUnchanged(
     const record = decodeRegistration(
       await NodeFSP.readFile(NodePath.join(directory, file), "utf8"),
     );
-    if (record.projectId === projectId && record.root !== root) {
+    if (record.projectId === projectId && !record.workspace?.id && record.root !== root) {
       throw new Error(
         "Separate project directories cannot be moved through project settings. Request outside help to migrate the environment.",
       );

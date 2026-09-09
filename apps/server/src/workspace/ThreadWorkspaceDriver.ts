@@ -7,6 +7,7 @@ import type {
   ThreadWorkspaceRootRole,
   ProjectId,
   ThreadId,
+  WorkspaceProfile,
 } from "@t3tools/contracts";
 
 import type { PreparedThreadWorkspace, ThreadWorkspaceError } from "./ThreadWorkspaceService.ts";
@@ -25,6 +26,7 @@ export interface PrepareThreadWorkspaceInput {
   readonly roots: ReadonlyArray<PrepareThreadWorkspaceRootInput>;
   readonly displayNameSeed?: string;
   readonly retentionPolicy?: ThreadWorkspaceRetentionPolicy;
+  readonly profile?: WorkspaceProfile;
 }
 
 export interface ThreadWorkspaceDriver {

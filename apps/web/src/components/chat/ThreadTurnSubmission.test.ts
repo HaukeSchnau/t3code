@@ -199,6 +199,7 @@ describe("ThreadTurnSubmission", () => {
         isServerThread: false,
         isFirstMessage: true,
         prepareWorkspace: true,
+        workspaceProfile: "minimal",
         baseRevision: "main",
         startFromOrigin: true,
       }),
@@ -234,6 +235,7 @@ describe("ThreadTurnSubmission", () => {
       result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.startFromOrigin,
       true,
     );
+    assert.equal(result.prepared.command.bootstrap?.prepareWorkspace?.profile, "minimal");
     assert.equal(delivered.length, 1);
   });
 
