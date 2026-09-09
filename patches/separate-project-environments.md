@@ -20,3 +20,7 @@ This feature reduces accidental context discovery. It is not a security boundary
 ## Upstream maintenance
 
 Keep the creation field, capability advertisement, all process entry points, and the registry guards together. If upstream introduces a project execution backend, move these adapters onto it. Never advertise separate execution while silently falling back to host execution.
+
+Independent jj environments are an opt-in infra launcher mode. The registry's optional `workspace.visibleRoot` gives the agent-visible path; T3 retains the canonical host root as the project/session identity. Codex thread startup and Claude SDK options use the visible cwd, while subprocess launch uses the host cwd. Local MCP endpoints use the environment's host gateway. This is intentionally coupled to the private runtime rather than a generic container abstraction.
+
+File reads, media grants and observed image persistence resolve namespace paths using the owning thread's workspace registration. Identical `/tmp` or project paths in different environments must never fall back to an arbitrary host file. Provider image paths remain unchanged in the transcript; their stored bytes or grants refer to the resolved file. The launcher owns jj cloning/collection, declarative devShell activation, private networking, and lifecycle; this patch adds no second repository manager or new worktree UI.

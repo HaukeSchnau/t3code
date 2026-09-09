@@ -24,6 +24,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import { projectHostPath } from "../project/SeparateProjectRegistry.ts";
 
 import * as WorkspaceEntries from "./WorkspaceEntries.ts";
 import * as WorkspacePaths from "./WorkspacePaths.ts";
@@ -150,7 +151,10 @@ export const make = Effect.gen(function* () {
     const requestedPath = input.relativePath.trim();
     if (path.isAbsolute(requestedPath)) {
       const realTargetPath = yield* Effect.tryPromise({
-        try: () => NodeFSP.realpath(requestedPath),
+        try: async () =>
+          NodeFSP.realpath(
+            await projectHostPath(input.cwd, requestedPath, process.env.AGENT_EXEC_STATE),
+          ),
         catch: (cause) =>
           new WorkspaceFileSystemOperationError({
             workspaceRoot: input.cwd,

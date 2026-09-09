@@ -31,11 +31,109 @@ export async function isSeparateProject(cwd: string, stateDirectory?: string): P
 const Registration = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
+    home: Schema.optional(Schema.String),
+    workspace: Schema.optional(Schema.Struct({ visibleRoot: Schema.String })),
     projectId: Schema.optional(Schema.NullOr(Schema.String)),
   }),
 );
 
 const decodeRegistration = Schema.decodeUnknownSync(Registration);
+
+/** Resolve by the host workspace identity; identical paths in two namespaces are unrelated. */
+export async function readSeparateProject(cwd: string, stateDirectory?: string) {
+  const state = stateDirectory ?? NodePath.join(NodeOS.homedir(), ".local/state/agent-exec");
+  let candidate = await NodeFSP.realpath(cwd).catch((error: NodeJS.ErrnoException) => {
+    if (error.code === "ENOENT") return NodePath.resolve(cwd);
+    throw error;
+  });
+  while (true) {
+    const id = NodeCrypto.createHash("sha256").update(candidate).digest("hex").slice(0, 20);
+    const contents = await NodeFSP.readFile(
+      NodePath.join(state, "projects", `${id}.json`),
+      "utf8",
+    ).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (contents !== undefined) {
+      const record = decodeRegistration(contents);
+      if (record.root !== candidate) throw new Error("Invalid project environment root");
+      return { ...record, state: NodePath.join(state, "environments", id) };
+    }
+    const parent = NodePath.dirname(candidate);
+    if (candidate === parent) return undefined;
+    candidate = parent;
+  }
+}
+
+export async function projectProviderCwd(cwd: string, stateDirectory?: string) {
+  const record = await readSeparateProject(cwd, stateDirectory);
+  return record?.workspace
+    ? NodePath.join(record.workspace.visibleRoot, NodePath.relative(record.root, cwd))
+    : cwd;
+}
+
+/** Explicit host integrations use the gateway; localhost remains private to the workspace. */
+export async function projectProviderEndpoint(
+  cwd: string | undefined,
+  endpoint: string,
+  stateDirectory?: string,
+) {
+  if (!cwd || !(await readSeparateProject(cwd, stateDirectory))?.workspace) return endpoint;
+  const url = new URL(endpoint);
+  if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) url.hostname = "10.0.2.2";
+  return url.toString();
+}
+
+function relativeWithin(root: string, path: string) {
+  const relative = NodePath.relative(root, path);
+  return relative === ".." ||
+    relative.startsWith(`..${NodePath.sep}`) ||
+    NodePath.isAbsolute(relative)
+    ? undefined
+    : relative;
+}
+
+/** Resolve namespace files for media and editor reads without falling back to unrelated host files. */
+export async function projectHostPath(cwd: string, filePath: string, stateDirectory?: string) {
+  const record = await readSeparateProject(cwd, stateDirectory);
+  if (!record) return filePath;
+  const home = record.home ?? NodeOS.homedir();
+  const visibleRoot = record.workspace?.visibleRoot ?? record.root;
+  const requested = NodePath.isAbsolute(filePath)
+    ? NodePath.normalize(filePath)
+    : NodePath.resolve(cwd, filePath);
+  const mappings = [
+    [record.root, record.root],
+    [record.state, record.state],
+    [
+      NodePath.join(home, ".t3/userdata/attachments"),
+      NodePath.join(home, ".t3/userdata/attachments"),
+    ],
+    [visibleRoot, record.root],
+    ["/tmp", NodePath.join(record.state, "tmp")],
+    [
+      "/srv/agent-share",
+      NodePath.join("/srv/agent-share/isolated", NodePath.basename(record.state)),
+    ],
+    [home, NodePath.join(record.state, "home")],
+  ] as const;
+  for (const [visible, actual] of mappings) {
+    const relative = relativeWithin(visible, requested);
+    if (relative === undefined) continue;
+    const result = NodePath.join(actual, relative);
+    // Host realpath must not follow a project symlink into another checkout.
+    const canonical = await NodeFSP.realpath(result).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return result;
+      throw error;
+    });
+    const actualRoot = await NodeFSP.realpath(actual).catch(() => actual);
+    if (relativeWithin(actualRoot, canonical) === undefined)
+      throw new Error("Environment file leaves its mounted directory");
+    return canonical;
+  }
+  throw new Error("File is not visible in this project environment");
+}
 
 /** Root changes need an explicit runtime migration, rather than silently dropping registration. */
 export async function assertSeparateProjectRootUnchanged(

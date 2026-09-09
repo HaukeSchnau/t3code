@@ -1325,21 +1325,31 @@ const make = Effect.gen(function* () {
     activities: ReadonlyArray<OrchestrationThreadActivity>,
   ) =>
     Effect.forEach(activities, (activity) =>
-      observedActivityMedia.enrich({ activity, threadId }).pipe(
-        Effect.flatMap((enrichedActivity) =>
-          providerCommandId(event, `thread-activity-append:${enrichedActivity.id}`).pipe(
-            Effect.flatMap((commandId) =>
-              orchestrationEngine.dispatch({
-                type: "thread.activity.append",
-                commandId,
-                threadId,
-                activity: enrichedActivity,
-                createdAt: enrichedActivity.createdAt,
-              }),
+      observedActivityMedia
+        .enrich({
+          activity,
+          threadId,
+          resolveWorkspaceRoot: projectionSnapshotQuery.getThreadCheckpointContext(threadId).pipe(
+            Effect.map(Option.getOrUndefined),
+            Effect.map((context) => context?.worktreePath ?? context?.workspaceRoot ?? undefined),
+            Effect.orElseSucceed(() => undefined),
+          ),
+        })
+        .pipe(
+          Effect.flatMap((enrichedActivity) =>
+            providerCommandId(event, `thread-activity-append:${enrichedActivity.id}`).pipe(
+              Effect.flatMap((commandId) =>
+                orchestrationEngine.dispatch({
+                  type: "thread.activity.append",
+                  commandId,
+                  threadId,
+                  activity: enrichedActivity,
+                  createdAt: enrichedActivity.createdAt,
+                }),
+              ),
             ),
           ),
         ),
-      ),
     ).pipe(Effect.asVoid);
 
   const clearAssistantMessageState = (messageId: MessageId) =>

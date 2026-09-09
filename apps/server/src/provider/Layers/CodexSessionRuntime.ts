@@ -33,6 +33,7 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import { projectProviderCwd } from "../../project/SeparateProjectRegistry.ts";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as CodexClient from "effect-codex-app-server/client";
 import * as CodexErrors from "effect-codex-app-server/errors";
@@ -1449,6 +1450,11 @@ export const makeCodexSessionRuntime = (
       ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
     };
     const extendEnv = options.environment === undefined;
+    const providerCwd = yield* Effect.tryPromise({
+      try: () => projectProviderCwd(options.cwd, options.environment?.AGENT_EXEC_STATE),
+      catch: (cause) =>
+        new CodexErrors.CodexAppServerSpawnError({ command: options.binaryPath, cause }),
+    });
     const appServerArgs = codexSessionAppServerArgs(options.appServerArgs, options.launchArgs);
     const spawnCommand = yield* resolveSpawnCommand(options.binaryPath, appServerArgs, {
       env,
@@ -2853,7 +2859,7 @@ export const makeCodexSessionRuntime = (
         client,
         threadId: options.threadId,
         runtimeMode: options.runtimeMode,
-        cwd: options.cwd,
+        cwd: providerCwd,
         requestedModel,
         serviceTier: options.serviceTier,
         resumeThreadId: readResumeCursorThreadId(options.resumeCursor),
@@ -2863,7 +2869,7 @@ export const makeCodexSessionRuntime = (
       const session = {
         ...(yield* Ref.get(sessionRef)),
         status: "ready",
-        cwd: opened.cwd,
+        cwd: options.cwd,
         model: opened.model,
         resumeCursor: { threadId: providerThreadId },
         updatedAt: yield* nowIso,

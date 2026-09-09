@@ -37,6 +37,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import { projectHostPath } from "../project/SeparateProjectRegistry.ts";
 
 import {
   base64UrlDecodeUtf8,
@@ -296,6 +297,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
           );
         requestedPath = path.resolve(workspaceRoot, requestedPath);
       }
+      if (input.workspaceRoot) {
+        const cwd = input.workspaceRoot;
+        requestedPath = yield* Effect.tryPromise({
+          try: () => projectHostPath(cwd, requestedPath, process.env.AGENT_EXEC_STATE),
+          catch: (cause) =>
+            new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+        });
+      }
       const canonicalFile = yield* resolveCanonicalFile(requestedPath).pipe(
         Effect.mapError(
           (cause) => new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
@@ -359,8 +368,14 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
             }),
         ),
       );
-      const relativePath = path.isAbsolute(input.resource.path)
-        ? path.relative(workspaceRoot, input.resource.path)
+      const resourcePath = input.resource.path;
+      const hostPath = yield* Effect.tryPromise({
+        try: () => projectHostPath(workspaceRoot, resourcePath, process.env.AGENT_EXEC_STATE),
+        catch: (cause) =>
+          new AssetWorkspaceAssetInspectionError({ resource: input.resource, cause }),
+      });
+      const relativePath = path.isAbsolute(hostPath)
+        ? path.relative(workspaceRoot, hostPath)
         : input.resource.path;
       const resolved = yield* workspacePaths
         .resolveRelativePathWithinRoot({ workspaceRoot, relativePath })

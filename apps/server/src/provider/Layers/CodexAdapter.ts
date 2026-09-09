@@ -1,3 +1,4 @@
+import { projectProviderEndpoint } from "../../project/SeparateProjectRegistry.ts";
 /**
  * CodexAdapterLive - Scoped live implementation for the Codex provider adapter.
  *
@@ -2311,6 +2312,23 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             : undefined;
         const sessionEnvironment = withThreadCliEnvironment(options?.environment, input.threadId);
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
+        const mcpEndpoint = mcpSession
+          ? yield* Effect.tryPromise({
+              try: () =>
+                projectProviderEndpoint(
+                  input.cwd,
+                  mcpSession.endpoint,
+                  sessionEnvironment.AGENT_EXEC_STATE,
+                ),
+              catch: (cause) =>
+                new ProviderAdapterRequestError({
+                  provider: PROVIDER,
+                  method: "startSession",
+                  detail: "Could not resolve the project endpoint.",
+                  cause,
+                }),
+            })
+          : undefined;
         const runtimeInput: CodexSessionRuntimeOptions = {
           threadId: input.threadId,
           providerInstanceId: boundInstanceId,
@@ -2336,7 +2354,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
                 },
                 appServerArgs: [
                   "-c",
-                  `mcp_servers.t3-code.url=${mcpSession.endpoint}`,
+                  `mcp_servers.t3-code.url=${mcpEndpoint}`,
                   "-c",
                   'mcp_servers.t3-code.bearer_token_env_var="T3_MCP_BEARER_TOKEN"',
                 ],
