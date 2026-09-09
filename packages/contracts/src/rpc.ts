@@ -1,3 +1,8 @@
+import {
+  ArtifactReadMarkdownInput,
+  ArtifactReadMarkdownResult,
+  ArtifactReadMarkdownError,
+} from "./artifact.ts";
 import * as Schema from "effect/Schema";
 import * as Rpc from "effect/unstable/rpc/Rpc";
 import * as RpcGroup from "effect/unstable/rpc/RpcGroup";
@@ -271,6 +276,7 @@ export const WS_METHODS = {
   projectsAdd: "projects.add",
   projectsRemove: "projects.remove",
   projectsListEntries: "projects.listEntries",
+  artifactsReadMarkdown: "artifacts.readMarkdown",
   projectsReadFile: "projects.readFile",
   projectsSearchContents: "projects.searchContents",
   projectsSearchEntries: "projects.searchEntries",
@@ -914,6 +920,12 @@ const WsProjectsListEntriesRpc = Rpc.make(WS_METHODS.projectsListEntries, {
   error: Schema.Union([ProjectListEntriesError, EnvironmentAuthorizationError]),
 });
 
+const WsArtifactsReadMarkdownRpc = Rpc.make(WS_METHODS.artifactsReadMarkdown, {
+  payload: ArtifactReadMarkdownInput,
+  success: ArtifactReadMarkdownResult,
+  error: Schema.Union([ArtifactReadMarkdownError, EnvironmentAuthorizationError]),
+});
+
 const WsProjectsReadFileRpc = Rpc.make(WS_METHODS.projectsReadFile, {
   payload: ProjectReadFileInput,
   success: ProjectReadFileResult,
@@ -1378,6 +1390,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
   WsProjectsListEntriesRpc,
+  WsArtifactsReadMarkdownRpc,
   WsProjectsReadFileRpc,
   WsProjectsSearchContentsRpc,
   WsProjectsSearchEntriesRpc,

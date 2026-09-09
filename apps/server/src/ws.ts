@@ -1,3 +1,4 @@
+import { readArtifactMarkdown } from "./artifactMarkdown.ts";
 import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
@@ -1969,6 +1970,8 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "workspace" },
           ),
+        [WS_METHODS.artifactsReadMarkdown]: (input) =>
+          observeRpcEffect(WS_METHODS.artifactsReadMarkdown, readArtifactMarkdown(input.url)),
         [WS_METHODS.projectsReadFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsReadFile,

@@ -26,6 +26,7 @@ import type {
   ServerProviderSkill,
   ThreadLinkedPullRequest,
 } from "@t3tools/contracts";
+import { resolvePublishedMarkdownDestination } from "@t3tools/shared/markdownLinks";
 import { faviconUrlForOrigin } from "@t3tools/shared/favicon";
 import {
   isAtomCommandInterrupted,
@@ -196,6 +197,8 @@ export type ChatMarkdownBlockRenderer = (
 
 export interface ChatMarkdownProps {
   text: string;
+  /** Published document URL used to resolve relative links and media. */
+  documentUrl?: string;
   cwd: string | undefined;
   threadRef?: ScopedThreadRef | undefined;
   /** Panel that receives pull request links, including the standalone PR view. */
@@ -3141,6 +3144,7 @@ function ChatMarkdown({
   parseRawHtml = true,
   extraRemarkPlugins = EMPTY_REMARK_PLUGINS,
   wideTables = false,
+  documentUrl,
   ...props
 }: ChatMarkdownProps) {
   const {
@@ -3178,7 +3182,12 @@ function ChatMarkdown({
           rehypePlugins={parseRawHtml ? CHAT_MARKDOWN_REHYPE_PLUGINS : undefined}
           skipHtml={false}
           components={CHAT_MARKDOWN_COMPONENTS}
-          urlTransform={markdownUrlTransform}
+          urlTransform={
+            documentUrl
+              ? (href) =>
+                  resolvePublishedMarkdownDestination(defaultUrlTransform(href), documentUrl)
+              : markdownUrlTransform
+          }
         >
           {text}
         </ReactMarkdown>

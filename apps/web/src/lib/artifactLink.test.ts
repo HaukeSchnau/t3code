@@ -16,6 +16,7 @@ describe("published artifact links", () => {
     "report.html",
     "report.PDF",
     "notes.md",
+    "notes.markdown",
     "data.json",
     "notes.txt",
     "prototype/",
