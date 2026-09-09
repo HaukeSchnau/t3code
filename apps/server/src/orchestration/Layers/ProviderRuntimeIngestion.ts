@@ -2586,19 +2586,31 @@ const make = Effect.gen(function* () {
   const processJournalEvent = (event: ProviderRuntimeEvent, journalBacked: boolean) =>
     processInput({ source: "runtime", event }, journalBacked);
 
-  const processInputSafely = (input: RuntimeIngestionInput) =>
-    (input.source === "runtime" && transcriptJournalIngestion.accepts(input.event)
-      ? transcriptJournalIngestion
-          .drain(input.event, processJournalEvent)
-          .pipe(
-            Effect.andThen(
-              isSubagentRuntimeEvent(input.event) &&
-                transcriptJournalIngestion.consumeRecoveredItemContinuation(input.event)
-                ? subagentActivityProjection.flush({ threadId: input.event.threadId })
-                : Effect.void,
-            ),
-          )
-      : processInput(input)
+  const processInputSafely = (input: RuntimeIngestionInput) => {
+    // A journal batch may have already delivered this queued notification.
+    // Retain the notification until then, but avoid another journal scan afterward.
+    if (
+      input.source === "runtime" &&
+      input.event.type === "content.delta" &&
+      !isSubagentRuntimeEvent(input.event) &&
+      transcriptJournalIngestion.accepts(input.event) &&
+      runtimeEventLedger.hasProcessed(input.event)
+    ) {
+      return processInput(input);
+    }
+    return (
+      input.source === "runtime" && transcriptJournalIngestion.accepts(input.event)
+        ? transcriptJournalIngestion
+            .drain(input.event, processJournalEvent)
+            .pipe(
+              Effect.andThen(
+                isSubagentRuntimeEvent(input.event) &&
+                  transcriptJournalIngestion.consumeRecoveredItemContinuation(input.event)
+                  ? subagentActivityProjection.flush({ threadId: input.event.threadId })
+                  : Effect.void,
+              ),
+            )
+        : processInput(input)
     ).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
@@ -2612,15 +2624,13 @@ const make = Effect.gen(function* () {
         });
       }),
     );
+  };
 
+  // Journal eligibility does not prove persistence. Keep every notification
+  // so the unjournaled fallback cannot lose assistant deltas.
   const worker = yield* makeKeyedDrainableWorker({
     concurrency: 8,
     process: (input: RuntimeIngestionInput, _threadId: ThreadId) => processInputSafely(input),
-    replacePendingTail: (pending, incoming) =>
-      pending.source === "runtime" &&
-      incoming.source === "runtime" &&
-      transcriptJournalIngestion.accepts(pending.event) &&
-      transcriptJournalIngestion.accepts(incoming.event),
   });
   const drain = worker.drain.pipe(
     Effect.andThen(

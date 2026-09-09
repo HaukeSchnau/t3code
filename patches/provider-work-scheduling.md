@@ -12,6 +12,10 @@ can each take seconds or minutes; globally serial execution makes an unrelated a
 - `drain` completes only when all queued and active items across every thread have settled.
 - Transcript-journal delivery remains ordered within its thread and does not let concurrent threads process
   each other's undelivered entries.
+- Runtime ingestion retains every queued notification. Journal eligibility does not prove an adapter
+  persisted the event; replacing eligible notifications can discard the only copy of assistant text.
+  Codex, Claude, and Antigravity must forward the registry's acceptance gate before volatile delivery,
+  just like the other adapters. The journal still batches persisted deltas for projection.
 - Thread detail replay uses the indexed aggregate stream; it must not scan and decode unrelated global events
   before filtering to the selected thread.
 

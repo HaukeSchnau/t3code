@@ -70,6 +70,7 @@ function nativeToolUpdate(
 }
 
 const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (options?: {
+  readonly acceptRuntimeEvent?: AntigravityAdapterOptions["acceptRuntimeEvent"];
   readonly enabled?: boolean;
   readonly holdCancel?: boolean;
   readonly holdClose?: boolean;
@@ -218,6 +219,7 @@ const makeHarness = Effect.fn("makeAntigravityAdapterHarness")(function* (option
     decodeSettings({ enabled: options?.enabled ?? true }),
     {
       instanceId,
+      ...(options?.acceptRuntimeEvent ? { acceptRuntimeEvent: options.acceptRuntimeEvent } : {}),
       makeRuntime: (input) =>
         Effect.gen(function* () {
           launches.push(input);
@@ -441,7 +443,12 @@ it.layer(layer)("AntigravityAdapter", (it) => {
 
   it.effect("keeps thoughts, native command results, and replies on the active turn", () =>
     Effect.gen(function* () {
-      const h = yield* makeHarness();
+      const h = yield* makeHarness({
+        acceptRuntimeEvent: (event) =>
+          Effect.succeed(
+            event.type !== "content.delta" || event.payload.delta !== "rejected duplicate",
+          ),
+      });
       yield* h.adapter.startSession({
         threadId,
         cwd: process.cwd(),
@@ -466,6 +473,7 @@ it.layer(layer)("AntigravityAdapter", (it) => {
         rawPayload: {},
       });
       yield* h.emitNative({ _tag: "ContentDelta", text: "The file says after.", rawPayload: {} });
+      yield* h.emitNative({ _tag: "ContentDelta", text: "rejected duplicate", rawPayload: {} });
       yield* Deferred.succeed(prompt.result, { stopReason: "end_turn" });
       const result = yield* Fiber.join(sending);
       yield* h.waitForEvent((event) => event.type === "turn.completed");

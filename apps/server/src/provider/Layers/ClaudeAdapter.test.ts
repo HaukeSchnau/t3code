@@ -173,6 +173,7 @@ function makeHarness(config?: {
   readonly scopedLimitNames?: ClaudeAdapterLiveOptions["scopedLimitNames"];
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
   readonly usageResponse?: unknown;
+  readonly acceptRuntimeEvent?: ClaudeAdapterLiveOptions["acceptRuntimeEvent"];
 }) {
   const query = new FakeClaudeQuery();
   let usageCalls = 0;
@@ -192,6 +193,7 @@ function makeHarness(config?: {
     | undefined;
 
   const adapterOptions: ClaudeAdapterLiveOptions = {
+    ...(config?.acceptRuntimeEvent ? { acceptRuntimeEvent: config.acceptRuntimeEvent } : {}),
     ...(config?.environment ? { environment: config.environment } : {}),
     ...(config?.instanceId ? { instanceId: config.instanceId } : {}),
     ...(config?.scopedLimitNames ? { scopedLimitNames: config.scopedLimitNames } : {}),
@@ -1206,7 +1208,12 @@ describe("ClaudeAdapterLive", () => {
   });
 
   it.effect("maps Claude stream/runtime messages to canonical provider runtime events", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({
+      acceptRuntimeEvent: (event) =>
+        Effect.succeed(
+          event.type !== "content.delta" || event.payload.delta !== "rejected duplicate",
+        ),
+    });
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
 
@@ -1258,6 +1265,18 @@ describe("ClaudeAdapterLive", () => {
             type: "text_delta",
             text: "Hi",
           },
+        },
+      } as unknown as SDKMessage);
+
+      harness.query.emit({
+        type: "stream_event",
+        session_id: "sdk-session-1",
+        uuid: "stream-rejected",
+        parent_tool_use_id: null,
+        event: {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "rejected duplicate" },
         },
       } as unknown as SDKMessage);
 
