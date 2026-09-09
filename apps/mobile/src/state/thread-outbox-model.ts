@@ -6,6 +6,8 @@ import {
 } from "@t3tools/client-runtime/operations/command-outbox";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import {
+  ThreadWorkspaceId,
+  WorkspaceProfile,
   CommandId,
   EnvironmentId,
   IsoDateTime,
@@ -46,6 +48,8 @@ const QueuedThreadCreationSchema = Schema.Struct({
   workspaceMode: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workspaceId: Schema.optional(ThreadWorkspaceId),
+  workspaceProfile: Schema.optional(WorkspaceProfile),
   startFromOrigin: Schema.optional(Schema.Boolean),
   skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
 });
@@ -84,6 +88,8 @@ export interface QueuedThreadCreation {
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly workspaceId?: ThreadWorkspaceId;
+  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin?: boolean;
   readonly skillPackIds?: ReadonlyArray<SkillPackIdType>;
 }
@@ -134,6 +140,10 @@ export function makeQueuedThreadDeliveryPlan(
           workspaceMode: message.creation.workspaceMode,
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
+          ...(message.creation.workspaceId ? { workspaceId: message.creation.workspaceId } : {}),
+          ...(message.creation.workspaceProfile
+            ? { workspaceProfile: message.creation.workspaceProfile }
+            : {}),
           startFromOrigin: message.creation.startFromOrigin ?? false,
           ...(message.creation.skillPackIds ? { skillPackIds: message.creation.skillPackIds } : {}),
           worktreeBranchName: message.deliveryWorktreeBranchName ?? `t3-code/${message.commandId}`,
@@ -320,7 +330,7 @@ export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): bo
   if (message.text.trim().length === 0 || message.modelSelection === undefined) {
     return false;
   }
-  return message.creation.workspaceMode !== "worktree" || Boolean(message.creation.branch);
+  return true;
 }
 
 function errorMessage(error: unknown): string | null {

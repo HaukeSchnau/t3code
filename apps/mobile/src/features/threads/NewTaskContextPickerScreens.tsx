@@ -1,3 +1,8 @@
+import { useArchivedThreadSnapshots } from "../archive/useArchivedThreadSnapshots";
+import {
+  filterWorkspaceGroups,
+  withArchivedWorkspaces,
+} from "@t3tools/client-runtime/state/workspaces";
 import type { VcsRef } from "@t3tools/client-runtime/state/vcs";
 import { resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import { LegendList } from "@legendapp/list/react-native";
@@ -146,6 +151,149 @@ function PickerSurface(props: { readonly children: ReactNode }) {
   return <View className="overflow-hidden rounded-2xl bg-card">{props.children}</View>;
 }
 
+export function NewTaskWorkspacePickerRouteScreen() {
+  const flow = useNewTaskFlow();
+  const navigation = useNavigation();
+  const insets = useSafeAreaInsets();
+  const [query, setQuery] = useState("");
+  const [showSettled, setShowSettled] = useState(false);
+  const [advanced, setAdvanced] = useState(false);
+  const archiveEnvironmentIds = useMemo(
+    () =>
+      flow.selectedProject && (showSettled || query.trim())
+        ? [flow.selectedProject.environmentId]
+        : [],
+    [flow.selectedProject, showSettled, query],
+  );
+  const archive = useArchivedThreadSnapshots(archiveEnvironmentIds);
+  const workspaces = useMemo(
+    () =>
+      filterWorkspaceGroups(
+        withArchivedWorkspaces(flow.workspaces, archive.snapshots, flow.selectedProject?.id ?? ""),
+        { query, showSettled },
+      ),
+    [flow.workspaces, archive.snapshots, flow.selectedProject?.id, query, showSettled],
+  );
+  return (
+    <View className="flex-1 bg-sheet" collapsable={false}>
+      <NativeStackScreenOptions
+        options={{ headerShown: Platform.OS !== "android", title: "Workspace" }}
+      />
+      {Platform.OS === "android" && (
+        <AndroidScreenHeader title="Workspace" onBack={() => navigation.goBack()} />
+      )}
+      <ScrollView
+        contentInsetAdjustmentBehavior="automatic"
+        contentContainerStyle={{
+          padding: 16,
+          paddingBottom: Math.max(insets.bottom, 16) + 16,
+          gap: 16,
+        }}
+      >
+        <PickerSurface>
+          <SelectionRow
+            title="New workspace"
+            subtitle={
+              flow.isolatedWorkspaces
+                ? "Separate files, tools and services"
+                : "A separate checkout for this task"
+            }
+            selected={flow.workspaceMode === "worktree"}
+            onPress={() => {
+              flow.setWorkspaceMode("worktree");
+              navigation.goBack();
+            }}
+          />
+          <SelectionRow
+            title="Project checkout"
+            selected={flow.workspaceMode === "local" && !flow.selectedWorktreePath}
+            onPress={() => {
+              flow.setWorkspaceMode("local");
+              navigation.goBack();
+            }}
+            isLast
+          />
+        </PickerSurface>
+        {
+          <>
+            <TextInput
+              accessibilityLabel="Find workspace"
+              placeholder="Find workspace…"
+              value={query}
+              onChangeText={setQuery}
+              className="rounded-xl bg-card px-4 py-3 text-base text-foreground"
+              autoCorrect={false}
+            />
+            {archive.isLoading && (
+              <Text className="px-4 text-sm text-foreground-muted">
+                Loading settled workspaces…
+              </Text>
+            )}
+            {archive.error && (
+              <Text className="px-4 text-sm text-foreground-muted">{archive.error}</Text>
+            )}
+            <PickerSurface>
+              {workspaces.map((workspace, index) => (
+                <SelectionRow
+                  key={workspace.key}
+                  title={workspace.label}
+                  subtitle={`${workspace.threads.length} ${workspace.threads.length === 1 ? "thread" : "threads"}${workspace.runningCount > 0 ? ` · ${workspace.runningCount} running` : workspace.settled ? " · Settled" : ""}`}
+                  selected={flow.selectedWorktreePath === workspace.checkoutPath}
+                  onPress={() => {
+                    flow.selectWorkspace(workspace);
+                    navigation.goBack();
+                  }}
+                  isLast={index === workspaces.length - 1}
+                />
+              ))}
+              {workspaces.length === 0 && (
+                <Text className="p-4 text-sm text-foreground-muted">No matching workspaces.</Text>
+              )}
+            </PickerSurface>
+            <PickerSurface>
+              <ToggleRow title="Show settled" value={showSettled} onValueChange={setShowSettled} />
+            </PickerSurface>
+          </>
+        }
+        {flow.isolatedWorkspaces && (
+          <>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setAdvanced(!advanced)}
+              className="px-4 py-2"
+            >
+              <Text className="text-sm text-foreground-muted">
+                {advanced ? "Hide advanced" : "Advanced"}
+              </Text>
+            </Pressable>
+            {advanced && (
+              <Text className="px-4 text-sm text-foreground-muted">Applies to new workspaces.</Text>
+            )}
+            {advanced && (
+              <PickerSurface>
+                {(["familiar", "minimal"] as const).map((profile) => (
+                  <SelectionRow
+                    key={profile}
+                    title={profile === "familiar" ? "Familiar" : "Minimal"}
+                    subtitle={
+                      profile === "familiar"
+                        ? "Keep your global instructions and skills"
+                        : "Use the project’s instructions and tools"
+                    }
+                    selected={flow.workspaceProfile === profile}
+                    onPress={() => flow.setWorkspaceProfile(profile)}
+                    isLast={profile === "minimal"}
+                  />
+                ))}
+              </PickerSurface>
+            )}
+          </>
+        )}
+      </ScrollView>
+    </View>
+  );
+}
+
 export function NewTaskEnvironmentPickerRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation();
@@ -261,7 +409,10 @@ export function NewTaskBranchPickerRouteScreen() {
         setSwitchingBranchName(branch.name);
         const result = await checkoutNewTaskBranch({
           branch,
-          project: flow.selectedProject,
+          project: {
+            ...flow.selectedProject,
+            workspaceRoot: flow.selectedWorktreePath ?? flow.selectedProject.workspaceRoot,
+          },
           workspaceMode: flow.workspaceMode,
           switchRef,
         });
@@ -297,6 +448,7 @@ export function NewTaskBranchPickerRouteScreen() {
     [
       flow.selectBranch,
       flow.selectedProject,
+      flow.selectedWorktreePath,
       flow.setBranchQuery,
       flow.workspaceMode,
       navigation,
@@ -319,6 +471,7 @@ export function NewTaskBranchPickerRouteScreen() {
     [
       flow.filteredBranches.length,
       flow.selectedProject,
+      flow.selectedWorktreePath,
       selectBranch,
       selectedBranchName,
       switchingBranchName,

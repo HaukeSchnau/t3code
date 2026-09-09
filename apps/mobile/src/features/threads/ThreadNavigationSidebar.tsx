@@ -603,6 +603,7 @@ function ThreadNavigationSidebarPane(
       settledShelfExpanded,
       settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
       snoozeLabelNow: `${nowMinute}:00.000Z`,
+      groupWorkspaces: selectedProjectRefs !== null,
     });
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
       items.push({
@@ -828,7 +829,11 @@ function ThreadNavigationSidebarPane(
       if (previous.type === "v2-settled-shelf" && item.type === "v2-settled-shelf") {
         return previous.count === item.count && previous.expanded === item.expanded;
       }
+      if (previous.type === "v2-workspace" && item.type === "v2-workspace")
+        return previous.key === item.key && previous.label === item.label;
       if (
+        previous.type === "v2-workspace" ||
+        item.type === "v2-workspace" ||
         previous.type === "v2-thread" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
@@ -866,6 +871,15 @@ function ThreadNavigationSidebarPane(
   const renderListItem = useCallback(
     ({ item }: { readonly item: SidebarListItem }) => {
       switch (item.type) {
+        case "v2-workspace":
+          return (
+            <Text
+              className="px-3 pb-1 pt-4 text-xs font-t3-medium text-foreground-muted"
+              numberOfLines={1}
+            >
+              {item.label}
+            </Text>
+          );
         case "v2-pending": {
           const pendingScopeKey = scopedProjectKey(
             item.pendingTask.environmentId,

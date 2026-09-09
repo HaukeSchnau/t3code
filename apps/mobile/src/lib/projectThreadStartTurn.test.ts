@@ -4,6 +4,7 @@ import {
   ProjectId,
   ProviderInstanceId,
   ThreadId,
+  ThreadWorkspaceId,
 } from "@t3tools/contracts";
 import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { describe, expect, it } from "vite-plus/test";
@@ -95,9 +96,50 @@ describe("new thread on an existing branch", () => {
         branch: "feature/existing",
         worktreePath,
       });
-      expect(input.bootstrap).not.toHaveProperty("prepareWorktree");
+      expect(input.bootstrap).not.toHaveProperty("prepareWorkspace");
       expect(input.bootstrap).not.toHaveProperty("runSetupScript");
       expect(input.threadId).toBe("new-thread");
     },
   );
+});
+
+describe("managed workspace creation", () => {
+  const spec = {
+    projectId: ProjectId.make("project"),
+    projectCwd: "/project",
+    threadId: "fresh-thread",
+    commandId: "create",
+    messageId: "prompt",
+    createdAt: "2026-09-09T12:00:00Z",
+    text: "Continue the task",
+    uploadedAttachments: [],
+    modelSelection: { instanceId: ProviderInstanceId.make("codex"), model: "gpt-5.6-luna" },
+    runtimeMode: "full-access" as const,
+    interactionMode: "default" as const,
+    workspaceMode: "worktree" as const,
+    branch: null,
+    worktreePath: null,
+    startFromOrigin: false,
+    worktreeBranchName: "unused",
+  };
+  it("lets the server select the current revision for a branchless repository", () => {
+    const command = buildProjectThreadStartTurnInput({ ...spec, workspaceProfile: "minimal" });
+    expect(command.bootstrap.prepareWorkspace).toEqual({
+      kind: "auto",
+      profile: "minimal",
+      roots: [{ projectId: "project", sourcePath: "/project", role: "primary" }],
+    });
+  });
+  it("shares the chosen workspace identity and files when starting another conversation", () => {
+    const workspaceId = ThreadWorkspaceId.make("workspace:original");
+    const command = buildProjectThreadStartTurnInput({
+      ...spec,
+      workspaceMode: "local",
+      workspaceId,
+      worktreePath: "/workspaces/task",
+    });
+    expect(command.bootstrap.createThread.workspaceId).toBe(workspaceId);
+    expect(command.bootstrap.createThread.worktreePath).toBe("/workspaces/task");
+    expect(command.bootstrap).not.toHaveProperty("prepareWorkspace");
+  });
 });

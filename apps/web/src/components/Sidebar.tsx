@@ -1,3 +1,4 @@
+import { workspaceLabel } from "@t3tools/client-runtime/state/workspaces";
 import { autoAnimate } from "@formkit/auto-animate";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -3634,6 +3635,7 @@ export default function Sidebar() {
               handleNewThreadRef.current(scopeProjectRef(thread.environmentId, thread.projectId), {
                 branch: thread.branch,
                 worktreePath: thread.worktreePath,
+                workspaceId: thread.workspaceId ?? null,
                 envMode: thread.worktreePath ? "worktree" : "local",
                 startFromOrigin: false,
               }),
@@ -4470,9 +4472,46 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  items.push(
-                    ...activeOrchestrationItems.map((item) => renderOrchestrationItem(item)),
-                  );
+                  if (scopedProjectGroup) {
+                    // Keep each orchestration tree together, then group its root
+                    // with the other conversations sharing the same checkout.
+                    const groups = new Map<
+                      string,
+                      { label: string; items: typeof activeOrchestrationItems }
+                    >();
+                    for (const item of activeOrchestrationItems) {
+                      const root = orchestrationThreadsByKey.get(item.rootKey);
+                      const key = JSON.stringify([
+                        root?.environmentId,
+                        root?.projectId,
+                        root?.worktreePath,
+                      ]);
+                      const group = groups.get(key);
+                      if (group) group.items.push(item);
+                      else
+                        groups.set(key, {
+                          label: root?.worktreePath
+                            ? workspaceLabel(root.worktreePath)
+                            : "Project checkout",
+                          items: [item],
+                        });
+                    }
+                    for (const [key, group] of groups) {
+                      items.push(
+                        <li
+                          key={`workspace:${key}`}
+                          className="mt-3 mb-1 truncate px-2.5 text-xs font-medium text-muted-foreground"
+                        >
+                          {group.label}
+                        </li>,
+                      );
+                      items.push(...group.items.map((item) => renderOrchestrationItem(item)));
+                    }
+                  } else {
+                    items.push(
+                      ...activeOrchestrationItems.map((item) => renderOrchestrationItem(item)),
+                    );
+                  }
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when

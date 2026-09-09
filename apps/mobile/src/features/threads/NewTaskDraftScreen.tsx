@@ -1,3 +1,4 @@
+import { workspaceLabel as labelWorkspace } from "@t3tools/client-runtime/state/workspaces";
 import { useAtomValue } from "@effect/atom-react";
 import { NativeHeaderToolbar, NativeStackScreenOptions } from "../../native/StackHeader";
 import {
@@ -93,10 +94,7 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
-import {
-  resolveNewTaskBranchLabel,
-  resolveNewTaskWorkspaceLabel,
-} from "./new-task-context-presentation";
+import { resolveNewTaskBranchLabel } from "./new-task-context-presentation";
 import { useIncomingShare } from "../sharing/IncomingShareProvider";
 import { selectIncomingShareAttachmentsForServer } from "../sharing/incoming-share-model";
 import { appAtomRegistry } from "../../state/atom-registry";
@@ -863,10 +861,11 @@ export function NewTaskDraftScreen(props: {
     startFromOrigin: flow.startFromOrigin,
     workspaceMode: flow.workspaceMode,
   });
-  const workspaceLabel = resolveNewTaskWorkspaceLabel({
-    workspaceMode: flow.workspaceMode,
-    worktreePath: flow.selectedWorktreePath,
-  });
+  const workspaceLabel = flow.selectedWorktreePath
+    ? labelWorkspace(flow.selectedWorktreePath)
+    : flow.workspaceMode === "worktree"
+      ? "New workspace"
+      : "Project checkout";
   const showBranchLoading = flow.branchesLoading && flow.availableBranches.length === 0;
 
   async function handlePickMedia(): Promise<void> {
@@ -954,16 +953,13 @@ export function NewTaskDraftScreen(props: {
         selectedEnvironmentServerConfig,
         draft.modelSelection ?? null,
       ) ?? flow.selectedModel;
-    const workspaceMode = draft.workspaceSelection?.mode ?? flow.workspaceMode;
-    const selectedBranchName = draft.workspaceSelection?.branch ?? flow.selectedBranchName;
     const initialMessageText = draft.text.trim();
 
     if (
       attachmentBlockReason !== null ||
       !modelSelection ||
       initialMessageText.length === 0 ||
-      flow.submitting ||
-      (workspaceMode === "worktree" && !selectedBranchName)
+      flow.submitting
     ) {
       return;
     }
@@ -1102,8 +1098,7 @@ export function NewTaskDraftScreen(props: {
     isIncomingShareReady &&
     !isImportingShare &&
     !flow.submitting &&
-    !voiceInput.blocksSubmission &&
-    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
+    !voiceInput.blocksSubmission;
   const promptEditor = (
     <ComposerEditor
       ref={promptInputRef}
@@ -1151,7 +1146,9 @@ export function NewTaskDraftScreen(props: {
     void KeyboardController.dismiss({ animated: true });
     navigation.dispatch(StackActions.push("NewTask", { incomingShareId: props.incomingShareId }));
   };
-  const openContextPicker = (routeName: "NewTaskBranch" | "NewTaskEnvironment") => {
+  const openContextPicker = (
+    routeName: "NewTaskBranch" | "NewTaskEnvironment" | "NewTaskWorkspace",
+  ) => {
     if (isComposerInteractionLocked) {
       return;
     }
@@ -1229,7 +1226,7 @@ export function NewTaskDraftScreen(props: {
   const workspaceControls = (
     <View className="flex-row items-center gap-1 px-2">
       <ComposerInlineControl
-        accessibilityHint={`Switches to ${flow.workspaceMode === "local" ? "a new worktree" : "the current checkout"}`}
+        accessibilityHint="Choose a new or existing workspace"
         accessibilityLabel={workspaceLabel}
         disabled={isComposerInteractionLocked || voiceInput.isBusy}
         iconNode={
@@ -1240,7 +1237,7 @@ export function NewTaskDraftScreen(props: {
         }
         label={workspaceLabel}
         maxWidth={flow.workspaceMode === "local" ? 220 : 148}
-        onPress={() => flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local")}
+        onPress={() => openContextPicker("NewTaskWorkspace")}
         showChevron={false}
       />
 

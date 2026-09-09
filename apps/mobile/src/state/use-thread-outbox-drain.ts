@@ -459,6 +459,12 @@ export async function restoreRejectedQueuedMessage(
               mode: queuedMessage.creation.workspaceMode,
               branch: queuedMessage.creation.branch,
               worktreePath: queuedMessage.creation.worktreePath,
+              ...(queuedMessage.creation.workspaceId
+                ? { workspaceId: queuedMessage.creation.workspaceId }
+                : {}),
+              ...(queuedMessage.creation.workspaceProfile
+                ? { workspaceProfile: queuedMessage.creation.workspaceProfile }
+                : {}),
               ...(queuedMessage.creation.startFromOrigin !== undefined
                 ? { startFromOrigin: queuedMessage.creation.startFromOrigin }
                 : {}),

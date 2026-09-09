@@ -1316,13 +1316,13 @@ describe("thread outbox", () => {
         ...creationMessage,
         creation: { ...creationMessage.creation, branch: null },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       isQueuedThreadCreationSendable({
         ...creationMessage,
         creation: { ...creationMessage.creation, branch: "" },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(isQueuedThreadCreationSendable({ ...creationMessage, modelSelection: undefined })).toBe(
       false,
     );

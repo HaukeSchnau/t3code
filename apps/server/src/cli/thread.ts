@@ -7,6 +7,7 @@ import {
   ProviderInstanceId,
   SkillPackId,
   ThreadId,
+  ThreadWorkspaceId,
   ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
@@ -32,6 +33,10 @@ import { readPersistedServerRuntimeState } from "../serverRuntimeState.ts";
 import { authLocationFlags, type CliAuthLocationFlags, resolveCliAuthConfig } from "./config.ts";
 
 const THREAD_ID_ENV = "T3CODE_THREAD_ID";
+
+class ThreadCliUsageError extends Data.TaggedError("ThreadCliUsageError")<{
+  readonly message: string;
+}> {}
 
 class ThreadCliServerUnavailableError extends Data.TaggedError("ThreadCliServerUnavailableError")<{
   readonly statePath: string;
@@ -484,6 +489,14 @@ const graphCommand = Command.make("graph", {
 );
 
 const createCommand = Command.make("create", {
+  workspace: Flag.string("workspace").pipe(
+    Flag.withDescription("Reuse an existing workspace id."),
+    Flag.optional,
+  ),
+  workspaceProfile: Flag.choice("workspace-profile", ["familiar", "minimal"]).pipe(
+    Flag.withDescription("Guidance profile for a new workspace."),
+    Flag.optional,
+  ),
   ...scopedFlags,
   prompt: promptArgument,
   project: Flag.string("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
@@ -523,10 +536,23 @@ const createCommand = Command.make("create", {
   Command.withHandler((flags) =>
     withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
       Effect.gen(function* () {
+        if (Option.isSome(flags.workspace) && flags.worktree) {
+          return yield* new ThreadCliUsageError({
+            message: "Choose --workspace or --worktree, not both.",
+          });
+        }
+        if (Option.isSome(flags.workspaceProfile) && !flags.worktree) {
+          return yield* new ThreadCliUsageError({
+            message: "--workspace-profile requires --worktree.",
+          });
+        }
         const caller = currentCallerThreadId(flags.fromThread);
         const modelSelection = yield* modelSelectionFromFlags(flags);
         const hasTarget =
-          Option.isSome(flags.environment) || Option.isSome(flags.project) || flags.worktree;
+          Option.isSome(flags.environment) ||
+          Option.isSome(flags.project) ||
+          flags.worktree ||
+          Option.isSome(flags.workspace);
         const hasCoordination =
           Option.isSome(flags.effort) ||
           Option.isSome(flags.label) ||
@@ -546,7 +572,23 @@ const createCommand = Command.make("create", {
                   ...(Option.isSome(flags.project)
                     ? { projectId: ProjectId.make(flags.project.value) }
                     : {}),
-                  ...(flags.worktree ? { environment: { type: "worktree" as const } } : {}),
+                  ...(Option.isSome(flags.workspace)
+                    ? {
+                        environment: {
+                          type: "workspace" as const,
+                          workspaceId: ThreadWorkspaceId.make(flags.workspace.value),
+                        },
+                      }
+                    : flags.worktree
+                      ? {
+                          environment: {
+                            type: "worktree" as const,
+                            ...(Option.isSome(flags.workspaceProfile)
+                              ? { profile: flags.workspaceProfile.value }
+                              : {}),
+                          },
+                        }
+                      : {}),
                 },
               }
             : {}),

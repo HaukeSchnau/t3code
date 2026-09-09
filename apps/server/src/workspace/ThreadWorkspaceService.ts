@@ -1,4 +1,4 @@
-import { isSeparateProject } from "../project/SeparateProjectRegistry.ts";
+import { isSeparateProject, readSeparateProject } from "../project/SeparateProjectRegistry.ts";
 // @effect-diagnostics nodeBuiltinImport:off
 // @effect-diagnostics globalDate:off
 // @effect-diagnostics globalTimers:off
@@ -37,6 +37,15 @@ import type {
   PrepareThreadWorkspaceInput,
   PrepareThreadWorkspaceRootInput,
 } from "./ThreadWorkspaceDriver.ts";
+
+const decodeIsolatedWorkspaceRegistration = Schema.decodeEffect(
+  Schema.fromJsonString(
+    Schema.Struct({
+      root: Schema.String,
+      workspace: Schema.Struct({ id: Schema.String, sourceRevision: Schema.String }),
+    }),
+  ),
+);
 
 export class ThreadWorkspaceError extends Schema.TaggedError<ThreadWorkspaceError>()(
   "ThreadWorkspaceError",
@@ -140,6 +149,11 @@ export class ThreadWorkspaceService extends Context.Service<
       readonly projectId: ProjectId;
       readonly workspaceId: ThreadWorkspaceId | null;
     }) => Effect.Effect<string | undefined, ThreadWorkspaceError>;
+    readonly selectWorkspace: (input: {
+      readonly projectId: ProjectId;
+      readonly workspaceId?: ThreadWorkspaceId | null;
+      readonly checkoutPath?: string | null;
+    }) => Effect.Effect<PreparedThreadWorkspace | undefined, ThreadWorkspaceError>;
     readonly deleteWorkspace: (input: {
       readonly workspaceId: ThreadWorkspaceId;
       readonly force?: boolean;
@@ -997,6 +1011,39 @@ export const make = Effect.gen(function* () {
     };
   };
 
+  // Workspace membership is many-to-one. The creating thread only supplies an
+  // idempotency key for provisioning; it does not own subsequent conversations.
+  const selectWorkspace: ThreadWorkspaceService["Service"]["selectWorkspace"] = Effect.fn(
+    "ThreadWorkspaceService.selectWorkspace",
+  )(
+    function* (input) {
+      if (!input.workspaceId && !input.checkoutPath) return undefined;
+      const rows = yield* sql<{ readonly id: string }>`
+      SELECT workspace.id
+      FROM projection_thread_workspaces AS workspace
+      JOIN projection_thread_workspace_roots AS root ON root.workspace_id = workspace.id
+      WHERE root.project_id = ${input.projectId}
+        AND root.role = 'primary'
+        AND workspace.lifecycle = 'active'
+        AND workspace.deleted_at IS NULL
+        AND (${input.workspaceId ?? null} IS NULL OR workspace.id = ${input.workspaceId ?? null})
+        AND (${input.checkoutPath ?? null} IS NULL OR root.checkout_path = ${input.checkoutPath ?? null})
+      ORDER BY workspace.created_at, workspace.id
+      LIMIT 1
+    `.pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.selectWorkspace")));
+      const row = rows[0];
+      if (!row) {
+        if (!input.workspaceId) return undefined; // Legacy unmanaged worktree.
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.selectWorkspace",
+          detail: "This workspace is unavailable or belongs to another project.",
+        });
+      }
+      return toPreparedWorkspace(yield* readWorkspace(ThreadWorkspaceId.make(row.id)));
+    },
+    Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.selectWorkspace")),
+  );
+
   const getPreparedWorkspace = Effect.fn("ThreadWorkspaceService.getPreparedWorkspace")(
     function* ({ threadId }: { readonly threadId: ThreadId }) {
       const workspaceId = makeWorkspaceId(threadId);
@@ -1702,12 +1749,149 @@ export const make = Effect.gen(function* () {
     );
   });
 
+  const prepareIsolatedWorkspace = Effect.fn("ThreadWorkspaceService.prepareIsolatedWorkspace")(
+    function* (input: PrepareThreadWorkspaceInput) {
+      const launcher = hostEnvironment.T3CODE_EXECUTION_LAUNCHER;
+      if (hostPlatform !== "linux" || !launcher) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.prepareIsolatedWorkspace",
+          detail: "This host does not support isolated workspaces.",
+        });
+      }
+      if (input.roots.length !== 1) {
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.prepareIsolatedWorkspace",
+          detail: "Isolated workspaces currently require one repository root.",
+        });
+      }
+      const root = primaryRoot(input);
+      const sourceUsesJj = commandSucceeds("jj", ["root"], root.sourcePath);
+      const projectName = slug(NodePath.basename(root.sourcePath));
+      const profile = input.profile ?? "familiar";
+      let revision = sourceUsesJj
+        ? (resolveJjRevision(root.sourcePath, root.baseRevision) ?? "@")
+        : (root.baseRevision ?? "HEAD");
+      if (!sourceUsesJj && root.startFromOrigin && root.baseRevision) {
+        const fetched = yield* processRunner
+          .run({
+            command: "git",
+            args: ["-C", root.sourcePath, "fetch", "origin", root.baseRevision],
+            cwd: "/",
+            timeout: "3 minutes",
+            maxOutputBytes: 16_384,
+          })
+          .pipe(
+            Effect.mapError(
+              mapWorkspaceError("ThreadWorkspaceService.prepareIsolatedWorkspace.fetch"),
+            ),
+          );
+        if (fetched.code !== 0) {
+          return yield* new ThreadWorkspaceError({
+            operation: "ThreadWorkspaceService.prepareIsolatedWorkspace.fetch",
+            detail: fetched.stderr.trim() || "Could not fetch the requested base revision.",
+          });
+        }
+        revision = "FETCH_HEAD";
+      }
+      return yield* withWorkspaceCheckout(
+        {
+          parentPath: NodePath.join(workspacesDir, projectName),
+          semanticSeed: input.displayNameSeed,
+          fallbackSeed: projectName,
+        },
+        ({ checkoutPath }) =>
+          Effect.gen(function* () {
+            const preparing = makeWorkspace({
+              request: input,
+              kind: "isolated",
+              checkoutPath,
+              vcsKind: "jj",
+              lifecycle: "preparing",
+              metadata: { profile, requestedRevision: revision },
+            });
+            yield* persistWorkspace(preparing);
+            const result = yield* processRunner
+              .run({
+                command: launcher,
+                args: [
+                  "fork",
+                  root.sourcePath,
+                  checkoutPath,
+                  "--name",
+                  projectName.replaceAll(".", "-").slice(0, 64),
+                  "--revision",
+                  revision,
+                  "--profile",
+                  profile,
+                  "--workspace-id",
+                  preparing.id,
+                  "--project-id",
+                  root.projectId,
+                ],
+                // Provisioning is a host operation, including when the source is isolated.
+                cwd: "/",
+                timeout: "5 minutes",
+                maxOutputBytes: 64 * 1024,
+              })
+              .pipe(
+                Effect.mapError(
+                  mapWorkspaceError("ThreadWorkspaceService.prepareIsolatedWorkspace"),
+                ),
+              );
+            if (result.code !== 0) {
+              const detail = result.stderr.trim() || "The isolated workspace could not be created.";
+              yield* persistWorkspace({
+                ...preparing,
+                lifecycle: "failed",
+                failureDetail: detail,
+                updatedAt: nowIso(),
+              });
+              return yield* new ThreadWorkspaceError({
+                operation: "ThreadWorkspaceService.prepareIsolatedWorkspace",
+                detail,
+              });
+            }
+            const registration = yield* decodeIsolatedWorkspaceRegistration(result.stdout).pipe(
+              Effect.mapError(
+                mapWorkspaceError("ThreadWorkspaceService.prepareIsolatedWorkspace.result"),
+              ),
+            );
+            if (registration.root !== checkoutPath || registration.workspace.id !== preparing.id) {
+              return yield* new ThreadWorkspaceError({
+                operation: "ThreadWorkspaceService.prepareIsolatedWorkspace",
+                detail: "The runtime returned another workspace's registration.",
+              });
+            }
+            const workspace = {
+              ...preparing,
+              lifecycle: "active" as const,
+              updatedAt: nowIso(),
+              roots: preparing.roots.map((entry) => ({
+                ...entry,
+                baseRevision: registration.workspace.sourceRevision,
+              })),
+            };
+            yield* persistWorkspace(workspace);
+            return toPreparedWorkspace(workspace);
+          }),
+      );
+    },
+  );
+
   const resolveKind = (
     input: PrepareThreadWorkspaceInput,
   ): Exclude<ThreadWorkspaceKind, "local"> => {
     const root = primaryRoot(input);
     if (input.kind !== "auto") {
       return input.kind;
+    }
+    if (
+      hostPlatform === "linux" &&
+      hostEnvironment.T3CODE_EXECUTION_LAUNCHER &&
+      (commandSucceeds("jj", ["root"], root.sourcePath) ||
+        commandSucceeds("git", ["rev-parse", "--git-dir"], root.sourcePath))
+    ) {
+      return "isolated";
     }
     if (commandSucceeds("jj", ["workspace", "root"], root.sourcePath)) {
       return "jj-workspace";
@@ -1720,44 +1904,84 @@ export const make = Effect.gen(function* () {
 
   const prepareWorkspace: ThreadWorkspaceService["Service"]["prepareWorkspace"] = Effect.fn(
     "ThreadWorkspaceService.prepareWorkspace",
-  )(function* (input) {
-    for (const root of input.roots) {
-      const separate = yield* Effect.tryPromise({
-        try: () => isSeparateProject(root.sourcePath, hostEnvironment.AGENT_EXEC_STATE),
-        catch: (cause) =>
-          new ThreadWorkspaceError({
-            operation: "prepareWorkspace",
-            detail: "Could not inspect project execution environment.",
-            cause,
-          }),
-      });
-      if (separate)
-        return yield* new ThreadWorkspaceError({
-          operation: "prepareWorkspace",
-          detail:
-            "Separate projects currently use the project directory. Choose Local instead of a managed workspace.",
+  )(
+    function* (input) {
+      const kind = resolveKind(input);
+      for (const root of input.roots) {
+        const separate = yield* Effect.tryPromise({
+          try: () => isSeparateProject(root.sourcePath, hostEnvironment.AGENT_EXEC_STATE),
+          catch: (cause) =>
+            new ThreadWorkspaceError({
+              operation: "prepareWorkspace",
+              detail: "Could not inspect project execution environment.",
+              cause,
+            }),
         });
-    }
+        if (separate && kind !== "isolated")
+          return yield* new ThreadWorkspaceError({
+            operation: "prepareWorkspace",
+            detail: "Create an isolated workspace to continue from this separate checkout.",
+          });
+      }
 
-    const existing = yield* getPreparedWorkspace({ threadId: input.threadId });
-    if (Option.isSome(existing)) {
-      return existing.value;
-    }
-    yield* clearIncompleteWorkspace(input.threadId).pipe(
-      Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace.cleanup")),
-    );
-    const mapPrepareError = Effect.mapError(
-      mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace"),
-    );
-    const kind = resolveKind(input);
-    if (kind === "jj-workspace") {
-      return yield* prepareJjWorkspace(input).pipe(mapPrepareError);
-    }
-    if (kind === "directory-copy") {
-      return yield* prepareDirectoryCopyWorkspace(input).pipe(mapPrepareError);
-    }
-    return yield* prepareGitWorkspace(input).pipe(mapPrepareError);
-  });
+      const existing = yield* getPreparedWorkspace({ threadId: input.threadId });
+      if (Option.isSome(existing)) {
+        return existing.value;
+      }
+      // The launcher may have finished while T3 lost the acknowledgement. Recover
+      // its registration before the generic incomplete-checkout cleanup can run.
+      const pending = yield* sql<{
+        readonly id: string;
+      }>`SELECT id FROM projection_thread_workspaces WHERE id = ${makeWorkspaceId(input.threadId)} AND kind = 'isolated' AND lifecycle IN ('preparing', 'failed')`;
+      if (pending[0]) {
+        const workspace = yield* readWorkspace(ThreadWorkspaceId.make(pending[0].id));
+        const primary = workspace.roots.find((entry) => entry.id === workspace.primaryRootId);
+        const record = primary
+          ? yield* Effect.tryPromise({
+              try: () =>
+                readSeparateProject(primary.checkoutPath, hostEnvironment.AGENT_EXEC_STATE),
+              catch: mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace.recover"),
+            })
+          : undefined;
+        if (
+          record?.workspace?.id === workspace.id &&
+          record.workspace.sourceRevision &&
+          primary &&
+          NodeFS.existsSync(primary.checkoutPath)
+        ) {
+          const recovered = {
+            ...workspace,
+            lifecycle: "active" as const,
+            failureDetail: null,
+            updatedAt: nowIso(),
+            roots: workspace.roots.map((entry) => ({
+              ...entry,
+              baseRevision: record.workspace?.sourceRevision ?? entry.baseRevision,
+            })),
+          };
+          yield* persistWorkspace(recovered);
+          return toPreparedWorkspace(recovered);
+        }
+      }
+      yield* clearIncompleteWorkspace(input.threadId).pipe(
+        Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace.cleanup")),
+      );
+      const mapPrepareError = Effect.mapError(
+        mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace"),
+      );
+      if (kind === "isolated") {
+        return yield* prepareIsolatedWorkspace(input).pipe(mapPrepareError);
+      }
+      if (kind === "jj-workspace") {
+        return yield* prepareJjWorkspace(input).pipe(mapPrepareError);
+      }
+      if (kind === "directory-copy") {
+        return yield* prepareDirectoryCopyWorkspace(input).pipe(mapPrepareError);
+      }
+      return yield* prepareGitWorkspace(input).pipe(mapPrepareError);
+    },
+    Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.prepareWorkspace")),
+  );
 
   const resolvePrimaryCwd: ThreadWorkspaceService["Service"]["resolvePrimaryCwd"] = Effect.fn(
     "ThreadWorkspaceService.resolvePrimaryCwd",
@@ -1765,14 +1989,11 @@ export const make = Effect.gen(function* () {
     if (!input.workspaceId) {
       return undefined;
     }
-    const roots = yield* sql<{ readonly checkout_path: string }>`
-      SELECT checkout_path
-      FROM projection_thread_workspace_roots
-      WHERE workspace_id = ${input.workspaceId}
-      ORDER BY CASE role WHEN 'primary' THEN 0 ELSE 1 END, id ASC
-      LIMIT 1
-    `.pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.resolvePrimaryCwd")));
-    return roots[0]?.checkout_path;
+    const selected = yield* selectWorkspace({
+      projectId: input.projectId,
+      workspaceId: input.workspaceId,
+    });
+    return selected?.primaryCwd;
   });
 
   const deleteWorkspace: ThreadWorkspaceService["Service"]["deleteWorkspace"] = Effect.fn(
@@ -1789,7 +2010,51 @@ export const make = Effect.gen(function* () {
       });
     }
 
-    if (workspace.kind === "git-detached") {
+    const activeReferences = yield* sql<{ readonly thread_id: string }>`
+      SELECT thread.thread_id FROM projection_threads AS thread
+      WHERE (thread.workspace_id = ${workspace.id} OR thread.worktree_path = ${primary.checkoutPath})
+        AND thread.deleted_at IS NULL
+        AND (
+          (thread.archived_at IS NULL AND thread.settled_override IS NOT 'settled')
+          OR EXISTS (
+            SELECT 1 FROM projection_thread_sessions AS session
+            WHERE session.thread_id = thread.thread_id AND session.status IN ('starting', 'running')
+          )
+        )
+      LIMIT 1
+    `.pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.deleteWorkspace.references")));
+    if (activeReferences.length > 0) {
+      return yield* new ThreadWorkspaceError({
+        operation: "ThreadWorkspaceService.deleteWorkspace",
+        detail:
+          "An active thread still uses this workspace. Settle or archive its threads before deleting it.",
+      });
+    }
+
+    if (workspace.kind === "isolated") {
+      const launcher = hostEnvironment.T3CODE_EXECUTION_LAUNCHER;
+      if (!launcher)
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.deleteWorkspace",
+          detail:
+            "The isolated runtime is required to stop this workspace before deleting its checkout.",
+        });
+      const stopped = yield* processRunner
+        .run({
+          command: launcher,
+          args: ["retire", primary.checkoutPath],
+          cwd: "/",
+          timeout: "1 minute",
+          maxOutputBytes: 16_384,
+        })
+        .pipe(Effect.mapError(mapWorkspaceError("ThreadWorkspaceService.deleteWorkspace.retire")));
+      if (stopped.code !== 0)
+        return yield* new ThreadWorkspaceError({
+          operation: "ThreadWorkspaceService.deleteWorkspace",
+          detail: stopped.stderr.trim() || "The workspace could not be stopped.",
+        });
+      removeWorkspaceDirectory(primary.checkoutPath);
+    } else if (workspace.kind === "git-detached") {
       yield* Effect.ignore(
         gitWorkflow.removeWorktree({
           cwd: primary.sourcePath,
@@ -1830,6 +2095,7 @@ export const make = Effect.gen(function* () {
 
   return ThreadWorkspaceService.of({
     prepareWorkspace,
+    selectWorkspace,
     resolvePrimaryCwd,
     deleteWorkspace,
   });

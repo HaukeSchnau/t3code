@@ -1,5 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
+  ThreadWorkspaceId,
+  WorkspaceProfile,
   EnvironmentId as EnvironmentIdSchema,
   MessageId as MessageIdSchema,
   ModelSelection as ModelSelectionSchema,
@@ -98,6 +100,8 @@ export interface ComposerDraftWorkspaceSelection {
   readonly mode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
+  readonly workspaceId?: ThreadWorkspaceId;
+  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin?: boolean;
 }
 
@@ -116,6 +120,8 @@ const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
   mode: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
+  workspaceId: Schema.optional(ThreadWorkspaceId),
+  workspaceProfile: Schema.optional(WorkspaceProfile),
   startFromOrigin: Schema.optional(Schema.Boolean),
 });
 
@@ -835,6 +841,8 @@ export async function removeDeliveredCloudQueuedMessage(
           (editor.workspaceSelection.mode !== message.creation?.workspaceMode ||
             editor.workspaceSelection.branch !== message.creation?.branch ||
             editor.workspaceSelection.worktreePath !== message.creation?.worktreePath ||
+            editor.workspaceSelection.workspaceId !== message.creation?.workspaceId ||
+            editor.workspaceSelection.workspaceProfile !== message.creation?.workspaceProfile ||
             (editor.workspaceSelection.startFromOrigin ?? false) !==
               (message.creation?.startFromOrigin ?? false))))
     )

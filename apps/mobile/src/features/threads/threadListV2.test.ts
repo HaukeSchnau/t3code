@@ -956,6 +956,52 @@ describe("buildThreadListV2ListItems", () => {
     now: NOW,
   });
 
+  it("groups active conversations by workspace and removes a header when its last thread settles", () => {
+    const first = makeThread({
+      id: ThreadId.make("first"),
+      title: "First",
+      worktreePath: "/workspaces/login",
+    });
+    const followUp = makeThread({
+      id: ThreadId.make("follow-up"),
+      title: "Review",
+      worktreePath: "/workspaces/login",
+    });
+    const other = makeThread({
+      id: ThreadId.make("other"),
+      title: "Other",
+      worktreePath: "/workspaces/search",
+    });
+    const build = (threads: EnvironmentThreadShell[]) => {
+      const layout = buildThreadListV2Items({
+        threads,
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        settledShelfExpanded: false,
+      });
+      return buildThreadListV2ListItems({
+        items: layout.items,
+        pendingTasks: [],
+        groupWorkspaces: true,
+        settledCount: layout.settledCount,
+        settledShelfHeaderIndex: layout.settledShelfHeaderIndex,
+        settledShelfExpanded: false,
+      });
+    };
+    const headers = (items: ReturnType<typeof build>) =>
+      items.flatMap((item) => (item.type === "v2-workspace" ? [item.label] : []));
+    expect(headers(build([first, other, followUp]))).toEqual(["login", "search"]);
+    const settled = { settledOverride: "settled" as const, settledAt: NOW };
+    expect(headers(build([{ ...first, ...settled }, other, followUp])).sort()).toEqual([
+      "login",
+      "search",
+    ]);
+    expect(headers(build([{ ...first, ...settled }, other, { ...followUp, ...settled }]))).toEqual([
+      "search",
+    ]);
+  });
+
   it("splices queued tasks between the active block and the settled tail", () => {
     const items = buildThreadListV2ListItems({
       items: layout.items,

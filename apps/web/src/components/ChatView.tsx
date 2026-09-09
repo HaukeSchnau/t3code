@@ -6989,6 +6989,8 @@ export default function ChatView(props: ChatViewProps) {
         threadId: threadIdForSend,
         threadCreatedAt: activeThread.createdAt,
         threadWorktreePath: activeThread.worktreePath,
+        workspaceId: draftThread?.workspaceId ?? activeThread.workspaceId,
+        workspaceProfile: draftThread?.workspaceProfile,
         projectId: activeProject.id,
         projectWorkspaceRoot: activeProject.workspaceRoot,
         projectDefaultModelSelection: activeProject.defaultModelSelection,
@@ -7869,7 +7871,8 @@ export default function ChatView(props: ChatViewProps) {
             envMode: mode,
             newWorktreesStartFromOrigin: primaryServerSettings.newWorktreesStartFromOrigin,
           }),
-          ...(mode === "worktree" && draftThread?.worktreePath ? { worktreePath: null } : {}),
+          worktreePath: null,
+          workspaceId: null,
         });
       }
       scheduleComposerFocus();

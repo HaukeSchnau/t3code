@@ -16,8 +16,12 @@ export const ThreadWorkspaceKind = Schema.Literals([
   "git-detached",
   "jj-workspace",
   "directory-copy",
+  "isolated",
 ]);
 export type ThreadWorkspaceKind = typeof ThreadWorkspaceKind.Type;
+
+export const WorkspaceProfile = Schema.Literals(["familiar", "minimal"]);
+export type WorkspaceProfile = typeof WorkspaceProfile.Type;
 
 export const ThreadWorkspaceLifecycle = Schema.Literals([
   "preparing",

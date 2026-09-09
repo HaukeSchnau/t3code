@@ -771,8 +771,16 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfExpanded,
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
+        groupWorkspaces: v2ScopedProjectKeys !== null,
       }),
-    [settledShelfExpanded, snoozedShelfExpanded, threadListV2Layout, v2PendingTasks],
+    [
+      settledShelfExpanded,
+      snoozedShelfExpanded,
+      threadListV2Layout,
+      v2PendingTasks,
+      v2ScopedProjectKeys,
+      nowMinute,
+    ],
   );
 
   const renderV2Item = useCallback(
@@ -825,6 +833,15 @@ export function HomeScreen(props: HomeScreenProps) {
           />
         );
       }
+      if (item.type === "v2-workspace")
+        return (
+          <Text
+            className="px-4 pb-1 pt-4 text-xs font-t3-medium text-foreground-muted"
+            numberOfLines={1}
+          >
+            {item.label}
+          </Text>
+        );
       const thread = item.item.thread;
       const movePlanner = item.item.pinned ? threadMovePlanners.pinned : threadMovePlanners.active;
       const movedId = `${thread.environmentId}:${thread.id}`;

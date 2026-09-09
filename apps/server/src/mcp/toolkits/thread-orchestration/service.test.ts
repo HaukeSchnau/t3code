@@ -578,6 +578,7 @@ it.effect("lists thread model choices with curated model selections and reasonin
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -690,6 +691,7 @@ it.effect("lists environments and projects without provider model metadata", () 
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -811,6 +813,7 @@ it.effect("keeps local discovery separate from aggregate remote discovery", () =
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -918,6 +921,7 @@ it.effect("delivers cross-thread messages with explicit queue control", () => {
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1074,6 +1078,7 @@ it.effect("rejects hidden and legacy models unless legacy use is explicit", () =
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1244,6 +1249,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1343,6 +1349,7 @@ it.effect("uses generated names for worktree threads before starting their initi
               compatibilityBranch: "feature/review",
             };
           }),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1527,6 +1534,7 @@ it.effect("resolves actor defaults before routing remote thread creation", () =>
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1677,6 +1685,7 @@ it.effect("prepares requested worktrees for forked threads", () => {
               compatibilityBranch: "feature/fork",
             };
           }),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1853,6 +1862,7 @@ it.effect("rejects fork requests while the source thread is running", () => {
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () =>
           Effect.die("workspace preparation should not be called for a running source thread"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -1948,6 +1958,7 @@ it.effect("cleans up prepared workspaces when fallback fork dispatch fails", () 
             compatibilityWorktreePath: "/repo/project-worktree",
             compatibilityBranch: "feature/fork",
           }),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: (input) =>
           Effect.sync(() => {
@@ -2046,6 +2057,7 @@ it.effect("uses Codex App Server fork imports for Codex-backed threads", () => {
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -2179,6 +2191,7 @@ it.effect("cleans up prepared workspaces when Codex-backed forks fail", () => {
             compatibilityWorktreePath: "/repo/project-worktree",
             compatibilityBranch: "feature/fork",
           }),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: (input) =>
           Effect.sync(() => {
@@ -2309,6 +2322,7 @@ it.effect("returns provider availability failures in compact coordinator results
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),
@@ -2422,6 +2436,7 @@ it.effect("reads relationship graphs without adding read edges", () => {
     Layer.provide(
       Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
         prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
         resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
         deleteWorkspace: () => Effect.die("unused"),
       }),

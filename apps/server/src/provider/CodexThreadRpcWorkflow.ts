@@ -623,7 +623,7 @@ export const makeCodexThreadRpcWorkflow = (input: {
           sourceThreadId,
           providerThreadId: result.providerThreadId,
           importedMessageCount: result.importedMessageCount,
-          workspaceId: preparedWorkspace?.workspace.id ?? null,
+          workspaceId: preparedWorkspace?.workspace.id ?? sourceThread.workspaceId ?? null,
         };
       }).pipe(
         Effect.mapError((cause) =>

@@ -1075,6 +1075,7 @@ const buildAppUnderTest = (options?: {
                 compatibilityBranch: null,
               });
             },
+            selectWorkspace: () => Effect.succeed(undefined),
             resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
             deleteWorkspace: () => Effect.die("deleteWorkspace should not be called in this test"),
             ...options?.layers?.threadWorkspaceService,
@@ -7504,6 +7505,101 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.isTrue(Option.isNone(workspaceStat));
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+  it.effect("binds new conversations to one workspace through both id and legacy path", () =>
+    Effect.gen(function* () {
+      const workspaceId = ThreadWorkspaceId.make("workspace:shared");
+      const rootId = ThreadWorkspaceRootId.make("workspace:shared:root");
+      const checkoutPath = "/tmp/shared-checkout";
+      const created: Array<{
+        readonly threadId: ThreadId;
+        readonly workspaceId?: ThreadWorkspaceId | null | undefined;
+        readonly worktreePath: string | null;
+      }> = [];
+      yield* buildAppUnderTest({
+        layers: {
+          threadWorkspaceService: {
+            prepareWorkspace: () =>
+              Effect.die("Reusing a workspace must not provision another checkout."),
+            selectWorkspace: () =>
+              Effect.succeed({
+                workspace: {
+                  id: workspaceId,
+                  kind: "isolated",
+                  lifecycle: "active",
+                  displayName: "Shared",
+                  managed: true,
+                  primaryRootId: rootId,
+                  roots: [
+                    {
+                      id: rootId,
+                      workspaceId,
+                      projectId: defaultProjectId,
+                      role: "primary",
+                      sourcePath: "/source",
+                      checkoutPath,
+                      vcsKind: "jj",
+                      repositoryRoot: checkoutPath,
+                      baseRevision: null,
+                      headRevision: null,
+                      metadata: {},
+                    },
+                  ],
+                  createdForThreadId: ThreadId.make("original"),
+                  retentionPolicy: "explicit-delete",
+                  createdAt: "2026-09-09T12:00:00.000Z",
+                  updatedAt: "2026-09-09T12:00:00.000Z",
+                  deletedAt: null,
+                  failureDetail: null,
+                  metadata: {},
+                },
+                primaryCwd: checkoutPath,
+                compatibilityWorktreePath: checkoutPath,
+                compatibilityBranch: null,
+              }),
+          },
+          orchestrationEngine: {
+            dispatch: (command) =>
+              Effect.sync(() => {
+                if (command.type === "thread.create") created.push(command);
+                return { sequence: created.length };
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            for (const mode of ["id", "path"] as const) {
+              yield* client[ORCHESTRATION_WS_METHODS.dispatchCommand]({
+                type: "thread.create",
+                commandId: CommandId.make(`shared-${mode}`),
+                threadId: ThreadId.make(`shared-${mode}`),
+                projectId: defaultProjectId,
+                title: "Follow-up",
+                modelSelection: defaultModelSelection,
+                runtimeMode: "full-access",
+                interactionMode: "default",
+                branch: null,
+                worktreePath: mode === "path" ? checkoutPath : null,
+                ...(mode === "id" ? { workspaceId } : {}),
+                createdAt: "2026-09-09T12:00:00.000Z",
+              });
+            }
+          }),
+        ),
+      );
+      assert.equal(created.length, 2);
+      assert.deepEqual(
+        created.map((command) => [command.workspaceId, command.worktreePath]),
+        [
+          [workspaceId, checkoutPath],
+          [workspaceId, checkoutPath],
+        ],
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("records thread analytics only after a client command succeeds", () =>
     Effect.gen(function* () {
       const effects: string[] = [];

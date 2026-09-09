@@ -940,6 +940,7 @@ it.layer(integrationLayer)("AgentSessionImporter integration", (it) => {
           Layer.provide(Layer.mock(TextGeneration)({})),
           Layer.provide(
             Layer.mock(ThreadWorkspaceService)({
+              selectWorkspace: () => Effect.succeed(undefined),
               resolvePrimaryCwd: () => Effect.succeed(undefined),
             }),
           ),
