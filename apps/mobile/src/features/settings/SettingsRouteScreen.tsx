@@ -131,7 +131,7 @@ function AccountlessSettingsRouteScreen() {
   const hasPairedEnvironment = environmentCount > 0;
 
   const refreshNotifications = useCallback(async () => {
-    if (process.env.EXPO_OS !== "ios") {
+    if (Platform.OS !== "ios" && Platform.OS !== "android") {
       setNotificationStatus("unsupported");
       return;
     }
@@ -208,7 +208,7 @@ function AccountlessSettingsRouteScreen() {
       setNotificationStatus("unsupported");
       Alert.alert(
         "Notifications unavailable",
-        "Live Activity notifications are only available on iOS.",
+        "Agent notifications are unavailable on this platform.",
       );
       return;
     }
@@ -278,7 +278,7 @@ function AccountlessSettingsRouteScreen() {
 
       Alert.alert(
         "Disable notifications",
-        "Notification permission is controlled by iOS. Open Settings to disable notifications for T3 Code.",
+        "Notification permission is controlled by the operating system. Open Settings to disable notifications for T3 Code.",
         [
           { text: "Cancel", style: "cancel" },
           { text: "Open Settings", onPress: () => void Linking.openSettings() },

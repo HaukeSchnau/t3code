@@ -1,6 +1,8 @@
 import { beforeEach, vi } from "vite-plus/test";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Notifications from "expo-notifications";
+import { Platform } from "react-native";
 
 import type { EnvironmentId } from "@t3tools/contracts";
 import type { Preferences } from "../../persistence/mobile-preferences";
@@ -15,6 +17,10 @@ import {
   setAgentAwarenessEnvironmentTransport,
   updateAgentAwarenessRegistrationPreferences,
 } from "./remoteRegistration";
+import {
+  configureAndroidAgentNotifications,
+  clearAndroidAgentNotifications,
+} from "./androidNotifications";
 
 const activityMocks = vi.hoisted(() => ({
   getInstances: vi.fn(() => []),
@@ -53,8 +59,21 @@ vi.mock("expo-notifications", () => ({
 }));
 
 vi.mock("react-native", () => ({
-  Platform: { OS: "ios", Version: "27.0" },
+  Platform: {
+    get OS() {
+      return "ios";
+    },
+    get Version() {
+      return 27;
+    },
+  },
   AppState: { addEventListener: vi.fn(() => ({ remove: vi.fn() })) },
+}));
+
+vi.mock("./androidNotifications", () => ({
+  configureAndroidAgentNotifications: vi.fn(),
+  clearAndroidAgentNotifications: vi.fn(),
+  supportsAndroidAgentNotifications: vi.fn(() => true),
 }));
 
 vi.mock("../../widgets/AgentActivity", () => ({
@@ -115,6 +134,11 @@ function transport(
 
 describe("accountless agent awareness registration", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
+      type: "ios",
+      data: "apns-token",
+    });
     vi.stubGlobal("__DEV__", false);
     __resetAgentAwarenessRemoteRegistrationForTest();
     registrationRecord.value = null;
@@ -158,6 +182,33 @@ describe("accountless agent awareness registration", () => {
     setAgentAwarenessEnvironmentTransport(environment);
 
     await vi.waitFor(() => expect(getAgentAwarenessRegistrationStatus()).toBe("failed"));
+  });
+
+  it("registers an Android push token through the paired environment", async () => {
+    vi.spyOn(Platform, "OS", "get").mockReturnValue("android");
+    vi.spyOn(Platform, "Version", "get").mockReturnValue(36);
+    vi.mocked(Notifications.getDevicePushTokenAsync).mockResolvedValue({
+      type: "android",
+      data: "fcm-token",
+    });
+    const environment = transport({ identity: "android-environment" });
+    setAgentAwarenessEnvironmentTransport(environment);
+
+    await vi.waitFor(() => expect(environment.registerDevice).toHaveBeenCalledTimes(1));
+    expect(environment.registerDevice).toHaveBeenCalledWith(
+      expect.objectContaining({
+        platform: "android",
+        androidApiLevel: 36,
+        pushToken: "fcm-token",
+      }),
+    );
+    expect(configureAndroidAgentNotifications).toHaveBeenCalledWith(
+      "device-1",
+      "android-environment",
+      true,
+    );
+    expect(clearAndroidAgentNotifications).not.toHaveBeenCalled();
+    expect(getAgentAwarenessRegistrationStatus()).toBe("registered");
   });
 
   it.effect("surfaces missing APNs credentials as an actionable error", () => {

@@ -1,4 +1,8 @@
 import { type LiveActivity } from "expo-widgets";
+import {
+  configureAndroidAgentNotifications,
+  clearAndroidAgentNotifications,
+} from "./androidNotifications";
 import Constants from "expo-constants";
 import * as Notifications from "expo-notifications";
 import * as Effect from "effect/Effect";
@@ -91,6 +95,7 @@ const activityPushTokenListeners = new WeakSet<LiveActivity<AgentActivityProps>>
 // transport identity changes alongside the device registration state.
 const ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS = 60_000;
 const registeredActivityPushTokens = new Map<string, number>();
+let androidDeviceReplayedAt: number | null = null;
 let pushTokenSubscription: { remove: () => void } | null = null;
 let appStateSubscription: { remove: () => void } | null = null;
 
@@ -166,12 +171,20 @@ function canRegisterRemoteLiveActivities(): boolean {
   return Platform.OS === "ios";
 }
 
+function canRegisterPushNotifications(): boolean {
+  return Platform.OS === "ios" || Platform.OS === "android";
+}
+
 export function setAgentAwarenessEnvironmentTransport(
   transport: AgentAwarenessEnvironmentTransport | null,
 ): void {
   const isExistingIdentity =
     transport !== null && environmentTransport?.identity === transport.identity;
   if (!isExistingIdentity) {
+    if (environmentTransport && transport?.identity !== environmentTransport.identity) {
+      clearAndroidAgentNotifications();
+    }
+    androidDeviceReplayedAt = null;
     deviceRegistrationGeneration++;
     activeDeviceRegistration = null;
     pendingDeviceRegistration = null;
@@ -179,6 +192,7 @@ export function setAgentAwarenessEnvironmentTransport(
   }
   environmentTransport = transport;
   if (!transport) {
+    clearAndroidAgentNotifications();
     pushTokenSubscription?.remove();
     pushTokenSubscription = null;
     appStateSubscription?.remove();
@@ -219,11 +233,8 @@ function iosMajorVersion(): number {
 
 function nativePushTokenRegistration(observedPushToken?: string) {
   return Effect.gen(function* () {
-    if (!canRegisterRemoteLiveActivities() || !supportsAgentAwarenessPush()) {
+    if (!canRegisterPushNotifications() || !supportsAgentAwarenessPush()) {
       return { notificationsEnabled: false, pushToken: null };
-    }
-    if (observedPushToken) {
-      return { notificationsEnabled: true, pushToken: observedPushToken };
     }
     const permissions = yield* Effect.tryPromise({
       try: () => Notifications.getPermissionsAsync(),
@@ -236,6 +247,9 @@ function nativePushTokenRegistration(observedPushToken?: string) {
     if (!permissions.granted) {
       return { notificationsEnabled: false, pushToken: null };
     }
+    if (observedPushToken) {
+      return { notificationsEnabled: true, pushToken: observedPushToken };
+    }
     const token = yield* Effect.tryPromise({
       try: () => Notifications.getDevicePushTokenAsync(),
       catch: (cause) =>
@@ -246,13 +260,13 @@ function nativePushTokenRegistration(observedPushToken?: string) {
     }).pipe(
       Effect.tapError((error) =>
         Effect.sync(() => {
-          logRegistrationError("native APNs token lookup failed", error);
+          logRegistrationError("native push token lookup failed", error);
         }),
       ),
       Effect.orElseSucceed(() => null),
     );
     const pushToken =
-      token?.type === "ios" && typeof token.data === "string" && token.data.trim().length > 0
+      token?.type === Platform.OS && typeof token.data === "string" && token.data.trim().length > 0
         ? token.data.trim()
         : null;
     return { notificationsEnabled: pushToken !== null, pushToken };
@@ -270,7 +284,9 @@ function registrationSignature(body: AgentAwarenessDeviceRegistrationInput): str
     body.apsEnvironment ?? "",
     body.appVersion ?? "",
     body.label,
+    body.platform,
     body.iosMajorVersion,
+    body.androidApiLevel,
     body.preferences.notificationsEnabled,
     body.preferences.liveActivitiesEnabled,
     body.preferences.notifyOnApproval,
@@ -315,7 +331,16 @@ function registerDeviceWithEnvironment(
     }
     const payload = body;
     const signature = `${identity}|${registrationSignature(payload)}`;
-    if (persisted && persisted.identity === identity && persisted.signature === signature) {
+    const needsAndroidReplay =
+      body.platform === "android" &&
+      (androidDeviceReplayedAt === null ||
+        Date.now() - androidDeviceReplayedAt >= ACTIVITY_TOKEN_REREGISTER_INTERVAL_MS);
+    if (
+      persisted &&
+      persisted.identity === identity &&
+      persisted.signature === signature &&
+      !needsAndroidReplay
+    ) {
       setRegistrationStatus("registered");
       logRegistrationDebug("device registration skipped; already registered with environment", {
         expectedGeneration,
@@ -347,6 +372,9 @@ function registerDeviceWithEnvironment(
         },
       );
       return;
+    }
+    if (body.platform === "android") {
+      androidDeviceReplayedAt = Date.now();
     }
     setRegistrationStatus("registered");
     yield* Effect.promise(() =>
@@ -642,7 +670,7 @@ function registerDevice(
   expectedGeneration = deviceRegistrationGeneration,
 ): Effect.Effect<void, unknown> {
   return Effect.gen(function* () {
-    if (!canRegisterRemoteLiveActivities()) {
+    if (!canRegisterPushNotifications()) {
       logRegistrationDebug("device registration skipped; platform does not support it");
       return;
     }
@@ -675,23 +703,43 @@ function registerDevice(
       storedPreferences,
       input.preferencesOverride,
     );
+    if (expectedGeneration !== deviceRegistrationGeneration) return;
+    const transport = environmentTransport;
+    if (Platform.OS === "android" && transport) {
+      configureAndroidAgentNotifications(
+        deviceId,
+        transport.identity,
+        preferences.liveActivitiesEnabled !== false,
+      );
+    }
     const pushTokenRegistration = yield* nativePushTokenRegistration(input?.observedPushToken);
     logRegistrationDebug("device registration local state ready", {
       expectedGeneration,
       notificationsEnabled: pushTokenRegistration.notificationsEnabled,
     });
-    const bundleId = Constants.expoConfig?.ios?.bundleIdentifier?.trim();
+    const bundleId =
+      Platform.OS === "android"
+        ? Constants.expoConfig?.android?.package?.trim()
+        : Constants.expoConfig?.ios?.bundleIdentifier?.trim();
     yield* registerDeviceWithEnvironment(
       makeAgentAwarenessDeviceRegistrationInput({
         deviceId,
-        label: Constants.deviceName?.trim() || "iOS device",
-        iosMajorVersion: iosMajorVersion(),
+        label:
+          Constants.deviceName?.trim() ||
+          (Platform.OS === "android" ? "Android device" : "iOS device"),
+        ...(Platform.OS === "android"
+          ? { platform: "android" as const, androidApiLevel: Number(Platform.Version) }
+          : { platform: "ios" as const, iosMajorVersion: iosMajorVersion() }),
         appVersion: Constants.expoConfig?.version,
         ...(bundleId ? { bundleId } : {}),
-        apsEnvironment: resolveApsEnvironment(
-          Constants.expoConfig?.extra?.apnsEnvironment,
-          Constants.expoConfig?.extra?.appVariant,
-        ),
+        ...(Platform.OS === "ios"
+          ? {
+              apsEnvironment: resolveApsEnvironment(
+                Constants.expoConfig?.extra?.apnsEnvironment,
+                Constants.expoConfig?.extra?.appVariant,
+              ),
+            }
+          : {}),
         ...(pushTokenRegistration.pushToken ? { pushToken: pushTokenRegistration.pushToken } : {}),
         notificationsEnabled: pushTokenRegistration.notificationsEnabled,
         preferences,
@@ -706,15 +754,19 @@ function registerDeviceForCurrentEnvironment(): Effect.Effect<void, unknown> {
 }
 
 function ensurePushTokenListener(): void {
-  if (pushTokenSubscription || !canRegisterRemoteLiveActivities()) {
+  if (pushTokenSubscription || !canRegisterPushNotifications()) {
     return;
   }
 
   pushTokenSubscription = Notifications.addPushTokenListener((token) => {
-    if (token.type === "ios" && typeof token.data === "string" && token.data.trim().length > 0) {
+    if (
+      token.type === Platform.OS &&
+      typeof token.data === "string" &&
+      token.data.trim().length > 0
+    ) {
       enqueueDeviceRegistration(
         { observedPushToken: token.data.trim() },
-        "native APNs token rotation registration failed",
+        "native push token rotation registration failed",
       );
     }
   });
@@ -727,7 +779,7 @@ function ensurePushTokenListener(): void {
 // foreground/reconnection bursts collapse to one registration, but returning after
 // real time away still replays.)
 function ensureAppStateListener(): void {
-  if (appStateSubscription || !canRegisterRemoteLiveActivities()) {
+  if (appStateSubscription || !canRegisterPushNotifications()) {
     return;
   }
 
@@ -735,6 +787,7 @@ function ensureAppStateListener(): void {
     if (state !== "active") {
       return;
     }
+    enqueueDeviceRegistration({}, "device registration after app foreground failed");
     runRegistrationInBackground(
       refreshActiveLiveActivityRemoteRegistration(),
       "active live activity reconciliation after app foreground failed",
@@ -744,6 +797,7 @@ function ensureAppStateListener(): void {
 
 export function unregisterAllAgentAwarenessConnections(): void {
   environmentTransport = null;
+  clearAndroidAgentNotifications();
   pushTokenSubscription?.remove();
   pushTokenSubscription = null;
   appStateSubscription?.remove();
@@ -798,6 +852,7 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   activeDeviceRegistration = null;
   pendingDeviceRegistration = null;
   registrationStatus = "unknown";
+  androidDeviceReplayedAt = null;
   registrationStatusListeners.clear();
   registeredActivityPushTokens.clear();
 }
