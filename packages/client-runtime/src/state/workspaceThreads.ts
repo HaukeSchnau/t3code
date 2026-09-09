@@ -1,4 +1,4 @@
-import type { ArchivedSnapshotEntry } from "./threads";
+import type { ArchivedSnapshotEntry } from "./archivedThreads.js";
 import type { ThreadWorkspaceId } from "@t3tools/contracts";
 
 interface WorkspaceThread {
