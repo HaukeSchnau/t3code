@@ -37,6 +37,7 @@ function makeReadModel(
         interactionMode: "default",
         branch: null,
         worktreePath: null,
+        pullRequests: [],
         latestTurn: {
           turnId: TURN_ID,
           state: turnState,

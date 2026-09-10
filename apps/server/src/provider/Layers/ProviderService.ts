@@ -247,7 +247,6 @@ export interface ProviderServiceLiveOptions {
    * never calls this issuer while the browser MCP surface is disabled.
    */
   readonly issueMcpCredential?: typeof McpSessionRegistry.issueActiveMcpCredential;
-  /** Same seam as `issueMcpCredential`, for observing the deny path's revoke. */
   readonly revokeMcpCredential?: typeof McpSessionRegistry.revokeActiveMcpThread;
 }
 

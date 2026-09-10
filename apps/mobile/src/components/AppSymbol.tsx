@@ -80,6 +80,7 @@ import IconSearch from "@tabler/icons-react-native/IconSearch";
 import IconServer from "@tabler/icons-react-native/IconServer";
 import IconSettings from "@tabler/icons-react-native/IconSettings";
 import IconSparkles from "@tabler/icons-react-native/IconSparkles";
+import IconStack2 from "@tabler/icons-react-native/IconStack2";
 import IconSun from "@tabler/icons-react-native/IconSun";
 import IconTerminal2 from "@tabler/icons-react-native/IconTerminal2";
 import IconTextDecrease from "@tabler/icons-react-native/IconTextDecrease";
@@ -102,6 +103,7 @@ const ANDROID_ICON_BY_SF_SYMBOL: Partial<Record<SFSymbol, Icon>> = {
   "arrow.right.circle": IconArrowRightCircle,
   "arrow.triangle.branch": IconGitBranch,
   "arrow.triangle.pull": IconGitPullRequest,
+  "square.3.layers.3d": IconStack2,
   "arrow.turn.left.up": IconArrowBackUp,
   "arrow.turn.down.right": IconCornerDownRight,
   "arrow.up": IconArrowUp,
