@@ -1,3 +1,8 @@
+import * as NodeCrypto from "node:crypto";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import * as ChildProcess from "effect/unstable/process/ChildProcess";
+import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+
 import { describe, expect, it, vi } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeFileSystem from "@effect/platform-node/NodeFileSystem";
@@ -267,6 +272,97 @@ describe("ProjectSetupScriptRunner", () => {
     },
   );
 
+  it.effect("runs and reconciles a setup wrapper through the workspace's private home", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+      const base = yield* fileSystem.makeTempDirectoryScoped();
+      const state = path.join(base, "registry");
+      const root = path.join(base, "host-workspace");
+      const visibleRoot = path.join(base, "visible-workspace");
+      const visibleHome = path.join(base, "visible-home");
+      yield* fileSystem.makeDirectory(root);
+      yield* fileSystem.makeDirectory(visibleRoot);
+      const canonicalRoot = yield* fileSystem.realPath(root);
+      const id = NodeCrypto.createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 20);
+      const privateHome = path.join(state, "environments", id, "home");
+      yield* fileSystem.makeDirectory(privateHome, { recursive: true });
+      // Represent the runtime's home mount with a symlink; all wrapper I/O is real.
+      yield* fileSystem.symlink(privateHome, visibleHome);
+      yield* fileSystem.makeDirectory(path.join(state, "projects"), { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(state, "projects", `${id}.json`),
+        encodeTestJson({ root: canonicalRoot, home: visibleHome, workspace: { visibleRoot } }),
+      );
+      const script = `${ProjectSetupScriptRunner.quotePosixShellArgument(process.execPath)} -e 'require("node:fs").appendFileSync("setup-runs.txt", process.env.T3CODE_WORKTREE_PATH + "\\n")'`;
+      const project = makeProject([
+        {
+          id: "setup",
+          name: "Setup",
+          command: script,
+          icon: "configure",
+          runOnWorktreeCreate: true,
+        },
+      ]);
+      const open = vi.fn(() =>
+        Effect.succeed({
+          threadId: "thread-1",
+          terminalId: "setup-setup",
+          cwd: root,
+          worktreePath: root,
+          status: "running" as const,
+          pid: 123,
+          history: "",
+          exitCode: null,
+          exitSignal: null,
+          label: "setup",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        }),
+      );
+      const write = vi.fn(
+        (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+          spawner
+            .exitCode(ChildProcess.make(process.execPath, [wrapperPathFromWrite(input.data)]))
+            .pipe(
+              Effect.tap((exitCode) => Effect.sync(() => expect(exitCode).toBe(0))),
+              Effect.asVoid,
+              Effect.orDie,
+            ),
+      );
+      yield* Effect.gen(function* () {
+        const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+        const input = { threadId: "thread-1", projectId: "project-1", worktreePath: root };
+        expect((yield* runner.runForThread(input)).status).toBe("started");
+        expect(
+          (yield* runner.runForThread({ ...input, reconcileClaimedLaunch: true })).status,
+        ).toBe("started");
+        expect(write).toHaveBeenCalledOnce();
+        expect(yield* fileSystem.readFileString(path.join(visibleRoot, "setup-runs.txt"))).toBe(
+          `${visibleRoot}\n`,
+        );
+        expect(yield* fileSystem.exists(path.join(root, "setup-runs.txt"))).toBe(false);
+        const identity = ProjectSetupScriptRunner.setupExecutionIdentity(
+          "thread-1",
+          "setup-setup",
+          script,
+        );
+        const completion = yield* fileSystem.readFileString(
+          path.join(
+            privateHome,
+            ".local/state/t3/setup-executions",
+            identity.executionKey,
+            "completed.json",
+          ),
+        );
+        expect(completion).toContain('"exitCode":0');
+      }).pipe(
+        Effect.provide(testLayer(project, { open, write })),
+        Effect.provideService(HostProcessEnvironment, { AGENT_EXEC_STATE: state }),
+      );
+    }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+  );
+
   it.effect("reconciles an interrupted claimed execution before exact retry completes", () => {
     let wrapperPath = "";
     let claimed!: Deferred.Deferred<void>;
@@ -318,6 +414,8 @@ describe("ProjectSetupScriptRunner", () => {
       };
       const interrupted = yield* runner.runForThread(input).pipe(Effect.forkChild);
       yield* Deferred.await(claimed);
+      yield* TestClock.adjust(Duration.minutes(2));
+      expect(interrupted.pollUnsafe()).toBeUndefined();
       yield* Fiber.interrupt(interrupted);
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
@@ -326,6 +424,8 @@ describe("ProjectSetupScriptRunner", () => {
         .runForThread({ ...input, reconcileClaimedLaunch: true })
         .pipe(Effect.forkChild);
       yield* Effect.yieldNow;
+      yield* TestClock.adjust(Duration.minutes(2));
+      expect(retry.pollUnsafe()).toBeUndefined();
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
       yield* fileSystem.writeFileString(
@@ -421,7 +521,7 @@ describe("ProjectSetupScriptRunner", () => {
     }).pipe(Effect.provide(testLayer(project, { open, write })));
   });
 
-  it.effect("classifies reconciliation watchdog expiry as typed and retryable", () => {
+  it.effect("bounds claimed setup completion with a typed, retryable timeout", () => {
     let claimed!: Deferred.Deferred<void>;
     const open = vi.fn(() => Effect.succeed({} as never));
     const write = vi.fn(
@@ -458,7 +558,43 @@ describe("ProjectSetupScriptRunner", () => {
       yield* Deferred.await(claimed);
       yield* Effect.yieldNow;
       yield* TestClock.adjust(
-        Duration.millis(ProjectSetupScriptRunner.SETUP_RECONCILIATION_TIMEOUT_MILLIS),
+        Duration.millis(ProjectSetupScriptRunner.SETUP_COMPLETION_TIMEOUT_MILLIS),
+      );
+      const timeout = yield* Fiber.join(running).pipe(Effect.flip);
+      expect(isProjectSetupScriptReconciliationTimeoutError(timeout)).toBe(true);
+      if (isProjectSetupScriptReconciliationTimeoutError(timeout)) {
+        expect(timeout.retryable).toBe(true);
+        expect(timeout.timeoutMillis).toBe(15 * 60_000);
+      }
+    }).pipe(Effect.provide(testLayer(project, { open, write })));
+  });
+
+  it.effect("still detects an unclaimed launch after 30 seconds", () => {
+    let written!: Deferred.Deferred<void>;
+    const open = vi.fn(() => Effect.succeed({} as never));
+    const write = vi.fn(() => Deferred.succeed(written, undefined).pipe(Effect.asVoid));
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "pnpm install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+    return Effect.gen(function* () {
+      written = yield* Deferred.make<void>();
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const running = yield* runner
+        .runForThread({
+          threadId: "thread-1",
+          projectId: "project-1",
+          worktreePath: "/repo/worktrees/a",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(written);
+      yield* TestClock.adjust(
+        Duration.millis(ProjectSetupScriptRunner.SETUP_LAUNCH_TIMEOUT_MILLIS),
       );
       const timeout = yield* Fiber.join(running).pipe(Effect.flip);
       expect(isProjectSetupScriptReconciliationTimeoutError(timeout)).toBe(true);

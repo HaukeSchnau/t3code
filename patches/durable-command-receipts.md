@@ -65,9 +65,10 @@ is atomically published after exit. An exact retry with no execution claim safel
 wrapper; competing writes still execute the user command once. A completed execution is reused. A
 normal launch waits interruptibly for the wrapper's atomic completion journal. The journal is
 Schema-decoded and must match its version, deterministic execution key, SHA-256 setup-command digest,
-exit code, signal, and error fields; malformed or stale journals fail closed. Both a normal launch and
-an exact claimed retry use the same explicit 30-second watchdog and return a typed, retryable
-reconciliation timeout rather than falling through. Only valid durable wrapper completion permits
+exit code, signal, and error fields; malformed or stale journals fail closed. An unclaimed launch has
+a 30-second watchdog. After launch, normal execution and exact claimed retries allow 15 minutes for
+completion so dependency installs can finish. Both deadlines return a typed, retryable reconciliation
+timeout rather than falling through. Only valid durable wrapper completion permits
 `setup-completed` to be persisted and the original turn to dispatch. Terminal
 launch/reconciliation errors are recorded as setup activity and returned.
 

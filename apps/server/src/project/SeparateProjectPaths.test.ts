@@ -9,6 +9,7 @@ import {
   projectHostPath,
   projectProviderCwd,
   projectProviderEndpoint,
+  projectSetupPaths,
 } from "./SeparateProjectRegistry.ts";
 
 it("resolves identical project and scratch paths by workspace, including legacy image paths", async () => {
@@ -18,7 +19,8 @@ it("resolves identical project and scratch paths by workspace, including legacy 
   try {
     await NodeFSP.mkdir(NodePath.join(state, "projects"), { recursive: true });
     const roots = [NodePath.join(base, "a"), NodePath.join(base, "b")];
-    const visibleRoot = NodePath.join(base, "home", "project");
+    const visibleHome = "/home/setup-test-user";
+    const visibleRoot = NodePath.join(visibleHome, "project");
     for (const [index, root] of roots.entries()) {
       await NodeFSP.mkdir(root);
       const id = NodeCrypto.createHash("sha256").update(root).digest("hex").slice(0, 20);
@@ -26,7 +28,7 @@ it("resolves identical project and scratch paths by workspace, including legacy 
         NodePath.join(state, "projects", `${id}.json`),
         JSON.stringify({
           root,
-          home: NodePath.join(base, "home"),
+          home: visibleHome,
           workspace: { visibleRoot },
         }),
       );
@@ -53,6 +55,25 @@ it("resolves identical project and scratch paths by workspace, including legacy 
         await projectProviderEndpoint(root, "http://127.0.0.1:4000/mcp", state),
         "http://10.0.2.2:4000/mcp",
       );
+      const setup = await projectSetupPaths(NodePath.join(root, "src"), "/server/journals", state);
+      NodeAssert.equal(setup.cwd, NodePath.join(visibleRoot, "src"));
+      NodeAssert.equal(setup.projectRoot, visibleRoot);
+      NodeAssert.equal(
+        setup.journalDirectory,
+        NodePath.join(visibleHome, ".local/state/t3/setup-executions"),
+      );
+      await NodeFSP.mkdir(setup.hostJournalDirectory, { recursive: true });
+      await NodeFSP.writeFile(
+        NodePath.join(setup.hostJournalDirectory, "completion"),
+        `setup-${index}`,
+      );
+      NodeAssert.equal(
+        await NodeFSP.readFile(
+          await projectHostPath(root, NodePath.join(setup.journalDirectory, "completion"), state),
+          "utf8",
+        ),
+        `setup-${index}`,
+      );
       await NodeAssert.rejects(projectHostPath(root, "/etc/unmapped.png", state));
     }
     const first = roots[0]!;
@@ -75,6 +96,12 @@ it("resolves identical project and scratch paths by workspace, including legacy 
       "http://localhost:4000/mcp",
     );
     NodeAssert.equal(await projectHostPath(base, "/tmp/host.png", state), "/tmp/host.png");
+    NodeAssert.deepEqual(await projectSetupPaths(base, "/server/journals", state), {
+      cwd: base,
+      projectRoot: undefined,
+      journalDirectory: "/server/journals",
+      hostJournalDirectory: "/server/journals",
+    });
   } finally {
     await NodeFSP.rm(temporary, { recursive: true, force: true });
   }

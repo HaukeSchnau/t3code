@@ -80,6 +80,28 @@ export async function projectProviderCwd(cwd: string, stateDirectory?: string) {
     : cwd;
 }
 
+/** Setup journals live in the workspace's private home, visible to both the server and its PTY. */
+export async function projectSetupPaths(
+  cwd: string,
+  serverJournalDirectory: string,
+  stateDirectory?: string,
+) {
+  const record = await readSeparateProject(cwd, stateDirectory);
+  const journalPath = ".local/state/t3/setup-executions";
+  return {
+    cwd: record?.workspace
+      ? NodePath.join(record.workspace.visibleRoot, NodePath.relative(record.root, cwd))
+      : cwd,
+    projectRoot: record ? (record.workspace?.visibleRoot ?? record.root) : undefined,
+    journalDirectory: record
+      ? NodePath.join(record.home ?? NodeOS.homedir(), journalPath)
+      : serverJournalDirectory,
+    hostJournalDirectory: record
+      ? NodePath.join(record.state, "home", journalPath)
+      : serverJournalDirectory,
+  };
+}
+
 /** Explicit host integrations use the gateway; localhost remains private to the workspace. */
 export async function projectProviderEndpoint(
   cwd: string | undefined,
