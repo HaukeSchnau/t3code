@@ -2,6 +2,7 @@
 import * as NodeCrypto from "node:crypto";
 
 import { ProjectId } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
 import * as Encoding from "effect/Encoding";
 import * as Context from "effect/Context";
@@ -15,9 +16,12 @@ import * as Schema from "effect/Schema";
 import * as ServerConfig from "../config.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
+import { projectSetupPaths } from "./SeparateProjectRegistry.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-export const SETUP_RECONCILIATION_TIMEOUT_MILLIS = 30_000;
+export const SETUP_LAUNCH_TIMEOUT_MILLIS = 30_000;
+// Dependency installs can take minutes after the wrapper has confirmed launch.
+export const SETUP_COMPLETION_TIMEOUT_MILLIS = 15 * 60_000;
 const SETUP_RECONCILIATION_INTERVAL_MILLIS = 100;
 
 const SetupExecutionCompletion = Schema.Struct({
@@ -277,9 +281,24 @@ export const make = Effect.gen(function* () {
 
     const { terminalId } = resolved;
     const cwd = input.worktreePath;
+    const hostEnvironment = yield* HostProcessEnvironment;
+    const executionPaths = yield* Effect.tryPromise({
+      try: () =>
+        projectSetupPaths(
+          cwd,
+          path.join(terminalLogsDir, "setup-executions"),
+          hostEnvironment.AGENT_EXEC_STATE,
+        ),
+      catch: (cause) =>
+        new ProjectSetupScriptOperationError({
+          ...errorContext,
+          operation: "prepareExecution",
+          cause,
+        }),
+    });
     const env = projectScriptRuntimeEnv({
-      project: { cwd: project.workspaceRoot },
-      worktreePath: input.worktreePath,
+      project: { cwd: executionPaths.projectRoot ?? project.workspaceRoot },
+      worktreePath: executionPaths.cwd,
     });
     const { executionKey, scriptDigest } = resolved.execution;
     if (
@@ -295,7 +314,8 @@ export const make = Effect.gen(function* () {
         actualScriptDigest: scriptDigest,
       });
     }
-    const executionDir = path.join(terminalLogsDir, "setup-executions", executionKey);
+    const executionDir = path.join(executionPaths.hostJournalDirectory, executionKey);
+    const terminalExecutionDir = path.join(executionPaths.journalDirectory, executionKey);
     const claimDir = path.join(executionDir, "claimed");
     const completedPath = path.join(executionDir, "completed.json");
     const wrapperPath = path.join(executionDir, "run.cjs");
@@ -345,7 +365,7 @@ export const make = Effect.gen(function* () {
 
     const awaitJournal = <E>(
       probe: Effect.Effect<boolean, E>,
-      onTimeout: () => ProjectSetupScriptReconciliationTimeoutError,
+      timeoutMillis: number,
     ): Effect.Effect<void, E | ProjectSetupScriptReconciliationTimeoutError> => {
       const poll: Effect.Effect<void, E> = probe.pipe(
         Effect.flatMap((ready) =>
@@ -358,21 +378,22 @@ export const make = Effect.gen(function* () {
       );
       return poll.pipe(
         Effect.timeoutOrElse({
-          duration: `${SETUP_RECONCILIATION_TIMEOUT_MILLIS} millis`,
-          orElse: () => Effect.fail(onTimeout()),
+          duration: `${timeoutMillis} millis`,
+          orElse: () =>
+            Effect.fail(
+              new ProjectSetupScriptReconciliationTimeoutError({
+                threadId: input.threadId,
+                terminalId,
+                timeoutMillis,
+                retryable: true,
+              }),
+            ),
         }),
       );
     };
-    const reconciliationTimeout = () =>
-      new ProjectSetupScriptReconciliationTimeoutError({
-        threadId: input.threadId,
-        terminalId,
-        timeoutMillis: SETUP_RECONCILIATION_TIMEOUT_MILLIS,
-        retryable: true,
-      });
     const awaitCompletion = awaitJournal(
       readCompletion().pipe(Effect.map(Option.isSome)),
-      reconciliationTimeout,
+      SETUP_COMPLETION_TIMEOUT_MILLIS,
     );
 
     if (claimed && input.reconcileClaimedLaunch) {
@@ -386,7 +407,7 @@ export const make = Effect.gen(function* () {
       } as const;
     }
 
-    const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(claimDir)};\nconst completedPath = ${encodeJson(completedPath)};\nconst executionKey = ${encodeJson(executionKey)};\nconst scriptDigest = ${encodeJson(scriptDigest)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ version: 1, executionKey, scriptDigest, exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
+    const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(path.join(terminalExecutionDir, "claimed"))};\nconst completedPath = ${encodeJson(path.join(terminalExecutionDir, "completed.json"))};\nconst executionKey = ${encodeJson(executionKey)};\nconst scriptDigest = ${encodeJson(scriptDigest)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(executionPaths.cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ version: 1, executionKey, scriptDigest, exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(executionDir, { recursive: true });
@@ -426,7 +447,7 @@ export const make = Effect.gen(function* () {
       .write({
         threadId: input.threadId,
         terminalId,
-        data: `${quotePosixShellArgument(process.execPath)} ${quotePosixShellArgument(wrapperPath)}\r`,
+        data: `${quotePosixShellArgument(process.execPath)} ${quotePosixShellArgument(path.join(terminalExecutionDir, "run.cjs"))}\r`,
       })
       .pipe(
         Effect.mapError(
@@ -442,7 +463,7 @@ export const make = Effect.gen(function* () {
     // A successful PTY write is not a durable launch acknowledgement. Wait until the
     // wrapper atomically claims the deterministic execution identity. A retry may
     // safely resubmit while this marker is absent; competing wrappers race on mkdir.
-    yield* awaitJournal(executionExists(claimDir), reconciliationTimeout);
+    yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS);
 
     // The caller may only persist `setup-completed` after this durable wrapper
     // completion exists. Waiting is interruptible, so shutdown leaves the durable

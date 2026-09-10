@@ -30,6 +30,12 @@ creation is idempotent for the same workspace id and request. The launcher owns 
 private home/tool state, networking, collection and retirement. T3 does not duplicate
 those implementations or register each workspace as a separate project.
 
+Setup runs in the workspace's terminal. Its launch journal must be in the private home,
+with separate host and terminal paths to the same files. The host's T3 userdata is not
+mounted there. Setup cwd and environment variables use workspace-visible paths; the
+source checkout is unavailable. Keep the journal's atomic claim and retry semantics.
+The repository bootstrap uses pinned pnpm because Vite+ is installed by that step.
+
 Workspace names derive once from the creation-time semantic seed. Only live collisions
 add a suffix; later thread-title changes do not rename paths used by terminals or tools.
 Directory-copy preparation retains its size, free-space and sensitive-root checks.
