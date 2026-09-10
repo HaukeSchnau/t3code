@@ -3111,19 +3111,19 @@ export function makeOpenCodeAdapter(
                       ),
                     }
                   : sessionEnvironment;
+              const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               const server = yield* openCodeRuntime.connectToOpenCodeServer({
                 binaryPath,
                 directory,
                 serverUrl,
-                environment,
                 ...(serverPassword ? { serverPassword } : {}),
+                environment: McpProviderSession.withAgentDeviceEnvironment(environment, mcpSession),
               });
               const client = openCodeRuntime.createOpenCodeSdkClient({
                 baseUrl: server.url,
                 directory,
                 ...(server.serverPassword ? { serverPassword: server.serverPassword } : {}),
               });
-              const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
               if (mcpSession && !server.external) {
                 yield* runOpenCodeSdk("mcp.add", () =>
                   client.mcp.add({

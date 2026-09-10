@@ -4877,7 +4877,10 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         canUseTool,
         onUserDialog,
         supportedDialogKinds: ["resume_return"],
-        env: withThreadCliEnvironment(claudeEnvironment, input.threadId),
+        env: McpProviderSession.withAgentDeviceEnvironment(
+          withThreadCliEnvironment(claudeEnvironment, input.threadId),
+          mcpSession,
+        ),
         additionalDirectories,
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
         ...(mcpSession
