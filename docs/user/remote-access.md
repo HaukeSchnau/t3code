@@ -116,6 +116,19 @@ For a plain HTTP LAN endpoint, use the direct pairing URL in a browser that can
 open it, or pair from the desktop app. On mobile, an IP address entered without a
 scheme uses HTTP, so include `https://` when your server uses HTTPS.
 
+## Open a remote project in your editor
+
+When you view a server from another machine, the **Open** button in the thread
+header opens the project in your local editor over SSH instead of launching an
+editor on the server. Pick the editor from the dropdown next to the button; the
+choice is remembered per browser. VS Code, VSCodium, Cursor, Zed and the other
+VS Code forks with a remote SSH extension are supported.
+
+The link uses a hostname the server advertises for itself. If your server uses a
+non-default SSH port or user, set `T3CODE_REMOTE_OPEN_SSH_HOST` in the server's
+environment to an alias from your `~/.ssh/config`, and the editor resolves the
+port, user and key from there. Your SSH key must be authorized on the server.
+
 ## Desktop-managed SSH
 
 In the desktop app, open **Settings → Connections → Add environment**, choose

@@ -143,6 +143,10 @@ const EnvServerConfig = Config.all({
     Config.option,
     Config.map(Option.getOrUndefined),
   ),
+  remoteOpenSshHost: Config.string("T3CODE_REMOTE_OPEN_SSH_HOST").pipe(
+    Config.option,
+    Config.map(Option.getOrUndefined),
+  ),
 });
 
 export interface CliServerFlags {
@@ -391,6 +395,7 @@ export const resolveServerConfig = (
       logWebSocketEvents,
       tailscaleServeEnabled,
       tailscaleServePort,
+      remoteOpenSshHost: env.remoteOpenSshHost?.trim() || undefined,
     };
 
     return config;
