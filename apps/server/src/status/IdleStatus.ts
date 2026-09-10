@@ -37,6 +37,7 @@ export function summarizeServerIdleStatus(input: {
   readonly checkedAt: string;
   readonly runtimeStartedAt: string;
   readonly liveStateKnown: boolean;
+  readonly activeCommandThreadIds?: ReadonlyArray<ThreadId>;
 }): ServerIdleStatus {
   const busyThreads: Array<ServerIdleBusyThread> = [];
   const seenBusyThreadKeys = new Set<string>();
@@ -49,6 +50,16 @@ export function summarizeServerIdleStatus(input: {
     pendingApprovalCount: 0,
     pendingUserInputCount: 0,
   };
+
+  for (const threadId of input.activeCommandThreadIds ?? []) {
+    pushBusyThread(busyThreads, seenBusyThreadKeys, {
+      threadId,
+      reason: "command-in-progress",
+      source: "command-preprocessing",
+      turnId: null,
+      detail: "thread command delivery or workspace setup is still in progress",
+    });
+  }
 
   for (const session of input.liveSessions) {
     const hasActiveTurn = session.activeTurnId !== undefined;
@@ -136,6 +147,7 @@ export function summarizeServerIdleStatus(input: {
 export const getServerIdleStatus = Effect.fn("getServerIdleStatus")(function* (options?: {
   readonly liveSessions?: ReadonlyArray<ProviderSession>;
   readonly runtimeStartedAt?: string;
+  readonly activeCommandThreadIds?: ReadonlyArray<ThreadId>;
 }) {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const [projectedState, now] = yield* Effect.all([
@@ -170,5 +182,6 @@ export const getServerIdleStatus = Effect.fn("getServerIdleStatus")(function* (o
     checkedAt: DateTime.formatIso(now),
     runtimeStartedAt: options?.runtimeStartedAt ?? SERVER_RUNTIME_STARTED_AT,
     liveStateKnown: options?.liveSessions !== undefined,
+    activeCommandThreadIds: options?.activeCommandThreadIds ?? [],
   });
 });

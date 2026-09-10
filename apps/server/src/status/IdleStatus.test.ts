@@ -28,6 +28,7 @@ function summarize(input: {
   liveSessions?: ReadonlyArray<ProviderSession>;
   threads?: ReadonlyArray<ProjectionRestartSafetyThread>;
   liveStateKnown?: boolean;
+  activeCommandThreadIds?: ReadonlyArray<ThreadId>;
 }) {
   return summarizeServerIdleStatus({
     liveSessions: input.liveSessions ?? [],
@@ -35,6 +36,9 @@ function summarize(input: {
     checkedAt: now,
     runtimeStartedAt,
     liveStateKnown: input.liveStateKnown ?? true,
+    ...(input.activeCommandThreadIds === undefined
+      ? {}
+      : { activeCommandThreadIds: input.activeCommandThreadIds }),
   });
 }
 
@@ -42,6 +46,16 @@ it("reports idle when live and projected state have no pending work", () => {
   const status = summarize({});
   assert.isTrue(status.idle);
   assert.equal(status.busyThreadCount, 0);
+});
+
+it("blocks restart during command preprocessing before a provider turn exists", () => {
+  const threadId = ThreadId.make("thread-setup");
+  const status = summarize({ activeCommandThreadIds: [threadId, threadId] });
+  assert.isFalse(status.idle);
+  assert.equal(status.busyThreadCount, 1);
+  assert.equal(status.busyThreads.length, 1);
+  assert.equal(status.busyThreads[0]?.reason, "command-in-progress");
+  assert.equal(status.busyThreads[0]?.source, "command-preprocessing");
 });
 
 it("treats live provider active turns as busy", () => {

@@ -15,14 +15,18 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
+import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { OrchestrationCommandReceiptMismatchError } from "../Errors.ts";
+import { canonicalizeClientCommandTimestamps } from "../Normalizer.ts";
 import { runMigrations } from "../../persistence/Migrations.ts";
 import * as NodeSqliteClient from "../../persistence/NodeSqliteClient.ts";
 import {
   CommandPreprocessingCoordinator,
   type CommandPreprocessingStep,
   layer as CommandPreprocessingCoordinatorLive,
+  preprocessingCommandId,
 } from "./CommandPreprocessingCoordinator.ts";
 
 const isReceiptMismatchError = Schema.is(OrchestrationCommandReceiptMismatchError);
@@ -89,7 +93,7 @@ const makePersistentLayer = (filename: string) => {
 
 const withFreshCoordinator = <A, E>(
   filename: string,
-  effect: Effect.Effect<A, E, CommandPreprocessingCoordinator>,
+  effect: Effect.Effect<A, E, CommandPreprocessingCoordinator | SqlClient.SqlClient>,
 ) =>
   Effect.scoped(
     Effect.gen(function* () {
@@ -97,6 +101,45 @@ const withFreshCoordinator = <A, E>(
       return yield* effect;
     }).pipe(Effect.provide(makePersistentLayer(filename))),
   );
+
+it.effect("recovers a legacy bootstrap receipt time after the server clock advances", () =>
+  Effect.gen(function* () {
+    const filename = yield* makePersistentFilename;
+    const receivedAt = "2026-09-10T19:58:08.896Z";
+    const normalized = canonicalizeClientCommandTimestamps(command, receivedAt) as typeof command;
+    yield* withFreshCoordinator(
+      filename,
+      Effect.gen(function* () {
+        const coordinator = yield* CommandPreprocessingCoordinator;
+        yield* coordinator.claimSetup(normalized, {
+          executionKey: "legacy-setup",
+          scriptDigest: "legacy-digest",
+        });
+        const sql = yield* SqlClient.SqlClient;
+        // Older versions sampled the preprocessing timestamp after normalization.
+        yield* sql`UPDATE orchestration_command_preprocessing SET created_at = '2026-09-10T19:58:08.899Z' WHERE command_id = ${command.commandId}`;
+        yield* sql`
+          INSERT INTO orchestration_command_receipts
+            (command_id, aggregate_kind, aggregate_id, accepted_at, result_sequence, status)
+          VALUES
+            (${preprocessingCommandId(normalized, "thread-create")}, 'thread', ${command.threadId}, ${receivedAt}, 1, 'accepted')
+        `;
+      }),
+    );
+    yield* TestClock.adjust("2 minutes");
+    yield* withFreshCoordinator(
+      filename,
+      Effect.gen(function* () {
+        const coordinator = yield* CommandPreprocessingCoordinator;
+        const restoredAt = yield* coordinator.getReceivedAt(command.commandId);
+        assert.equal(restoredAt, receivedAt);
+        const replay = canonicalizeClientCommandTimestamps(command, restoredAt) as typeof command;
+        const progress = yield* coordinator.claim(replay);
+        assert.equal(progress.setup.status, "claimed");
+      }),
+    );
+  }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
+);
 
 it.effect("resumes durable preprocessing checkpoints after coordinator restart", () =>
   Effect.gen(function* () {
@@ -263,15 +306,17 @@ it.effect("serializes consumers that share one persistence-scoped coordinator", 
           () => Effect.sync(() => void (active -= 1)),
         );
         const first = yield* coordinator
-          .withCommandLock(command.commandId, criticalSection)
+          .withCommandLock(command.commandId, criticalSection, command.threadId)
           .pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
+        assert.deepEqual(yield* coordinator.activeThreadIds, [command.threadId]);
         const second = yield* coordinator
-          .withCommandLock(command.commandId, criticalSection)
+          .withCommandLock(command.commandId, criticalSection, command.threadId)
           .pipe(Effect.forkScoped);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(first);
         yield* Fiber.join(second);
+        assert.deepEqual(yield* coordinator.activeThreadIds, []);
       }).pipe(Effect.provide(makePersistentLayer(":memory:"))),
     );
 

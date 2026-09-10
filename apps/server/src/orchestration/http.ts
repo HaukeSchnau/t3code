@@ -112,53 +112,57 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
       )
       .handle(
         "dispatch",
-        Effect.fn("environment.orchestration.dispatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          const preparedCommand = yield* prepareDispatchCommand(args.payload).pipe(
-            Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
-          );
-          const normalizedCommand = preparedCommand.command;
-          if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
-            return yield* failEnvironmentInvalidRequest("invalid_command");
-          }
-          return yield* orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-            Effect.flatMap(
-              Option.match({
-                onSome: Effect.succeed,
-                onNone: () =>
-                  commandPreprocessing.withCommandLock(
-                    normalizedCommand.commandId,
-                    orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-                      Effect.flatMap(
-                        Option.match({
-                          onSome: Effect.succeed,
-                          onNone: () =>
-                            Effect.gen(function* () {
-                              let progress = yield* commandPreprocessing.claim(normalizedCommand);
-                              if (!progress.deferredPreprocessingCompleted) {
-                                yield* preparedCommand.performDeferredPreprocessing;
-                                progress = yield* commandPreprocessing.markCompleted(
-                                  normalizedCommand,
-                                  "deferred-preprocessing-completed",
-                                );
-                              }
-                              return yield* orchestrationEngine.dispatch(normalizedCommand);
-                            }),
-                        }),
-                      ),
-                    ),
-                  ),
-              }),
+        Effect.fn("environment.orchestration.dispatch")(
+          function* (args) {
+            yield* annotateEnvironmentRequest(args.endpoint.name);
+            yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+            const receivedAt = yield* commandPreprocessing
+              .getReceivedAt(args.payload.commandId)
+              .pipe(
+                Effect.catch((cause) =>
+                  failEnvironmentInternal("orchestration_dispatch_failed", cause),
+                ),
+              );
+            const preparedCommand = yield* prepareDispatchCommand(args.payload, receivedAt).pipe(
+              Effect.catch(() => failEnvironmentInvalidRequest("invalid_command")),
+            );
+            const normalizedCommand = preparedCommand.command;
+            if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+              return yield* failEnvironmentInvalidRequest("invalid_command");
+            }
+            return yield* orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+              Effect.flatMap(
+                Option.match({
+                  onSome: Effect.succeed,
+                  onNone: () =>
+                    Effect.gen(function* () {
+                      const progress = yield* commandPreprocessing.claim(normalizedCommand);
+                      if (!progress.deferredPreprocessingCompleted) {
+                        yield* preparedCommand.performDeferredPreprocessing;
+                        yield* commandPreprocessing.markCompleted(
+                          normalizedCommand,
+                          "deferred-preprocessing-completed",
+                        );
+                      }
+                      return yield* orchestrationEngine.dispatch(normalizedCommand);
+                    }),
+                }),
+              ),
+              Effect.tapError(() =>
+                cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
+              ),
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_dispatch_failed", cause),
+              ),
+            );
+          },
+          (effect, args) =>
+            commandPreprocessing.withCommandLock(
+              args.payload.commandId,
+              effect,
+              "threadId" in args.payload ? args.payload.threadId : undefined,
             ),
-            Effect.tapError(() =>
-              cleanupFailedUploadedAttachments(args.payload, normalizedCommand),
-            ),
-            Effect.catch((cause) =>
-              failEnvironmentInternal("orchestration_dispatch_failed", cause),
-            ),
-          );
-        }),
+        ),
       );
   }),
 );

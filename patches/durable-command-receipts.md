@@ -36,14 +36,21 @@ committed:
   Existing identical bytes are accepted and stale pending files are removed, while an identity
   collision fails closed.
 - Project workspace-root canonicalization is pure. Filesystem validation, `createIfMissing`, and all
-  later preprocessing run only after an initial receipt miss, inside the shared command lock, and
-  after a second receipt lookup. A committed command therefore performs no path stat, directory
+  later preprocessing run only after a receipt miss inside the shared command lock.
+  A committed command therefore performs no path stat, directory
   creation, workspace preparation, or upload write when its acknowledgement is replayed.
 - Receipt lookup uses the same aggregate, variant, canonical fingerprint, rejection, and legacy
   validation as engine dispatch. It is read-only and cannot mutate or replace a receipt.
 - Preprocessing is serialized per command id by a persistence-scoped coordinator shared by HTTP and
   every WebSocket route layer. Concurrent retries cannot both cross the no-receipt boundary.
   Different command ids remain independent.
+- The lock includes normalization. Server-owned timestamps reuse the first persisted receipt time,
+  so retrying later or after restart produces the original envelope. Preprocessing stores that exact
+  timestamp; older bootstrap attempts recover it from their deterministic thread-creation receipt.
+  Client timestamps remain untrusted.
+- Active thread-command locks contribute to `/api/server/idle`, including workspace setup before a
+  provider session exists. Idle-gated updates must wait for those requests to finish. Interrupted
+  requests release their locks; a persisted incomplete checkpoint alone does not keep the server busy.
 - Bootstrap metadata remains part of the `thread.turn.start` envelope passed to the engine. The
   decider deliberately omits bootstrap instructions from domain events, but the receipt fingerprint
   includes them. WebSocket bootstrap checks the full receipt before thread, workspace/worktree, setup
@@ -117,7 +124,9 @@ image-bearing turn start/message queue commands, concurrent replay, changed imag
 commit-then-lost-ack replay, and local, worktree, and explicit-workspace bootstrap replay without
 repeated thread/workspace/setup resources. It also races one HTTP dispatch against one WebSocket
 dispatch for the exact same image-bearing command over a shared runtime/coordinator, asserting an
-identical receipt, one engine dispatch, one published attachment, and no pending publication file.
+identical receipt across a clock advance, one engine dispatch, one published attachment, and no pending
+publication file. Idle status remains busy while that dispatch is blocked. The bootstrap restart test
+also advances the clock before retrying through a fresh server and coordinator.
 
 `apps/server/src/orchestration/Services/CommandPreprocessingCoordinator.test.ts` reopens the same
 SQLite file with fresh coordinator instances at crash checkpoints after attachment materialization,

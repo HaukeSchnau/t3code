@@ -87,9 +87,12 @@ const removeClaimedAttachmentPaths = Effect.fn("Normalizer.removeClaimedAttachme
   },
 );
 
-export const prepareDispatchCommand = (command: ClientOrchestrationCommand) =>
+export const prepareDispatchCommand = (
+  command: ClientOrchestrationCommand,
+  firstReceivedAt?: IsoDateTime,
+) =>
   Effect.gen(function* () {
-    const receivedAt = DateTime.formatIso(yield* DateTime.now);
+    const receivedAt = firstReceivedAt ?? DateTime.formatIso(yield* DateTime.now);
     const canonicalCommand = canonicalizeClientCommandTimestamps(command, receivedAt);
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
