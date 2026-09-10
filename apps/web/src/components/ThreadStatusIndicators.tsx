@@ -1,7 +1,4 @@
-import {
-  scopedThreadKey,
-  scopeThreadRef,
-} from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull-requests";
 import {
   resolveEnvironmentMachineKind,
