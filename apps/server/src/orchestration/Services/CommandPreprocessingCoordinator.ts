@@ -119,7 +119,11 @@ export class CommandPreprocessingCoordinator extends Context.Service<
     readonly withCommandLock: <A, E, R>(
       commandId: CommandId,
       effect: Effect.Effect<A, E, R>,
+      threadId?: ThreadId,
     ) => Effect.Effect<A, E, R>;
+    readonly activeThreadIds: Effect.Effect<ReadonlyArray<ThreadId>>;
+    /** Reuse the first server receipt time before normalizing a retried client command. */
+    readonly getReceivedAt: (commandId: CommandId) => Effect.Effect<string, PersistenceSqlError>;
     readonly claim: (
       command: OrchestrationCommand,
     ) => Effect.Effect<CommandPreprocessingProgress, CommandPreprocessingError>;
@@ -141,8 +145,29 @@ export function preprocessingCommandId(command: OrchestrationCommand, phase: str
 
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
-  const locks = new Map<string, { readonly semaphore: Semaphore.Semaphore; users: number }>();
+  const locks = new Map<
+    string,
+    { readonly semaphore: Semaphore.Semaphore; readonly threadId?: ThreadId; users: number }
+  >();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+
+  const getReceivedAt: CommandPreprocessingCoordinator["Service"]["getReceivedAt"] = (commandId) =>
+    sql<{ readonly receivedAt: string }>`
+      SELECT COALESCE(thread_receipt.accepted_at, progress.created_at) AS "receivedAt"
+      FROM orchestration_command_preprocessing AS progress
+      LEFT JOIN orchestration_command_receipts AS thread_receipt
+        ON thread_receipt.command_id = 'preprocess:' || progress.command_id || ':' ||
+          substr(progress.envelope_fingerprint, 1, 16) || ':thread-create'
+      WHERE progress.command_id = ${commandId}
+      UNION ALL
+      SELECT accepted_at AS "receivedAt"
+      FROM orchestration_command_receipts
+      WHERE command_id = ${commandId}
+      LIMIT 1
+    `.pipe(
+      Effect.mapError(toPersistenceSqlError("CommandPreprocessingCoordinator.getReceivedAt")),
+      Effect.flatMap((rows) => (rows[0] ? Effect.succeed(rows[0].receivedAt) : nowIso)),
+    );
 
   const readProgress = (commandId: CommandId) =>
     sql<ProgressRow>`
@@ -219,6 +244,9 @@ export const make = Effect.gen(function* () {
     const fingerprint = commandEnvelopeFingerprint(command);
     return Effect.gen(function* () {
       const timestamp = yield* nowIso;
+      // The normalization timestamp is part of the immutable envelope. Persist
+      // it exactly, rather than sampling the clock again after preprocessing.
+      const receivedAt = "createdAt" in command ? (command.createdAt ?? timestamp) : timestamp;
       yield* sql`
         INSERT INTO orchestration_command_preprocessing (
           command_id,
@@ -234,7 +262,7 @@ export const make = Effect.gen(function* () {
           ${aggregate.aggregateId},
           ${command.type},
           ${fingerprint},
-          ${timestamp},
+          ${receivedAt},
           ${timestamp}
         )
         ON CONFLICT(command_id) DO NOTHING
@@ -325,6 +353,7 @@ export const make = Effect.gen(function* () {
   const withCommandLock: CommandPreprocessingCoordinator["Service"]["withCommandLock"] = (
     commandId,
     effect,
+    threadId,
   ) =>
     Effect.acquireUseRelease(
       Effect.sync(() => {
@@ -333,7 +362,11 @@ export const make = Effect.gen(function* () {
           existing.users += 1;
           return existing;
         }
-        const created = { semaphore: Semaphore.makeUnsafe(1), users: 1 };
+        const created = {
+          semaphore: Semaphore.makeUnsafe(1),
+          users: 1,
+          ...(threadId === undefined ? {} : { threadId }),
+        };
         locks.set(commandId, created);
         return created;
       }),
@@ -347,7 +380,22 @@ export const make = Effect.gen(function* () {
         }),
     );
 
-  return CommandPreprocessingCoordinator.of({ withCommandLock, claim, markCompleted, claimSetup });
+  return CommandPreprocessingCoordinator.of({
+    withCommandLock,
+    activeThreadIds: Effect.sync(() =>
+      Array.from(
+        new Set(
+          Array.from(locks.values()).flatMap(({ threadId }) =>
+            threadId === undefined ? [] : [threadId],
+          ),
+        ),
+      ),
+    ),
+    getReceivedAt,
+    claim,
+    markCompleted,
+    claimSetup,
+  });
 });
 
 export const layer = Layer.effect(CommandPreprocessingCoordinator, make);

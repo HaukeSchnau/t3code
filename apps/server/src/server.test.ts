@@ -41,6 +41,7 @@ import {
   ProviderSetupError,
   ResolvedKeybindingRule,
   type ServerLifecycleStreamEvent,
+  type ServerIdleStatus,
   ThreadId,
   TurnId,
   UsageLimitSourceId,
@@ -11033,10 +11034,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("serializes the same command across HTTP and WebSocket dispatch", () =>
     Effect.gen(function* () {
       const receipts = new Map<string, { readonly envelope: string; readonly sequence: number }>();
-      const bothInitialLookups = yield* Deferred.make<void>();
       const firstDispatchEntered = yield* Deferred.make<void>();
       const releaseFirstDispatch = yield* Deferred.make<void>();
-      let initialLookupCount = 0;
       let dispatchEntrants = 0;
       const dispatch = vi.fn((command: OrchestrationCommand) =>
         Effect.gen(function* () {
@@ -11052,19 +11051,16 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       const config = yield* buildAppUnderTest({
         layers: {
+          providerService: { listSessions: () => Effect.succeed([]) },
+          projectionSnapshotQuery: {
+            getRestartSafetyState: () => Effect.succeed({ threads: [] }),
+          },
           orchestrationEngine: {
             resolveReceipt: (command) =>
-              Effect.gen(function* () {
+              Effect.sync(() => {
                 const receipt = receipts.get(command.commandId);
                 if (receipt && receipt.envelope === encodeTestJson(command)) {
                   return Option.some({ sequence: receipt.sequence });
-                }
-                initialLookupCount += 1;
-                if (initialLookupCount === 2) {
-                  yield* Deferred.succeed(bothInitialLookups, undefined);
-                }
-                if (initialLookupCount <= 2) {
-                  yield* Deferred.await(bothInitialLookups);
                 }
                 return Option.none();
               }),
@@ -11119,14 +11115,27 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       const requestsFiber = yield* concurrentRequests.pipe(Effect.forkChild);
       yield* Deferred.await(firstDispatchEntered);
-      yield* Effect.yieldNow;
-      yield* Effect.yieldNow;
-      assert.equal(
-        dispatchEntrants,
-        1,
-        "a missing shared command lock lets both transports enter the deferred effect",
-      );
-      yield* Deferred.succeed(releaseFirstDispatch, undefined);
+      yield* TestClock.adjust(Duration.seconds(1));
+      const idleUrl = yield* getHttpServerUrl("/api/server/idle");
+      yield* Effect.gen(function* () {
+        const idleResponse = yield* fetchEffect(idleUrl, {
+          headers: { authorization: `Bearer ${accessToken}` },
+        });
+        const busy = yield* responseJsonEffect<ServerIdleStatus>(idleResponse);
+        assert.equal(idleResponse.status, 200);
+        assert.isFalse(busy.idle);
+        assert.isTrue(
+          busy.busyThreads.some(
+            (thread) =>
+              thread.threadId === command.threadId && thread.reason === "command-in-progress",
+          ),
+        );
+        assert.equal(
+          dispatchEntrants,
+          1,
+          "a missing shared command lock lets both transports enter the deferred effect",
+        );
+      }).pipe(Effect.ensuring(Deferred.succeed(releaseFirstDispatch, undefined)));
       const [wsReceipt, httpResponse] = yield* Fiber.join(requestsFiber);
       const httpReceipt = yield* responseJsonEffect<{ readonly sequence: number }>(httpResponse);
       const attachmentFiles = yield* FileSystem.FileSystem.pipe(
@@ -11135,12 +11144,18 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(httpResponse.status, 200);
       assert.deepEqual(httpReceipt, wsReceipt);
-      assert.isAtLeast(initialLookupCount, 2);
       assert.equal(dispatch.mock.calls.length, 1);
       assert.equal(attachmentFiles.filter((name) => !name.includes(".pending-")).length, 1);
       assert.equal(
         attachmentFiles.some((name) => name.includes(".pending-")),
         false,
+      );
+      const completedIdleResponse = yield* fetchEffect(idleUrl, {
+        headers: { authorization: `Bearer ${accessToken}` },
+      });
+      const completedIdle = yield* responseJsonEffect<ServerIdleStatus>(completedIdleResponse);
+      assert.isFalse(
+        completedIdle.busyThreads.some((thread) => thread.threadId === command.threadId),
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
@@ -11529,6 +11544,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       yield* Scope.close(firstScope, Exit.void);
 
+      yield* TestClock.adjust(Duration.minutes(2));
+
       const attachmentFilesAfterCrash = yield* fileSystem.readDirectory(
         firstServer.config.attachmentsDir,
       );
@@ -11621,6 +11638,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),
         ),
       );
+      yield* TestClock.adjust(Duration.seconds(1));
       const replayed = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[ORCHESTRATION_WS_METHODS.dispatchCommand](command),

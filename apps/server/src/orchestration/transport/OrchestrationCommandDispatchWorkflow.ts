@@ -499,40 +499,34 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       );
     });
 
-  const dispatchNormalizedCommand = (
+  const dispatchNormalizedCommandUnlocked = (
     normalizedCommand: OrchestrationCommand,
     performDeferredPreprocessing: Effect.Effect<
       void,
       OrchestrationDispatchCommandError
     > = Effect.void,
   ): Effect.Effect<{ readonly sequence: number }, OrchestrationDispatchCommandError> => {
-    const dispatchAfterInitialMiss = input.commandPreprocessing.withCommandLock(
-      normalizedCommand.commandId,
-      input.startup.enqueueCommand(
-        input.orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
-          Effect.flatMap(
-            Option.match({
-              onSome: Effect.succeed,
-              onNone: () =>
-                Effect.gen(function* () {
-                  let progress = yield* input.commandPreprocessing.claim(normalizedCommand);
-                  if (!progress.deferredPreprocessingCompleted) {
-                    yield* performDeferredPreprocessing;
-                    progress = yield* input.commandPreprocessing.markCompleted(
-                      normalizedCommand,
-                      "deferred-preprocessing-completed",
-                    );
-                  }
-                  if (
-                    normalizedCommand.type === "thread.turn.start" &&
-                    normalizedCommand.bootstrap
-                  ) {
-                    return yield* dispatchBootstrapTurnStart(normalizedCommand, progress);
-                  }
-                  return yield* dispatchCommand(normalizedCommand);
-                }),
-            }),
-          ),
+    const dispatchAfterInitialMiss = input.startup.enqueueCommand(
+      input.orchestrationEngine.resolveReceipt(normalizedCommand).pipe(
+        Effect.flatMap(
+          Option.match({
+            onSome: Effect.succeed,
+            onNone: () =>
+              Effect.gen(function* () {
+                let progress = yield* input.commandPreprocessing.claim(normalizedCommand);
+                if (!progress.deferredPreprocessingCompleted) {
+                  yield* performDeferredPreprocessing;
+                  progress = yield* input.commandPreprocessing.markCompleted(
+                    normalizedCommand,
+                    "deferred-preprocessing-completed",
+                  );
+                }
+                if (normalizedCommand.type === "thread.turn.start" && normalizedCommand.bootstrap) {
+                  return yield* dispatchBootstrapTurnStart(normalizedCommand, progress);
+                }
+                return yield* dispatchCommand(normalizedCommand);
+              }),
+          }),
         ),
       ),
     );
@@ -554,6 +548,19 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       ),
     );
   };
+
+  const dispatchNormalizedCommand = (
+    command: OrchestrationCommand,
+    performDeferredPreprocessing: Effect.Effect<
+      void,
+      OrchestrationDispatchCommandError
+    > = Effect.void,
+  ) =>
+    input.commandPreprocessing.withCommandLock(
+      command.commandId,
+      dispatchNormalizedCommandUnlocked(command, performDeferredPreprocessing),
+      "threadId" in command ? command.threadId : undefined,
+    );
 
   const bindSelectedWorkspace = (command: ClientOrchestrationCommand) =>
     Effect.gen(function* () {
@@ -618,7 +625,11 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
   const dispatch = (command: ClientOrchestrationCommand) =>
     Effect.gen(function* () {
-      const preparedCommand = yield* prepareDispatchCommand(yield* bindSelectedWorkspace(command));
+      const receivedAt = yield* input.commandPreprocessing.getReceivedAt(command.commandId);
+      const preparedCommand = yield* prepareDispatchCommand(
+        yield* bindSelectedWorkspace(command),
+        receivedAt,
+      );
       const normalizedCommand = preparedCommand.command;
       const archiveCommand =
         normalizedCommand.type === "thread.archive" ? normalizedCommand : undefined;
@@ -639,7 +650,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           )
         : false;
 
-      const result = yield* dispatchNormalizedCommand(
+      const result = yield* dispatchNormalizedCommandUnlocked(
         normalizedCommand,
         preparedCommand.performDeferredPreprocessing,
       ).pipe(Effect.tapError(() => cleanupFailedUploadedAttachments(command, normalizedCommand)));
@@ -678,6 +689,12 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       }
       return result;
     }).pipe(
+      (effect) =>
+        input.commandPreprocessing.withCommandLock(
+          command.commandId,
+          effect,
+          "threadId" in command ? command.threadId : undefined,
+        ),
       Effect.mapError((cause) =>
         isOrchestrationDispatchCommandError(cause)
           ? cause

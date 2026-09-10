@@ -15,6 +15,7 @@ import {
 import { EnergyCaptureRequests } from "../diagnostics/EnergyCaptureRequests.ts";
 import { WorkloadDiagnostics } from "../diagnostics/WorkloadDiagnostics.ts";
 import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { CommandPreprocessingCoordinator } from "../orchestration/Services/CommandPreprocessingCoordinator.ts";
 import { getServerIdleStatus } from "./IdleStatus.ts";
 
 export const serverStatusHttpApiLayer = HttpApiBuilder.group(
@@ -24,6 +25,7 @@ export const serverStatusHttpApiLayer = HttpApiBuilder.group(
     const energyCaptureRequests = yield* EnergyCaptureRequests;
     const workloadDiagnostics = yield* WorkloadDiagnostics;
     const providerService = yield* Effect.serviceOption(ProviderService);
+    const commandPreprocessing = yield* CommandPreprocessingCoordinator;
     return handlers
       .handle(
         "idleStatus",
@@ -33,9 +35,10 @@ export const serverStatusHttpApiLayer = HttpApiBuilder.group(
           const liveSessions = Option.isSome(providerService)
             ? yield* providerService.value.listSessions()
             : undefined;
-          return yield* getServerIdleStatus(
-            liveSessions === undefined ? undefined : { liveSessions },
-          ).pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
+          return yield* getServerIdleStatus({
+            ...(liveSessions === undefined ? {} : { liveSessions }),
+            activeCommandThreadIds: yield* commandPreprocessing.activeThreadIds,
+          }).pipe(Effect.catch((cause) => failEnvironmentInternal("internal_error", cause)));
         }),
       )
       .handle(

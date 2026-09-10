@@ -851,13 +851,14 @@ export const ServerIdleBusyReason = Schema.Literals([
   "pending-approval",
   "pending-user-input",
   "undelivered-transcript-events",
+  "command-in-progress",
 ]);
 export type ServerIdleBusyReason = typeof ServerIdleBusyReason.Type;
 
 export const ServerIdleBusyThread = Schema.Struct({
   threadId: ThreadId,
   reason: ServerIdleBusyReason,
-  source: Schema.Literals(["live-provider", "projection"]),
+  source: Schema.Literals(["live-provider", "projection", "command-preprocessing"]),
   turnId: Schema.NullOr(TurnId),
   status: Schema.optional(TrimmedNonEmptyString),
   provider: Schema.optional(TrimmedNonEmptyString),
