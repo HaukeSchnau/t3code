@@ -113,6 +113,7 @@
               (productionFiles ./packages/effect-acp)
               (productionFiles ./packages/effect-codex-app-server)
               (productionFiles ./packages/shared)
+              (productionFiles ./packages/ssh)
               (productionFiles ./packages/tailscale)
               ./scripts/lib/cli-external-packages.ts
               ./scripts/lib/public-config.ts
