@@ -58,6 +58,13 @@ it("resolves identical project and scratch paths by workspace, including legacy 
       const setup = await projectSetupPaths(NodePath.join(root, "src"), "/server/journals", state);
       NodeAssert.equal(setup.cwd, NodePath.join(visibleRoot, "src"));
       NodeAssert.equal(setup.projectRoot, visibleRoot);
+      const alias = NodePath.join(base, `alias-${index}`);
+      await NodeFSP.symlink(root, alias);
+      NodeAssert.equal(await projectProviderCwd(alias, state), visibleRoot);
+      NodeAssert.equal(
+        (await projectSetupPaths(alias, "/server/journals", state)).cwd,
+        visibleRoot,
+      );
       NodeAssert.equal(
         setup.journalDirectory,
         NodePath.join(visibleHome, ".local/state/t3/setup-executions"),

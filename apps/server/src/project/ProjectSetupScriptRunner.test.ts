@@ -298,10 +298,12 @@ describe("ProjectSetupScriptRunner", () => {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const base = yield* fileSystem.makeTempDirectoryScoped();
       const state = path.join(base, "registry");
-      const root = path.join(base, "host-workspace");
+      const actualRoot = path.join(base, "host-workspace");
+      const root = path.join(base, "workspace-link");
       const visibleRoot = path.join(base, "visible-workspace");
       const visibleHome = path.join(base, "visible-home");
-      yield* fileSystem.makeDirectory(root);
+      yield* fileSystem.makeDirectory(actualRoot);
+      yield* fileSystem.symlink(actualRoot, root);
       yield* fileSystem.makeDirectory(visibleRoot);
       const canonicalRoot = yield* fileSystem.realPath(root);
       const id = NodeCrypto.createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 20);
