@@ -431,8 +431,7 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.systemPrompt, {
         type: "preset",
         preset: "claude_code",
-        append:
-          `${buildRuntimeInstructions({ harness: "Claude Code" })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
+        append: `${buildRuntimeInstructions({ harness: "Claude Code" })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
       });
       assert.equal(createInput?.options.permissionMode, "bypassPermissions");
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, true);
