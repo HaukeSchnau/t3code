@@ -16,6 +16,7 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 
@@ -118,8 +119,26 @@ const makeTerminalManagerLayer = (
 const testLayer = (
   project: OrchestrationProject,
   terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
+  onCompletionCheck: Effect.Effect<void> = Effect.void,
 ) => {
-  const nodeFileServices = Layer.merge(NodeFileSystem.layer, NodePath.layer);
+  const observedFileSystem = Layer.effect(
+    FileSystem.FileSystem,
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      return {
+        ...fileSystem,
+        exists: (filePath: string) =>
+          fileSystem
+            .exists(filePath)
+            .pipe(
+              Effect.tap(() =>
+                filePath.endsWith("completed.json") ? onCompletionCheck : Effect.void,
+              ),
+            ),
+      };
+    }),
+  ).pipe(Layer.provide(NodeFileSystem.layer));
+  const nodeFileServices = Layer.merge(observedFileSystem, NodePath.layer);
   return Layer.mergeAll(
     ProjectSetupScriptRunner.layer.pipe(
       Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
@@ -322,13 +341,16 @@ describe("ProjectSetupScriptRunner", () => {
       );
       const write = vi.fn(
         (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
-          spawner
-            .exitCode(ChildProcess.make(process.execPath, [wrapperPathFromWrite(input.data)]))
-            .pipe(
-              Effect.tap((exitCode) => Effect.sync(() => expect(exitCode).toBe(0))),
-              Effect.asVoid,
-              Effect.orDie,
-            ),
+          Effect.gen(function* () {
+            const handle = yield* spawner.spawn(
+              ChildProcess.make(process.execPath, [wrapperPathFromWrite(input.data)]),
+            );
+            const [exitCode, output] = yield* Effect.all(
+              [handle.exitCode, handle.all.pipe(Stream.decodeText, Stream.mkString)],
+              { concurrency: "unbounded" },
+            );
+            expect(exitCode, output).toBe(0);
+          }).pipe(Effect.scoped, Effect.orDie),
       );
       yield* Effect.gen(function* () {
         const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
@@ -366,6 +388,13 @@ describe("ProjectSetupScriptRunner", () => {
   it.effect("reconciles an interrupted claimed execution before exact retry completes", () => {
     let wrapperPath = "";
     let claimed!: Deferred.Deferred<void>;
+    let completionChecked!: Deferred.Deferred<void>;
+    let completionChecks = 0;
+    const onCompletionCheck = Effect.suspend(() =>
+      ++completionChecks === 2
+        ? Deferred.succeed(completionChecked, undefined).pipe(Effect.asVoid)
+        : Effect.void,
+    );
     const open = vi.fn(() =>
       Effect.succeed({
         threadId: "thread-1",
@@ -406,6 +435,7 @@ describe("ProjectSetupScriptRunner", () => {
       const path = yield* Path.Path;
       const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       claimed = yield* Deferred.make<void>();
+      completionChecked = yield* Deferred.make<void>();
       const input = {
         threadId: "thread-1",
         projectId: "project-1",
@@ -414,16 +444,20 @@ describe("ProjectSetupScriptRunner", () => {
       };
       const interrupted = yield* runner.runForThread(input).pipe(Effect.forkChild);
       yield* Deferred.await(claimed);
+      // The first check reads prior completion; the second follows launch acknowledgement.
+      yield* Deferred.await(completionChecked);
       yield* TestClock.adjust(Duration.minutes(2));
       expect(interrupted.pollUnsafe()).toBeUndefined();
       yield* Fiber.interrupt(interrupted);
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
 
+      completionChecks = 0;
+      completionChecked = yield* Deferred.make<void>();
       const retry = yield* runner
         .runForThread({ ...input, reconcileClaimedLaunch: true })
         .pipe(Effect.forkChild);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(completionChecked);
       yield* TestClock.adjust(Duration.minutes(2));
       expect(retry.pollUnsafe()).toBeUndefined();
       expect(open).toHaveBeenCalledOnce();
@@ -437,7 +471,7 @@ describe("ProjectSetupScriptRunner", () => {
       expect(completed.status).toBe("started");
       expect(open).toHaveBeenCalledOnce();
       expect(write).toHaveBeenCalledOnce();
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+    }).pipe(Effect.provide(testLayer(project, { open, write }, onCompletionCheck)));
   });
 
   it.effect("rejects malformed and mismatched completion journals", () => {
@@ -523,6 +557,13 @@ describe("ProjectSetupScriptRunner", () => {
 
   it.effect("bounds claimed setup completion with a typed, retryable timeout", () => {
     let claimed!: Deferred.Deferred<void>;
+    let completionChecked!: Deferred.Deferred<void>;
+    let completionChecks = 0;
+    const onCompletionCheck = Effect.suspend(() =>
+      ++completionChecks === 2
+        ? Deferred.succeed(completionChecked, undefined).pipe(Effect.asVoid)
+        : Effect.void,
+    );
     const open = vi.fn(() => Effect.succeed({} as never));
     const write = vi.fn(
       (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
@@ -546,6 +587,7 @@ describe("ProjectSetupScriptRunner", () => {
 
     return Effect.gen(function* () {
       claimed = yield* Deferred.make<void>();
+      completionChecked = yield* Deferred.make<void>();
       const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
       const running = yield* runner
         .runForThread({
@@ -556,7 +598,7 @@ describe("ProjectSetupScriptRunner", () => {
         })
         .pipe(Effect.forkChild);
       yield* Deferred.await(claimed);
-      yield* Effect.yieldNow;
+      yield* Deferred.await(completionChecked);
       yield* TestClock.adjust(
         Duration.millis(ProjectSetupScriptRunner.SETUP_COMPLETION_TIMEOUT_MILLIS),
       );
@@ -566,7 +608,7 @@ describe("ProjectSetupScriptRunner", () => {
         expect(timeout.retryable).toBe(true);
         expect(timeout.timeoutMillis).toBe(15 * 60_000);
       }
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+    }).pipe(Effect.provide(testLayer(project, { open, write }, onCompletionCheck)));
   });
 
   it.effect("still detects an unclaimed launch after 30 seconds", () => {
