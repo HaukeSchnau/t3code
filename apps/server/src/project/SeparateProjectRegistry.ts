@@ -49,10 +49,11 @@ const decodeRegistration = Schema.decodeUnknownSync(Registration);
 /** Resolve by the host workspace identity; identical paths in two namespaces are unrelated. */
 export async function readSeparateProject(cwd: string, stateDirectory?: string) {
   const state = stateDirectory ?? NodePath.join(NodeOS.homedir(), ".local/state/agent-exec");
-  let candidate = await NodeFSP.realpath(cwd).catch((error: NodeJS.ErrnoException) => {
+  const canonicalCwd = await NodeFSP.realpath(cwd).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return NodePath.resolve(cwd);
     throw error;
   });
+  let candidate = canonicalCwd;
   while (true) {
     const id = NodeCrypto.createHash("sha256").update(candidate).digest("hex").slice(0, 20);
     const contents = await NodeFSP.readFile(
@@ -65,7 +66,7 @@ export async function readSeparateProject(cwd: string, stateDirectory?: string) 
     if (contents !== undefined) {
       const record = decodeRegistration(contents);
       if (record.root !== candidate) throw new Error("Invalid project environment root");
-      return { ...record, state: NodePath.join(state, "environments", id) };
+      return { ...record, canonicalCwd, state: NodePath.join(state, "environments", id) };
     }
     const parent = NodePath.dirname(candidate);
     if (candidate === parent) return undefined;
@@ -76,7 +77,10 @@ export async function readSeparateProject(cwd: string, stateDirectory?: string) 
 export async function projectProviderCwd(cwd: string, stateDirectory?: string) {
   const record = await readSeparateProject(cwd, stateDirectory);
   return record?.workspace
-    ? NodePath.join(record.workspace.visibleRoot, NodePath.relative(record.root, cwd))
+    ? NodePath.join(
+        record.workspace.visibleRoot,
+        NodePath.relative(record.root, record.canonicalCwd),
+      )
     : cwd;
 }
 
@@ -90,7 +94,10 @@ export async function projectSetupPaths(
   const journalPath = ".local/state/t3/setup-executions";
   return {
     cwd: record?.workspace
-      ? NodePath.join(record.workspace.visibleRoot, NodePath.relative(record.root, cwd))
+      ? NodePath.join(
+          record.workspace.visibleRoot,
+          NodePath.relative(record.root, record.canonicalCwd),
+        )
       : cwd,
     projectRoot: record ? (record.workspace?.visibleRoot ?? record.root) : undefined,
     journalDirectory: record
