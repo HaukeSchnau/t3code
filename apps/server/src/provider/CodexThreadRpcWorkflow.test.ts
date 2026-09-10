@@ -62,6 +62,7 @@ const makeThread = (overrides: Partial<OrchestrationThread> = {}): Orchestration
   branch: null,
   worktreePath: null,
   workspaceId: null,
+  pullRequests: [],
   latestTurn: null,
   createdAt: now,
   updatedAt: now,

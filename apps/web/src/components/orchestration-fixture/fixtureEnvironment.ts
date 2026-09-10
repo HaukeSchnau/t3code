@@ -130,6 +130,7 @@ function shellFor(
         ? `${workspaceRoot}/.t3/worktrees/${thread.branch.replace(/\//g, "-")}`
         : null,
     latestTurn: latestTurnFor(thread),
+    pullRequests: [],
     createdAt: thread.createdAt,
     updatedAt: thread.updatedAt,
     archivedAt: null,

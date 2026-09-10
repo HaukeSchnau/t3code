@@ -70,6 +70,7 @@ function makeThread(overrides: Partial<SidebarThreadSummary> = {}): SidebarThrea
     settledAt: null,
     updatedAt: completedAt,
     latestTurn: makeLatestTurn(),
+    pullRequests: [],
     branch: null,
     worktreePath: null,
     latestUserMessageAt: null,
