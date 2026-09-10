@@ -2,11 +2,15 @@
  * RemoteOpenTargets - resolves the SSH hostnames this environment advertises
  * for remote open-in-editor deep links (`vscode://vscode-remote/ssh-remote+…`).
  *
- * The server can only check itself: sshd listening locally, tailscaled
- * reporting a MagicDNS name, and the machine hostname for mDNS. Whether a
- * given name resolves from the viewer's machine is inherently client-side.
- * Targets are ordered most-reachable first (tailnet name works from anywhere
- * on the tailnet; `<hostname>.local` only on the same LAN).
+ * An operator-configured ssh alias (`T3CODE_REMOTE_OPEN_SSH_HOST`) wins
+ * outright and skips probing: the alias resolves user, port and key through
+ * the viewer's own `~/.ssh/config`, which a bare hostname cannot express.
+ *
+ * Otherwise the server can only check itself: sshd listening locally,
+ * tailscaled reporting a MagicDNS name, and the machine hostname for mDNS.
+ * Whether a given name resolves from the viewer's machine is inherently
+ * client-side. Targets are ordered most-reachable first (tailnet name works
+ * from anywhere on the tailnet; `<hostname>.local` only on the same LAN).
  */
 import { type RemoteOpenTarget } from "@t3tools/contracts";
 import { HostProcessHostname } from "@t3tools/shared/hostProcess";
@@ -16,6 +20,8 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
+
+import { ServerConfig } from "../config.ts";
 
 const SSH_PORT = 22;
 
@@ -30,8 +36,13 @@ export class RemoteOpenTargets extends Context.Service<
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const net = yield* NetService.NetService;
+  const { remoteOpenSshHost } = yield* ServerConfig;
 
   const resolveTargets = Effect.gen(function* () {
+    if (remoteOpenSshHost !== undefined) {
+      return [{ kind: "configured", host: remoteOpenSshHost }] satisfies Array<RemoteOpenTarget>;
+    }
+
     // No local sshd means no name can work; advertise nothing so clients
     // render a clear "no SSH route" state instead of links that hang.
     // Check both loopback families: sshd can be bound IPv6-only.
