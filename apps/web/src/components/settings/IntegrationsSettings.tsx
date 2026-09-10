@@ -1,3 +1,4 @@
+import { DeviceHostsSettings } from "./DeviceHostsSettings";
 /**
  * Integrations settings - preferences for surfaces T3 Code embeds rather than
  * owns. Browser is the first section and controls how a hand-opened preview
@@ -11,6 +12,7 @@ import {
   BrowserImportFailureReason,
   type BrowserProfile,
   type EnvironmentId,
+  type SshDeviceHostConfig,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -35,10 +37,22 @@ import { InfoIcon, Plus as PlusIcon, Trash2 as Trash2Icon } from "lucide-react";
 import { useState } from "react";
 import type { ReactNode } from "react";
 
+import { AnimatedHeight } from "~/components/AnimatedHeight";
+import { Switch } from "../ui/switch";
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { cn, randomUUID } from "~/lib/utils";
-import { useEnvironments } from "~/state/environments";
+import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
+import { deviceEnvironment, useDeviceState } from "~/state/device";
+import { useAtomCommand } from "~/state/use-atom-command";
+import {
+  AgentDeviceSetupStatus,
+  DeviceHubSetupStatus,
+  PlatformStatus,
+  platformSetupStatus,
+  deviceHubDescription,
+  agentDeviceDescription,
+} from "~/components/device/DeviceSetup";
 import { isElectron } from "../../env";
 
 import { Badge } from "../ui/badge";
@@ -838,6 +852,175 @@ function BrowserDefaultProfileSetting({ disabled }: { readonly disabled: boolean
   );
 }
 
+function DeviceIntegrationSettings() {
+  const primaryEnvironment = usePrimaryEnvironment();
+  const { environments } = useEnvironments();
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected =
+    environments.find((environment) => environment.environmentId === selectedId) ??
+    environments.find(
+      (environment) => environment.environmentId === primaryEnvironment?.environmentId,
+    ) ??
+    environments[0];
+  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
+  const environmentId = connected ? selected.environmentId : null;
+
+  return (
+    <SettingsSection id="devices" title="Devices">
+      {environments.length > 1 ? (
+        <SettingsRow
+          title="Environment"
+          description="Device support and hosts are shared by all projects in this environment."
+          control={
+            <Select
+              value={selected?.environmentId ?? ""}
+              onValueChange={(value) => setSelectedId(value)}
+            >
+              <SelectTrigger size="sm" aria-label="Device environment">
+                <SelectValue>{selected?.label ?? "Select environment"}</SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                {environments.map((environment) => (
+                  <SelectItem key={environment.environmentId} value={environment.environmentId}>
+                    {environment.label}
+                    {environment.connection.phase === "connected" ? "" : " · Offline"}
+                  </SelectItem>
+                ))}
+              </SelectPopup>
+            </Select>
+          }
+        />
+      ) : null}
+      <DeviceIntegrationControls
+        key={selected?.environmentId ?? "none"}
+        environmentId={environmentId}
+        hosts={selected?.serverConfig?.settings.deviceHosts ?? []}
+        enabled={selected?.serverConfig?.settings.enableDeviceSupport ?? false}
+        agentAccessEnabled={selected?.serverConfig?.settings.enableAgentDeviceAccess ?? false}
+      />
+    </SettingsSection>
+  );
+}
+
+function DeviceIntegrationControls({
+  environmentId,
+  hosts,
+  enabled,
+  agentAccessEnabled,
+}: {
+  environmentId: EnvironmentId | null;
+  hosts: ReadonlyArray<SshDeviceHostConfig>;
+  enabled: boolean;
+  agentAccessEnabled: boolean;
+}) {
+  const { state, loaded } = useDeviceState(environmentId);
+  const configure = useAtomCommand(deviceEnvironment.configure);
+  const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
+  const [pending, setPending] = useState<"hub" | "check" | "agent" | null>(null);
+  const busy = state.hostStatus === "installing" || state.hostStatus === "starting";
+  const [platformsRevealed, setPlatformsRevealed] = useState(false);
+  // Keep diagnostics visible through subsequent agent setup and refresh phases.
+  if (platformsRevealed && !enabled) setPlatformsRevealed(false);
+  if (enabled && !platformsRevealed && state.hostStatus === "ready" && pending !== "hub") {
+    setPlatformsRevealed(true);
+  }
+
+  const update = async (
+    kind: NonNullable<typeof pending>,
+    input: { enabled?: boolean; agentAccessEnabled?: boolean },
+  ) => {
+    if (!environmentId) return;
+    setPending(kind);
+    try {
+      const result = await configure({ environmentId, input });
+      if (result._tag === "Success" && input.enabled === true && !state.onboardingCompleted) {
+        await configure({ environmentId, input: { onboardingCompleted: true } });
+      }
+    } finally {
+      setPending(null);
+    }
+  };
+
+  return (
+    <>
+      <SettingsRow
+        {...searchableSetting("device-hub")}
+        description={deviceHubDescription}
+        control={
+          <>
+            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
+            <Switch
+              checked={enabled}
+              disabled={!loaded || !environmentId || busy || pending !== null}
+              aria-label="Device hub"
+              onCheckedChange={(checked) =>
+                void update("hub", {
+                  enabled: Boolean(checked),
+                  ...(checked ? {} : { agentAccessEnabled: false }),
+                })
+              }
+            />
+          </>
+        }
+      />
+      <AnimatedHeight>
+        {platformsRevealed ? (
+          <SettingsRow
+            {...searchableSetting("device-platform-support")}
+            status={
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                <PlatformStatus compact platform="iOS" status={platformSetupStatus(state, "ios")} />
+                <PlatformStatus
+                  compact
+                  platform="Android"
+                  status={platformSetupStatus(state, "android")}
+                />
+              </div>
+            }
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!environmentId || !enabled || busy || pending !== null}
+                onClick={() => {
+                  if (!environmentId) return;
+                  setPending("check");
+                  void list({ environmentId, input: {} }).finally(() => setPending(null));
+                }}
+              >
+                {pending === "check" ? "Checking…" : "Refresh"}
+              </Button>
+            }
+          />
+        ) : null}
+      </AnimatedHeight>
+      <SettingsRow
+        {...searchableSetting("agent-device-access")}
+        description={agentDeviceDescription}
+        control={
+          <>
+            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
+            <Switch
+              checked={agentAccessEnabled}
+              disabled={!loaded || !environmentId || !enabled || busy || pending !== null}
+              aria-label="Agent device access"
+              onCheckedChange={(checked) =>
+                void update("agent", { agentAccessEnabled: Boolean(checked) })
+              }
+            />
+          </>
+        }
+      />
+      {state.hostStatus === "failed" && state.hostStatusDetail ? (
+        <p role="alert" className="px-4 py-3 text-xs text-destructive">
+          {state.hostStatusDetail}
+        </p>
+      ) : null}
+      <DeviceHostsSettings environmentId={environmentId} hosts={hosts} />
+    </>
+  );
+}
+
 export function IntegrationsSettingsPanel() {
   // Client-local preview defaults are editable only where the preview exists.
   const previewDefaultsDisabled = !isElectron;
@@ -864,6 +1047,7 @@ export function IntegrationsSettingsPanel() {
           previewDefaults
         )}
       </SettingsSection>
+      <DeviceIntegrationSettings />
     </SettingsPageContainer>
   );
 }
