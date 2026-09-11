@@ -8,7 +8,7 @@ import {
 import { createRef, useLayoutEffect, type ReactNode, type Ref } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { beforeAll, describe, expect, it, vi } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 import type { LegendListRef, MaintainScrollAtEndOptions } from "@legendapp/list/react";
 import { shouldUseRestingComposerLayout } from "../composerFooterLayout";
 import { useComposerFocusState } from "./useComposerFocusState";
@@ -146,9 +146,7 @@ function matchMedia() {
   };
 }
 
-let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
-
-beforeAll(async () => {
+{
   const classList = {
     add: () => {},
     remove: () => {},
@@ -179,9 +177,9 @@ beforeAll(async () => {
       offsetHeight: 0,
     },
   });
+}
 
-  ({ MessagesTimeline } = await import("./MessagesTimeline"));
-}, 30_000);
+const { MessagesTimeline } = await import("./MessagesTimeline");
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
 const MESSAGE_CREATED_AT = "2026-03-17T19:12:28.000Z";
@@ -357,12 +355,24 @@ describe("MessagesTimeline", () => {
         });
         const toggle = renderer!.root.findByProps({ "aria-expanded": false });
         await act(async () => toggle.props.onClick());
+        const questionToggle = renderer!.root.find(
+          (node) =>
+            node.props["aria-label"]?.startsWith("Question answer submitted:") &&
+            node.props["aria-expanded"] === false,
+        );
+        expect(questionToggle.props["aria-label"]).toContain(
+          Object.values(answers)[0] ?? "spec.txt",
+        );
+        expect(JSON.stringify(renderer!.toJSON())).not.toContain("Provide a spec");
+        await act(async () => questionToggle.props.onClick());
         const markup = JSON.stringify(renderer!.toJSON());
         expect(markup.match(/Provide a spec/g)).toHaveLength(1);
-        expect(markup.match(/spec\.txt/g)).toHaveLength(1);
+        expect(markup).toContain("spec.txt");
         expect(markup).toContain("Provide a screenshot");
         expect(markup).toContain("shot.png");
         for (const answer of Object.values(answers)) expect(markup).toContain(answer);
+        await act(async () => questionToggle.props.onClick());
+        expect(JSON.stringify(renderer!.toJSON())).not.toContain("Provide a spec");
       } finally {
         await act(async () => renderer?.unmount());
       }

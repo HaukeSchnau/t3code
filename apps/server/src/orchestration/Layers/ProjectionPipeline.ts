@@ -196,6 +196,9 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
         event.type === "thread.created" ||
         event.type === "thread.turn-start-requested" ||
         event.type === "thread.session-set" ||
+        (event.type === "thread.activity-appended" &&
+          (event.payload.activity.kind === "context-compaction" ||
+            event.payload.activity.kind === "provider.turn.start.failed")) ||
         (event.type === "thread.message-sent" &&
           event.payload.role === "assistant" &&
           !event.payload.streaming &&
