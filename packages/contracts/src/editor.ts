@@ -129,7 +129,7 @@ export const buildRemoteOpenUrl = (input: {
 /**
  * SSH hostnames an environment advertises for remote open links. Reachability
  * is client-side. A `configured` host is an operator-declared ssh alias
- * (`T3CODE_REMOTE_OPEN_SSH_HOST`) and is advertised alone, since it is the
+ * (`T3CODE_REMOTE_OPEN_HOST`) and is advertised alone, since it is the
  * only way to carry a non-default port or user through a `vscode-remote`
  * URI. Otherwise the server advertises names that resolve to itself, gated
  * on a local sshd listen check and ordered most-reachable first (tailnet

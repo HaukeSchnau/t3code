@@ -92,7 +92,7 @@ export class ServerConfig extends Context.Service<
     readonly tailscaleServeEnabled: boolean;
     readonly tailscaleServePort: number;
     /** ssh config alias clients use for remote open-in-editor deep links. */
-    readonly remoteOpenSshHost?: string | undefined;
+    readonly remoteOpenHost?: string | undefined;
   }
 >()("t3/config/ServerConfig") {
   /** @deprecated Import and use `layerTest` from this module. */

@@ -2,7 +2,7 @@
  * RemoteOpenTargets - resolves the SSH hostnames this environment advertises
  * for remote open-in-editor deep links (`vscode://vscode-remote/ssh-remote+…`).
  *
- * An operator-configured ssh alias (`T3CODE_REMOTE_OPEN_SSH_HOST`) wins
+ * An operator-configured ssh alias (`T3CODE_REMOTE_OPEN_HOST`) wins
  * outright and skips probing: the alias resolves user, port and key through
  * the viewer's own `~/.ssh/config`, which a bare hostname cannot express.
  *
@@ -36,11 +36,11 @@ export class RemoteOpenTargets extends Context.Service<
 export const make = Effect.gen(function* () {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const net = yield* NetService.NetService;
-  const { remoteOpenSshHost } = yield* ServerConfig;
+  const { remoteOpenHost } = yield* ServerConfig;
 
   const resolveTargets = Effect.gen(function* () {
-    if (remoteOpenSshHost !== undefined) {
-      return [{ kind: "configured", host: remoteOpenSshHost }] satisfies Array<RemoteOpenTarget>;
+    if (remoteOpenHost !== undefined) {
+      return [{ kind: "configured", host: remoteOpenHost }] satisfies Array<RemoteOpenTarget>;
     }
 
     // No local sshd means no name can work; advertise nothing so clients
