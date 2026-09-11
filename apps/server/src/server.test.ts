@@ -11238,24 +11238,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const dispatchedCommands: OrchestrationCommand[] = [];
       let workspaceProvisionCount = 0;
       let terminalOpenCount = 0;
-      let terminalWriteCount = 0;
       let claimedExecutionDirectory: string | undefined;
       let claimedTerminalId: string | undefined;
       let interruptAfterClaim = true;
-
-      const decodeShellLiteral = (literal: string) => {
-        if (!literal.startsWith("'") || !literal.endsWith("'")) {
-          throw new Error(`Invalid POSIX shell literal: ${literal}`);
-        }
-        return literal.slice(1, -1).replaceAll(`'\\''`, "'");
-      };
-      const wrapperPathFromWrite = (data: string) => {
-        const boundary = data.trim().indexOf("' '");
-        if (boundary < 0) {
-          throw new Error(`Missing setup wrapper path in terminal write: ${data}`);
-        }
-        return decodeShellLiteral(data.trim().slice(boundary + 2));
-      };
 
       const project = {
         id: defaultProjectId,
@@ -11301,9 +11286,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
               Layer.mock(TerminalManager.TerminalManager)({
                 open: (input) =>
-                  Effect.sync(() => {
+                  Effect.gen(function* () {
                     terminalOpenCount += 1;
                     claimedTerminalId = input.terminalId;
+                    const wrapperPath = input.command?.args?.[0];
+                    assert.ok(wrapperPath, "Expected a direct setup command");
+                    claimedExecutionDirectory = path.dirname(wrapperPath);
+                    yield* fileSystem
+                      .makeDirectory(path.join(claimedExecutionDirectory, "claimed"))
+                      .pipe(Effect.orDie);
+                    if (interruptAfterClaim) {
+                      return yield* Effect.die(
+                        new Error("simulated process interruption after durable setup claim"),
+                      );
+                    }
                     return {
                       threadId: input.threadId,
                       terminalId: input.terminalId,
@@ -11318,20 +11314,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                       updatedAt: createdAt,
                     };
                   }),
-                write: (input) =>
-                  Effect.gen(function* () {
-                    terminalWriteCount += 1;
-                    const wrapperPath = wrapperPathFromWrite(input.data);
-                    claimedExecutionDirectory = path.dirname(wrapperPath);
-                    yield* fileSystem
-                      .makeDirectory(path.join(claimedExecutionDirectory, "claimed"))
-                      .pipe(Effect.orDie);
-                    if (interruptAfterClaim) {
-                      return yield* Effect.die(
-                        new Error("simulated process interruption after durable setup claim"),
-                      );
-                    }
-                  }),
+                write: () => Effect.die("Setup must launch directly"),
               }),
               ServerConfig.layerTest(process.cwd(), baseDir).pipe(
                 Layer.provide(NodeServices.layer),
@@ -11535,7 +11518,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(firstAttempt._tag === "Failure");
       assertInclude(String(firstAttempt.failure), "simulated process interruption");
       assert.equal(terminalOpenCount, 1);
-      assert.equal(terminalWriteCount, 1);
       assert.equal(workspaceProvisionCount, 1);
       assert.deepEqual(
         dispatchedCommands.map((entry) => entry.type),
@@ -11578,7 +11560,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(changedLiveScript._tag === "Failure");
       assertInclude(String(changedLiveScript.failure), "no longer matches the durable execution");
       assert.equal(terminalOpenCount, 1);
-      assert.equal(terminalWriteCount, 1);
       assert.equal(workspaceProvisionCount, 1);
       assert.equal(
         dispatchedCommands.filter((entry) => entry.type === "thread.turn.start").length,
@@ -11621,7 +11602,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ["thread.create", "thread.meta.update", "thread.activity.append", "thread.activity.append"],
       );
       assert.equal(terminalOpenCount, 1);
-      assert.equal(terminalWriteCount, 1);
 
       yield* fileSystem.writeFileString(
         completionPath,
@@ -11675,7 +11655,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
       assert.equal(workspaceProvisionCount, 1);
       assert.equal(terminalOpenCount, 1);
-      assert.equal(terminalWriteCount, 1);
       assert.deepEqual(
         yield* fileSystem.readDirectory(firstServer.config.attachmentsDir),
         attachmentFilesAfterCrash,

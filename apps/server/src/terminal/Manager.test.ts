@@ -1712,6 +1712,35 @@ it.layer(
     }),
   );
 
+  it.effect("launches a server command directly and reuses its live terminal", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager(5, {
+        shellResolver: () => "/interactive/fish",
+      });
+      const command = { shell: process.execPath, args: ["/workspace with spaces/setup.cjs"] };
+      const input = { ...openInput(), command };
+      yield* manager.open(input);
+      yield* manager.open(input);
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+      expect(ptyAdapter.spawnInputs[0]).toMatchObject(command);
+      expect(ptyAdapter.processes[0]?.writes).toEqual([]);
+    }),
+  );
+
+  it.effect("does not replace a failed server command with an interactive shell", () =>
+    Effect.gen(function* () {
+      const { manager, ptyAdapter } = yield* createManager();
+      ptyAdapter.spawnFailures.push(new Error("posix_spawnp failed."));
+      const result = yield* manager.open({
+        ...openInput(),
+        command: { shell: "/missing/setup-command", args: [] },
+      });
+      expect(result.status).toBe("error");
+      expect(ptyAdapter.spawnInputs).toHaveLength(1);
+      expect(ptyAdapter.spawnInputs[0]?.shell).toBe("/missing/setup-command");
+    }),
+  );
+
   it.effect("retries with fallback shells when preferred shell spawn fails", () =>
     Effect.gen(function* () {
       const platform = yield* HostProcessPlatform;

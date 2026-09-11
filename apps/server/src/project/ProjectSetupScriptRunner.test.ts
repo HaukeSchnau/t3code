@@ -39,10 +39,10 @@ const decodePosixShellArgument = (literal: string): string => {
   return literal.slice(1, -1).replaceAll(`'\\''`, "'");
 };
 
-const wrapperPathFromWrite = (data: string): string => {
-  const boundary = data.trim().indexOf("' '");
-  if (boundary < 0) throw new Error(`Missing wrapper path in terminal write: ${data}`);
-  return decodePosixShellArgument(data.trim().slice(boundary + 2));
+const wrapperPathFromLaunch = (input: TerminalManager.TerminalCommandOpenInput): string => {
+  const wrapperPath = input.command?.args?.[0];
+  if (!wrapperPath) throw new Error("Missing setup wrapper command");
+  return wrapperPath;
 };
 
 const validCompletion = (
@@ -102,11 +102,17 @@ const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
     searchThreads: () => Effect.succeed({ matches: [] }),
   });
 
-const makeTerminalManagerLayer = (
-  overrides: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
-) =>
+interface TestTerminal {
+  readonly open: TerminalManager.TerminalManager["Service"]["open"];
+  readonly launch: (
+    input: TerminalManager.TerminalCommandOpenInput,
+  ) => Effect.Effect<void, TerminalManager.TerminalError>;
+}
+
+const makeTerminalManagerLayer = (overrides: TestTerminal) =>
   Layer.succeed(TerminalManager.TerminalManager, {
-    ...overrides,
+    open: (input) => overrides.open(input).pipe(Effect.tap(() => overrides.launch(input))),
+    write: () => Effect.die("setup must launch directly"),
     attachStream: () => Effect.die(new Error("unused")),
     resize: () => Effect.void,
     clear: () => Effect.void,
@@ -118,7 +124,7 @@ const makeTerminalManagerLayer = (
 
 const testLayer = (
   project: OrchestrationProject,
-  terminal: Pick<TerminalManager.TerminalManager["Service"], "open" | "write">,
+  terminal: TestTerminal,
   onCompletionCheck: Effect.Effect<void> = Effect.void,
 ) => {
   const observedFileSystem = Layer.effect(
@@ -154,11 +160,11 @@ const testLayer = (
   );
 };
 
-const claimWrapperExecution = (data: string) =>
+const claimWrapperExecution = (input: TerminalManager.TerminalCommandOpenInput) =>
   Effect.gen(function* () {
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const wrapperPath = wrapperPathFromWrite(data);
+    const wrapperPath = wrapperPathFromLaunch(input);
     const executionDirectory = path.dirname(wrapperPath);
     yield* fileSystem.makeDirectory(path.join(executionDirectory, "claimed"));
     yield* fileSystem.writeFileString(
@@ -170,7 +176,7 @@ const claimWrapperExecution = (data: string) =>
 describe("ProjectSetupScriptRunner", () => {
   it.effect("returns no-script when no setup script exists", () => {
     const open = vi.fn(() => Effect.die("unexpected open"));
-    const write = vi.fn(() => Effect.die("unexpected write"));
+    const launch = vi.fn(() => Effect.die("unexpected launch"));
     const project = makeProject([]);
 
     return Effect.gen(function* () {
@@ -183,13 +189,13 @@ describe("ProjectSetupScriptRunner", () => {
 
       expect(result).toEqual({ status: "no-script" });
       expect(open).not.toHaveBeenCalled();
-      expect(write).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+      expect(launch).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it.effect("rejects a changed live setup identity before terminal I/O", () => {
     const open = vi.fn(() => Effect.die("unexpected open"));
-    const write = vi.fn(() => Effect.die("unexpected write"));
+    const launch = vi.fn(() => Effect.die("unexpected launch"));
     const project = makeProject([
       {
         id: "setup",
@@ -222,12 +228,12 @@ describe("ProjectSetupScriptRunner", () => {
         expect(result.failure._tag).toBe("ProjectSetupScriptIdentityMismatchError");
       }
       expect(open).not.toHaveBeenCalled();
-      expect(write).not.toHaveBeenCalled();
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+      expect(launch).not.toHaveBeenCalled();
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it.effect(
-    "opens the deterministic setup terminal with worktree env and writes the command",
+    "launches the setup wrapper directly in its deterministic terminal with worktree env",
     () => {
       const open = vi.fn(() =>
         Effect.succeed({
@@ -244,9 +250,9 @@ describe("ProjectSetupScriptRunner", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
         }),
       );
-      const write = vi.fn(
-        (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
-          claimWrapperExecution(input.data),
+      const launch = vi.fn(
+        (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
+          claimWrapperExecution(input),
       );
       const project = makeProject([
         {
@@ -282,12 +288,16 @@ describe("ProjectSetupScriptRunner", () => {
             T3CODE_PROJECT_ROOT: "/repo/project",
             T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
           },
+          command: {
+            shell: process.execPath,
+            args: [expect.stringMatching(/run\.cjs$/)],
+          },
         });
-        expect(write).toHaveBeenCalledOnce();
-        expect(write.mock.calls[0]?.[0].threadId).toBe("thread-1");
-        expect(write.mock.calls[0]?.[0].terminalId).toBe("setup-setup");
-        expect(write.mock.calls[0]?.[0].data).toContain("run.cjs");
-      }).pipe(Effect.provide(testLayer(project, { open, write })));
+        expect(launch).toHaveBeenCalledOnce();
+        expect(launch.mock.calls[0]?.[0].threadId).toBe("thread-1");
+        expect(launch.mock.calls[0]?.[0].terminalId).toBe("setup-setup");
+        expect(launch.mock.calls[0]?.[0].command?.args?.[0]).toContain("run.cjs");
+      }).pipe(Effect.provide(testLayer(project, { open, launch })));
     },
   );
 
@@ -341,11 +351,11 @@ describe("ProjectSetupScriptRunner", () => {
           updatedAt: "2026-01-01T00:00:00.000Z",
         }),
       );
-      const write = vi.fn(
-        (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+      const launch = vi.fn(
+        (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
           Effect.gen(function* () {
             const handle = yield* spawner.spawn(
-              ChildProcess.make(process.execPath, [wrapperPathFromWrite(input.data)]),
+              ChildProcess.make(process.execPath, [wrapperPathFromLaunch(input)]),
             );
             const [exitCode, output] = yield* Effect.all(
               [handle.exitCode, handle.all.pipe(Stream.decodeText, Stream.mkString)],
@@ -361,7 +371,7 @@ describe("ProjectSetupScriptRunner", () => {
         expect(
           (yield* runner.runForThread({ ...input, reconcileClaimedLaunch: true })).status,
         ).toBe("started");
-        expect(write).toHaveBeenCalledOnce();
+        expect(launch).toHaveBeenCalledOnce();
         expect(yield* fileSystem.readFileString(path.join(visibleRoot, "setup-runs.txt"))).toBe(
           `${visibleRoot}\n`,
         );
@@ -381,7 +391,7 @@ describe("ProjectSetupScriptRunner", () => {
         );
         expect(completion).toContain('"exitCode":0');
       }).pipe(
-        Effect.provide(testLayer(project, { open, write })),
+        Effect.provide(testLayer(project, { open, launch })),
         Effect.provideService(HostProcessEnvironment, { AGENT_EXEC_STATE: state }),
       );
     }).pipe(Effect.provide(NodeServices.layer), Effect.scoped),
@@ -412,12 +422,12 @@ describe("ProjectSetupScriptRunner", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     );
-    const write = vi.fn(
-      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+    const launch = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          wrapperPath = wrapperPathFromWrite(input.data);
+          wrapperPath = wrapperPathFromLaunch(input);
           yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
           yield* Deferred.succeed(claimed, undefined);
         }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
@@ -452,7 +462,7 @@ describe("ProjectSetupScriptRunner", () => {
       expect(interrupted.pollUnsafe()).toBeUndefined();
       yield* Fiber.interrupt(interrupted);
       expect(open).toHaveBeenCalledOnce();
-      expect(write).toHaveBeenCalledOnce();
+      expect(launch).toHaveBeenCalledOnce();
 
       completionChecks = 0;
       completionChecked = yield* Deferred.make<void>();
@@ -463,7 +473,7 @@ describe("ProjectSetupScriptRunner", () => {
       yield* TestClock.adjust(Duration.minutes(2));
       expect(retry.pollUnsafe()).toBeUndefined();
       expect(open).toHaveBeenCalledOnce();
-      expect(write).toHaveBeenCalledOnce();
+      expect(launch).toHaveBeenCalledOnce();
       yield* fileSystem.writeFileString(
         path.join(path.dirname(wrapperPath), "completed.json"),
         validCompletion(),
@@ -472,8 +482,8 @@ describe("ProjectSetupScriptRunner", () => {
       const completed = yield* Fiber.join(retry);
       expect(completed.status).toBe("started");
       expect(open).toHaveBeenCalledOnce();
-      expect(write).toHaveBeenCalledOnce();
-    }).pipe(Effect.provide(testLayer(project, { open, write }, onCompletionCheck)));
+      expect(launch).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(testLayer(project, { open, launch }, onCompletionCheck)));
   });
 
   it.effect("rejects malformed and mismatched completion journals", () => {
@@ -494,12 +504,12 @@ describe("ProjectSetupScriptRunner", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     );
-    const write = vi.fn(
-      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+    const launch = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          wrapperPath = wrapperPathFromWrite(input.data);
+          wrapperPath = wrapperPathFromLaunch(input);
           yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
           yield* Deferred.succeed(claimed, undefined);
         }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
@@ -554,7 +564,7 @@ describe("ProjectSetupScriptRunner", () => {
       if (isProjectSetupScriptOperationError(mismatched)) {
         expect(String(mismatched.cause)).toContain("identity mismatch");
       }
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it.effect("bounds claimed setup completion with a typed, retryable timeout", () => {
@@ -567,12 +577,12 @@ describe("ProjectSetupScriptRunner", () => {
         : Effect.void,
     );
     const open = vi.fn(() => Effect.succeed({} as never));
-    const write = vi.fn(
-      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) =>
+    const launch = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
         Effect.gen(function* () {
           const fileSystem = yield* FileSystem.FileSystem;
           const path = yield* Path.Path;
-          const wrapperPath = wrapperPathFromWrite(input.data);
+          const wrapperPath = wrapperPathFromLaunch(input);
           yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
           yield* Deferred.succeed(claimed, undefined);
         }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
@@ -609,14 +619,58 @@ describe("ProjectSetupScriptRunner", () => {
       if (isProjectSetupScriptReconciliationTimeoutError(timeout)) {
         expect(timeout.retryable).toBe(true);
         expect(timeout.timeoutMillis).toBe(15 * 60_000);
+        expect(timeout.phase).toBe("completion");
       }
-    }).pipe(Effect.provide(testLayer(project, { open, write }, onCompletionCheck)));
+    }).pipe(Effect.provide(testLayer(project, { open, launch }, onCompletionCheck)));
   });
 
-  it.effect("still detects an unclaimed launch after 30 seconds", () => {
+  it.effect("waits for a cold environment before the setup wrapper claims execution", () => {
+    let opened!: Deferred.Deferred<void>;
+    let wrapperPath = "";
+    const open = vi.fn(() => Effect.succeed({} as never));
+    const launch = vi.fn((input: TerminalManager.TerminalCommandOpenInput) => {
+      wrapperPath = wrapperPathFromLaunch(input);
+      return Deferred.succeed(opened, undefined).pipe(Effect.asVoid);
+    });
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+    return Effect.gen(function* () {
+      opened = yield* Deferred.make<void>();
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const running = yield* runner
+        .runForThread({
+          threadId: "thread-1",
+          projectId: "project-1",
+          worktreePath: "/repo/worktrees/a",
+        })
+        .pipe(Effect.forkChild);
+      yield* Deferred.await(opened);
+      yield* TestClock.adjust(Duration.seconds(40));
+      expect(running.pollUnsafe()).toBeUndefined();
+      yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
+      yield* fileSystem.writeFileString(
+        path.join(path.dirname(wrapperPath), "completed.json"),
+        validCompletion(),
+      );
+      yield* TestClock.adjust(Duration.millis(100));
+      expect((yield* Fiber.join(running)).status).toBe("started");
+      expect(launch).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
+  });
+
+  it.effect("bounds cold environment startup separately from script completion", () => {
     let written!: Deferred.Deferred<void>;
     const open = vi.fn(() => Effect.succeed({} as never));
-    const write = vi.fn(() => Deferred.succeed(written, undefined).pipe(Effect.asVoid));
+    const launch = vi.fn(() => Deferred.succeed(written, undefined).pipe(Effect.asVoid));
     const project = makeProject([
       {
         id: "setup",
@@ -644,9 +698,11 @@ describe("ProjectSetupScriptRunner", () => {
       expect(isProjectSetupScriptReconciliationTimeoutError(timeout)).toBe(true);
       if (isProjectSetupScriptReconciliationTimeoutError(timeout)) {
         expect(timeout.retryable).toBe(true);
-        expect(timeout.timeoutMillis).toBe(30_000);
+        expect(timeout.timeoutMillis).toBe(5 * 60_000);
+        expect(timeout.phase).toBe("launch");
+        expect(timeout.message).toContain("preparing its environment");
       }
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it("quotes executable and wrapper paths as inert POSIX shell arguments", () => {
@@ -667,7 +723,7 @@ describe("ProjectSetupScriptRunner", () => {
     }
   });
 
-  it.effect("safely resubmits when terminal open completed without an execution claim", () => {
+  it.effect("retries a direct terminal launch that failed before an execution claim", () => {
     const open = vi.fn(() =>
       Effect.succeed({
         threadId: "thread-1",
@@ -683,18 +739,18 @@ describe("ProjectSetupScriptRunner", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     );
-    let writeAttempt = 0;
-    const write = vi.fn(
-      (input: Parameters<TerminalManager.TerminalManager["Service"]["write"]>[0]) => {
-        writeAttempt += 1;
-        return writeAttempt === 1
+    let launchAttempt = 0;
+    const launch = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) => {
+        launchAttempt += 1;
+        return launchAttempt === 1
           ? Effect.fail(
               new TerminalManager.TerminalNotRunningError({
                 threadId: input.threadId,
                 terminalId: input.terminalId,
               }),
             )
-          : claimWrapperExecution(input.data);
+          : claimWrapperExecution(input);
       },
     );
     const project = makeProject([
@@ -718,7 +774,7 @@ describe("ProjectSetupScriptRunner", () => {
       const interrupted = yield* runner.runForThread(input).pipe(Effect.flip);
       expect(isProjectSetupScriptOperationError(interrupted)).toBe(true);
       if (isProjectSetupScriptOperationError(interrupted)) {
-        expect(interrupted.operation).toBe("writeCommand");
+        expect(interrupted.operation).toBe("openTerminal");
       }
 
       const resumed = yield* runner.runForThread({
@@ -727,8 +783,8 @@ describe("ProjectSetupScriptRunner", () => {
       });
       expect(resumed.status).toBe("started");
       expect(open).toHaveBeenCalledTimes(2);
-      expect(write).toHaveBeenCalledTimes(2);
-    }).pipe(Effect.provide(testLayer(project, { open, write })));
+      expect(launch).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it.effect("keeps terminal failures as the exact cause of a structured operation error", () => {
@@ -770,7 +826,7 @@ describe("ProjectSetupScriptRunner", () => {
       Effect.provide(
         testLayer(project, {
           open: () => Effect.fail(terminalError),
-          write: () => Effect.die("unexpected write"),
+          launch: () => Effect.die("unexpected launch"),
         }),
       ),
     );

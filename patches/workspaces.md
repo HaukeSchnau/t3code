@@ -35,6 +35,10 @@ with separate host and terminal paths to the same files. The host's T3 userdata 
 mounted there. Setup cwd and environment variables use workspace-visible paths; the
 source checkout is unavailable. Keep the journal's atomic claim and retry semantics.
 The repository bootstrap uses pinned pnpm because Vite+ is installed by that step.
+The setup wrapper is the PTY's initial process, so interactive shell configuration and
+terminal capability queries cannot delay it. Cold toolchain activation has a five-minute
+launch budget; the script has fifteen minutes after its durable launch acknowledgement.
+Startup and completion timeouts must identify which stage failed.
 
 Workspace names derive once from the creation-time semantic seed. Only live collisions
 add a suffix; later thread-title changes do not rename paths used by terminals or tools.
