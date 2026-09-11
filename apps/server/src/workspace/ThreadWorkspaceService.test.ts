@@ -20,13 +20,14 @@ import * as ServerConfig from "../config.ts";
 import * as GitWorkflowService from "../git/GitWorkflowService.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
 import * as ProcessRunner from "../processRunner.ts";
+import { SeparateWorkspaceMetadata } from "../project/SeparateProjectRegistry.ts";
 import * as ThreadWorkspaceService from "./ThreadWorkspaceService.ts";
 
 const encodeIsolatedRegistration = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({
       root: Schema.String,
-      workspace: Schema.Struct({ id: Schema.String, sourceRevision: Schema.String }),
+      workspace: SeparateWorkspaceMetadata,
     }),
   ),
 );
@@ -824,5 +825,90 @@ layer("ThreadWorkspaceService", (it) => {
       yield* service.deleteWorkspace({ workspaceId: prepared.workspace.id, force: true });
       assert.equal(NodeFS.existsSync(prepared.primaryCwd), false);
     }),
+  );
+
+  it.effect(
+    "automatically isolates a directory project and retains its discovered repository roots",
+    () => {
+      const sourcePath = makeTempDir("t3-directory-isolated-source-");
+      const baseDir = makeTempDir("t3-directory-isolated-base-");
+      const calls: ProcessRunner.ProcessRunInput[] = [];
+      NodeFS.writeFileSync(NodePath.join(sourcePath, "notes.txt"), "source notes");
+      return Effect.gen(function* () {
+        const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+        const request = {
+          threadId: ThreadId.make("directory-isolated"),
+          kind: "auto" as const,
+          roots: [
+            {
+              projectId: ProjectId.make("directory-project"),
+              sourcePath,
+              role: "primary" as const,
+            },
+          ],
+        };
+        const first = yield* service.prepareWorkspace(request);
+        assert.equal(first.workspace.kind, "isolated");
+        assert.equal(first.workspace.roots.length, 3);
+        assert.equal(first.workspace.roots[0]?.vcsKind, "unknown");
+        assert.equal(first.workspace.roots[0]?.baseRevision, null);
+        assert.deepEqual(
+          first.workspace.roots.slice(1).map((root) => ({
+            path: NodePath.relative(first.primaryCwd, root.checkoutPath),
+            revision: root.baseRevision,
+            kind: root.vcsKind,
+          })),
+          [
+            { path: "repos/team/backend", revision: "backend-commit", kind: "jj" },
+            { path: "other/deeper/frontend", revision: "frontend-commit", kind: "jj" },
+          ],
+        );
+        const retried = yield* service.prepareWorkspace(request);
+      assert.sameDeepMembers([...retried.workspace.roots], [...first.workspace.roots]);
+        assert.equal(calls.length, 1);
+        yield* service.deleteWorkspace({ workspaceId: first.workspace.id });
+        assert.deepEqual(calls[1]?.args, ["retire", first.primaryCwd, "--remove-checkout"]);
+        assert.equal(NodeFS.existsSync(first.primaryCwd), false);
+        assert.equal(
+          NodeFS.readFileSync(NodePath.join(sourcePath, "notes.txt"), "utf8"),
+          "source notes",
+        );
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            baseDir,
+            platform: "linux",
+            environment: { T3CODE_EXECUTION_LAUNCHER: "/test/agent-exec" },
+            processRunner: {
+              run: (input) =>
+                Effect.sync(() => {
+                  calls.push(input);
+                  if (input.args[0] === "retire") {
+                    NodeFS.rmSync(input.args[1]!, { recursive: true });
+                    return makeProcessOutput({ stdout: "{}" });
+                  }
+                  const checkoutPath = input.args[2]!;
+                  NodeFS.mkdirSync(checkoutPath, { recursive: true });
+                  return makeProcessOutput({
+                    stdout: encodeIsolatedRegistration({
+                      root: checkoutPath,
+                      workspace: {
+                        id: input.args[input.args.indexOf("--workspace-id") + 1]!,
+                        layout: "directory",
+                        ready: true,
+                        sourceRevision: null,
+                        repositories: [
+                          { path: "repos/team/backend", sourceRevision: "backend-commit" },
+                          { path: "other/deeper/frontend", sourceRevision: "frontend-commit" },
+                        ],
+                      },
+                    }),
+                  });
+                }),
+            },
+          }),
+        ),
+      );
+    },
   );
 });
