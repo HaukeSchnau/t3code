@@ -19,7 +19,8 @@ import * as TerminalManager from "../terminal/Manager.ts";
 import { projectSetupPaths } from "./SeparateProjectRegistry.ts";
 
 const encodeJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
-export const SETUP_LAUNCH_TIMEOUT_MILLIS = 30_000;
+// A cold workspace may evaluate and fetch its toolchain before the wrapper can start.
+export const SETUP_LAUNCH_TIMEOUT_MILLIS = 5 * 60_000;
 // Dependency installs can take minutes after the wrapper has confirmed launch.
 export const SETUP_COMPLETION_TIMEOUT_MILLIS = 15 * 60_000;
 const SETUP_RECONCILIATION_INTERVAL_MILLIS = 100;
@@ -130,12 +131,15 @@ export class ProjectSetupScriptReconciliationTimeoutError extends Schema.TaggedE
   {
     threadId: Schema.String,
     terminalId: Schema.String,
+    phase: Schema.Literals(["launch", "completion"]),
     timeoutMillis: Schema.Number,
     retryable: Schema.Literal(true),
   },
 ) {
   override get message(): string {
-    return `Setup execution '${this.terminalId}' did not publish durable completion within ${this.timeoutMillis}ms.`;
+    return this.phase === "launch"
+      ? `The setup process did not start within ${this.timeoutMillis / 60_000} minutes while preparing its environment.`
+      : `The setup script did not finish within ${this.timeoutMillis / 60_000} minutes.`;
   }
 }
 
@@ -366,6 +370,7 @@ export const make = Effect.gen(function* () {
     const awaitJournal = <E>(
       probe: Effect.Effect<boolean, E>,
       timeoutMillis: number,
+      phase: "launch" | "completion",
     ): Effect.Effect<void, E | ProjectSetupScriptReconciliationTimeoutError> => {
       const poll: Effect.Effect<void, E> = probe.pipe(
         Effect.flatMap((ready) =>
@@ -384,6 +389,7 @@ export const make = Effect.gen(function* () {
               new ProjectSetupScriptReconciliationTimeoutError({
                 threadId: input.threadId,
                 terminalId,
+                phase,
                 timeoutMillis,
                 retryable: true,
               }),
@@ -394,6 +400,7 @@ export const make = Effect.gen(function* () {
     const awaitCompletion = awaitJournal(
       readCompletion().pipe(Effect.map(Option.isSome)),
       SETUP_COMPLETION_TIMEOUT_MILLIS,
+      "completion",
     );
 
     if (claimed && input.reconcileClaimedLaunch) {
@@ -425,13 +432,17 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    yield* terminalManager
+    const terminal = yield* terminalManager
       .open({
         threadId: input.threadId,
         terminalId,
         cwd,
         worktreePath: input.worktreePath,
         env,
+        command: {
+          shell: process.execPath,
+          args: [path.join(terminalExecutionDir, "run.cjs")],
+        },
       })
       .pipe(
         Effect.mapError(
@@ -443,27 +454,17 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
-    yield* terminalManager
-      .write({
-        threadId: input.threadId,
-        terminalId,
-        data: `${quotePosixShellArgument(process.execPath)} ${quotePosixShellArgument(path.join(terminalExecutionDir, "run.cjs"))}\r`,
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectSetupScriptOperationError({
-              ...errorContext,
-              operation: "writeCommand",
-              cause,
-            }),
-        ),
-      );
+    if (terminal.status === "error") {
+      return yield* new ProjectSetupScriptOperationError({
+        ...errorContext,
+        operation: "openTerminal",
+        cause: new Error("The setup terminal could not start its process."),
+      });
+    }
 
-    // A successful PTY write is not a durable launch acknowledgement. Wait until the
-    // wrapper atomically claims the deterministic execution identity. A retry may
-    // safely resubmit while this marker is absent; competing wrappers race on mkdir.
-    yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS);
+    // PTY creation can precede environment activation. The wrapper acknowledges
+    // its actual launch with an atomic claim; reopening a live PTY just attaches.
+    yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS, "launch");
 
     // The caller may only persist `setup-completed` after this durable wrapper
     // completion exists. Waiting is interruptible, so shutdown leaves the durable

@@ -154,7 +154,7 @@ export class TerminalManager extends Context.Service<
      * persisted history on first open.
      */
     readonly open: (
-      input: TerminalOpenInput,
+      input: TerminalCommandOpenInput,
     ) => Effect.Effect<TerminalSessionSnapshot, TerminalError>;
 
     /**
@@ -254,7 +254,12 @@ export interface ShellCandidate {
   args?: string[];
 }
 
-export interface TerminalStartInput extends TerminalOpenInput {
+/** Server-owned jobs can run directly in a PTY without an interactive shell startup. */
+export interface TerminalCommandOpenInput extends TerminalOpenInput {
+  readonly command?: ShellCandidate;
+}
+
+export interface TerminalStartInput extends TerminalCommandOpenInput {
   cols: number;
   rows: number;
 }
@@ -2230,7 +2235,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
       increment(terminalSessionsTotal, { lifecycle: eventType }).pipe(
         Effect.andThen(
           Effect.gen(function* () {
-            const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
+            const shellCandidates = input.command
+              ? [input.command]
+              : resolveShellCandidates(shellResolver, platform, baseEnv);
             const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv);
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
@@ -2525,7 +2532,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     }).pipe(Effect.ignoreCause({ log: true })),
   );
 
-  const openLocked = Effect.fn("terminal.openLocked")(function* (input: TerminalOpenInput) {
+  const openLocked = Effect.fn("terminal.openLocked")(function* (input: TerminalCommandOpenInput) {
     const terminalId = input.terminalId;
     yield* assertValidCwd(input.cwd);
 
@@ -2580,6 +2587,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           cols,
           rows,
           ...(input.env ? { env: input.env } : {}),
+          ...(input.command ? { command: input.command } : {}),
         },
         "started",
       );
@@ -2632,6 +2640,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           cols: targetCols,
           rows: targetRows,
           ...(input.env ? { env: input.env } : {}),
+          ...(input.command ? { command: input.command } : {}),
         },
         "started",
       );
