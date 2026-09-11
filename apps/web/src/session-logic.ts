@@ -1,4 +1,5 @@
 import { requestKindFromRequestType } from "@t3tools/client-runtime/pending-requests";
+import { foldUserInputActivities } from "@t3tools/client-runtime/work-log/user-input";
 import {
   ApprovalRequestId,
   ProviderApprovalOption,
@@ -722,7 +723,7 @@ export function deriveWorkLogEntries(
 ): WorkLogEntry[] {
   const ordered = collapseWatchActivities([...activities].toSorted(compareActivitiesByOrder));
   const entries: DerivedWorkLogEntry[] = [];
-  for (const activity of ordered) {
+  for (const activity of foldUserInputActivities(ordered)) {
     if (activity.kind === "tool.started") continue;
     // Agent task.started rows are CTA seeds: they carry the true spawn turn,
     // which is the batch key (completions of background subagents arrive
@@ -1994,15 +1995,26 @@ export function deriveTimelineEntriesWithState(
     const entries = replaceStreamingTimelineMessages(messages, previous);
     if (entries !== null) return { messages, proposedPlans, turnPlans, workEntries, entries };
   }
+  const foldedAnswerMessageIds = new Set(
+    workEntries.flatMap((entry) =>
+      entry.questionAnswer ? [`async-answer:${entry.questionAnswer.requestId}`] : [],
+    ),
+  );
+  const showMessage = (message: ChatMessage) =>
+    message.role !== "user" || !foldedAnswerMessageIds.has(message.id);
   const canAppend =
     previous !== null &&
+    !previous.entries.some((entry) => entry.kind === "message" && !showMessage(entry.message)) &&
     hasExactArrayPrefix(previous.messages, messages) &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
     hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
     hasExactArrayPrefix(previous.workEntries, workEntries);
 
   if (canAppend) {
-    const messageRows = messages.slice(previous.messages.length).map(timelineEntryFromMessage);
+    const messageRows = messages
+      .slice(previous.messages.length)
+      .filter(showMessage)
+      .map(timelineEntryFromMessage);
     const proposedPlanRows = proposedPlans
       .slice(previous.proposedPlans.length)
       .map(timelineEntryFromProposedPlan);
@@ -2020,7 +2032,7 @@ export function deriveTimelineEntriesWithState(
     };
   }
 
-  const messageRows = messages.map(timelineEntryFromMessage);
+  const messageRows = messages.filter(showMessage).map(timelineEntryFromMessage);
   const proposedPlanRows = proposedPlans.map(timelineEntryFromProposedPlan);
   const turnPlanRows = turnPlans.map(timelineEntryFromTurnPlan);
   const workRows = workEntries.map(timelineEntryFromWork);
