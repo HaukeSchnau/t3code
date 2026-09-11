@@ -28,17 +28,25 @@ export async function isSeparateProject(cwd: string, stateDirectory?: string): P
   }
 }
 
+export const SeparateWorkspaceMetadata = Schema.Struct({
+  id: Schema.optional(Schema.NullOr(Schema.String)),
+  sourceRevision: Schema.optional(Schema.NullOr(Schema.String)),
+  profile: Schema.optional(Schema.Literals(["familiar", "minimal"])),
+  layout: Schema.optional(Schema.Literals(["repository", "directory"])),
+  ready: Schema.optional(Schema.Boolean),
+  repositories: Schema.optional(
+    Schema.Array(
+      Schema.Struct({ path: Schema.String, sourceRevision: Schema.NullOr(Schema.String) }),
+    ),
+  ),
+});
+
 const Registration = Schema.fromJsonString(
   Schema.Struct({
     root: Schema.String,
     home: Schema.optional(Schema.String),
     workspace: Schema.optional(
-      Schema.Struct({
-        visibleRoot: Schema.String,
-        id: Schema.optional(Schema.NullOr(Schema.String)),
-        sourceRevision: Schema.optional(Schema.String),
-        profile: Schema.optional(Schema.Literals(["familiar", "minimal"])),
-      }),
+      Schema.Struct({ ...SeparateWorkspaceMetadata.fields, visibleRoot: Schema.String }),
     ),
     projectId: Schema.optional(Schema.NullOr(Schema.String)),
   }),
@@ -76,7 +84,7 @@ export async function readSeparateProject(cwd: string, stateDirectory?: string) 
 
 export async function projectProviderCwd(cwd: string, stateDirectory?: string) {
   const record = await readSeparateProject(cwd, stateDirectory);
-  return record?.workspace
+  return record?.workspace?.visibleRoot
     ? NodePath.join(
         record.workspace.visibleRoot,
         NodePath.relative(record.root, record.canonicalCwd),
@@ -93,7 +101,7 @@ export async function projectSetupPaths(
   const record = await readSeparateProject(cwd, stateDirectory);
   const journalPath = ".local/state/t3/setup-executions";
   return {
-    cwd: record?.workspace
+    cwd: record?.workspace?.visibleRoot
       ? NodePath.join(
           record.workspace.visibleRoot,
           NodePath.relative(record.root, record.canonicalCwd),

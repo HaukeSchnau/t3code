@@ -13,9 +13,15 @@ archive query to find retained workspaces. Merely reading history does not wake 
 Settlement never merges or deletes files, and preview leases remain independent.
 Explicit deletion refuses workspaces still referenced by active or running threads.
 
-On Linux with `T3CODE_EXECUTION_LAUNCHER`, automatic repository workspaces use the
-private infra runtime's independent jj checkout and execution environment. Git sources
-and shared jj workspaces are supported. Other hosts retain detached Git worktrees,
+On Linux with `T3CODE_EXECUTION_LAUNCHER`, automatic workspaces use the
+private infra runtime's independent checkouts and execution environment. Git sources,
+shared jj workspaces and directory projects are supported. The launcher discovers nested
+repository boundaries and returns their independent checkout revisions; T3 retains the
+project directory as the primary root and registers the repositories as supporting roots.
+Ordinary directory files use a lazy view with private writes, so untouched files can see
+later source changes. Retained mounts outlive providers; deletion must go through the
+launcher, which checks source dependencies before unmounting or removing private files.
+Other hosts retain detached Git worktrees,
 shared jj workspaces and guarded directory copies. The existing project checkout and
 configured thread defaults remain available. Advanced setup offers Familiar, which
 retains global instructions and skills, or Minimal, which starts with project guidance.
