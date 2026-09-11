@@ -125,7 +125,7 @@ choice is remembered per browser. VS Code, VSCodium, Cursor, Zed and the other
 VS Code forks with a remote SSH extension are supported.
 
 The link uses a hostname the server advertises for itself. If your server uses a
-non-default SSH port or user, set `T3CODE_REMOTE_OPEN_SSH_HOST` in the server's
+non-default SSH port or user, set `T3CODE_REMOTE_OPEN_HOST` in the server's
 environment to an alias from your `~/.ssh/config`, and the editor resolves the
 port, user and key from there. Your SSH key must be authorized on the server.
 

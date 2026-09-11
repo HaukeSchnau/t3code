@@ -51,12 +51,10 @@ const netLayer = (input: { readonly ipv4: boolean; readonly ipv6: boolean }) =>
   });
 
 /** Test server config with the remote-open alias applied on top. */
-const serverConfigLayer = (remoteOpenSshHost: string | undefined) =>
+const serverConfigLayer = (remoteOpenHost: string | undefined) =>
   Layer.effect(
     ServerConfig.ServerConfig,
-    Effect.map(ServerConfig.ServerConfig, (base) =>
-      ServerConfig.make({ ...base, remoteOpenSshHost }),
-    ),
+    Effect.map(ServerConfig.ServerConfig, (base) => ServerConfig.make({ ...base, remoteOpenHost })),
   ).pipe(
     Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "remote-open-targets-" })),
     Layer.provide(NodeServices.layer),
@@ -66,7 +64,7 @@ const resolveTargets = (input: {
   readonly sshd: { readonly ipv4: boolean; readonly ipv6: boolean };
   readonly tailscale: { readonly exitCode: number; readonly stdout: string };
   readonly hostname: string;
-  readonly remoteOpenSshHost?: string;
+  readonly remoteOpenHost?: string;
 }) =>
   Effect.flatMap(RemoteOpenTargets.RemoteOpenTargets, (service) => service.resolveTargets()).pipe(
     Effect.provideService(HostProcessHostname, input.hostname),
@@ -76,7 +74,7 @@ const resolveTargets = (input: {
           Layer.mergeAll(
             netLayer(input.sshd),
             spawnerLayer(input.tailscale),
-            serverConfigLayer(input.remoteOpenSshHost),
+            serverConfigLayer(input.remoteOpenHost),
           ),
         ),
       ),
@@ -104,7 +102,7 @@ describe("RemoteOpenTargets", () => {
         sshd: { ipv4: false, ipv6: false },
         tailscale: TAILSCALE_UP,
         hostname: "bb-1",
-        remoteOpenSshHost: "bb-1",
+        remoteOpenHost: "bb-1",
       });
       expect(targets).toEqual([{ kind: "configured", host: "bb-1" }]);
     }),
