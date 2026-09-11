@@ -19,7 +19,7 @@ in browsers. On the fleet:
 
 ## Patch
 
-- `T3CODE_REMOTE_OPEN_SSH_HOST` (server env) advertises one target of kind
+- `T3CODE_REMOTE_OPEN_HOST` (server env) advertises one target of kind
   `configured` and skips probing. Infra sets it to the host's managed ssh alias,
   which `lib/managed-hosts.nix` renders into every workstation's ssh config with
   the right user, port and key.
