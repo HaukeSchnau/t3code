@@ -864,7 +864,7 @@ layer("ThreadWorkspaceService", (it) => {
           ],
         );
         const retried = yield* service.prepareWorkspace(request);
-      assert.sameDeepMembers([...retried.workspace.roots], [...first.workspace.roots]);
+        assert.sameDeepMembers([...retried.workspace.roots], [...first.workspace.roots]);
         assert.equal(calls.length, 1);
         yield* service.deleteWorkspace({ workspaceId: first.workspace.id });
         assert.deepEqual(calls[1]?.args, ["retire", first.primaryCwd, "--remove-checkout"]);
