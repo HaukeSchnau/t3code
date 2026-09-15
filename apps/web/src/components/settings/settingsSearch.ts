@@ -430,6 +430,20 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["xcode android studio sdk avd runtime"],
   },
   {
+    id: "agent-browser-access",
+    title: "Agent browser access",
+    to: "/settings/integrations",
+    targetId: "browser",
+    searchTerms: ["allow agent preview tools MCP sessions"],
+  },
+  {
+    id: "browser-auto-show-floating-preview",
+    title: "Auto-show floating preview",
+    to: "/settings/integrations",
+    targetId: "browser",
+    searchTerms: ["agent preview floating player visibility"],
+  },
+  {
     id: "browser-profiles",
     title: "Browser profiles",
     to: "/settings/integrations",

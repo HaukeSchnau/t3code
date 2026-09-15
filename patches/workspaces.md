@@ -25,7 +25,7 @@ Other hosts retain detached Git worktrees,
 shared jj workspaces and guarded directory copies. The existing project checkout and
 configured thread defaults remain available. Advanced setup offers Familiar, which
 retains global instructions and skills, or Minimal, which starts with project guidance.
-Familiar is the default for a new isolated workspace. Codex and Claude/Claudex currently
+Familiar is the default for a new isolated workspace. Codex and Claude currently
 support isolated execution; other providers fail explicitly at session startup.
 
 The existing workspace projection and service own preparation, membership and deletion.

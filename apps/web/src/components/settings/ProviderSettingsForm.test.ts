@@ -35,19 +35,6 @@ describe("ProviderSettingsForm helpers", () => {
     });
   });
 
-  it("renders Claude built-in model discovery as a switch", () => {
-    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
-    expect(claude).toBeDefined();
-
-    expect(
-      deriveProviderSettingsFields(claude!).find((field) => field.key === "includeBuiltInModels"),
-    ).toMatchObject({
-      label: "Include built-in models",
-      control: "switch",
-      defaultBooleanValue: true,
-    });
-  });
-
   it("derives a select control with its choices for the Antigravity sign-in method", () => {
     const antigravity = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")];
     expect(antigravity).toBeDefined();
@@ -78,7 +65,6 @@ describe("ProviderSettingsForm helpers", () => {
     expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
       "binaryPath",
       "homePath",
-      "includeBuiltInModels",
       "autoCompactWindow",
       "launchArgs",
     ]);

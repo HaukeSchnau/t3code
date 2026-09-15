@@ -15,7 +15,7 @@ options, runtime mode, and interaction mode.
 Provider and model discovery lives in `t3 thread models`. That command returns
 curated choices with provider instance ids, model slugs, and compact reasoning
 metadata. Those values map to `--provider-instance`, `--model`, and `--option`
-on `create` and `send`. Agent instructions say not to call this command for
+on `create` and `send`. The command is not needed for
 ordinary child threads.
 Hidden orchestration models such as small, stale, or internal models are omitted
 from explicit selection. Existing threads may still inherit their current model

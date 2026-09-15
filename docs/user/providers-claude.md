@@ -9,20 +9,6 @@ shared provider settings.
 Use a separate Claude config directory for each account. This also works for named
 presets that need different Claude settings or a router connection.
 
-## Claudex in this fork
-
-This fork includes an always-visible `Claudex` provider profile. It runs the host-provided
-`claudex` executable through the normal Claude driver, uses its own orange X icon, and offers only
-`gpt-5.6-sol` by default. Native Claude keeps the standard Claude icon.
-
-Claudex shares the normal Claude configuration and skills unless customized in Settings, but T3
-Code keeps its resumable sessions separate from first-party Claude. It can be disabled or edited,
-but it cannot be deleted. The machine running the T3 Code server must provide the executable and
-its local proxy service.
-
-For other routed Claude profiles, turn off **Include built-in models** when only the custom model
-IDs configured on that instance should appear in model pickers.
-
 ## I Only Use One Claude Account
 
 Use the default provider and log in normally:

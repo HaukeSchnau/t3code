@@ -26,10 +26,6 @@ import {
   type ServerProviderState,
 } from "@t3tools/contracts";
 import {
-  isClaudexInstance,
-  withBundledProviderInstances,
-} from "@t3tools/shared/bundledProviderInstances";
-import {
   normalizeProviderAccentColor,
   resolveProviderInstanceDisplayName,
 } from "@t3tools/client-runtime/state/provider-instance-display";
@@ -93,7 +89,6 @@ function shouldShowInstanceBadge(
   entry: ProviderInstanceEntry,
   entries: Iterable<ProviderInstanceEntry>,
 ): boolean {
-  if (isClaudexInstance(entry.instanceId)) return false;
   if (entry.accentColor) return true;
   if (
     entry.driverKind === "codex" &&
@@ -104,11 +99,7 @@ function shouldShowInstanceBadge(
   }
   let sharedDriverCount = 0;
   for (const candidate of entries) {
-    if (
-      !isClaudexInstance(candidate.instanceId) &&
-      candidate.driverKind === entry.driverKind &&
-      ++sharedDriverCount > 1
-    ) {
+    if (candidate.driverKind === entry.driverKind && ++sharedDriverCount > 1) {
       return true;
     }
   }
@@ -206,11 +197,10 @@ export function applyProviderInstanceSettings(
   const legacyProviders = settings.providers as Readonly<
     Record<string, { readonly enabled?: boolean } | undefined>
   >;
-  const effectiveProviderInstances = withBundledProviderInstances(settings.providerInstances);
 
   return entries.map((entry) => {
-    const explicitInstance = Object.hasOwn(effectiveProviderInstances, entry.instanceId)
-      ? effectiveProviderInstances[entry.instanceId]
+    const explicitInstance = Object.hasOwn(settings.providerInstances, entry.instanceId)
+      ? settings.providerInstances[entry.instanceId]
       : undefined;
     const legacyProvider = Object.hasOwn(legacyProviders, entry.driverKind)
       ? legacyProviders[entry.driverKind]

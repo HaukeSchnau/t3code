@@ -1,9 +1,7 @@
-import { ProviderDriverKind, type ProviderInstanceId } from "@t3tools/contracts";
-import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import {
   AntigravityIcon,
   ClaudeAI,
-  ClaudexIcon,
   CursorIcon,
   GrokIcon,
   Icon,
@@ -19,13 +17,6 @@ export const PROVIDER_ICON_BY_PROVIDER: Partial<Record<ProviderDriverKind, Icon>
   [ProviderDriverKind.make("grok")]: GrokIcon,
   [ProviderDriverKind.make("antigravity")]: AntigravityIcon,
 };
-
-export function getProviderInstanceIcon(
-  instanceId: ProviderInstanceId,
-  driverKind: ProviderDriverKind,
-): Icon | undefined {
-  return isClaudexInstance(instanceId) ? ClaudexIcon : PROVIDER_ICON_BY_PROVIDER[driverKind];
-}
 
 export type ModelEsque = {
   slug: string;

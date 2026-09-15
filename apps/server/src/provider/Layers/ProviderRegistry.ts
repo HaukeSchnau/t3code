@@ -29,7 +29,6 @@ import {
   type ServerProvider,
   type ServerProviderUpdateState,
 } from "@t3tools/contracts";
-import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
@@ -221,9 +220,7 @@ export const mergeProviderSnapshot = (
   return {
     ...(savedAccount?.status === "ready" ? nextWithoutMessage : nextProvider),
     ...savedAccount,
-    models: isClaudexInstance(nextProvider.instanceId)
-      ? nextProvider.models
-      : mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
+    models: mergeProviderModels(nextProvider, previousProvider.models, nextProvider.models),
     ...(nextProvider.workspaceSnapshots !== undefined
       ? { workspaceSnapshots: nextProvider.workspaceSnapshots }
       : !composerCatalogChanged && previousProvider.workspaceSnapshots !== undefined

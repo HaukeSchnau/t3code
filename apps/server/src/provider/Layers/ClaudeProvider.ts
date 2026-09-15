@@ -2,7 +2,6 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ServerProviderSlashCommand,
-  type ServerProviderModel,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -52,17 +51,6 @@ import {
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-
-function configuredClaudeModels(
-  claudeSettings: ClaudeSettings,
-  builtInModels: ReadonlyArray<ServerProviderModel>,
-): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(
-    claudeSettings.includeBuiltInModels ? builtInModels : [],
-    claudeSettings.customModels,
-    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
-}
 
 function extractAuthBoolean(value: unknown): boolean | undefined {
   if (globalThis.Array.isArray(value)) {
@@ -488,7 +476,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   modelCatalog: ClaudeModelCatalog = BUNDLED_CLAUDE_MODEL_CATALOG,
   /** Shared with the adapter so turn events reuse the scoped-bucket names this probe saw. */
   scopedLimitNames?: Ref.Ref<ClaudeScopedLimitNames>,
-  options?: { readonly requireAuthenticatedStatusProbe?: boolean },
 ): Effect.fn.Return<
   ServerProviderDraft,
   never,
@@ -496,9 +483,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
 > {
   const resolvedEnvironment = environment ?? process.env;
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const allModels = configuredClaudeModels(
-    claudeSettings,
+  const allModels = providerModelsFromSettings(
     modelCatalog.models.map((entry) => entry.model),
+    claudeSettings.customModels,
+    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
 
   if (!claudeSettings.enabled) {
@@ -585,36 +573,12 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     });
   }
 
-  const models = configuredClaudeModels(
-    claudeSettings,
+  const models = providerModelsFromSettings(
     resolveClaudeModelsForVersion(modelCatalog, parsedVersion),
+    claudeSettings.customModels,
+    DEFAULT_CLAUDE_MODEL_CAPABILITIES,
   );
-  const versionUpgradeMessage = claudeSettings.includeBuiltInModels
-    ? formatClaudeVersionUpgradeMessage(modelCatalog, parsedVersion)
-    : undefined;
-
-  const authenticated = options?.requireAuthenticatedStatusProbe
-    ? yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment)
-    : undefined;
-
-  if (options?.requireAuthenticatedStatusProbe && authenticated !== true) {
-    return buildServerProvider({
-      presentation: CLAUDE_PRESENTATION,
-      enabled: claudeSettings.enabled,
-      checkedAt,
-      models,
-      probe: {
-        installed: true,
-        version: parsedVersion,
-        status: "warning",
-        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
-        message:
-          authenticated === false
-            ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
-            : `Could not verify authentication with \`${claudeSettings.binaryPath} auth status\`.`,
-      },
-    });
-  }
+  const versionUpgradeMessage = formatClaudeVersionUpgradeMessage(modelCatalog, parsedVersion);
 
   const capabilities = resolveCapabilities
     ? yield* resolveCapabilities(claudeSettings).pipe(Effect.orElseSucceed(() => undefined))
@@ -623,8 +587,8 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const slashCommands = [COMPACT_SLASH_COMMAND, ...(capabilities?.slashCommands ?? [])];
   const dedupedSlashCommands = dedupeSlashCommands(slashCommands);
 
-  if (!capabilities && authenticated !== true) {
-    const fallbackAuthenticated = yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment);
+  if (!capabilities) {
+    const authenticated = yield* probeClaudeAuthStatus(claudeSettings, resolvedEnvironment);
     return buildServerProvider({
       presentation: CLAUDE_PRESENTATION,
       enabled: claudeSettings.enabled,
@@ -636,25 +600,21 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
         installed: true,
         version: parsedVersion,
         status: "warning",
-        auth: {
-          status:
-            (authenticated ?? fallbackAuthenticated) === false ? "unauthenticated" : "unknown",
-        },
+        auth: { status: authenticated === false ? "unauthenticated" : "unknown" },
         message:
-          (authenticated ?? fallbackAuthenticated) === false
+          authenticated === false
             ? `Claude is not authenticated. Run \`${claudeSettings.binaryPath} auth login\` to authenticate.`
             : "Could not verify Claude authentication status from initialization result.",
       },
     });
   }
 
-  const authMetadata = capabilities
-    ? (claudeAuthMetadata({
-        subscriptionType: capabilities.subscriptionType,
-        authMethod: capabilities.tokenSource,
-      }) ?? apiProviderAuthMetadata(capabilities.apiProvider))
-    : undefined;
-  const usageLimits = !capabilities?.usage
+  const authMetadata =
+    claudeAuthMetadata({
+      subscriptionType: capabilities.subscriptionType,
+      authMethod: capabilities.tokenSource,
+    }) ?? apiProviderAuthMetadata(capabilities.apiProvider);
+  const usageLimits = !capabilities.usage
     ? makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" })
     : scopedLimitNames
       ? yield* recordClaudeUsageResponse(scopedLimitNames, {
@@ -675,7 +635,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
       status: "ready",
       auth: {
         status: "authenticated",
-        ...(capabilities?.email ? { email: capabilities.email } : {}),
+        ...(capabilities.email ? { email: capabilities.email } : {}),
         ...(authMetadata ? authMetadata : {}),
       },
       ...(versionUpgradeMessage ? { message: versionUpgradeMessage } : {}),
@@ -692,9 +652,10 @@ export const makePendingClaudeProvider = (
 ): Effect.Effect<ServerProviderDraft> =>
   Effect.gen(function* () {
     const checkedAt = yield* nowIso;
-    const models = configuredClaudeModels(
-      claudeSettings,
+    const models = providerModelsFromSettings(
       modelCatalog.models.map((entry) => entry.model),
+      claudeSettings.customModels,
+      DEFAULT_CLAUDE_MODEL_CAPABILITIES,
     );
 
     if (!claudeSettings.enabled) {

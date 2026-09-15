@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-09-04T19:10:48Z",
+  "updatedAt": "2026-09-12T00:41:55Z",
   "currentModels": {
     "codex": [
       "gpt-6-astra",
@@ -16,7 +16,7 @@
   "providers": {
     "claudeAgent": {
       "defaults": {
-        "chat": "claude-sonnet-5"
+        "chat": "claude-fable-5-1"
       },
       "profiles": {
         "fable-5": {
@@ -67,12 +67,12 @@
                 "options": [
                   {
                     "id": "200k",
-                    "label": "200k",
-                    "isDefault": true
+                    "label": "200k"
                   },
                   {
                     "id": "1m",
-                    "label": "1M"
+                    "label": "1M",
+                    "isDefault": true
                   }
                 ]
               }
@@ -149,12 +149,12 @@
                 "options": [
                   {
                     "id": "200k",
-                    "label": "200k",
-                    "isDefault": true
+                    "label": "200k"
                   },
                   {
                     "id": "1m",
-                    "label": "1M"
+                    "label": "1M",
+                    "isDefault": true
                   }
                 ]
               }
@@ -333,12 +333,12 @@
                 "options": [
                   {
                     "id": "200k",
-                    "label": "200k",
-                    "isDefault": true
+                    "label": "200k"
                   },
                   {
                     "id": "1m",
-                    "label": "1M"
+                    "label": "1M",
+                    "isDefault": true
                   }
                 ]
               }

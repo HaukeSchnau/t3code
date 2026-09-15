@@ -16,6 +16,7 @@ import {
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
   DEFAULT_BROWSER_PROFILE_ID,
+  DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
   DEFAULT_BROWSER_LINK_TARGET,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_VIEWPORT,
@@ -852,6 +853,60 @@ function BrowserDefaultProfileSetting({ disabled }: { readonly disabled: boolean
   );
 }
 
+function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
+  const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
+  const updateSettings = useUpdatePrimarySettings();
+
+  return (
+    <SettingsRow
+      {...searchableSetting("browser-auto-show-floating-preview")}
+      description="Show the floating preview when an agent opens a browser or device unless the agent says otherwise."
+      resetAction={
+        !disabled && autoShow !== DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW ? (
+          <SettingResetButton
+            label="auto-show floating preview"
+            onClick={() =>
+              updateSettings({
+                browserAutoShowFloatingPreview: DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
+              })
+            }
+          />
+        ) : null
+      }
+      control={
+        <Switch
+          disabled={disabled}
+          checked={autoShow}
+          onCheckedChange={(checked) =>
+            updateSettings({ browserAutoShowFloatingPreview: Boolean(checked) })
+          }
+          aria-label="Auto-show floating preview"
+        />
+      }
+    />
+  );
+}
+
+function AgentBrowserAccessSetting() {
+  const environment = usePrimaryEnvironment();
+  const updateSettings = useUpdatePrimarySettings();
+  return (
+    <SettingsRow
+      {...searchableSetting("agent-browser-access")}
+      description="Allow agents to use T3 Code's preview browser. Changes apply to new provider sessions."
+      control={
+        <Switch
+          checked={environment?.serverConfig?.settings.enableAgentBrowserAccess ?? false}
+          disabled={environment?.connection.phase !== "connected"}
+          onCheckedChange={(checked) =>
+            updateSettings({ enableAgentBrowserAccess: Boolean(checked) })
+          }
+        />
+      }
+    />
+  );
+}
+
 function DeviceIntegrationSettings() {
   const primaryEnvironment = usePrimaryEnvironment();
   const { environments } = useEnvironments();
@@ -1033,12 +1088,14 @@ export function IntegrationsSettingsPanel() {
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
       <BrowserLinkTargetSetting disabled={previewDefaultsDisabled} />
+      <BrowserAutoShowFloatingPreviewSetting disabled={previewDefaultsDisabled} />
     </>
   );
 
   return (
     <SettingsPageContainer>
       <SettingsSection id="browser" title="Browser">
+        <AgentBrowserAccessSetting />
         {previewDefaultsDisabled ? (
           <SettingsUnavailableGroup message="Only available in the desktop app.">
             {previewDefaults}

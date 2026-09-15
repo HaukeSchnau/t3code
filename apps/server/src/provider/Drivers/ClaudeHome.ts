@@ -38,13 +38,9 @@ export const makeClaudeEnvironment = Effect.fn("makeClaudeEnvironment")(function
 });
 
 export const makeClaudeContinuationGroupKey = Effect.fn("makeClaudeContinuationGroupKey")(
-  function* (
-    config: Pick<ClaudeSettings, "homePath">,
-    scope?: string,
-  ): Effect.fn.Return<string, never, Path.Path> {
+  function* (config: Pick<ClaudeSettings, "homePath">): Effect.fn.Return<string, never, Path.Path> {
     const resolvedHomePath = yield* resolveClaudeHomePath(config);
-    const homeKey = `claude:home:${resolvedHomePath}`;
-    return scope ? `${homeKey}:${scope}` : homeKey;
+    return `claude:home:${resolvedHomePath}`;
   },
 );
 
