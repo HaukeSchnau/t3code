@@ -628,8 +628,8 @@ const McpTransportLive = McpServer.layerHttp({
   protocols: [McpProtocol.v2025_06_18],
 }).pipe(Layer.provide(McpAuthMiddlewareLive));
 
-// Keep the toolkit implementations available for focused tests and a possible
-// future rollout, but do not register agent-facing MCP tools in this fork.
-export const McpToolkitRegistrationLive = Layer.empty;
-
-export const layer = McpToolkitRegistrationLive.pipe(Layer.provideMerge(McpTransportLive));
+export const layer = Layer.mergeAll(
+  PreviewToolkitRegistrationLive,
+  PullRequestsToolkitRegistrationLive,
+  DeviceToolkitRegistrationLive,
+).pipe(Layer.provideMerge(McpTransportLive));

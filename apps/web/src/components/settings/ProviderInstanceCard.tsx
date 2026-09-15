@@ -436,10 +436,7 @@ export function ProviderInstanceCard({
       ? (liveProvider.auth.label ?? liveProvider.auth.type ?? null)
       : null;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
-  const versionAdvisory = getProviderVersionAdvisoryPresentation(
-    liveProvider?.versionAdvisory,
-    instanceId,
-  );
+  const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
   const updateCommand = versionAdvisory?.updateCommand ?? null;
   const FallbackIconComponent = driverOption?.icon;
   const displayName =

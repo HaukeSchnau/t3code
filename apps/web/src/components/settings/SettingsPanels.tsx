@@ -12,10 +12,6 @@ import {
   type ScopedThreadRef,
   type SidebarProjectGroupingMode,
 } from "@t3tools/contracts";
-import {
-  isBundledProviderInstance,
-  withBundledProviderInstances,
-} from "@t3tools/shared/bundledProviderInstances";
 import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import {
   isAtomCommandInterrupted,

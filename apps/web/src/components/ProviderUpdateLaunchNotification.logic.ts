@@ -11,7 +11,6 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { isExternallyManagedProviderInstance } from "@t3tools/shared/bundledProviderInstances";
 
 export type ProviderUpdateCandidate = ServerProvider & {
   readonly versionAdvisory: NonNullable<ServerProvider["versionAdvisory"]> & {
@@ -142,7 +141,6 @@ export function isProviderUpdateCandidate(
 ): provider is ProviderUpdateCandidate {
   return (
     provider.enabled &&
-    !isExternallyManagedProviderInstance(provider.instanceId) &&
     provider.versionAdvisory?.status === "behind_latest" &&
     provider.versionAdvisory.latestVersion !== null
   );

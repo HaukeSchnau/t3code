@@ -13,7 +13,6 @@
  * @module provider/Drivers/ClaudeDriver
  */
 import { ClaudeSettings, ProviderDriverKind } from "@t3tools/contracts";
-import { isClaudexInstance } from "@t3tools/shared/bundledProviderInstances";
 import * as Cache from "effect/Cache";
 import * as Duration from "effect/Duration";
 import * as Crypto from "effect/Crypto";
@@ -46,7 +45,6 @@ import {
   type ProviderDriver,
   type ProviderInstance,
 } from "../ProviderDriver.ts";
-import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
@@ -145,32 +143,14 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           Effect.provideService(Path.Path, path),
         ),
       );
-      // Claudex deliberately shares Claude's config and skills, but not its
-      // resumable sessions or account label.
-      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(
-        effectiveConfig,
-        isClaudexInstance(instanceId) ? "claudex" : undefined,
-      );
-      const stampIdentity = (snapshot: ServerProviderDraft) => {
-        const stamped = withInstanceIdentity({
-          instanceId,
-          driverKind: DRIVER_KIND,
-          displayName,
-          accentColor,
-          continuationGroupKey,
-        })(snapshot);
-        if (isClaudexInstance(instanceId) && stamped.auth.status === "authenticated") {
-          return { ...stamped, auth: { ...stamped.auth, type: "proxy", label: "CLIProxyAPI" } };
-        }
-        if (isClaudexInstance(instanceId) && stamped.auth.status === "unauthenticated") {
-          return {
-            ...stamped,
-            message:
-              "CLIProxyAPI has no Codex account for gpt-5.6-sol. Run `cliproxyapi-auth codex-device` on this host.",
-          };
-        }
-        return stamped;
-      };
+      const continuationGroupKey = yield* makeClaudeContinuationGroupKey(effectiveConfig);
+      const stampIdentity = withInstanceIdentity({
+        instanceId,
+        driverKind: DRIVER_KIND,
+        displayName,
+        accentColor,
+        continuationGroupKey,
+      });
 
       // One per instance: the status probe writes the model-scoped bucket
       // names it saw, the adapter reads them to place turn-driven events.
@@ -215,7 +195,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
                 cwd,
                 resolveClaudeModelCatalog(manifest),
                 scopedLimitNames,
-                { requireAuthenticatedStatusProbe: isClaudexInstance(instanceId) },
               ),
             ),
             Effect.map(stampIdentity),
@@ -241,17 +220,15 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
           ),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
-          isClaudexInstance(instanceId)
-            ? publishSnapshot(snapshot)
-            : resolveMaintenance().pipe(
-                Effect.flatMap((maintenanceCapabilities) =>
-                  enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
-                    enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-                  }),
-                ),
-                Effect.provideService(HttpClient.HttpClient, httpClient),
-                Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
-              ),
+          resolveMaintenance().pipe(
+            Effect.flatMap((maintenanceCapabilities) =>
+              enrichProviderSnapshotWithVersionAdvisory(snapshot, maintenanceCapabilities, {
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+              }),
+            ),
+            Effect.provideService(HttpClient.HttpClient, httpClient),
+            Effect.flatMap((enrichedSnapshot) => publishSnapshot(enrichedSnapshot)),
+          ),
       }).pipe(
         Effect.mapError(
           (cause) =>

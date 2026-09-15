@@ -753,27 +753,6 @@ describe("T3 browser developer instructions", () => {
   });
 });
 
-describe("T3 orchestration developer instructions", () => {
-  it("advertises the CLI without advertising disabled MCP tools", () => {
-    for (const instructions of [
-      codexDefaultModeDeveloperInstructions,
-      codexPlanModeDeveloperInstructions,
-    ]) {
-      NodeAssert.doesNotMatch(instructions, /Desktop-style thread orchestration tools/);
-      NodeAssert.doesNotMatch(instructions, /create_thread/);
-      NodeAssert.doesNotMatch(instructions, /send_message_to_thread/);
-      NodeAssert.match(instructions, /t3 thread --help/);
-      NodeAssert.match(instructions, /T3CODE_THREAD_ID/);
-      NodeAssert.match(instructions, /Source request/);
-      NodeAssert.match(instructions, /Coordinator context/);
-      NodeAssert.match(instructions, /t3 thread send.*delivers a message immediately/);
-      NodeAssert.match(instructions, /t3 thread wait create/);
-      NodeAssert.match(instructions, /Do not poll workers for routine progress/);
-      NodeAssert.match(instructions, /t3 thread watch create/);
-    }
-  });
-});
-
 describe("hasConfiguredMcpServer", () => {
   it("detects inline Codex MCP configuration arguments", () => {
     NodeAssert.equal(hasConfiguredMcpServer(undefined), false);

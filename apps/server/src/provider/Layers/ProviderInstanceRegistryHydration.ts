@@ -47,7 +47,6 @@ import {
   type ProviderInstanceConfigMap,
   ServerSettings,
 } from "@t3tools/contracts";
-import { withBundledProviderInstances } from "@t3tools/shared/bundledProviderInstances";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -79,7 +78,7 @@ export const deriveProviderInstanceConfigMap = (
   settings: ServerSettings,
 ): ProviderInstanceConfigMap => {
   const merged: Record<string, ProviderInstanceConfig> = {
-    ...withBundledProviderInstances(settings.providerInstances),
+    ...settings.providerInstances,
   };
 
   for (const driver of BUILT_IN_DRIVERS) {

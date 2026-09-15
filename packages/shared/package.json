@@ -7,10 +7,6 @@
       "types": "./src/watchActivities.ts",
       "import": "./src/watchActivities.ts"
     },
-    "./bundledProviderInstances": {
-      "types": "./src/bundledProviderInstances.ts",
-      "import": "./src/bundledProviderInstances.ts"
-    },
     "./themePalettes": {
       "types": "./src/themePalettes.ts",
       "import": "./src/themePalettes.ts"

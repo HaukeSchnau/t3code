@@ -1431,46 +1431,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         ]);
       });
 
-      it("uses the exact model catalog for bundled provider instances", () => {
-        const previousProvider = {
-          instanceId: ProviderInstanceId.make("claudex"),
-          driver: ProviderDriverKind.make("claudeAgent"),
-          status: "ready",
-          enabled: true,
-          installed: true,
-          auth: { status: "authenticated" },
-          checkedAt: "2026-04-14T00:00:00.000Z",
-          version: "1.0.0",
-          models: [
-            {
-              slug: "stale-built-in-model",
-              name: "Stale built-in model",
-              isCustom: false,
-              capabilities: createModelCapabilities({ optionDescriptors: [] }),
-            },
-          ],
-          slashCommands: [],
-          skills: [],
-        } as const satisfies ServerProvider;
-        const refreshedProvider = {
-          ...previousProvider,
-          checkedAt: "2026-04-14T00:01:00.000Z",
-          models: [
-            {
-              slug: "gpt-5.6-sol",
-              name: "gpt-5.6-sol",
-              isCustom: true,
-              capabilities: createModelCapabilities({ optionDescriptors: [] }),
-            },
-          ],
-        } satisfies ServerProvider;
-
-        assert.deepStrictEqual(
-          mergeProviderSnapshot(previousProvider, refreshedProvider).models,
-          refreshedProvider.models,
-        );
-      });
-
       it.effect("does not run provider probes during layer construction", () =>
         Effect.gen(function* () {
           const codexDriver = ProviderDriverKind.make("codex");
@@ -2497,15 +2457,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                   grok: { enabled: false },
                   opencode: { enabled: false },
                 },
-                // The bundled Claudex profile is merged into every settings
-                // snapshot. Override it explicitly so this test isolates the
-                // Codex binary-path rebuild it is exercising.
-                providerInstances: {
-                  claudex: {
-                    driver: "claudeAgent",
-                    enabled: false,
-                  },
-                } as unknown as ContractServerSettings["providerInstances"],
               }),
             ),
           );
@@ -2770,7 +2721,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               assert.deepStrictEqual(providers.map((provider) => provider.instanceId).toSorted(), [
                 "antigravity",
                 "claudeAgent",
-                "claudex",
                 "codex",
                 "cursor",
                 "grok",
@@ -3105,19 +3055,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
         }).pipe(Effect.provide(failingSpawnerLayer("spawn claude ENOENT"))),
       );
 
-      it.effect("names the configured Claudex binary when it is missing", () =>
-        Effect.gen(function* () {
-          const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, binaryPath: "claudex" },
-            claudeCapabilities(),
-          );
-          assert.strictEqual(
-            status.message,
-            "Configured Claude Agent CLI (`claudex`) is not installed or not on PATH.",
-          );
-        }).pipe(Effect.provide(failingSpawnerLayer("spawn claudex ENOENT"))),
-      );
-
       it.effect("returns actionable unauthenticated status when Claude reports logged out", () =>
         Effect.gen(function* () {
           const status = yield* checkClaudeProviderStatus(
@@ -3138,64 +3075,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
               if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return { stdout: '{"loggedIn":false}\n', stderr: "", code: 1 };
-              throw new Error(`Unexpected args: ${joined}`);
-            }),
-          ),
-        ),
-      );
-
-      it.effect("requires the Claudex wrapper auth probe even when SDK metadata is available", () =>
-        Effect.gen(function* () {
-          const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, binaryPath: "claudex" },
-            claudeCapabilities({ tokenSource: "ANTHROPIC_AUTH_TOKEN" }),
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            { requireAuthenticatedStatusProbe: true },
-          );
-
-          assert.strictEqual(status.status, "warning");
-          assert.strictEqual(status.auth.status, "unauthenticated");
-          assert.strictEqual(
-            status.message,
-            "Claude is not authenticated. Run `claudex auth login` to authenticate.",
-          );
-        }).pipe(
-          Effect.provide(
-            mockSpawnerLayer((args) => {
-              const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-              if (joined === "auth status")
-                return { stdout: '{"loggedIn":false}\n', stderr: "", code: 0 };
-              throw new Error(`Unexpected args: ${joined}`);
-            }),
-          ),
-        ),
-      );
-
-      it.effect("accepts a healthy Claudex wrapper without SDK account metadata", () =>
-        Effect.gen(function* () {
-          const status = yield* checkClaudeProviderStatus(
-            { ...defaultClaudeSettings, binaryPath: "claudex" },
-            noClaudeCapabilities,
-            undefined,
-            undefined,
-            undefined,
-            undefined,
-            { requireAuthenticatedStatusProbe: true },
-          );
-
-          assert.strictEqual(status.status, "ready");
-          assert.strictEqual(status.auth.status, "authenticated");
-        }).pipe(
-          Effect.provide(
-            mockSpawnerLayer((args) => {
-              const joined = args.join(" ");
-              if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
-              if (joined === "auth status")
-                return { stdout: '{"loggedIn":true}\n', stderr: "", code: 0 };
               throw new Error(`Unexpected args: ${joined}`);
             }),
           ),

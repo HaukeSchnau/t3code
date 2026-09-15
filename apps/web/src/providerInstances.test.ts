@@ -60,25 +60,6 @@ describe("shouldShowInstanceBadge", () => {
     expect(shouldShowInstanceBadge(entries[1]!, entries)).toBe(true);
   });
 
-  it("keeps native Claude unbadged when Claudex has its own icon", () => {
-    const entries = deriveProviderInstanceEntries([
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        displayName: "Claude",
-      }),
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudex",
-        displayName: "Claudex",
-        accentColor: "#f97316",
-      }),
-    ]);
-
-    expect(shouldShowInstanceBadge(entries[0]!, entries)).toBe(false);
-    expect(shouldShowInstanceBadge(entries[1]!, entries)).toBe(false);
-  });
-
   it("still badges Claude instances that share the same driver icon", () => {
     const entries = deriveProviderInstanceEntries([
       provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),

@@ -9,7 +9,8 @@ requests must not leave a stale question blocking the composer.
 ## Design
 
 - Enable Codex App Server's `default_mode_request_user_input` feature for both new and resumed
-  threads.
+  threads. Default-mode instructions prefer this tool for consequential questions that cannot
+  be answered from context; plain-text questions are the fallback when the tool is unavailable.
 - Keep the existing provider-neutral user-input contract and orchestration flow. Codex translates
   `item/tool/requestUserInput` at the adapter boundary instead of adding a Codex-only client API.
 - Preserve the App Server JSON-RPC request id and raw request metadata beside the generated typed

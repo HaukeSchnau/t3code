@@ -138,12 +138,13 @@ reviewable, and document every custom patch and its requirements in `patches/*.m
   patch. Keep local behavior only when a documented fork requirement remains unmet.
 - Use Jujutsu for version-control operations. Keep `origin/main` as the fork branch and merge
   `upstream/main` into it; do not routinely rebase the fork patch stack onto upstream.
-- Before work, fetch `origin` and `upstream` sequentially and inspect `jj status`. If upstream moved,
-  create a dedicated `merge: sync upstream main` change and do not mix feature work into it.
+- Before implementing changes, fetch `origin` and `upstream` sequentially and inspect `jj status`.
+  Synchronize upstream only as a separate maintenance task; an investigation or feature change does
+  not require merging upstream first.
 - Delegate large conflict investigations to a subagent, then review the integrated resolution and
   focused checks before committing.
-- Push completed fork work directly to `main` with `jj-push main`; do not open a PR unless explicitly
-  requested.
+- Push completed fork work directly to `main` with `jj-push main`; include concurrent changes only
+  when their intended destination is clear. Do not open a PR unless explicitly requested.
 
 ## Coupling to `infra`
 
