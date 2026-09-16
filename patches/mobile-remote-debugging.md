@@ -27,9 +27,8 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   - `just mobile-dev-reload`
   - `just mobile-dev-snapshot`
   - `just desktop-macos`
-- Provide a paired schema-v2 Project with repository-owned `.#dev`, `.#dev-web`, and `.#dev-mobile`
-  Nix entry points. Web and Metro are independent Workloads with their own Endpoints; both converge
-  through the shared Preparation action.
+- Keep web and Metro as independent native devenv processes with their own managed endpoints.
+  Both depend on the shared dependency task. `project dev up` and `devenv up` use this definition.
 - Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
   executable so `just desktop-macos` works in non-interactive shells where `vp` is not installed
   globally or present on `PATH`.
@@ -45,11 +44,10 @@ MacBook and `srv-2` environments, while making the dev-client feedback loop repe
   adapter remains repository-owned Expo/Metro. Persistent supervision, local listener allocation,
   manifest validation, Preparation locking, and hostname publication do not belong to either adapter.
   Local invocation receives stable runtime allocations automatically.
-- Export the versioned repository-owned Project descriptor as both `project.json` and `lib.project`, and
-  construct `packages.<system>.projectRuntime` plus its flake apps through the pinned public
-  `lib.projectRuntime.mkDevelopment` interface. Infrastructure evaluates the descriptor and prebuilt
-  runtime from its pinned flake input to infer Preparation, Workloads, Endpoints, and readiness. It must
-  never evaluate the mutable checkout or an ad-hoc worktree during reconciliation.
+- Keep shared requirements and release policy in `project.nix`, consumed independently by the
+  production flake. Generate development metadata from native devenv annotations. Infrastructure
+  prepares pinned bundles or an explicitly refreshed tracked snapshot; routine reconciliation
+  must not evaluate mutable source. There is no source JSON export or custom development flake app.
 - In dev builds, allow the Add Environment screen to prefill and optionally auto-connect from
   `EXPO_PUBLIC_T3CODE_DEV_PAIRING_URL` and `EXPO_PUBLIC_T3CODE_DEV_PAIRING_AUTOCONNECT`.
 - Also support route params for pairing URL and auto-connect so external automation can deep-link

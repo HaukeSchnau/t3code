@@ -7,8 +7,11 @@ The flake exposes:
 
 - `packages.default`: a packaged `t3` server with the bundled web client and production dependencies.
 - `apps.t3`: a runnable `t3` app entrypoint. The flake intentionally has no default app.
-- `packages.projectRuntime` and the `prepare`, `dev`, and `dev-mobile` apps: the repository-owned mobile
-  Development adapter, with lifecycle and allocation supplied by the pinned public Project Runtime.
+- `packages.projectRelease`: the immutable server artifact and its idle-gated release actions.
+- `project.nix`: shared typed requirements, parameters and release policy.
+- `devenv.nix`: native dependency setup, web/server development and Metro, using the same pinned toolchain.
+  Managed previews supply endpoint and per-instance state bindings. Standalone `devenv up` uses `.devenv`
+  state and loopback endpoints. Generated JSON is an artifact, not a source file or manual export step.
 - `devShells.default`: Node 24, pnpm 11.10, JJ, Git, SSH, and native build tooling.
 - `nixosModules.default`: a `services.t3code` systemd service module for NixOS hosts.
 
@@ -72,6 +75,21 @@ workflow above refreshes them automatically. To refresh them directly, use:
 
 The command builds the web, server, and runtime dependency stores concurrently with `lib.fakeHash`, rewrites
 their defaults in `flake.nix`, and verifies `projectReleaseGate`. `just qa-nix-deps` is its non-mutating check.
+
+## Development state
+
+The web process always passes an explicit private `--home-dir`, preserving the existing managed
+`<state>/t3-home` path. It must never inherit the production `T3CODE_HOME`. Web and Metro keep separate
+cache directories and share native dependency preparation. Setup uses `CI=true` so pnpm can repair stale
+node_modules without an interactive prompt. Production keeps its independent flake build and
+`wait-for-idle` pre-deploy action; migrating development must not force restart an active T3 server.
+
+Native setup owns dependency installation. Metro starts the installed Expo binary
+directly so pnpm does not attempt a second install when entering a managed
+workspace. The local `.pnpm-store` cache is ignored and excluded from source
+snapshots.
+Metro listens on the private workspace network so the preview proxy can reach it.
+Its cold-start readiness allowance is 300 seconds.
 
 ## Service behavior
 

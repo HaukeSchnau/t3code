@@ -38,3 +38,10 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Native development environment state.
+.devenv/
+.direnv/
+
+# pnpm may use a checkout-local store in isolated environments.
+.pnpm-store/
