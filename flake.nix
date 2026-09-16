@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-infra-modules = {
-      url = "git+https://git.schnau.dev/schnau/nix-infra-modules.git?rev=7e0a8f95263cff6423576f26982535a408fe116e";
+      url = "github:HaukeSchnau/nix-infra-modules/a78a097b289c9f1b79162b1e2729a27b51eaa8bc";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -28,7 +28,7 @@
       forAllSystems = lib.genAttrs systems;
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
-      projectDescriptor = builtins.fromJSON (builtins.readFile ./project.json);
+      projectDescriptor = nix-infra-modules.lib.projectDefinition { modules = [ ./project.nix ]; };
       normalizedProjectDescriptor = nix-infra-modules.lib.projectDescriptor.normalize {
         descriptor = projectDescriptor;
         expectedProject = "t3code";
@@ -40,15 +40,7 @@
           inherit system;
         };
 
-      mkPnpm =
-        pkgs: nodejs:
-        (pkgs.pnpm_11.override { inherit nodejs; }).overrideAttrs {
-          version = "11.10.0";
-          src = pkgs.fetchurl {
-            url = "https://registry.npmjs.org/pnpm/-/pnpm-11.10.0.tgz";
-            hash = "sha256-YgtmBepPYvxWptCphzP0eQcdAyHgPkhrUix+mnRhdDE=";
-          };
-        };
+      mkPnpm = import ./nix/pnpm.nix;
 
       mkT3CodePackageWith =
         {
@@ -56,8 +48,8 @@
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
             web = "sha256-Lz6lPqv6HyqZYSwa9SeV+kHmtx9jBDeI04uDS0H4B84=";
-            server = "sha256-L1VKHXoPOUNFXShrPQkT2FP2H8+uzWWK0ti/7ez8NlA=";
-            runtime = "sha256-runjpCCmjkAOytS7eTH4kjYHrAActMqyE2PZKAMp50U=";
+            server = "sha256-Sf7YwTFNDm9kXHrTwVUjJFrhHgJWPIkirprpmQ/1Bnk=";
+            runtime = "sha256-3COXWC1hI4ExMANUFbyCdHhD+1qc7G+ihKfaln8O8Lc=";
           },
         }:
         let
@@ -327,148 +319,6 @@
 
       mkT3CodePackage = pkgs: mkT3CodePackageWith { inherit pkgs; };
 
-      mkProjectRuntime =
-        system:
-        let
-          pkgs = mkPkgs system;
-          nodejs = pkgs.nodejs_24;
-          pnpm = mkPnpm pkgs nodejs;
-
-          prepareAction = pkgs.writeShellApplication {
-            name = "t3code-project-prepare";
-            runtimeInputs = [
-              nodejs
-              pkgs.coreutils
-              pkgs.findutils
-              pkgs.gcc
-              pkgs.git
-              pkgs.gnumake
-              pkgs.gnugrep
-              pkgs.gnused
-              pkgs.pkg-config
-              pkgs.python3
-              pnpm
-            ];
-            text = ''
-              checkout="$(project-context path checkout)"
-              cache_root="$(project-context path cache)"
-              preparation_state="$cache_root/preparation"
-              stamp_file="$preparation_state/dependencies.sha256"
-              cd "$checkout"
-
-              dependency_key=$(
-                {
-                  sha256sum flake.lock package.json pnpm-lock.yaml pnpm-workspace.yaml
-                  find apps packages -type f -name package.json -print0 \
-                    | sort -z \
-                    | xargs -0 -r sha256sum
-                  if [[ -d patches ]]; then
-                    find patches -type f -name '*.patch' -print0 \
-                      | sort -z \
-                      | xargs -0 -r sha256sum
-                  fi
-                } | sha256sum | cut -d ' ' -f 1
-              )
-
-              if [[ -d node_modules && -f "$stamp_file" ]] \
-                && [[ "$(<"$stamp_file")" == "$dependency_key" ]]; then
-                echo "T3 Code dependencies are already prepared ($dependency_key)"
-                exit 0
-              fi
-
-              export npm_config_nodedir="${nodejs}"
-              pnpm install --frozen-lockfile
-              install -d -m 0700 "$preparation_state"
-              printf '%s\n' "$dependency_key" > "$stamp_file.next"
-              mv "$stamp_file.next" "$stamp_file"
-            '';
-          };
-
-          webAction = pkgs.writeShellApplication {
-            name = "t3code-project-web";
-            runtimeInputs = [
-              nodejs
-              pkgs.coreutils
-              pkgs.git
-            ];
-            text = ''
-              web_url="$(project-context endpoint web url)"
-              web_host="$(project-context endpoint web listen-host)"
-              web_port="$(project-context endpoint web listen-port)"
-              web_host_names="$(project-context endpoint web host-names --json)"
-              allowed_hosts="$(
-                node -e 'process.stdout.write(JSON.parse(process.argv[1]).join(","))' "$web_host_names"
-              )"
-              checkout="$(project-context path checkout)"
-              state_root="$(project-context path state)"
-              cache_root="$(project-context path cache)"
-              t3_home="$state_root/t3-home"
-              web_cache="$cache_root/web"
-              install -d -m 0700 "$t3_home" "$web_cache"
-
-              export XDG_CACHE_HOME="$web_cache"
-              export PATH="$checkout/node_modules/.bin:$PATH"
-              export T3CODE_BUNDLED_DEV=1
-              export T3CODE_DEV_ALLOWED_HOSTS="$allowed_hosts"
-              unset AGENT_SERVICE_PORT AGENT_SERVICE_URL T3CODE_HOST T3CODE_PORT
-
-              cd "$checkout"
-              exec node scripts/dev-runner.ts dev \
-                --no-browser \
-                --host 127.0.0.1 \
-                --home-dir "$t3_home" \
-                --web-host "$web_host" \
-                --web-port "$web_port" \
-                --dev-url "$web_url"
-            '';
-          };
-
-          mobileAction = pkgs.writeShellApplication {
-            name = "t3code-project-mobile";
-            runtimeInputs = [
-              nodejs
-              pkgs.coreutils
-              pnpm
-            ];
-            text = ''
-              mobile_url="$(project-context endpoint mobile url)"
-              mobile_port="$(project-context endpoint mobile listen-port)"
-              checkout="$(project-context path checkout)"
-              cache_root="$(project-context path cache)"
-              mobile_cache="$cache_root/mobile"
-              install -d -m 0700 "$mobile_cache/tmp"
-
-              export APP_VARIANT=development
-              export EXPO_PACKAGER_PROXY_URL="$mobile_url"
-              export EXPO_UNSTABLE_HEADLESS=1
-              export NODE_OPTIONS="--dns-result-order=ipv4first''${NODE_OPTIONS:+ $NODE_OPTIONS}"
-              export TMPDIR="$mobile_cache/tmp"
-              export XDG_CACHE_HOME="$mobile_cache"
-
-              encoded_url="$(node -e 'process.stdout.write(encodeURIComponent(process.argv[1]))' "$mobile_url")"
-              echo "T3 Code Dev Client: t3code-dev://expo-development-client/?url=$encoded_url"
-
-              cd "$checkout/apps/mobile"
-              exec pnpm exec expo start \
-                --dev-client \
-                --scheme t3code-dev \
-                --localhost \
-                --port "$mobile_port"
-            '';
-          };
-        in
-        nix-infra-modules.lib.projectRuntime.mkDevelopment {
-          inherit pkgs;
-          descriptorPath = ./project.json;
-          actions = {
-            prepare = lib.getExe prepareAction;
-            web = lib.getExe webAction;
-            mobile = lib.getExe mobileAction;
-          };
-        };
-
-      projectRuntimes = forAllSystems mkProjectRuntime;
-
       mkProjectRelease =
         system:
         let
@@ -517,7 +367,7 @@
         in
         nix-infra-modules.lib.projectRuntime.mkServiceRelease {
           inherit pkgs;
-          descriptorPath = ./project.json;
+          descriptor = projectDescriptor;
           payloads = [ package ];
           actions = {
             web = webAction;
@@ -541,7 +391,6 @@
         rec {
           t3code = mkT3CodePackage pkgs;
           default = t3code;
-          projectRuntime = projectRuntimes.${system}.package;
           projectRelease = projectReleases.${system}.package;
         }
       );
@@ -566,20 +415,13 @@
         }
       );
 
-      apps = forAllSystems (
-        system:
-        let
-          projectRuntime = projectRuntimes.${system};
-        in
-        {
-          t3 = {
-            type = "app";
-            program = "${self.packages.${system}.t3code}/bin/t3";
-            meta.description = "Run the T3 Code server CLI";
-          };
-        }
-        // projectRuntime.apps
-      );
+      apps = forAllSystems (system: {
+        t3 = {
+          type = "app";
+          program = "${self.packages.${system}.t3code}/bin/t3";
+          meta.description = "Run the T3 Code server CLI";
+        };
+      });
 
       devShells = forAllSystems (
         system:
@@ -635,28 +477,12 @@
         system:
         let
           pkgs = mkPkgs system;
-          runtime = projectRuntimes.${system};
           release = projectReleases.${system};
         in
         {
           package = self.packages.${system}.default;
           projectDescriptor =
-            assert
-              builtins.attrNames normalizedProjectDescriptor.development.workloads == [
-                "mobile"
-                "web"
-              ];
-            assert normalizedProjectDescriptor.development.workloads.mobile.action == "mobile";
-            assert normalizedProjectDescriptor.development.workloads.web.action == "web";
-            assert
-              builtins.attrNames normalizedProjectDescriptor.development.endpoints == [
-                "mobile"
-                "web"
-              ];
-            assert normalizedProjectDescriptor.development.endpoints.mobile.health.paths == [ "/status" ];
-            assert normalizedProjectDescriptor.development.endpoints.web.health.paths == [ "/healthz" ];
-            assert normalizedProjectDescriptor.development.endpoints.web.health.startupTimeoutSec == 300;
-            assert normalizedProjectDescriptor.development.endpoints.web.health.requestTimeoutSec == 300;
+            assert normalizedProjectDescriptor.development == null;
             assert normalizedProjectDescriptor.release.package == "projectRelease";
             assert normalizedProjectDescriptor.release.executable == "project-release-runtime";
             assert normalizedProjectDescriptor.release.action == "web";
@@ -667,7 +493,6 @@
             pkgs.runCommand "t3code-project-descriptor-check" { } ''
               touch "$out"
             '';
-          projectRuntimeInterface = runtime.checks.interface;
           projectReleaseInterface = release.checks.interface;
           projectReleaseDescriptor = release.checks.descriptorExact;
           projectReleaseGate = pkgs.runCommand "t3code-project-release-gate" { } ''

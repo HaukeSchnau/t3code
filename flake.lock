@@ -30,18 +30,18 @@
         ]
       },
       "locked": {
-        "lastModified": 1787683135,
-        "narHash": "sha256-75SDGC+rGzHJ0dQSQgev3rcqLr8BKphshhu29D+etU0=",
-        "ref": "refs/heads/main",
-        "rev": "7e0a8f95263cff6423576f26982535a408fe116e",
-        "revCount": 77,
-        "type": "git",
-        "url": "https://git.schnau.dev/schnau/nix-infra-modules.git"
+        "lastModified": 1789483145,
+        "narHash": "sha256-syMga8sQ83Ia2j+fnOe3VP0P3TB2KMarkyoiWpXQEaQ=",
+        "owner": "HaukeSchnau",
+        "repo": "nix-infra-modules",
+        "rev": "a78a097b289c9f1b79162b1e2729a27b51eaa8bc",
+        "type": "github"
       },
       "original": {
-        "rev": "7e0a8f95263cff6423576f26982535a408fe116e",
-        "type": "git",
-        "url": "https://git.schnau.dev/schnau/nix-infra-modules.git"
+        "owner": "HaukeSchnau",
+        "repo": "nix-infra-modules",
+        "rev": "a78a097b289c9f1b79162b1e2729a27b51eaa8bc",
+        "type": "github"
       }
     },
     "nixpkgs": {
