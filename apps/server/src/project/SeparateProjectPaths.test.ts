@@ -32,6 +32,19 @@ it("resolves identical project and scratch paths by workspace, including legacy 
           workspace: { visibleRoot },
         }),
       );
+      const published = `/srv/agent-share/isolated/${id}/image.png`;
+      NodeAssert.equal(await projectHostPath(root, published, state), published);
+      NodeAssert.equal(await projectHostPath(root, "/srv/agent-share/image.png", state), published);
+      const otherPublished = "/srv/agent-share/isolated/another-workspace/image.png";
+      NodeAssert.notEqual(await projectHostPath(root, otherPublished, state), otherPublished);
+      NodeAssert.notEqual(
+        await projectHostPath(
+          root,
+          `/srv/agent-share/isolated/${id}/../another-workspace/image.png`,
+          state,
+        ),
+        otherPublished,
+      );
       const scratch = NodePath.join(state, "environments", id, "tmp");
       await NodeFSP.mkdir(scratch, { recursive: true });
       await NodeFSP.writeFile(NodePath.join(root, "image.png"), `project-${index}`);

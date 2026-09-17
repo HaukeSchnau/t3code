@@ -71,3 +71,7 @@ worktree setup delegates dependency checks to the cached devenv task when alread
 inside its native environment; ordinary non-Nix setup still runs pinned pnpm.
 Vite optimizes browser dependencies when the dev server starts; worktree setup
 does not warm that cache before an agent can begin repository work.
+
+Published image paths accept both `/srv/agent-share/...` inside a workspace and
+its already-resolved `/srv/agent-share/isolated/<id>/...` host path. Preserve the
+workspace-specific mapping and canonical-path checks when changing asset access.
