@@ -62,3 +62,12 @@ The CLI exposes `t3 thread create --worktree --workspace-profile familiar|minima
 `--workspace ID` for reuse. Native outbox replay uses the same `prepareWorkspace`
 bootstrap as web, including branchless repositories. Preserve these contracts, the
 many-thread deletion guard, and the existing settlement lifecycle during upstream syncs.
+
+Short-lived Codex metadata clients use the launcher's baseline environment. They
+still see the registered workspace and provider credentials, but do not install
+project dependencies while listing skills or checking account status. Agent
+sessions and their shell commands retain normal native activation. In this repo,
+worktree setup delegates dependency checks to the cached devenv task when already
+inside its native environment; ordinary non-Nix setup still runs pinned pnpm.
+Vite optimizes browser dependencies when the dev server starts; worktree setup
+does not warm that cache before an agent can begin repository work.

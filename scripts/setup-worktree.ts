@@ -14,8 +14,15 @@ function run(command: string, args: string[]) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-// pnpm is pinned by package.json and the Nix shell; vp is installed by this step.
-run("pnpm", ["install", "--frozen-lockfile"]);
+// Native entry already runs this task. Recheck its inputs instead of installing twice.
+if (
+  process.env.DEVENV_ROOT &&
+  NodeFS.realpathSync(process.env.DEVENV_ROOT) === NodeFS.realpathSync(process.cwd())
+) {
+  run("devenv", ["--no-tui", "tasks", "run", "t3:dependencies"]);
+} else {
+  run("pnpm", ["install", "--frozen-lockfile"]);
+}
 
 const projectRoot = process.env.T3CODE_PROJECT_ROOT;
 if (projectRoot && NodeFS.existsSync(projectRoot)) {
@@ -33,5 +40,3 @@ if (projectRoot && NodeFS.existsSync(projectRoot)) {
     }
   }
 }
-
-run(process.execPath, ["apps/web/scripts/warm-dep-cache.ts"]);
