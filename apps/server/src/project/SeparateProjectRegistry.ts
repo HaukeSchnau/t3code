@@ -147,7 +147,9 @@ export async function projectHostPath(cwd: string, filePath: string, stateDirect
   const requested = NodePath.isAbsolute(filePath)
     ? NodePath.normalize(filePath)
     : NodePath.resolve(cwd, filePath);
+  const publishedRoot = NodePath.join("/srv/agent-share/isolated", NodePath.basename(record.state));
   const mappings = [
+    [publishedRoot, publishedRoot],
     [record.root, record.root],
     [record.state, record.state],
     [
@@ -156,10 +158,7 @@ export async function projectHostPath(cwd: string, filePath: string, stateDirect
     ],
     [visibleRoot, record.root],
     ["/tmp", NodePath.join(record.state, "tmp")],
-    [
-      "/srv/agent-share",
-      NodePath.join("/srv/agent-share/isolated", NodePath.basename(record.state)),
-    ],
+    ["/srv/agent-share", publishedRoot],
     [home, NodePath.join(record.state, "home")],
   ] as const;
   for (const [visible, actual] of mappings) {
