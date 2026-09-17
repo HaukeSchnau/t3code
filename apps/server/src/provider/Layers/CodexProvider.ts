@@ -375,6 +375,8 @@ export const withCodexAppServerClient = Effect.fn("withCodexAppServerClient")(fu
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const environment = {
     ...input.environment,
+    // Metadata probes need workspace files and provider credentials, not project setup.
+    AGENT_EXEC_ENVIRONMENT: "baseline",
     ...(resolvedHomePath ? { CODEX_HOME: resolvedHomePath } : {}),
   };
   const spawnCommand = yield* resolveSpawnCommand(
