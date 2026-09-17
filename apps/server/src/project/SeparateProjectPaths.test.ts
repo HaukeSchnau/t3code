@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- exercises the host namespace registry with real temporary files.
 import { it } from "@effect/vitest";
+import { vi } from "vite-plus/test";
 import * as NodeAssert from "node:assert/strict";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeOS from "node:os";
@@ -12,10 +13,31 @@ import {
   projectSetupPaths,
 } from "./SeparateProjectRegistry.ts";
 
+const publicationFixture = vi.hoisted(() => ({ root: "" }));
+
+// The CI account cannot traverse the real publication directory. Keep realpath's
+// symlink checks, but route the public mount to this test's temporary directory.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    realpath: (...args: Parameters<typeof actual.realpath>) => {
+      const [path, options] = args;
+      const prefix = "/srv/agent-share/";
+      const target =
+        publicationFixture.root && typeof path === "string" && path.startsWith(prefix)
+          ? `${publicationFixture.root}/${path.slice(prefix.length)}`
+          : path;
+      return actual.realpath(target, options);
+    },
+  };
+});
+
 it("resolves identical project and scratch paths by workspace, including legacy image paths", async () => {
   const temporary = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "isolated-paths-"));
   const base = await NodeFSP.realpath(temporary);
   const state = NodePath.join(base, "state");
+  publicationFixture.root = NodePath.join(base, "published");
   try {
     await NodeFSP.mkdir(NodePath.join(state, "projects"), { recursive: true });
     const roots = [NodePath.join(base, "a"), NodePath.join(base, "b")];
@@ -33,17 +55,29 @@ it("resolves identical project and scratch paths by workspace, including legacy 
         }),
       );
       const published = `/srv/agent-share/isolated/${id}/image.png`;
-      NodeAssert.equal(await projectHostPath(root, published, state), published);
-      NodeAssert.equal(await projectHostPath(root, "/srv/agent-share/image.png", state), published);
-      const otherPublished = "/srv/agent-share/isolated/another-workspace/image.png";
-      NodeAssert.notEqual(await projectHostPath(root, otherPublished, state), otherPublished);
-      NodeAssert.notEqual(
-        await projectHostPath(
+      const actualPublished = NodePath.join(publicationFixture.root, "isolated", id, "image.png");
+      await NodeFSP.mkdir(NodePath.dirname(actualPublished), { recursive: true });
+      await NodeFSP.writeFile(actualPublished, `published-${index}`);
+      NodeAssert.equal(await projectHostPath(root, published, state), actualPublished);
+      NodeAssert.equal(
+        await projectHostPath(root, "/srv/agent-share/image.png", state),
+        actualPublished,
+      );
+      const aliasImage = NodePath.join(NodePath.dirname(actualPublished), "alias.png");
+      await NodeFSP.symlink("image.png", aliasImage);
+      NodeAssert.equal(
+        await projectHostPath(root, `/srv/agent-share/isolated/${id}/alias.png`, state),
+        actualPublished,
+      );
+      await NodeAssert.rejects(
+        projectHostPath(root, "/srv/agent-share/isolated/another-workspace/image.png", state),
+      );
+      await NodeAssert.rejects(
+        projectHostPath(
           root,
           `/srv/agent-share/isolated/${id}/../another-workspace/image.png`,
           state,
         ),
-        otherPublished,
       );
       const scratch = NodePath.join(state, "environments", id, "tmp");
       await NodeFSP.mkdir(scratch, { recursive: true });
@@ -123,6 +157,7 @@ it("resolves identical project and scratch paths by workspace, including legacy 
       hostJournalDirectory: "/server/journals",
     });
   } finally {
+    publicationFixture.root = "";
     await NodeFSP.rm(temporary, { recursive: true, force: true });
   }
 });
