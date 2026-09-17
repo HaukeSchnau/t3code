@@ -119,7 +119,7 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Pull requests
 
-- Never make a PR unless the developer explicitly asks you to do so.
+- Automatically open or update a pull request for completed work, following the fork maintenance workflow below.
 - Conventional commit titles, plain language: `fix(web): new threads no longer spike CPU`.
 - Body: the problem in a sentence or two, then how you fixed it. End with the model and harness that did the work.
 - UI changes need before/after images. Motion or timing needs a short video.
@@ -129,22 +129,17 @@ An empty database is a bad test. Seed your worktree's `.t3` with a copy of real 
 
 ## Fork maintenance
 
-This repository is a personal fork. Keep fork-only patches small enough that upstream merges remain
-reviewable, and document every custom patch and its requirements in `patches/*.md`.
+This is a personal fork. `origin/main` is the published fork branch; `upstream/main` is the upstream source. Preserve published fork history and integrate upstream through merge commits.
 
-- Prefer extension points, small adapters, and narrowly scoped modules over broad rewrites of
-  upstream-owned code. Avoid unrelated formatting churn in patched files.
-- When upstream now satisfies a fork patch, prefer the upstream implementation and retire the local
-  patch. Keep local behavior only when a documented fork requirement remains unmet.
-- Use Jujutsu for version-control operations. Keep `origin/main` as the fork branch and merge
-  `upstream/main` into it; do not routinely rebase the fork patch stack onto upstream.
-- Before implementing changes, fetch `origin` and `upstream` sequentially and inspect `jj status`.
-  Synchronize upstream only as a separate maintenance task; an investigation or feature change does
-  not require merging upstream first.
-- Delegate large conflict investigations to a subagent, then review the integrated resolution and
-  focused checks before committing.
-- Push completed fork work directly to `main` with `jj-push main`; include concurrent changes only
-  when their intended destination is clear. Do not open a PR unless explicitly requested.
+Do not include an upstream merge in unrelated feature or bug-fix work.
+
+When asked to sync upstream, fetch both remotes, reconcile the local fork with `origin/main`, then merge `upstream/main`. Resolve conflicts according to the fork requirements in `patches/*.md`. If upstream meets a documented requirement, use its implementation and remove the obsolete local code and patch documentation. Ask when a resolution requires dropping or changing a fork requirement.
+
+Do not use `jj-pull` to synchronize this fork if it would rebase published fork history.
+
+Keep changes to upstream-owned code narrow. Document each fork-specific behavior in `patches/*.md`, including why it exists, the requirements upstream does not meet, and what would allow us to remove it. Update the existing document when that behavior changes.
+
+Commit completed work, push a feature bookmark with `jj-push <bookmark>`, and automatically open or update a pull request targeting `main` after relevant checks pass and the working copy has no file changes. This applies to upstream syncs as well. Do not push directly to `main`. If concurrent work has an uncertain destination, finish the authorized local work and ask before including it in the push.
 
 ## Coupling to `infra`
 
