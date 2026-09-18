@@ -16,7 +16,9 @@ tool activity, which makes the main transcript noisy and misleading.
   provider thread id and parent turn id.
 - Runtime ingestion treats events with `agentContext` as subagent events. It upserts one
   `subagent.thread` activity per child provider thread and does not project child assistant text into
-  parent assistant messages.
+  parent assistant messages. Its activity keeps the original turn membership even when a later
+  parent turn reuses the child. The payload tracks the latest parent turn separately. Moving an
+  existing activity between turns violates the projection invariant and blocks ingestion retries.
 - The web client omits `subagent.thread` transcript projections from the parent timeline. It does not
   parse them into a second roster or status model.
 - Upstream's native `task.*` activities feed the shared subagent runtime fold and Agents panel for both
