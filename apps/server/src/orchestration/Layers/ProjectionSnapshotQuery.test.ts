@@ -969,6 +969,15 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           (${ORCHESTRATION_PROJECTOR_NAMES.checkpoints}, 4, '2026-04-06T00:00:07.000Z')
       `;
 
+      assert.isTrue(
+        Option.isNone(yield* snapshotQuery.getThreadShellById(ThreadId.make("thread-archived"))),
+      );
+      const archivedById = yield* snapshotQuery.getThreadShellById(
+        ThreadId.make("thread-archived"),
+        { includeArchived: true },
+      );
+      assert.isTrue(Option.isSome(archivedById));
+
       const shellSnapshot = yield* snapshotQuery.getShellSnapshot();
       assert.deepEqual(
         shellSnapshot.threads.map((thread) => thread.id),
