@@ -148,6 +148,12 @@ export async function projectHostPath(cwd: string, filePath: string, stateDirect
     ? NodePath.normalize(filePath)
     : NodePath.resolve(cwd, filePath);
   const publishedRoot = NodePath.join("/srv/agent-share/isolated", NodePath.basename(record.state));
+  if (
+    relativeWithin("/srv/agent-share/isolated", requested) !== undefined &&
+    relativeWithin(publishedRoot, requested) === undefined
+  ) {
+    throw new Error("File belongs to another workspace publication directory");
+  }
   const mappings = [
     [publishedRoot, publishedRoot],
     [record.root, record.root],
@@ -164,13 +170,13 @@ export async function projectHostPath(cwd: string, filePath: string, stateDirect
   for (const [visible, actual] of mappings) {
     const relative = relativeWithin(visible, requested);
     if (relative === undefined) continue;
-    const result = NodePath.join(actual, relative);
+    const actualRoot = await NodeFSP.realpath(actual).catch(() => actual);
+    const result = NodePath.join(actualRoot, relative);
     // Host realpath must not follow a project symlink into another checkout.
     const canonical = await NodeFSP.realpath(result).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return result;
       throw error;
     });
-    const actualRoot = await NodeFSP.realpath(actual).catch(() => actual);
     if (relativeWithin(actualRoot, canonical) === undefined)
       throw new Error("Environment file leaves its mounted directory");
     return canonical;
