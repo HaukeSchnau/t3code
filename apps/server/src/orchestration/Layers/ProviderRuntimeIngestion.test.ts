@@ -5558,6 +5558,62 @@ describe("ProviderRuntimeIngestion", () => {
     expect(finalPayload.transcript).toBe("byte-exact child result");
     expect(finalPayload.status).toBe("completed");
   });
+  it.each([false, true])(
+    "keeps subagent activity membership across turns with hydration=%s",
+    async (hydrate) => {
+      const harness = await createHarness();
+      if (hydrate) {
+        await harness.dispatch({
+          type: "thread.activity.append",
+          commandId: CommandId.make("seed-child-activity"),
+          threadId: asThreadId("thread-1"),
+          createdAt: "2025-12-31T00:00:00.000Z",
+          activity: {
+            id: asEventId("subagent:thread-1:codex:codex:reused-child"),
+            turnId: asTurnId("parent-original"),
+            createdAt: "2025-12-31T00:00:00.000Z",
+            kind: "subagent.thread",
+            tone: "info",
+            summary: "Subagent completed",
+            payload: {
+              transcript: "prior reply",
+              parentTurnId: "parent-original",
+              status: "completed",
+            },
+          },
+        });
+      }
+      for (const [index, parentTurn] of ["parent-first", "parent-next"].entries()) {
+        harness.emit({
+          type: "content.delta",
+          eventId: asEventId(`reused-child-${index}`),
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: `2026-01-01T00:00:0${index}.000Z`,
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId(parentTurn),
+          itemId: asItemId(`child-message-${index}`),
+          agentContext: {
+            providerThreadId: "reused-child",
+            parentTurnId: asTurnId(parentTurn),
+          },
+          payload: { streamKind: "assistant_text", delta: `reply-${index}` },
+        });
+        await harness.drain();
+      }
+      const thread = await waitForThread(harness.readModel, (entry) =>
+        entry.activities.some((activity) => activity.kind === "subagent.thread"),
+      );
+      const activities = thread.activities.filter(
+        (activity) => activity.kind === "subagent.thread",
+      );
+      expect(activities).toHaveLength(1);
+      expect(activities[0]?.turnId).toBe(hydrate ? "parent-original" : "parent-first");
+      expect(activities[0]?.payload).toMatchObject({
+        parentTurnId: "parent-next",
+        transcript: expect.stringContaining("reply-1"),
+      });
+    },
+  );
   it("projects subagent assistant text into a subagent activity without parent transcript rows", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
