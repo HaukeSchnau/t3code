@@ -5902,6 +5902,76 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("serves absolute media from the isolated thread filesystem over websocket rpc", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-isolated-media-" });
+      const root = path.join(directory, "checkout");
+      yield* fileSystem.makeDirectory(root);
+      const canonicalRoot = yield* fileSystem.realPath(root);
+      const state = path.join(directory, "agent-state");
+      const id = NodeCrypto.createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 20);
+      const scratch = path.join(state, "environments", id, "tmp");
+      yield* fileSystem.makeDirectory(path.join(state, "projects"), { recursive: true });
+      yield* fileSystem.makeDirectory(scratch, { recursive: true });
+      yield* fileSystem.writeFileString(
+        path.join(state, "projects", `${id}.json`),
+        encodeTestJson({ root: canonicalRoot, workspace: { visibleRoot: "/workspace" } }),
+      );
+      yield* fileSystem.writeFileString(
+        path.join(scratch, "screenshot.png"),
+        "isolated image bytes",
+      );
+      const previousState = process.env.AGENT_EXEC_STATE;
+      process.env.AGENT_EXEC_STATE = state;
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (previousState === undefined) delete process.env.AGENT_EXEC_STATE;
+          else process.env.AGENT_EXEC_STATE = previousState;
+        }),
+      );
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getProjectShellById: () =>
+              Effect.succeed(
+                Option.some({
+                  ...makeDefaultOrchestrationReadModel().projects[0]!,
+                  workspaceRoot: directory,
+                }),
+              ),
+            getThreadShellById: () =>
+              Effect.succeed(
+                Option.some(makeDefaultOrchestrationThreadShell({ worktreePath: canonicalRoot })),
+              ),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const issued = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: {
+                _tag: "media-file",
+                threadId: defaultThreadId,
+                path: "/tmp/screenshot.png",
+              },
+            });
+            const response = yield* HttpClient.get(issued.relativeUrl);
+            assert.equal(response.status, 200);
+            assert.equal(yield* response.text, "isolated image bytes");
+            const missing = yield* client[WS_METHODS.assetsCreateUrl]({
+              resource: { _tag: "media-file", threadId: defaultThreadId, path: "/tmp/missing.png" },
+            }).pipe(Effect.flip);
+            assert.equal(missing._tag, "AssetWorkspaceAssetNotFoundError");
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("serves absolute host media without a local thread and rejects relative media", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
