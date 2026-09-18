@@ -75,3 +75,7 @@ does not warm that cache before an agent can begin repository work.
 Published image paths accept both `/srv/agent-share/...` inside a workspace and
 its already-resolved `/srv/agent-share/isolated/<id>/...` host path. Preserve the
 workspace-specific mapping and canonical-path checks when changing asset access.
+
+Absolute media paths, including `/tmp`, resolve through the local thread workspace
+before issuing signed asset URLs. Only links without a local thread use host paths
+directly, preserving cross-environment links without bypassing workspace isolation.

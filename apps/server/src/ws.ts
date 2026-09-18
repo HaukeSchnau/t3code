@@ -2140,11 +2140,9 @@ const makeWsRpcLayer = (
             WS_METHODS.assetsCreateUrl,
             Effect.gen(function* () {
               const path = yield* Path.Path;
-              // An absolute media path can be linked from a thread on another environment.
               if (
                 input.resource._tag === "attachment" ||
-                input.resource._tag === "native-app-icon" ||
-                (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path))
+                input.resource._tag === "native-app-icon"
               ) {
                 return yield* issueAssetUrl({ resource: input.resource });
               }
@@ -2176,7 +2174,7 @@ const makeWsRpcLayer = (
                 });
               }
               const thread = yield* projectionSnapshotQuery
-                .getThreadShellById(input.resource.threadId)
+                .getThreadShellById(input.resource.threadId, { includeArchived: true })
                 .pipe(
                   Effect.mapError(
                     (cause) =>
@@ -2187,6 +2185,11 @@ const makeWsRpcLayer = (
                   ),
                 );
               if (Option.isNone(thread)) {
+                // Cross-environment links have no local thread. Local threads must
+                // resolve even absolute paths through their workspace namespace.
+                if (input.resource._tag === "media-file" && path.isAbsolute(input.resource.path)) {
+                  return yield* issueAssetUrl({ resource: input.resource });
+                }
                 return yield* new AssetWorkspaceContextNotFoundError({
                   resource: input.resource,
                 });
