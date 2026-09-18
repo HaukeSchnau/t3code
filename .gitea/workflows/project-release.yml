@@ -3,13 +3,15 @@ name: CI
 on:
   push:
     branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: t3code-ci-${{ github.ref }}
+  group: t3code-ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -161,6 +163,7 @@ jobs:
 
   release:
     name: Release
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: release_check
     uses: schnau/nix-infra-modules/.gitea/workflows/project-release.yml@main
     with:

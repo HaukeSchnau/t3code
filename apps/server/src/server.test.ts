@@ -5911,6 +5911,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* fileSystem.makeDirectory(root);
       const canonicalRoot = yield* fileSystem.realPath(root);
       const state = path.join(directory, "agent-state");
+      const realState = path.join(directory, "real-agent-state");
+      yield* fileSystem.makeDirectory(realState);
+      yield* fileSystem.symlink(realState, state);
       const id = NodeCrypto.createHash("sha256").update(canonicalRoot).digest("hex").slice(0, 20);
       const scratch = path.join(state, "environments", id, "tmp");
       yield* fileSystem.makeDirectory(path.join(state, "projects"), { recursive: true });
