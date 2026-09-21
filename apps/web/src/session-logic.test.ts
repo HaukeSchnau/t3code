@@ -1,3 +1,4 @@
+import * as NodeProcess from "node:process";
 import {
   classifyTaskAgentKind,
   EventId,
@@ -2950,7 +2951,7 @@ describe("session activity performance", () => {
     expect(appendedEntries[1]).toBe(initialEntries[1]);
   });
 
-  it("updates 20,000 ordered tool activities within 100 ms", () => {
+  it("updates 20,000 ordered tool activities within 100 ms of CPU time", () => {
     const activities = Array.from({ length: 20_000 }, (_, index) =>
       makeActivity({
         id: `benchmark-tool-${index}`,
@@ -2985,8 +2986,10 @@ describe("session activity performance", () => {
       }),
     ];
 
-    const startedAt = performance.now();
+    // Shared CI runners may deschedule this worker; measure computation, not queue time.
+    const startedAt = NodeProcess.cpuUsage();
     expect(deriveWorkLogEntries(updatedActivities)).toHaveLength(20_001);
-    expect(performance.now() - startedAt).toBeLessThan(100);
+    const elapsed = NodeProcess.cpuUsage(startedAt);
+    expect((elapsed.user + elapsed.system) / 1_000).toBeLessThan(100);
   });
 });
