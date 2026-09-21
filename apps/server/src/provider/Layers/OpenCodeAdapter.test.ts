@@ -1974,7 +1974,7 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       NodeAssert.deepEqual(prompt.parts, [{ type: "text", text: "/unknown explain this" }]);
       NodeAssert.equal(
         prompt.system,
-        buildRuntimeInstructions({ harness: "OpenCode", model: "openai/gpt-5" }),
+        `${buildRuntimeInstructions({ harness: "OpenCode", model: "openai/gpt-5" })}${T3_CODE_THREAD_ORCHESTRATION_INSTRUCTIONS}`,
       );
       yield* adapter.stopSession(threadId);
     }),
