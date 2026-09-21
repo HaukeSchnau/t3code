@@ -358,10 +358,7 @@ const listCommand = Command.make("list", {
     Flag.withDescription("Search titles and projects."),
     Flag.optional,
   ),
-  limit: Flag.Int("limit").pipe(
-    Flag.withDescription("Maximum number of threads."),
-    Flag.optional,
-  ),
+  limit: Flag.Int("limit").pipe(Flag.withDescription("Maximum number of threads."), Flag.optional),
 }).pipe(
   Command.withDescription("List recent threads."),
   Command.withHandler((flags) =>
@@ -456,10 +453,7 @@ const graphCommand = Command.make("graph", {
     Flag.withDefault(false),
   ),
   depth: Flag.Int("depth").pipe(Flag.withDescription("Maximum graph depth."), Flag.optional),
-  limit: Flag.Int("limit").pipe(
-    Flag.withDescription("Maximum number of edges."),
-    Flag.optional,
-  ),
+  limit: Flag.Int("limit").pipe(Flag.withDescription("Maximum number of edges."), Flag.optional),
 }).pipe(
   Command.withDescription("Read the automatic relationship graph."),
   Command.withHandler((flags) =>

@@ -555,10 +555,12 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
               ? "Workspace setup cancelled."
               : setupFailureDescription(error);
             if (cancelled && progress.setup.status === "claimed") {
-              yield* input.terminalManager.close({
-                threadId: command.threadId,
-                terminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
-              }).pipe(Effect.ignoreCause({ log: true }));
+              yield* input.terminalManager
+                .close({
+                  threadId: command.threadId,
+                  terminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
+                })
+                .pipe(Effect.ignoreCause({ log: true }));
             }
             yield* finish(cancelled ? "cancelled" : "failed", detail);
             const bootstrapThreadDisposition =

@@ -1,24 +1,47 @@
 import { appAtomRegistry } from "../../rpc/atomRegistry";
 import { environmentServerConfigsAtom } from "../../state/server";
 import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./composerPromptHistory";
-import { type MessageId, type ModelSelection, type ProviderInstanceId, type ProviderInteractionMode, type RuntimeMode, type ScopedThreadRef, type ServerProvider, type ThreadId } from "@t3tools/contracts";
+import {
+  type MessageId,
+  type ModelSelection,
+  type ProviderInstanceId,
+  type ProviderInteractionMode,
+  type RuntimeMode,
+  type ScopedThreadRef,
+  type ServerProvider,
+  type ThreadId,
+} from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { projectScriptCwd } from "@t3tools/shared/projectScripts";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { parseStandaloneComposerSlashCommand } from "../../composer-logic";
-import { type ComposerImageAttachment, type DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import {
+  type ComposerImageAttachment,
+  type DraftId,
+  useComposerDraftStore,
+} from "../../composerDraftStore";
 import { readEnvironmentApi } from "../../environmentApi";
 import { type TerminalContextDraft } from "../../lib/terminalContext";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import { derivePhase } from "../../session-logic";
 import { type ChatImageAttachment, type ChatMessage, type Thread } from "../../types";
 import { newCommandId, newDraftId, newMessageId } from "~/lib/utils";
-import { buildExpiredTerminalContextToastCopy, cloneComposerImageForRetry, deriveLockedProvider, getStartedThreadModelChangeBlockReason } from "../ChatView.logic";
+import {
+  buildExpiredTerminalContextToastCopy,
+  cloneComposerImageForRetry,
+  deriveLockedProvider,
+  getStartedThreadModelChangeBlockReason,
+} from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { InlineMessageEditor } from "./InlineMessageEditor";
 import { type ChatComposerHandle } from "./ChatComposer";
-import { editableTextFromUserMessage, hydrateMessageImagesForEdit, runPreviousMessageEditTransaction, waitForMessagePrunedFromThread } from "./previousMessageEditing";
+import {
+  editableTextFromUserMessage,
+  hydrateMessageImagesForEdit,
+  runPreviousMessageEditTransaction,
+  waitForMessagePrunedFromThread,
+} from "./previousMessageEditing";
 import { type UserMessageEditingController } from "./MessagesTimeline";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -28,7 +51,17 @@ import { useProject, useProviderUsageLimits, useThread } from "../../state/entit
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
-import { analyzeThreadTurnDraft, materializeThreadTurnAttachments, buildThreadTurnMessageContext, createDirectThreadTurnDeliveryAdapter, formatThreadTurnOutgoingText, resolveNewThreadSubmissionTitle, serializeThreadTurnPrompt, threadTurnDraftFromComposer, type ThreadTurnDraft } from "./ThreadTurnSubmission";
+import {
+  analyzeThreadTurnDraft,
+  materializeThreadTurnAttachments,
+  buildThreadTurnMessageContext,
+  createDirectThreadTurnDeliveryAdapter,
+  formatThreadTurnOutgoingText,
+  resolveNewThreadSubmissionTitle,
+  serializeThreadTurnPrompt,
+  threadTurnDraftFromComposer,
+  type ThreadTurnDraft,
+} from "./ThreadTurnSubmission";
 
 const NOOP = () => undefined;
 const NOOP_ASYNC = () => Promise.resolve(undefined);
