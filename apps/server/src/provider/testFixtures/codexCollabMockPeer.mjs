@@ -166,15 +166,15 @@ rl.on("line", (line) => {
       if (request.id !== undefined) {
         // Legacy form: caller-supplied JSON-RPC ids recorded in .responses.
         write({ jsonrpc: "2.0", id: request.id, method: request.method, params: request.params });
-      if (request.resolveOutOfBand === true) {
-        setImmediate(() => {
-          write({
-            jsonrpc: "2.0",
-            method: "serverRequest/resolved",
-            params: { threadId: rootThreadId, requestId: request.id },
+        if (request.resolveOutOfBand === true) {
+          setImmediate(() => {
+            write({
+              jsonrpc: "2.0",
+              method: "serverRequest/resolved",
+              params: { threadId: rootThreadId, requestId: request.id },
+            });
           });
-        });
-      }
+        }
         continue;
       }
       // Scripted server->client requests (approval prompts). String values in

@@ -53,6 +53,7 @@ export default defineConfig({
       "dist-electron",
       "node_modules",
       "pnpm-lock.yaml",
+      "pnpm-deploy-lock.yaml",
       "*.tsbuildinfo",
       "**/routeTree.gen.ts",
       "apps/mobile/android/**",

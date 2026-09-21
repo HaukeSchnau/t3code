@@ -237,7 +237,8 @@ describe("command outbox lifecycle", () => {
       ]) {
         const error = yield* Effect.flip(outbox.begin(original.command.commandId, T0, replacement));
         expect(error._tag).toBe("CommandOutboxStateError");
-        if (error._tag === "CommandOutboxStateError") expect(error.reason).toBe("invalid-replacement");
+        if (error._tag === "CommandOutboxStateError")
+          expect(error.reason).toBe("invalid-replacement");
       }
       expect((yield* outbox.entries)[0]).toEqual({ plan: original, state: { _tag: "Pending" } });
     }),

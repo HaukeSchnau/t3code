@@ -993,8 +993,9 @@ function MonitorThreadActions({
       },
       title: resolveFollowUpSubmissionTitle(analysis, thread.title),
       delivery: createDirectThreadTurnDeliveryAdapter({
-        supportsInlineMessageContext: appAtomRegistry.get(environmentServerConfigsAtom)
-          .get(threadRef.environmentId)?.environment.capabilities.inlineMessageContext === true,
+        supportsInlineMessageContext:
+          appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+            ?.environment.capabilities.inlineMessageContext === true,
         dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
       }),
       composer: {
