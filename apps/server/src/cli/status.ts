@@ -41,12 +41,12 @@ class StatusOfflineUnavailableError extends Data.TaggedError("StatusOfflineUnava
   }
 }
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );
 
-const quietFlag = Flag.boolean("quiet").pipe(
+const quietFlag = Flag.Boolean("quiet").pipe(
   Flag.withDescription("Suppress output and use the exit code only."),
   Flag.withDefault(false),
 );

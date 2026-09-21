@@ -14,7 +14,11 @@ import { useLocation, useNavigate } from "@tanstack/react-router";
 import { isCommandPaletteOpen } from "../commandPaletteBus";
 import { isElectron } from "../env";
 import { getLocalStorageItem, removeLocalStorageItem } from "../hooks/useLocalStorage";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
+import {
+  isRichTextBoldShortcut,
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+} from "../keybindings";
 import { isTerminalFocused } from "../lib/terminalFocus";
 import { cn, isMacPlatform } from "../lib/utils";
 import { rememberMonitorReturnLocation, resolveMonitorToggleTarget } from "../monitorNavigation";
@@ -48,7 +52,7 @@ import {
 } from "./ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 
-const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "90px";
+const MACOS_TRAFFIC_LIGHTS_LEFT_INSET = "var(--desktop-window-controls-inset, 90px)";
 
 // The settings nav (and the Clerk profile surfaces behind it) only renders on
 // settings routes; lazy-loading it keeps that subtree out of the startup chunk.
@@ -108,6 +112,15 @@ function SidebarControl() {
         event.target instanceof HTMLElement &&
         event.target.closest("[data-keybinding-capture]")
       ) {
+        return;
+      }
+      if (
+        isRichTextBoldShortcut(event) &&
+        event.target instanceof HTMLElement &&
+        event.target.closest('[data-composer-rich-text="true"]')
+      ) {
+        // The rich-text composer claims Mod+B for bold; the toggle stays
+        // available everywhere else, including the plain-text composer.
         return;
       }
       const command = resolveShortcutCommand(event, keybindings, {
@@ -280,7 +293,7 @@ export function AppSidebarLayout({ children }: { children: ReactNode }) {
     <SidebarCardThreadsProvider>
       <SidebarProvider
         className="h-dvh! min-h-0!"
-        data-panel-animations={panelAnimationsActive ? "true" : "false"}
+        data-panel-animations={routePanelAnimationsActive ? "true" : "false"}
         defaultOpen
         style={sidebarProviderStyle}
       >

@@ -3,9 +3,10 @@ import type {
   OrchestrationThreadActivity,
   ThreadId,
 } from "@t3tools/contracts";
-import Mime from "@effect/platform-node/Mime";
+import * as Mime from "effect/unstable/http/Mime";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
+import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import { ServerConfig } from "../config.ts";
@@ -91,7 +92,7 @@ export const makeObservedActivityMedia = Effect.gen(function* () {
       const sourcePath = observedImageSourcePath(input.activity);
       if (!payload || !sourcePath || !isLocalPath(sourcePath)) return input.activity;
 
-      const mimeType = Mime.getType(sourcePath);
+      const mimeType = Option.getOrNull(Mime.getType(sourcePath));
       if (!mimeType?.toLowerCase().startsWith("image/")) return input.activity;
       const mediaId = createObservedMediaId(input.threadId);
       if (!mediaId) return input.activity;

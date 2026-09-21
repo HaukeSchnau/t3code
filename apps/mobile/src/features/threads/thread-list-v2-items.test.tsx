@@ -21,6 +21,9 @@ vi.mock("react-native", () => ({
   View: "View",
   useWindowDimensions: () => ({ height: 1_024, width: 768 }),
 }));
+vi.mock("../../lib/copyTextWithHaptic", () => ({ copyTextWithHaptic: vi.fn() }));
+vi.mock("../../components/RowPressable", () => ({ RowPressable: "Pressable" }));
+vi.mock("./CustomSnoozeSheet", () => ({ CustomSnoozeSheet: "CustomSnoozeSheet" }));
 vi.mock("../../components/AppSymbol", () => ({ SymbolView: "SymbolView" }));
 vi.mock("../../components/AppText", () => ({ AppText: "Text" }));
 vi.mock("../../components/ControlPill", () => ({ ControlPillMenu: "ControlPillMenu" }));
@@ -100,6 +103,7 @@ function rowProps() {
     onUnsnoozeThread: noop,
     onUnsettleThread: noop,
     onArchiveThread: noop,
+    onRenameThread: noop,
     onPinThread: noop,
     onUnpinThread: noop,
     settlementSupported: true,

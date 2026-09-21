@@ -278,6 +278,7 @@ export const fixtureShellSnapshotAtom = Atom.make<OrchestrationShellSnapshot | n
 );
 
 const FIXTURE_CATALOG_ENTRY = {
+  enabled: true,
   target: new BearerConnectionTarget({
     environmentId: FIXTURE_ENVIRONMENT_ID,
     label: FIXTURE_ENVIRONMENT_LABEL,

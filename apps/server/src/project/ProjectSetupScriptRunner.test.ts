@@ -21,6 +21,7 @@ import * as TestClock from "effect/testing/TestClock";
 import * as Duration from "effect/Duration";
 
 import * as ServerConfig from "../config.ts";
+import * as ServerSettings from "../serverSettings.ts";
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TerminalManager from "../terminal/Manager.ts";
 import * as ProjectSetupScriptRunner from "./ProjectSetupScriptRunner.ts";
@@ -72,37 +73,17 @@ const makeProject = (scripts: OrchestrationProject["scripts"]): OrchestrationPro
 });
 
 const makeProjectionSnapshotQueryLayer = (project: OrchestrationProject) =>
-  Layer.succeed(ProjectionSnapshotQuery.ProjectionSnapshotQuery, {
-    getUserInputActivity: () => Effect.die("unused"),
-    getCommandReadModel: () => Effect.die("unused"),
-    getSnapshot: () => Effect.die("unused"),
-    getShellSnapshot: () => Effect.die("unused"),
-    getArchivedShellSnapshot: () => Effect.die("unused"),
-    getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
-    getCounts: () => Effect.die("unused"),
-    getEventReplayStats: () => Effect.die("unused"),
+  Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
     getActiveProjectByWorkspaceRoot: (workspaceRoot) =>
       Effect.succeed(
         workspaceRoot === project.workspaceRoot ? Option.some(project) : Option.none(),
       ),
     getProjectShellById: (projectId) =>
       Effect.succeed(projectId === project.id ? Option.some(project) : Option.none()),
-    getImportedAgentSessionSources: () => Effect.die("unused"),
-    getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
-    getThreadCheckpointContext: () => Effect.die("unused"),
-    getFullThreadDiffContext: () => Effect.die("unused"),
-    getThreadRuntimeContext: () => Effect.die("unused"),
-    getTurnStartMessage: () => Effect.die("unused"),
-    getThreadShellById: () => Effect.die("unused"),
-    getThreadResultContextById: () => Effect.die("unused"),
-    listThreadRelationshipActivities: () => Effect.die("unused"),
-    getThreadDetailById: () => Effect.die("unused"),
-    getThreadDetailSnapshot: () => Effect.die("unused"),
-    getTurnActivitiesSnapshot: () => Effect.die("unused"),
-    searchThreads: () => Effect.succeed({ matches: [] }),
   });
 
 interface TestTerminal {
+  readonly subscribe?: TerminalManager.TerminalManager["Service"]["subscribe"];
   readonly open: TerminalManager.TerminalManager["Service"]["open"];
   readonly launch: (
     input: TerminalManager.TerminalCommandOpenInput,
@@ -118,7 +99,7 @@ const makeTerminalManagerLayer = (overrides: TestTerminal) =>
     clear: () => Effect.void,
     restart: () => Effect.die(new Error("unused")),
     close: () => Effect.void,
-    subscribe: () => Effect.succeed(() => undefined),
+    subscribe: overrides.subscribe ?? (() => Effect.succeed(() => undefined)),
     subscribeMetadata: () => Effect.succeed(() => undefined),
   });
 
@@ -126,6 +107,7 @@ const testLayer = (
   project: OrchestrationProject,
   terminal: TestTerminal,
   onCompletionCheck: Effect.Effect<void> = Effect.void,
+  settings = ServerSettings.layerTest(),
 ) => {
   const observedFileSystem = Layer.effect(
     FileSystem.FileSystem,
@@ -149,6 +131,7 @@ const testLayer = (
     ProjectSetupScriptRunner.layer.pipe(
       Layer.provideMerge(makeProjectionSnapshotQueryLayer(project)),
       Layer.provideMerge(makeTerminalManagerLayer(terminal)),
+      Layer.provide(settings),
       Layer.provideMerge(
         ServerConfig.layerTest(process.cwd(), { prefix: "t3-setup-runner-test-" }).pipe(
           Layer.provide(nodeFileServices),
@@ -174,6 +157,110 @@ const claimWrapperExecution = (input: TerminalManager.TerminalCommandOpenInput) 
   }).pipe(Effect.provide(NodeServices.layer), Effect.orDie);
 
 describe("ProjectSetupScriptRunner", () => {
+  it.effect.each([false, true])(
+    "streams setup output and releases its listener when launch finishes (failure: %s)",
+    (failLaunch) => {
+      let listener:
+        | Parameters<TerminalManager.TerminalManager["Service"]["subscribe"]>[0]
+        | undefined;
+      const unsubscribe = vi.fn(() => {
+        listener = undefined;
+      });
+      const subscribe = vi.fn((next: NonNullable<typeof listener>) => {
+        listener = next;
+        return Effect.succeed(unsubscribe);
+      });
+      const open = vi.fn((input: TerminalManager.TerminalCommandOpenInput) =>
+        failLaunch
+          ? Effect.fail(
+              new TerminalManager.TerminalNotRunningError({
+                threadId: input.threadId,
+                terminalId: input.terminalId,
+              }),
+            )
+          : Effect.succeed({
+              threadId: "thread-1",
+              terminalId: "setup-setup",
+              cwd: "/repo/worktrees/a",
+              worktreePath: "/repo/worktrees/a",
+              status: "running" as const,
+              pid: 123,
+              history: "",
+              exitCode: null,
+              exitSignal: null,
+              label: "Setup",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            }),
+      );
+      const launch = (input: TerminalManager.TerminalCommandOpenInput) =>
+        Effect.gen(function* () {
+          if (!listener) return yield* Effect.die("Output listener must exist before launch");
+          for (const data of [
+            "\u001b[32mResolving",
+            " deps\u001b[0m\r\n",
+            "Progress: 1/2\rProgress: 2/2\r\n",
+          ]) {
+            yield* listener({
+              threadId: "thread-1",
+              terminalId: "setup-setup",
+              type: "output",
+              data,
+            });
+          }
+          yield* claimWrapperExecution(input);
+        });
+      return Effect.gen(function* () {
+        const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+        const lines: string[] = [];
+        const result = yield* runner
+          .runForThread({
+            threadId: "thread-1",
+            projectId: "project-1",
+            worktreePath: "/repo/worktrees/a",
+            observeCompletion: {
+              onOutputLine: (line) =>
+                Effect.sync(() => {
+                  lines.push(line);
+                }),
+            },
+          })
+          .pipe(Effect.result);
+        expect(subscribe).toHaveBeenCalledOnce();
+        expect(unsubscribe).toHaveBeenCalledOnce();
+        expect(listener).toBeUndefined();
+        if (failLaunch) {
+          expect(result._tag).toBe("Failure");
+          expect(lines).toEqual([]);
+        } else {
+          expect(lines).toEqual(["Resolving deps", "Progress: 1/2", "Progress: 2/2"]);
+          if (
+            result._tag !== "Success" ||
+            result.success.status !== "started" ||
+            !result.success.completion
+          ) {
+            throw new Error("Expected a completed setup execution");
+          }
+          expect((yield* result.success.completion).exitCode).toBe(0);
+        }
+      }).pipe(
+        Effect.provide(
+          testLayer(
+            makeProject([
+              {
+                id: "setup",
+                name: "Setup",
+                command: "bun install",
+                icon: "configure",
+                runOnWorktreeCreate: true,
+              },
+            ]),
+            { open, launch, subscribe },
+          ),
+        ),
+      );
+    },
+  );
+
   it.effect("returns no-script when no setup script exists", () => {
     const open = vi.fn(() => Effect.die("unexpected open"));
     const launch = vi.fn(() => Effect.die("unexpected launch"));
@@ -232,9 +319,9 @@ describe("ProjectSetupScriptRunner", () => {
     }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
-  it.effect(
-    "launches the setup wrapper directly in its deterministic terminal with worktree env",
-    () => {
+  it.effect.each([false, true])(
+    "launches the setup wrapper directly in its deterministic terminal with worktree env (machine default: %s)",
+    (inherited) => {
       const open = vi.fn(() =>
         Effect.succeed({
           threadId: "thread-1",
@@ -272,7 +359,7 @@ describe("ProjectSetupScriptRunner", () => {
           worktreePath: "/repo/worktrees/a",
         });
 
-        expect(result).toEqual({
+        expect(result).toMatchObject({
           status: "started",
           scriptId: "setup",
           scriptName: "Setup",
@@ -287,6 +374,8 @@ describe("ProjectSetupScriptRunner", () => {
           env: {
             T3CODE_PROJECT_ROOT: "/repo/project",
             T3CODE_WORKTREE_PATH: "/repo/worktrees/a",
+            NO_COLOR: "1",
+            FORCE_COLOR: "0",
           },
           command: {
             shell: process.execPath,
@@ -297,7 +386,16 @@ describe("ProjectSetupScriptRunner", () => {
         expect(launch.mock.calls[0]?.[0].threadId).toBe("thread-1");
         expect(launch.mock.calls[0]?.[0].terminalId).toBe("setup-setup");
         expect(launch.mock.calls[0]?.[0].command?.args?.[0]).toContain("run.cjs");
-      }).pipe(Effect.provide(testLayer(project, { open, launch })));
+      }).pipe(
+        Effect.provide(
+          testLayer(
+            inherited ? makeProject([]) : project,
+            { open, launch },
+            Effect.void,
+            ServerSettings.layerTest(inherited ? { defaultProjectScripts: project.scripts } : {}),
+          ),
+        ),
+      );
     },
   );
 
