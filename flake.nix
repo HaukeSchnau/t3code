@@ -448,6 +448,7 @@
             pkgs.gnutar
             pkgs.gzip
             pkgs.just
+            pkgs.jq
             pkgs.libsecret
             pkgs.pkg-config
             pkgs.python3

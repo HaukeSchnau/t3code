@@ -23,7 +23,12 @@ function runStep(stdout, exitCode = 0) {
   try {
     const result = spawnSync(
       "bash",
-      ["-c", 'npx() { printf "%s\\n" "$FIXTURE_STDOUT"; return "$FIXTURE_EXIT"; }\n' + script],
+      [
+        "--noprofile",
+        "--norc",
+        "-c",
+        'npx() { printf "%s\\n" "$FIXTURE_STDOUT"; return "$FIXTURE_EXIT"; }\n' + script,
+      ],
       {
         encoding: "utf8",
         env: {
