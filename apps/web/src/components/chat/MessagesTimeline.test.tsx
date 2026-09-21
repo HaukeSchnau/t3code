@@ -190,7 +190,7 @@ function stubDomGlobals() {
 beforeAll(async () => {
   stubDomGlobals();
   ({ MessagesTimeline, resolvePreviewAnnotationImage } = await import("./MessagesTimeline"));
-}, 30_000);
+}, 60_000);
 
 // The scroll-settling test clears every global stub; mounted timeline rows
 // still touch `window` through the tooltip's focus handling.

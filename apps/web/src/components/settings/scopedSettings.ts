@@ -192,7 +192,8 @@ function projectOverrideWrites(
 /**
  * Environment scopes write the patch to every connected environment; project
  * and checkout scopes write the scopable keys into each member's override
- * entry on its environment. Client keys always persist locally.
+ * entry on its environment. Client-only keys persist locally; server keys take
+ * precedence over legacy duplicates in the client schema.
  */
 export function planScopedSettingsPatch(
   scope: ResolvedSettingsScope,
@@ -200,7 +201,7 @@ export function planScopedSettingsPatch(
   patch: ScopedSettingsPatch,
 ) {
   const clientPatch = Object.fromEntries(
-    Object.entries(patch).filter(([key]) => CLIENT_KEYS.has(key)),
+    Object.entries(patch).filter(([key]) => CLIENT_KEYS.has(key) && !SERVER_KEYS.has(key)),
   ) as ClientSettingsPatch;
   const serverPatch = Object.fromEntries(
     Object.entries(patch).filter(([key]) => SERVER_KEYS.has(key)),

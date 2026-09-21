@@ -416,6 +416,7 @@ async function bootstrapServerAuth(urlCredential: string | null): Promise<Server
     clearOfflineAuthProof();
   }
   const requiresDesktopSessionUpgrade =
+    urlCredential === null &&
     currentSession.authenticated &&
     bootstrapCredential !== null &&
     currentSession.scopes?.includes(AuthDiagnosticsCaptureScope) !== true;
@@ -433,9 +434,9 @@ async function bootstrapServerAuth(urlCredential: string | null): Promise<Server
 
   try {
     await exchangeBootstrapCredential(bootstrapCredential);
-    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap({
-      requiredScopes: [AuthDiagnosticsCaptureScope],
-    });
+    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap(
+      urlCredential === null ? { requiredScopes: [AuthDiagnosticsCaptureScope] } : undefined,
+    );
     persistAuthenticatedProof(authenticatedSession);
     return { status: "authenticated" };
   } catch (error) {
