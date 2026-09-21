@@ -63,6 +63,11 @@ const packExecutableTargets = packExecutableTarget
 export default {
   run: {
     tasks: {
+      typecheck: {
+        command: "tsc --noEmit",
+        // Compiler GC tuning affects resource usage, not the typecheck result.
+        untrackedEnv: ["GOMEMLIMIT"],
+      },
       build: {
         command: "node scripts/cli.ts build",
         dependsOn: ["@t3tools/web#build"],
