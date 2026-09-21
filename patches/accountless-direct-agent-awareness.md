@@ -9,7 +9,7 @@ authorization boundary and is intentionally not removed.
 ## Implementation
 
 - Remove account sign-in, account settings, cloud discovery, cloud-link dialogs, and browser OAuth
-  routes from the clients.
+  routes from the clients. The mobile theme generator omits the unused Clerk native theme JSON.
 - Keep the upstream managed-relay interfaces behind fail-closed compatibility layers so shared
   connection runtime types do not need a fork-wide rewrite. No account credential is read or sent.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
