@@ -445,6 +445,8 @@
             pkgs.gcc
             pkgs.git
             pkgs.gnumake
+            pkgs.gnutar
+            pkgs.gzip
             pkgs.just
             pkgs.libsecret
             pkgs.pkg-config

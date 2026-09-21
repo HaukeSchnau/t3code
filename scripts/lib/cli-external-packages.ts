@@ -32,6 +32,7 @@ export const CLI_RUNTIME_EXTERNAL_PREFIXES = [
   "@ff-labs/",
   "@clerk/electron-passkeys",
   "node-gyp-build",
+  "detect-libc",
   "node-addon-api",
   // ws's optional accelerators. Nothing in this repo declares them, so they are
   // not in the staged production install and the packaged app does not ship
