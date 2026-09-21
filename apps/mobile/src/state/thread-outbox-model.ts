@@ -13,6 +13,7 @@ import {
   IsoDateTime,
   MessageId,
   ModelSelection,
+  OrchestrationMessageContext,
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
@@ -32,6 +33,7 @@ import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
 import { toUploadChatImageAttachments } from "../lib/composerImageAttachments";
 import type { DraftComposerAttachment } from "../lib/composerImages";
 import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
+import { serializeComposerMessageForServer, uploadedComposerContext } from "../lib/composerContext";
 import { scopedThreadKey } from "../lib/scopedEntities";
 import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
 
@@ -61,6 +63,7 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   messageId: MessageId,
   commandId: CommandId,
   text: Schema.String,
+  context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
   runtimeMode: Schema.optional(RuntimeMode),
@@ -100,6 +103,7 @@ export interface QueuedThreadMessage {
   readonly messageId: MessageId;
   readonly commandId: CommandId;
   readonly text: string;
+  readonly context?: OrchestrationMessageContext;
   readonly attachments: ReadonlyArray<DraftComposerAttachment>;
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
@@ -115,8 +119,14 @@ export interface QueuedThreadMessage {
 
 export function makeQueuedThreadDeliveryPlan(
   message: QueuedThreadMessage,
+  supportsInlineMessageContext = true,
 ): DurableCommandDeliveryPlan {
   const attachments = queuedMessageWireAttachments(message.attachments);
+  const serializedMessage = serializeComposerMessageForServer(
+    message.creation ? message.text.trim() : message.text,
+    uploadedComposerContext(message.context, message.attachments, attachments),
+    supportsInlineMessageContext,
+  );
   const settings = {
     modelSelection: message.modelSelection,
     runtimeMode: message.runtimeMode ?? "full-access",
@@ -132,7 +142,7 @@ export function makeQueuedThreadDeliveryPlan(
           commandId: message.commandId,
           messageId: message.messageId,
           createdAt: message.createdAt,
-          text: message.text.trim(),
+          ...serializedMessage,
           uploadedAttachments: attachments,
           modelSelection: message.modelSelection!,
           runtimeMode: settings.runtimeMode,
@@ -156,7 +166,7 @@ export function makeQueuedThreadDeliveryPlan(
         message: {
           messageId: message.messageId,
           role: "user" as const,
-          text: message.text,
+          ...serializedMessage,
           attachments,
         },
         ...settings,

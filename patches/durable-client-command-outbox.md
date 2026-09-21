@@ -118,3 +118,8 @@ command schema, replace the local refinement rather than duplicating command pay
   accepted-before-cleanup crash recovery, no redispatch after accepted hydration, and exactly-one optimistic
   projection.
 - Client-runtime typecheck plus repository `vp check` and `vp run typecheck` gates.
+
+Structured message context travels with durable commands and queued messages. First delivery freezes
+the wire representation for the target server capability; retries reuse that representation even if
+capabilities change. Server queue persistence keeps context until dispatch, so delaying a message
+does not discard file, terminal, or skill references.

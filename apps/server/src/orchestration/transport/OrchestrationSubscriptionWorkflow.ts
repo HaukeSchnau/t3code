@@ -63,6 +63,9 @@ export function isThreadDetailEvent(event: OrchestrationEvent): event is Extract
   {
     type:
       | "thread.message-sent"
+      | "thread.message-queued"
+      | "thread.queued-message-deleted"
+      | "thread.queued-message-dispatched"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
@@ -781,7 +784,7 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
           Stream.runForEach((event) => {
             const item = {
               kind: "event" as const,
-              event: projectActivityEvent(event),
+              event: projectActivityEvent(event, subscriptionInput.reasoningMessages === true),
             };
             return liveBudget.retain(item, event).pipe(
               Effect.flatMap((retained) => Queue.offer(liveBuffer, retained)),
@@ -831,7 +834,7 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
               Stream.filter(isThisThreadDetailEvent),
               Stream.map((event) => ({
                 kind: "event" as const,
-                event: projectActivityEvent(event),
+                event: projectActivityEvent(event, subscriptionInput.reasoningMessages === true),
               })),
               Stream.mapError(
                 (cause) =>
@@ -902,7 +905,10 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
       return Stream.concat(
         Stream.make({
           kind: "snapshot" as const,
-          snapshot: projectThreadDetailSnapshot(snapshot.value),
+          snapshot: projectThreadDetailSnapshot(
+            snapshot.value,
+            subscriptionInput.reasoningMessages === true,
+          ),
         }),
         afterSnapshot,
       );

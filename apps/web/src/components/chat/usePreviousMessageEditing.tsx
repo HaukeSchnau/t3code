@@ -1,46 +1,24 @@
-import {
-  type MessageId,
-  type ModelSelection,
-  type ProviderInstanceId,
-  type ProviderInteractionMode,
-  type RuntimeMode,
-  type ScopedThreadRef,
-  type ServerProvider,
-  type ThreadId,
-} from "@t3tools/contracts";
+import { appAtomRegistry } from "../../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../../state/server";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./composerPromptHistory";
+import { type MessageId, type ModelSelection, type ProviderInstanceId, type ProviderInteractionMode, type RuntimeMode, type ScopedThreadRef, type ServerProvider, type ThreadId } from "@t3tools/contracts";
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { useAtomValue } from "@effect/atom-react";
 import { projectScriptCwd } from "@t3tools/shared/projectScripts";
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { parseStandaloneComposerSlashCommand } from "../../composer-logic";
-import {
-  type ComposerImageAttachment,
-  type DraftId,
-  useComposerDraftStore,
-} from "../../composerDraftStore";
+import { type ComposerImageAttachment, type DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import { readEnvironmentApi } from "../../environmentApi";
 import { type TerminalContextDraft } from "../../lib/terminalContext";
-import { type ElementContextDraft } from "../../lib/elementContext";
 import { resolveAppModelSelectionForInstance } from "../../modelSelection";
 import { derivePhase } from "../../session-logic";
 import { type ChatImageAttachment, type ChatMessage, type Thread } from "../../types";
 import { newCommandId, newDraftId, newMessageId } from "~/lib/utils";
-import {
-  buildExpiredTerminalContextToastCopy,
-  cloneComposerImageForRetry,
-  deriveLockedProvider,
-  getStartedThreadModelChangeBlockReason,
-  readFileAsDataUrl,
-} from "../ChatView.logic";
+import { buildExpiredTerminalContextToastCopy, cloneComposerImageForRetry, deriveLockedProvider, getStartedThreadModelChangeBlockReason } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 import { InlineMessageEditor } from "./InlineMessageEditor";
 import { type ChatComposerHandle } from "./ChatComposer";
-import {
-  editableTextFromUserMessage,
-  hydrateMessageImagesForEdit,
-  runPreviousMessageEditTransaction,
-  waitForMessagePrunedFromThread,
-} from "./previousMessageEditing";
+import { editableTextFromUserMessage, hydrateMessageImagesForEdit, runPreviousMessageEditTransaction, waitForMessagePrunedFromThread } from "./previousMessageEditing";
 import { type UserMessageEditingController } from "./MessagesTimeline";
 import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
@@ -50,15 +28,7 @@ import { useProject, useProviderUsageLimits, useThread } from "../../state/entit
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
-import {
-  analyzeThreadTurnDraft,
-  formatThreadTurnOutgoingText,
-  IMAGE_ONLY_BOOTSTRAP_PROMPT,
-  resolveNewThreadSubmissionTitle,
-  serializeThreadTurnPrompt,
-  threadTurnDraftFromComposer,
-  type ThreadTurnDraft,
-} from "./ThreadTurnSubmission";
+import { analyzeThreadTurnDraft, materializeThreadTurnAttachments, buildThreadTurnMessageContext, createDirectThreadTurnDeliveryAdapter, formatThreadTurnOutgoingText, resolveNewThreadSubmissionTitle, serializeThreadTurnPrompt, threadTurnDraftFromComposer, type ThreadTurnDraft } from "./ThreadTurnSubmission";
 
 const NOOP = () => undefined;
 const NOOP_ASYNC = () => Promise.resolve(undefined);
@@ -211,7 +181,6 @@ export function usePreviousMessageEditing({
   const editPromptRef = useRef("");
   const editComposerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const editComposerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
-  const editComposerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const editComposerRef = useRef<ChatComposerHandle | null>(null);
   const activeThreadSnapshotRef = useRef<Thread | undefined>(undefined);
   activeThreadSnapshotRef.current = activeThread;
@@ -260,7 +229,6 @@ export function usePreviousMessageEditing({
     editPromptRef.current = "";
     editComposerImagesRef.current = [];
     editComposerTerminalContextsRef.current = [];
-    editComposerElementContextsRef.current = [];
     setEditingUserMessage(null);
   }, []);
 
@@ -465,7 +433,6 @@ export function usePreviousMessageEditing({
           previewAnnotations: [],
           reviewComments: [],
         }),
-        elementContexts: [],
       };
       const composerImages = submissionDraft.images;
       const promptForSend = editPromptRef.current;
@@ -525,16 +492,7 @@ export function usePreviousMessageEditing({
       const outgoingMessageText = formatThreadTurnOutgoingText(
         submittedDraft,
         serializeThreadTurnPrompt(submittedDraft, submissionAnalysis) ||
-          IMAGE_ONLY_BOOTSTRAP_PROMPT,
-      );
-      const turnAttachmentsPromise = Promise.all(
-        composerImagesSnapshot.map(async (image) => ({
-          type: "image" as const,
-          name: image.name,
-          mimeType: image.mimeType,
-          sizeBytes: image.sizeBytes,
-          dataUrl: await readFileAsDataUrl(image.file),
-        })),
+          ATTACHMENT_ONLY_BOOTSTRAP_PROMPT,
       );
       const optimisticAttachments = composerImagesSnapshot.map((image) => ({
         type: "image" as const,
@@ -552,6 +510,22 @@ export function usePreviousMessageEditing({
 
       let turnStartSucceeded = false;
       try {
+        // Validate attachment bytes before pruning the original conversation.
+        const turnAttachments = await materializeThreadTurnAttachments(
+          submittedDraft,
+          environmentId,
+        );
+        const context = buildThreadTurnMessageContext(
+          submittedDraft,
+          submissionAnalysis,
+          turnAttachments,
+        );
+        const directDelivery = createDirectThreadTurnDeliveryAdapter({
+          dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
+          supportsInlineMessageContext:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment
+              .capabilities.inlineMessageContext === true,
+        });
         const result = await runPreviousMessageEditTransaction({
           pruneHistory: async () => {
             await api.orchestration.dispatchCommand({
@@ -619,9 +593,8 @@ export function usePreviousMessageEditing({
               interactionMode: editInteractionMode,
             });
 
-            const turnAttachments = await turnAttachmentsPromise;
             beginLocalDispatch({ preparingWorktree: false });
-            await api.orchestration.dispatchCommand({
+            await directDelivery.deliver(environmentId, {
               type: "thread.turn.start",
               commandId: newCommandId(),
               threadId: threadIdForSend,
@@ -630,6 +603,7 @@ export function usePreviousMessageEditing({
                 role: "user",
                 text: outgoingMessageText,
                 attachments: turnAttachments,
+                ...(context ? { context } : {}),
               },
               modelSelection: submittedDraft.selectedModelSelection,
               titleSeed: title,
@@ -659,6 +633,11 @@ export function usePreviousMessageEditing({
             result.error instanceof Error ? result.error.message : "Failed to edit message.",
           );
         }
+      } catch (error) {
+        setThreadError(
+          threadIdForSend,
+          error instanceof Error ? error.message : "Failed to prepare the edited message.",
+        );
       } finally {
         sendInFlightRef.current = false;
         setIsSubmittingEdit(false);
@@ -734,7 +713,6 @@ export function usePreviousMessageEditing({
         promptRef={editPromptRef}
         composerImagesRef={editComposerImagesRef}
         composerTerminalContextsRef={editComposerTerminalContextsRef}
-        composerElementContextsRef={editComposerElementContextsRef}
         onSend={onSendEditedMessage}
         onInterrupt={NOOP}
         onImplementPlanInNewThread={NOOP}

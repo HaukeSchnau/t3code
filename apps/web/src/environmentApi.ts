@@ -6,7 +6,6 @@ import {
   type CodexThreadForkResult,
   type CodexThreadResumeInput,
   type CodexThreadResumeResult,
-  type EnvironmentApi,
   type EnvironmentId,
 } from "@t3tools/contracts";
 import {
@@ -18,10 +17,7 @@ import {
 import { connectionAtomRuntime } from "./connection/runtime";
 import { appAtomRegistry } from "./rpc/atomRegistry";
 
-type MinimalEnvironmentApi = {
-  readonly codex: Pick<EnvironmentApi["codex"], "forkThread" | "resumeThread">;
-  readonly orchestration: Pick<EnvironmentApi["orchestration"], "dispatchCommand">;
-};
+type EnvironmentApi = ReturnType<typeof createMinimalEnvironmentApi>;
 
 const dispatchCommand = createEnvironmentRpcCommand(connectionAtomRuntime, {
   label: "environment-api:orchestration:dispatch-command",
@@ -53,7 +49,7 @@ async function unwrapEnvironmentCommand<A>(
   throw squashAtomCommandFailure(result as Parameters<typeof squashAtomCommandFailure>[0]);
 }
 
-function createMinimalEnvironmentApi(environmentId: EnvironmentId): MinimalEnvironmentApi {
+function createMinimalEnvironmentApi(environmentId: EnvironmentId) {
   return {
     codex: {
       forkThread: (input: CodexThreadForkInput): Promise<CodexThreadForkResult> =>
@@ -99,7 +95,7 @@ export function readEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi
     return overriddenApi;
   }
 
-  return createMinimalEnvironmentApi(environmentId) as EnvironmentApi;
+  return createMinimalEnvironmentApi(environmentId);
 }
 
 export function ensureEnvironmentApi(environmentId: EnvironmentId): EnvironmentApi {

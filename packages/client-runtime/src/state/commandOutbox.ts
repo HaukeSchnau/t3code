@@ -144,6 +144,7 @@ export interface CommandOutboxService {
   readonly begin: (
     commandId: CommandIdType,
     startedAt: string,
+    preparedPlan?: DurableCommandDeliveryPlanType,
   ) => Effect.Effect<
     DurableCommandOutboxEntry,
     CommandOutboxStorageError | CommandOutboxStateError
@@ -278,6 +279,7 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
   const begin = Effect.fn("CommandOutbox.begin")(function* (
     commandId: CommandIdType,
     startedAt: string,
+    preparedPlan?: DurableCommandDeliveryPlanType,
   ) {
     return yield* persist((current) => {
       const index = current.entries.findIndex((entry) => commandIdOf(entry) === commandId);
@@ -290,9 +292,24 @@ export const makeCommandOutbox = Effect.fn("CommandOutbox.make")(function* (
       ) {
         return stateError("not-ready", commandId, `Command ${commandId} is not ready for delivery`);
       }
+      // Resolve host capabilities once, in the same durable write that begins delivery.
+      // Ambiguous retries keep the original wire payload even if capabilities change.
+      const plan = entry.state._tag === "Pending" ? (preparedPlan ?? entry.plan) : entry.plan;
+      if (
+        !isDurableCommandDeliveryPlan(plan) ||
+        plan.command.commandId !== commandId ||
+        plan.command.threadId !== entry.plan.command.threadId ||
+        plan.environmentId !== entry.plan.environmentId
+      ) {
+        return stateError(
+          "invalid-replacement",
+          commandId,
+          "Prepared delivery must retain its command, thread and environment identity",
+        );
+      }
       const attempt = entry.state._tag === "Retrying" ? entry.state.attempt + 1 : 1;
       const nextEntry: DurableCommandOutboxEntry = {
-        plan: entry.plan,
+        plan,
         state: { _tag: "Delivering", attempt, startedAt },
       };
       const entries = [...current.entries];

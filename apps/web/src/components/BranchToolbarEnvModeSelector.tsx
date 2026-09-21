@@ -10,11 +10,12 @@ import {
 } from "@t3tools/client-runtime/state/workspaces";
 
 import type { EnvMode } from "./BranchToolbar.logic";
-import { composerFloatingLayerProps } from "./chat/composerEventScope";
+import { useComposerMenuProps } from "./chat/composerEventScope";
 import { Button } from "./ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 
 interface BranchToolbarEnvModeSelectorProps {
+  forceNewWorktree?: boolean;
   environmentId: EnvironmentId;
   projectId: ProjectId;
   envLocked: boolean;
@@ -29,6 +30,7 @@ interface BranchToolbarEnvModeSelectorProps {
 }
 
 export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSelector({
+  forceNewWorktree = false,
   environmentId,
   projectId,
   envLocked,
@@ -41,6 +43,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
   profile,
   onProfileChange,
 }: BranchToolbarEnvModeSelectorProps) {
+  const composerFloatingLayerProps = useComposerMenuProps();
   const profileGroupId = useId();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -59,11 +62,13 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
     [workspaces, archive.snapshots, projectId, query, showSettled],
   );
   const isNew = effectiveEnvMode === "worktree" && !activeWorktreePath;
-  const label = activeWorktreePath
-    ? workspaceLabel(activeWorktreePath)
-    : isNew
-      ? "New workspace"
-      : "Project checkout";
+  const label = forceNewWorktree
+    ? "New workspace per model"
+    : activeWorktreePath
+      ? workspaceLabel(activeWorktreePath)
+      : isNew
+        ? "New workspace"
+        : "Project checkout";
   const content = (
     <>
       <FolderGit2Icon className="size-3 shrink-0" />
@@ -80,7 +85,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       </span>
     </>
   );
-  if (envLocked)
+  if (envLocked || forceNewWorktree)
     return (
       <span
         aria-label={label}
@@ -100,6 +105,7 @@ export const BranchToolbarEnvModeSelector = memo(function BranchToolbarEnvModeSe
       <PopoverTrigger
         render={<Button variant="ghost" size="xs" />}
         aria-label="Workspace"
+        data-composer-shortcut="composer.workspace"
         className="min-w-0 shrink font-normal text-xs!"
         data-composer-context-control
       >

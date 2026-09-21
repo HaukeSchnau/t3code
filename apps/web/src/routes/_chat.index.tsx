@@ -4,6 +4,8 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { LinkIcon, PlusIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { isElectron } from "../env";
 import { NoProjectsHero } from "../components/NoProjectsHero";
 import { sortScopedProjectsForSidebar } from "../components/Sidebar.logic";
 import { Button } from "../components/ui/button";
@@ -113,10 +115,15 @@ export const Route = createFileRoute("/_chat/")({
 });
 
 function HostedStaticOnboardingState() {
+  const localEnvironmentOff = isLocalEnvironmentDisabled();
+  const description = localEnvironmentOff
+    ? "The local environment is turned off. Connect a remote environment, or turn the local environment back on in Connections."
+    : "Open Connections and add that machine using its pairing link. This app must be able to reach it.";
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden bg-background">
-        <WorkspacePageHeader className="border-b border-border">
+        <WorkspacePageHeader electron={isElectron} className="border-b border-border">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-foreground md:text-muted-foreground/60">
               {APP_DISPLAY_NAME}
@@ -134,7 +141,11 @@ function HostedStaticOnboardingState() {
                 Connect to a computer running T3 Code
               </EmptyTitle>
               <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
-                Add a reachable backend manually to start working from this browser.
+                This app connects to T3 Code running on your computer or a server. Start the T3 Code
+                desktop app or command-line server on that machine and keep it running.
+              </EmptyDescription>
+              <EmptyDescription className="mt-2 text-sm leading-relaxed text-muted-foreground/78">
+                {description}
               </EmptyDescription>
               <div className="mt-6 flex justify-center">
                 <Button render={<Link to="/settings/connections" />} size="sm">

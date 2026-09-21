@@ -245,6 +245,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
         message: input.message,
         previousTitle: input.previousTitle,
         automaticRefresh: input.automaticRefresh,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -258,6 +259,7 @@ export const makeCursorTextGeneration = Effect.fn("makeCursorTextGeneration")(fu
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 

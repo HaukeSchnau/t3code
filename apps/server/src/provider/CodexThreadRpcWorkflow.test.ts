@@ -88,6 +88,9 @@ const readModel = (thread: OrchestrationThread): OrchestrationReadModel => ({
 });
 
 const baseProjectionQuery = {
+        listActivitiesByKind: () => Effect.die("unexpected activity query"),
+        getDeletedWorktreeThreads: () => Effect.die("unexpected deleted worktree query"),
+        getProjectShells: () => Effect.die("unexpected project shells query"),
   getCommandReadModel: () => Effect.die("unexpected command read"),
   getThreadRuntimeContext: () => Effect.die("unexpected runtime context read"),
   getSnapshot: () => Effect.die("unexpected snapshot read"),
