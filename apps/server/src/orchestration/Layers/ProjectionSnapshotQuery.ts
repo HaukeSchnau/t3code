@@ -1629,6 +1629,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
         a.kind,
         a.summary,
         a.payload_json AS "payload",
+        a.activity_revision AS "activityRevision",
         a.sequence,
         a.created_at AS "createdAt"
       FROM projection_thread_activities a
