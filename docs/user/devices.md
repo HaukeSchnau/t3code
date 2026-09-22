@@ -98,10 +98,43 @@ The picker identifies devices by host when several hosts are configured.
 Connections recover after interruptions. Removing a host closes its device
 sessions and stops its T3 helpers when reachable; simulators keep running.
 
-T3 provides discovery, streaming, and control. Arrange app builds,
-installation, and connectivity to development servers such as Metro separately.
+T3 provides discovery, streaming, and control. With agent access enabled,
+`agent-device install` accepts a local `.apk` or `.app` path and uploads it
+through the configured remote daemon. Use the config and session arguments
+provided by the device tool. `agent-device help install` needs neither argument.
+
+For an artifact already on the device host, use
+`agent-device install <app> remote:/absolute/path/to/app.apk` with the same
+config and session flags. This skips upload and still controls the selected
+remote device from your workspace. The pinned uploader bounds each transfer
+attempt to five minutes. On a slow link, copy a large artifact to the host with
+a resumable transfer first, then install its `remote:` path.
+
+Arrange native builds and connectivity to development servers such as Metro separately.
 A simulator on another machine cannot reach Metro through your environment's
 localhost without forwarding or another reachable address.
+
+### Expo projects on remote simulators
+
+Start Metro on a port allowed by your workspace's service manager. Bind to an
+address reachable from the simulator host and advertise that address in Expo's
+launch URL. A port-forward or Tailnet address can provide this connection;
+`localhost` in the simulator refers to the simulator host, not the agent's server.
+
+Check the installed apps before downloading Expo Go again. Reuse a compatible
+installed version, or install a build matching the project's SDK. Expo's versions response keeps
+client download URLs under `sdkVersions["<SDK>.0.0"]`, not at its top level.
+An iOS archive must produce an `.app` directory; if it contains the bundle files
+at its root, extract them into a directory such as `Expo Go.app` before installing.
+Projects with native modules unavailable in Expo Go need a development build.
+
+Expo Go onboarding overlays can report a visible button as covered in the
+accessibility tree. If a ref-based tap fails this way, inspect a fresh screenshot
+and tap its visible position, then return to snapshot refs after dismissing the overlay.
+
+If the project directory already contains version-control metadata that the Expo
+scaffolder rejects, scaffold into a temporary empty directory and copy the app
+files into the project, preserving its existing repository metadata.
 
 ## Device tool updates
 
