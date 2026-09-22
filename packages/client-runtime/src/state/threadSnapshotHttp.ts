@@ -60,18 +60,21 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
   readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
   readonly timeoutMs?: number;
   readonly window?: ThreadSnapshotWindow;
+  readonly reasoningMessages?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
+    group: "orchestration",
     method: "GET",
     url: (httpBaseUrl) =>
       environmentEndpointUrl(httpBaseUrl, `/api/orchestration/threads/${input.threadId}`),
     timeoutMs: input.timeoutMs ?? DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS,
     request: ({ client, headers }) =>
-      client.orchestration.threadSnapshot({
+      client.threadSnapshot({
         params: { threadId: input.threadId },
         payload: {
           activityDetailMode: input.activityDetailMode,
+          ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
           ...(input.window !== undefined ? { turnLimit: input.window.turnLimit } : {}),
           ...(input.window?.beforeCursor !== undefined
             ? { beforeCursor: input.window.beforeCursor }
@@ -138,6 +141,7 @@ export class ThreadSnapshotLoader extends Context.Service<
       threadId: ThreadId,
       activityDetailMode: OrchestrationThreadActivityDetailMode,
       window?: ThreadSnapshotWindow,
+      reasoningMessages?: boolean,
     ) => Effect.Effect<ThreadSnapshotLoadOutcome>;
     readonly loadTurnActivities: (
       prepared: PreparedConnection,
@@ -165,13 +169,14 @@ export const threadSnapshotLoaderLayer: Layer.Layer<
         fetchEnvironmentTurnActivities({ prepared, threadId, turnId, signer }).pipe(
           Effect.provideService(HttpClient.HttpClient, httpClient),
         ),
-      load: (prepared, threadId, activityDetailMode, window) =>
+      load: (prepared, threadId, activityDetailMode, window, reasoningMessages) =>
         fetchEnvironmentThreadSnapshot({
           prepared,
           threadId,
           activityDetailMode,
           signer,
           remoteAuthorization,
+          ...(reasoningMessages === true ? { reasoningMessages: true } : {}),
           ...(window !== undefined ? { window } : {}),
         }).pipe(
           Effect.map((snapshot): ThreadSnapshotLoadOutcome => ({ _tag: "Found", snapshot })),

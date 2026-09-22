@@ -1,3 +1,4 @@
+import * as ArrayUtils from "effect/Array";
 // @effect-diagnostics nodeBuiltinImport:off -- The integration fixture owns real Node HTTP/WebSocket and hashing boundaries.
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
@@ -428,41 +429,39 @@ function makeDecoratedSocket(input: {
       return true;
     });
 
-  const runRaw: Socket.Socket["runRaw"] = <A, E, R>(
-    handler: (frame: string | Uint8Array) => Effect.Effect<A, E, R> | void,
-    options?: { readonly onOpen?: Effect.Effect<void> | undefined },
-  ): Effect.Effect<void, Socket.SocketError | E, R> =>
-    Effect.scopedWith((scope) =>
-      Scope.provide(input.base.writer, scope).pipe(
-        Effect.flatMap((write) =>
-          input.base.runRaw(
-            (frame) =>
-              inspectOriginFrame(frame).pipe(
-                Effect.flatMap((suppress): Effect.Effect<void, Socket.SocketError | E, R> => {
-                  if (!suppress) {
-                    const handled = handler(frame);
-                    return Effect.isEffect(handled) ? Effect.asVoid(handled) : Effect.void;
-                  }
-                  input.state.clientLinkClosedAfterSuppression = true;
-                  return write(new Socket.CloseEvent(1012, "nl1-correlated-exit-suppressed"));
-                }),
-              ),
-            options,
-          ),
-        ),
-      ),
-    );
-
   return Socket.make({
+    reader: Effect.gen(function* () {
+      const reader = yield* input.base.reader;
+      const writer = yield* input.base.writer;
+      return {
+        ...reader,
+        pull: Effect.gen(function* () {
+          while (true) {
+            const frames = yield* reader.pull;
+            const retained: Array<string | Uint8Array> = [];
+            for (const frame of frames) {
+              if (yield* inspectOriginFrame(frame)) {
+                input.state.clientLinkClosedAfterSuppression = true;
+                yield* writer.write(new Socket.CloseEvent(1012, "nl1-correlated-exit-suppressed"));
+              } else retained.push(frame);
+            }
+            if (ArrayUtils.isArrayNonEmpty(retained)) return retained;
+          }
+        }),
+      };
+    }),
     writer: input.base.writer.pipe(
-      Effect.map(
-        (write) => (frame) =>
+      Effect.map((writer) => ({
+        write: (frame) =>
           Socket.isCloseEvent(frame)
-            ? write(frame)
-            : onClientFrame(frame).pipe(Effect.andThen(write(frame))),
-      ),
+            ? writer.write(frame)
+            : onClientFrame(frame).pipe(Effect.andThen(writer.write(frame))),
+        writeAll: (frames) =>
+          Effect.forEach(frames, onClientFrame, { discard: true }).pipe(
+            Effect.andThen(writer.writeAll(frames)),
+          ),
+      })),
     ),
-    runRaw,
   });
 }
 

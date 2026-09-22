@@ -39,7 +39,8 @@ merge conflicts easier to reason about.
 - Preserve the fork's applied migration IDs and names. Append upstream migrations to the existing
   registry instead of replacing it with upstream's numbering. Upstream migrations 48 and 49 run as
   fork migrations 69 and 70; the source filenames remain upstream-compatible.
-- Push completed fork work directly to `main` with `jj-push main`.
+- Push completed fork work to a feature bookmark with `jj-push <bookmark>` and open a pull request
+  targeting `main`, including upstream sync merges. Do not push directly to `main`.
 - Use Jujutsu for VCS operations unless explicitly instructed otherwise.
 - Keep new fork patches minimally invasive:
   - prefer extension points and small adapters
@@ -58,7 +59,7 @@ merge conflicts easier to reason about.
 ## Non-Goals
 
 - Do not use routine upstream rebases that rewrite the fork patch stack.
-- Do not open pull requests for normal personal-fork publishing.
+- Do not bypass the pull request workflow for personal-fork publishing.
 - Do not silently carry undocumented fork patches.
 
 ## Verification

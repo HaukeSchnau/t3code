@@ -125,6 +125,7 @@ export function makeProjectionOperationalReads(input: {
         text,
         attachments_json AS "attachments",
         origin_json AS "origin",
+        context_json AS "context",
         is_streaming AS "isStreaming",
         created_at AS "createdAt",
         updated_at AS "updatedAt"
@@ -147,6 +148,7 @@ export function makeProjectionOperationalReads(input: {
         text,
         attachments_json AS "attachments",
         origin_json AS "origin",
+        context_json AS "context",
         is_streaming AS "isStreaming",
         created_at AS "createdAt",
         updated_at AS "updatedAt"

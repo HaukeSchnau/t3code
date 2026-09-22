@@ -72,6 +72,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run type checks
+        env:
+          # Native TypeScript uses Go; collect before the runner hits MemoryHigh.
+          GOMEMLIMIT: 3GiB
         run: |
           set -euo pipefail
           if [ -x /run/current-system/sw/bin/nix ]; then

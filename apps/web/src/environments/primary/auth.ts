@@ -198,7 +198,9 @@ function currentAuthProofBinding() {
   const target = readPrimaryEnvironmentTarget();
   return {
     browserOrigin: window.location.origin,
-    primaryTargetSignature: primaryEnvironmentTargetSignature(target),
+    primaryTargetSignature: target
+      ? primaryEnvironmentTargetSignature(target)
+      : "local-backend-disabled",
   };
 }
 
@@ -393,9 +395,9 @@ function isTransientBootstrapError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
-  const bootstrapCredential = getDesktopBootstrapCredential();
-  const cachedAuthenticationEligible = readValidAuthenticatedProof() !== null;
+async function bootstrapServerAuth(urlCredential: string | null): Promise<ServerAuthGateState> {
+  const bootstrapCredential = urlCredential ?? getDesktopBootstrapCredential();
+  const cachedAuthenticationEligible = !urlCredential && readValidAuthenticatedProof() !== null;
   let currentSession: AuthSessionState;
   try {
     currentSession = cachedAuthenticationEligible
@@ -414,10 +416,11 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
     clearOfflineAuthProof();
   }
   const requiresDesktopSessionUpgrade =
+    urlCredential === null &&
     currentSession.authenticated &&
     bootstrapCredential !== null &&
     currentSession.scopes?.includes(AuthDiagnosticsCaptureScope) !== true;
-  if (currentSession.authenticated && !requiresDesktopSessionUpgrade) {
+  if (currentSession.authenticated && !urlCredential && !requiresDesktopSessionUpgrade) {
     persistAuthenticatedProof(currentSession);
     return { status: "authenticated" };
   }
@@ -431,9 +434,9 @@ async function bootstrapServerAuth(): Promise<ServerAuthGateState> {
 
   try {
     await exchangeBootstrapCredential(bootstrapCredential);
-    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap({
-      requiredScopes: [AuthDiagnosticsCaptureScope],
-    });
+    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap(
+      urlCredential === null ? { requiredScopes: [AuthDiagnosticsCaptureScope] } : undefined,
+    );
     persistAuthenticatedProof(authenticatedSession);
     return { status: "authenticated" };
   } catch (error) {
@@ -540,22 +543,37 @@ export async function revokeOtherServerClientSessions(): Promise<number> {
 }
 
 export async function resolveInitialServerAuthGateState(): Promise<ServerAuthGateState> {
-  if (resolvedAuthenticatedGateState?.status === "authenticated") {
-    return resolvedAuthenticatedGateState;
-  }
-  if (authoritativeRequiresAuthGateState !== null) {
-    return authoritativeRequiresAuthGateState;
+  const urlCredential = takePairingTokenFromUrl();
+  const previousPromise = bootstrapPromise;
+  if (urlCredential) {
+    resolvedAuthenticatedGateState = null;
+    authoritativeRequiresAuthGateState = null;
+  } else {
+    if (previousPromise) {
+      return previousPromise;
+    }
+
+    if (authoritativeRequiresAuthGateState !== null) {
+      return authoritativeRequiresAuthGateState;
+    }
+
+    if (resolvedAuthenticatedGateState?.status === "authenticated") {
+      return resolvedAuthenticatedGateState;
+    }
   }
 
-  if (bootstrapPromise) {
-    return bootstrapPromise;
-  }
-
-  const nextPromise = bootstrapServerAuth();
+  const nextPromise = previousPromise
+    ? previousPromise
+        .catch(() => undefined)
+        .then(() => {
+          resolvedAuthenticatedGateState = null;
+          return bootstrapServerAuth(urlCredential);
+        })
+    : bootstrapServerAuth(urlCredential);
   bootstrapPromise = nextPromise;
   return nextPromise
     .then((result) => {
-      if (result.status === "authenticated") {
+      if (bootstrapPromise === nextPromise && result.status === "authenticated") {
         resolvedAuthenticatedGateState = result;
       }
       return result;

@@ -11,13 +11,15 @@ import {
   accountlessRelayCompatibilityLayer,
   browserCryptoLayer,
 } from "../connection/accountlessRelayCompatibility";
+import * as ClientTracer from "../observability/clientTracer";
 
 const httpClientLayer = remoteHttpClientLayer((input, init) => globalThis.fetch(input, init));
 type RuntimeLayerSource =
   | typeof httpClientLayer
   | typeof browserCryptoLayer
   | typeof Socket.layerWebSocketConstructorGlobal
-  | typeof accountlessRelayCompatibilityLayer;
+  | typeof accountlessRelayCompatibilityLayer
+  | typeof ClientTracer.layer;
 
 const primaryHttpRuntime = ManagedRuntime.make(
   PrimaryEnvironmentHttpClient.layer.pipe(Layer.provide(primaryEnvironmentHttpLayer)),
@@ -45,6 +47,7 @@ const runtimeLayer = Layer.mergeAll(
   browserCryptoLayer,
   Socket.layerWebSocketConstructorGlobal,
   accountlessRelayCompatibilityLayer.pipe(Layer.provide(httpClientLayer)),
+  ClientTracer.layer,
 );
 
 export const runtime: ManagedRuntime.ManagedRuntime<

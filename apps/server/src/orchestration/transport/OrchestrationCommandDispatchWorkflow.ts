@@ -10,10 +10,13 @@ import {
   type ThreadWorkspaceRetentionPolicy,
   type ThreadWorkspaceRootRole,
   type WorkspaceProfile,
+  type WorktreeSetupSnapshot,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
@@ -31,6 +34,8 @@ import {
 } from "../Services/CommandPreprocessingCoordinator.ts";
 import type * as ProjectionSnapshotQuery from "../Services/ProjectionSnapshotQuery.ts";
 import { canReplaceThreadTitle, DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
+import type * as WorktreeSetupTracker from "../../project/WorktreeSetupTracker.ts";
+import * as ProjectCloneTracker from "../../project/ProjectCloneTracker.ts";
 import * as ProjectSetupScriptRunner from "../../project/ProjectSetupScriptRunner.ts";
 import type * as ServerSettings from "../../serverSettings.ts";
 import * as ServerRuntimeStartup from "../../serverRuntimeStartup.ts";
@@ -89,6 +94,9 @@ function setupScriptFailureDetail(
 export function makeOrchestrationCommandDispatchWorkflow(input: {
   readonly orchestrationEngine: OrchestrationEngine.OrchestrationEngineShape;
   readonly commandPreprocessing: CommandPreprocessingCoordinator["Service"];
+  readonly projectCloneTracker: ProjectCloneTracker.ProjectCloneTracker["Service"];
+  readonly worktreeSetupTracker: WorktreeSetupTracker.WorktreeSetupTracker["Service"];
+  readonly recordWorktreeSetup: (snapshot: WorktreeSetupSnapshot) => Effect.Effect<void>;
   readonly startup: ServerRuntimeStartup.ServerRuntimeStartup["Service"];
   readonly projectionSnapshotQuery: ProjectionSnapshotQuery.ProjectionSnapshotQueryShape;
   readonly textGeneration: TextGeneration.TextGeneration["Service"];
@@ -198,6 +206,39 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
               retentionPolicy: "explicit-delete" as const,
             }
           : undefined);
+      const tracker = input.worktreeSetupTracker;
+      const tracked = prepareWorkspace !== undefined;
+      const track = (effect: Effect.Effect<void>) => (tracked ? effect : Effect.void);
+      let preparingSessionSet = false;
+      const setPreparingSession = (status: "starting" | "error", detail: string | null = null) =>
+        dispatchCommand({
+          type: "thread.session.set",
+          commandId: preprocessingCommandId(command, `bootstrap-session-${status}`),
+          threadId: command.threadId,
+          session: {
+            threadId: command.threadId,
+            status,
+            providerName: null,
+            providerInstanceId:
+              bootstrap?.createThread?.modelSelection.instanceId ??
+              command.modelSelection?.instanceId,
+            runtimeMode: command.runtimeMode,
+            activeTurnId: null,
+            lastError: detail,
+            updatedAt: command.createdAt,
+          },
+          createdAt: command.createdAt,
+        });
+      const finish = (phase: "done" | "failed" | "cancelled", error?: string) =>
+        tracked
+          ? tracker
+              .finish(command.threadId, phase, error)
+              .pipe(
+                Effect.flatMap((snapshot) =>
+                  snapshot ? input.recordWorktreeSetup(snapshot) : Effect.void,
+                ),
+              )
+          : Effect.void;
       const provisionalTitle =
         bootstrap?.createThread?.title ?? command.titleSeed ?? DEFAULT_THREAD_TITLE;
       const generateWorkspaceNaming = prepareWorkspace
@@ -298,8 +339,14 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
       const runSetupProgram = () =>
         Effect.gen(function* () {
-          if (!bootstrap?.runSetupScript || !targetWorktreePath) return;
-          if (progress.setup.status === "completed") return;
+          if (!bootstrap?.runSetupScript || !targetWorktreePath) {
+            yield* track(tracker.stageStatus(command.threadId, "setup-script", "skipped"));
+            return;
+          }
+          if (progress.setup.status === "completed") {
+            yield* track(tracker.stageStatus(command.threadId, "setup-script", "done"));
+            return;
+          }
 
           const worktreePath = targetWorktreePath;
           const runnerInput = {
@@ -313,6 +360,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           if (progress.setup.status === "pending") {
             const resolution = yield* input.projectSetupScriptRunner.resolveForThread(runnerInput);
             if (resolution.status === "no-script") {
+              yield* track(tracker.stageStatus(command.threadId, "setup-script", "skipped"));
               progress = yield* input.commandPreprocessing.markCompleted(
                 command,
                 "setup-completed",
@@ -323,12 +371,17 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           }
           if (progress.setup.status !== "claimed") return;
 
+          yield* track(tracker.stageStatus(command.threadId, "setup-script", "running"));
           const requestedAt = yield* nowIso;
           yield* input.projectSetupScriptRunner
             .runForThread({
               ...runnerInput,
               reconcileClaimedLaunch,
               expectedExecution: progress.setup.execution,
+              observeCompletion: {
+                onOutputLine: (line) =>
+                  track(tracker.appendTail(command.threadId, "setup-script", line)),
+              },
             })
             .pipe(
               Effect.matchEffect({
@@ -349,6 +402,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
               }),
             );
           progress = yield* input.commandPreprocessing.markCompleted(command, "setup-completed");
+          yield* track(tracker.stageStatus(command.threadId, "setup-script", "done"));
         });
 
       const bootstrapProgram = Effect.gen(function* () {
@@ -392,6 +446,23 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           progress = yield* input.commandPreprocessing.markCompleted(command, "thread-created");
         }
 
+        if (bootstrap?.createThread && progress.threadCreated) {
+          // Deterministic child receipts let a reconnect resume without duplicating the message.
+          yield* dispatchCommand({
+            type: "thread.message.user.append",
+            commandId: preprocessingCommandId(command, "bootstrap-message"),
+            threadId: command.threadId,
+            message: command.message,
+            createdAt: command.createdAt,
+          });
+          if (tracked) {
+            const snapshot = yield* tracker.get(command.threadId);
+            if (snapshot) yield* input.recordWorktreeSetup(snapshot);
+            yield* setPreparingSession("starting");
+            preparingSessionSet = true;
+          }
+        }
+
         if (prepareWorkspace) {
           if (workspaceNaming === undefined) {
             const thread = yield* input.projectionSnapshotQuery
@@ -426,6 +497,9 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             });
           }
 
+          // WorkspaceService owns git, jj, copied and isolated workspaces. It
+          // currently exposes one preparation operation, so report no invented percentages.
+          yield* track(tracker.stageStatus(command.threadId, "checkout", "running"));
           const preparedWorkspace = yield* prepareThreadWorkspace({
             threadId: command.threadId,
             request: {
@@ -434,6 +508,14 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             },
           });
           targetWorktreePath = preparedWorkspace.compatibilityWorktreePath;
+          yield* track(
+            tracker.update(command.threadId, (snapshot) => ({
+              ...snapshot,
+              branch: preparedWorkspace.compatibilityBranch,
+              worktreePath: targetWorktreePath,
+            })),
+          );
+          yield* track(tracker.stageStatus(command.threadId, "checkout", "done"));
           if (!progress.workspacePrepared) {
             yield* dispatchCommand({
               type: "thread.meta.update",
@@ -455,13 +537,32 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
         // Bootstrap remains in the durable envelope fingerprint even though the
         // decider intentionally excludes it from emitted events.
-        return yield* dispatchCommand(command);
+        yield* track(tracker.stageStatus(command.threadId, "agent", "running"));
+        yield* track(tracker.markUncancellable(command.threadId));
+        const result = yield* Effect.uninterruptible(dispatchCommand(command));
+        yield* track(tracker.stageStatus(command.threadId, "agent", "done"));
+        yield* finish("done");
+        return result;
       });
 
-      return yield* bootstrapProgram.pipe(
+      const settledProgram = bootstrapProgram.pipe(
+        Effect.interruptible,
         Effect.catchCause((cause) => {
           const error = Cause.squash(cause);
           return Effect.gen(function* () {
+            const cancelled = Cause.hasInterruptsOnly(cause);
+            const detail = cancelled
+              ? "Workspace setup cancelled."
+              : setupFailureDescription(error);
+            if (cancelled && progress.setup.status === "claimed") {
+              yield* input.terminalManager
+                .close({
+                  threadId: command.threadId,
+                  terminalId: `setup-${preprocessingCommandId(command, "setup-run")}`,
+                })
+                .pipe(Effect.ignoreCause({ log: true }));
+            }
+            yield* finish(cancelled ? "cancelled" : "failed", detail);
             const bootstrapThreadDisposition =
               bootstrap?.createThread && progress.threadCreated && !progress.workspacePrepared
                 ? yield* dispatchCommand({
@@ -482,22 +583,56 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                     Effect.orElseSucceed(() => undefined),
                   )
                 : undefined;
+            if (!bootstrapThreadDisposition && preparingSessionSet) {
+              yield* setPreparingSession("error", detail).pipe(Effect.ignoreCause({ log: true }));
+            }
             return yield* Effect.fail(
               isOrchestrationDispatchCommandError(error)
                 ? error
                 : new OrchestrationDispatchCommandError({
-                    message:
-                      error instanceof Error
-                        ? error.message
-                        : "Failed to bootstrap thread turn start.",
+                    message: detail,
                     cause,
                     ...(bootstrapThreadDisposition ? { bootstrapThreadDisposition } : {}),
                   }),
             );
           });
         }),
+        Effect.uninterruptible,
       );
+      if (!tracked) return yield* settledProgram;
+      // Register cancellation before the child can emit progress. The detached
+      // parent owns the command lock until this child and its cleanup settle.
+      const fiber = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const ready = yield* Deferred.make<void>();
+          const fiber = yield* Deferred.await(ready).pipe(
+            Effect.andThen(settledProgram),
+            Effect.forkDetach,
+          );
+          yield* tracker.begin({
+            threadId: command.threadId,
+            branch: bootstrap?.prepareWorktree?.branch ?? null,
+            baseRef:
+              prepareWorkspace?.roots.find((root) => root.role === "primary")?.baseRevision ?? null,
+            stages: ["checkout", "setup-script", "agent"],
+            fiber,
+          });
+          yield* Deferred.succeed(ready, undefined);
+          return fiber;
+        }),
+      );
+      return yield* Fiber.join(fiber);
     });
+
+  // Disconnecting only stops waiting. The full locked operation must survive,
+  // otherwise a retry could enter preprocessing while the first setup still runs.
+  const surviveDisconnect = <A, E, R>(
+    command: { readonly type: string; readonly bootstrap?: unknown },
+    effect: Effect.Effect<A, E, R>,
+  ) =>
+    command.type === "thread.turn.start" && command.bootstrap
+      ? effect.pipe(Effect.forkDetach, Effect.flatMap(Fiber.join))
+      : effect;
 
   const dispatchNormalizedCommandUnlocked = (
     normalizedCommand: OrchestrationCommand,
@@ -513,6 +648,10 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
             onSome: Effect.succeed,
             onNone: () =>
               Effect.gen(function* () {
+                yield* ProjectCloneTracker.rejectCommandsDuringClone(
+                  input.projectCloneTracker,
+                  normalizedCommand,
+                );
                 let progress = yield* input.commandPreprocessing.claim(normalizedCommand);
                 if (!progress.deferredPreprocessingCompleted) {
                   yield* performDeferredPreprocessing;
@@ -556,10 +695,13 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
       OrchestrationDispatchCommandError
     > = Effect.void,
   ) =>
-    input.commandPreprocessing.withCommandLock(
-      command.commandId,
-      dispatchNormalizedCommandUnlocked(command, performDeferredPreprocessing),
-      "threadId" in command ? command.threadId : undefined,
+    surviveDisconnect(
+      command,
+      input.commandPreprocessing.withCommandLock(
+        command.commandId,
+        dispatchNormalizedCommandUnlocked(command, performDeferredPreprocessing),
+        "threadId" in command ? command.threadId : undefined,
+      ),
     );
 
   const bindSelectedWorkspace = (command: ClientOrchestrationCommand) =>
@@ -695,6 +837,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           effect,
           "threadId" in command ? command.threadId : undefined,
         ),
+      (effect) => surviveDisconnect(command, effect),
       Effect.mapError((cause) =>
         isOrchestrationDispatchCommandError(cause)
           ? cause

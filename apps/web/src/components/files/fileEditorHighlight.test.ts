@@ -198,7 +198,8 @@ async function cleanUpFixture() {
 
 afterEach(cleanUpFixture);
 
-describe("editable file highlighting", () => {
+// Real worker startup and 7,000-line WASM highlighting share throttled CI CPUs.
+describe("editable file highlighting", { timeout: 60_000 }, () => {
   it("cleans up an already terminated worker pool", async () => {
     (await nextResponse()).deliver();
     expect(pool.getStats().totalWorkers).toBe(1);

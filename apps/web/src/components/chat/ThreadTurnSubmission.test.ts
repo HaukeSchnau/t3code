@@ -9,6 +9,7 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 
+import { useAttachmentUploadStore } from "../../lib/attachmentUploadQueue";
 import type { ComposerImageAttachment } from "../../composerDraftStore";
 import {
   analyzeThreadTurnDraft,
@@ -46,7 +47,6 @@ function draft(overrides: Partial<ThreadTurnDraft> = {}): ThreadTurnDraft {
     prompt: "Ship it",
     images: [],
     terminalContexts: [],
-    elementContexts: [],
     previewAnnotations: [],
     reviewComments: [],
     selectedProvider: ProviderDriverKind.make("codex"),
@@ -85,8 +85,8 @@ function emptyRevision(): ThreadComposerRevision {
   return {
     prompt: "",
     imageIds: [],
+    fileIds: [],
     terminalContexts: [],
-    elementContexts: [],
     previewAnnotations: [],
     reviewComments: [],
   };
@@ -138,8 +138,7 @@ describe("ThreadTurnSubmission", () => {
 
     assert.equal(analysis.expiredTerminalContextCount, 1);
     assert.equal(analysis.sendableTerminalContexts.length, 1);
-    assert.match(serialized, /Inspect this[\s\S]*<terminal_context>/);
-    assert.match(serialized, /<terminal_context>[\s\S]*<review_comment/);
+    assert.equal(serialized, "Inspect this");
   });
 
   it("derives new-thread and follow-up titles without leaking command construction to callers", () => {
@@ -188,56 +187,145 @@ describe("ThreadTurnSubmission", () => {
     ]);
   });
 
-  it("builds a start command with attachments and workspace bootstrap", async () => {
-    const delivered: unknown[] = [];
-    const inputDraft = draft({ images: [image()] });
-    const currentRevision = threadComposerRevision(inputDraft);
-    const result = await submitThreadTurn({
-      draft: inputDraft,
-      target: target({
-        isLocalDraftThread: true,
-        isServerThread: false,
-        isFirstMessage: true,
-        prepareWorkspace: true,
-        workspaceProfile: "minimal",
-        baseRevision: "main",
-        startFromOrigin: true,
-      }),
-      title: "Ship it",
-      delivery: createDirectThreadTurnDeliveryAdapter({
-        dispatchCommand: async (command) => void delivered.push(command),
-      }),
-      composer: {
-        clearOnSuccess: "if-current",
-        readCurrentRevision: () => currentRevision,
-        clear: () => undefined,
-      },
-      readAttachment: async () => "data:image/png;base64,AA==",
-      makeCommandId: () => CommandId.make("command-1"),
-      makeMessageId: () => MessageId.make("message-1"),
-      now: () => "2026-08-09T10:00:00.000Z",
+  it("queues an uploaded file with its context and preserves newer composer text", async () => {
+    const inputDraft = draft({
+      prompt: "Review the report",
+      files: [
+        {
+          type: "file",
+          id: "local-report",
+          name: "report.pdf",
+          mimeType: "application/pdf",
+          sizeBytes: 6,
+          file: null,
+        },
+      ],
+      terminalContexts: [
+        {
+          id: "terminal-live",
+          threadId,
+          terminalId: "term-1",
+          terminalLabel: "Build",
+          createdAt: "2026-08-09T10:00:00.000Z",
+          lineStart: 1,
+          lineEnd: 1,
+          text: "build passed",
+        },
+        {
+          id: "terminal-expired",
+          threadId,
+          terminalId: "term-2",
+          terminalLabel: "Expired",
+          createdAt: "2026-08-09T10:00:00.000Z",
+          lineStart: 1,
+          lineEnd: 1,
+          text: "",
+        },
+      ],
     });
-
-    assert.equal(result.kind, "delivered");
-    if (result.kind !== "delivered") return;
-    assert.equal(result.prepared.command.type, "thread.turn.start");
-    if (result.prepared.command.type !== "thread.turn.start") return;
-    const attachment = result.prepared.command.message.attachments[0];
-    assert.ok(attachment && "dataUrl" in attachment);
-    if (!attachment || !("dataUrl" in attachment)) return;
-    assert.equal(attachment.dataUrl, "data:image/png;base64,AA==");
-    assert.equal(result.prepared.command.bootstrap?.createThread?.projectId, projectId);
-    assert.equal(
-      result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.baseRevision,
-      "main",
-    );
-    assert.equal(
-      result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.startFromOrigin,
-      true,
-    );
-    assert.equal(result.prepared.command.bootstrap?.prepareWorkspace?.profile, "minimal");
-    assert.equal(delivered.length, 1);
+    useAttachmentUploadStore.setState({
+      uploadsByImageId: {
+        "local-report": { status: "ready", environmentId, attachmentId: "pending-report" },
+      },
+    });
+    let cleared = false;
+    try {
+      const result = await submitThreadTurn({
+        draft: inputDraft,
+        target: target({ queue: true }),
+        title: "Report",
+        delivery: createDurableThreadTurnDeliveryAdapter({
+          enqueue: async (_environmentId, command) => {
+            assert.equal(command.type, "thread.message.queue");
+            assert.equal(command.message.attachments[0]?.id, "pending-report");
+            assert.deepEqual(
+              command.message.context?.records.map((record) => record.kind),
+              ["terminal", "file"],
+            );
+            assert.include(JSON.stringify(command.message.context), "build passed");
+            assert.notInclude(JSON.stringify(command.message.context), "terminal-expired");
+            assert.include(JSON.stringify(command.message.context), "pending-report");
+          },
+        }),
+        composer: {
+          clearOnSuccess: "if-current",
+          readCurrentRevision: () =>
+            threadComposerRevision({ ...inputDraft, prompt: "Another request" }),
+          clear: () => {
+            cleared = true;
+          },
+        },
+        makeCommandId: () => CommandId.make("command-report"),
+        makeMessageId: () => MessageId.make("message-report"),
+        now: () => "2026-08-09T10:00:00.000Z",
+      });
+      assert.equal(result.kind, "delivered");
+      if (result.kind === "delivered")
+        assert.equal(result.prepared.optimisticMessage.attachments?.[0]?.type, "file");
+      assert.equal(cleared, false);
+    } finally {
+      useAttachmentUploadStore.setState({ uploadsByImageId: {} });
+    }
   });
+
+  it.each([undefined, "git-detached"] as const)(
+    "builds an attachment send with workspace kind %s",
+    async (workspaceKind) => {
+      const delivered: unknown[] = [];
+      const inputDraft = draft({ images: [image()] });
+      const currentRevision = threadComposerRevision(inputDraft);
+      const result = await submitThreadTurn({
+        draft: inputDraft,
+        target: target({
+          isLocalDraftThread: true,
+          isServerThread: false,
+          isFirstMessage: true,
+          prepareWorkspace: true,
+          workspaceProfile: "minimal",
+          ...(workspaceKind ? { workspaceKind } : {}),
+          baseRevision: "main",
+          startFromOrigin: true,
+        }),
+        title: "Ship it",
+        delivery: createDirectThreadTurnDeliveryAdapter({
+          dispatchCommand: async (command) => void delivered.push(command),
+        }),
+        composer: {
+          clearOnSuccess: "if-current",
+          readCurrentRevision: () => currentRevision,
+          clear: () => undefined,
+        },
+        readAttachment: async () => "data:image/png;base64,AA==",
+        makeCommandId: () => CommandId.make("command-1"),
+        makeMessageId: () => MessageId.make("message-1"),
+        now: () => "2026-08-09T10:00:00.000Z",
+      });
+
+      assert.equal(result.kind, "delivered");
+      if (result.kind !== "delivered") return;
+      assert.equal(result.prepared.command.type, "thread.turn.start");
+      if (result.prepared.command.type !== "thread.turn.start") return;
+      const attachment = result.prepared.command.message.attachments[0];
+      assert.ok(attachment && "dataUrl" in attachment);
+      if (!attachment || !("dataUrl" in attachment)) return;
+      assert.equal(attachment.dataUrl, "data:image/png;base64,AA==");
+      assert.equal(result.prepared.command.bootstrap?.createThread?.projectId, projectId);
+      assert.equal(
+        result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.baseRevision,
+        "main",
+      );
+      assert.equal(
+        result.prepared.command.bootstrap?.prepareWorkspace?.roots[0]?.startFromOrigin,
+        true,
+      );
+      assert.equal(result.prepared.command.bootstrap?.prepareWorkspace?.profile, "minimal");
+      assert.equal(
+        result.prepared.command.bootstrap?.prepareWorkspace?.kind,
+        workspaceKind ?? "auto",
+      );
+      assert.equal(delivered.length, 1);
+    },
+  );
 
   it("preserves a newer composer revision after durable delivery", async () => {
     const inputDraft = draft();
