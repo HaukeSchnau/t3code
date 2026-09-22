@@ -235,6 +235,14 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
           [
             ...baseSshArgs(targetFor(config), { batchMode: "yes" }),
             ...identityArgs(config),
+            // A multiplexed -N client can exit while its master retains the forwards.
+            // Keep tunnel lifetime tied to the process this host supervises.
+            "-o",
+            "ControlMaster=no",
+            "-o",
+            "ControlPath=none",
+            "-o",
+            "ForkAfterAuthentication=no",
             "-o",
             "ExitOnForwardFailure=yes",
             "-o",

@@ -30,6 +30,13 @@ it.effect("preserves installed status after probes and cleans failed agent activ
         const forwarding = command.args.includes("-N");
         let output = "";
         if (forwarding) {
+          expect(command.args).toEqual(
+            expect.arrayContaining([
+              "ControlMaster=no",
+              "ControlPath=none",
+              "ForkAfterAuthentication=no",
+            ]),
+          );
           if (failForward) {
             failForward = false;
             return yield* PlatformError.systemError({
