@@ -308,6 +308,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   const serverConfigs = useServerConfigs();
   const isolatedWorkspaces =
     serverConfigs.get(environmentId)?.environment.capabilities.isolatedWorkspaces === true;
+  const showWorkspaceSelector = showGitControls || isolatedWorkspaces;
   const onSelectWorkspace = useCallback(
     (workspace: ThreadWorkspaceGroup<unknown>) => {
       if (!draftThread || !activeProjectRef || envModeLocked || forceNewWorktree) return;
@@ -385,7 +386,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         !contextStripVisible && "pointer-events-none invisible absolute inset-x-0 top-full",
       )}
     >
-      {showGitControls || showEnvironmentIndicator || skillPacks ? (
+      {showWorkspaceSelector || showEnvironmentIndicator || skillPacks ? (
         <div
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
@@ -403,7 +404,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
               />
-              {showGitControls ? (
+              {showWorkspaceSelector ? (
                 <Separator
                   orientation="vertical"
                   className="mx-0.5 h-3.5!"
@@ -412,7 +413,7 @@ export const BranchToolbar = memo(function BranchToolbar({
               ) : null}
             </>
           )}
-          {showGitControls ? (
+          {showWorkspaceSelector ? (
             <BranchToolbarEnvModeSelector
               environmentId={environmentId}
               projectId={activeProject.id}
@@ -432,7 +433,7 @@ export const BranchToolbar = memo(function BranchToolbar({
           ) : null}
           {skillPacks ? (
             <>
-              {showGitControls || showEnvironmentIndicator ? (
+              {showWorkspaceSelector || showEnvironmentIndicator ? (
                 <Separator
                   orientation="vertical"
                   className="mx-0.5 h-3.5!"

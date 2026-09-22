@@ -435,6 +435,18 @@ describe("shouldShowComposerContextStrip", () => {
     ).toBe(true);
   });
 
+  it("offers isolation in a new project before Git is initialized", () => {
+    expect(
+      shouldShowComposerContextStrip({
+        hasActiveProject: true,
+        isGitRepo: false,
+        showEnvironmentIndicator: false,
+        hostsRestingComposerControls: false,
+        supportsIsolatedWorkspaces: true,
+      }),
+    ).toBe(true);
+  });
+
   it("hides the strip when a non-Git project has nothing to show", () => {
     expect(
       shouldShowComposerContextStrip({
