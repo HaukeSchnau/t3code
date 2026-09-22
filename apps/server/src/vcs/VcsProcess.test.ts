@@ -7,6 +7,8 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Cause from "effect/Cause";
 import * as Fiber from "effect/Fiber";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -55,6 +57,25 @@ const captureProcessResult = (
   );
 
 describe("VcsProcess.run", () => {
+  it.effect("recognizes a real Git lock error despite a localized caller environment", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-git-locale-" });
+      const service = yield* VcsProcess.VcsProcess;
+      const input = {
+        ...baseInput,
+        cwd,
+        env: { LC_ALL: "de_DE.UTF-8", GIT_INDEX_FILE: path.join(cwd, "private-index") },
+      };
+      yield* service.run({ ...input, args: ["init"] });
+      yield* fs.writeFileString(`${input.env.GIT_INDEX_FILE}.lock`, "concurrent writer");
+      const error = yield* service.run({ ...input, args: ["add", "."] }).pipe(Effect.flip);
+      assert.instanceOf(error, VcsProcessExitError);
+      expect(error.retryable).toBe(true);
+    }).pipe(Effect.scoped, Effect.provide(liveLayer), Effect.provide(NodeServices.layer)),
+  );
+
   it.effect.each([
     { stderr: "fatal: Unable to create '/private/repo/index.lock': File exists", retryable: true },
     {
