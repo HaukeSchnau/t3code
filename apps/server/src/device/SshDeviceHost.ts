@@ -109,6 +109,23 @@ export const probe = Effect.fn("SshDeviceHost.probe")(function* (
   } satisfies DeviceHostSummary;
 });
 
+/** A health deadline cannot distinguish a busy upload from a dead helper. */
+export const deviceHealthProbe = <E, R>(probe: Effect.Effect<boolean, E, R>) =>
+  probe.pipe(
+    Effect.orElseSucceed(() => false),
+    Effect.timeoutOrElse({ duration: "5 seconds", orElse: () => Effect.succeed(true) }),
+  );
+
+/** Busy device helpers can miss a health deadline without losing their SSH transport. */
+export const waitForUnhealthyDeviceHost = (probe: Effect.Effect<boolean>) =>
+  Effect.gen(function* () {
+    let failures = 0;
+    while (failures < 3) {
+      yield* Effect.sleep("10 seconds");
+      failures = (yield* probe) ? 0 : failures + 1;
+    }
+  });
+
 export const make = Effect.fn("SshDeviceHost.make")(function* (
   config: SshDeviceHostConfig,
   onReady: (
@@ -301,7 +318,8 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
       yield* waitForHttpReady({
         baseUrl: baseUrl!,
         path: route!,
-        timeoutMs: 15000,
+        timeoutMs: 60000,
+        probeTimeoutMs: 5000,
         makeError: () =>
           new DeviceHost.DeviceHostError({
             hostId: config.id,
@@ -314,24 +332,21 @@ export const make = Effect.fn("SshDeviceHost.make")(function* (
     ready = next;
     yield* onStatus("ready");
     // Reconnect also repairs helpers that died while SSH itself stayed connected.
-    const unhealthy = Effect.gen(function* () {
-      while (true) {
-        yield* Effect.sleep("10 seconds");
+    const unhealthy = waitForUnhealthyDeviceHost(
+      Effect.gen(function* () {
         const alive = yield* http.get(`${next.hub.origin}/readyz`).pipe(
-          Effect.timeout("5 seconds"),
           Effect.map((r) => r.status === 200),
-          Effect.orElseSucceed(() => false),
+          deviceHealthProbe,
         );
         const daemonAlive = next.agentDevice
           ? yield* http.get(`${next.agentDevice!.baseUrl}/health`).pipe(
-              Effect.timeout("5 seconds"),
               Effect.map((r) => r.status === 200),
-              Effect.orElseSucceed(() => false),
+              deviceHealthProbe,
             )
           : true;
-        if (!alive || !daemonAlive) return;
-      }
-    });
+        return alive && daemonAlive;
+      }),
+    );
     yield* Effect.gen(function* () {
       yield* Effect.raceFirst(child.exitCode.pipe(Effect.ignore), unhealthy);
       if (stopped || connectionScope !== scope) return;

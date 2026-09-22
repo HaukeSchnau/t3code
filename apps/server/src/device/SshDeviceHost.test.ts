@@ -3,6 +3,8 @@ import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Net from "@t3tools/shared/Net";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as PlatformError from "effect/PlatformError";
@@ -143,4 +145,29 @@ it.effect("preserves installed status after probes and cleans failed agent activ
     yield* host.stop;
     expect(forwards).toBe(0);
   }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+);
+
+it.effect("keeps a busy host connected and resets failures after recovery", () =>
+  Effect.gen(function* () {
+    const outcomes = [false, true, false, false, false];
+    let checks = 0;
+    const watcher = yield* SshDeviceHost.waitForUnhealthyDeviceHost(
+      Effect.sync(() => outcomes[checks++] ?? true),
+    ).pipe(Effect.forkChild);
+    yield* TestClock.adjust("40 seconds");
+    expect(checks).toBe(4);
+    yield* TestClock.adjust("10 seconds");
+    yield* Fiber.join(watcher);
+    expect(checks).toBe(5);
+  }),
+);
+
+it.effect("does not tear down uploads on health deadlines, but detects definite failure", () =>
+  Effect.gen(function* () {
+    const check = yield* SshDeviceHost.deviceHealthProbe(Effect.never).pipe(Effect.forkChild);
+    yield* TestClock.adjust("5 seconds");
+    expect(yield* Fiber.join(check)).toBe(true);
+    expect(yield* SshDeviceHost.deviceHealthProbe(Effect.fail("connection refused"))).toBe(false);
+    expect(yield* SshDeviceHost.deviceHealthProbe(Effect.succeed(false))).toBe(false);
+  }),
 );

@@ -29,7 +29,7 @@ export const ensureAgentDeviceShim = Effect.fn("AgentDeviceShim.ensure")(functio
     launcherPath,
     `import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
-const informational = args.length === 1 && ["help", "--help", "-h", "--version", "version"].includes(args[0]);
+const informational = args[0] === "help" || args.includes("--help") || args.includes("-h") || (args.length === 1 && ["--version", "version"].includes(args[0]));
 const hasValue = flag => { const index = args.indexOf(flag); return index >= 0 && !!args[index + 1] && !args[index + 1].startsWith("--"); };
 if (!informational && !(hasValue("--config") && hasValue("--session"))) {
   console.error("Call device_open first and include its --config and --session flags.");
