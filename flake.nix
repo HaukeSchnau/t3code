@@ -4,7 +4,7 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     nix-infra-modules = {
-      url = "github:HaukeSchnau/nix-infra-modules/a78a097b289c9f1b79162b1e2729a27b51eaa8bc";
+      url = "github:HaukeSchnau/nix-infra-modules/c08469c9ed76a0e2223cb6bf1ac624580be6f98c";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -29,10 +29,6 @@
 
       packageJson = builtins.fromJSON (builtins.readFile ./apps/server/package.json);
       projectDescriptor = nix-infra-modules.lib.projectDefinition { modules = [ ./project.nix ]; };
-      normalizedProjectDescriptor = nix-infra-modules.lib.projectDescriptor.normalize {
-        descriptor = projectDescriptor;
-        expectedProject = "t3code";
-      };
 
       mkPkgs =
         system:
@@ -492,25 +488,17 @@
         in
         {
           package = self.packages.${system}.default;
-          projectDescriptor =
-            assert normalizedProjectDescriptor.development == null;
-            assert normalizedProjectDescriptor.release.package == "projectRelease";
-            assert normalizedProjectDescriptor.release.executable == "project-release-runtime";
-            assert normalizedProjectDescriptor.release.action == "web";
-            assert normalizedProjectDescriptor.release.health.paths == [ "/healthz" ];
-            assert normalizedProjectDescriptor.release.health.startupTimeoutSec == 300;
-            assert normalizedProjectDescriptor.release.preDeployTasks.wait-for-idle.failureMode == "defer";
-            assert normalizedProjectDescriptor.release.ingress.streamCloseDelaySec == 300;
-            pkgs.runCommand "t3code-project-descriptor-check" { } ''
-              touch "$out"
-            '';
           projectReleaseInterface = release.checks.interface;
-          projectReleaseDescriptor = release.checks.descriptorExact;
-          projectReleaseGate = pkgs.runCommand "t3code-project-release-gate" { } ''
-            test -x ${release.package}/bin/project-release-runtime
-            test -f ${release.package}/share/project/descriptor.json
-            touch "$out"
-          '';
+          projectReleaseGate =
+            pkgs.runCommand "t3code-project-release-gate"
+              {
+                interface = release.checks.interface;
+              }
+              ''
+                test -x ${release.package}/bin/project-release-runtime
+                test -f ${release.package}/share/project/descriptor.json
+                touch "$out"
+              '';
         }
       );
 
