@@ -7,6 +7,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
+import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { RpcClientError } from "effect/unstable/rpc";
@@ -59,6 +60,8 @@ export type EnvironmentSubscriptionRpcTag =
   | typeof WS_METHODS.pullRequestsSubscribeRefreshes
   | typeof WS_METHODS.previewAutomationConnect
   | typeof WS_METHODS.subscribeVcsStatus
+  | typeof WS_METHODS.subscribeWorktreeSetup
+  | typeof WS_METHODS.subscribeProjectClones
   | typeof WS_METHODS.terminalAttach;
 
 export type EnvironmentStreamCommandRpcTag =
@@ -234,9 +237,15 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         method: tag,
                         input,
                       });
-                      return mapStream(session, method(input)).pipe(
-                        Stream.ensuring(completeObservation),
-                      );
+                      const stream = mapStream(session, method(input));
+                      // An evicted preview host completes its registration stream.
+                      // Re-register only after completion; failures still follow the
+                      // session recovery policy and browser actions are never replayed.
+                      return (
+                        tag === WS_METHODS.previewAutomationConnect
+                          ? stream.pipe(Stream.repeat(Schedule.spaced("1 second")))
+                          : stream
+                      ).pipe(Stream.ensuring(completeObservation));
                     }),
                   ).pipe(
                     Stream.tapCause((cause) =>
@@ -391,7 +400,10 @@ function withSubscriptionAdmission<TTag extends EnvironmentSubscriptionRpcTag>(
       );
       yield* Effect.acquireRelease(gate.take(1), () => release, { interruptible: true });
       return stream.pipe(
-        Stream.tap((value) => (admission.releaseWhen(value) ? release : Effect.void)),
+        // Preserve replay batches so a catch-up publishes once per transport chunk.
+        Stream.mapArrayEffect((values) =>
+          (values.some(admission.releaseWhen) ? release : Effect.void).pipe(Effect.as(values)),
+        ),
       );
     }),
   );
@@ -407,6 +419,7 @@ function subscribeMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
     Effect.gen(function* () {
       const admission = normalizeSubscriptionAdmission(options?.admission);
       const supervisor = yield* EnvironmentSupervisor;
+      const observer = yield* EnvironmentRpcSubscriptionObserver;
       const sessionChanges = SubscriptionRef.changes(supervisor.session);
       const sessions =
         options?.resubscribe === undefined
@@ -437,13 +450,34 @@ function subscribeMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
               ): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
-                    input(session, generation).pipe(
-                      Effect.map((value) =>
-                        withSubscriptionAdmission(session, method(value), admission),
-                      ),
-                    ),
+                    Effect.gen(function* () {
+                      const value = yield* input(session, generation);
+                      const completeObservation = yield* observer.observe({
+                        environmentId: supervisor.target.environmentId,
+                        method: tag,
+                        input: value,
+                      });
+                      const stream = withSubscriptionAdmission(session, method(value), admission);
+                      return (
+                        tag === WS_METHODS.previewAutomationConnect
+                          ? stream.pipe(Stream.repeat(Schedule.spaced("1 second")))
+                          : stream
+                      ).pipe(Stream.ensuring(completeObservation));
+                    }),
                   ).pipe(
                     Stream.map((value) => mapValue(session, generation, value)),
+                    Stream.tapCause((cause) =>
+                      options?.onDefect !== undefined &&
+                      cause.reasons.some(
+                        (reason) =>
+                          reason._tag === "Die" ||
+                          (reason._tag === "Fail" &&
+                            isRpcClientError(reason.error) &&
+                            reason.error.reason._tag === "RpcClientDefect"),
+                      )
+                        ? options.onDefect(cause)
+                        : Effect.void,
+                    ),
                     Stream.catchCause((cause) => {
                       const hasOnlyExpectedFailures =
                         cause.reasons.length > 0 &&

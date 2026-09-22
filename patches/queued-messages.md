@@ -12,6 +12,10 @@ T3 Code supports queueing user messages while a provider turn is running. Submit
 - Failed, cancelled, interrupted, stopped, and manually interrupted turns leave the queue intact.
 - Queued messages are projected to SQLite, included in thread detail snapshots, and streamed through `orchestration.subscribeThread`, so they survive app restart/reconnect and update the active chat UI immediately.
 
+Upstream now also offers a browser-local queue that sends at tool boundaries. Keep the server-owned queue here: turn completion controls dispatch, and SQLite makes queued messages available after reconnect and from other clients. Queued attachments and inline context use the same normalization as an immediate send.
+
+Remove this patch when upstream provides those durability and dispatch guarantees.
+
 ## Maintenance Notes
 
 The patch intentionally reuses the existing `thread.turn-start-requested` provider path after dispatch instead of adding provider-specific queue or steer APIs. This keeps provider merge risk low and confines durable queue state to orchestration contracts, decider logic, projections, and the web composer surface.

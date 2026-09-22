@@ -1,3 +1,21 @@
+import { type BrowserImportSource } from "@t3tools/contracts";
+import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
+import { readLocalApi } from "~/localApi";
+import { toastManager } from "../ui/toast";
+import { persistClientSettingsUpdate } from "~/hooks/useSettings";
+import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
+import { DeviceToolVersions } from "../device/DeviceToolVersions";
+import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
+import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
 /**
  * Integrations settings - preferences for surfaces T3 Code embeds rather than
@@ -12,7 +30,6 @@ import {
   BrowserImportFailureReason,
   type BrowserProfile,
   type EnvironmentId,
-  type SshDeviceHostConfig,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
   DEFAULT_BROWSER_PROFILE_ID,
@@ -34,8 +51,8 @@ import {
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
-import { InfoIcon, Plus as PlusIcon, Trash2 as Trash2Icon } from "lucide-react";
-import { useState } from "react";
+import { InfoIcon, MoreVertical, Plus as PlusIcon } from "lucide-react";
+import { useCallback, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
 import { AnimatedHeight } from "~/components/AnimatedHeight";
@@ -95,6 +112,10 @@ import {
 } from "./settingsLayout";
 import { ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { searchableSetting } from "./settingsSearch";
+import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { useSettingsScope } from "./SettingsScopeContext";
+import { BrowserImportWizard, type WizardTarget } from "./BrowserImportWizard";
+import type { ImportOutcome } from "./browserImportWizard.logic";
 
 const FILL_VALUE = "fill";
 const RESPONSIVE_VALUE = "responsive";
@@ -126,6 +147,13 @@ export function browserProfileRemovalAvailable(
   environmentCount: number,
 ): boolean {
   return bridgeAvailable && environmentsReady && environmentCount > 0;
+}
+
+class ProfileLimitReachedError extends Error {
+  constructor() {
+    super("Browser profile limit reached.");
+    this.name = "ProfileLimitReachedError";
+  }
 }
 
 export const importFailureReason = (cause: unknown): BrowserImportFailureReason => {
@@ -438,6 +466,44 @@ function BrowserAppearanceSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
+function BrowserRecordingInputSettings({ disabled }: { readonly disabled: boolean }) {
+  const showKeys = useClientSettings((settings) => settings.browserRecordingShowKeyPresses);
+  const showMouse = useClientSettings((settings) => settings.browserRecordingShowMousePresses);
+  const updateSettings = useUpdatePrimarySettings();
+  return (
+    <>
+      <SettingsRow
+        {...searchableSetting("browser-recording-key-presses")}
+        description="Show pressed keys and shortcuts in new recordings. Password fields are excluded."
+        control={
+          <Switch
+            disabled={disabled}
+            checked={showKeys}
+            aria-label="Show key presses in recordings"
+            onCheckedChange={(checked) =>
+              updateSettings({ browserRecordingShowKeyPresses: Boolean(checked) })
+            }
+          />
+        }
+      />
+      <SettingsRow
+        {...searchableSetting("browser-recording-mouse-presses")}
+        description="Highlight mouse presses and held buttons in new recordings."
+        control={
+          <Switch
+            disabled={disabled}
+            checked={showMouse}
+            aria-label="Show mouse presses in recordings"
+            onCheckedChange={(checked) =>
+              updateSettings({ browserRecordingShowMousePresses: Boolean(checked) })
+            }
+          />
+        }
+      />
+    </>
+  );
+}
+
 function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boolean }) {
   const frameRate = useClientSettings((settings) => settings.browserRecordingFrameRate);
   const updateSettings = useUpdatePrimarySettings();
@@ -534,20 +600,6 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
   );
 }
 
-/**
- * Frames the client-local preview defaults as one unavailable block.
- *
- * Disabling each control on its own left the labels and descriptions at full
- * strength, so the group still read as editable. Boxing it puts the reason at
- * the top and dims everything it covers, which is also why the explanation
- * sits outside the dimmed area — the one part that must stay readable is the
- * part saying why the rest isn't.
- *
- * Disabled rather than hidden because these are *client* settings: editing
- * them from a browser tab would write preferences belonging to a different
- * client, reading as though the desktop app had been configured when it
- * hadn't.
- */
 function DesktopOnlyBrowserDefaults({ children }: { readonly children: ReactNode }) {
   return (
     <div className="rounded-xl border border-border/60 bg-muted/20 py-1.5">
@@ -557,230 +609,6 @@ function DesktopOnlyBrowserDefaults({ children }: { readonly children: ReactNode
       </div>
       <div className="[&_h3]:opacity-64 [&_p]:opacity-64">{children}</div>
     </div>
-  );
-}
-
-/**
- * Create, rename, and remove browser profiles.
- *
- * Built-ins render without controls: they are synthesized rather than stored,
- * so there is nothing to rename and removing them would strand every tab that
- * opened under them.
- */
-function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
-  const userProfiles = useClientSettings((settings) => settings.browserProfiles);
-  const settingsHydrated = useClientSettingsHydrated();
-  const updateSettings = useUpdatePrimarySettings();
-  const { environments, isReady: environmentsReady } = useEnvironments();
-  const [profilePendingRemoval, setProfilePendingRemoval] = useState<BrowserProfile | null>(null);
-  const [profileRemovalError, setProfileRemovalError] = useState<string | null>(null);
-  const [profileRemovalInFlight, setProfileRemovalInFlight] = useState(false);
-  const removalAvailable = browserProfileRemovalAvailable(
-    previewBridge !== null,
-    environmentsReady,
-    environments.length,
-  );
-  const profileWritesDisabled = disabled || !settingsHydrated;
-
-  const addProfile = () => {
-    if (!settingsHydrated) return;
-    const currentProfiles = getClientSettings().browserProfiles;
-    if (currentProfiles.length >= BROWSER_PROFILE_MAX_COUNT) return;
-    const taken = new Set(resolveBrowserProfiles(currentProfiles).map((profile) => profile.name));
-    let name = "New profile";
-    for (let index = 2; taken.has(name); index += 1) name = `New profile ${index}`;
-    updateSettings({
-      browserProfiles: [
-        ...currentProfiles,
-        { id: `profile-${randomUUID()}`, name, kind: "persistent" as const },
-      ],
-    });
-  };
-
-  const renameProfile = (id: string, next: string) => {
-    if (!settingsHydrated) return;
-    const name = next.trim().slice(0, BROWSER_PROFILE_NAME_MAX_LENGTH);
-    if (name === "") return;
-    const currentProfiles = getClientSettings().browserProfiles;
-    updateSettings({
-      browserProfiles: currentProfiles.map((profile) =>
-        profile.id === id ? { ...profile, name } : profile,
-      ),
-    });
-  };
-
-  const removeProfile = async (id: string) => {
-    if (!settingsHydrated) return;
-    if (!removalAvailable) {
-      setProfileRemovalError("Connect to an environment before removing this profile.");
-      return;
-    }
-    setProfileRemovalError(null);
-    setProfileRemovalInFlight(true);
-    // Drop the partition's data too, otherwise a removed profile's cookies
-    // stay on disk with nothing in the UI pointing at them.
-    try {
-      await clearBrowserProfileData(
-        previewBridge,
-        environmentsReady ? environments.map((environment) => environment.environmentId) : [],
-        id,
-      );
-    } catch {
-      setProfileRemovalError("Profile data could not be deleted. Try again.");
-      setProfileRemovalInFlight(false);
-      return;
-    }
-    const currentSettings = getClientSettings();
-    updateSettings({
-      browserProfiles: currentSettings.browserProfiles.filter((profile) => profile.id !== id),
-      // Reassign the default rather than leaving it pointing at nothing.
-      ...(currentSettings.browserDefaultProfileId === id
-        ? { browserDefaultProfileId: DEFAULT_BROWSER_PROFILE_ID }
-        : {}),
-    });
-    setProfileRemovalInFlight(false);
-    setProfilePendingRemoval(null);
-  };
-
-  return (
-    <SettingsRow
-      {...searchableSetting("browser-profiles")}
-      description="Each profile keeps its own cookies and logins, so a tab opened under one can't see another's. Incognito discards everything when the app closes."
-      control={
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={profileWritesDisabled || userProfiles.length >= BROWSER_PROFILE_MAX_COUNT}
-          onClick={addProfile}
-        >
-          <PlusIcon />
-          Add profile
-        </Button>
-      }
-    >
-      {/*
-        Each profile is its own bounded row, and the list carries the bottom
-        spacing `SettingsRow` leaves to its children (`pt-3 pb-1`). Bare rows
-        stack on narrow viewports with a larger gap inside a row than between
-        rows, which reads as the remove button belonging to the profile below.
-      */}
-      <div className="mt-2 space-y-1 pb-2">
-        {resolveBrowserProfiles(userProfiles).map((profile) => {
-          const builtIn = isBuiltInBrowserProfileId(profile.id);
-          return (
-            <div
-              key={profile.id}
-              className={cn(
-                ITEM_ROW_INNER_CLASSNAME,
-                "rounded-lg border border-border/60 px-3 py-2",
-              )}
-            >
-              {builtIn ? (
-                // Dimmed here rather than on the list, which is the only
-                // content in the row without a disabled treatment of its own:
-                // a wrapper-level dim would stack with the rename field's and
-                // the remove button's, landing them near 0.41 while every
-                // other disabled control in the block sits at 0.64.
-                <span
-                  className={cn(
-                    "flex min-w-0 items-center gap-2 text-sm text-foreground",
-                    profileWritesDisabled && "opacity-64",
-                  )}
-                >
-                  {profile.name}
-                  <Badge variant="outline">
-                    {profile.kind === "incognito" ? "Ephemeral" : "Built-in"}
-                  </Badge>
-                </span>
-              ) : (
-                <DraftInput
-                  nativeInput
-                  size="sm"
-                  className="w-full sm:w-64"
-                  aria-label={`Rename ${profile.name}`}
-                  disabled={profileWritesDisabled}
-                  maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
-                  value={profile.name}
-                  onCommit={(next) => renameProfile(profile.id, next)}
-                />
-              )}
-              {builtIn ? null : (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <span className="inline-flex" {...(!removalAvailable ? { tabIndex: 0 } : {})}>
-                        <Button
-                          size="icon-xs"
-                          variant="ghost-muted"
-                          disabled={profileWritesDisabled || !removalAvailable}
-                          aria-label={`Remove ${profile.name}`}
-                          onClick={() => setProfilePendingRemoval(profile)}
-                        >
-                          <Trash2Icon />
-                        </Button>
-                      </span>
-                    }
-                  />
-                  <TooltipPopup side="top">
-                    {removalAvailable
-                      ? "Remove profile and its data"
-                      : "Connect to an environment to remove this profile"}
-                  </TooltipPopup>
-                </Tooltip>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <AlertDialog
-        open={profilePendingRemoval !== null}
-        onOpenChange={(open) => {
-          if (!open && !profileRemovalInFlight) {
-            setProfilePendingRemoval(null);
-            setProfileRemovalError(null);
-          }
-        }}
-      >
-        <AlertDialogPopup>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Remove “{profilePendingRemoval?.name}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Its cookies, logins, and cache are deleted with it. Tabs already open in this profile
-              stay open until you close them.
-            </AlertDialogDescription>
-            {profileRemovalError ? (
-              <p aria-live="polite" className="text-sm text-destructive">
-                {profileRemovalError}
-              </p>
-            ) : null}
-            {!removalAvailable ? (
-              <p className="text-sm text-muted-foreground">
-                Connect to an environment to remove this profile and its data.
-              </p>
-            ) : null}
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogClose
-              disabled={profileRemovalInFlight}
-              render={<Button variant="outline" disabled={profileRemovalInFlight} />}
-            >
-              Cancel
-            </AlertDialogClose>
-            <Button
-              variant="destructive"
-              disabled={profileRemovalInFlight || !settingsHydrated || !removalAvailable}
-              onClick={() => {
-                if (profilePendingRemoval && settingsHydrated && removalAvailable) {
-                  void removeProfile(profilePendingRemoval.id);
-                }
-              }}
-            >
-              {profileRemovalInFlight ? "Removing…" : "Remove profile"}
-            </Button>
-          </AlertDialogFooter>
-        </AlertDialogPopup>
-      </AlertDialog>
-    </SettingsRow>
   );
 }
 
@@ -853,6 +681,254 @@ function BrowserDefaultProfileSetting({ disabled }: { readonly disabled: boolean
   );
 }
 
+function DeviceIntegrationSettings() {
+  const { search, environment: selected } = useSettingsScope();
+  const settings = useScopedSettings();
+  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
+  const environmentId = connected ? selected.environmentId : null;
+
+  return (
+    <SettingsSection id="devices" title="Devices">
+      <DeviceIntegrationControls
+        key={`${environmentId}:${JSON.stringify(search)}`}
+        environmentId={environmentId}
+        enabled={settings.enableDeviceSupport}
+        agentAccessEnabled={settings.enableAgentDeviceAccess}
+      />
+    </SettingsSection>
+  );
+}
+
+function DeviceIntegrationControls({
+  environmentId,
+  enabled,
+  agentAccessEnabled,
+}: {
+  environmentId: EnvironmentId | null;
+  enabled: boolean;
+  agentAccessEnabled: boolean;
+}) {
+  const { state, loaded } = useDeviceState(environmentId);
+  const { scope, environments, connectedEnvironments } = useSettingsScope();
+  const updateSettings = useUpdateScopedSettings();
+  const projectScope = scope.kind === "project" || scope.kind === "checkout";
+  const anyHubEnabled = connectedEnvironments.some(
+    (environment) => environment.serverConfig?.settings.enableDeviceSupport,
+  );
+  const configure = useAtomCommand(deviceEnvironment.configure, { reportFailure: false });
+  const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
+  const [pending, setPending] = useState<
+    "hub" | "check" | "agent" | "update-hub" | "update-agent" | null
+  >(null);
+  const busy = state.hostStatus === "installing" || state.hostStatus === "starting";
+  const [platformsRevealed, setPlatformsRevealed] = useState(false);
+  // Keep diagnostics visible through subsequent agent setup and refresh phases.
+  if (platformsRevealed && !enabled) setPlatformsRevealed(false);
+  if (enabled && !platformsRevealed && state.hostStatus === "ready" && pending !== "hub") {
+    setPlatformsRevealed(true);
+  }
+
+  const update = async (
+    kind: NonNullable<typeof pending>,
+    input: { enabled?: boolean; agentAccessEnabled?: boolean },
+  ) => {
+    if (!environmentId) return;
+    setPending(kind);
+    try {
+      const results = await Promise.allSettled(
+        environments.map(async (environment) => {
+          if (environment.connection.phase !== "connected" || !environment.serverConfig) {
+            throw new Error("Environment disconnected");
+          }
+          return configure({
+            environmentId: environment.environmentId,
+            input: { ...input, ...(input.enabled ? { onboardingCompleted: true } : {}) },
+          });
+        }),
+      );
+      const failed = environments.filter((_, index) => {
+        const result = results[index];
+        return result?.status !== "fulfilled" || result.value._tag === "Failure";
+      });
+      if (failed.length > 0) {
+        toastManager.add({
+          type: "error",
+          title: "Device settings not saved on all environments",
+          description: `Could not update ${failed.map((environment) => environment.label).join(", ")}.`,
+        });
+      }
+    } finally {
+      setPending(null);
+    }
+  };
+
+  const [updateError, setUpdateError] = useState<{ tool: "hub" | "agent"; message: string } | null>(
+    null,
+  );
+  const localTools = state.hosts.find((host) => host.kind === "local")?.tools;
+  const versionActions = (tool: "hub" | "agent") => {
+    const version = localTools?.[tool];
+    const needsUpdate = version && !version.installedVersions.includes(version.requiredVersion);
+    return (
+      <div className="space-y-2">
+        <div className="flex flex-wrap gap-2">
+          {state.supportsToolUpdate && needsUpdate ? (
+            <Button
+              size="sm"
+              disabled={!environmentId || pending !== null || busy}
+              onClick={() => {
+                if (!environmentId) return;
+                setUpdateError(null);
+                setPending(`update-${tool}`);
+                void list({ environmentId, input: { updateTool: tool } })
+                  .then((result) => {
+                    if (result._tag === "Failure")
+                      setUpdateError({
+                        tool,
+                        message:
+                          "Update failed. Check this host's network connection and try again.",
+                      });
+                  })
+                  .finally(() => setPending(null));
+              }}
+            >
+              {pending === `update-${tool}` ? "Updating…" : `Update to v${version.requiredVersion}`}
+            </Button>
+          ) : null}
+          {state.supportsToolInspection ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!environmentId || pending !== null || busy}
+              onClick={() => {
+                if (!environmentId) return;
+                setPending("check");
+                void list({ environmentId, input: { inspectOnly: true } }).finally(() =>
+                  setPending(null),
+                );
+              }}
+            >
+              {pending === "check" ? "Checking…" : "Check versions"}
+            </Button>
+          ) : null}
+        </div>
+        {updateError?.tool === tool ? (
+          <p role="alert" className="text-xs text-destructive">
+            {updateError.message}
+          </p>
+        ) : null}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <SettingsRow
+        {...searchableSetting("device-hub")}
+        serverScoped
+        settingKeys={["enableDeviceSupport"]}
+        description={deviceHubDescription}
+        control={
+          <>
+            <DeviceToolVersions
+              action={versionActions("hub")}
+              kind="hub"
+              tools={state.hosts.find((host) => host.kind === "local")?.tools}
+            />
+            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
+            <ScopedSwitch
+              settingKeys={["enableDeviceSupport"]}
+              checked={enabled}
+              disabled={projectScope || !loaded || !environmentId || busy || pending !== null}
+              aria-label="Device hub"
+              onCheckedChange={(checked) =>
+                void update("hub", {
+                  enabled: Boolean(checked),
+                  ...(checked ? {} : { agentAccessEnabled: false }),
+                })
+              }
+            />
+          </>
+        }
+      />
+      <AnimatedHeight>
+        {platformsRevealed ? (
+          <SettingsRow
+            {...searchableSetting("device-platform-support")}
+            description={
+              connectedEnvironments.length > 1
+                ? `Status for ${connectedEnvironments.find((environment) => environment.environmentId === environmentId)?.label}. Select an environment to inspect its simulator support.`
+                : undefined
+            }
+            status={
+              <div className="flex flex-wrap gap-x-5 gap-y-2">
+                <PlatformStatus compact platform="iOS" status={platformSetupStatus(state, "ios")} />
+                <PlatformStatus
+                  compact
+                  platform="Android"
+                  status={platformSetupStatus(state, "android")}
+                />
+              </div>
+            }
+            control={
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={!environmentId || !enabled || busy || pending !== null}
+                onClick={() => {
+                  if (!environmentId) return;
+                  setPending("check");
+                  void list({ environmentId, input: {} }).finally(() => setPending(null));
+                }}
+              >
+                {pending === "check" ? "Checking…" : "Refresh"}
+              </Button>
+            }
+          />
+        ) : null}
+      </AnimatedHeight>
+      <SettingsRow
+        {...searchableSetting("agent-device-access")}
+        serverScoped
+        settingKeys={["enableAgentDeviceAccess"]}
+        description={agentDeviceDescription}
+        control={
+          <>
+            <DeviceToolVersions
+              action={versionActions("agent")}
+              kind="agent"
+              tools={state.hosts.find((host) => host.kind === "local")?.tools}
+            />
+            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
+            <ScopedSwitch
+              settingKeys={["enableAgentDeviceAccess"]}
+              checked={agentAccessEnabled}
+              disabled={
+                connectedEnvironments.length === 0 ||
+                (!projectScope && (!loaded || !anyHubEnabled || busy)) ||
+                pending !== null
+              }
+              aria-label="Agent device access"
+              onCheckedChange={(checked) =>
+                projectScope
+                  ? updateSettings({ enableAgentDeviceAccess: Boolean(checked) })
+                  : void update("agent", { agentAccessEnabled: Boolean(checked) })
+              }
+            />
+          </>
+        }
+      />
+      {environmentId ? (
+        <DeviceHostUpdates
+          state={{ ...state, hosts: state.hosts.filter((host) => host.kind === "local") }}
+          environmentId={environmentId}
+        />
+      ) : null}
+      <DeviceHostsSettings environmentId={environmentId} />
+    </>
+  );
+}
+
 function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled: boolean }) {
   const autoShow = useClientSettings((settings) => settings.browserAutoShowFloatingPreview);
   const updateSettings = useUpdatePrimarySettings();
@@ -887,192 +963,543 @@ function BrowserAutoShowFloatingPreviewSetting({ disabled }: { readonly disabled
   );
 }
 
-function AgentBrowserAccessSetting() {
-  const environment = usePrimaryEnvironment();
+/**
+ * Profile list, its header menu, and the import flow.
+ *
+ * One menu creates profiles and imports into them, because the two are the
+ * same decision from the user's side: "I want a profile that has my Helium
+ * logins in it". Import targets include "New profile" so that case does not
+ * require creating one first and then finding a second control.
+ *
+ * Built-ins render without a rename field: they are synthesized rather than
+ * stored, so there is nothing to rename and removing them would strand every
+ * tab that opened under them.
+ *
+ * Sources are listed lazily on open: detection touches the other browser's
+ * files, and the answer changes while the app is running (quitting the browser
+ * clears `browserRunning`), so a value cached at mount would go stale.
+ */
+function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
+  const userProfiles = useClientSettings((settings) => settings.browserProfiles);
+  const defaultProfileId = useClientSettings((settings) => settings.browserDefaultProfileId);
+  const settingsHydrated = useClientSettingsHydrated();
   const updateSettings = useUpdatePrimarySettings();
-  return (
-    <SettingsRow
-      {...searchableSetting("agent-browser-access")}
-      description="Allow agents to use T3 Code's preview browser. Changes apply to new provider sessions."
-      control={
-        <Switch
-          checked={environment?.serverConfig?.settings.enableAgentBrowserAccess ?? false}
-          disabled={environment?.connection.phase !== "connected"}
-          onCheckedChange={(checked) =>
-            updateSettings({ enableAgentBrowserAccess: Boolean(checked) })
-          }
-        />
-      }
-    />
-  );
-}
-
-function DeviceIntegrationSettings() {
+  const { environments, isReady: environmentsReady } = useEnvironments();
   const primaryEnvironment = usePrimaryEnvironment();
-  const { environments } = useEnvironments();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected =
-    environments.find((environment) => environment.environmentId === selectedId) ??
-    environments.find(
-      (environment) => environment.environmentId === primaryEnvironment?.environmentId,
-    ) ??
-    environments[0];
-  const connected = selected?.connection.phase === "connected" && selected.serverConfig !== null;
-  const environmentId = connected ? selected.environmentId : null;
-
-  return (
-    <SettingsSection id="devices" title="Devices">
-      {environments.length > 1 ? (
-        <SettingsRow
-          title="Environment"
-          description="Device support and hosts are shared by all projects in this environment."
-          control={
-            <Select
-              value={selected?.environmentId ?? ""}
-              onValueChange={(value) => setSelectedId(value)}
-            >
-              <SelectTrigger size="sm" aria-label="Device environment">
-                <SelectValue>{selected?.label ?? "Select environment"}</SelectValue>
-              </SelectTrigger>
-              <SelectPopup align="end" alignItemWithTrigger={false}>
-                {environments.map((environment) => (
-                  <SelectItem key={environment.environmentId} value={environment.environmentId}>
-                    {environment.label}
-                    {environment.connection.phase === "connected" ? "" : " · Offline"}
-                  </SelectItem>
-                ))}
-              </SelectPopup>
-            </Select>
-          }
-        />
-      ) : null}
-      <DeviceIntegrationControls
-        key={selected?.environmentId ?? "none"}
-        environmentId={environmentId}
-        hosts={selected?.serverConfig?.settings.deviceHosts ?? []}
-        enabled={selected?.serverConfig?.settings.enableDeviceSupport ?? false}
-        agentAccessEnabled={selected?.serverConfig?.settings.enableAgentDeviceAccess ?? false}
-      />
-    </SettingsSection>
+  const [sources, setSources] = useState<ReadonlyArray<BrowserImportSource> | null>(null);
+  const [importSession, setImportSession] = useState<{
+    readonly source: BrowserImportSource;
+    readonly environmentId: EnvironmentId;
+    readonly environmentName: string;
+  } | null>(null);
+  const [profilePendingRemoval, setProfilePendingRemoval] = useState<BrowserProfile | null>(null);
+  const [profileRemovalError, setProfileRemovalError] = useState<string | null>(null);
+  const [profileRemovalInFlight, setProfileRemovalInFlight] = useState(false);
+  const removalAvailable = browserProfileRemovalAvailable(
+    previewBridge !== null,
+    environmentsReady,
+    environments.length,
   );
-}
+  const importInFlightRef = useRef(false);
+  const [importInFlight, setImportInFlight] = useState(false);
+  const profileWritesDisabled = disabled || !settingsHydrated;
 
-function DeviceIntegrationControls({
-  environmentId,
-  hosts,
-  enabled,
-  agentAccessEnabled,
-}: {
-  environmentId: EnvironmentId | null;
-  hosts: ReadonlyArray<SshDeviceHostConfig>;
-  enabled: boolean;
-  agentAccessEnabled: boolean;
-}) {
-  const { state, loaded } = useDeviceState(environmentId);
-  const configure = useAtomCommand(deviceEnvironment.configure);
-  const list = useAtomCommand(deviceEnvironment.list, { reportFailure: false });
-  const [pending, setPending] = useState<"hub" | "check" | "agent" | null>(null);
-  const busy = state.hostStatus === "installing" || state.hostStatus === "starting";
-  const [platformsRevealed, setPlatformsRevealed] = useState(false);
-  // Keep diagnostics visible through subsequent agent setup and refresh phases.
-  if (platformsRevealed && !enabled) setPlatformsRevealed(false);
-  if (enabled && !platformsRevealed && state.hostStatus === "ready" && pending !== "hub") {
-    setPlatformsRevealed(true);
-  }
+  const profiles = resolveBrowserProfiles(userProfiles);
+  // Incognito is deliberately not a row — it holds nothing to manage — so the
+  // default has to resolve against the list that renders. A stored
+  // `browserDefaultProfileId` of "incognito" would otherwise leave the section
+  // with no Default badge at all.
+  const listedProfiles = profiles.filter((profile) => profile.kind !== "incognito");
+  const resolvedDefaultId =
+    findBrowserProfile(listedProfiles, defaultProfileId)?.id ?? DEFAULT_BROWSER_PROFILE_ID;
 
-  const update = async (
-    kind: NonNullable<typeof pending>,
-    input: { enabled?: boolean; agentAccessEnabled?: boolean },
-  ) => {
-    if (!environmentId) return;
-    setPending(kind);
+  const createProfile = (baseName: string) => {
+    if (!settingsHydrated || importInFlightRef.current) return undefined;
+    const currentProfiles = getClientSettings().browserProfiles;
+    // Checked against the live settings, not the rendered list: two clicks
+    // before a re-render would otherwise both pass the disabled control.
+    if (currentProfiles.length >= BROWSER_PROFILE_MAX_COUNT) return undefined;
+    const resolvedProfiles = resolveBrowserProfiles(currentProfiles);
+    const taken = new Set(resolvedProfiles.map((profile) => profile.name));
+    let name = baseName;
+    for (let index = 2; taken.has(name); index += 1) name = `${baseName} ${index}`;
+    const profile = { id: `profile-${randomUUID()}`, name, kind: "persistent" as const };
+    updateSettings({ browserProfiles: [...currentProfiles, profile] });
+    return profile;
+  };
+
+  const renameProfile = (id: string, next: string) => {
+    if (!settingsHydrated || importInFlightRef.current) return;
+    const name = next.trim().slice(0, BROWSER_PROFILE_NAME_MAX_LENGTH);
+    if (name === "") return;
+    const currentProfiles = getClientSettings().browserProfiles;
+    updateSettings({
+      browserProfiles: currentProfiles.map((profile) =>
+        profile.id === id ? { ...profile, name } : profile,
+      ),
+    });
+  };
+
+  const clearProfileData = (id: string, name: string) => {
+    if (!settingsHydrated || importInFlightRef.current) return;
+    if (!previewBridge || !environmentsReady || environments.length === 0) {
+      toastManager.add({
+        type: "error",
+        title: `Could not clear ${name}'s data`,
+        description: "You're not connected to a server yet.",
+      });
+      return;
+    }
+    void clearBrowserProfileData(
+      previewBridge,
+      environments.map((environment) => environment.environmentId),
+      id,
+    )
+      .then(() => {
+        toastManager.add({ type: "success", title: `Cleared ${name}'s cookies and cache` });
+      })
+      .catch(() => {
+        toastManager.add({ type: "error", title: `Could not clear ${name}'s data` });
+      });
+  };
+
+  const removeProfile = async (id: string) => {
+    if (!settingsHydrated || importInFlightRef.current) return;
+    if (!removalAvailable) {
+      setProfileRemovalError("Connect to an environment before removing this profile.");
+      return;
+    }
+    setProfileRemovalError(null);
+    setProfileRemovalInFlight(true);
+    // Drop the partition's data too, otherwise a removed profile's cookies
+    // stay on disk with nothing in the UI pointing at them.
     try {
-      const result = await configure({ environmentId, input });
-      if (result._tag === "Success" && input.enabled === true && !state.onboardingCompleted) {
-        await configure({ environmentId, input: { onboardingCompleted: true } });
+      await clearBrowserProfileData(
+        previewBridge,
+        environmentsReady ? environments.map((environment) => environment.environmentId) : [],
+        id,
+      );
+    } catch {
+      setProfileRemovalError("Profile data could not be deleted. Try again.");
+      setProfileRemovalInFlight(false);
+      return;
+    }
+    const currentSettings = getClientSettings();
+    updateSettings({
+      browserProfiles: currentSettings.browserProfiles.filter((profile) => profile.id !== id),
+      // Reassign the default rather than leaving it pointing at nothing.
+      ...(currentSettings.browserDefaultProfileId === id
+        ? { browserDefaultProfileId: DEFAULT_BROWSER_PROFILE_ID }
+        : {}),
+    });
+    setProfileRemovalInFlight(false);
+    setProfilePendingRemoval(null);
+  };
+
+  // A browser that is not on this machine is left out rather than listed as a
+  // dead row: there is nothing to act on, and the menu is a list of things you
+  // can import from. An unsupported one is left out for the same reason — the
+  // blocked wizard step can't be fixed from here. Every other unavailable
+  // reason stays, since each names a step the user can take.
+  const importableSources = (sources ?? []).filter(
+    (source) =>
+      source.unavailable !== "notInstalled" && source.unavailable !== "unsupportedPlatform",
+  );
+
+  // Refreshed without blanking the last result: the menu shows the cached list
+  // straight away so it doesn't reflow on open, and the source list is stable
+  // (names only) since choosing what to import happens in the wizard, not here.
+  const loadSources = useCallback(() => {
+    if (!previewBridge) return;
+    void previewBridge
+      .listBrowserImportSources()
+      .then(setSources)
+      .catch(() => setSources((previous) => previous ?? []));
+  }, []);
+
+  // Runs one import for the wizard. A new profile is registered only once the
+  // import succeeds — the cookies land in its partition first — so a blocked
+  // attempt never leaves an empty profile behind.
+  const runWizardImport = async (
+    source: BrowserImportSource,
+    environmentId: EnvironmentId,
+    input: { readonly sourceProfileDirectory: string; readonly target: WizardTarget },
+  ): Promise<ImportOutcome> => {
+    if (!previewBridge) return { kind: "blocked", reason: "sessionUnavailable" };
+    if (!settingsHydrated) return { kind: "blocked", reason: "sessionUnavailable" };
+    if (
+      input.target.kind === "existing" &&
+      !resolveBrowserProfiles(getClientSettings().browserProfiles).some(
+        (profile) => profile.id === input.target.profileId,
+      )
+    ) {
+      return { kind: "blocked", reason: "readFailed" };
+    }
+    if (importInFlightRef.current) return { kind: "blocked", reason: "readFailed" };
+    importInFlightRef.current = true;
+    setImportInFlight(true);
+    try {
+      const result = await previewBridge.importBrowserCookies({
+        environmentId,
+        sourceId: source.id,
+        sourceProfileDirectory: input.sourceProfileDirectory,
+        targetProfileId: input.target.profileId,
+      });
+      if (
+        input.target.kind === "existing" &&
+        !resolveBrowserProfiles(getClientSettings().browserProfiles).some(
+          (profile) => profile.id === input.target.profileId,
+        )
+      ) {
+        return { kind: "blocked", reason: "readFailed" };
       }
+      let targetName: string;
+      if (input.target.kind === "new") {
+        // Registered only when something actually came over: an import that
+        // found no cookies should not leave a new, empty profile behind.
+        if (result.imported > 0) {
+          try {
+            const persisted = await persistClientSettingsUpdate((current) => {
+              const existing = current.browserProfiles.find(
+                (profile) => profile.id === input.target.profileId,
+              );
+              if (existing) return current;
+              // The wizard refuses a new target at the cap, but the cap can be
+              // reached while the import runs; the updater sees the newest
+              // settings, so this is the check that holds.
+              if (current.browserProfiles.length >= BROWSER_PROFILE_MAX_COUNT) {
+                throw new ProfileLimitReachedError();
+              }
+              const taken = new Set(
+                resolveBrowserProfiles(current.browserProfiles).map((profile) => profile.name),
+              );
+              let name = source.name;
+              for (let index = 2; taken.has(name); index += 1) name = `${source.name} ${index}`;
+              return {
+                ...current,
+                browserProfiles: [
+                  ...current.browserProfiles,
+                  { id: input.target.profileId, name, kind: "persistent" as const },
+                ],
+              };
+            });
+            targetName =
+              persisted.browserProfiles.find((profile) => profile.id === input.target.profileId)
+                ?.name ?? source.name;
+          } catch (cause) {
+            // This target id belongs only to the attempted new profile. Clear
+            // its partition so a failed registration cannot strand imported
+            // cookies behind a profile that disappears on restart.
+            await clearBrowserProfileData(
+              previewBridge,
+              [environmentId],
+              input.target.profileId,
+            ).catch(() => undefined);
+            // Not a read failure: the cookies came over and were cleared again
+            // because the profile could not be kept. Name that, in the same
+            // token form `importFailureReason` recovers from a bridge error.
+            const reason =
+              cause instanceof ProfileLimitReachedError ? "profileLimitReached" : "profileNotSaved";
+            throw new Error(`Importing cookies from ${source.id} failed: ${reason}.`, { cause });
+          }
+        } else {
+          targetName = source.name;
+        }
+      } else {
+        targetName = input.target.name;
+      }
+      return {
+        kind: "imported",
+        imported: result.imported,
+        skipped: result.skipped,
+        skippedDomains: result.skippedDomains,
+        targetName,
+      };
+    } catch (cause) {
+      return { kind: "blocked", reason: importFailureReason(cause) };
     } finally {
-      setPending(null);
+      importInFlightRef.current = false;
+      setImportInFlight(false);
     }
   };
 
+  // Re-checks a source's availability after the user quits the browser, and
+  // keeps the cached list in step so the menu reflects it too.
+  const refreshImportSource = async (
+    sourceId: BrowserImportSource["id"],
+  ): Promise<BrowserImportSource | undefined> => {
+    if (!previewBridge) return undefined;
+    try {
+      const latest = await previewBridge.listBrowserImportSources();
+      setSources(latest);
+      return latest.find((source) => source.id === sourceId);
+    } catch {
+      return undefined;
+    }
+  };
+
+  const atProfileLimit = userProfiles.length >= BROWSER_PROFILE_MAX_COUNT;
+
   return (
-    <>
-      <SettingsRow
-        {...searchableSetting("device-hub")}
-        description={deviceHubDescription}
-        control={
-          <>
-            {pending === "hub" ? <DeviceHubSetupStatus state={state} pending compact /> : null}
-            <Switch
-              checked={enabled}
-              disabled={!loaded || !environmentId || busy || pending !== null}
-              aria-label="Device hub"
-              onCheckedChange={(checked) =>
-                void update("hub", {
-                  enabled: Boolean(checked),
-                  ...(checked ? {} : { agentAccessEnabled: false }),
-                })
-              }
-            />
-          </>
-        }
-      />
-      <AnimatedHeight>
-        {platformsRevealed ? (
-          <SettingsRow
-            {...searchableSetting("device-platform-support")}
-            status={
-              <div className="flex flex-wrap gap-x-5 gap-y-2">
-                <PlatformStatus compact platform="iOS" status={platformSetupStatus(state, "ios")} />
-                <PlatformStatus
-                  compact
-                  platform="Android"
-                  status={platformSetupStatus(state, "android")}
-                />
-              </div>
-            }
-            control={
+    <SettingsRow
+      {...searchableSetting("browser-profiles")}
+      description="Profiles separate cookies and logins. Incognito data is cleared when the app closes."
+      control={
+        <Menu onOpenChange={(open) => open && loadSources()}>
+          <MenuTrigger
+            render={
               <Button
                 size="sm"
                 variant="outline"
-                disabled={!environmentId || !enabled || busy || pending !== null}
-                onClick={() => {
-                  if (!environmentId) return;
-                  setPending("check");
-                  void list({ environmentId, input: {} }).finally(() => setPending(null));
-                }}
-              >
-                {pending === "check" ? "Checking…" : "Refresh"}
-              </Button>
+                disabled={profileWritesDisabled || importInFlight}
+              />
             }
-          />
-        ) : null}
-      </AnimatedHeight>
-      <SettingsRow
-        {...searchableSetting("agent-device-access")}
-        description={agentDeviceDescription}
-        control={
-          <>
-            {pending === "agent" ? <AgentDeviceSetupStatus state={state} pending compact /> : null}
-            <Switch
-              checked={agentAccessEnabled}
-              disabled={!loaded || !environmentId || !enabled || busy || pending !== null}
-              aria-label="Agent device access"
-              onCheckedChange={(checked) =>
-                void update("agent", { agentAccessEnabled: Boolean(checked) })
-              }
-            />
-          </>
-        }
-      />
-      {state.hostStatus === "failed" && state.hostStatusDetail ? (
-        <p role="alert" className="px-4 py-3 text-xs text-destructive">
-          {state.hostStatusDetail}
-        </p>
+          >
+            <PlusIcon />
+            Add profile
+          </MenuTrigger>
+          <MenuPopup align="end" className="min-w-56">
+            <MenuItem
+              disabled={!settingsHydrated || atProfileLimit}
+              onClick={() => createProfile("New profile")}
+            >
+              Blank profile
+            </MenuItem>
+            {atProfileLimit ? (
+              <MenuItem disabled>You&rsquo;ve reached the profile limit</MenuItem>
+            ) : null}
+            <MenuSeparator />
+            <MenuGroup>
+              <MenuGroupLabel>Import from</MenuGroupLabel>
+              {sources === null ? (
+                <MenuItem disabled>Looking for browsers…</MenuItem>
+              ) : importableSources.length === 0 ? (
+                <MenuItem disabled>No supported browsers found</MenuItem>
+              ) : (
+                // Every source is a plain row — running, needs-permission and
+                // ready all look the same here. The wizard picks up whatever
+                // state the source is in and walks the user forward from there.
+                <>
+                  {importableSources.map((source) => (
+                    <MenuItem
+                      key={source.id}
+                      disabled={!settingsHydrated || primaryEnvironment == null}
+                      onClick={() => {
+                        if (!settingsHydrated || primaryEnvironment == null) return;
+                        setImportSession({
+                          source,
+                          environmentId: primaryEnvironment.environmentId,
+                          environmentName: resolveEnvironmentOptionLabel({
+                            isPrimary: true,
+                            environmentId: primaryEnvironment.environmentId,
+                            runtimeLabel: primaryEnvironment.label,
+                          }),
+                        });
+                      }}
+                    >
+                      {source.name}
+                    </MenuItem>
+                  ))}
+                  {primaryEnvironment == null ? (
+                    <MenuItem disabled>Connect to an environment to import cookies</MenuItem>
+                  ) : null}
+                </>
+              )}
+            </MenuGroup>
+          </MenuPopup>
+        </Menu>
+      }
+    >
+      {/*
+        The bordered container groups rows unambiguously at any width, and
+        carries the bottom spacing `SettingsRow` leaves to its children
+        (`pt-3 pb-1`).
+      */}
+      <div className="mt-2 mb-2 overflow-hidden rounded-lg border border-border/60">
+        {listedProfiles.map((profile, index) => {
+          const builtIn = isBuiltInBrowserProfileId(profile.id);
+          const isDefault = profile.id === resolvedDefaultId;
+          return (
+            <div
+              key={profile.id}
+              className={cn(
+                "flex items-center gap-3 px-3 py-2",
+                index > 0 && "border-t border-border/60",
+              )}
+            >
+              <span className="flex min-w-0 flex-1 items-center gap-2">
+                {builtIn ? (
+                  // Dimmed here rather than on the table: a wrapper-level dim
+                  // stacks with the rename field's and the row menu button's
+                  // own, landing them near 0.41 while every other disabled
+                  // control in the block sits at 0.64.
+                  <span
+                    className={cn(
+                      "truncate text-sm text-foreground",
+                      profileWritesDisabled && "opacity-64",
+                    )}
+                  >
+                    {profile.name}
+                  </span>
+                ) : (
+                  <DraftInput
+                    nativeInput
+                    size="sm"
+                    className="w-full max-w-56"
+                    aria-label={`Rename ${profile.name}`}
+                    disabled={profileWritesDisabled || importInFlight}
+                    maxLength={BROWSER_PROFILE_NAME_MAX_LENGTH}
+                    value={profile.name}
+                    onCommit={(next) => renameProfile(profile.id, next)}
+                  />
+                )}
+                {/*
+                  Dimmed with the rest of the row: a `Badge` has no disabled
+                  treatment of its own, so a solid `bg-primary` pill would
+                  otherwise sit at full strength beside a name, rename field
+                  and menu button that are all at 0.64.
+                */}
+                {isDefault ? (
+                  <Badge className={cn(profileWritesDisabled && "opacity-64")}>Default</Badge>
+                ) : null}
+              </span>
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="ghost-muted"
+                      disabled={profileWritesDisabled || importInFlight}
+                      aria-label={`${profile.name} options`}
+                    />
+                  }
+                >
+                  <MoreVertical />
+                </MenuTrigger>
+                <MenuPopup align="end" className="min-w-44">
+                  <MenuItem
+                    disabled={!settingsHydrated || isDefault}
+                    onClick={() => {
+                      if (settingsHydrated) {
+                        updateSettings({ browserDefaultProfileId: profile.id });
+                      }
+                    }}
+                  >
+                    Set as default
+                  </MenuItem>
+                  <MenuItem
+                    disabled={!settingsHydrated || !removalAvailable}
+                    onClick={() => clearProfileData(profile.id, profile.name)}
+                  >
+                    Clear cookies and cache
+                  </MenuItem>
+                  {builtIn ? null : (
+                    <MenuItem
+                      variant="destructive"
+                      disabled={!settingsHydrated || !removalAvailable}
+                      onClick={() => {
+                        if (settingsHydrated) setProfilePendingRemoval(profile);
+                      }}
+                    >
+                      Remove profile and data
+                    </MenuItem>
+                  )}
+                  {!removalAvailable ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuItem disabled>
+                        {environmentsReady
+                          ? "Connect to an environment to clear profile data"
+                          : "Checking environments…"}
+                      </MenuItem>
+                    </>
+                  ) : null}
+                </MenuPopup>
+              </Menu>
+            </div>
+          );
+        })}
+      </div>
+      <AlertDialog
+        open={profilePendingRemoval !== null}
+        onOpenChange={(open) => {
+          if (!open && !profileRemovalInFlight) {
+            setProfilePendingRemoval(null);
+            setProfileRemovalError(null);
+          }
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove “{profilePendingRemoval?.name}”?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its cookies and logins are deleted. Tabs already open in this profile stay open until
+              you close them.
+            </AlertDialogDescription>
+            {profileRemovalError ? (
+              <p aria-live="polite" className="text-sm text-destructive">
+                {profileRemovalError}
+              </p>
+            ) : null}
+            {!removalAvailable ? (
+              <p className="text-sm text-muted-foreground">
+                Connect to an environment to remove this profile and its data.
+              </p>
+            ) : null}
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose
+              disabled={profileRemovalInFlight}
+              render={<Button variant="outline" disabled={profileRemovalInFlight} />}
+            >
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={profileRemovalInFlight || !settingsHydrated || !removalAvailable}
+              onClick={() => {
+                if (profilePendingRemoval && settingsHydrated && removalAvailable) {
+                  void removeProfile(profilePendingRemoval.id);
+                }
+              }}
+            >
+              {profileRemovalInFlight ? "Removing…" : "Remove profile"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+      {importSession ? (
+        <BrowserImportWizard
+          source={importSession.source}
+          destinationEnvironmentName={importSession.environmentName}
+          targetProfiles={listedProfiles.map((profile) => ({ id: profile.id, name: profile.name }))}
+          canCreateProfile={settingsHydrated && !atProfileLimit}
+          onImport={(input) =>
+            runWizardImport(importSession.source, importSession.environmentId, input)
+          }
+          onRefreshSource={() => refreshImportSource(importSession.source.id)}
+          onCheckFullDiskAccess={
+            window.desktopBridge?.checkSystemPermission
+              ? () => window.desktopBridge!.checkSystemPermission!("full-disk-access")
+              : undefined
+          }
+          onOpenFullDiskAccessSettings={async () => {
+            // Rejects outside the desktop shell (and on shells that predate the
+            // method), so the one toast covers every way the link can fail.
+            await readLocalApi()
+              ?.shell.openSystemSettings("full-disk-access")
+              .catch(() => {
+                toastManager.add({
+                  type: "error",
+                  title: "Could not open System Settings",
+                  description: "Open Privacy & Security → Full Disk Access manually.",
+                });
+              });
+          }}
+          onClose={() => setImportSession(null)}
+        />
       ) : null}
-      <DeviceHostsSettings environmentId={environmentId} hosts={hosts} />
-    </>
+    </SettingsRow>
   );
 }
 
@@ -1087,6 +1514,7 @@ export function IntegrationsSettingsPanel() {
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />
       <BrowserRecordingFrameRateSetting disabled={previewDefaultsDisabled} />
+      <BrowserRecordingInputSettings disabled={previewDefaultsDisabled} />
       <BrowserLinkTargetSetting disabled={previewDefaultsDisabled} />
       <BrowserAutoShowFloatingPreviewSetting disabled={previewDefaultsDisabled} />
     </>
@@ -1094,8 +1522,10 @@ export function IntegrationsSettingsPanel() {
 
   return (
     <SettingsPageContainer>
+      {/* Server-authoritative agent access is scoped by the header selection;
+          the preview defaults below are device-local and ignore it. */}
+      <ProjectDefaultsSettings category="integrations" />
       <SettingsSection id="browser" title="Browser">
-        <AgentBrowserAccessSetting />
         {previewDefaultsDisabled ? (
           <SettingsUnavailableGroup message="Only available in the desktop app.">
             {previewDefaults}

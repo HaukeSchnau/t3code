@@ -16,10 +16,12 @@ import { Route as PairRouteImport } from './routes/pair'
 import { Route as ConnectRouteImport } from './routes/connect'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
+import { Route as SettingsStorageRouteImport } from './routes/settings.storage'
 import { Route as SettingsSourceControlRouteImport } from './routes/settings.source-control'
 import { Route as SettingsSnapShotRouteImport } from './routes/settings.snap-shot'
 import { Route as SettingsProvidersRouteImport } from './routes/settings.providers'
 import { Route as SettingsProjectsRouteImport } from './routes/settings.projects'
+import { Route as SettingsOpenSourceLicensesRouteImport } from './routes/settings.open-source-licenses'
 import { Route as SettingsKeybindingsRouteImport } from './routes/settings.keybindings'
 import { Route as SettingsIntegrationsRouteImport } from './routes/settings.integrations'
 import { Route as SettingsGeneralRouteImport } from './routes/settings.general'
@@ -30,7 +32,6 @@ import { Route as SettingsAppearanceRouteImport } from './routes/settings.appear
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
 import { Route as FixturesOrchestrationRouteImport } from './routes/fixtures.orchestration'
 import { Route as FixturesDelegationRouteImport } from './routes/fixtures.delegation'
-import { Route as ConnectCallbackRouteImport } from './routes/connect_.callback'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatMonitorRouteImport } from './routes/_chat.monitor'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -70,6 +71,11 @@ const ChatIndexRoute = ChatIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ChatRoute,
 } as any)
+const SettingsStorageRoute = SettingsStorageRouteImport.update({
+  id: '/storage',
+  path: '/storage',
+  getParentRoute: () => SettingsRoute,
+} as any)
 const SettingsSourceControlRoute = SettingsSourceControlRouteImport.update({
   id: '/source-control',
   path: '/source-control',
@@ -90,6 +96,12 @@ const SettingsProjectsRoute = SettingsProjectsRouteImport.update({
   path: '/projects',
   getParentRoute: () => SettingsRoute,
 } as any)
+const SettingsOpenSourceLicensesRoute =
+  SettingsOpenSourceLicensesRouteImport.update({
+    id: '/open-source-licenses',
+    path: '/open-source-licenses',
+    getParentRoute: () => SettingsRoute,
+  } as any)
 const SettingsKeybindingsRoute = SettingsKeybindingsRouteImport.update({
   id: '/keybindings',
   path: '/keybindings',
@@ -140,11 +152,6 @@ const FixturesDelegationRoute = FixturesDelegationRouteImport.update({
   path: '/fixtures/delegation',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ConnectCallbackRoute = ConnectCallbackRouteImport.update({
-  id: '/connect_/callback',
-  path: '/connect/callback',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -176,7 +183,6 @@ export interface FileRoutesByFullPath {
   '/welcome': typeof WelcomeRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
-  '/connect/callback': typeof ConnectCallbackRoute
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -187,10 +193,12 @@ export interface FileRoutesByFullPath {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
 }
@@ -202,7 +210,6 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
-  '/connect/callback': typeof ConnectCallbackRoute
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -213,10 +220,12 @@ export interface FileRoutesByTo {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/': typeof ChatIndexRoute
   '/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -231,7 +240,6 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_chat/monitor': typeof ChatMonitorRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
-  '/connect_/callback': typeof ConnectCallbackRoute
   '/fixtures/delegation': typeof FixturesDelegationRoute
   '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
@@ -242,10 +250,12 @@ export interface FileRoutesById {
   '/settings/general': typeof SettingsGeneralRoute
   '/settings/integrations': typeof SettingsIntegrationsRoute
   '/settings/keybindings': typeof SettingsKeybindingsRoute
+  '/settings/open-source-licenses': typeof SettingsOpenSourceLicensesRoute
   '/settings/projects': typeof SettingsProjectsRoute
   '/settings/providers': typeof SettingsProvidersRoute
   '/settings/snap-shot': typeof SettingsSnapShotRoute
   '/settings/source-control': typeof SettingsSourceControlRoute
+  '/settings/storage': typeof SettingsStorageRoute
   '/_chat/': typeof ChatIndexRoute
   '/_chat/$environmentId/$threadId': typeof ChatEnvironmentIdThreadIdRoute
   '/_chat/draft/$draftId': typeof ChatDraftDraftIdRoute
@@ -261,7 +271,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/monitor'
     | '/pull-requests'
-    | '/connect/callback'
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
@@ -272,10 +281,12 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/open-source-licenses'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/snap-shot'
     | '/settings/source-control'
+    | '/settings/storage'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
   fileRoutesByTo: FileRoutesByTo
@@ -287,7 +298,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/monitor'
     | '/pull-requests'
-    | '/connect/callback'
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
@@ -298,10 +308,12 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/open-source-licenses'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/snap-shot'
     | '/settings/source-control'
+    | '/settings/storage'
     | '/'
     | '/$environmentId/$threadId'
     | '/draft/$draftId'
@@ -315,7 +327,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_chat/monitor'
     | '/_chat/pull-requests'
-    | '/connect_/callback'
     | '/fixtures/delegation'
     | '/fixtures/orchestration'
     | '/projects/$projectKey'
@@ -326,10 +337,12 @@ export interface FileRouteTypes {
     | '/settings/general'
     | '/settings/integrations'
     | '/settings/keybindings'
+    | '/settings/open-source-licenses'
     | '/settings/projects'
     | '/settings/providers'
     | '/settings/snap-shot'
     | '/settings/source-control'
+    | '/settings/storage'
     | '/_chat/'
     | '/_chat/$environmentId/$threadId'
     | '/_chat/draft/$draftId'
@@ -342,7 +355,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
-  ConnectCallbackRoute: typeof ConnectCallbackRoute
   FixturesDelegationRoute: typeof FixturesDelegationRoute
   FixturesOrchestrationRoute: typeof FixturesOrchestrationRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
@@ -399,6 +411,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatIndexRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/settings/storage': {
+      id: '/settings/storage'
+      path: '/storage'
+      fullPath: '/settings/storage'
+      preLoaderRoute: typeof SettingsStorageRouteImport
+      parentRoute: typeof SettingsRoute
+    }
     '/settings/source-control': {
       id: '/settings/source-control'
       path: '/source-control'
@@ -425,6 +444,13 @@ declare module '@tanstack/react-router' {
       path: '/projects'
       fullPath: '/settings/projects'
       preLoaderRoute: typeof SettingsProjectsRouteImport
+      parentRoute: typeof SettingsRoute
+    }
+    '/settings/open-source-licenses': {
+      id: '/settings/open-source-licenses'
+      path: '/open-source-licenses'
+      fullPath: '/settings/open-source-licenses'
+      preLoaderRoute: typeof SettingsOpenSourceLicensesRouteImport
       parentRoute: typeof SettingsRoute
     }
     '/settings/keybindings': {
@@ -497,13 +523,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof FixturesDelegationRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/connect_/callback': {
-      id: '/connect_/callback'
-      path: '/connect/callback'
-      fullPath: '/connect/callback'
-      preLoaderRoute: typeof ConnectCallbackRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -561,10 +580,12 @@ interface SettingsRouteChildren {
   SettingsGeneralRoute: typeof SettingsGeneralRoute
   SettingsIntegrationsRoute: typeof SettingsIntegrationsRoute
   SettingsKeybindingsRoute: typeof SettingsKeybindingsRoute
+  SettingsOpenSourceLicensesRoute: typeof SettingsOpenSourceLicensesRoute
   SettingsProjectsRoute: typeof SettingsProjectsRoute
   SettingsProvidersRoute: typeof SettingsProvidersRoute
   SettingsSnapShotRoute: typeof SettingsSnapShotRoute
   SettingsSourceControlRoute: typeof SettingsSourceControlRoute
+  SettingsStorageRoute: typeof SettingsStorageRoute
 }
 
 const SettingsRouteChildren: SettingsRouteChildren = {
@@ -575,10 +596,12 @@ const SettingsRouteChildren: SettingsRouteChildren = {
   SettingsGeneralRoute: SettingsGeneralRoute,
   SettingsIntegrationsRoute: SettingsIntegrationsRoute,
   SettingsKeybindingsRoute: SettingsKeybindingsRoute,
+  SettingsOpenSourceLicensesRoute: SettingsOpenSourceLicensesRoute,
   SettingsProjectsRoute: SettingsProjectsRoute,
   SettingsProvidersRoute: SettingsProvidersRoute,
   SettingsSnapShotRoute: SettingsSnapShotRoute,
   SettingsSourceControlRoute: SettingsSourceControlRoute,
+  SettingsStorageRoute: SettingsStorageRoute,
 }
 
 const SettingsRouteWithChildren = SettingsRoute._addFileChildren(
@@ -592,7 +615,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
-  ConnectCallbackRoute: ConnectCallbackRoute,
   FixturesDelegationRoute: FixturesDelegationRoute,
   FixturesOrchestrationRoute: FixturesOrchestrationRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,

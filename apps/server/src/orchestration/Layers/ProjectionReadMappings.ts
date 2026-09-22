@@ -1,6 +1,7 @@
 import {
   ChatAttachment,
   OrchestrationNotificationOrigin,
+  OrchestrationMessageContext,
   NonNegativeInt,
   TurnId,
   type OrchestrationMessage,
@@ -18,6 +19,7 @@ export const ProjectionThreadMessageDbRowSchema = ProjectionThreadMessage.mapFie
     isStreaming: Schema.Number,
     attachments: Schema.NullOr(Schema.fromJsonString(Schema.Array(ChatAttachment))),
     origin: Schema.NullOr(Schema.fromJsonString(OrchestrationNotificationOrigin)),
+    context: Schema.NullOr(Schema.fromJsonString(OrchestrationMessageContext)),
   }),
 );
 
@@ -37,6 +39,7 @@ export function mapProjectionMessageRow(
     Object.assign(message, { attachments: row.attachments });
   }
   if (row.origin !== null) Object.assign(message, { origin: row.origin });
+  if (row.context !== null) Object.assign(message, { context: row.context });
   return message;
 }
 

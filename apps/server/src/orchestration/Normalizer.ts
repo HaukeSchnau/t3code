@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import {
   type ClientOrchestrationCommand,
   type UserInputAttachments,
+  getProviderAttachmentLimitError,
   type IsoDateTime,
   type OrchestrationCommand,
   OrchestrationDispatchCommandError,
@@ -218,16 +219,27 @@ export const prepareDispatchCommand = (
       canonicalCommand.type === "thread.user-input.respond"
         ? Object.values(canonicalCommand.attachmentsByQuestionId ?? {}).flat()
         : canonicalCommand.message.attachments;
-    if (
-      canonicalCommand.type === "thread.user-input.respond" &&
-      attachments.length > PROVIDER_SEND_TURN_MAX_ATTACHMENTS
-    ) {
-      return yield* new OrchestrationDispatchCommandError({
-        message: `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per question response.`,
-      });
+    const attachmentLimitError = getProviderAttachmentLimitError(attachments);
+    if (attachmentLimitError) {
+      return yield* new OrchestrationDispatchCommandError({ message: attachmentLimitError });
+    }
+    if (canonicalCommand.type !== "thread.user-input.respond") {
+      const clientAttachmentIds = new Set<string>();
+      for (const attachment of attachments) {
+        if (attachment.id === undefined) continue;
+        if (clientAttachmentIds.has(attachment.id)) {
+          return yield* new OrchestrationDispatchCommandError({
+            message: `Attachment '${attachment.name}' cannot be sent: duplicate attachment id.`,
+          });
+        }
+        clientAttachmentIds.add(attachment.id);
+      }
     }
 
     const claimedAttachmentPaths: string[] = [];
+    const attachmentsWithDecodedSizes = [...attachments];
+    // Context records bind to attachments by the id the client knew; they follow the rename.
+    const finalAttachmentIdByClientId = new Map<string, string>();
     const preparedAttachments = yield* Effect.forEach(
       attachments,
       (attachment, index) =>
@@ -288,6 +300,7 @@ export const prepareDispatchCommand = (
               ),
             );
             claimedAttachmentPaths.push(claim.finalPath);
+            finalAttachmentIdByClientId.set(attachment.id, claim.finalId);
 
             return { attachment: normalizedAttachment, materialize: Effect.void };
           }
@@ -332,6 +345,12 @@ export const prepareDispatchCommand = (
             mimeType: parsed.mimeType.toLowerCase(),
             sizeBytes: bytes.byteLength,
           };
+          attachmentsWithDecodedSizes[index] = persistedAttachment;
+          const decodedLimitError = getProviderAttachmentLimitError(attachmentsWithDecodedSizes);
+          if (decodedLimitError) {
+            return yield* new OrchestrationDispatchCommandError({ message: decodedLimitError });
+          }
+
           const attachmentPath = resolveAttachmentPath({
             attachmentsDir: serverConfig.attachmentsDir,
             attachment: persistedAttachment,
@@ -393,12 +412,34 @@ export const prepareDispatchCommand = (
               Effect.ensuring(fileSystem.remove(pendingPath, { force: true }).pipe(Effect.ignore)),
             );
           });
+          if (attachment.id !== undefined) {
+            finalAttachmentIdByClientId.set(attachment.id, attachmentId);
+          }
 
           return { attachment: persistedAttachment, materialize };
         }),
       { concurrency: 1 },
     ).pipe(Effect.tapError(() => removeClaimedAttachmentPaths(claimedAttachmentPaths)));
 
+    const context =
+      canonicalCommand.type === "thread.user-input.respond"
+        ? undefined
+        : canonicalCommand.message.context;
+    const normalizedContext =
+      context === undefined
+        ? undefined
+        : {
+            ...context,
+            records: context.records.map((record) =>
+              (record.kind === "image" || record.kind === "file") && "attachmentId" in record
+                ? {
+                    ...record,
+                    attachmentId:
+                      finalAttachmentIdByClientId.get(record.attachmentId) ?? record.attachmentId,
+                  }
+                : record,
+            ),
+          };
     const normalizedAttachments = preparedAttachments.map(({ attachment }) => attachment);
     const normalizedCommand =
       canonicalCommand.type === "thread.user-input.respond"
@@ -426,6 +467,7 @@ export const prepareDispatchCommand = (
             message: {
               ...canonicalCommand.message,
               attachments: normalizedAttachments,
+              ...(normalizedContext !== undefined ? { context: normalizedContext } : {}),
             },
           } satisfies OrchestrationCommand);
 
@@ -449,19 +491,22 @@ export const cleanupFailedUploadedAttachments = Effect.fn(
   "Normalizer.cleanupFailedUploadedAttachments",
 )(function* (command: ClientOrchestrationCommand, normalizedCommand: OrchestrationCommand) {
   if (
-    (command.type !== "thread.turn.start" && command.type !== "thread.user-input.respond") ||
+    (command.type !== "thread.turn.start" &&
+      command.type !== "thread.message.queue" &&
+      command.type !== "thread.user-input.respond") ||
     (normalizedCommand.type !== "thread.turn.start" &&
+      normalizedCommand.type !== "thread.message.queue" &&
       normalizedCommand.type !== "thread.user-input.respond")
   ) {
     return;
   }
 
   const originalAttachments =
-    command.type === "thread.turn.start"
+    command.type !== "thread.user-input.respond"
       ? command.message.attachments
       : Object.values(command.attachmentsByQuestionId ?? {}).flat();
   const normalizedAttachments =
-    normalizedCommand.type === "thread.turn.start"
+    normalizedCommand.type !== "thread.user-input.respond"
       ? normalizedCommand.message.attachments
       : Object.values(normalizedCommand.attachmentsByQuestionId ?? {}).flat();
   if (normalizedAttachments.length === 0) return;

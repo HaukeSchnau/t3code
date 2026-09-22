@@ -5,6 +5,11 @@ import { Children, isValidElement, type ReactNode } from "react";
 import { DiffWorkerPoolProvider } from "../components/DiffWorkerPoolProvider";
 import { ChatRouteLayout } from "./_chat";
 
+vi.mock("@tanstack/react-router", async (original) => ({
+  ...(await original<typeof import("@tanstack/react-router")>()),
+  useParams: () => undefined,
+}));
+
 vi.mock("../components/DiffWorkerPoolProvider", () => ({
   DiffWorkerPoolProvider: ({ children }: { children: ReactNode }) => children,
 }));

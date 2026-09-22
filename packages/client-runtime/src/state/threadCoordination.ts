@@ -404,7 +404,9 @@ export function orderEffortGroups(
 ): ReadonlyArray<LineageEffortGroup> {
   const lifecycleRank = (group: LineageEffortGroup) => {
     const keys: string[] = [];
-    const pending = group.memberKeys.toReversed();
+    // Hermes lacks toReversed; reverse a copy to preserve the input.
+    // oxlint-disable-next-line unicorn/no-array-reverse
+    const pending = [...group.memberKeys].reverse();
     const seen = new Set<string>();
     while (pending.length > 0) {
       const key = pending.pop();
@@ -421,7 +423,7 @@ export function orderEffortGroups(
   };
   return groups
     .map((group, index) => ({ group, index, rank: lifecycleRank(group) }))
-    .toSorted((left, right) => left.rank - right.rank || left.index - right.index)
+    .sort((left, right) => left.rank - right.rank || left.index - right.index)
     .map(({ group }) => group);
 }
 

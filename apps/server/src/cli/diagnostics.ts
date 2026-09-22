@@ -53,18 +53,18 @@ const MIN_WAIT_TIMEOUT_MS = 1_000;
 const MAX_WAIT_TIMEOUT_MS = 600_000;
 const encodeJsonString = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );
 
-const durationFlag = Flag.string("duration").pipe(
+const durationFlag = Flag.String("duration").pipe(
   Flag.withSchema(DurationFromString),
   Flag.withDescription("Capture duration, for example `5s`, `30s`, or `2 minutes`."),
   Flag.withDefault(Duration.seconds(30)),
 );
 
-const waitTimeoutFlag = Flag.string("wait-timeout").pipe(
+const waitTimeoutFlag = Flag.String("wait-timeout").pipe(
   Flag.withSchema(DurationFromString),
   Flag.withDescription("Maximum time to wait for the renderer to finish the capture."),
   Flag.optional,

@@ -60,3 +60,5 @@ hydration, accepted-append/removal interleavings, oldest-event deletion, shared 
 and a 4,000-entry recovery with one summary and bounded work. Replay tests cover process-local duration totals.
 SQLite tests cover successful and rolled-back transaction timing, present database/WAL files, normal WAL
 absence, invalid event-loop samples, and missing-database collection errors.
+
+Provider NDJSON logs retain metadata only, cap each record at 1 KiB, and sample high-frequency events. Upstream raw-payload logging and its larger per-record limit do not meet this fork's disk and payload-retention limits. Keep the metadata-only logger until upstream offers the same policy.

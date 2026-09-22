@@ -447,17 +447,17 @@ const runProjectMutation = Effect.fn("runProjectMutation")(function* (
 });
 
 const projectAddCommand = Command.make("add", {
-  separate: Flag.boolean("separate").pipe(
+  separate: Flag.Boolean("separate").pipe(
     Flag.withDescription(
       "Create a fresh project in a separate filesystem environment. Requires a managed Linux host.",
     ),
     Flag.withDefault(false),
   ),
   ...projectLocationFlags,
-  workspaceRoot: Argument.string("path").pipe(
+  workspaceRoot: Argument.String("path").pipe(
     Argument.withDescription("Workspace root to add as a project."),
   ),
-  title: Flag.string("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
+  title: Flag.String("title").pipe(Flag.withDescription("Optional project title."), Flag.optional),
 }).pipe(
   Command.withDescription("Add a project."),
   Command.withHandler((flags) =>
@@ -514,10 +514,10 @@ const projectAddCommand = Command.make("add", {
 
 const projectRemoveCommand = Command.make("remove", {
   ...projectLocationFlags,
-  project: Argument.string("project").pipe(
+  project: Argument.String("project").pipe(
     Argument.withDescription("Project id or workspace root to remove."),
   ),
-  force: Flag.boolean("force").pipe(
+  force: Flag.Boolean("force").pipe(
     Flag.withDescription("Delete the project and all of its threads."),
     Flag.withDefault(false),
   ),
@@ -553,10 +553,10 @@ const projectRemoveCommand = Command.make("remove", {
 
 const projectRenameCommand = Command.make("rename", {
   ...projectLocationFlags,
-  project: Argument.string("project").pipe(
+  project: Argument.String("project").pipe(
     Argument.withDescription("Project id or workspace root to rename."),
   ),
-  title: Argument.string("title").pipe(Argument.withDescription("New project title.")),
+  title: Argument.String("title").pipe(Argument.withDescription("New project title.")),
 }).pipe(
   Command.withDescription("Rename a project."),
   Command.withHandler((flags) =>

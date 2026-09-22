@@ -580,6 +580,7 @@ const EnvironmentOrchestrationTurnActivitiesParams = Schema.Struct({
 // behavior, so pagination stays opt-in per request.
 const EnvironmentOrchestrationThreadSnapshotQuery = {
   activityDetailMode: Schema.optionalKey(OrchestrationThreadActivityDetailMode),
+  reasoningMessages: Schema.optional(Schema.Literal("true")),
   turnLimit: Schema.optional(
     Schema.FiniteFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
   ),

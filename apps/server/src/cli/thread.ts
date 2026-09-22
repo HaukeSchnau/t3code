@@ -128,68 +128,68 @@ const withThreadCliSession = <A, E, R>(
     );
   });
 
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit compact JSON."),
   Flag.withDefault(false),
 );
-const fromThreadFlag = Flag.string("from-thread").pipe(
+const fromThreadFlag = Flag.String("from-thread").pipe(
   Flag.withDescription(`Calling thread id. Defaults to ${THREAD_ID_ENV}.`),
   Flag.optional,
 );
-const environmentFlag = Flag.string("environment").pipe(
+const environmentFlag = Flag.String("environment").pipe(
   Flag.withDescription("Target environment id from `t3 thread projects`."),
   Flag.optional,
 );
-const providerInstanceFlag = Flag.string("provider-instance").pipe(
+const providerInstanceFlag = Flag.String("provider-instance").pipe(
   Flag.withDescription("Provider instance id from `t3 thread models`."),
   Flag.optional,
 );
-const modelFlag = Flag.string("model").pipe(
+const modelFlag = Flag.String("model").pipe(
   Flag.withDescription("Provider model slug from `t3 thread models`."),
   Flag.optional,
 );
-const includeLegacyModelsFlag = Flag.boolean("include-legacy").pipe(
+const includeLegacyModelsFlag = Flag.Boolean("include-legacy").pipe(
   Flag.withDescription("Include models marked legacy."),
   Flag.withDefault(false),
 );
-const allowLegacyModelFlag = Flag.boolean("allow-legacy-model").pipe(
+const allowLegacyModelFlag = Flag.Boolean("allow-legacy-model").pipe(
   Flag.withDescription("Allow an intentional legacy model selection."),
   Flag.withDefault(false),
 );
-const queueMessageFlag = Flag.boolean("queue").pipe(
+const queueMessageFlag = Flag.Boolean("queue").pipe(
   Flag.withDescription("Wait behind active work instead of steering it."),
   Flag.withDefault(false),
 );
-const modelOptionFlag = Flag.keyValuePair("option").pipe(
+const modelOptionFlag = Flag.KeyValuePair("option").pipe(
   Flag.withDescription("Provider option as key=value. Repeat for more options."),
   Flag.optional,
 );
-const runtimeModeFlag = Flag.choice("runtime-mode", [
+const runtimeModeFlag = Flag.Literals("runtime-mode", [
   "approval-required",
   "auto-accept-edits",
   "auto",
   "full-access",
 ] as const).pipe(Flag.withDescription("Override the thread runtime mode."), Flag.optional);
-const interactionModeFlag = Flag.choice("interaction-mode", ["default", "plan"] as const).pipe(
+const interactionModeFlag = Flag.Literals("interaction-mode", ["default", "plan"] as const).pipe(
   Flag.withDescription("Override the thread interaction mode."),
   Flag.optional,
 );
-const threadIdArgument = Argument.string("thread-id").pipe(
+const threadIdArgument = Argument.String("thread-id").pipe(
   Argument.withDescription("Target T3 thread id."),
 );
-const promptArgument = Argument.string("prompt").pipe(
+const promptArgument = Argument.String("prompt").pipe(
   Argument.withDescription("Message to submit to the thread."),
 );
-const batchIdArgument = Argument.string("batch-id").pipe(
+const batchIdArgument = Argument.String("batch-id").pipe(
   Argument.withDescription("Orchestration batch id."),
 );
-const effortIdArgument = Argument.string("effort-id").pipe(
+const effortIdArgument = Argument.String("effort-id").pipe(
   Argument.withDescription("Orchestration effort id."),
 );
-const waitIdArgument = Argument.string("wait-id").pipe(
+const waitIdArgument = Argument.String("wait-id").pipe(
   Argument.withDescription("Durable wait id."),
 );
-const watchIdArgument = Argument.string("watch-id").pipe(
+const watchIdArgument = Argument.String("watch-id").pipe(
   Argument.withDescription("Durable watch id."),
 );
 
@@ -354,14 +354,11 @@ const modelsCommand = Command.make("models", {
 
 const listCommand = Command.make("list", {
   ...scopedFlags,
-  query: Flag.string("query").pipe(
+  query: Flag.String("query").pipe(
     Flag.withDescription("Search titles and projects."),
     Flag.optional,
   ),
-  limit: Flag.integer("limit").pipe(
-    Flag.withDescription("Maximum number of threads."),
-    Flag.optional,
-  ),
+  limit: Flag.Int("limit").pipe(Flag.withDescription("Maximum number of threads."), Flag.optional),
 }).pipe(
   Command.withDescription("List recent threads."),
   Command.withHandler((flags) =>
@@ -389,7 +386,7 @@ const listCommand = Command.make("list", {
 const readCommand = Command.make("read", {
   ...scopedFlags,
   threadId: threadIdArgument,
-  turns: Flag.integer("turns").pipe(
+  turns: Flag.Int("turns").pipe(
     Flag.withDescription("Limit the transcript to this many user turns."),
     Flag.optional,
   ),
@@ -447,19 +444,16 @@ const resultCommand = Command.make("result", {
 
 const graphCommand = Command.make("graph", {
   ...scopedFlags,
-  rootThreadId: Argument.string("root-thread-id").pipe(
+  rootThreadId: Argument.String("root-thread-id").pipe(
     Argument.withDescription("Optional thread at the center of the graph."),
     Argument.optional,
   ),
-  includeReads: Flag.boolean("include-reads").pipe(
+  includeReads: Flag.Boolean("include-reads").pipe(
     Flag.withDescription("Include read relationships."),
     Flag.withDefault(false),
   ),
-  depth: Flag.integer("depth").pipe(Flag.withDescription("Maximum graph depth."), Flag.optional),
-  limit: Flag.integer("limit").pipe(
-    Flag.withDescription("Maximum number of edges."),
-    Flag.optional,
-  ),
+  depth: Flag.Int("depth").pipe(Flag.withDescription("Maximum graph depth."), Flag.optional),
+  limit: Flag.Int("limit").pipe(Flag.withDescription("Maximum number of edges."), Flag.optional),
 }).pipe(
   Command.withDescription("Read the automatic relationship graph."),
   Command.withHandler((flags) =>
@@ -489,18 +483,18 @@ const graphCommand = Command.make("graph", {
 );
 
 const createCommand = Command.make("create", {
-  workspace: Flag.string("workspace").pipe(
+  workspace: Flag.String("workspace").pipe(
     Flag.withDescription("Reuse an existing workspace id."),
     Flag.optional,
   ),
-  workspaceProfile: Flag.choice("workspace-profile", ["familiar", "minimal"]).pipe(
+  workspaceProfile: Flag.Literals("workspace-profile", ["familiar", "minimal"]).pipe(
     Flag.withDescription("Guidance profile for a new workspace."),
     Flag.optional,
   ),
   ...scopedFlags,
   prompt: promptArgument,
-  project: Flag.string("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
-  worktree: Flag.boolean("worktree").pipe(
+  project: Flag.String("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
+  worktree: Flag.Boolean("worktree").pipe(
     Flag.withDescription("Create an isolated managed workspace."),
     Flag.withDefault(false),
   ),
@@ -510,24 +504,24 @@ const createCommand = Command.make("create", {
   allowLegacyModel: allowLegacyModelFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
-  title: Flag.string("title").pipe(Flag.withDescription("Initial thread title."), Flag.optional),
-  skillPacks: Flag.string("skill-pack").pipe(
+  title: Flag.String("title").pipe(Flag.withDescription("Initial thread title."), Flag.optional),
+  skillPacks: Flag.String("skill-pack").pipe(
     Flag.withDescription("Activate a skill pack. Repeat for multiple packs."),
     Flag.between(0, 64),
   ),
-  effort: Flag.string("effort").pipe(
+  effort: Flag.String("effort").pipe(
     Flag.withDescription("Add the new thread to this effort."),
     Flag.optional,
   ),
-  label: Flag.string("label").pipe(
+  label: Flag.String("label").pipe(
     Flag.withDescription("Worker label inside the effort."),
     Flag.optional,
   ),
-  replaces: Flag.string("replaces").pipe(
+  replaces: Flag.String("replaces").pipe(
     Flag.withDescription("Thread this new worker replaces."),
     Flag.optional,
   ),
-  noEffort: Flag.boolean("no-effort").pipe(
+  noEffort: Flag.Boolean("no-effort").pipe(
     Flag.withDescription("Do not inherit the coordinator's sole open effort."),
     Flag.withDefault(false),
   ),
@@ -633,19 +627,19 @@ const forkCommand = Command.make("fork", {
   ...commonFlags,
   fromThread: fromThreadFlag,
   threadId: threadIdArgument.pipe(Argument.optional),
-  worktree: Flag.boolean("worktree").pipe(
+  worktree: Flag.Boolean("worktree").pipe(
     Flag.withDescription("Fork into an isolated managed workspace."),
     Flag.withDefault(false),
   ),
-  effort: Flag.string("effort").pipe(
+  effort: Flag.String("effort").pipe(
     Flag.withDescription("Add the forked thread to this effort."),
     Flag.optional,
   ),
-  label: Flag.string("label").pipe(
+  label: Flag.String("label").pipe(
     Flag.withDescription("Worker label inside the effort."),
     Flag.optional,
   ),
-  noEffort: Flag.boolean("no-effort").pipe(
+  noEffort: Flag.Boolean("no-effort").pipe(
     Flag.withDescription("Do not inherit the coordinator's sole open effort."),
     Flag.withDefault(false),
   ),
@@ -736,7 +730,7 @@ const sendCommand = Command.make("send", {
 const renameCommand = Command.make("rename", {
   ...scopedFlags,
   threadId: threadIdArgument,
-  title: Argument.string("title").pipe(Argument.withDescription("New thread title.")),
+  title: Argument.String("title").pipe(Argument.withDescription("New thread title.")),
 }).pipe(
   Command.withDescription("Rename a thread."),
   Command.withHandler((flags) =>
@@ -764,7 +758,7 @@ const renameCommand = Command.make("rename", {
 
 const effortCreateCommand = Command.make("create", {
   ...scopedFlags,
-  title: Argument.string("title").pipe(Argument.withDescription("Effort title.")),
+  title: Argument.String("title").pipe(Argument.withDescription("Effort title.")),
 }).pipe(
   Command.withDescription("Open an effort owned by the calling thread."),
   Command.withHandler((flags) =>
@@ -805,7 +799,7 @@ const effortReadCommand = Command.make("read", {
 
 const effortListCommand = Command.make("list", {
   ...scopedFlags,
-  includeClosed: Flag.boolean("include-closed").pipe(
+  includeClosed: Flag.Boolean("include-closed").pipe(
     Flag.withDescription("Include closed efforts."),
     Flag.withDefault(false),
   ),
@@ -830,7 +824,7 @@ const effortListCommand = Command.make("list", {
 const effortRenameCommand = Command.make("rename", {
   ...scopedFlags,
   effortId: effortIdArgument,
-  title: Argument.string("title").pipe(Argument.withDescription("New effort title.")),
+  title: Argument.String("title").pipe(Argument.withDescription("New effort title.")),
 }).pipe(
   Command.withDescription("Rename an effort."),
   Command.withHandler((flags) =>
@@ -855,7 +849,7 @@ const effortRenameCommand = Command.make("rename", {
 const effortCloseCommand = Command.make("close", {
   ...scopedFlags,
   effortId: effortIdArgument,
-  stopMembers: Flag.boolean("stop-members").pipe(
+  stopMembers: Flag.Boolean("stop-members").pipe(
     Flag.withDescription("Interrupt live local member threads too."),
     Flag.withDefault(false),
   ),
@@ -905,7 +899,7 @@ const effortAddCommand = Command.make("add", {
   ...scopedFlags,
   effortId: effortIdArgument,
   threadId: threadIdArgument,
-  label: Argument.string("label").pipe(Argument.withDescription("Worker label.")),
+  label: Argument.String("label").pipe(Argument.withDescription("Worker label.")),
 }).pipe(
   Command.withDescription("Add a thread to an effort."),
   Command.withHandler((flags) =>
@@ -969,27 +963,27 @@ const effortCommand = Command.make("effort").pipe(
 
 const waitCreateCommand = Command.make("create", {
   ...scopedFlags,
-  effort: Flag.string("effort").pipe(
+  effort: Flag.String("effort").pipe(
     Flag.withDescription("Wait on effort members."),
     Flag.optional,
   ),
-  members: Flag.string("members").pipe(
+  members: Flag.String("members").pipe(
     Flag.withDescription("Comma-separated thread ids to wait on."),
     Flag.optional,
   ),
-  mode: Flag.choice("mode", ["all", "any"] as const).pipe(
+  mode: Flag.Literals("mode", ["all", "any"] as const).pipe(
     Flag.withDescription("Resolve after all or any member settles."),
     Flag.withDefault("all"),
   ),
-  deadlineMs: Flag.integer("deadline-ms").pipe(
+  deadlineMs: Flag.Int("deadline-ms").pipe(
     Flag.withDescription("Server-owned deadline in milliseconds."),
     Flag.optional,
   ),
-  summarize: Flag.boolean("summarize").pipe(
+  summarize: Flag.Boolean("summarize").pipe(
     Flag.withDescription("Summarize the settled result with the configured system model."),
     Flag.withDefault(false),
   ),
-  summaryInstruction: Flag.string("summary-instruction").pipe(
+  summaryInstruction: Flag.String("summary-instruction").pipe(
     Flag.withDescription("Additional instruction for the settlement summary."),
     Flag.optional,
   ),
@@ -1058,8 +1052,8 @@ const waitReadCommand = Command.make("read", {
 
 const waitListCommand = Command.make("list", {
   ...scopedFlags,
-  effort: Flag.string("effort").pipe(Flag.withDescription("Filter by effort."), Flag.optional),
-  includeResolved: Flag.boolean("include-resolved").pipe(
+  effort: Flag.String("effort").pipe(Flag.withDescription("Filter by effort."), Flag.optional),
+  includeResolved: Flag.Boolean("include-resolved").pipe(
     Flag.withDescription("Include resolved waits."),
     Flag.withDefault(false),
   ),
@@ -1114,27 +1108,27 @@ const waitCommand = Command.make("wait").pipe(
 
 const watchCreateCommand = Command.make("create", {
   ...scopedFlags,
-  command: Flag.string("command").pipe(
+  command: Flag.String("command").pipe(
     Flag.withDescription("Shell command whose stdout lines are events."),
     Flag.optional,
   ),
-  argvJson: Flag.string("argv-json").pipe(
+  argvJson: Flag.String("argv-json").pipe(
     Flag.withDescription("JSON string array for direct process execution."),
     Flag.optional,
   ),
-  websocket: Flag.string("websocket").pipe(
+  websocket: Flag.String("websocket").pipe(
     Flag.withDescription("ws:// or wss:// endpoint whose text frames are events."),
     Flag.optional,
   ),
-  cwd: Flag.string("cwd").pipe(
+  cwd: Flag.String("cwd").pipe(
     Flag.withDescription("Command working directory. Defaults to the thread workspace."),
     Flag.optional,
   ),
-  instruction: Flag.string("instruction").pipe(
+  instruction: Flag.String("instruction").pipe(
     Flag.withDescription("Use the configured system model to wake only when this is satisfied."),
     Flag.optional,
   ),
-  deadlineMs: Flag.integer("deadline-ms").pipe(
+  deadlineMs: Flag.Int("deadline-ms").pipe(
     Flag.withDescription("Close the watch after this many milliseconds."),
     Flag.optional,
   ),
@@ -1217,7 +1211,7 @@ const watchReadCommand = Command.make("read", {
 
 const watchListCommand = Command.make("list", {
   ...scopedFlags,
-  includeClosed: Flag.boolean("include-closed").pipe(
+  includeClosed: Flag.Boolean("include-closed").pipe(
     Flag.withDescription("Include completed, failed, and cancelled watches."),
     Flag.withDefault(false),
   ),
@@ -1300,21 +1294,21 @@ const stopCommand = Command.make("stop", {
 const batchCreateCommand = Command.make("create", {
   ...scopedFlags,
   prompt: promptArgument,
-  workers: Flag.keyValuePair("worker").pipe(
+  workers: Flag.KeyValuePair("worker").pipe(
     Flag.withDescription(
       "Worker as label=provider-instance/model?option:value. Repeat for multiple workers.",
     ),
   ),
-  project: Flag.string("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
-  worktree: Flag.boolean("worktree").pipe(
+  project: Flag.String("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
+  worktree: Flag.Boolean("worktree").pipe(
     Flag.withDescription("Give each worker a managed workspace."),
     Flag.withDefault(false),
   ),
   allowLegacyModel: allowLegacyModelFlag,
   runtimeMode: runtimeModeFlag,
   interactionMode: interactionModeFlag,
-  title: Flag.string("title").pipe(Flag.withDescription("Batch title."), Flag.optional),
-  timeoutMs: Flag.integer("timeout-ms").pipe(
+  title: Flag.String("title").pipe(Flag.withDescription("Batch title."), Flag.optional),
+  timeoutMs: Flag.Int("timeout-ms").pipe(
     Flag.withDescription("Server-owned batch deadline."),
     Flag.optional,
   ),

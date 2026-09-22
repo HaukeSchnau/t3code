@@ -23,6 +23,8 @@ monitor full of visible threads to start every reconnect catch-up simultaneously
   holding it. Failure, interruption, and session replacement release through the scoped finalizer,
   and release is idempotent. Permit acquisition is interruptible so a cancelled queued waiter does
   not block session teardown or retain its FIFO position.
+- Admission preserves transport batches so replay updates publish once per batch, including when a
+  synchronization marker releases the permit.
 - Each replacement `RpcSession` owns a fresh weakly referenced gate. Pending work from an obsolete
   session cannot consume the replacement session's capacity.
 
