@@ -37,17 +37,17 @@
     "projectSdk": {
       "flake": false,
       "locked": {
-        "lastModified": 1789483145,
-        "narHash": "sha256-syMga8sQ83Ia2j+fnOe3VP0P3TB2KMarkyoiWpXQEaQ=",
+        "lastModified": 1790115917,
+        "narHash": "sha256-Y/hfCjK9o8xThCCLZt09NbGRv+tVwF9v1+a2GzG7BgU=",
         "owner": "HaukeSchnau",
         "repo": "nix-infra-modules",
-        "rev": "a78a097b289c9f1b79162b1e2729a27b51eaa8bc",
+        "rev": "c08469c9ed76a0e2223cb6bf1ac624580be6f98c",
         "type": "github"
       },
       "original": {
         "owner": "HaukeSchnau",
         "repo": "nix-infra-modules",
-        "rev": "a78a097b289c9f1b79162b1e2729a27b51eaa8bc",
+        "rev": "c08469c9ed76a0e2223cb6bf1ac624580be6f98c",
         "type": "github"
       }
     },
