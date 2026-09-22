@@ -60,7 +60,7 @@ export function agentDeviceQuickStart(
     `  ${executable} install <app> <path-to-.app-or-.apk> ${target}`,
     `Prefer snapshot refs over coordinates. Run ${executable} help <topic> for workflow guides and ${executable} <command> --help for flags. Help commands do not need device/config/session flags.`,
     "Do not call simctl, adb, xcrun, or serve-sim directly while these tools are attached; use agent-device.",
-    "For remote hosts, install accepts a local .app directory or .apk and uploads it through the configured daemon connection. Arrange native builds and Metro reachability separately. Keep Metro running with your environment's service manager on an allowed port, bind a reachable interface, and advertise the address reachable from the device host.",
+    "For remote hosts, install accepts a local .app directory or .apk and uploads it through the configured daemon connection. For artifacts already on the device host, use remote:/absolute/path instead of uploading again. Arrange native builds and Metro reachability separately. Keep Metro running with your environment's service manager on an allowed port, bind a reachable interface, and advertise the address reachable from the device host.",
     "Keep the returned --config and --session flags on every operational command. Other hosts can be used concurrently; opening one does not switch these commands.",
     platformNotes,
   ].join("\n");
