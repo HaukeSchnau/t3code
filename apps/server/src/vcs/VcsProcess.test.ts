@@ -73,7 +73,7 @@ describe("VcsProcess.run", () => {
       const error = yield* service.run({ ...input, args: ["add", "."] }).pipe(Effect.flip);
       assert.instanceOf(error, VcsProcessExitError);
       expect(error.retryable).toBe(true);
-    }).pipe(Effect.scoped, Effect.provide(liveLayer), Effect.provide(NodeServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(Layer.merge(liveLayer, NodeServices.layer))),
   );
 
   it.effect.each([
