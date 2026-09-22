@@ -1448,6 +1448,38 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
       }),
     );
 
+    it.effect("preserves same-stat edits when copying the review index", () =>
+      Effect.gen(function* () {
+        const path = yield* Path.Path;
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        // Model a filesystem where a same-size write leaves Git's cached stat unchanged.
+        yield* git(cwd, ["config", "core.trustctime", "false"]);
+        yield* git(cwd, ["config", "core.checkStat", "minimal"]);
+        yield* writeTextFile(cwd, "tracked.txt", "before\n");
+        NodeFS.utimesSync(path.join(cwd, "tracked.txt"), 1, 1);
+        yield* git(cwd, ["add", "tracked.txt"]);
+        yield* git(cwd, ["commit", "-m", "tracked file"]);
+        yield* writeTextFile(cwd, "tracked.txt", "after!\n");
+        NodeFS.utimesSync(path.join(cwd, "tracked.txt"), 1, 1);
+        NodeFS.utimesSync(path.join(cwd, ".git", "index"), 1, 1);
+        yield* writeTextFile(cwd, "untracked.txt", "new\n");
+
+        const indexBefore = NodeFS.readFileSync(path.join(cwd, ".git", "index"));
+        const preview = yield* driver.getReviewDiffPreview({ cwd });
+        const dirty = preview.sources.find((source) => source.kind === "working-tree")!;
+
+        assert.deepStrictEqual(dirty.files, [
+          { path: "tracked.txt", previousPath: null, additions: 1, deletions: 1 },
+          { path: "untracked.txt", previousPath: null, additions: 1, deletions: 0 },
+        ]);
+        assert.include(dirty.diff, "-before");
+        assert.include(dirty.diff, "+after!");
+        assert.deepStrictEqual(NodeFS.readFileSync(path.join(cwd, ".git", "index")), indexBefore);
+      }),
+    );
+
     it.effect("keeps complete stats for files beyond the combined patch limit", () =>
       Effect.gen(function* () {
         const cwd = yield* makeTmpDir();

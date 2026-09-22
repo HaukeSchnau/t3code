@@ -31,6 +31,7 @@ const fixture = (
 ) => {
   let finalized = 0;
   const requests: string[] = [];
+  const hosts: Array<string | undefined> = [];
   const client = HttpClient.make((request, _url, signal) =>
     Effect.gen(function* () {
       requests.push(request.url);
@@ -58,8 +59,13 @@ const fixture = (
       ),
       Layer.provideMerge(
         Layer.succeed(DeviceService, {
-          currentReadiness: () =>
-            Effect.succeed({ hostId: LOCAL_DEVICE_HOST_ID, hub: { origin: "http://hub.test" } }),
+          currentReadiness: (hostId) => {
+            hosts.push(hostId);
+            return Effect.succeed({
+              hostId: hostId ?? LOCAL_DEVICE_HOST_ID,
+              hub: { origin: "http://hub.test" },
+            });
+          },
         } as DeviceService["Service"]),
       ),
       Layer.provideMerge(Layer.succeed(HttpClient.HttpClient, client)),
@@ -67,10 +73,23 @@ const fixture = (
     { disableLogger: true },
   );
   disposers.push(dispose);
-  return { handler, requests, finalized: () => finalized };
+  return { handler, requests, hosts, finalized: () => finalized };
 };
 
 describe("device hub proxy", () => {
+  it("routes remote media to its host and strips routing credentials", async () => {
+    const { handler, requests, hosts } = fixture([AuthOrchestrationReadScope]);
+    const response = await handler(
+      new Request(
+        "http://t3.test/api/device-hub/vendor/serve-emu/api/screenshot?hostId=m1&device=emulator-5554&wsTicket=secret",
+      ),
+    );
+    expect(response.status).toBe(200);
+    expect(hosts).toEqual(["m1"]);
+    expect(requests).toEqual([
+      "http://hub.test/vendor/serve-emu/api/screenshot?device=emulator-5554",
+    ]);
+  });
   it("releases the upstream response after forwarding its body and strips tickets", async () => {
     const { handler, requests, finalized } = fixture([AuthOrchestrationReadScope]);
     const response = await handler(
