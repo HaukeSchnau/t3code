@@ -11,6 +11,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import { ensureAgentDeviceShim } from "./AgentDeviceShim.ts";
 import {
   agentDeviceConfigPath,
@@ -37,6 +38,7 @@ describe("host-bound agent commands", () => {
         entryPath,
         `import { readFileSync } from 'node:fs';
 const args = process.argv.slice(2);
+if (args[0] === 'help' || args.includes('--help')) { console.log(JSON.stringify(args)); process.exit(0); }
 console.log(readFileSync(args[args.indexOf('--config') + 1], 'utf8'));
 if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
       );
@@ -76,6 +78,19 @@ if (process.env.AGENT_DEVICE_DAEMON_BASE_URL) process.exit(2);`,
       expect(agentDeviceSession("thread", "mini", "same-id")).not.toBe(
         agentDeviceSession("thread", "android", "same-id"),
       );
+      for (const args of [
+        ["help", "remote"],
+        ["install", "--help"],
+      ]) {
+        const result = yield* Effect.promise(() =>
+          exec(process.execPath, [path.join(shim, "agent-device-launcher.mjs"), ...args]),
+        );
+        expect(
+          yield* Schema.decodeUnknownEffect(Schema.fromJsonString(Schema.Array(Schema.String)))(
+            result.stdout,
+          ),
+        ).toEqual(args);
+      }
       for (const args of [
         ["snapshot"],
         ["snapshot", "--config", files[0]!],
