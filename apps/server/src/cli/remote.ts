@@ -35,26 +35,26 @@ class RemoteRegisterInputError extends Schema.TaggedError<RemoteRegisterInputErr
   },
 ) {}
 
-const baseUrlFlag = Flag.string("base-url").pipe(
+const baseUrlFlag = Flag.String("base-url").pipe(
   Flag.withDescription("Remote T3 Code HTTP base URL, for example https://t3.schnau.dev."),
 );
-const wsBaseUrlFlag = Flag.string("ws-base-url").pipe(
+const wsBaseUrlFlag = Flag.String("ws-base-url").pipe(
   Flag.withDescription("Optional remote T3 Code WebSocket base URL."),
   Flag.optional,
 );
-const pairingTokenFlag = Flag.string("pairing-token").pipe(
+const pairingTokenFlag = Flag.String("pairing-token").pipe(
   Flag.withDescription(
     "One-time remote pairing token to exchange for an orchestration bearer session.",
   ),
   Flag.optional,
 );
-const bearerTokenFlag = Flag.string("bearer-token").pipe(
+const bearerTokenFlag = Flag.String("bearer-token").pipe(
   Flag.withDescription(
     "Already-issued remote bearer token with orchestration read/operate scopes.",
   ),
   Flag.optional,
 );
-const jsonFlag = Flag.boolean("json").pipe(
+const jsonFlag = Flag.Boolean("json").pipe(
   Flag.withDescription("Emit JSON instead of human-readable output."),
   Flag.withDefault(false),
 );

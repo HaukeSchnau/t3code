@@ -6,6 +6,7 @@ import {
 } from "@t3tools/client-runtime/operations/command-outbox";
 import {
   CommandId,
+  ComposerContextId,
   EnvironmentId,
   MessageId,
   ProjectId,
@@ -245,6 +246,58 @@ describe("thread outbox", () => {
     });
   }
 
+  it("retains structured context through a persisted offline queue round trip and ambiguous delivery", async () => {
+    const message: QueuedThreadMessage = {
+      ...queuedMessage({ messageId: "context-message", createdAt: "2026-09-06T12:00:00.000Z" }),
+      text: "[Build](t3-context://v1/terminal/build-output)",
+      context: {
+        version: 1,
+        records: [
+          {
+            version: 1,
+            kind: "terminal",
+            contextId: ComposerContextId.make("build-output"),
+            label: "Build",
+            terminalId: "main",
+            terminalLabel: "Terminal",
+            lineStart: 2,
+            lineEnd: 2,
+            text: "Build failed",
+          },
+        ],
+      },
+    };
+    expect(
+      decodeQueuedThreadMessage(JSON.parse(JSON.stringify(encodeQueuedThreadMessage(message)))),
+    ).toEqual(message);
+    const harness = makeMemoryOutboxFileSystem();
+    const registry = AtomRegistry.make();
+    const first = createThreadOutboxManager({ registry, storage: harness.storage });
+    await first.enqueue(message);
+    const sent = await first.begin(message, message.createdAt, false);
+    if (sent.plan.command.type !== "thread.turn.start") throw new Error("Expected turn start");
+    expect(sent.plan.command.message.context).toBeUndefined();
+    expect(sent.plan.command.message.text).toContain("Build failed");
+    await first.fail(
+      message,
+      new Error("Socket closed after receiving the command"),
+      message.createdAt,
+    );
+    registry.dispose();
+
+    const restartedRegistry = AtomRegistry.make();
+    const restarted = createThreadOutboxManager({
+      registry: restartedRegistry,
+      storage: harness.storage,
+    });
+    await restarted.load();
+    const replay = await restarted.begin(message, "2026-09-06T12:00:02.000Z", true);
+    expect(replay.plan.command).toEqual(sent.plan.command);
+    const structured = makeQueuedThreadDeliveryPlan(message, true).command;
+    if (structured.type !== "thread.turn.start") throw new Error("Expected turn start");
+    expect(structured.message.context).toEqual(message.context);
+    restartedRegistry.dispose();
+  });
   it.each(["read", "json", "schema"] as const)(
     "does not load a partial outbox after a record %s failure",
     async (failure) => {

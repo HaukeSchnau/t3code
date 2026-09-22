@@ -47,9 +47,9 @@
           pkgs,
           preferLocalWebBuild ? false,
           pnpmDepsHashes ? {
-            web = "sha256-Lz6lPqv6HyqZYSwa9SeV+kHmtx9jBDeI04uDS0H4B84=";
-            server = "sha256-Sf7YwTFNDm9kXHrTwVUjJFrhHgJWPIkirprpmQ/1Bnk=";
-            runtime = "sha256-3COXWC1hI4ExMANUFbyCdHhD+1qc7G+ihKfaln8O8Lc=";
+            web = "sha256-zxz5fzFztU2DxEhYQ8GXe8J2VMajw06G1uvIyMS0++k=";
+            server = "sha256-Kp5mgTswr5eko5Icn/funOQmp5zWyM0YkvyArA2RZIY=";
+            runtime = "sha256-EFXdCg6vmma1rf3biYbFUsIQlw06na5epkfDnGRZEpM=";
           },
         }:
         let
@@ -92,6 +92,12 @@
               (productionFiles ./packages/contracts)
               (productionFiles ./packages/shared)
               ./scripts/lib/public-config.ts
+              ./scripts/lib/third-party-licenses.ts
+              ./third-party-licenses.config.json
+              ./apps/desktop/package.json
+              ./native/libghostty-vt/LICENSE
+              ./apps/mobile/modules/t3-markdown-text/LICENSE
+              ./apps/mobile/modules/t3-composer-editor/LICENSE
             ];
           };
           serverSource = lib.fileset.toSource {
@@ -183,6 +189,8 @@
             };
             buildPhase = ''
               runHook preBuild
+              mkdir -p .generated/third-party-licenses
+              cp -R ${import ./nix/spdx.nix { inherit pkgs; }} .generated/third-party-licenses/spdx
               pnpm --filter @t3tools/web build
               runHook postBuild
             '';
@@ -437,7 +445,10 @@
             pkgs.gcc
             pkgs.git
             pkgs.gnumake
+            pkgs.gnutar
+            pkgs.gzip
             pkgs.just
+            pkgs.jq
             pkgs.libsecret
             pkgs.pkg-config
             pkgs.python3

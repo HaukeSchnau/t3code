@@ -110,3 +110,7 @@ Revisit when:
   - mobile bundling/source-map checks for Expo/Metro
   - diff parsing tests for `@pierre/diffs`
   - iOS build/codegen checks for Nitro modules
+
+## Offline license notices
+
+The Nix web build includes upstream third-party license generation. Its SPDX templates come from a pinned fixed-output source in `nix/spdx.nix`, because sandboxed builds cannot fetch them on demand. Package overrides supply verified MIT notices omitted from the fastdom, strictdom, and khroma npm packages. Remove those overrides when their published packages contain usable notices.

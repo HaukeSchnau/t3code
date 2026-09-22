@@ -395,6 +395,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         message: input.message,
         previousTitle: input.previousTitle,
         automaticRefresh: input.automaticRefresh,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -408,6 +409,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       };
     });
 

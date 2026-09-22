@@ -341,7 +341,11 @@ export async function recoverEditedCreationAfterDelivery(
     // from deleting the attachment files. allowOverflow mirrors the
     // send-failure restore; the send path refuses over-cap drafts, so the
     // state stays recoverable.
-    await mergeComposerDraftContent(draftKey, { text: kept.text, attachments: [] });
+    await mergeComposerDraftContent(draftKey, {
+      text: kept.text,
+      context: kept.context,
+      attachments: [],
+    });
     if (appAtomRegistry.get(editingQueuedMessageIdsAtom)[kept.messageId]) {
       return true;
     }
@@ -433,6 +437,7 @@ export async function restoreRejectedQueuedMessage(
       stampRecoveryDraftProject(queuedMessage, draftKey);
       await mergeComposerDraftContent(draftKey, {
         text: queuedMessage.text,
+        context: queuedMessage.context,
         attachments: queuedMessage.attachments,
       });
     } finally {
@@ -875,7 +880,11 @@ export function useThreadOutboxDrain(): void {
       const { completeDelivery } = makeDeliveryHelpers(persistedMessage);
       let begun;
       try {
-        begun = await threadOutboxManager.begin(persistedMessage, new Date().toISOString());
+        begun = await threadOutboxManager.begin(
+          persistedMessage,
+          new Date().toISOString(),
+          currentConfig.environment.capabilities.inlineMessageContext === true,
+        );
       } catch (error) {
         console.warn("[thread-outbox] failed to begin queued delivery", error);
         return false;
@@ -983,7 +992,11 @@ export function useThreadOutboxDrain(): void {
       // different worktree branch or otherwise diverge from the queued task.
       let begun;
       try {
-        begun = await threadOutboxManager.begin(persistedMessage, new Date().toISOString());
+        begun = await threadOutboxManager.begin(
+          persistedMessage,
+          new Date().toISOString(),
+          currentConfig.environment.capabilities.inlineMessageContext === true,
+        );
       } catch (error) {
         console.warn("[thread-outbox] failed to begin queued creation", error);
         return false;

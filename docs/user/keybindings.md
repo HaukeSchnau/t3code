@@ -3,6 +3,53 @@
 Customize shortcuts in **Settings → Keybindings** on web and desktop. That page
 also lists the command IDs and defaults available in your version.
 
+## Composer controls
+
+In **Settings → General → Send shortcut**, choose whether Enter sends, requires
+`mod+Enter` for multiline prompts, or always requires `mod+Enter`. `Shift+Enter`
+inserts a new line. This applies to the web and desktop composer at desktop widths.
+
+**Follow-up behavior** chooses Queue or Steer while the agent runs. Use
+`mod+Enter` to do the opposite for one message. When sending requires `mod+Enter`,
+use `mod+Shift+Enter` for the opposite action. In a new thread, `mod+Enter` keeps
+starting the thread in the background.
+
+Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
+Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
+workspace, and `mod+shift+g` for the Git branch. The workspace menu includes the
+current checkout, a new worktree, and the previous worktree when available.
+Use `mod+shift+l` to reuse the previous worktree directly.
+
+In the model picker, press Left in an empty search field or Shift+Tab to reach
+the provider list. Use Up/Down to move and Enter to choose. Right returns to
+model search. `mod+shift+up` and `mod+shift+down` switch providers directly and clear the
+search. These provider shortcuts can also be changed in Settings.
+
+These shortcuts run inside the focused web or desktop client. `mod` uses Command
+on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
+Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
+in Settings.
+
+## Copy pull request references
+
+With a PR open in the right panel or on the Pull Requests page, use `mod+shift+c`
+to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
+Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
+or “Copy Number”. They copy the selected PR and leave terminal input alone.
+
+## iPad
+
+With a hardware keyboard, use `Cmd+1` through `Cmd+9` to open the first nine
+displayed threads. The shortcuts follow the current list filters and order.
+`Cmd+K` opens the command palette to search commands, projects, and threads.
+Use the arrow keys and Return to choose a result, or `Cmd+1` through `Cmd+9` to
+choose directly. Escape or `Cmd+K` closes the palette. Start a search with `>`
+to show only actions.
+
+In the composer, Return sends and `Shift+Return` inserts a new line. `Cmd+Return`
+also sends. To make Return insert a new line instead, change the Return key
+behavior in Settings → Keyboard.
+
 ## Edit the configuration file
 
 Keybindings live on the environment's machine, in
@@ -94,11 +141,13 @@ Background submission from a new thread is the exception. `mod+enter` starts tha
 another new thread with the same workspace mode and base branch. **New worktree** remains selected,
 but the new thread does not reuse the worktree created for the thread that just started.
 
-## `when` Conditions
+## When conditions
 
 A `when` expression is evaluated against context keys describing the current UI state. The keys
 the app supplies today are `desktop`, `browser`, `mac`, `terminalFocus`, `terminalOpen`,
-`previewFocus`, `previewOpen`, and `modelPickerOpen`. The set is open and grows over time, so treat
+`previewFocus`, `previewOpen`, `modelPickerOpen`, `editableFocus`, `isWeb`, and `isDesktop`.
+`editableFocus` is true while a text field or editor has the keyboard. `isWeb` and
+`isDesktop` identify the browser and desktop app. The set is open and grows over time, so treat
 that as the current list rather than a fixed one. Any key the running app does not supply evaluates
 to `false`.
 
@@ -125,6 +174,11 @@ a shortcut.
 
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
+
+`thread.undo` (`mod+z` by default) reverses the most recent thread action that is
+still offering **Undo** in a notification, such as an unpin, settle, snooze, or
+archive. Its default rule skips text fields and terminals so native undo keeps
+working there.
 
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your

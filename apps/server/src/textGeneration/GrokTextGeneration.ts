@@ -247,6 +247,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
         message: input.message,
         previousTitle: input.previousTitle,
         automaticRefresh: input.automaticRefresh,
+        linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
 
@@ -260,6 +261,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
 
       return {
         title: sanitizeThreadTitle(generated.title),
+        ...(generated.needsRefinement ? { needsRefinement: true } : {}),
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 

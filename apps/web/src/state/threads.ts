@@ -16,7 +16,10 @@ import { connectionAtomRuntime } from "../connection/runtime";
 import { withFixtureCatalog } from "../components/orchestration-fixture/fixtureEnvironment";
 import { environmentSnapshotAtom } from "./shell";
 
-export const threadEnvironment = createThreadEnvironmentAtoms(connectionAtomRuntime);
+export const threadEnvironment = createThreadEnvironmentAtoms(
+  connectionAtomRuntime,
+  environmentSnapshotAtom,
+);
 export const environmentThreads = createEnvironmentThreadStateAtoms(connectionAtomRuntime, {
   activityDetailMode: "compact",
 });
@@ -29,7 +32,7 @@ export const threadCatalogValueAtom = import.meta.env.DEV
   : environmentCatalog.catalogValueAtom;
 export const environmentThreadShells = createEnvironmentThreadShellAtoms({
   catalogValueAtom: threadCatalogValueAtom,
-  snapshotAtom: environmentSnapshotAtom,
+  snapshotAtom: threadEnvironment.snapshotAtom,
 });
 
 const EMPTY_THREAD_STATE_ATOM = Atom.make(AsyncResult.success(EMPTY_ENVIRONMENT_THREAD_STATE)).pipe(

@@ -52,6 +52,10 @@ vi.mock("expo-widgets", () => ({
   addPushToStartTokenListener: vi.fn(() => ({ remove: vi.fn() })),
 }));
 
+vi.mock("./agentLiveActivity", () => ({
+  getAgentLiveActivities: activityMocks.getInstances,
+  startAgentLiveActivity: activityMocks.start,
+}));
 vi.mock("expo-notifications", () => ({
   addPushTokenListener: vi.fn(() => ({ remove: vi.fn() })),
   getDevicePushTokenAsync: vi.fn(() => Promise.resolve({ type: "ios", data: "apns-token" })),

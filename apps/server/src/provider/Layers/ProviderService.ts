@@ -28,15 +28,18 @@ import {
   ProviderUploadFeedbackInput,
   ThreadId,
   TurnId,
+  type ProjectId,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ServerSettings as ServerSettingsValue,
 } from "@t3tools/contracts";
 import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -867,16 +870,31 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   const agentAccessSettings = Effect.fn("ProviderService.agentAccessSettings")(
     function* (threadId: ThreadId) {
       const settings = yield* serverSettings.getSettings;
+      const entries = Object.values(settings.projectSettingsOverrides);
+      const browserOverridden = entries.some(
+        (entry) => entry.enableAgentBrowserAccess !== undefined,
+      );
+      const deviceOverridden = entries.some((entry) => entry.enableAgentDeviceAccess !== undefined);
       const environment = {
         browser: settings.enableAgentBrowserAccess,
         device: settings.enableAgentDeviceAccess,
       };
-      const overrides = settings.projectAgentBrowserAccessOverrides;
-      if (Object.keys(overrides).length === 0) return environment;
-      if (Option.isNone(projectionQuery)) return { ...environment, browser: false };
+      if (!browserOverridden && !deviceOverridden) return environment;
+      // Provider-only runtimes may omit orchestration. An unresolved project
+      // must not bypass an explicit project override, but a capability no
+      // project overrides keeps its environment value.
+      const denied = {
+        browser: browserOverridden ? false : environment.browser,
+        device: deviceOverridden ? false : environment.device,
+      };
+      if (Option.isNone(projectionQuery)) return denied;
       const thread = yield* projectionQuery.value.getThreadShellById(threadId);
-      if (Option.isNone(thread)) return { ...environment, browser: false };
-      return { ...environment, browser: overrides[thread.value.projectId] ?? environment.browser };
+      if (Option.isNone(thread)) return denied;
+      const resolved = resolveProjectSettings(settings, thread.value.projectId).settings;
+      return {
+        browser: resolved.enableAgentBrowserAccess,
+        device: resolved.enableAgentDeviceAccess,
+      };
     },
     Effect.catch((cause) =>
       Effect.logWarning(
@@ -1083,6 +1101,35 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         canonicalEvent.type === "turn.aborted"
       ) {
         yield* recordTurnCompletedAnalytics(source, canonicalEvent);
+        if (source.provider === "claudeAgent") {
+          // Background Claude turns have no sendTurn response to persist their
+          // new native boundary. Save it before clients can checkpoint the turn.
+          yield* Effect.gen(function* () {
+            const adapter = yield* registry.getByInstance(source.instanceId);
+            const session = (yield* adapter.listSessions()).find(
+              (session) => session.threadId === canonicalEvent.threadId,
+            );
+            if (session?.resumeCursor !== undefined) {
+              const binding = yield* directory.getBinding(session.threadId);
+              if (
+                Option.isNone(binding) ||
+                binding.value.providerInstanceId !== source.instanceId
+              ) {
+                return;
+              }
+              yield* directory.upsert({
+                threadId: session.threadId,
+                provider: source.provider,
+                providerInstanceId: source.instanceId,
+                resumeCursor: session.resumeCursor,
+              });
+            }
+          }).pipe(
+            Effect.catch((cause) =>
+              Effect.logWarning("failed to persist Claude turn resume state", { cause }),
+            ),
+          );
+        }
       } else if (canonicalEvent.type === "session.exited") {
         yield* clearTurnAnalyticsSession(source.instanceId, canonicalEvent.threadId);
       }
@@ -1631,30 +1678,45 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
 
     // Every attachment gets an on-disk path in the prompt so the model's tools
     // can dereference the actual file. All attachments then go to the adapter,
-    // and each adapter decides what its provider ingests natively: OpenCode
-    // sends generic files as file parts, the others send images only and rely
-    // on the path line for everything else. Unresolvable ids are skipped here
-    // and surface as adapter errors when the file is read.
+    // and each adapter decides what its provider ingests natively. Folded
+    // clipboard text remains path-only everywhere: eagerly embedding it would
+    // spend the same context the client deliberately preserved by folding it.
+    // Unresolvable ids are skipped here and surface as adapter errors when the
+    // file is read.
     let inputTextWithAttachmentContext = inputTextWithCitations;
     const appendAttachmentContext = (context: string | undefined) => {
-      if (context === undefined) return;
+      if (context === undefined) return true;
       const candidate = inputTextWithAttachmentContext
         ? `${inputTextWithAttachmentContext}\n\n${context}`
         : context;
       if (candidate.length <= PROVIDER_SEND_TURN_MAX_INPUT_CHARS) {
         inputTextWithAttachmentContext = candidate;
+        return true;
       }
+      return false;
     };
     for (const attachment of attachments) {
       const attachmentPath = resolveAttachmentPath({
         attachmentsDir: serverConfig.attachmentsDir,
         attachment,
       });
-      appendAttachmentContext(
+      const isPastedText =
+        attachment.type === "file" &&
+        "source" in attachment &&
+        attachment.source?._tag === "pasted-text";
+      const appended = appendAttachmentContext(
         attachmentPath === null
           ? undefined
-          : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
+          : isPastedText
+            ? `[Pasted text "${attachment.name}" is saved at: ${attachmentPath}. Inspect it as needed.]`
+            : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
       );
+      if (isPastedText && !appended) {
+        return yield* toValidationError(
+          "ProviderService.sendTurn",
+          `Input plus pasted-text attachment context exceeds the ${PROVIDER_SEND_TURN_MAX_INPUT_CHARS} character limit`,
+        );
+      }
     }
     for (const attachment of attachments) {
       const source =
@@ -2073,6 +2135,15 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
           "provider.thread_id": input.threadId,
         });
         if (routed.isActive) {
+          const session = (yield* routed.adapter.listSessions()).find(
+            (session) => session.threadId === routed.threadId,
+          );
+          if (session) {
+            yield* upsertSessionBinding(
+              { ...session, providerInstanceId: routed.instanceId },
+              input.threadId,
+            );
+          }
           yield* routed.adapter.stopSession(routed.threadId);
         }
         const pendingCompaction = pendingCompactions.get(input.threadId);
@@ -2244,7 +2315,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       });
       yield* routed.adapter.rollbackThread(routed.threadId, input.numTurns);
       const activeSessions = yield* routed.adapter.listSessions();
-      const activeSession = activeSessions.find((session) => session.threadId === input.threadId);
+      const activeSession = activeSessions.find((session) => session.threadId === routed.threadId);
       if (activeSession) {
         yield* upsertSessionBinding(
           { ...activeSession, providerInstanceId: routed.instanceId },
@@ -2323,10 +2394,30 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
   );
 
   const runStopAll = Effect.fn("runStopAll")(function* () {
-    const continueAfterRestart = yield* serverSettings.getSettings.pipe(
-      Effect.map((settings) => settings.continueThreadsAfterServerUpdate),
-      Effect.orElseSucceed(() => false),
+    // Continuation is project-scopable, so decide it per session's project;
+    // without orchestration the environment value is all there is.
+    const stopSettings = yield* serverSettings.getSettings.pipe(
+      Effect.map(Option.some),
+      Effect.orElseSucceed(() => Option.none<ServerSettingsValue>()),
     );
+    const continueAfterRestartFor = Effect.fn("continueAfterRestartFor")(function* (
+      threadId: ThreadId,
+    ) {
+      if (Option.isNone(stopSettings)) return false;
+      const settings = stopSettings.value;
+      const overridden = Object.values(settings.projectSettingsOverrides).some(
+        (entry) => entry.continueThreadsAfterServerUpdate !== undefined,
+      );
+      if (!overridden || Option.isNone(projectionQuery)) {
+        return settings.continueThreadsAfterServerUpdate;
+      }
+      const thread = yield* projectionQuery.value
+        .getThreadShellById(threadId)
+        .pipe(Effect.orElseSucceed(() => Option.none<{ projectId: ProjectId }>()));
+      if (Option.isNone(thread)) return settings.continueThreadsAfterServerUpdate;
+      return resolveProjectSettings(settings, thread.value.projectId).settings
+        .continueThreadsAfterServerUpdate;
+    });
     const properties = yield* Ref.modify(turnAnalytics, (state) => {
       const completed: Array<Readonly<Record<string, unknown>>> = [];
       for (const [sessionKey, session] of state.sessions) {
@@ -2352,15 +2443,20 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ),
     ).pipe(Effect.map((sessionsByAdapter) => sessionsByAdapter.flatMap((sessions) => sessions)));
     yield* Effect.forEach(activeSessions, (session) =>
-      Effect.flatMap(nowIso, (lastRuntimeEventAt) =>
-        upsertSessionBinding(session, session.threadId, {
-          ...(continueAfterRestart && session.status === "running" && session.activeTurnId
+      Effect.gen(function* () {
+        const continueAfterRestart =
+          session.status === "running" && session.activeTurnId
+            ? yield* continueAfterRestartFor(session.threadId)
+            : false;
+        const lastRuntimeEventAt = yield* nowIso;
+        yield* upsertSessionBinding(session, session.threadId, {
+          ...(continueAfterRestart && session.activeTurnId
             ? { continueAfterServerUpdate: session.activeTurnId }
             : {}),
           lastRuntimeEvent: "provider.stopAll",
           lastRuntimeEventAt,
-        }),
-      ),
+        });
+      }),
     ).pipe(Effect.asVoid);
     yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
     yield* McpSessionRegistry.revokeAllActiveMcpCredentials();

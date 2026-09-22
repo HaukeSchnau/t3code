@@ -1,3 +1,5 @@
+import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "../state/server";
 import {
   ArrowRightIcon,
   CheckIcon,
@@ -50,7 +52,6 @@ import { readEnvironmentApi } from "../environmentApi";
 import { useEnvironmentSettings } from "../hooks/useSettings";
 import { useTheme } from "../hooks/useTheme";
 import { cn, newCommandId, newMessageId } from "../lib/utils";
-import { type ElementContextDraft } from "../lib/elementContext";
 import { type TerminalContextDraft } from "../lib/terminalContext";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import {
@@ -131,7 +132,6 @@ function hasMonitorComposerDraftContent(draft: ComposerThreadDraftState): boolea
     draft.images.length > 0 ||
     draft.persistedAttachments.length > 0 ||
     draft.terminalContexts.length > 0 ||
-    draft.elementContexts.length > 0 ||
     draft.previewAnnotations.length > 0
   );
 }
@@ -758,7 +758,6 @@ function MonitorThreadActions({
   const promptRef = useRef("");
   const composerImagesRef = useRef<ComposerImageAttachment[]>([]);
   const composerTerminalContextsRef = useRef<TerminalContextDraft[]>([]);
-  const composerElementContextsRef = useRef<ElementContextDraft[]>([]);
   const composerRef = useRef<ChatComposerHandle | null>(null);
   const composerShellRef = useRef<HTMLDivElement | null>(null);
   const collapsedComposerButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -994,6 +993,9 @@ function MonitorThreadActions({
       },
       title: resolveFollowUpSubmissionTitle(analysis, thread.title),
       delivery: createDirectThreadTurnDeliveryAdapter({
+        supportsInlineMessageContext:
+          appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+            ?.environment.capabilities.inlineMessageContext === true,
         dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
       }),
       composer: {
@@ -1003,8 +1005,8 @@ function MonitorThreadActions({
           return threadComposerRevision({
             prompt: promptRef.current,
             images: composerImagesRef.current,
+            files: currentDraft?.files ?? [],
             terminalContexts: composerTerminalContextsRef.current,
-            elementContexts: composerElementContextsRef.current,
             previewAnnotations: currentDraft?.previewAnnotations ?? [],
             reviewComments: [],
           });
@@ -1147,7 +1149,6 @@ function MonitorThreadActions({
                 promptRef={promptRef}
                 composerImagesRef={composerImagesRef}
                 composerTerminalContextsRef={composerTerminalContextsRef}
-                composerElementContextsRef={composerElementContextsRef}
                 onSend={send}
                 onInterrupt={interrupt}
                 onImplementPlanInNewThread={() => undefined}

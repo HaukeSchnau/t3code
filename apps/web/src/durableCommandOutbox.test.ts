@@ -504,6 +504,46 @@ describe("web durable command outbox", () => {
     second.dispose();
   });
 
+  it("retries the persisted wire payload after capabilities change and the client reloads", async () => {
+    const memory = memoryStorage();
+    const delivered: string[] = [];
+    const first = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T0,
+      setTimer: () => 1,
+      clearTimer: () => undefined,
+      prepareCommand: (_environmentId, value) => ({
+        ...value,
+        message: { ...value.message, text: "legacy context payload" },
+      }),
+      dispatch: async (_environmentId, value) => {
+        delivered.push(JSON.stringify(value));
+        expect(memory.read().entries[0]?.plan.command).toEqual(value);
+        throw new Error("acknowledgement lost");
+      },
+    });
+    await first.enqueue(environmentId, command());
+    await first.flush();
+    first.dispose();
+
+    let reprepareCount = 0;
+    const second = createDurableCommandOutboxController({
+      storage: memory.storage,
+      now: () => T1,
+      prepareCommand: (_environmentId, value) => {
+        reprepareCount += 1;
+        return { ...value, message: { ...value.message, text: "new capability payload" } };
+      },
+      dispatch: async (_environmentId, value) => void delivered.push(JSON.stringify(value)),
+    });
+    await second.flush();
+    expect(delivered).toHaveLength(2);
+    expect(delivered[1]).toBe(delivered[0]);
+    expect(reprepareCount).toBe(0);
+    expect(memory.read().entries).toEqual([]);
+    second.dispose();
+  });
+
   it("projects one optimistic message for one persisted intent", async () => {
     const memory = memoryStorage();
     const controller = createDurableCommandOutboxController({

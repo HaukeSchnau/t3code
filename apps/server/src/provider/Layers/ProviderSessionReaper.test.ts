@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { ProjectionSnapshotQuery } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import type { ProjectionRestartSafetyState } from "../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { OrchestrationEngineService } from "../../orchestration/Services/OrchestrationEngine.ts";
-import { OrchestrationListenerCallbackError } from "../../orchestration/Errors.ts";
+import { OrchestrationCommandInvariantError } from "../../orchestration/Errors.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
 import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
 import { ProviderValidationError } from "../Errors.ts";
@@ -256,9 +256,11 @@ describe("ProviderSessionReaper", () => {
       Layer.provideMerge(
         Layer.succeed(ProjectionSnapshotQuery, {
           getUserInputActivity: () => Effect.die("unused"),
+          listActivitiesByKind: () => Effect.die("unused"),
           getCommandReadModel: () => Effect.die("unused"),
           getSnapshot: () => Effect.die("unused"),
           getShellSnapshot: () => Effect.die("unused"),
+          getDeletedWorktreeThreads: () => Effect.die("unused"),
           getArchivedShellSnapshot: () => Effect.die("unused"),
           getSnapshotSequence: () =>
             Effect.succeed({ snapshotSequence: input.readModel.snapshotSequence }),
@@ -279,6 +281,7 @@ describe("ProviderSessionReaper", () => {
               })),
             }),
           getActiveProjectByWorkspaceRoot: () => Effect.die("unused"),
+          getProjectShells: () => Effect.die("unused"),
           getProjectShellById: () => Effect.die("unused"),
           getFirstActiveThreadIdByProjectId: () => Effect.die("unused"),
           getImportedAgentSessionSources: () => Effect.die("unused"),
@@ -306,8 +309,8 @@ describe("ProviderSessionReaper", () => {
             dispatch(command).pipe(
               Effect.mapError(
                 (cause) =>
-                  new OrchestrationListenerCallbackError({
-                    listener: "read-model",
+                  new OrchestrationCommandInvariantError({
+                    commandType: command.type,
                     detail: cause.message,
                     cause,
                   }),

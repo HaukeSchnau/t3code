@@ -210,6 +210,40 @@ describe("command outbox lifecycle", () => {
     }),
   );
 
+  it.effect("freezes prepared wire content before delivery and replays it after restart", () =>
+    Effect.gen(function* () {
+      const harness = makeStorage();
+      const outbox = yield* makeCommandOutbox(harness.storage, T0);
+      const original = plan({ commandId: "prepared", text: "canonical context" });
+      const prepared = plan({ commandId: "prepared", text: "legacy context" });
+      yield* outbox.enqueue(original);
+      const first = yield* outbox.begin(original.command.commandId, T0, prepared);
+      expect(first.plan).toEqual(prepared);
+      const restarted = yield* makeCommandOutbox(harness.storage, T0);
+      const replay = yield* restarted.begin(original.command.commandId, T1, original);
+      expect(replay.plan).toEqual(prepared);
+    }),
+  );
+
+  it.effect("refuses a prepared delivery for another command or destination", () =>
+    Effect.gen(function* () {
+      const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
+      const original = plan({ commandId: "prepared" });
+      yield* outbox.enqueue(original);
+      for (const replacement of [
+        plan({ commandId: "other" }),
+        plan({ commandId: "prepared", threadId: "other" }),
+        plan({ commandId: "prepared", environmentId: "other" }),
+      ]) {
+        const error = yield* Effect.flip(outbox.begin(original.command.commandId, T0, replacement));
+        expect(error._tag).toBe("CommandOutboxStateError");
+        if (error._tag === "CommandOutboxStateError")
+          expect(error.reason).toBe("invalid-replacement");
+      }
+      expect((yield* outbox.entries)[0]).toEqual({ plan: original, state: { _tag: "Pending" } });
+    }),
+  );
+
   it.effect("a permanent head failure blocks only its thread", () =>
     Effect.gen(function* () {
       const outbox = yield* makeCommandOutbox(makeStorage().storage, T0);
