@@ -552,10 +552,20 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       return currentMessages().filter((message) => ids.has(message.commandId));
     });
 
-  const begin = (message: QueuedThreadMessage, at: string): Promise<DurableCommandOutboxEntry> =>
+  const begin = (
+    message: QueuedThreadMessage,
+    at: string,
+    supportsInlineMessageContext = true,
+  ): Promise<DurableCommandOutboxEntry> =>
     serialize(async () => {
       const service = await outbox();
-      const entry = await Effect.runPromise(service.begin(message.commandId, at));
+      const entry = await Effect.runPromise(
+        service.begin(
+          message.commandId,
+          at,
+          makeQueuedThreadDeliveryPlan(message, supportsInlineMessageContext),
+        ),
+      );
       await refreshDeliveryStates(service);
       return entry;
     });

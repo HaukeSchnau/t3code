@@ -1,3 +1,6 @@
+import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
+import { appAtomRegistry } from "./rpc/atomRegistry";
+import { environmentServerConfigsAtom } from "./state/server";
 import {
   EMPTY_DURABLE_COMMAND_OUTBOX_DOCUMENT,
   decodeDurableCommandOutboxDocument,
@@ -34,6 +37,10 @@ export interface DurableCommandOutboxControllerOptions {
   readonly storage: CommandOutboxStorage["Service"];
   readonly acceptedProjectionStorage?: CommandOutboxStorage["Service"];
   readonly dispatch: (environmentId: EnvironmentId, command: DurableClientCommand) => Promise<void>;
+  readonly prepareCommand?: (
+    environmentId: EnvironmentId,
+    command: DurableClientCommand,
+  ) => DurableClientCommand;
   readonly now?: () => string;
   readonly setTimer?: (callback: () => void, delayMs: number) => TimerHandle;
   readonly clearTimer?: (handle: TimerHandle) => void;
@@ -292,9 +299,18 @@ export function createDurableCommandOutboxController(
               return null;
             }
             const commandId = entry.plan.command.commandId;
-            await Effect.runPromise(service.begin(commandId, now()));
+            const preparedPlan =
+              entry.state._tag === "Pending" && options.prepareCommand
+                ? {
+                    ...entry.plan,
+                    command: options.prepareCommand(entry.plan.environmentId, entry.plan.command),
+                  }
+                : entry.plan;
+            const delivering = await Effect.runPromise(
+              service.begin(commandId, now(), preparedPlan),
+            );
             await publish(service);
-            return entry;
+            return delivering;
           });
           if (delivery === null) break;
           let dispatchFailure: unknown | null = null;
@@ -522,6 +538,20 @@ export function durableCommandOutbox(): DurableCommandOutboxController {
   liveController = createDurableCommandOutboxController({
     storage: browserCommandOutboxStorage,
     acceptedProjectionStorage: browserAcceptedProjectionStorage,
+    prepareCommand: (environmentId, command) => {
+      if (!command.message.context) return command;
+      const config = appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId);
+      if (!config) throw new Error(`Environment capabilities unavailable for ${environmentId}`);
+      if (config.environment.capabilities.inlineMessageContext === true) return command;
+      const { context, ...message } = command.message;
+      return {
+        ...command,
+        message: {
+          ...message,
+          text: serializeLegacyContextMessage({ text: message.text, records: context.records }),
+        },
+      };
+    },
     dispatch: async (environmentId, command) => {
       const api = readEnvironmentApi(environmentId);
       if (!api) throw new Error(`Environment API unavailable for ${environmentId}`);

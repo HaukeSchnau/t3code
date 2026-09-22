@@ -4,7 +4,18 @@ import {
 } from "@t3tools/client-runtime/state/workspaces";
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+
+import {
+  type Ref,
+  memo,
+  useImperativeHandle,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import {
@@ -20,17 +31,28 @@ import {
   resolveEffectiveEnvMode,
   shouldShowEnvironmentIndicator,
 } from "./BranchToolbar.logic";
-import { BranchToolbarBranchSelector } from "./BranchToolbarBranchSelector";
+import {
+  BranchToolbarBranchSelector,
+  type BranchToolbarBranchSelectorHandle,
+} from "./BranchToolbarBranchSelector";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { SkillPacksControl, type SkillPacksControlProps } from "./chat/SkillPacksControl";
 import { Separator } from "./ui/separator";
+
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { measureRestingComposerControls } from "./chat/restingComposerControlsMeasurement";
 import { resolveRestingComposerControlsNaturalWidth } from "./composerFooterLayout";
 import { cn } from "~/lib/utils";
 
+export interface BranchToolbarHandle {
+  openBranchPicker: () => void;
+  usePreviousWorktree: () => void;
+}
+
 interface BranchToolbarProps {
+  forceNewWorktree?: boolean;
+  ref?: Ref<BranchToolbarHandle>;
   environmentId: EnvironmentId;
   threadId: ThreadId;
   showGitControls: boolean;
@@ -221,6 +243,8 @@ function useLabelsOverflow(element: HTMLDivElement | null): boolean {
 }
 
 export const BranchToolbar = memo(function BranchToolbar({
+  forceNewWorktree = false,
+  ref,
   environmentId,
   threadId,
   showGitControls,
@@ -243,6 +267,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   contextStripVisible = true,
   skillPacks,
 }: BranchToolbarProps) {
+  const branchSelectorRef = useRef<BranchToolbarBranchSelectorHandle>(null);
   const threadRef = useMemo(
     () => scopeThreadRef(environmentId, threadId),
     [environmentId, threadId],
@@ -259,9 +284,11 @@ export const BranchToolbar = memo(function BranchToolbar({
       : null;
   const activeProject = useProject(activeProjectRef);
   const hasActiveThread = serverThread !== null || draftThread !== null;
-  const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const activeWorktreePath = forceNewWorktree
+    ? null
+    : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const effectiveEnvMode =
-    effectiveEnvModeOverride ??
+    (forceNewWorktree ? "worktree" : effectiveEnvModeOverride) ??
     resolveEffectiveEnvMode({
       activeWorktreePath,
       hasServerThread: serverThread !== null,
@@ -284,7 +311,7 @@ export const BranchToolbar = memo(function BranchToolbar({
   const showWorkspaceSelector = showGitControls || isolatedWorkspaces;
   const onSelectWorkspace = useCallback(
     (workspace: ThreadWorkspaceGroup<unknown>) => {
-      if (!draftThread || !activeProjectRef || envModeLocked) return;
+      if (!draftThread || !activeProjectRef || envModeLocked || forceNewWorktree) return;
       setDraftThreadContext(draftId ?? threadRef, {
         branch: workspace.branch,
         worktreePath: workspace.checkoutPath,
@@ -293,7 +320,44 @@ export const BranchToolbar = memo(function BranchToolbar({
         projectRef: activeProjectRef,
       });
     },
-    [activeProjectRef, draftId, draftThread, envModeLocked, setDraftThreadContext, threadRef],
+    [
+      activeProjectRef,
+      draftId,
+      draftThread,
+      envModeLocked,
+      forceNewWorktree,
+      setDraftThreadContext,
+      threadRef,
+    ],
+  );
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      openBranchPicker: () => branchSelectorRef.current?.open(),
+      usePreviousWorktree: () => {
+        const previousWorkspace = workspaces[0];
+        if (
+          !showGitControls ||
+          !previousWorkspace ||
+          forceNewWorktree ||
+          envModeLocked ||
+          serverThread !== null
+        )
+          return;
+        onSelectWorkspace(previousWorkspace);
+        onComposerFocusRequest?.();
+      },
+    }),
+    [
+      workspaces,
+      forceNewWorktree,
+      envModeLocked,
+      serverThread,
+      onComposerFocusRequest,
+      onSelectWorkspace,
+      showGitControls,
+    ],
   );
 
   const showEnvironmentPicker = Boolean(
@@ -353,6 +417,7 @@ export const BranchToolbar = memo(function BranchToolbar({
             <BranchToolbarEnvModeSelector
               environmentId={environmentId}
               projectId={activeProject.id}
+              forceNewWorktree={forceNewWorktree}
               envLocked={envModeLocked}
               effectiveEnvMode={effectiveEnvMode}
               activeWorktreePath={activeWorktreePath}
@@ -395,12 +460,18 @@ export const BranchToolbar = memo(function BranchToolbar({
 
       {showGitControls ? (
         <BranchToolbarBranchSelector
+          forceNewWorktree={forceNewWorktree}
+          ref={branchSelectorRef}
           className="min-w-0 flex-initial justify-end @3xl/composer-surface:ml-auto"
           environmentId={environmentId}
           threadId={threadId}
           {...(draftId ? { draftId } : {})}
           envLocked={envLocked}
-          {...(effectiveEnvModeOverride ? { effectiveEnvModeOverride } : {})}
+          {...(forceNewWorktree
+            ? { effectiveEnvModeOverride: "worktree" }
+            : effectiveEnvModeOverride
+              ? { effectiveEnvModeOverride }
+              : {})}
           {...(activeThreadBranchOverride !== undefined ? { activeThreadBranchOverride } : {})}
           {...(onActiveThreadBranchOverrideChange ? { onActiveThreadBranchOverrideChange } : {})}
           startFromOrigin={startFromOrigin}

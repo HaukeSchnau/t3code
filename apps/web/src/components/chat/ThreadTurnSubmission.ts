@@ -1,3 +1,4 @@
+import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import type { DurableClientCommand } from "@t3tools/client-runtime/operations/command-outbox";
 import {
   DEFAULT_MODEL,
@@ -12,8 +13,11 @@ import {
   type SkillPackId,
   type ThreadId,
   type ThreadWorkspaceId,
+  type ThreadWorkspaceKind,
   type WorkspaceProfile,
   type UploadChatAttachment,
+  type ChatAttachment,
+  type OrchestrationMessageContext,
 } from "@t3tools/contracts";
 import {
   applyClaudePromptEffortPrefix,
@@ -22,23 +26,16 @@ import {
 } from "@t3tools/shared/model";
 import { truncate } from "@t3tools/shared/String";
 
-import type { ComposerImageAttachment } from "../../composerDraftStore";
+import type { ComposerImageAttachment, ComposerFileAttachment } from "../../composerDraftStore";
 import { shouldClearComposerAfterDurableEnqueue } from "../../durableCommandOutbox";
+import { formatTerminalContextLabel, type TerminalContextDraft } from "../../lib/terminalContext";
+import type { ReviewCommentContext } from "../../reviewCommentContext";
+import { buildMessageContext, terminalContextReference } from "../../lib/composerContextRecords";
 import {
-  appendElementContextsToPrompt,
-  formatElementContextLabel,
-  type ElementContextDraft,
-} from "../../lib/elementContext";
-import { appendPreviewAnnotationPrompt } from "../../lib/previewAnnotation";
-import {
-  appendTerminalContextsToPrompt,
-  formatTerminalContextLabel,
-  type TerminalContextDraft,
-} from "../../lib/terminalContext";
-import {
-  appendReviewCommentsToPrompt,
-  type ReviewCommentContext,
-} from "../../reviewCommentContext";
+  removeInlineContextReference,
+  stripInlineContextReferences,
+} from "../../lib/composerContextReferences";
+import { getUploadedAttachments } from "../../lib/attachmentUploadQueue";
 import type { ChatMessage } from "../../types";
 import { getProviderModelCapabilities } from "../../providerModels";
 import {
@@ -48,17 +45,16 @@ import {
 } from "../ChatView.logic";
 import type { ChatComposerHandle } from "./ChatComposer";
 
-export const IMAGE_ONLY_BOOTSTRAP_PROMPT =
-  "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
+import { ATTACHMENT_ONLY_BOOTSTRAP_PROMPT } from "./composerPromptHistory";
 
 type ComposerSendContext = ReturnType<ChatComposerHandle["getSendContext"]>;
-type TurnAttachment = UploadChatAttachment;
+type TurnAttachment = UploadChatAttachment | ChatAttachment;
 
 export interface ThreadTurnDraft {
   readonly prompt: string;
   readonly images: ReadonlyArray<ComposerImageAttachment>;
+  readonly files?: ReadonlyArray<ComposerFileAttachment>;
   readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
-  readonly elementContexts: ReadonlyArray<ElementContextDraft>;
   readonly previewAnnotations: ComposerSendContext["previewAnnotations"];
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
   readonly selectedProvider: ProviderDriverKind;
@@ -78,8 +74,8 @@ export interface ThreadTurnDraftAnalysis {
 export interface ThreadComposerRevision {
   readonly prompt: string;
   readonly imageIds: ReadonlyArray<string>;
+  readonly fileIds: ReadonlyArray<string>;
   readonly terminalContexts: ReadonlyArray<TerminalContextDraft>;
-  readonly elementContexts: ReadonlyArray<ElementContextDraft>;
   readonly previewAnnotations: ComposerSendContext["previewAnnotations"];
   readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
 }
@@ -99,6 +95,7 @@ export interface ThreadTurnSubmissionTarget {
   readonly prepareWorkspace: boolean;
   readonly workspaceId?: ThreadWorkspaceId | null | undefined;
   readonly workspaceProfile?: WorkspaceProfile | undefined;
+  readonly workspaceKind?: Exclude<ThreadWorkspaceKind, "local">;
   readonly activeBranch: string | null;
   readonly baseRevision: string | null;
   readonly startFromOrigin: boolean;
@@ -186,7 +183,7 @@ export function threadTurnDraftFromComposer(
     prompt: sendContext.prompt,
     images: overrides.images ?? sendContext.images,
     terminalContexts: sendContext.terminalContexts,
-    elementContexts: sendContext.elementContexts,
+    files: sendContext.files,
     previewAnnotations: overrides.previewAnnotations ?? sendContext.previewAnnotations,
     reviewComments: overrides.reviewComments ?? sendContext.reviewComments,
     selectedProvider: sendContext.selectedProvider,
@@ -200,29 +197,23 @@ export function threadTurnDraftFromComposer(
 export function analyzeThreadTurnDraft(draft: ThreadTurnDraft): ThreadTurnDraftAnalysis {
   return deriveComposerSendState({
     prompt: draft.prompt,
-    imageCount: draft.images.length,
+    imageCount: draft.images.length + (draft.files?.length ?? 0),
     terminalContexts: draft.terminalContexts,
-    elementContextCount:
-      draft.elementContexts.length + draft.previewAnnotations.length + draft.reviewComments.length,
+    elementContextCount: draft.previewAnnotations.length + draft.reviewComments.length,
   });
 }
 
 export function threadComposerRevision(
   draft: Pick<
     ThreadTurnDraft,
-    | "prompt"
-    | "images"
-    | "terminalContexts"
-    | "elementContexts"
-    | "previewAnnotations"
-    | "reviewComments"
+    "prompt" | "images" | "terminalContexts" | "files" | "previewAnnotations" | "reviewComments"
   >,
 ): ThreadComposerRevision {
   return {
     prompt: draft.prompt,
     imageIds: draft.images.map((image) => image.id),
     terminalContexts: draft.terminalContexts,
-    elementContexts: draft.elementContexts,
+    fileIds: (draft.files ?? []).map((file) => file.id),
     previewAnnotations: draft.previewAnnotations,
     reviewComments: draft.reviewComments,
   };
@@ -232,15 +223,14 @@ export function serializeThreadTurnPrompt(
   draft: ThreadTurnDraft,
   analysis: ThreadTurnDraftAnalysis,
 ): string {
-  const withContexts = appendElementContextsToPrompt(
-    appendTerminalContextsToPrompt(draft.prompt, analysis.sendableTerminalContexts),
-    draft.elementContexts,
-  );
-  const withAnnotations = draft.previewAnnotations.reduce(
-    (text, annotation) => appendPreviewAnnotationPrompt(text, annotation),
-    withContexts,
-  );
-  return appendReviewCommentsToPrompt(withAnnotations, draft.reviewComments);
+  return draft.terminalContexts
+    .filter((context) => !analysis.sendableTerminalContexts.includes(context))
+    .reduce(
+      (text, context) =>
+        removeInlineContextReference(text, terminalContextReference(context).contextId).prompt,
+      draft.prompt,
+    )
+    .trim();
 }
 
 export function formatThreadTurnOutgoingPrompt(input: {
@@ -272,7 +262,7 @@ export function resolveThreadTurnOutgoingText(
   analysis: ThreadTurnDraftAnalysis = analyzeThreadTurnDraft(draft),
 ): string {
   const serializedText = serializeThreadTurnPrompt(draft, analysis);
-  return formatThreadTurnOutgoingText(draft, serializedText || IMAGE_ONLY_BOOTSTRAP_PROMPT);
+  return formatThreadTurnOutgoingText(draft, serializedText || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT);
 }
 
 export function resolveNewThreadSubmissionTitle(
@@ -281,12 +271,12 @@ export function resolveNewThreadSubmissionTitle(
 ): string {
   const firstImage = draft.images[0];
   const firstTerminalContext = analysis.sendableTerminalContexts[0];
-  const firstElementContext = draft.elementContexts[0];
+  const firstFile = draft.files?.[0];
   return truncate(
-    analysis.trimmedPrompt ||
+    stripInlineContextReferences(analysis.trimmedPrompt) ||
       (firstImage ? `Image: ${firstImage.name}` : "") ||
       (firstTerminalContext ? formatTerminalContextLabel(firstTerminalContext) : "") ||
-      (firstElementContext ? formatElementContextLabel(firstElementContext) : "") ||
+      (firstFile ? `File: ${firstFile.name}` : "") ||
       "New thread",
   );
 }
@@ -313,32 +303,53 @@ export function createDurableThreadTurnDeliveryAdapter(input: {
 
 export function createDirectThreadTurnDeliveryAdapter(input: {
   readonly dispatchCommand: (command: DurableClientCommand) => Promise<unknown>;
+  readonly supportsInlineMessageContext?: boolean;
 }): ThreadTurnDeliveryAdapter {
   return {
     deliver: async (_environmentId, command) => {
-      await input.dispatchCommand(command);
+      if (command.message.context && !input.supportsInlineMessageContext) {
+        const { context, ...message } = command.message;
+        await input.dispatchCommand({
+          ...command,
+          message: {
+            ...message,
+            text: serializeLegacyContextMessage({ text: message.text, records: context.records }),
+          },
+        });
+      } else await input.dispatchCommand(command);
     },
   };
 }
 
 function createOptimisticMessage(input: {
+  readonly context?: OrchestrationMessageContext | undefined;
   readonly draft: ThreadTurnDraft;
   readonly messageId: MessageId;
   readonly text: string;
   readonly createdAt: string;
 }): ChatMessage {
-  const attachments = input.draft.images.map((image) => ({
-    type: "image" as const,
-    id: image.id,
-    name: image.name,
-    mimeType: image.mimeType,
-    sizeBytes: image.sizeBytes,
-    previewUrl: image.previewUrl,
-  }));
+  const attachments = [
+    ...input.draft.images.map((image) => ({
+      type: "image" as const,
+      id: image.id,
+      name: image.name,
+      mimeType: image.mimeType,
+      sizeBytes: image.sizeBytes,
+      previewUrl: image.previewUrl,
+    })),
+    ...(input.draft.files ?? []).map((file) => ({
+      type: "file" as const,
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      sizeBytes: file.sizeBytes,
+    })),
+  ];
   return {
     id: input.messageId,
     role: "user",
     text: input.text,
+    ...(input.context ? { context: input.context } : {}),
     ...(attachments.length > 0 ? { attachments } : {}),
     turnId: null,
     createdAt: input.createdAt,
@@ -353,6 +364,7 @@ function createCommand(input: {
   readonly createdAt: string;
   readonly messageId: MessageId;
   readonly outgoingText: string;
+  readonly context?: OrchestrationMessageContext | undefined;
   readonly target: ThreadTurnSubmissionTarget;
   readonly title: string;
   readonly selectedModelSelection: ModelSelection;
@@ -366,6 +378,7 @@ function createCommand(input: {
       role: "user" as const,
       text: input.outgoingText,
       attachments: [...input.attachments],
+      ...(input.context ? { context: input.context } : {}),
     },
     modelSelection: input.selectedModelSelection,
     titleSeed: input.title,
@@ -404,7 +417,7 @@ function createCommand(input: {
           ...(input.target.prepareWorkspace
             ? {
                 prepareWorkspace: {
-                  kind: "auto" as const,
+                  kind: input.target.workspaceKind ?? ("auto" as const),
                   ...(input.target.workspaceProfile
                     ? { profile: input.target.workspaceProfile }
                     : {}),
@@ -439,10 +452,54 @@ function composerHasContent(revision: ThreadComposerRevision): boolean {
     revision.prompt.length > 0 ||
     revision.imageIds.length > 0 ||
     revision.terminalContexts.length > 0 ||
-    revision.elementContexts.length > 0 ||
+    revision.fileIds.length > 0 ||
     revision.previewAnnotations.length > 0 ||
     revision.reviewComments.length > 0
   );
+}
+
+export function materializeThreadTurnAttachments(
+  draft: ThreadTurnDraft,
+  environmentId: EnvironmentId,
+  readAttachment?: (file: File) => Promise<string>,
+): Promise<TurnAttachment[]> {
+  return Promise.all(
+    [...draft.images, ...(draft.files ?? [])].map(async (attachment): Promise<TurnAttachment> => {
+      const uploaded = getUploadedAttachments({
+        environmentId: environmentId,
+        images: [attachment],
+      })?.[0];
+      if (uploaded) return uploaded;
+      if (attachment.type === "file")
+        throw new Error(`Attachment '${attachment.name}' did not finish uploading.`);
+      return {
+        type: "image",
+        id: attachment.id,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        sizeBytes: attachment.sizeBytes,
+        dataUrl: await (readAttachment ?? readFileAsDataUrl)(attachment.file),
+        ...(attachment.source ? { source: attachment.source } : {}),
+      };
+    }),
+  );
+}
+
+export function buildThreadTurnMessageContext(
+  draft: ThreadTurnDraft,
+  analysis: ThreadTurnDraftAnalysis,
+  attachments: ReadonlyArray<TurnAttachment>,
+): OrchestrationMessageContext | undefined {
+  const draftAttachments = [...draft.images, ...(draft.files ?? [])];
+  return buildMessageContext({
+    terminalContexts: analysis.sendableTerminalContexts,
+    reviewComments: draft.reviewComments,
+    previewAnnotations: draft.previewAnnotations,
+    attachments: draftAttachments.map((attachment, index) => ({
+      attachment,
+      attachmentId: attachments[index]?.id ?? attachment.id,
+    })),
+  });
 }
 
 export async function submitThreadTurn(
@@ -456,22 +513,21 @@ export async function submitThreadTurn(
   const messageId = input.makeMessageId();
   const serializedText = serializeThreadTurnPrompt(input.draft, analysis);
   const outgoingText =
-    input.formatOutgoingText?.(input.draft, serializedText || IMAGE_ONLY_BOOTSTRAP_PROMPT) ??
-    (serializedText || IMAGE_ONLY_BOOTSTRAP_PROMPT);
-  const attachmentPromise = Promise.all(
-    input.draft.images.map(async (image) => ({
-      type: "image" as const,
-      name: image.name,
-      mimeType: image.mimeType,
-      sizeBytes: image.sizeBytes,
-      dataUrl: await (input.readAttachment ?? readFileAsDataUrl)(image.file),
-    })),
+    input.formatOutgoingText?.(input.draft, serializedText || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT) ??
+    (serializedText || ATTACHMENT_ONLY_BOOTSTRAP_PROMPT);
+  const buildContext = (attachments: ReadonlyArray<TurnAttachment>) =>
+    buildThreadTurnMessageContext(input.draft, analysis, attachments);
+  const attachmentPromise = materializeThreadTurnAttachments(
+    input.draft,
+    input.target.environmentId,
+    input.readAttachment,
   );
   const optimisticMessage = createOptimisticMessage({
     draft: input.draft,
     messageId,
     text: outgoingText,
     createdAt,
+    context: buildContext([]),
   });
   let attachments: ReadonlyArray<TurnAttachment> = [];
   let failure: unknown = null;
@@ -543,6 +599,7 @@ export async function submitThreadTurn(
     if (failure === null) {
       command = createCommand({
         attachments,
+        context: buildContext(attachments),
         commandId: provisionalCommand.commandId,
         createdAt,
         messageId,

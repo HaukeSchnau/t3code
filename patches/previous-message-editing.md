@@ -21,3 +21,5 @@ The web client lets a user edit an earlier user message by rendering the normal 
 - Keep the inline editor on `ChatComposer` rather than adding a second composer implementation. The feature depends on having one composer surface with isolated draft targets.
 - The fork-owned implementation lives in `apps/web/src/components/chat/usePreviousMessageEditing.tsx`, `InlineMessageEditor.tsx`, and `previousMessageEditing.ts`. `ChatView` should keep only the hook call and timeline controller wiring so upstream sync conflicts stay small.
 - `MessagesTimeline` receives edit eligibility separately from checkpoint revert counts. Do not gate the edit button on `revertTurnCountByUserMessageId`; that map is only for the filesystem checkpoint revert button.
+
+Codex rollback reads newest-first pages only until it finds the requested boundary. Missing boundaries fail instead of clamping the request to the available history. Preserve this behavior when syncing upstream full-history helpers, which otherwise make long-thread edits expensive or silently prune a different range.

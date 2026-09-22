@@ -3,8 +3,14 @@ import * as NodeCrypto from "node:crypto";
 
 import { ProjectId } from "@t3tools/contracts";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
-import { projectScriptRuntimeEnv, setupProjectScript } from "@t3tools/shared/projectScripts";
+import {
+  projectScriptRuntimeEnv,
+  resolveProjectScripts,
+  setupProjectScript,
+} from "@t3tools/shared/projectScripts";
 import * as Encoding from "effect/Encoding";
+import * as Clock from "effect/Clock";
+import { ServerSettingsService } from "../serverSettings.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
@@ -61,8 +67,16 @@ export interface ProjectSetupScriptRunnerResultStarted {
   readonly status: "started";
   readonly scriptId: string;
   readonly scriptName: string;
+  readonly scriptCommand: string;
+  readonly async: boolean;
+  readonly completion?: Effect.Effect<ProjectSetupScriptCompletion>;
   readonly terminalId: string;
   readonly cwd: string;
+}
+
+export interface ProjectSetupScriptCompletion {
+  readonly exitCode: number | null;
+  readonly durationMs: number;
 }
 
 export type ProjectSetupScriptRunnerResult =
@@ -75,6 +89,9 @@ export interface ProjectSetupScriptRunnerInput {
   readonly projectCwd?: string;
   readonly worktreePath: string;
   readonly preferredTerminalId?: string;
+  readonly observeCompletion?: {
+    readonly onOutputLine?: (line: string) => Effect.Effect<void>;
+  };
   /** Reconcile a launch durably claimed by preprocessing before this process started. */
   readonly reconcileClaimedLaunch?: boolean;
   /** Durable preprocessing identity that the live project setup script must still match. */
@@ -178,9 +195,24 @@ export class ProjectSetupScriptRunner extends Context.Service<
   }
 >()("t3/project/ProjectSetupScriptRunner") {}
 
+/** Removes ANSI escape sequences and cursor controls so lines can be shown as plain text. */
+function stripTerminalControl(text: string): string {
+  return (
+    text
+      .replace(
+        // eslint-disable-next-line no-control-regex
+        /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[()][A-Za-z0-9]|\x1b[=>]/g,
+        "",
+      )
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+  );
+}
+
 export const make = Effect.gen(function* () {
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
   const terminalManager = yield* TerminalManager.TerminalManager;
+  const serverSettings = yield* ServerSettingsService;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const { terminalLogsDir } = yield* ServerConfig.ServerConfig;
@@ -225,7 +257,17 @@ export const make = Effect.gen(function* () {
     if (!project) {
       return yield* new ProjectSetupScriptProjectNotFoundError(errorContext);
     }
-    const script = setupProjectScript(project.scripts);
+    const settings = yield* serverSettings.getSettings.pipe(
+      Effect.mapError(
+        (cause) =>
+          new ProjectSetupScriptOperationError({
+            ...errorContext,
+            operation: "resolveProject",
+            cause,
+          }),
+      ),
+    );
+    const script = setupProjectScript(resolveProjectScripts(settings, project));
     if (!script) return { errorContext, project, script: null } as const;
     const terminalId = input.preferredTerminalId ?? `setup-${script.id}`;
     return {
@@ -284,6 +326,7 @@ export const make = Effect.gen(function* () {
     }
 
     const { terminalId } = resolved;
+    const startedAtMs = yield* Clock.currentTimeMillis;
     const cwd = input.worktreePath;
     const hostEnvironment = yield* HostProcessEnvironment;
     const executionPaths = yield* Effect.tryPromise({
@@ -355,16 +398,32 @@ export const make = Effect.gen(function* () {
       }
       return Option.some(completion);
     });
+    const completedResult = Effect.gen(function* () {
+      const completion = yield* readCompletion();
+      const finishedAtMs = yield* Clock.currentTimeMillis;
+      return {
+        status: "started" as const,
+        scriptId: script.id,
+        scriptName: script.name,
+        scriptCommand: script.command,
+        terminalId,
+        cwd,
+        async: script.async !== false,
+        ...(input.observeCompletion
+          ? {
+              completion: Effect.succeed({
+                exitCode: Option.getOrNull(completion)?.exitCode ?? null,
+                durationMs: finishedAtMs - startedAtMs,
+              }),
+            }
+          : {}),
+      };
+    });
+
     const completed = yield* readCompletion();
 
     if (Option.isSome(completed)) {
-      return {
-        status: "started",
-        scriptId: script.id,
-        scriptName: script.name,
-        terminalId,
-        cwd,
-      } as const;
+      return yield* completedResult;
     }
 
     const awaitJournal = <E>(
@@ -405,13 +464,7 @@ export const make = Effect.gen(function* () {
 
     if (claimed && input.reconcileClaimedLaunch) {
       yield* awaitCompletion;
-      return {
-        status: "started",
-        scriptId: script.id,
-        scriptName: script.name,
-        terminalId,
-        cwd,
-      } as const;
+      return yield* completedResult;
     }
 
     const wrapper = `"use strict";\nconst fs = require("node:fs");\nconst cp = require("node:child_process");\nconst claimDir = ${encodeJson(path.join(terminalExecutionDir, "claimed"))};\nconst completedPath = ${encodeJson(path.join(terminalExecutionDir, "completed.json"))};\nconst executionKey = ${encodeJson(executionKey)};\nconst scriptDigest = ${encodeJson(scriptDigest)};\nconst command = ${encodeJson(script.command)};\nconst cwd = ${encodeJson(executionPaths.cwd)};\nconst env = ${encodeJson(env)};\ntry { fs.mkdirSync(claimDir); } catch (error) { if (error && error.code === "EEXIST") process.exit(75); throw error; }\nconst result = cp.spawnSync(command, { cwd, env: { ...process.env, ...env }, shell: true, stdio: "inherit" });\nconst completion = JSON.stringify({ version: 1, executionKey, scriptDigest, exitCode: result.status, signal: result.signal, error: result.error ? String(result.error) : null }) + "\\n";\nconst temporaryPath = completedPath + "." + process.pid + ".tmp";\nfs.writeFileSync(temporaryPath, completion);\nfs.renameSync(temporaryPath, completedPath);\nprocess.exit(result.status === null ? 1 : result.status);\n`;
@@ -432,52 +485,76 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-    const terminal = yield* terminalManager
-      .open({
-        threadId: input.threadId,
-        terminalId,
-        cwd,
-        worktreePath: input.worktreePath,
-        env,
-        command: {
-          shell: process.execPath,
-          args: [path.join(terminalExecutionDir, "run.cjs")],
-        },
-      })
-      .pipe(
-        Effect.mapError(
-          (cause) =>
-            new ProjectSetupScriptOperationError({
+    let lineBuffer = "";
+    const onOutputLine = input.observeCompletion?.onOutputLine;
+    return yield* Effect.acquireUseRelease(
+      onOutputLine === undefined
+        ? Effect.succeed(() => {})
+        : terminalManager.subscribe((event) => {
+            if (
+              event.threadId !== input.threadId ||
+              event.terminalId !== terminalId ||
+              event.type !== "output"
+            ) {
+              return Effect.void;
+            }
+            lineBuffer += event.data;
+            const lines = lineBuffer.split(/\r\n|\r|\n/);
+            lineBuffer = (lines.pop() ?? "").slice(-4096);
+            return Effect.forEach(
+              lines,
+              (line) => {
+                const cleaned = stripTerminalControl(line).trimEnd();
+                return cleaned.length === 0 ? Effect.void : onOutputLine(cleaned.slice(0, 400));
+              },
+              { discard: true },
+            );
+          }),
+      () =>
+        Effect.gen(function* () {
+          const terminal = yield* terminalManager
+            .open({
+              threadId: input.threadId,
+              terminalId,
+              cwd,
+              worktreePath: input.worktreePath,
+              env: { ...env, NO_COLOR: "1", FORCE_COLOR: "0" },
+              command: {
+                shell: process.execPath,
+                args: [path.join(terminalExecutionDir, "run.cjs")],
+              },
+            })
+            .pipe(
+              Effect.mapError(
+                (cause) =>
+                  new ProjectSetupScriptOperationError({
+                    ...errorContext,
+                    operation: "openTerminal",
+                    cause,
+                  }),
+              ),
+            );
+          if (terminal.status === "error") {
+            return yield* new ProjectSetupScriptOperationError({
               ...errorContext,
               operation: "openTerminal",
-              cause,
-            }),
-        ),
-      );
-    if (terminal.status === "error") {
-      return yield* new ProjectSetupScriptOperationError({
-        ...errorContext,
-        operation: "openTerminal",
-        cause: new Error("The setup terminal could not start its process."),
-      });
-    }
+              cause: new Error("The setup terminal could not start its process."),
+            });
+          }
 
-    // PTY creation can precede environment activation. The wrapper acknowledges
-    // its actual launch with an atomic claim; reopening a live PTY just attaches.
-    yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS, "launch");
+          // PTY creation can precede environment activation. The wrapper acknowledges
+          // its actual launch with an atomic claim; reopening a live PTY just attaches.
+          yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS, "launch");
 
-    // The caller may only persist `setup-completed` after this durable wrapper
-    // completion exists. Waiting is interruptible, so shutdown leaves the durable
-    // claim for a bounded exact-retry reconciliation.
-    yield* awaitCompletion;
+          // The caller may only persist `setup-completed` after this durable wrapper
+          // completion exists. Waiting is interruptible, so shutdown leaves the durable
+          // claim for a bounded exact-retry reconciliation.
+          yield* awaitCompletion;
 
-    return {
-      status: "started",
-      scriptId: script.id,
-      scriptName: script.name,
-      terminalId,
-      cwd,
-    } as const;
+          return yield* completedResult;
+        }),
+      (unsubscribe) => Effect.sync(unsubscribe),
+    );
   });
 
   return ProjectSetupScriptRunner.of({ runForThread, resolveForThread });

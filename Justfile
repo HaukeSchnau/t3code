@@ -34,7 +34,7 @@ qa-test-server:
     cd apps/server && ../../node_modules/.bin/vp test run
 
 qa-test-server-shard shard total:
-    cd apps/server && ../../node_modules/.bin/vp test run --shard {{ quote(shard + "/" + total) }}
+    cd apps/server && ../../node_modules/.bin/vp test run --reporter verbose --shard {{ quote(shard + "/" + total) }}
 
 qa-release:
     node scripts/release-smoke.ts

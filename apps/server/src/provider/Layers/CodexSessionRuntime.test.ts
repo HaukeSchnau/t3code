@@ -25,9 +25,37 @@ import {
   openCodexThread,
   revertPaginatedCodexThread,
   rollbackCodexThread,
+  readCodexThread,
   toMcpElicitationResponse,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
+
+describe("Codex thread history", () => {
+  for (const cursors of [
+    ["next", "next"],
+    ["first", "second", "first"],
+  ]) {
+    it.effect(`rejects a pagination cursor cycle: ${cursors.join(", ")}`, () =>
+      Effect.gen(function* () {
+        let pageCount = 0;
+        const client: Parameters<typeof readCodexThread>[0] = {
+          request: () => Effect.die("Unexpected legacy request"),
+          raw: {
+            request: (method) =>
+              Effect.sync(() => {
+                if (method === "thread/read") return { thread: { historyMode: "paginated" } };
+                NodeAssert.ok(pageCount < cursors.length, "Repeated cursor was requested");
+                return { data: [], nextCursor: cursors[pageCount++] };
+              }),
+          },
+        };
+        const error = yield* Effect.flip(readCodexThread(client, "thread-1"));
+        NodeAssert.ok(isCodexAppServerRequestError(error));
+        NodeAssert.equal(pageCount, cursors.length);
+      }),
+    );
+  }
+});
 
 describe("CodexSessionRuntimeIdentifierGenerationError", () => {
   it("retains identifier purpose and the random source failure", () => {
@@ -291,8 +319,8 @@ describe("buildTurnStartParams", () => {
         runtimeMode: "full-access",
         attachments: [
           {
-            type: "image",
-            url: { secret } as unknown as string,
+            type: "localImage",
+            path: { secret } as unknown as string,
           },
         ],
       }).pipe(Effect.flip),
@@ -360,8 +388,8 @@ describe("buildTurnStartParams", () => {
         interactionMode: "default",
         attachments: [
           {
-            type: "image",
-            url: "data:image/png;base64,abc",
+            type: "localImage",
+            path: "/tmp/generated.png",
           },
         ],
       }),
@@ -380,8 +408,8 @@ describe("buildTurnStartParams", () => {
           text: "Implement it",
         },
         {
-          type: "image",
-          url: "data:image/png;base64,abc",
+          type: "localImage",
+          path: "/tmp/generated.png",
         },
       ],
       model: "gpt-5.3-codex",

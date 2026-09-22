@@ -38,6 +38,8 @@ interface ProjectionState {
   providerInstanceId: string;
   providerThreadId: string;
   parentTurnId: TurnId | null;
+  // A child can be reused by later turns; its activity row keeps its original membership.
+  activityTurnId: TurnId | null;
   turnId: TurnId | null;
   transcript: string;
   transcriptSegmentsByItemId: Map<string, Array<string>>;
@@ -318,6 +320,7 @@ export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
       typeof payload.updatedAt === "string" ? payload.updatedAt : activity.createdAt;
     return {
       activityId: input.activityId,
+      activityTurnId: activity.turnId,
       threadId: input.threadId,
       provider: input.event.provider,
       providerInstanceId:
@@ -374,7 +377,7 @@ export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
               latestEventType: state.latestEventType,
               latestEventId: state.lastEventId,
             },
-            turnId: state.parentTurnId ?? state.turnId,
+            turnId: state.activityTurnId,
           },
           createdAt: state.updatedAt,
         })
@@ -458,6 +461,7 @@ export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
       (yield* hydrate({ event, threadId, activityId, authoritativeTranscriptRecovery }));
     const existing: ProjectionState = hydratedState ?? {
       activityId,
+      activityTurnId: event.agentContext.parentTurnId ?? toTurnId(event.turnId) ?? null,
       threadId,
       provider: event.provider,
       providerInstanceId: event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider),
