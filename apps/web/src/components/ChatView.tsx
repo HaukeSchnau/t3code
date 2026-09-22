@@ -4063,6 +4063,7 @@ export default function ChatView(props: ChatViewProps) {
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
     hasSkillPacks: composerSkillPacks !== null,
+    supportsIsolatedWorkspaces: serverConfig?.environment.capabilities.isolatedWorkspaces === true,
   });
   const showComposerContextStrip = shouldShowComposerContextStrip({
     hasActiveProject: activeProject !== null,
@@ -4070,6 +4071,7 @@ export default function ChatView(props: ChatViewProps) {
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
     hasSkillPacks: composerSkillPacks !== null,
+    supportsIsolatedWorkspaces: serverConfig?.environment.capabilities.isolatedWorkspaces === true,
   });
   const terminalShortcutLabelOptions = useMemo(
     () => ({
@@ -9922,7 +9924,9 @@ export default function ChatView(props: ChatViewProps) {
                             }
                             restingControlsHost={restingComposerControlsHost}
                             restingControlsHaveLeadingContext={
-                              isGitRepo || showComposerEnvironmentIndicator
+                              isGitRepo ||
+                              serverConfig?.environment.capabilities.isolatedWorkspaces === true ||
+                              showComposerEnvironmentIndicator
                             }
                             onRestingControlsVisibilityChange={setRestingComposerControlsVisible}
                             getTimelineScrollableNode={getTimelineScrollableNode}

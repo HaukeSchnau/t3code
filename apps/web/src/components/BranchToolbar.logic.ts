@@ -63,10 +63,12 @@ export function shouldShowComposerContextStrip(input: {
   hostsRestingComposerControls: boolean;
   /** The environment publishes a skill pack catalog, so the strip hosts the Skills control. */
   hasSkillPacks?: boolean;
+  supportsIsolatedWorkspaces?: boolean;
 }): boolean {
   return (
     input.hasActiveProject &&
     (input.isGitRepo ||
+      input.supportsIsolatedWorkspaces === true ||
       input.showEnvironmentIndicator ||
       input.hostsRestingComposerControls ||
       input.hasSkillPacks === true)

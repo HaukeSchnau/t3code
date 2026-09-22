@@ -80,4 +80,8 @@ Absolute media paths, including `/tmp`, resolve through the local thread workspa
 before issuing signed asset URLs. Only links without a local thread use host paths
 directly, preserving cross-environment links without bypassing workspace isolation.
 
+Workspace selection is available for directory projects when the server advertises
+isolated workspaces. Git status controls only branch and Git actions, not access
+to isolation; a new empty app must not need an initial commit to show the selector.
+
 Bootstrap progress follows upstream checkout, setup, and agent stages, but setup still waits for the durable completion journal before starting the provider. Cancelling after workspace preparation keeps the registered workspace. The upstream automatic "Work locally" retry assumes the workspace was deleted, so this fork requires a separate submission after cancellation instead.
