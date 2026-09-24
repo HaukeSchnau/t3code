@@ -3,7 +3,6 @@ import {
   EventId,
   ProviderApprovalDecision,
   ProviderRuntimeEvent,
-  type ProviderSendTurnInput,
   RuntimeSessionId,
   ProviderSession,
   ProviderTurnStartResult,
@@ -195,7 +194,6 @@ export interface TestProviderAdapterHarness {
   ) => Effect.Effect<boolean, never>;
   readonly setRuntimeEventAcceptance: (accept: ProviderRuntimeEventAcceptance) => void;
   readonly getStartCount: () => number;
-  readonly getSendTurnCalls: (threadId: ThreadId) => ReadonlyArray<ProviderSendTurnInput>;
   readonly getRollbackCalls: (threadId: ThreadId) => ReadonlyArray<number>;
   readonly getInterruptCalls: (threadId: ThreadId) => ReadonlyArray<TurnId | undefined>;
   readonly listActiveSessionIds: () => ReadonlyArray<ThreadId>;
@@ -242,7 +240,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
     const sessions = new Map<ThreadId, SessionState>();
     const queuedResponsesForNextSession: TestTurnResponse[] = [];
     const interruptCallsBySession = new Map<ThreadId, Array<TurnId | undefined>>();
-    const sendTurnCallsBySession = new Map<ThreadId, Array<ProviderSendTurnInput>>();
     const approvalResponsesBySession = new Map<
       ThreadId,
       Array<{
@@ -320,13 +317,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
 
     const sendTurn: ProviderAdapterShape<ProviderAdapterError>["sendTurn"] = (input) =>
       Effect.gen(function* () {
-        const sendTurnCalls = sendTurnCallsBySession.get(input.threadId) ?? [];
-        sendTurnCalls.push({
-          ...input,
-          ...(input.attachments !== undefined ? { attachments: [...input.attachments] } : {}),
-        });
-        sendTurnCallsBySession.set(input.threadId, sendTurnCalls);
-
         const state = sessions.get(input.threadId);
         if (!state) {
           return yield* missingSessionEffect(provider, input.threadId);
@@ -569,12 +559,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
 
     const getStartCount = (): number => sessionCount;
 
-    const getSendTurnCalls = (threadId: ThreadId): ReadonlyArray<ProviderSendTurnInput> =>
-      (sendTurnCallsBySession.get(threadId) ?? []).map((input) => ({
-        ...input,
-        ...(input.attachments !== undefined ? { attachments: [...input.attachments] } : {}),
-      }));
-
     const getInterruptCalls = (threadId: ThreadId): ReadonlyArray<TurnId | undefined> => {
       const calls = interruptCallsBySession.get(threadId);
       if (!calls) {
@@ -611,7 +595,6 @@ export const makeTestProviderAdapterHarness = (options?: MakeTestProviderAdapter
         acceptRuntimeEvent = accept;
       },
       getStartCount,
-      getSendTurnCalls,
       getRollbackCalls,
       getInterruptCalls,
       listActiveSessionIds,
