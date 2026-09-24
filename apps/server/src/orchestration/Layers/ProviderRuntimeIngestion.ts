@@ -1281,19 +1281,6 @@ const make = Effect.gen(function* () {
     );
   });
 
-  const hasAuthoritativeTranscriptRecovery = Effect.fn("hasAuthoritativeTranscriptRecovery")(
-    function* (event: ProviderRuntimeEvent, journalBacked: boolean) {
-      if (journalBacked) return true;
-      const instanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-      return yield* providerService.getCapabilities(instanceId).pipe(
-        Effect.map((capabilities) => capabilities.assistantTranscriptRecovery === "authoritative"),
-        // Capability lookup failure must choose the lossless path. Volatile
-        // coalescing is an optimization that requires positive proof.
-        Effect.orElseSucceed(() => false),
-      );
-    },
-  );
-
   const rememberAssistantMessageId = (threadId: ThreadId, turnId: TurnId, messageId: MessageId) =>
     Cache.getOption(turnMessageIdsByTurnKey, providerTurnKey(threadId, turnId)).pipe(
       Effect.flatMap((existingIds) =>
@@ -2409,11 +2396,8 @@ const make = Effect.gen(function* () {
           yield* rememberAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
 
-        const authoritativeTranscriptRecovery = yield* hasAuthoritativeTranscriptRecovery(
-          event,
-          journalBacked,
-        );
-        const streamingMode = authoritativeTranscriptRecovery
+        // Only journal-backed deltas may be buffered: the journal recovers them after a crash.
+        const streamingMode = journalBacked
           ? yield* resolveResponseStreamingMode(thread.projectId)
           : "token";
         if (streamingMode !== "token") {

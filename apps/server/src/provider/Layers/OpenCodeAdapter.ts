@@ -4313,7 +4313,6 @@ export function makeOpenCodeAdapter(
       provider: PROVIDER,
       capabilities: {
         sessionModelSwitch: "in-session",
-        assistantTranscriptRecovery: "none",
         turnContinuation: "unsupported",
       },
       startSession,
