@@ -7,11 +7,7 @@ export function resolveDesktopPairingUrl(endpointUrl: string, credential: string
   return setPairingTokenOnUrl(url, credential).toString();
 }
 
-export function resolveHostedPairingUrl(
-  endpointUrl: string,
-  credential: string,
-  environmentId?: string | null,
-): string | null {
+export function resolveHostedPairingUrl(endpointUrl: string, credential: string): string | null {
   const url = new URL(endpointUrl);
   if (url.protocol !== "https:") {
     return null;
@@ -20,6 +16,5 @@ export function resolveHostedPairingUrl(
   return buildHostedPairingUrl({
     host: endpointUrl,
     token: credential,
-    ...(environmentId !== undefined ? { environmentId } : {}),
   });
 }
