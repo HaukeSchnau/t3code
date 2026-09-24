@@ -17,6 +17,7 @@ import {
   type OrchestrationReadModel,
   type OrchestrationShellSnapshot,
   type OrchestrationThread,
+  type ThreadOrchestrationActorScope,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -35,7 +36,6 @@ import * as ServerEnvironment from "../../../environment/ServerEnvironment.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import * as TextGeneration from "../../../textGeneration/TextGeneration.ts";
 import * as ThreadWorkspaceService from "../../../workspace/ThreadWorkspaceService.ts";
-import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
 import {
@@ -89,13 +89,11 @@ it("steers attention and explicit wait outcomes while queuing routine settlement
   expect(__testing.deliveryForCoordinatorNotification(["completed"], "wait")).toBe("immediate");
 });
 
-const scope: McpInvocationContext.McpInvocationScope = {
+const scope: ThreadOrchestrationActorScope = {
   environmentId: EnvironmentId.make("environment-1"),
   threadId: actorThreadId,
   providerSessionId: "provider-session-1",
   providerInstanceId: ProviderInstanceId.make("codex"),
-  capabilities: new Set(["threads"]),
-  issuedAt: 1,
 };
 
 const project: OrchestrationProject = {
@@ -1280,7 +1278,7 @@ it.effect("rejects hidden model selections sent through remote creation", () => 
   return Effect.gen(function* () {
     const service = yield* ThreadOrchestrationService;
     const error = yield* service
-      .createThreadFromRemote(scope, {
+      .createThread(scope, {
         prompt: "Please review remotely with hidden settings.",
         target: { projectId },
         modelSelection: hiddenModelSelection,
