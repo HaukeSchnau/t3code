@@ -15,6 +15,13 @@ const APNS_ENVIRONMENT = resolveApnsEnvironment(repoEnv.T3CODE_APNS_ENVIRONMENT,
 const IOS_TEAM_ID = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || "2243J9RD68";
 const IOS_DEPLOYMENT_TARGET = "18.0";
 const RUNTIME_VERSION_POLICY = resolveRuntimeVersionPolicy(process.env.MOBILE_VERSION_POLICY);
+// CI-only distribution inputs; see scripts/mobile-update.ts and scripts/mobile-testflight.ts.
+const MOBILE_UPDATES_URL = optionalEnv("T3CODE_MOBILE_UPDATES_URL", /^https:\/\/\S+$/);
+const MOBILE_RUNTIME_VERSION = optionalEnv(
+  "T3CODE_MOBILE_RUNTIME_VERSION",
+  /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
+);
+const IOS_BUILD_NUMBER = optionalEnv("T3CODE_IOS_BUILD_NUMBER", /^\d+(?:\.\d+){0,2}$/);
 const isIosPersonalTeamBuild = repoEnv.T3CODE_IOS_PERSONAL_TEAM === "1";
 
 const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?.trim();
@@ -210,21 +217,23 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.2.1",
-  runtimeVersion: {
-    // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
-    // project — native deps, config plugins, AND patches/ — matches the update.
-    // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-    // could land on a binary missing the native changes it needs and crash.
-    policy: RUNTIME_VERSION_POLICY,
-  },
+  // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
+  // project — native deps, config plugins, AND patches/ — matches the update.
+  // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
+  // could land on a binary missing the native changes it needs and crash.
+  // Distribution CI resolves the fingerprint once and pins it here, so the
+  // binary and its updates cannot disagree across build hosts.
+  runtimeVersion: MOBILE_RUNTIME_VERSION ?? { policy: RUNTIME_VERSION_POLICY },
   orientation: "portrait",
   icon: variant.assets.appIcon,
   userInterfaceStyle: "automatic",
-  updates: {
-    // This fork ships its own embedded bundle. Staying enrolled in upstream's
-    // Expo project lets an upstream OTA replace fork-only behavior after install.
-    enabled: false,
-  },
+  updates: MOBILE_UPDATES_URL
+    ? { url: MOBILE_UPDATES_URL, checkAutomatically: "ON_LOAD", fallbackToCacheTimeout: 0 }
+    : {
+        // Without the fork's update server, run only the embedded bundle. Upstream's
+        // Expo project must never replace fork-only behavior after install.
+        enabled: false,
+      },
   ios: {
     icon: variant.assets.iosIcon,
     // expo-widgets reads this top-level value when generating its extension.
@@ -236,6 +245,7 @@ const config: ExpoConfig = {
     // showcase capture build requires full screen (see infoPlist below).
     requireFullScreen: process.env.T3_SHOWCASE_CAPTURE_BUILD === "1",
     bundleIdentifier: iosBundleIdentifier,
+    ...(IOS_BUILD_NUMBER ? { buildNumber: IOS_BUILD_NUMBER } : {}),
     // Pin code signing to this fork's Apple Developer team so non-interactive
     // builds keep the App Group and push-notification entitlements intact.
     appleTeamId: IOS_TEAM_ID,
@@ -441,6 +451,13 @@ function resolveIosBundleIdentifier(defaultBundleIdentifier: string, appVariant:
     case "production":
       return baseBundleIdentifier;
   }
+}
+
+function optionalEnv(name: string, pattern: RegExp): string | undefined {
+  const value = repoEnv[name]?.trim();
+  if (!value) return undefined;
+  if (!pattern.test(value)) throw new Error(`${name} must match ${pattern}.`);
+  return value;
 }
 
 function resolveRuntimeVersionPolicy(value: string | undefined) {

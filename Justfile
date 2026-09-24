@@ -55,6 +55,18 @@ prefetch-pnpm-deps: deps-nix-refresh
 ci-watch revision="main@origin":
     ./node_modules/.bin/vp run --workspace-root ci:watch -- --revision {{ quote(revision) }}
 
+# Publish the mobile JavaScript bundle as an OTA update. Entry point for the Mobile workflow.
+ci-mobile-update:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${T3CODE_MOBILE_UPDATES_DIR:?The runner must provide a writable update directory.}"
+    runtime_version="$(node scripts/mobile-update.ts runtime-version --updates-url "$T3CODE_MOBILE_UPDATES_URL")"
+    echo "runtime_version=$runtime_version" >> "$GITHUB_OUTPUT"
+    node scripts/mobile-update.ts publish \
+      --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
+      --runtime-version "$runtime_version" \
+      --updates-dir "$T3CODE_MOBILE_UPDATES_DIR"
+
 # Build and install the iOS development app on the configured device.
 mobile-dev:
     just _mobile-ios development Debug T3CodeDev

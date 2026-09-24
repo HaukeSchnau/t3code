@@ -451,7 +451,12 @@
             pkgs.procps
             pkgs.rsync
             pkgs.util-linux
-          ];
+          ]
+          # TODO: Drop once hermes-compiler ships a linux-arm64 hermesc. The mobile
+          # update export runs its static x86-64 binary under emulation on aarch64 CI.
+          ++ lib.optional (
+            pkgs.stdenv.hostPlatform.isLinux && pkgs.stdenv.hostPlatform.isAarch64
+          ) pkgs.qemu-user;
         in
         {
           default = pkgs.mkShell {

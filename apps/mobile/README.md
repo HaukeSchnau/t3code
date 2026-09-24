@@ -162,6 +162,15 @@ node ../../scripts/mobile-native-static-check.ts
 
 The native lint task runs SwiftLint for Swift plus ktlint and detekt for Kotlin. Missing native tools are reported as warnings and skipped locally. CI installs the default toolset from `apps/mobile/Brewfile` before running the native checks.
 
+## Fork distribution
+
+Every green commit on the fork's `main` reaches the production iOS app through the Mobile workflow.
+JavaScript changes ship as over-the-air updates. The app downloads them on launch, or on a return
+after 15 minutes in the background, and installs them the next time it leaves the foreground. Native
+changes produce a TestFlight build that TestFlight installs automatically. Builds from `just
+mobile-prod` or `vp run ios:*` run only their embedded bundle. See
+[`patches/mobile-distribution.md`](../../patches/mobile-distribution.md).
+
 ## EAS Builds
 
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.

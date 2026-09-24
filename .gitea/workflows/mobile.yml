@@ -1,0 +1,91 @@
+name: Mobile
+
+# Ships every green main commit to the fork's iOS app: an OTA update for the
+# JavaScript bundle, plus a TestFlight binary when the native runtime changed.
+# It follows CI instead of living in it, so a newer push queues behind an
+# in-flight TestFlight build rather than cancelling it.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      force_testflight:
+        description: Upload a TestFlight build even if one already serves this runtime
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: t3code-mobile
+  cancel-in-progress: false
+
+env:
+  NIX_CONFIG: experimental-features = nix-command flakes
+  CI_PROJECT_ID: t3code
+  T3CODE_MOBILE_UPDATES_URL: https://t3code-updates.schnau.dev/manifest
+
+jobs:
+  update:
+    name: OTA update
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: t3code-ci
+    timeout-minutes: 30
+    outputs:
+      runtime_version: ${{ steps.publish.outputs.runtime_version }}
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Publish update
+        id: publish
+        run: |
+          set -euo pipefail
+          if [ -x /run/current-system/sw/bin/nix ]; then
+            export PATH="/run/current-system/sw/bin:$PATH"
+          fi
+          source_workspace="$GITHUB_WORKSPACE"
+          exec nix develop .#ci --command \
+            "$source_workspace/scripts/ci-workspace-run.sh" \
+            "$source_workspace" just ci-mobile-update
+
+  testflight:
+    name: TestFlight
+    needs: update
+    runs-on: apple-builder
+    timeout-minutes: 120
+    # The Apple builder provides Xcode, CocoaPods and Node. This flake's pinned
+    # Node and CocoaPods misbehave on macOS 27, so the job uses the host's.
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      # The builder sits behind a slow home uplink; pnpm's 60 s default aborts
+      # large tarballs when many download at once.
+      - name: Install dependencies
+        env:
+          pnpm_config_fetch_timeout: "600000"
+        run: corepack pnpm install --frozen-lockfile --trust-lockfile --network-concurrency 4
+
+      - name: Upload a build when the runtime needs one
+        env:
+          RUNTIME_VERSION: ${{ needs.update.outputs.runtime_version }}
+          FORCE: ${{ inputs.force_testflight && '--force' || '' }}
+        run: |
+          set -euo pipefail
+          node scripts/mobile-testflight.ts \
+            --runtime-version "$RUNTIME_VERSION" \
+            --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
+            --notes "$(git log -1 --format=%s)" \
+            $FORCE
