@@ -119,9 +119,7 @@ function isLegacyTurnCompletedEvent(
   );
 }
 
-function createProviderServiceHarness(options?: {
-  readonly assistantTranscriptRecovery?: "none" | "authoritative";
-}) {
+function createProviderServiceHarness() {
   const runtimeEventPubSub = Effect.runSync(
     PubSub.unbounded<{
       readonly events: ReadonlyArray<ProviderRuntimeEvent>;
@@ -143,7 +141,6 @@ function createProviderServiceHarness(options?: {
     getCapabilities: () =>
       Effect.succeed({
         sessionModelSwitch: "in-session",
-        assistantTranscriptRecovery: options?.assistantTranscriptRecovery ?? "none",
       }),
     assertConversationRollbackSupported: () => unsupported(),
     getInstanceInfo: (instanceId) => {
@@ -308,7 +305,6 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     readonly journalEvents?: boolean;
     serverSettings?: Partial<ServerSettings>;
-    assistantTranscriptRecovery?: "none" | "authoritative";
     threadTitle?: string;
     workspaceSubdirectory?: string;
     isGitRepository?: CheckpointStore.CheckpointStore["Service"]["isGitRepository"];
@@ -320,11 +316,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
     const workspaceRoot = NodePath.join(repositoryRoot, options?.workspaceSubdirectory ?? "");
     NodeFS.mkdirSync(workspaceRoot, { recursive: true });
-    const provider = createProviderServiceHarness(
-      options?.assistantTranscriptRecovery
-        ? { assistantTranscriptRecovery: options.assistantTranscriptRecovery }
-        : undefined,
-    );
+    const provider = createProviderServiceHarness();
     const sqlCounter = makeSqlStatementCounter();
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
@@ -5476,7 +5468,7 @@ describe("ProviderRuntimeIngestion", () => {
     });
   });
   it("finalizes buffered parent text when a provider session exits", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const turnId = asTurnId("turn-buffered-session-exit");
 
     harness.emit({
@@ -5525,7 +5517,7 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe("survives session exit");
   });
   it("bounds lifecycle queries while buffering assistant deltas until completion", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+    const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
 
     await harness.emitAndDrain([
@@ -6085,8 +6077,8 @@ describe("ProviderRuntimeIngestion", () => {
       `${firstFinal}${secondFinal}`,
     );
   });
-  it("coalesces subagent transcript deltas only with authoritative recovery", async () => {
-    const harness = await createHarness({ assistantTranscriptRecovery: "authoritative" });
+  it("coalesces journal-backed subagent transcript deltas", async () => {
+    const harness = await createHarness();
     const turnId = asTurnId("turn-subagent-coalesced");
     const agentContext = {
       providerThreadId: "provider-child-coalesced",

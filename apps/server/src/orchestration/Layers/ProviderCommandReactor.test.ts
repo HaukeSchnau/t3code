@@ -379,7 +379,6 @@ describe("ProviderCommandReactor", () => {
       getCapabilities: (_provider) =>
         Effect.succeed({
           sessionModelSwitch: input?.sessionModelSwitch ?? "in-session",
-          assistantTranscriptRecovery: "none",
           turnContinuation: "prompt",
         }),
       assertConversationRollbackSupported: () => unsupported(),
