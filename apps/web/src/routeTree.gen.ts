@@ -30,8 +30,6 @@ import { Route as SettingsConnectionsRouteImport } from './routes/settings.conne
 import { Route as SettingsArchivedRouteImport } from './routes/settings.archived'
 import { Route as SettingsAppearanceRouteImport } from './routes/settings.appearance'
 import { Route as ProjectsProjectKeyRouteImport } from './routes/projects.$projectKey'
-import { Route as FixturesOrchestrationRouteImport } from './routes/fixtures.orchestration'
-import { Route as FixturesDelegationRouteImport } from './routes/fixtures.delegation'
 import { Route as ChatPullRequestsRouteImport } from './routes/_chat.pull-requests'
 import { Route as ChatMonitorRouteImport } from './routes/_chat.monitor'
 import { Route as ChatDraftDraftIdRouteImport } from './routes/_chat.draft.$draftId'
@@ -142,16 +140,6 @@ const ProjectsProjectKeyRoute = ProjectsProjectKeyRouteImport.update({
   path: '/projects/$projectKey',
   getParentRoute: () => rootRouteImport,
 } as any)
-const FixturesOrchestrationRoute = FixturesOrchestrationRouteImport.update({
-  id: '/fixtures/orchestration',
-  path: '/fixtures/orchestration',
-  getParentRoute: () => rootRouteImport,
-} as any)
-const FixturesDelegationRoute = FixturesDelegationRouteImport.update({
-  id: '/fixtures/delegation',
-  path: '/fixtures/delegation',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChatPullRequestsRoute = ChatPullRequestsRouteImport.update({
   id: '/pull-requests',
   path: '/pull-requests',
@@ -183,8 +171,6 @@ export interface FileRoutesByFullPath {
   '/welcome': typeof WelcomeRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
-  '/fixtures/delegation': typeof FixturesDelegationRoute
-  '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -210,8 +196,6 @@ export interface FileRoutesByTo {
   '/welcome': typeof WelcomeRoute
   '/monitor': typeof ChatMonitorRoute
   '/pull-requests': typeof ChatPullRequestsRoute
-  '/fixtures/delegation': typeof FixturesDelegationRoute
-  '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -240,8 +224,6 @@ export interface FileRoutesById {
   '/welcome': typeof WelcomeRoute
   '/_chat/monitor': typeof ChatMonitorRoute
   '/_chat/pull-requests': typeof ChatPullRequestsRoute
-  '/fixtures/delegation': typeof FixturesDelegationRoute
-  '/fixtures/orchestration': typeof FixturesOrchestrationRoute
   '/projects/$projectKey': typeof ProjectsProjectKeyRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -271,8 +253,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/monitor'
     | '/pull-requests'
-    | '/fixtures/delegation'
-    | '/fixtures/orchestration'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -298,8 +278,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/monitor'
     | '/pull-requests'
-    | '/fixtures/delegation'
-    | '/fixtures/orchestration'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -327,8 +305,6 @@ export interface FileRouteTypes {
     | '/welcome'
     | '/_chat/monitor'
     | '/_chat/pull-requests'
-    | '/fixtures/delegation'
-    | '/fixtures/orchestration'
     | '/projects/$projectKey'
     | '/settings/appearance'
     | '/settings/archived'
@@ -355,8 +331,6 @@ export interface RootRouteChildren {
   SettingsRoute: typeof SettingsRouteWithChildren
   UsageRoute: typeof UsageRoute
   WelcomeRoute: typeof WelcomeRoute
-  FixturesDelegationRoute: typeof FixturesDelegationRoute
-  FixturesOrchestrationRoute: typeof FixturesOrchestrationRoute
   ProjectsProjectKeyRoute: typeof ProjectsProjectKeyRoute
 }
 
@@ -509,20 +483,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ProjectsProjectKeyRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/fixtures/orchestration': {
-      id: '/fixtures/orchestration'
-      path: '/fixtures/orchestration'
-      fullPath: '/fixtures/orchestration'
-      preLoaderRoute: typeof FixturesOrchestrationRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/fixtures/delegation': {
-      id: '/fixtures/delegation'
-      path: '/fixtures/delegation'
-      fullPath: '/fixtures/delegation'
-      preLoaderRoute: typeof FixturesDelegationRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_chat/pull-requests': {
       id: '/_chat/pull-requests'
       path: '/pull-requests'
@@ -615,8 +575,6 @@ const rootRouteChildren: RootRouteChildren = {
   SettingsRoute: SettingsRouteWithChildren,
   UsageRoute: UsageRoute,
   WelcomeRoute: WelcomeRoute,
-  FixturesDelegationRoute: FixturesDelegationRoute,
-  FixturesOrchestrationRoute: FixturesOrchestrationRoute,
   ProjectsProjectKeyRoute: ProjectsProjectKeyRoute,
 }
 export const routeTree = rootRouteImport

@@ -3,8 +3,7 @@
  * shell `coordination`, plus per-thread selectors for the sidebar, the thread
  * header strip and the Work panel.
  *
- * Reads the same snapshot atoms the thread shells use, so the dev fixture's
- * virtual environment flows through here unchanged.
+ * Reads the same snapshot atoms the thread shells use.
  */
 import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
@@ -24,7 +23,7 @@ import { useMemo } from "react";
 
 import { environmentSnapshotAtom } from "./shell";
 import { useThreadShells } from "./entities";
-import { threadCatalogValueAtom } from "./threads";
+import { environmentCatalog } from "../connection/catalog";
 
 const EMPTY_SOURCES: ReadonlyArray<EnvironmentCoordination> = Object.freeze([]);
 
@@ -38,7 +37,7 @@ const coordinationSourceAtom = Atom.family((environmentId: EnvironmentId) =>
 let previousSources: ReadonlyArray<EnvironmentCoordination> = EMPTY_SOURCES;
 const coordinationSourcesAtom = Atom.make((get) => {
   const next: EnvironmentCoordination[] = [];
-  for (const environmentId of get(threadCatalogValueAtom).entries.keys()) {
+  for (const environmentId of get(environmentCatalog.catalogValueAtom).entries.keys()) {
     const source = get(coordinationSourceAtom(environmentId));
     if (source !== null) next.push(source);
   }
