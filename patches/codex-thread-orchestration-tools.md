@@ -78,8 +78,8 @@ The message-level fork action is destination-aware. The fork button opens a menu
   `thread/fork` with the prepared cwd. On JJ repositories this resolves to a cheap
   `jj-workspace`; `directory-copy` is reserved for explicit preservation of ignored or
   untracked runtime state.
-- A disabled `Fork to host...` placeholder. Cross-host Codex continuation remains blocked
-  until provider-thread transfer/export semantics are proven.
+
+Forking to another host is not offered until provider-thread transfer/export semantics are proven.
 
 The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
 archived sources, running latest turns, active provider turns, streaming messages, queued messages,
