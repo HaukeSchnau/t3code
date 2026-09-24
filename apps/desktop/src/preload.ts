@@ -1,8 +1,5 @@
-// @effect-diagnostics globalDate:off - This sandboxed Electron preload cannot import Effect runtime modules.
 import type {
   DesktopBridge,
-  DesktopIpcMessagePressureCounter,
-  DesktopIpcMessagePressureSnapshot,
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingInputEvent,
   DesktopPreviewRecordingFrame,
@@ -28,114 +25,6 @@ function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
     SNAP_SHOT_EVENT_TYPES.has(type) &&
     (id === undefined || typeof id === "string")
   );
-}
-
-interface IpcPressureAccumulator {
-  readonly channel: string;
-  readonly operation: "invoke" | "sendSync";
-  count: number;
-  totalDurationMs: number;
-  maxDurationMs: number;
-  estimatedPayloadBytes: number;
-  failureCount: number;
-}
-
-const ipcPressureCounters = new Map<string, IpcPressureAccumulator>();
-
-function estimatePayloadBytes(value: unknown): number {
-  try {
-    return new TextEncoder().encode(JSON.stringify(value)).byteLength;
-  } catch {
-    return 0;
-  }
-}
-
-function recordIpcPressure(input: {
-  readonly channel: string;
-  readonly operation: "invoke" | "sendSync";
-  readonly durationMs: number;
-  readonly estimatedPayloadBytes: number;
-  readonly failed: boolean;
-}): void {
-  const key = `${input.operation}:${input.channel}`;
-  const current =
-    ipcPressureCounters.get(key) ??
-    ({
-      channel: input.channel,
-      operation: input.operation,
-      count: 0,
-      totalDurationMs: 0,
-      maxDurationMs: 0,
-      estimatedPayloadBytes: 0,
-      failureCount: 0,
-    } satisfies IpcPressureAccumulator);
-
-  current.count += 1;
-  current.totalDurationMs += input.durationMs;
-  current.maxDurationMs = Math.max(current.maxDurationMs, input.durationMs);
-  current.estimatedPayloadBytes += input.estimatedPayloadBytes;
-  if (input.failed) current.failureCount += 1;
-  ipcPressureCounters.set(key, current);
-}
-
-function readIpcMessagePressureSnapshot(): DesktopIpcMessagePressureSnapshot {
-  const counters: DesktopIpcMessagePressureCounter[] = [...ipcPressureCounters.values()]
-    .map((counter) => ({ ...counter }))
-    .sort((left, right) => right.count - left.count || left.channel.localeCompare(right.channel));
-  return {
-    readAtIso: new Date().toISOString(),
-    counters,
-  };
-}
-
-async function invoke(channel: string, ...args: unknown[]) {
-  const startedAt = performance.now();
-  const estimatedBytes = estimatePayloadBytes(args);
-  try {
-    const result = await ipcRenderer.invoke(channel, ...args);
-    recordIpcPressure({
-      channel,
-      operation: "invoke",
-      durationMs: performance.now() - startedAt,
-      estimatedPayloadBytes: estimatedBytes + estimatePayloadBytes(result),
-      failed: false,
-    });
-    return result;
-  } catch (error) {
-    recordIpcPressure({
-      channel,
-      operation: "invoke",
-      durationMs: performance.now() - startedAt,
-      estimatedPayloadBytes: estimatedBytes,
-      failed: true,
-    });
-    throw error;
-  }
-}
-
-function sendSync(channel: string, ...args: unknown[]) {
-  const startedAt = performance.now();
-  const estimatedBytes = estimatePayloadBytes(args);
-  try {
-    const result = ipcRenderer.sendSync(channel, ...args);
-    recordIpcPressure({
-      channel,
-      operation: "sendSync",
-      durationMs: performance.now() - startedAt,
-      estimatedPayloadBytes: estimatedBytes + estimatePayloadBytes(result),
-      failed: false,
-    });
-    return result;
-  } catch (error) {
-    recordIpcPressure({
-      channel,
-      operation: "sendSync",
-      durationMs: performance.now() - startedAt,
-      estimatedPayloadBytes: estimatedBytes,
-      failed: true,
-    });
-    throw error;
-  }
 }
 
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Electron exposes the client platform in its sandboxed preload process.
@@ -172,7 +61,7 @@ function unwrapEnsureSshEnvironmentResult(result: unknown) {
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getAppBranding: () => {
-    const result = sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
+    const result = ipcRenderer.sendSync(IpcChannels.GET_APP_BRANDING_CHANNEL);
     if (typeof result !== "object" || result === null) {
       return null;
     }
@@ -192,20 +81,21 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     return typeof result === "string" ? result : null;
   },
   getLocalEnvironmentBootstraps: () => {
-    const result = sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
+    const result = ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_BOOTSTRAPS_CHANNEL);
     if (!Array.isArray(result)) {
       return [];
     }
     return result as ReturnType<DesktopBridge["getLocalEnvironmentBootstraps"]>;
   },
   getLocalEnvironmentBearerToken: () =>
-    invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
+    ipcRenderer.invoke(IpcChannels.GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL),
   getLocalEnvironmentEnabled: () =>
     ipcRenderer.sendSync(IpcChannels.GET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL) !== false,
   setLocalEnvironmentEnabled: (enabled) =>
-    invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled),
-  getClientSettings: () => invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
-  setClientSettings: (settings) => invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
+    ipcRenderer.invoke(IpcChannels.SET_LOCAL_ENVIRONMENT_ENABLED_CHANNEL, enabled),
+  getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
+  setClientSettings: (settings) =>
+    ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
   requestSnapShotPermissions: (includeAccessibility) =>
     ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
   getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
@@ -224,31 +114,32 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   dismissSnapShotAnimation: (id) =>
     ipcRenderer.invoke(IpcChannels.DISMISS_SNAP_SHOT_ANIMATION_CHANNEL, id),
   acknowledgeSnapShot: (id) => ipcRenderer.invoke(IpcChannels.ACKNOWLEDGE_SNAP_SHOT_CHANNEL, id),
-  getConnectionCatalog: () => invoke(IpcChannels.GET_CONNECTION_CATALOG_CHANNEL),
-  setConnectionCatalog: (catalog) => invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
-  clearConnectionCatalog: () => invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
-  discoverSshHosts: () => invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
+  getConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.GET_CONNECTION_CATALOG_CHANNEL),
+  setConnectionCatalog: (catalog) =>
+    ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
+  clearConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.CLEAR_CONNECTION_CATALOG_CHANNEL),
+  discoverSshHosts: () => ipcRenderer.invoke(IpcChannels.DISCOVER_SSH_HOSTS_CHANNEL),
   resolveSshHost: (alias) => ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_HOST_CHANNEL, alias),
   ensureSshEnvironment: async (target, options) =>
     unwrapEnsureSshEnvironmentResult(
-      await invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
+      await ipcRenderer.invoke(IpcChannels.ENSURE_SSH_ENVIRONMENT_CHANNEL, {
         target,
         ...(options === undefined ? {} : { options }),
       }),
     ),
   disconnectSshEnvironment: (target) =>
-    invoke(IpcChannels.DISCONNECT_SSH_ENVIRONMENT_CHANNEL, target),
+    ipcRenderer.invoke(IpcChannels.DISCONNECT_SSH_ENVIRONMENT_CHANNEL, target),
   fetchSshEnvironmentDescriptor: (httpBaseUrl) =>
-    invoke(IpcChannels.FETCH_SSH_ENVIRONMENT_DESCRIPTOR_CHANNEL, { httpBaseUrl }),
+    ipcRenderer.invoke(IpcChannels.FETCH_SSH_ENVIRONMENT_DESCRIPTOR_CHANNEL, { httpBaseUrl }),
   bootstrapSshBearerSession: (httpBaseUrl, credential) =>
-    invoke(IpcChannels.BOOTSTRAP_SSH_BEARER_SESSION_CHANNEL, {
+    ipcRenderer.invoke(IpcChannels.BOOTSTRAP_SSH_BEARER_SESSION_CHANNEL, {
       httpBaseUrl,
       credential,
     }),
   fetchSshSessionState: (httpBaseUrl, bearerToken) =>
-    invoke(IpcChannels.FETCH_SSH_SESSION_STATE_CHANNEL, { httpBaseUrl, bearerToken }),
+    ipcRenderer.invoke(IpcChannels.FETCH_SSH_SESSION_STATE_CHANNEL, { httpBaseUrl, bearerToken }),
   issueSshWebSocketTicket: (httpBaseUrl, bearerToken) =>
-    invoke(IpcChannels.ISSUE_SSH_WEBSOCKET_TOKEN_CHANNEL, { httpBaseUrl, bearerToken }),
+    ipcRenderer.invoke(IpcChannels.ISSUE_SSH_WEBSOCKET_TOKEN_CHANNEL, { httpBaseUrl, bearerToken }),
   onSshPasswordPrompt: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
       if (typeof request !== "object" || request === null) return;
@@ -261,29 +152,31 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   resolveSshPasswordPrompt: (requestId, password) =>
-    invoke(IpcChannels.RESOLVE_SSH_PASSWORD_PROMPT_CHANNEL, { requestId, password }),
-  getServerExposureState: () => invoke(IpcChannels.GET_SERVER_EXPOSURE_STATE_CHANNEL),
-  setServerExposureMode: (mode) => invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),
+    ipcRenderer.invoke(IpcChannels.RESOLVE_SSH_PASSWORD_PROMPT_CHANNEL, { requestId, password }),
+  getServerExposureState: () => ipcRenderer.invoke(IpcChannels.GET_SERVER_EXPOSURE_STATE_CHANNEL),
+  setServerExposureMode: (mode) =>
+    ipcRenderer.invoke(IpcChannels.SET_SERVER_EXPOSURE_MODE_CHANNEL, mode),
   setTailscaleServeEnabled: (input) =>
-    invoke(IpcChannels.SET_TAILSCALE_SERVE_ENABLED_CHANNEL, input),
-  getAdvertisedEndpoints: () => invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
-  getWslState: () => invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
-  setWslBackendEnabled: (enabled) => invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),
-  setWslDistro: (distro) => invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
-  setWslOnly: (enabled) => invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
-  pickFolder: (options) => invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
+    ipcRenderer.invoke(IpcChannels.SET_TAILSCALE_SERVE_ENABLED_CHANNEL, input),
+  getAdvertisedEndpoints: () => ipcRenderer.invoke(IpcChannels.GET_ADVERTISED_ENDPOINTS_CHANNEL),
+  getWslState: () => ipcRenderer.invoke(IpcChannels.GET_WSL_STATE_CHANNEL),
+  setWslBackendEnabled: (enabled) =>
+    ipcRenderer.invoke(IpcChannels.SET_WSL_BACKEND_ENABLED_CHANNEL, enabled),
+  setWslDistro: (distro) => ipcRenderer.invoke(IpcChannels.SET_WSL_DISTRO_CHANNEL, distro),
+  setWslOnly: (enabled) => ipcRenderer.invoke(IpcChannels.SET_WSL_ONLY_CHANNEL, enabled),
+  pickFolder: (options) => ipcRenderer.invoke(IpcChannels.PICK_FOLDER_CHANNEL, options),
   pickProjectFavicon: (initialPath) =>
-    invoke(IpcChannels.PICK_PROJECT_FAVICON_CHANNEL, initialPath),
-  pickThemeFiles: () => invoke(IpcChannels.PICK_THEME_FILES_CHANNEL, undefined),
-  setTheme: (theme) => invoke(IpcChannels.SET_THEME_CHANNEL, theme),
+    ipcRenderer.invoke(IpcChannels.PICK_PROJECT_FAVICON_CHANNEL, initialPath),
+  pickThemeFiles: () => ipcRenderer.invoke(IpcChannels.PICK_THEME_FILES_CHANNEL, undefined),
+  setTheme: (theme) => ipcRenderer.invoke(IpcChannels.SET_THEME_CHANNEL, theme),
   showContextMenu: (items, position) =>
-    invoke(IpcChannels.CONTEXT_MENU_CHANNEL, {
+    ipcRenderer.invoke(IpcChannels.CONTEXT_MENU_CHANNEL, {
       items,
       ...(position === undefined ? {} : { position }),
     }),
-  openExternal: (url: string) => invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
+  openExternal: (url: string) => ipcRenderer.invoke(IpcChannels.OPEN_EXTERNAL_CHANNEL, url),
   consumePendingOpenWorkspaceRequests: () =>
-    invoke(IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL),
+    ipcRenderer.invoke(IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL),
   onOpenWorkspaceRequest: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, request: unknown) => {
       if (typeof request !== "object" || request === null) return;
@@ -296,11 +189,11 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     };
   },
   checkSystemPermission: (pane: string) =>
-    invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
+    ipcRenderer.invoke(IpcChannels.CHECK_SYSTEM_PERMISSION_CHANNEL, pane),
   openSystemSettings: (pane: string) =>
     ipcRenderer.invoke(IpcChannels.OPEN_SYSTEM_SETTINGS_CHANNEL, pane),
-  probeRemoteEditors: () => invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL),
-  pasteAsText: () => invoke(IpcChannels.PASTE_AS_TEXT_CHANNEL, undefined),
+  probeRemoteEditors: () => ipcRenderer.invoke(IpcChannels.PROBE_REMOTE_EDITORS_CHANNEL),
+  pasteAsText: () => ipcRenderer.invoke(IpcChannels.PASTE_AS_TEXT_CHANNEL, undefined),
   onMenuAction: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, action: unknown) => {
       if (typeof action !== "string") return;
@@ -357,11 +250,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.WINDOW_FULLSCREEN_STATE_CHANNEL, wrappedListener);
     };
   },
-  getUpdateState: () => invoke(IpcChannels.UPDATE_GET_STATE_CHANNEL),
-  setUpdateChannel: (channel) => invoke(IpcChannels.UPDATE_SET_CHANNEL_CHANNEL, channel),
-  checkForUpdate: () => invoke(IpcChannels.UPDATE_CHECK_CHANNEL),
-  downloadUpdate: () => invoke(IpcChannels.UPDATE_DOWNLOAD_CHANNEL),
-  installUpdate: () => invoke(IpcChannels.UPDATE_INSTALL_CHANNEL),
+  getUpdateState: () => ipcRenderer.invoke(IpcChannels.UPDATE_GET_STATE_CHANNEL),
+  setUpdateChannel: (channel) =>
+    ipcRenderer.invoke(IpcChannels.UPDATE_SET_CHANNEL_CHANNEL, channel),
+  checkForUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_CHECK_CHANNEL),
+  downloadUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_DOWNLOAD_CHANNEL),
+  installUpdate: () => ipcRenderer.invoke(IpcChannels.UPDATE_INSTALL_CHANNEL),
   onUpdateState: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, state: unknown) => {
       if (typeof state !== "object" || state === null) return;
@@ -373,14 +267,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.UPDATE_STATE_CHANNEL, wrappedListener);
     };
   },
-  energyDiagnostics: {
-    captureProcessSnapshot: () => invoke(IpcChannels.ENERGY_CAPTURE_PROCESS_SNAPSHOT_CHANNEL),
-    readIpcMessagePressureSnapshot,
-    writeCaptureArtifact: (input) =>
-      invoke(IpcChannels.ENERGY_WRITE_CAPTURE_ARTIFACT_CHANNEL, input),
-    revealCaptureArtifact: (path) =>
-      invoke(IpcChannels.ENERGY_REVEAL_CAPTURE_ARTIFACT_CHANNEL, path),
-  },
+
   appActivation: {
     setReady: (ready) =>
       ipcRenderer.invoke(IpcChannels.DESKTOP_APP_ACTIVATION_READY_CHANNEL, ready),
@@ -402,41 +289,47 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   },
   preview: {
     createTab: (tabId, defaults) =>
-      invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CREATE_TAB_CHANNEL, {
         tabId,
         zoomFactor: defaults?.zoomFactor,
         colorScheme: defaults?.colorScheme,
       }),
-    closeTab: (tabId) => invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
+    closeTab: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_CLOSE_TAB_CHANNEL, { tabId }),
     registerWebview: (tabId, webContentsId) =>
-      invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
-    navigate: (tabId, url) => invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
-    goBack: (tabId) => invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
-    goForward: (tabId) => invoke(IpcChannels.PREVIEW_GO_FORWARD_CHANNEL, { tabId }),
-    refresh: (tabId) => invoke(IpcChannels.PREVIEW_REFRESH_CHANNEL, { tabId }),
-    zoomIn: (tabId) => invoke(IpcChannels.PREVIEW_ZOOM_IN_CHANNEL, { tabId }),
-    zoomOut: (tabId) => invoke(IpcChannels.PREVIEW_ZOOM_OUT_CHANNEL, { tabId }),
-    resetZoom: (tabId) => invoke(IpcChannels.PREVIEW_RESET_ZOOM_CHANNEL, { tabId }),
-    hardReload: (tabId) => invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
+      ipcRenderer.invoke(IpcChannels.PREVIEW_REGISTER_WEBVIEW_CHANNEL, { tabId, webContentsId }),
+    navigate: (tabId, url) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_NAVIGATE_CHANNEL, { tabId, url }),
+    goBack: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_BACK_CHANNEL, { tabId }),
+    goForward: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_GO_FORWARD_CHANNEL, { tabId }),
+    refresh: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_REFRESH_CHANNEL, { tabId }),
+    zoomIn: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_ZOOM_IN_CHANNEL, { tabId }),
+    zoomOut: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_ZOOM_OUT_CHANNEL, { tabId }),
+    resetZoom: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_RESET_ZOOM_CHANNEL, { tabId }),
+    hardReload: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_HARD_RELOAD_CHANNEL, { tabId }),
     setColorScheme: (tabId, colorScheme) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
-    openDevTools: (tabId) => invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
-    listBrowserImportSources: () => invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
-    importBrowserCookies: (input) => invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
-    clearCookies: () => invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
-    clearCache: () => invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
+    openDevTools: (tabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
+    listBrowserImportSources: () => ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_SOURCES_CHANNEL),
+    importBrowserCookies: (input) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_IMPORT_COOKIES_CHANNEL, input),
+    clearCookies: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),
+    clearCache: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_CACHE_CHANNEL),
     setAudioMuted: (tabId, audioMuted) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     getPreviewConfig: (environmentId) =>
-      invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId }),
+      ipcRenderer.invoke(IpcChannels.PREVIEW_GET_CONFIG_CHANNEL, { environmentId }),
     setAnnotationTheme: (theme) =>
-      invoke(IpcChannels.PREVIEW_SET_ANNOTATION_THEME_CHANNEL, { theme }),
-    pickElement: (tabId) => invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId }),
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_ANNOTATION_THEME_CHANNEL, { theme }),
+    pickElement: (tabId) => ipcRenderer.invoke(IpcChannels.PREVIEW_PICK_ELEMENT_CHANNEL, { tabId }),
     cancelPickElement: (tabId) =>
-      invoke(IpcChannels.PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL, { tabId }),
-    captureScreenshot: (tabId) => invoke(IpcChannels.PREVIEW_CAPTURE_SCREENSHOT_CHANNEL, { tabId }),
-    revealArtifact: (path) => invoke(IpcChannels.PREVIEW_REVEAL_ARTIFACT_CHANNEL, { path }),
-    copyArtifactToClipboard: (path) => invoke(IpcChannels.PREVIEW_COPY_ARTIFACT_CHANNEL, { path }),
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CANCEL_PICK_ELEMENT_CHANNEL, { tabId }),
+    captureScreenshot: (tabId) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_CAPTURE_SCREENSHOT_CHANNEL, { tabId }),
+    revealArtifact: (path) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_REVEAL_ARTIFACT_CHANNEL, { path }),
+    copyArtifactToClipboard: (path) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_COPY_ARTIFACT_CHANNEL, { path }),
     pictureInPicture: {
       open: (tabId) =>
         ipcRenderer.invoke(IpcChannels.PREVIEW_PICTURE_IN_PICTURE_OPEN_CHANNEL, { tabId }),
@@ -453,10 +346,12 @@ contextBridge.exposeInMainWorld("desktopBridge", {
         return () =>
           ipcRenderer.removeListener(IpcChannels.PREVIEW_RECORDING_INPUT_CHANNEL, wrappedListener);
       },
-      startScreencast: (tabId) => invoke(IpcChannels.PREVIEW_RECORDING_START_CHANNEL, { tabId }),
-      stopScreencast: (tabId) => invoke(IpcChannels.PREVIEW_RECORDING_STOP_CHANNEL, { tabId }),
+      startScreencast: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_RECORDING_START_CHANNEL, { tabId }),
+      stopScreencast: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_RECORDING_STOP_CHANNEL, { tabId }),
       save: (tabId, mimeType, data) =>
-        invoke(IpcChannels.PREVIEW_RECORDING_SAVE_CHANNEL, {
+        ipcRenderer.invoke(IpcChannels.PREVIEW_RECORDING_SAVE_CHANNEL, {
           tabId,
           mimeType,
           data,
@@ -472,19 +367,22 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       },
     },
     automation: {
-      status: (tabId) => invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, { tabId }),
-      snapshot: (tabId) => invoke(IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL, { tabId }),
+      status: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_STATUS_CHANNEL, { tabId }),
+      snapshot: (tabId) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SNAPSHOT_CHANNEL, { tabId }),
       click: (tabId, input) =>
-        invoke(IpcChannels.PREVIEW_AUTOMATION_CLICK_CHANNEL, { tabId, input }),
-      type: (tabId, input) => invoke(IpcChannels.PREVIEW_AUTOMATION_TYPE_CHANNEL, { tabId, input }),
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_CLICK_CHANNEL, { tabId, input }),
+      type: (tabId, input) =>
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_TYPE_CHANNEL, { tabId, input }),
       press: (tabId, input) =>
-        invoke(IpcChannels.PREVIEW_AUTOMATION_PRESS_CHANNEL, { tabId, input }),
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_PRESS_CHANNEL, { tabId, input }),
       scroll: (tabId, input) =>
-        invoke(IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL, { tabId, input }),
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_SCROLL_CHANNEL, { tabId, input }),
       evaluate: (tabId, input) =>
-        invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, { tabId, input }),
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_EVALUATE_CHANNEL, { tabId, input }),
       waitFor: (tabId, input) =>
-        invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, { tabId, input }),
+        ipcRenderer.invoke(IpcChannels.PREVIEW_AUTOMATION_WAIT_FOR_CHANNEL, { tabId, input }),
     },
     onStateChange: (listener) => {
       const wrappedListener = (
