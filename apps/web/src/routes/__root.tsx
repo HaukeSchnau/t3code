@@ -84,12 +84,7 @@ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    const currentUrl = new URL(location.href, window.location.origin);
-    const browserUrl = new URL(window.location.href);
-    if (
-      location.pathname === "/pair" &&
-      (hasHostedPairingRequest(currentUrl) || hasHostedPairingRequest(browserUrl))
-    ) {
+    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -97,7 +92,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (isLocalEnvironmentDisabled() || isHostedStaticApp(currentUrl)) {
+    if (isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-static",

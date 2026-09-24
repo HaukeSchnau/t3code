@@ -53,7 +53,7 @@ import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { cn } from "../../lib/utils";
 import { isLocalEnvironmentDisabled } from "../../localEnvironment";
 import { formatElapsedDurationLabel, formatExpiresInLabel } from "../../timestampFormat";
-import { resolveDesktopPairingUrl, resolveHostedPairingUrl } from "./pairingUrls";
+import { resolveDesktopPairingUrl } from "./pairingUrls";
 import {
   applyWslEnableSelection,
   isQrShareableEndpoint,
@@ -529,17 +529,9 @@ function endpointDefaultPreferenceKey(endpoint: AdvertisedEndpoint): string {
   return `${endpoint.provider.id}:${endpoint.reachability}:${scheme}:${endpoint.label}`;
 }
 
-function resolveAdvertisedEndpointPairingUrl(
-  endpoint: AdvertisedEndpoint,
-  credential: string,
-  environmentId: EnvironmentId | null,
-): string {
-  if (endpoint.compatibility.hostedHttpsApp === "compatible") {
-    return (
-      resolveHostedPairingUrl(endpoint.httpBaseUrl, credential, environmentId) ??
-      resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential)
-    );
-  }
+// This fork ships no hosted web app, so pairing links always open the backend's own app.
+// A hosted link would load upstream's client against this fork's server.
+function resolveAdvertisedEndpointPairingUrl(endpoint: AdvertisedEndpoint, credential: string) {
   return resolveDesktopPairingUrl(endpoint.httpBaseUrl, credential);
 }
 
@@ -576,7 +568,6 @@ function endpointShareHint(endpoint: AdvertisedEndpoint, url: string): string {
 type PairingLinkListRowProps = {
   pairingLink: ServerPairingLinkRecord;
   credential: string | undefined;
-  environmentId: EnvironmentId | null;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -588,7 +579,6 @@ type PairingLinkListRowProps = {
 const PairingLinkListRow = memo(function PairingLinkListRow({
   pairingLink,
   credential,
-  environmentId,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -612,19 +602,12 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
     () => (credential ? resolveCurrentOriginPairingUrl(credential) : null),
     [credential],
   );
-  const hostedPairingUrl = useMemo(
-    () =>
-      credential && endpointUrl != null && endpointUrl !== ""
-        ? resolveHostedPairingUrl(endpointUrl, credential, environmentId)
-        : null,
-    [credential, endpointUrl, environmentId],
-  );
   const endpointPairingUrl = useMemo(() => {
     const endpoint = selectPairingEndpoint(endpoints, defaultEndpointKey);
     return endpoint && credential
-      ? resolveAdvertisedEndpointPairingUrl(endpoint, credential, environmentId)
+      ? resolveAdvertisedEndpointPairingUrl(endpoint, credential)
       : null;
-  }, [credential, defaultEndpointKey, endpoints, environmentId]);
+  }, [credential, defaultEndpointKey, endpoints]);
   const endpointCopyOptions = useMemo(() => {
     const options: Array<{
       readonly id: string;
@@ -639,7 +622,7 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       if (endpoint.status === "unavailable") {
         continue;
       }
-      const url = resolveAdvertisedEndpointPairingUrl(endpoint, credential, environmentId);
+      const url = resolveAdvertisedEndpointPairingUrl(endpoint, credential);
       options.push({
         id: endpoint.id,
         preferenceKey: endpointDefaultPreferenceKey(endpoint),
@@ -650,11 +633,11 @@ const PairingLinkListRow = memo(function PairingLinkListRow({
       });
     }
     return options;
-  }, [credential, endpoints, environmentId]);
+  }, [credential, endpoints]);
   const shareablePairingUrl =
     endpointPairingUrl ??
     (credential && endpointUrl != null && endpointUrl !== ""
-      ? (hostedPairingUrl ?? resolveDesktopPairingUrl(endpointUrl, credential))
+      ? resolveDesktopPairingUrl(endpointUrl, credential)
       : isLoopbackHostname(window.location.hostname)
         ? null
         : currentOriginPairingUrl);
@@ -1225,7 +1208,6 @@ const AuthorizedClientsHeaderAction = memo(function AuthorizedClientsHeaderActio
 });
 
 type PairingClientsListProps = {
-  environmentId: EnvironmentId | null;
   endpointUrl: string | null | undefined;
   endpoints: ReadonlyArray<AdvertisedEndpoint>;
   defaultEndpointKey: string | null;
@@ -1241,7 +1223,6 @@ type PairingClientsListProps = {
 };
 
 const PairingClientsList = memo(function PairingClientsList({
-  environmentId,
   endpointUrl,
   endpoints,
   defaultEndpointKey,
@@ -1262,7 +1243,6 @@ const PairingClientsList = memo(function PairingClientsList({
           key={pairingLink.id}
           pairingLink={pairingLink}
           credential={createdPairingCredentials.get(pairingLink.id)}
-          environmentId={environmentId}
           endpointUrl={endpointUrl}
           endpoints={endpoints}
           defaultEndpointKey={defaultEndpointKey}
@@ -3015,7 +2995,6 @@ export function ConnectionsSettings() {
         </div>
       ) : null}
       <PairingClientsList
-        environmentId={primaryEnvironmentId}
         endpointUrl={desktopServerExposureState?.endpointUrl}
         endpoints={visibleDesktopAdvertisedEndpoints}
         defaultEndpointKey={defaultDesktopAdvertisedEndpointKey}
