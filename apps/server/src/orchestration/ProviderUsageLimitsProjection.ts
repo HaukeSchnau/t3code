@@ -48,7 +48,8 @@ function normalizeRateLimitWindow(value: unknown): UsageLimitWindow | null {
   const record = asRecord(value);
   const usedPercent = asFiniteNumber(record?.usedPercent);
   if (usedPercent === null) return null;
-  const key = asString(record?.key);
+  // Upstream usage-limit windows identify themselves by `id`; Z.AI windows use `key`.
+  const key = asString(record?.key) ?? asString(record?.id);
   const label = asString(record?.label);
   return {
     ...(key ? { key } : {}),
