@@ -42,6 +42,7 @@ import {
 } from "./registrationPayload";
 
 const REMOTE_ACTIVITY_REGISTRATION_RETRY_MS = 15_000;
+const DEVICE_UNREGISTRATION_TIMEOUT = "5 seconds";
 
 const AgentAwarenessOperation = Schema.Literals([
   "read-notification-permissions",
@@ -132,7 +133,6 @@ export interface AgentAwarenessEnvironmentTransport {
   readonly registerDevice: (
     input: AgentAwarenessDeviceRegistrationInput,
   ) => Promise<AgentAwarenessRegistrationResult>;
-  readonly unregisterDevice: (deviceId: string) => Promise<void>;
   readonly registerLiveActivity: (
     input: AgentAwarenessLiveActivityRegistrationInput,
   ) => Promise<AgentAwarenessRegistrationResult>;
@@ -385,21 +385,6 @@ function registerDeviceWithEnvironment(
     );
     logRegistrationDebug("environment device registration request completed", {
       expectedGeneration,
-    });
-  });
-}
-
-function unregisterDeviceWithEnvironment(deviceId: string): Effect.Effect<void, unknown> {
-  return Effect.gen(function* () {
-    const transport = environmentTransport;
-    if (!transport) return;
-    yield* Effect.tryPromise({
-      try: () => transport.unregisterDevice(deviceId),
-      catch: (cause) =>
-        new AgentAwarenessOperationError({
-          operation: "unregister-device-with-environment",
-          cause,
-        }),
     });
   });
 }
@@ -794,19 +779,6 @@ function ensureAppStateListener(): void {
   });
 }
 
-export function unregisterAllAgentAwarenessConnections(): void {
-  environmentTransport = null;
-  clearAndroidAgentNotifications();
-  pushTokenSubscription?.remove();
-  pushTokenSubscription = null;
-  appStateSubscription?.remove();
-  appStateSubscription = null;
-  if (activeLiveActivityRegistrationRetry) {
-    clearTimeout(activeLiveActivityRegistrationRetry);
-    activeLiveActivityRegistrationRetry = null;
-  }
-}
-
 export function refreshAgentAwarenessRegistration(): Effect.Effect<void, never> {
   return registerDeviceForCurrentEnvironment().pipe(
     Effect.catch((error) =>
@@ -856,8 +828,15 @@ export function __resetAgentAwarenessRemoteRegistrationForTest(): void {
   registeredActivityPushTokens.clear();
 }
 
-export function unregisterAgentAwarenessDeviceForCurrentEnvironment(): Effect.Effect<void, never> {
-  return Effect.gen(function* () {
+/**
+ * Asks one paired environment to forget this device before the user removes it,
+ * so the removed server stops sending notifications and Live Activity updates.
+ * Best effort and bounded: an unreachable server must not block removal.
+ */
+export async function unregisterAgentAwarenessDeviceFromEnvironment(
+  unregister: (deviceId: string) => Promise<void>,
+): Promise<void> {
+  const operation = Effect.gen(function* () {
     const deviceId = yield* Effect.tryPromise({
       try: () => loadAgentAwarenessDeviceId(),
       catch: (cause) =>
@@ -869,14 +848,19 @@ export function unregisterAgentAwarenessDeviceForCurrentEnvironment(): Effect.Ef
     if (!deviceId) {
       return;
     }
-    yield* unregisterDeviceWithEnvironment(deviceId);
-  }).pipe(
-    Effect.catch((error) =>
-      Effect.sync(() => {
-        logRegistrationError("device unregistration failed", error);
-      }),
-    ),
-  );
+    yield* Effect.tryPromise({
+      try: () => unregister(deviceId),
+      catch: (cause) =>
+        new AgentAwarenessOperationError({
+          operation: "unregister-device-with-environment",
+          cause,
+        }),
+    });
+  }).pipe(Effect.timeout(DEVICE_UNREGISTRATION_TIMEOUT));
+  const result = await settleAsyncResult(() => runtime.runPromiseExit(operation));
+  if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+    logRegistrationError("device unregistration failed", squashAtomCommandFailure(result));
+  }
 }
 
 export function registerLiveActivityPushToken(input: {
