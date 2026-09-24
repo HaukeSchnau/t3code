@@ -62,23 +62,6 @@ const actorModelSelection = {
 const actorRuntimeMode = "auto-accept-edits" as const;
 const actorInteractionMode = "plan" as const;
 
-it("keeps blocked batches open and cleanup-ineligible", () => {
-  const outcomes = ["completed", "blocked-approval", "running"] as const;
-  expect(__testing.statusForBatch({ cancelled: false, deadlineExceeded: false, outcomes })).toBe(
-    "blocked",
-  );
-  expect(__testing.isTerminalBatchStatus("blocked")).toBe(false);
-  expect(outcomes.every(__testing.isTerminalBatchMemberOutcome)).toBe(false);
-});
-
-it("settles mixed terminal worker outcomes as failed", () => {
-  const outcomes = ["completed", "failed", "interrupted"] as const;
-  expect(__testing.statusForBatch({ cancelled: false, deadlineExceeded: false, outcomes })).toBe(
-    "failed",
-  );
-  expect(outcomes.every(__testing.isTerminalBatchMemberOutcome)).toBe(true);
-});
-
 it("steers attention and explicit wait outcomes while queuing routine settlements", () => {
   expect(__testing.deliveryForCoordinatorNotification(["failed"])).toBe("immediate");
   expect(__testing.deliveryForCoordinatorNotification(["blocked-approval"])).toBe("immediate");

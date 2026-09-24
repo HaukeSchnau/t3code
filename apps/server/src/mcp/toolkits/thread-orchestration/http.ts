@@ -97,38 +97,6 @@ export const threadOrchestrationHttpApiLayer = HttpApiBuilder.group(
         }),
       )
       .handle(
-        "createBatch",
-        Effect.fn("environment.threadOrchestration.createBatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* service.createBatch(args.payload.scope, args.payload.input);
-        }),
-      )
-      .handle(
-        "readBatch",
-        Effect.fn("environment.threadOrchestration.readBatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          return yield* service.readBatch(args.payload.scope, args.payload.input);
-        }),
-      )
-      .handle(
-        "cancelBatch",
-        Effect.fn("environment.threadOrchestration.cancelBatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* service.cancelBatch(args.payload.scope, args.payload.input);
-        }),
-      )
-      .handle(
-        "cleanupBatch",
-        Effect.fn("environment.threadOrchestration.cleanupBatch")(function* (args) {
-          yield* annotateEnvironmentRequest(args.endpoint.name);
-          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
-          return yield* service.cleanupBatch(args.payload.scope, args.payload.input);
-        }),
-      )
-      .handle(
         "createEffort",
         Effect.fn("environment.threadOrchestration.createEffort")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);

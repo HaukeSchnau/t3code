@@ -135,10 +135,6 @@ const THREAD_DETAIL_ACTIVITY_PAYLOAD_BATCH_SIZE = 25;
 // SQLite's default case-insensitive LIKE cannot seek the binary `kind` index.
 // These adjacent ASCII bounds turn prefix reads into index range scans.
 const THREAD_ORCHESTRATION_KIND_RANGE = ["thread-orchestration.", "thread-orchestration/"] as const;
-const THREAD_ORCHESTRATION_BATCH_KIND_RANGE = [
-  "thread-orchestration.batch.",
-  "thread-orchestration.batch/",
-] as const;
 const ProjectionProjectDbRowSchema = ProjectionProject.mapFields(
   Struct.assign({
     defaultModelSelection: Schema.NullOr(Schema.fromJsonString(ModelSelection)),
@@ -921,29 +917,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           created_at AS "createdAt"
         FROM projection_thread_activities
         WHERE kind = 'thread-orchestration.relationship'
-        ORDER BY created_at ASC, activity_id ASC
-      `,
-  });
-
-  const listThreadOrchestrationBatchActivityRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionThreadActivityDbRowSchema,
-    execute: () =>
-      sql`
-        SELECT
-          activity_id AS "activityId",
-          thread_id AS "threadId",
-          turn_id AS "turnId",
-          tone,
-          kind,
-          summary,
-          payload_json AS "payload",
-          activity_revision AS "activityRevision",
-          sequence,
-          created_at AS "createdAt"
-        FROM projection_thread_activities
-        WHERE kind >= ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[0]}
-          AND kind < ${THREAD_ORCHESTRATION_BATCH_KIND_RANGE[1]}
         ORDER BY created_at ASC, activity_id ASC
       `,
   });
@@ -3640,19 +3613,6 @@ pending_approval_requests AS (
         Effect.map((rows) => rows.map(mapProjectionActivityRow)),
       );
 
-  const listThreadOrchestrationBatchActivities: NonNullable<
-    ProjectionSnapshotQueryShape["listThreadOrchestrationBatchActivities"]
-  > = () =>
-    listThreadOrchestrationBatchActivityRows(undefined).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionSnapshotQuery.listThreadOrchestrationBatchActivities:query",
-          "ProjectionSnapshotQuery.listThreadOrchestrationBatchActivities:decodeRows",
-        ),
-      ),
-      Effect.map((rows) => rows.map(mapProjectionActivityRow)),
-    );
-
   const getThreadCoordinationShell: NonNullable<
     ProjectionSnapshotQueryShape["getThreadCoordinationShell"]
   > = () =>
@@ -4220,7 +4180,6 @@ pending_approval_requests AS (
     getThreadShellById,
     getThreadResultContextById,
     listThreadRelationshipActivities,
-    listThreadOrchestrationBatchActivities,
     getThreadCoordinationShell,
     getThreadRuntimeContext,
     getTurnStartMessage,
