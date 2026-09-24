@@ -11,7 +11,6 @@ import {
   getAgentAwarenessSnapshot,
   registerAgentAwarenessDevice,
   registerAgentAwarenessLiveActivity,
-  unregisterAgentAwarenessDevice,
 } from "../../state/agent-awareness";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { useSavedRemoteConnections } from "../../state/use-remote-environment-registry";
@@ -31,10 +30,6 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
     return ids.sort();
   }, [savedConnectionsById]);
   const registerDevice = useAtomCommand(registerAgentAwarenessDevice, {
-    reportFailure: false,
-    reportDefect: false,
-  });
-  const unregisterDevice = useAtomCommand(unregisterAgentAwarenessDevice, {
     reportFailure: false,
     reportDefect: false,
   });
@@ -69,15 +64,6 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
         runFirstConfiguredRegistration(environmentIds, (environmentId) =>
           registerDevice({ environmentId, input }),
         ),
-      unregisterDevice: async (deviceId: string) => {
-        const results = await Promise.all(
-          environmentIds.map((environmentId) =>
-            unregisterDevice({ environmentId, input: { deviceId } }),
-          ),
-        );
-        const failure = results.find((result) => result._tag === "Failure");
-        if (failure) throw commandFailure(failure);
-      },
       registerLiveActivity: (input: AgentAwarenessLiveActivityRegistrationInput) =>
         runFirstConfiguredRegistration(environmentIds, (environmentId) =>
           registerLiveActivity({ environmentId, input }),
@@ -91,7 +77,7 @@ export function AccountlessAgentAwarenessProvider(props: { readonly children: Re
     return () => {
       setAgentAwarenessEnvironmentTransport(null);
     };
-  }, [environmentIds, getSnapshot, registerDevice, registerLiveActivity, unregisterDevice]);
+  }, [environmentIds, getSnapshot, registerDevice, registerLiveActivity]);
 
   return props.children;
 }

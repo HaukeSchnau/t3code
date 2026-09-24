@@ -15,6 +15,7 @@ import {
   mergeAgentAwarenessRegistrationPreferences,
   registerLiveActivityPushToken,
   setAgentAwarenessEnvironmentTransport,
+  unregisterAgentAwarenessDeviceFromEnvironment,
   updateAgentAwarenessRegistrationPreferences,
 } from "./remoteRegistration";
 import {
@@ -127,7 +128,6 @@ function transport(
     registerDevice: vi.fn(() =>
       Promise.resolve({ accepted: true as const, deliveryConfigured: true }),
     ),
-    unregisterDevice: vi.fn(() => Promise.resolve()),
     registerLiveActivity: vi.fn(() =>
       Promise.resolve({ accepted: true as const, deliveryConfigured: true }),
     ),
@@ -301,5 +301,30 @@ describe("accountless agent awareness registration", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(activityMocks.start).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("removing a paired environment", () => {
+  it("asks that environment to forget this device", async () => {
+    const unregister = vi.fn(() => Promise.resolve());
+
+    await unregisterAgentAwarenessDeviceFromEnvironment(unregister);
+
+    expect(unregister).toHaveBeenCalledWith("device-1");
+  });
+
+  it("does not block removal when the environment rejects or never answers", async () => {
+    await expect(
+      unregisterAgentAwarenessDeviceFromEnvironment(() => Promise.reject(new Error("offline"))),
+    ).resolves.toBeUndefined();
+
+    vi.useFakeTimers();
+    try {
+      const removal = unregisterAgentAwarenessDeviceFromEnvironment(() => new Promise(() => {}));
+      await vi.advanceTimersByTimeAsync(5_000);
+      await expect(removal).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
