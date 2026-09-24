@@ -1,8 +1,7 @@
 # CLI thread orchestration
 
-The per-thread `t3-code` MCP server does not register the Desktop-style
-orchestration toolkit. Provider sessions also omit the `threads` capability.
-The same operations are available through the running server and the
+The per-thread `t3-code` MCP server has no thread orchestration tools. The
+Desktop-style operations are available through the running server and the
 `t3 thread` CLI group:
 
 - `list_projects` becomes `t3 thread projects`.
@@ -17,8 +16,7 @@ The same operations are available through the running server and the
 - `set_thread_title` becomes `t3 thread rename`.
 
 Do not expose individual MCP tools from this list. A future MCP rollout should
-register the toolkit as one unit and restore the `threads` credential
-capability in the same change.
+wrap the whole service as one toolkit behind a dedicated credential capability.
 
 The implementation maps the Codex Desktop App operations to T3 Code's
 event-sourced thread engine, project snapshot query, and managed thread
@@ -61,10 +59,6 @@ recursive, nested containers remain independent, and a selected hidden descendan
 row that reopens its precise container path. Search and the global Snoozed and Settled shelves stay
 flat. The shared projection and its surface contract are documented in
 `docs/internals/thread-orchestration-sidebar.md`.
-
-The dormant MCP toolkit's boundary is the issued per-thread credential, not the
-project graph. A credential with the `threads` capability can list projects and
-threads, then target any known thread id.
 
 Codex-backed `t3 thread fork` calls follow the official Codex fork semantics:
 T3 Code asks Codex App Server to run `thread/fork`, imports the returned copied
