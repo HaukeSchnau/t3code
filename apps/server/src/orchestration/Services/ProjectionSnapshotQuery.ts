@@ -302,12 +302,6 @@ export interface ProjectionSnapshotQueryShape {
     ProjectionRepositoryError
   >;
 
-  /** Read persisted batch lifecycle activities without hydrating thread transcripts. */
-  readonly listThreadOrchestrationBatchActivities?: () => Effect.Effect<
-    ReadonlyArray<OrchestrationThreadActivity>,
-    ProjectionRepositoryError
-  >;
-
   /** Read the compact relationship, effort, and wait model used by shell clients. */
   readonly getThreadCoordinationShell?: () => Effect.Effect<
     OrchestrationCoordinationShell,

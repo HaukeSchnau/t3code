@@ -17,7 +17,7 @@ t3 thread wait create --members <thread-id> --mode all --json
 Create or fork the workers, register one durable wait covering them, then let the coordinator turn
 end. The server wakes the coordinator when the workers settle or need attention. Use `send` for
 direct coordination between threads. Use `watch create` for external commands and WebSocket events,
-not for thread completion. Use `result`, `batch read`, or `wait read` for a one-time status check.
+not for thread completion. Use `result` or `wait read` for a one-time status check.
 
 When one agent delegates to another, its prompt should keep the user's words separate from the
 coordinator's interpretation:
@@ -64,13 +64,6 @@ t3 thread watch read <watch-id> --json
 t3 thread watch list --include-closed --json
 t3 thread watch cancel <watch-id> --json
 t3 thread stop <thread-id> --json
-t3 thread batch create "Review the parser" \
-  --worker 'codex=codexAgent/gpt-5.6-sol?effort:high' \
-  --worker 'claude=claudeAgent/claude-opus-5?effort:high' \
-  --worktree --timeout-ms 1800000 --json
-t3 thread batch read <batch-id> --json
-t3 thread batch cancel <batch-id> --json
-t3 thread batch cleanup <batch-id> --json
 t3 thread create "Review the parser" --worktree --json
 t3 thread fork <source-thread-id> --effort <effort-id> --label prototype --worktree --json
 t3 thread send <thread-id> "Please run the focused tests" --json
@@ -94,7 +87,7 @@ worktree name. An explicit title remains authoritative. If automatic naming is u
 worktree receives a short `task-…` name rather than a truncated copy of the prompt.
 
 Model discovery lists current models by default. Pass `--include-legacy` to inspect models that
-the provider manifest marks as legacy. Thread creation, batch creation, and model-changing sends
+the provider manifest marks as legacy. Thread creation and model-changing sends
 reject legacy selections, including a model inherited from the calling thread. Use
 `--allow-legacy-model` only for an intentional compatibility or model-evaluation run. Existing
 threads can continue using their selected model without that flag.
@@ -155,39 +148,17 @@ FIFO order behind active work and automatically start the next turn when the thr
 Work panel lists open watches and their observed event counts. Use `watch cancel` as the explicit
 way to stop one without archiving the thread.
 
-## Durable batches
-
-`t3 thread batch create` remains convenience syntax for launching one or more workers with the same
-prompt. Each `--worker` uses
-`label=provider-instance/model?option:value`; repeat the flag to compare models,
-providers, or reasoning settings. The server assigns an opaque batch id, stores
-the exact membership on the coordinator thread, and keeps monitoring after the
-CLI command or coordinator turn exits.
-
-The barrier settles when every worker completes, fails, or is interrupted. A
-worker blocked on approval or user input keeps the barrier open and queues an
-attention message on the coordinator; resolving the request lets the same
-batch continue. A deadline settles the barrier and interrupts live local
-workers. Once settled, the server queues one result message on the coordinator
-thread so it can compare the results without holding a tool call open. Barrier
-state is reconstructed from durable activities after a server restart.
+## Worker outcomes
 
 Worker summaries expose normalized outcomes (`queued`, `running`, `completed`,
 `failed`, `interrupted`, `blocked-approval`, or `blocked-input`) alongside the
-provider's raw status and latest assistant response. Existing batches also appear in the UI through
-a compatibility effort and wait; their persisted batch semantics do not change.
+provider's raw status and latest assistant response.
 
-Cancellation and workspace cleanup are intentionally separate. `cancel`
-interrupts live local workers but preserves their partial work. `cleanup`
-deletes managed local workspaces only after the batch is terminal. A worktree
-isolates working state; it is not a security boundary and does not prevent a
-full-access worker from reading sibling paths. Sandboxed blind evaluations need
-a container, microVM, or another restricted runtime.
+A worktree isolates working state; it is not a security boundary and does not
+prevent a full-access worker from reading sibling paths. Sandboxed blind
+evaluations need a container, microVM, or another restricted runtime.
 
-Batch membership and graph lineage support workers on registered remote hosts.
-Cross-host cancel and cleanup currently fail explicitly before changing any
-member; they do not silently report success while remote workers keep running.
-
+Graph lineage supports workers on registered remote hosts.
 Use `--environment <environment-id>` with the id returned by
 `t3 thread projects` to target a registered remote host. Register hosts with
 `t3 remote register`. Remote thread creation also needs
