@@ -52,8 +52,6 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
-import { EnergyDiagnosticsCaptureRequestConsumer } from "../diagnostics/EnergyDiagnosticsCaptureRequestConsumer";
-import { EnergyDiagnosticsProfiler } from "../diagnostics/EnergyDiagnosticsProfiler";
 import {
   clearOfflineAuthProof,
   offlineAuthProofExpiresAtEpochMs,
@@ -180,13 +178,11 @@ function RootRouteView() {
   }
 
   const appShell = (
-    <EnergyDiagnosticsProfiler id="app-shell">
-      <CommandPalette>
-        <AppSidebarLayout>
-          <Outlet />
-        </AppSidebarLayout>
-      </CommandPalette>
-    </EnergyDiagnosticsProfiler>
+    <CommandPalette>
+      <AppSidebarLayout>
+        <Outlet />
+      </AppSidebarLayout>
+    </CommandPalette>
   );
 
   return (
@@ -208,7 +204,6 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {cachedAuthentication ? <OfflineAuthenticationRevalidator /> : null}
-        {primaryEnvironmentAuthenticated ? <EnergyDiagnosticsCaptureRequestConsumer /> : null}
         {primaryEnvironmentAuthenticated ? (
           <EventRouter skipInitialBootstrapNavigation={false} />
         ) : null}

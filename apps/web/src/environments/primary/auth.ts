@@ -7,11 +7,7 @@ import type {
   AuthSessionId,
   AuthSessionState,
 } from "@t3tools/contracts";
-import {
-  AuthDiagnosticsCaptureScope,
-  EnvironmentHttpCommonError,
-  PRIMARY_LOCAL_ENVIRONMENT_ID,
-} from "@t3tools/contracts";
+import { EnvironmentHttpCommonError, PRIMARY_LOCAL_ENVIRONMENT_ID } from "@t3tools/contracts";
 import type { EnvironmentHttpCommonError as EnvironmentHttpCommonErrorType } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -326,17 +322,12 @@ async function exchangeBootstrapCredential(credential: string): Promise<AuthBrow
   });
 }
 
-async function waitForAuthenticatedSessionAfterBootstrap(input?: {
-  readonly requiredScopes?: ReadonlyArray<AuthEnvironmentScope>;
-}): Promise<AuthSessionState> {
+async function waitForAuthenticatedSessionAfterBootstrap(): Promise<AuthSessionState> {
   const startedAt = Date.now();
 
   while (true) {
     const session = await fetchSessionState();
-    if (
-      session.authenticated &&
-      (input?.requiredScopes?.every((scope) => session.scopes?.includes(scope) === true) ?? true)
-    ) {
+    if (session.authenticated) {
       return session;
     }
 
@@ -415,12 +406,7 @@ async function bootstrapServerAuth(urlCredential: string | null): Promise<Server
   if (!currentSession.authenticated) {
     clearOfflineAuthProof();
   }
-  const requiresDesktopSessionUpgrade =
-    urlCredential === null &&
-    currentSession.authenticated &&
-    bootstrapCredential !== null &&
-    currentSession.scopes?.includes(AuthDiagnosticsCaptureScope) !== true;
-  if (currentSession.authenticated && !urlCredential && !requiresDesktopSessionUpgrade) {
+  if (currentSession.authenticated && !urlCredential) {
     persistAuthenticatedProof(currentSession);
     return { status: "authenticated" };
   }
@@ -434,9 +420,7 @@ async function bootstrapServerAuth(urlCredential: string | null): Promise<Server
 
   try {
     await exchangeBootstrapCredential(bootstrapCredential);
-    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap(
-      urlCredential === null ? { requiredScopes: [AuthDiagnosticsCaptureScope] } : undefined,
-    );
+    const authenticatedSession = await waitForAuthenticatedSessionAfterBootstrap();
     persistAuthenticatedProof(authenticatedSession);
     return { status: "authenticated" };
   } catch (error) {

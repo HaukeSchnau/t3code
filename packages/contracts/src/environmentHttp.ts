@@ -32,11 +32,7 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import {
-  EnergyDiagnosticsCaptureRequestInput,
-  EnergyDiagnosticsCaptureResult,
-  WorkloadDiagnosticsSnapshot,
-} from "./diagnostics.ts";
+import { WorkloadDiagnosticsSnapshot } from "./diagnostics.ts";
 import {
   ClientOrchestrationCommand,
   DispatchResult,
@@ -643,14 +639,6 @@ export class EnvironmentServerHttpApi extends HttpApiGroup.make("server")
     HttpApiEndpoint.get("workloadDiagnostics", "/api/diagnostics/workload", {
       headers: OptionalBearerHeaders,
       success: WorkloadDiagnosticsSnapshot,
-      error: EnvironmentScopedOperationErrors,
-    }).middleware(EnvironmentAuthenticatedAuth),
-  )
-  .add(
-    HttpApiEndpoint.post("requestEnergyCapture", "/api/diagnostics/energy-capture", {
-      headers: OptionalBearerHeaders,
-      payload: EnergyDiagnosticsCaptureRequestInput,
-      success: EnergyDiagnosticsCaptureResult,
       error: EnvironmentScopedOperationErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
