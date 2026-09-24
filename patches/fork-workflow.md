@@ -36,9 +36,11 @@ merge conflicts easier to reason about.
 - For large upstream merge conflicts, delegate investigation/resolution to a subagent and then
   review the result before committing.
 - Run required checks before committing sync merges.
-- Preserve the fork's applied migration IDs and names. Append upstream migrations to the existing
-  registry instead of replacing it with upstream's numbering. Upstream migrations 48 and 49 run as
-  fork migrations 69 and 70; the source filenames remain upstream-compatible.
+- Preserve the fork's applied migration IDs and names. The registry in
+  `apps/server/src/persistence/Migrations.ts` is authoritative. Append each new upstream migration at
+  the next free fork ID instead of adopting upstream's numbering. Every upstream migration from 033
+  onward therefore runs under a different ID (for example, upstream 048 and 049 run as 69 and 70),
+  and some source filenames share a numeric prefix with a fork migration.
 - Push completed fork work to a feature bookmark with `jj-push <bookmark>` and open a pull request
   targeting `main`, including upstream sync merges. Do not push directly to `main`.
 - Use Jujutsu for VCS operations unless explicitly instructed otherwise.
