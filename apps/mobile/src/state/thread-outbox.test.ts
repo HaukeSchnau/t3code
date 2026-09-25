@@ -239,7 +239,7 @@ describe("thread outbox", () => {
         storage: harness.storage,
       });
       await restarted.load();
-      expect(await harness.storage.load()).toEqual([]);
+      expect(await harness.storage.load()).toEqual({ messages: [], errors: [] });
       expect((await harness.storage.loadCommandOutbox!()).entries).toEqual([]);
       expect(restartedRegistry.get(restarted.queuedMessagesByThreadKeyAtom)).toEqual({});
       restartedRegistry.dispose();
@@ -299,7 +299,7 @@ describe("thread outbox", () => {
     restartedRegistry.dispose();
   });
   it.each(["read", "json", "schema"] as const)(
-    "does not load a partial outbox after a record %s failure",
+    "loads the readable records and reports a record %s failure",
     async (failure) => {
       const harness = makeMemoryOutboxFileSystem();
       const first = queuedMessage({
@@ -320,15 +320,68 @@ describe("thread outbox", () => {
             : JSON.stringify({ ...second, schemaVersion: 999 }),
       );
 
-      await expect(harness.storage.load()).rejects.toMatchObject({
-        operation: "read-message",
-        fileName: "message-2.json",
-      });
+      const partial = await harness.storage.load();
+      if (!("messages" in partial)) throw new Error("Expected a load result");
+      expect(partial.messages).toEqual([first]);
+      expect(partial.errors).toMatchObject([
+        { operation: "read-message", fileName: "message-2.json" },
+      ]);
 
       harness.contents.set("message-2.json", JSON.stringify(encodeQueuedThreadMessage(second)));
-      await expect(harness.storage.load()).resolves.toEqual([first, second]);
+      await expect(harness.storage.load()).resolves.toEqual({
+        messages: [first, second],
+        errors: [],
+      });
     },
   );
+
+  it("sends readable messages while keeping an unreadable record's intent", async () => {
+    const harness = makeMemoryOutboxFileSystem();
+    const readable = queuedMessage({
+      threadId: "thread-1",
+      messageId: "message-1",
+      createdAt: "2026-06-08T10:00:01.000Z",
+    });
+    const unreadable = queuedMessage({
+      threadId: "thread-2",
+      messageId: "message-2",
+      createdAt: "2026-06-08T10:00:02.000Z",
+    });
+    const firstRegistry = AtomRegistry.make();
+    const first = createThreadOutboxManager({ registry: firstRegistry, storage: harness.storage });
+    await first.enqueue(readable);
+    await first.enqueue(unreadable);
+    firstRegistry.dispose();
+    const unreadableRecord = harness.contents.get("message-2.json")!;
+    harness.contents.set("message-2.json", "{");
+
+    const registry = AtomRegistry.make();
+    const manager = createThreadOutboxManager({
+      registry,
+      storage: harness.storage,
+      warn: () => undefined,
+    });
+    const queuedIds = () =>
+      Object.values(registry.get(manager.queuedMessagesByThreadKeyAtom))
+        .flat()
+        .map((message) => message.messageId);
+
+    expect(await manager.load()).toBe(false);
+    expect(queuedIds()).toEqual([readable.messageId]);
+    expect((await manager.ready(unreadable.createdAt)).map((message) => message.messageId)).toEqual(
+      [readable.messageId],
+    );
+    expect(
+      (await harness.storage.loadCommandOutbox!()).entries.map(
+        (entry) => entry.plan.command.commandId,
+      ),
+    ).toEqual([readable.commandId, unreadable.commandId]);
+
+    harness.contents.set("message-2.json", unreadableRecord);
+    expect(await manager.load()).toBe(true);
+    expect(queuedIds()).toEqual([readable.messageId, unreadable.messageId]);
+    registry.dispose();
+  });
 
   it("preserves queued messages when environment cleanup cannot read the outbox", async () => {
     const registry = AtomRegistry.make();
