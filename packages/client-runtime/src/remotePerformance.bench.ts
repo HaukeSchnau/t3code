@@ -7,6 +7,7 @@ import {
   ThreadId,
   type OrchestrationEvent,
   type OrchestrationThread,
+  type OrchestrationThreadActivity,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -163,4 +164,39 @@ describe("remote message replay", () => {
       { warmupTime: 1_000, time: 1_500 },
     );
   }
+});
+
+describe("remote activity replay", () => {
+  const activity = (index: number): OrchestrationThreadActivity => ({
+    id: EventId.make(`activity-${index}`),
+    tone: "tool",
+    kind: "tool.completed",
+    summary: "Ran a command",
+    payload: {},
+    turnId: null,
+    sequence: index,
+    createdAt: timestamp,
+  });
+  const loaded = {
+    ...thread,
+    activities: Array.from({ length: 2_000 }, (_, index) => activity(index)),
+  };
+  const events = Array.from({ length: 200 }, (_, index): OrchestrationEvent => ({
+    ...delta,
+    eventId: EventId.make(`activity-event-${index}`),
+    sequence: 3 + index,
+    type: "thread.activity-appended",
+    payload: { threadId: thread.id, activity: activity(2_000 + index) },
+  }));
+  bench(
+    "append 200 activities to 2,000 loaded activities",
+    () => {
+      let current: OrchestrationThread = loaded;
+      for (const event of events) {
+        const result = applyThreadDetailEvent(current, event);
+        if (result.kind === "updated") current = result.thread;
+      }
+    },
+    { warmupTime: 1_000, time: 1_500 },
+  );
 });
