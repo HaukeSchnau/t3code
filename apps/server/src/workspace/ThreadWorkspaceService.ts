@@ -1419,14 +1419,27 @@ export const make = Effect.gen(function* () {
   ) {
     const root = primaryRoot(input);
     let baseRevision = root.baseRevision ?? "HEAD";
-    if (root.startFromOrigin && root.baseRevision) {
+    // "Start from origin" is a stored default. Repos without an origin remote,
+    // or whose base branch exists only locally, keep the local base.
+    if (
+      root.startFromOrigin &&
+      root.baseRevision &&
+      (yield* gitWorkflow.remoteExists({ cwd: root.sourcePath, remoteName: "origin" }))
+    ) {
       yield* gitWorkflow.fetchRemote({ cwd: root.sourcePath, remoteName: "origin" });
-      const resolved = yield* gitWorkflow.resolveRemoteTrackingCommit({
+      const remoteBaseExists = yield* gitWorkflow.remoteBranchExists({
         cwd: root.sourcePath,
+        remoteName: "origin",
         refName: root.baseRevision,
-        fallbackRemoteName: "origin",
       });
-      baseRevision = resolved.commitSha;
+      if (remoteBaseExists) {
+        const resolved = yield* gitWorkflow.resolveRemoteTrackingCommit({
+          cwd: root.sourcePath,
+          refName: root.baseRevision,
+          fallbackRemoteName: "origin",
+        });
+        baseRevision = resolved.commitSha;
+      }
     }
 
     const repoName = slug(NodePath.basename(root.sourcePath));
@@ -1870,27 +1883,46 @@ export const make = Effect.gen(function* () {
       let revision = sourceUsesJj
         ? (resolveJjRevision(root.sourcePath, root.baseRevision) ?? "@")
         : (root.baseRevision ?? "HEAD");
-      if (!sourceUsesJj && root.startFromOrigin && root.baseRevision) {
-        const fetched = yield* processRunner
-          .run({
-            command: "git",
-            args: ["-C", root.sourcePath, "fetch", "origin", root.baseRevision],
-            cwd: "/",
-            timeout: "3 minutes",
-            maxOutputBytes: 16_384,
-          })
-          .pipe(
-            Effect.mapError(
-              mapWorkspaceError("ThreadWorkspaceService.prepareIsolatedWorkspace.fetch"),
-            ),
-          );
-        if (fetched.code !== 0) {
-          return yield* new ThreadWorkspaceError({
-            operation: "ThreadWorkspaceService.prepareIsolatedWorkspace.fetch",
-            detail: fetched.stderr.trim() || "Could not fetch the requested base revision.",
-          });
+      // Same fallback as git workspaces: without an origin remote, or when
+      // origin lacks the base branch, the local base revision is used.
+      if (
+        !sourceUsesJj &&
+        root.startFromOrigin &&
+        root.baseRevision &&
+        (yield* gitWorkflow.remoteExists({ cwd: root.sourcePath, remoteName: "origin" }))
+      ) {
+        const runSourceGit = (args: ReadonlyArray<string>) =>
+          processRunner
+            .run({
+              command: "git",
+              args: ["-C", root.sourcePath, ...args],
+              cwd: "/",
+              timeout: "3 minutes",
+              maxOutputBytes: 16_384,
+            })
+            .pipe(
+              Effect.mapError(
+                mapWorkspaceError("ThreadWorkspaceService.prepareIsolatedWorkspace.fetch"),
+              ),
+            );
+        const fetched = yield* runSourceGit(["fetch", "origin", root.baseRevision]);
+        if (fetched.code === 0) {
+          revision = "FETCH_HEAD";
+        } else {
+          // `ls-remote --exit-code` exits 2 only when origin has no such ref.
+          const listed = yield* runSourceGit([
+            "ls-remote",
+            "--exit-code",
+            "origin",
+            root.baseRevision,
+          ]);
+          if (listed.code !== 2) {
+            return yield* new ThreadWorkspaceError({
+              operation: "ThreadWorkspaceService.prepareIsolatedWorkspace.fetch",
+              detail: fetched.stderr.trim() || "Could not fetch the requested base revision.",
+            });
+          }
         }
-        revision = "FETCH_HEAD";
       }
       return yield* withWorkspaceCheckout(
         {
