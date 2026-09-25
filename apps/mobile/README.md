@@ -43,6 +43,23 @@ Start Metro for an already verified dev client:
 vp run dev:client
 ```
 
+Metro keeps its transform cache between ordinary starts. If the cache itself is causing stale or
+invalid output, clear it for one development-client start:
+
+```bash
+vp run dev:client:reset
+```
+
+Run that reset once after installing or changing the Uniwind dependency patch. Cached transforms
+can otherwise reference its previous pnpm package path. Ordinary Metro starts still keep the cache.
+
+Component edits use Fast Refresh. Connection-runtime edits replace the active Effect layer through
+a stable atom runtime, preserving navigation and existing atom subscribers. Replaced registries
+and managed runtimes dispose their resources; the app does not force a JavaScript reload. The Uniwind patch
+skips global style invalidation when generated styles and themes are unchanged, while real style
+changes still refresh. See [mobile development lifecycle](../../docs/internals/mobile-development.md)
+for the lifetime boundaries.
+
 From the repo root, the `Justfile` has wrappers for the physical iOS dev loop:
 
 ```bash
