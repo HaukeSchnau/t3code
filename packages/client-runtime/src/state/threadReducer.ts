@@ -81,6 +81,14 @@ function compareActivities(left: OrderedActivity, right: OrderedActivity): numbe
   return createdAt !== 0 ? createdAt : left.id.localeCompare(right.id);
 }
 
+// Id membership for activity arrays this reducer produced, so a streamed
+// append with an unseen id skips the full-history id scan. Snapshot and
+// hydration arrays start unindexed and gain an index on their first append.
+const activityIdIndex = new WeakMap<
+  ReadonlyArray<OrchestrationThreadActivity>,
+  Set<OrchestrationThreadActivity["id"]>
+>();
+
 function activityProducesWorkLogRow(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind === "tool.started" || activity.kind === "task.started") return false;
   if (activity.kind === "context-window.updated") return false;
@@ -271,6 +279,56 @@ function upsertOrderedActivity(
   const inserted = [...activities];
   insertOrderedActivity(inserted, activity);
   return inserted;
+}
+
+/**
+ * Applies one `thread.activity-appended` activity to a sorted activity list.
+ * A context-window update first drops the snapshots it supersedes. The common
+ * streaming case, an unseen id that sorts last, is a single copy on an indexed
+ * array; everything else goes through `upsertOrderedActivity`. The id index
+ * moves to the returned array, so it must stay exact: a stale id only costs the
+ * fast path, but a missing one would duplicate a re-delivered activity.
+ */
+function applyAppendedActivity(
+  current: ReadonlyArray<OrchestrationThreadActivity>,
+  activity: OrchestrationThreadActivity,
+): ReadonlyArray<OrchestrationThreadActivity> {
+  const ids = activityIdIndex.get(current);
+  activityIdIndex.delete(current);
+
+  let base = current;
+  if (activity.kind === "context-window.updated") {
+    const supersedesContextWindow = isResolvableContextWindowActivity(activity);
+    base = current.filter((entry) => {
+      const superseded =
+        (activity.turnId === null &&
+          entry.turnId === null &&
+          entry.kind === "context-window.updated") ||
+        (supersedesContextWindow &&
+          entry.turnId === activity.turnId &&
+          isResolvableContextWindowActivity(entry));
+      if (superseded) ids?.delete(entry.id);
+      return !superseded;
+    });
+  }
+
+  const last = base.at(-1);
+  if (
+    ids !== undefined &&
+    !ids.has(activity.id) &&
+    (last === undefined || compareActivities(last, activity) <= 0)
+  ) {
+    const activities = [...base, activity];
+    ids.add(activity.id);
+    activityIdIndex.set(activities, ids);
+    return activities;
+  }
+
+  const activities = upsertOrderedActivity(base, activity);
+  const nextIds = ids ?? new Set(activities.map((entry) => entry.id));
+  nextIds.add(activity.id);
+  activityIdIndex.set(activities, nextIds);
+  return activities;
 }
 
 /**
@@ -1054,20 +1112,7 @@ export function applyThreadDetailEvent(
           turnId: activity.turnId!,
         };
       }
-      const supersedesContextWindow = isResolvableContextWindowActivity(activity);
-      const activityBase = thread.activities.filter(
-        (entry) =>
-          !(
-            (activity.turnId === null &&
-              activity.kind === "context-window.updated" &&
-              entry.turnId === null &&
-              entry.kind === "context-window.updated") ||
-            (supersedesContextWindow &&
-              entry.turnId === activity.turnId &&
-              isResolvableContextWindowActivity(entry))
-          ),
-      );
-      const activities = upsertOrderedActivity(activityBase, activity);
+      const activities = applyAppendedActivity(thread.activities, activity);
 
       return {
         kind: "updated",
