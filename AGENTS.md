@@ -137,6 +137,8 @@ Do not include an upstream merge in unrelated feature or bug-fix work.
 
 When asked to sync upstream, fetch both remotes, reconcile the local fork with `origin/main`, then merge `upstream/main`. Resolve conflicts according to the fork requirements in `patches/*.md`. If upstream meets a documented requirement, use its implementation and remove the obsolete local code and patch documentation. Ask when a resolution requires dropping or changing a fork requirement.
 
+Resolve each conflict hunk by hunk. Never settle a conflicted file by keeping one side whole (`git checkout --ours`, `jj restore --from`, or copying the fork's version over it). Git has already merged that file's non-conflicting upstream changes, and once the merge is committed git treats their loss as a fork decision and never offers them again. Before committing a sync, compare each conflicted file with the fork parent. If it is identical while upstream changed the file, restore upstream's changes or record the reason in the matching `patches/*.md`.
+
 Do not use `jj-pull` to synchronize this fork if it would rebase published fork history.
 
 Keep changes to upstream-owned code narrow. Document each fork-specific behavior in `patches/*.md`, including why it exists, the requirements upstream does not meet, and what would allow us to remove it. Update the existing document when that behavior changes.
