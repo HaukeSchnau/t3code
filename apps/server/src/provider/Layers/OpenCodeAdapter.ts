@@ -1648,6 +1648,8 @@ export function makeOpenCodeAdapter(
               promptAdmission.messageObserved = true;
               yield* Deferred.succeed(promptAdmission.messageReceipt, undefined);
               context.messageRoleById.set(promptAdmission.messageId, "user");
+              // User text never becomes assistant output; drop parts buffered before the role arrived.
+              context.textPartsByMessageId.delete(promptAdmission.messageId);
             }
           }
 
