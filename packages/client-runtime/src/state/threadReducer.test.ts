@@ -954,6 +954,113 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("streaming reference stability", () => {
+    const runningSession = {
+      threadId: ThreadId.make("thread-1"),
+      status: "running" as const,
+      providerName: "codex",
+      runtimeMode: "full-access" as const,
+      activeTurnId: TurnId.make("turn-1"),
+      lastError: null,
+      updatedAt: "2026-04-01T06:59:00.000Z",
+    };
+    const streamingThread: OrchestrationThread = {
+      ...baseThread,
+      session: runningSession,
+      latestTurn: {
+        turnId: TurnId.make("turn-1"),
+        state: "running",
+        requestedAt: "2026-04-01T06:59:00.000Z",
+        startedAt: "2026-04-01T06:59:00.000Z",
+        completedAt: null,
+        assistantMessageId: MessageId.make("msg-2"),
+      },
+      messages: [
+        {
+          id: MessageId.make("msg-2"),
+          role: "assistant",
+          text: "Hello",
+          turnId: TurnId.make("turn-1"),
+          streaming: true,
+          createdAt: "2026-04-01T06:00:00.000Z",
+          updatedAt: "2026-04-01T06:00:00.000Z",
+        },
+      ],
+      activities: [
+        {
+          id: EventId.make("activity-1"),
+          tone: "tool",
+          kind: "tool.completed",
+          summary: "Ran tests",
+          payload: {},
+          turnId: TurnId.make("turn-1"),
+          createdAt: "2026-04-01T06:30:00.000Z",
+        },
+      ],
+      historicalActivityGroups: [],
+      checkpoints: [
+        {
+          turnId: TurnId.make("turn-1"),
+          checkpointTurnCount: 1,
+          checkpointRef: CheckpointRef.make("ref-1"),
+          status: "ready",
+          files: [],
+          assistantMessageId: MessageId.make("msg-2"),
+          completedAt: "2026-04-01T06:00:30.000Z",
+        },
+      ],
+    };
+    const delta = (messageId: string) =>
+      ({
+        ...baseEventFields,
+        sequence: 9,
+        occurredAt: "2026-04-01T07:00:00.000Z",
+        aggregateKind: "thread",
+        aggregateId: ThreadId.make("thread-1"),
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.make("thread-1"),
+          messageId: MessageId.make(messageId),
+          role: "assistant",
+          text: ", world",
+          turnId: TurnId.make("turn-1"),
+          streaming: true,
+          createdAt: "2026-04-01T06:00:00.000Z",
+          updatedAt: "2026-04-01T07:00:00.000Z",
+        },
+      }) as const;
+
+    it.each(["full", "compact"] as const)(
+      "keeps turn, checkpoint and activity references across a %s-mode delta",
+      (mode) => {
+        const result = applyThreadDetailEvent(streamingThread, delta("msg-2"), mode);
+
+        expect(result.kind).toBe("updated");
+        if (result.kind === "updated") {
+          expect(result.thread.messages[0]?.text).toBe("Hello, world");
+          expect(result.thread.latestTurn).toBe(streamingThread.latestTurn);
+          expect(result.thread.checkpoints).toBe(streamingThread.checkpoints);
+          expect(result.thread.activities).toBe(streamingThread.activities);
+          expect(result.thread.historicalActivityGroups).toBe(
+            streamingThread.historicalActivityGroups,
+          );
+        }
+      },
+    );
+
+    it("replaces the turn and checkpoints when a new assistant message binds the turn", () => {
+      const result = applyThreadDetailEvent(streamingThread, delta("msg-3"));
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.latestTurn).not.toBe(streamingThread.latestTurn);
+        expect(result.thread.latestTurn?.assistantMessageId).toBe("msg-3");
+        expect(result.thread.checkpoints).not.toBe(streamingThread.checkpoints);
+        expect(result.thread.checkpoints[0]?.assistantMessageId).toBe("msg-3");
+      }
+    });
+  });
+
   describe("thread.session-set", () => {
     it("bulk-demotes many activities into one constant-size descriptor per turn", () => {
       const previousTurnId = TurnId.make("turn-previous");
