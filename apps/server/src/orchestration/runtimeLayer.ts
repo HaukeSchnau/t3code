@@ -9,12 +9,12 @@ import { OrchestrationProjectionSnapshotMaterializerLive } from "./Layers/Projec
 import * as ThreadBackgroundLiveness from "./ThreadBackgroundLiveness.ts";
 import * as ThreadPlanProgress from "./ThreadPlanProgress.ts";
 
-export const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
+const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
   OrchestrationEventStoreLive,
   OrchestrationCommandReceiptRepositoryLive,
 );
 
-export const OrchestrationProjectionPipelineLayerLive = OrchestrationProjectionPipelineLive.pipe(
+const OrchestrationProjectionPipelineLayerLive = OrchestrationProjectionPipelineLive.pipe(
   Layer.provide(OrchestrationEventStoreLive),
 );
 
@@ -34,7 +34,7 @@ const OrchestrationInfrastructureCoreLayerLive = Layer.mergeAll(
 
 // Shared in-memory registries are supplied once to readers in the core and
 // re-exported for runtime ingestion, guaranteeing both sides see one instance.
-export const OrchestrationInfrastructureLayerLive = Layer.merge(
+const OrchestrationInfrastructureLayerLive = Layer.merge(
   OrchestrationRuntimeStateLayerLive,
   OrchestrationInfrastructureCoreLayerLive.pipe(Layer.provide(OrchestrationRuntimeStateLayerLive)),
 );
