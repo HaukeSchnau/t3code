@@ -20,6 +20,7 @@ import {
   UserInputQuestion,
   type ProviderUserInputAnswers,
 } from "@t3tools/contracts";
+import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 import { projectComposerContextForProvider } from "@t3tools/shared/composerContextReferences";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
 import * as Cache from "effect/Cache";
@@ -1899,7 +1900,7 @@ const make = Effect.gen(function* () {
     const isFirstUserMessageTurn = !isContinuation && !hasOtherUserMessages;
     if (!isContinuation && message?.role === "user" && message.origin === undefined) {
       const generationInput = {
-        messageText: message.text,
+        messageText: assistantCitationsToPlainText(message.text),
         ...(message.attachments !== undefined ? { attachments: message.attachments } : {}),
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };

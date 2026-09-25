@@ -13,9 +13,11 @@ import {
   ProviderSetupError,
   type ProviderInteractionMode,
 } from "@t3tools/contracts";
+import { serializeAssistantCitation } from "@t3tools/shared/assistantCitations";
 import { createModelSelection } from "@t3tools/shared/model";
 import {
   ApprovalRequestId,
+  EnvironmentId,
   CheckpointRef,
   CommandId,
   ComposerContextId,
@@ -2796,6 +2798,18 @@ describe("ProviderCommandReactor", () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Fix reconnect spinner on resume";
+    const quoteText = "Retain the reconnect backoff.";
+    const citation = serializeAssistantCitation({
+      version: 1,
+      environmentId: EnvironmentId.make("source-environment"),
+      threadId: ThreadId.make("source-thread"),
+      messageId: asMessageId("source-message"),
+      text: quoteText,
+      start: 0,
+      end: quoteText.length,
+      prefix: "",
+      suffix: "",
+    });
     harness.generateThreadTitle.mockReturnValue(
       Effect.succeed({
         title: "Reconnect spinner resume bug",
@@ -2820,7 +2834,7 @@ describe("ProviderCommandReactor", () => {
         message: {
           messageId: asMessageId("user-message-title-formatted"),
           role: "user",
-          text: "[effort:high]\\n\\nFix reconnect spinner on resume",
+          text: `[effort:high]\\n\\nFix reconnect spinner on resume ${citation}`,
           attachments: [],
         },
         titleSeed: seededTitle,
@@ -2831,6 +2845,9 @@ describe("ProviderCommandReactor", () => {
     );
 
     await waitFor(() => harness.generateThreadTitle.mock.calls.length === 1);
+    expect(harness.generateThreadTitle.mock.calls[0]?.[0].message).toBe(
+      `[effort:high]\\n\\nFix reconnect spinner on resume ${quoteText}`,
+    );
     await waitFor(async () => {
       const readModel = await harness.readModel();
       return (
