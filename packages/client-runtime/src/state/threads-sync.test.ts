@@ -115,7 +115,14 @@ const ACTIVE_THREAD: OrchestrationThread = {
   },
 };
 
-type TestThreadInput = OrchestrationThreadStreamItem | Error;
+/** Makes the harness stream die instead of failing with a domain error. */
+class TestThreadDefect {
+  readonly error: Error;
+  constructor(error: Error) {
+    this.error = error;
+  }
+}
+type TestThreadInput = OrchestrationThreadStreamItem | Error | TestThreadDefect;
 
 function testSession(
   client: WsRpcProtocolClient,
@@ -183,12 +190,18 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
     Stream.fromQueue(queue).pipe(
       Stream.chunks,
       Stream.flatMap((chunk) => {
-        const errorIndex = chunk.findIndex((input) => input instanceof Error);
+        const errorIndex = chunk.findIndex(
+          (input) => input instanceof Error || input instanceof TestThreadDefect,
+        );
         if (errorIndex === -1) {
           return Stream.fromArray(chunk as ReadonlyArray<OrchestrationThreadStreamItem>);
         }
         const prefix = chunk.slice(0, errorIndex) as ReadonlyArray<OrchestrationThreadStreamItem>;
-        const failure = Stream.fail(chunk[errorIndex] as Error);
+        const terminal = chunk[errorIndex];
+        const failure =
+          terminal instanceof TestThreadDefect
+            ? Stream.die(terminal.error)
+            : Stream.fail(terminal as Error);
         return prefix.length === 0 ? failure : Stream.concat(Stream.fromArray(prefix), failure);
       }),
     );
@@ -1454,6 +1467,42 @@ describe("EnvironmentThreads", () => {
       expect(Option.isNone(recovered.error)).toBe(true);
       expect(yield* Ref.get(harness.subscriptionCount)).toBe(2);
       expect(yield* Ref.get(harness.retryCount)).toBe(0);
+    }),
+  );
+
+  it.effect("keeps a subscription defect visible across connection updates", () =>
+    Effect.gen(function* () {
+      const harness = yield* makeHarness({ cached: BASE_THREAD });
+      yield* Queue.offer(harness.inputs, snapshot(BASE_THREAD));
+      yield* Queue.offer(
+        harness.inputs,
+        new TestThreadDefect(new Error("SYNTHETIC_DEFECT_SHOULD_NOT_REACH_THREAD_UI")),
+      );
+
+      const failed = yield* awaitThreadState(harness.observed, (value) =>
+        Option.isSome(value.error),
+      );
+      expect(failed.error).toEqual(Option.some("Could not synchronize the thread."));
+      expect(failed.status).toBe("cached");
+      expect(Option.getOrThrow(failed.data)).toEqual(BASE_THREAD);
+
+      // A reconnecting supervisor does not restart a defective subscription.
+      for (const phase of ["connecting", "connected"] as const) {
+        yield* SubscriptionRef.set(harness.supervisorState, {
+          desired: true,
+          network: "online",
+          phase,
+          stage: phase === "connecting" ? "synchronizing" : null,
+          attempt: 1,
+          generation: 1,
+          lastFailure: null,
+          retryAt: null,
+        });
+        for (let index = 0; index < 10; index += 1) {
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Ref.get(harness.latest)).toEqual(failed);
+      }
     }),
   );
 
