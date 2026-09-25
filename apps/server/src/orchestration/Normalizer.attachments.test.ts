@@ -11,6 +11,7 @@ import {
   ApprovalRequestId,
   MessageId,
   type OrchestrationMessageContext,
+  type SnapShotSource,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -34,7 +35,12 @@ function turnStartCommand(input: {
   readonly threadId?: string;
   readonly attachments: ReadonlyArray<
     | { readonly id: string; readonly sizeBytes: number }
-    | { readonly dataUrl: string; readonly sizeBytes: number; readonly id?: string }
+    | {
+        readonly dataUrl: string;
+        readonly sizeBytes: number;
+        readonly id?: string;
+        readonly source?: SnapShotSource;
+      }
   >;
   readonly context?: OrchestrationMessageContext;
 }): ClientOrchestrationCommand {
@@ -187,6 +193,27 @@ describe("normalizeDispatchCommand attachments", () => {
       expect(
         NodeFS.readFileSync(NodePath.join(config.attachmentsDir, `${attachment.id}.png`)),
       ).toEqual(Buffer.from("pixels"));
+    }).pipe(Effect.provide(testLayer)),
+  );
+
+  it.effect("keeps the SnapShot source of an inline image", () =>
+    Effect.gen(function* () {
+      const source: SnapShotSource = {
+        kind: "snap-shot",
+        capturedAt: "2026-08-01T00:00:00.000Z",
+        appName: "Terminal",
+        windowTitle: "build output",
+      };
+      const normalized = yield* normalizeDispatchCommand(
+        turnStartCommand({
+          attachments: [{ dataUrl: "data:image/png;base64,cGl4ZWxz", sizeBytes: 6, source }],
+        }),
+      );
+      if (normalized.type !== "thread.turn.start") {
+        throw new Error("Expected a thread.turn.start command.");
+      }
+
+      expect(normalized.message.attachments[0]).toMatchObject({ type: "image", source });
     }).pipe(Effect.provide(testLayer)),
   );
 
