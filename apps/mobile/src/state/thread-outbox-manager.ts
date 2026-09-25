@@ -217,9 +217,11 @@ export function createThreadOutboxManager(options: ThreadOutboxManagerOptions) {
       // A lifecycle without presentation cannot be a legitimate accepted
       // intent: presentation is always written first. It is an obsolete entry
       // from an older fallback generation, so retire it before it can block a
-      // newer command on the same thread.
+      // newer command on the same thread. An unreadable record looks the same,
+      // so this waits until every record reads.
       const presentedIds = new Set(messages.map((message) => message.commandId));
-      for (const entry of await Effect.runPromise(service.entries)) {
+      const lifecycleEntries = hasReadErrors ? [] : await Effect.runPromise(service.entries);
+      for (const entry of lifecycleEntries) {
         const commandId = entry.plan.command.commandId;
         if (presentedIds.has(commandId)) continue;
         if (entry.state._tag === "Pending") {
