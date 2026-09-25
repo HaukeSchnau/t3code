@@ -1694,6 +1694,79 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
+    describe("streamed appends", () => {
+      const makeActivity = (
+        id: string,
+        sequence: number,
+        overrides: {
+          summary?: string;
+          kind?: string;
+          turnId?: TurnId | null;
+          payload?: unknown;
+        } = {},
+      ) => ({
+        id: EventId.make(id),
+        tone: "tool" as const,
+        kind: overrides.kind ?? "tool.completed",
+        summary: overrides.summary ?? id,
+        payload: overrides.payload ?? {},
+        turnId: overrides.turnId === undefined ? TurnId.make("turn-1") : overrides.turnId,
+        sequence,
+        createdAt: "2026-04-01T11:00:00.000Z",
+      });
+      const append = (
+        thread: OrchestrationThread,
+        sequence: number,
+        activity: ReturnType<typeof makeActivity>,
+      ): OrchestrationThread => {
+        const result = applyThreadDetailEvent(thread, {
+          ...baseEventFields,
+          sequence,
+          occurredAt: "2026-04-01T11:01:00.000Z",
+          aggregateKind: "thread",
+          aggregateId: ThreadId.make("thread-1"),
+          type: "thread.activity-appended",
+          payload: { threadId: ThreadId.make("thread-1"), activity },
+        });
+        if (result.kind !== "updated") throw new Error(`expected an update, got ${result.kind}`);
+        return result.thread;
+      };
+
+      it("replaces an activity re-delivered right after an in-order append", () => {
+        let thread: OrchestrationThread = { ...baseThread, activities: [makeActivity("a", 1)] };
+        thread = append(thread, 10, makeActivity("b", 2));
+        thread = append(thread, 11, makeActivity("c", 3));
+        thread = append(thread, 12, makeActivity("c", 4, { summary: "c (redelivered)" }));
+
+        expect(thread.activities.map((activity) => activity.id)).toEqual(["a", "b", "c"]);
+        expect(thread.activities.at(-1)?.summary).toBe("c (redelivered)");
+      });
+
+      it("keeps one row per id across context-window updates between appends", () => {
+        const context = (id: string, sequence: number, usedTokens: number) =>
+          makeActivity(id, sequence, {
+            kind: "context-window.updated",
+            turnId: null,
+            payload: { usedTokens },
+          });
+        let thread: OrchestrationThread = {
+          ...baseThread,
+          activities: [context("context-1", 1, 1)],
+        };
+        thread = append(thread, 10, makeActivity("tool-a", 2));
+        thread = append(thread, 11, context("context-2", 3, 2));
+        thread = append(thread, 12, makeActivity("tool-b", 4));
+        thread = append(thread, 13, makeActivity("tool-a", 5, { summary: "tool-a (redelivered)" }));
+
+        expect(thread.activities.map((activity) => activity.id)).toEqual([
+          "context-2",
+          "tool-b",
+          "tool-a",
+        ]);
+        expect(thread.activities.at(-1)?.summary).toBe("tool-a (redelivered)");
+      });
+    });
+
     it("refreshes an unknown inactive compact destination instead of guessing membership", () => {
       const historicalTurnId = TurnId.make("turn-history");
       const result = applyThreadDetailEvent(
