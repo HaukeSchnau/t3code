@@ -194,6 +194,30 @@ function shouldPersistThread(thread: OrchestrationThread): boolean {
   return status !== "starting" && status !== "running";
 }
 
+/** The last completed data/cursor pair, and whether the disk cache holds it. */
+interface CommittedThreadSnapshot {
+  readonly state: EnvironmentThreadState;
+  readonly sequence: number;
+  readonly persisted: boolean;
+}
+
+function matchesCommittedSnapshot(
+  committed: CommittedThreadSnapshot,
+  thread: OrchestrationThread | null,
+  sequence: number,
+  page: Pick<EnvironmentThreadPageState, "beforeCursor" | "hasMore"> | undefined,
+): boolean {
+  if (committed.sequence !== sequence || Option.getOrNull(committed.state.data) !== thread) {
+    return false;
+  }
+  const committedPage = Option.getOrUndefined(committed.state.page);
+  return committedPage === undefined
+    ? page === undefined
+    : page !== undefined &&
+        committedPage.beforeCursor === page.beforeCursor &&
+        committedPage.hasMore === page.hasMore;
+}
+
 export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make")(function* (
   threadId: ThreadIdType,
   activityDetailMode: OrchestrationThreadActivityDetailMode = "full",
@@ -239,6 +263,30 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       onSome: (snapshot) => snapshot.snapshotSequence,
     }),
   );
+  let committed: CommittedThreadSnapshot = {
+    state: yield* SubscriptionRef.get(state),
+    sequence: yield* SubscriptionRef.get(lastSequence),
+    persisted: Option.isSome(cached),
+  };
+  // Records the data/cursor pair after each completed mutation. Teardown saves
+  // this pair rather than the live refs: the cursor advances before its event
+  // reaches the data, and a canceled scope must not cache that gap.
+  const remember = Effect.gen(function* () {
+    const current = yield* SubscriptionRef.get(state);
+    const sequence = yield* SubscriptionRef.get(lastSequence);
+    committed = {
+      state: current,
+      sequence,
+      persisted:
+        committed.persisted &&
+        matchesCommittedSnapshot(
+          committed,
+          Option.getOrNull(current.data),
+          sequence,
+          Option.getOrUndefined(current.page),
+        ),
+    };
+  });
   // An exhausted authoritative refresh means the cached cursor cannot be
   // reduced safely. Keep rendering the cached data, but do not offer that
   // cursor again: replaying from it would deterministically hit the same
@@ -276,7 +324,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   const persist = Effect.fn("EnvironmentThreadState.persist")(function* (
     snapshot: OrchestrationThreadDetailSnapshot,
   ) {
+    const isCommitted = () =>
+      matchesCommittedSnapshot(
+        committed,
+        snapshot.thread,
+        snapshot.snapshotSequence,
+        snapshot.page,
+      );
+    // Leaving a thread nobody changed must not re-encode and rewrite it.
+    if (committed.persisted && isCommitted()) return;
     yield* cache.saveThread(environmentId, snapshot).pipe(
+      Effect.tap(() =>
+        Effect.sync(() => {
+          if (isCommitted()) committed = { ...committed, persisted: true };
+        }),
+      ),
       Effect.catch((error) =>
         Effect.logWarning("Could not persist the thread cache.").pipe(
           Effect.annotateLogs({
@@ -418,6 +480,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
       error: Option.none(),
       page: Option.none(),
     });
+    yield* remember;
     yield* cache.removeThread(environmentId, threadId).pipe(
       Effect.catch((error) =>
         Effect.logWarning("Could not remove the cached thread.").pipe(
@@ -653,7 +716,9 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     itemSession?: RpcSession,
     itemGeneration?: number,
   ) {
-    yield* applyLock.withPermits(1)(applyItemLocked(item, itemSession, itemGeneration));
+    yield* applyLock.withPermits(1)(
+      applyItemLocked(item, itemSession, itemGeneration).pipe(Effect.andThen(remember)),
+    );
   });
 
   const applyItems = Effect.fn("EnvironmentThreadState.applyItems")(function* (
@@ -676,6 +741,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ) {
           for (const item of items) {
             yield* applyItemLocked(item, itemSession, itemGeneration);
+            yield* remember;
           }
           return;
         }
@@ -695,6 +761,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             if (result.kind === "authoritative-refresh-required") {
               for (const pending of items) {
                 yield* applyItemLocked(pending, itemSession, itemGeneration);
+                yield* remember;
               }
               return;
             }
@@ -711,6 +778,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         }
         if (synchronized)
           yield* applyItemLocked({ kind: "synchronized" }, itemSession, itemGeneration);
+        yield* remember;
       }),
     );
   });
@@ -770,6 +838,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
         ...(snapshot.page === undefined ? {} : { page: { ...snapshot.page, snapshotSequence } }),
       });
     }
+    yield* remember;
   });
 
   const loadOlderTurns = Effect.fn("EnvironmentThreadState.loadOlderTurns")(function* () {
@@ -906,18 +975,23 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 : { ...current, status: "synchronizing" as const },
             );
 
-            let current = yield* SubscriptionRef.get(state);
-            if (!supportsPagination && Option.isSome(current.page)) {
-              yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-              yield* SubscriptionRef.update(state, (value) => ({
-                ...value,
-                data: Option.none(),
-                status: value.status === "deleted" ? value.status : ("empty" as const),
-                page: Option.none(),
-              }));
-              yield* SubscriptionRef.set(lastSequence, 0);
-              current = yield* SubscriptionRef.get(state);
+            if (!supportsPagination) {
+              yield* applyLock.withPermits(1)(
+                Effect.gen(function* () {
+                  if (Option.isNone((yield* SubscriptionRef.get(state)).page)) return;
+                  yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+                  yield* SubscriptionRef.update(state, (value) => ({
+                    ...value,
+                    data: Option.none(),
+                    status: value.status === "deleted" ? value.status : ("empty" as const),
+                    page: Option.none(),
+                  }));
+                  yield* SubscriptionRef.set(lastSequence, 0);
+                  yield* remember;
+                }),
+              );
             }
+            let current = yield* SubscriptionRef.get(state);
 
             if (Option.isNone(current.data) && current.status !== "deleted") {
               const prepared = yield* SubscriptionRef.get(supervisor.prepared).pipe(
@@ -942,11 +1016,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
                 supportsReasoningMessages,
               );
               if (outcome._tag === "Found") {
-                yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
-                yield* SubscriptionRef.set(lastSequence, outcome.snapshot.snapshotSequence);
-                yield* setThread(
-                  outcome.snapshot.thread,
-                  pageStateFromSnapshot(outcome.snapshot.page),
+                yield* applyLock.withPermits(1)(
+                  Effect.gen(function* () {
+                    yield* Ref.update(historyEpoch, (epoch) => epoch + 1);
+                    yield* SubscriptionRef.set(lastSequence, outcome.snapshot.snapshotSequence);
+                    yield* setThread(
+                      outcome.snapshot.thread,
+                      pageStateFromSnapshot(outcome.snapshot.page),
+                    );
+                    yield* remember;
+                  }),
                 );
                 current = yield* SubscriptionRef.get(state);
               }
@@ -1030,32 +1109,31 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
   yield* Effect.addFinalizer(() => Effect.sync(deregister));
 
   yield* Effect.addFinalizer(() =>
-    Effect.all([SubscriptionRef.get(state), SubscriptionRef.get(lastSequence)]).pipe(
-      Effect.flatMap(([current, snapshotSequence]) =>
-        Option.match(current.data, {
-          onNone: () => Effect.void,
-          onSome: (thread) =>
-            shouldPersistThread(thread)
-              ? persist({
-                  snapshotSequence,
-                  activityDetailMode,
-                  thread,
-                  ...Option.match(current.page, {
-                    onNone: () => ({}),
-                    onSome: (page) =>
-                      ({
-                        page: {
-                          beforeCursor: page.beforeCursor,
-                          hasMore: page.hasMore,
-                          snapshotSequence,
-                        },
-                      }) as const,
-                  }),
-                })
-              : Effect.void,
-        }),
-      ),
-    ),
+    Effect.suspend(() => {
+      const { state: current, sequence: snapshotSequence } = committed;
+      return Option.match(current.data, {
+        onNone: () => Effect.void,
+        onSome: (thread) =>
+          shouldPersistThread(thread)
+            ? persist({
+                snapshotSequence,
+                activityDetailMode,
+                thread,
+                ...Option.match(current.page, {
+                  onNone: () => ({}),
+                  onSome: (page) =>
+                    ({
+                      page: {
+                        beforeCursor: page.beforeCursor,
+                        hasMore: page.hasMore,
+                        snapshotSequence,
+                      },
+                    }) as const,
+                }),
+              })
+            : Effect.void,
+      });
+    }),
   );
 
   return state;
