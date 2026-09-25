@@ -66,6 +66,30 @@ describe("ProviderEventMetadata", () => {
     assert.isBelow(JSON.stringify(metadata).length, 512);
   });
 
+  it("falls back to minimal metadata when an event's accessors throw", () => {
+    const hostile = new Proxy(
+      { id: "hostile" },
+      {
+        get(_target, property) {
+          if (property === "type") throw new Error("blocked");
+          return undefined;
+        },
+      },
+    );
+
+    assert.deepEqual(
+      makeProviderEventMetadata({ stream: "canonical", threadId: "thread-1", event: hostile }),
+      {
+        schemaVersion: 1,
+        stream: "canonical",
+        threadId: "thread-1",
+        event: { name: "unknown" },
+        body: { valueType: "other" },
+        metadataTruncated: true,
+      },
+    );
+  });
+
   it("classifies only known high-frequency provider event families", () => {
     assert.isTrue(isHighFrequencyProviderEvent("canonical", "content.delta"));
     assert.isTrue(isHighFrequencyProviderEvent("native", "item/commandExecution/outputDelta"));

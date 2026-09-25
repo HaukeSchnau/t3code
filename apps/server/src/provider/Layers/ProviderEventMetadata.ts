@@ -106,7 +106,31 @@ export function makeProviderEventMetadata(input: {
   readonly threadId: string | null;
   readonly sampling?: ProviderEventMetadataRecord["sampling"];
 }): ProviderEventMetadataRecord {
-  const root = asRecord(input.event) ?? {};
+  const threadId = input.threadId === null ? null : input.threadId.slice(0, MAX_THREAD_ID_LENGTH);
+  try {
+    return readProviderEventMetadata(input.event, input.stream, threadId, input.sampling);
+  } catch {
+    // Provider SDK objects can expose throwing getters or proxies. Logging must
+    // never fail the adapter or service fiber that emitted the event.
+    return {
+      schemaVersion: 1,
+      stream: input.stream,
+      threadId,
+      event: { name: "unknown" },
+      body: { valueType: "other" },
+      ...(input.sampling ? { sampling: input.sampling } : {}),
+      metadataTruncated: true,
+    };
+  }
+}
+
+function readProviderEventMetadata(
+  event: unknown,
+  stream: ProviderEventMetadataStream,
+  threadId: string | null,
+  sampling: ProviderEventMetadataRecord["sampling"],
+): ProviderEventMetadataRecord {
+  const root = asRecord(event) ?? {};
   const record = asRecord(root.event) ?? root;
   const hasPayload = Object.hasOwn(record, "payload");
   const hasMessage = !hasPayload && Object.hasOwn(record, "message");
@@ -122,8 +146,8 @@ export function makeProviderEventMetadata(input: {
 
   return {
     schemaVersion: 1,
-    stream: input.stream,
-    threadId: input.threadId === null ? null : input.threadId.slice(0, MAX_THREAD_ID_LENGTH),
+    stream,
+    threadId,
     event: {
       name: eventName(record),
       ...(id ? { id } : {}),
@@ -134,7 +158,7 @@ export function makeProviderEventMetadata(input: {
       ...(itemId ? { itemId } : {}),
     },
     body: summarizeBody(body, hasPayload || hasMessage),
-    ...(input.sampling ? { sampling: input.sampling } : {}),
+    ...(sampling ? { sampling } : {}),
   };
 }
 
