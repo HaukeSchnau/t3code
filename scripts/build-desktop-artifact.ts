@@ -307,6 +307,11 @@ export const LINUX_DESKTOP_BUILD_PREREQUISITES = [
   { id: "rust-target", description: "Requested Rust standard library", packages: [] },
   { id: "cc", description: "C/C++ build toolchain", packages: ["build-essential"] },
   { id: "make", description: "Make", packages: ["build-essential"] },
+  {
+    id: "libsecret",
+    description: "libsecret development headers and pkg-config",
+    packages: ["libsecret-1-dev", "pkg-config"],
+  },
   { id: "imagemagick", description: "ImageMagick", packages: ["imagemagick"] },
 ] as const;
 
@@ -956,6 +961,10 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   // client's maps alone were 50 MB of app.asar that no request ever read.
   "!**/*.map",
   "!**/*.d.cts",
+  "!apps/desktop/resources/browser-secret",
+  "!apps/desktop/resources/browser-secret/**/*",
+  "!apps/desktop/prod-resources/browser-secret",
+  "!apps/desktop/prod-resources/browser-secret/**/*",
   // Windows stages the server sidecar below prod-resources so electron-builder
   // can copy it using project-relative extraResources matchers. Keep those
   // staging inputs out of app.asar; they are emitted once at resources/.
@@ -1738,6 +1747,10 @@ export const preflightLinuxDesktopBuild = Effect.fn("preflightLinuxDesktopBuild"
       "rust-target": needsRust ? rustTargetIsInstalled(rustTarget) : Effect.succeed(true),
       cc: desktopBuildProbeSucceeds(ChildProcess.make("cc", ["--version"]), "cc"),
       make: desktopBuildProbeSucceeds(ChildProcess.make("make", ["--version"]), "make"),
+      libsecret: desktopBuildProbeSucceeds(
+        ChildProcess.make("pkg-config", ["--exists", "libsecret-1"]),
+        "libsecret",
+      ),
       imagemagick: Effect.all([
         desktopBuildProbeSucceeds(ChildProcess.make("magick", ["-version"]), "magick"),
         desktopBuildProbeSucceeds(ChildProcess.make("convert", ["-version"]), "convert"),
