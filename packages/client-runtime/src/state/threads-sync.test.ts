@@ -15,9 +15,11 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import * as TestClock from "effect/testing/TestClock";
@@ -155,6 +157,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   readonly authoritativeRefreshJitterSeed?: number;
   readonly requestedActivityDetailMode?: OrchestrationThreadActivityDetailMode;
   readonly completionMarker?: boolean;
+  readonly saveThread?: Persistence.EnvironmentCacheStore["Service"]["saveThread"];
 }) {
   const inputs = yield* Queue.unbounded<TestThreadInput>();
   const observed = yield* Queue.unbounded<EnvironmentThreadState>();
@@ -278,8 +281,10 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
             })
           : Option.none(),
       ),
-    saveThread: (_environmentId, thread) =>
-      Ref.update(savedThreads, (current) => [...current, thread]),
+    saveThread: (environmentId, thread) =>
+      Ref.update(savedThreads, (current) => [...current, thread]).pipe(
+        Effect.andThen(options?.saveThread?.(environmentId, thread) ?? Effect.void),
+      ),
     removeThread: (_environmentId, threadId) =>
       Ref.update(removedThreads, (current) => [...current, threadId]),
     loadServerConfig: () => Effect.succeed(Option.none()),
@@ -314,6 +319,7 @@ const makeHarness = Effect.fn("TestEnvironmentThreads.makeHarness")(function* (o
   );
 
   return {
+    threadState,
     inputs,
     observed,
     latest,
@@ -1255,6 +1261,153 @@ describe("EnvironmentThreads", () => {
       );
 
       expect(yield* Ref.get(savedThreads)).toEqual([]);
+    }),
+  );
+
+  for (const source of ["disk", "HTTP"] as const) {
+    it.effect(`does not rewrite an unchanged ${source} snapshot when the thread closes`, () =>
+      Effect.gen(function* () {
+        const saved = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const harness = yield* makeHarness(
+              source === "disk"
+                ? { cached: BASE_THREAD }
+                : {
+                    httpSnapshot: Option.some({
+                      snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+                      activityDetailMode: "full",
+                      thread: BASE_THREAD,
+                    }),
+                  },
+            );
+            yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+            yield* TestClock.adjust("500 millis");
+            return harness.savedThreads;
+          }),
+        );
+        expect(yield* Ref.get(saved)).toHaveLength(source === "disk" ? 0 : 1);
+      }),
+    );
+  }
+
+  it.effect("retries a failed background cache write when the thread closes", () =>
+    Effect.gen(function* () {
+      let attempts = 0;
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({
+            httpSnapshot: Option.some({
+              snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+              activityDetailMode: "full",
+              thread: BASE_THREAD,
+            }),
+            saveThread: () =>
+              Effect.suspend(() => {
+                attempts += 1;
+                return attempts === 1
+                  ? Effect.fail(
+                      new Persistence.ConnectionPersistenceError({
+                        operation: "save-thread",
+                        message: "Test storage failure",
+                      }),
+                    )
+                  : Effect.void;
+              }),
+          });
+          yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+          yield* TestClock.adjust("500 millis");
+          expect(attempts).toBe(1);
+        }),
+      );
+      expect(attempts).toBe(2);
+    }),
+  );
+
+  it.effect("flushes newer data after an older background write completes", () =>
+    Effect.gen(function* () {
+      const writing = yield* Deferred.make<void>();
+      const written = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const saved = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const harness = yield* makeHarness({
+            cached: BASE_THREAD,
+            saveThread: (_environmentId, snapshot) =>
+              snapshot.snapshotSequence === 8
+                ? Deferred.succeed(writing, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.andThen(Deferred.succeed(written, undefined)),
+                  )
+                : Effect.void,
+          });
+          yield* Queue.offer(harness.inputs, titleUpdated("First update", 8));
+          yield* awaitThreadState(
+            harness.observed,
+            (value) => Option.getOrNull(value.data)?.title === "First update",
+          );
+          yield* TestClock.adjust("500 millis");
+          yield* Deferred.await(writing);
+          yield* Queue.offer(harness.inputs, titleUpdated("Newer update", 9));
+          yield* awaitThreadState(
+            harness.observed,
+            (value) => Option.getOrNull(value.data)?.title === "Newer update",
+          );
+          yield* Deferred.succeed(release, undefined);
+          yield* Deferred.await(written);
+          return harness.savedThreads;
+        }),
+      );
+      expect(
+        (yield* Ref.get(saved)).map((snapshot) => [
+          snapshot.snapshotSequence,
+          snapshot.thread.title,
+        ]),
+      ).toEqual([
+        [8, "First update"],
+        [9, "Newer update"],
+      ]);
+    }),
+  );
+
+  it.effect("does not save a cursor past a canceled event whose data was not applied", () =>
+    Effect.gen(function* () {
+      const scope = yield* Effect.acquireRelease(Scope.make(), (scope) =>
+        Scope.close(scope, Exit.void),
+      );
+      const harness = yield* makeHarness({
+        httpSnapshot: Option.some({
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          activityDetailMode: "full",
+          thread: BASE_THREAD,
+        }),
+      }).pipe(Effect.provideService(Scope.Scope, scope));
+      yield* awaitThreadState(harness.observed, (value) => value.status === "live");
+      const applying = yield* Deferred.make<void>();
+      const update = titleUpdated("Not applied", 8);
+      if (update.kind !== "event") return yield* Effect.die("Expected an event");
+      Object.defineProperty(update.event.payload, "title", {
+        get: () => {
+          Deferred.doneUnsafe(applying, Exit.void);
+          return "Not applied";
+        },
+      });
+      // The reducer reads the title just before the cursor advances. Hold the
+      // data write, let the apply fiber advance the cursor and park on it, then
+      // close the scope inside that gap.
+      yield* harness.threadState.semaphore.take(1);
+      yield* Queue.offer(harness.inputs, update);
+      yield* Deferred.await(applying);
+      yield* Effect.yieldNow;
+      yield* Scope.close(scope, Exit.void);
+      yield* harness.threadState.semaphore.release(1);
+
+      expect(yield* Ref.get(harness.savedThreads)).toEqual([
+        {
+          snapshotSequence: CACHED_SNAPSHOT_SEQUENCE,
+          activityDetailMode: "full",
+          thread: BASE_THREAD,
+        },
+      ]);
     }),
   );
 
