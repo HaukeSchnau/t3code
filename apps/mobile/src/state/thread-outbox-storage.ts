@@ -228,6 +228,7 @@ export function createThreadOutboxStorage(fileSystem: ThreadOutboxFileSystem): T
     },
     load: async () => {
       const messages: QueuedThreadMessage[] = [];
+      const errors: ThreadOutboxStorageError[] = [];
       try {
         const directory = await fileSystem.directory();
 
@@ -242,20 +243,21 @@ export function createThreadOutboxStorage(fileSystem: ThreadOutboxFileSystem): T
           try {
             messages.push(decodeQueuedThreadMessage(JSON.parse(await entry.text()) as unknown));
           } catch (cause) {
-            // A partial queue hides attachment owners from cleanup. Keep all
-            // records untouched until every persisted message can be read.
-            throw new ThreadOutboxStorageError({
-              operation: "read-message",
-              environmentId: null,
-              threadId: null,
-              messageId: null,
-              fileName: entry.name,
-              cause,
-            });
+            // Recover readable messages. The errors keep callers from treating
+            // them as the complete inventory that cleanup needs.
+            errors.push(
+              new ThreadOutboxStorageError({
+                operation: "read-message",
+                environmentId: null,
+                threadId: null,
+                messageId: null,
+                fileName: entry.name,
+                cause,
+              }),
+            );
           }
         }
       } catch (cause) {
-        if (cause instanceof ThreadOutboxStorageError) throw cause;
         throw new ThreadOutboxStorageError({
           operation: "load",
           environmentId: null,
@@ -265,7 +267,7 @@ export function createThreadOutboxStorage(fileSystem: ThreadOutboxFileSystem): T
           cause,
         });
       }
-      return messages;
+      return { messages, errors };
     },
     write: async (message) => {
       const fileName = messageFileName(message.messageId);
