@@ -1,4 +1,3 @@
-import type { EnvironmentId } from "@t3tools/contracts";
 import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 
 import { randomHex } from "../lib/uuid";
@@ -69,8 +68,4 @@ export function threadOutboxRevision(messageId: QueuedThreadMessage["messageId"]
 /** Waits for pending writes to settle; false if the message was rolled back. */
 export function confirmThreadOutboxMessageQueued(message: QueuedThreadMessage): Promise<boolean> {
   return threadOutboxManager.confirmQueued(message);
-}
-
-export function clearThreadOutboxEnvironment(environmentId: EnvironmentId): Promise<void> {
-  return threadOutboxManager.clearEnvironment(environmentId).then(() => undefined);
 }
