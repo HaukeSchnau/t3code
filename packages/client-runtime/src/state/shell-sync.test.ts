@@ -408,6 +408,91 @@ describe("environment shell synchronization", () => {
       const cachedSnapshot: OrchestrationShellSnapshot = {
         snapshotSequence: 5,
         projects: [],
+        threads: [{ id: "cached-thread" } as never],
+        usageLimits: [],
+        updatedAt: "2026-06-06T00:00:00.000Z",
+      };
+      const resetSnapshot: OrchestrationShellSnapshot = {
+        ...cachedSnapshot,
+        snapshotSequence: 9_999,
+        threads: [],
+        updatedAt: "2026-06-07T00:00:00.000Z",
+      };
+      const events = yield* Queue.unbounded<OrchestrationShellStreamItem>();
+      const subscribeInputs = yield* Queue.unbounded<{
+        readonly afterSequence?: number;
+        readonly requestCompletionMarker?: boolean;
+      }>();
+      const loaderCalls = yield* Ref.make(0);
+      const client = {
+        [ORCHESTRATION_WS_METHODS.subscribeShell]: (input: {
+          readonly afterSequence?: number;
+          readonly requestCompletionMarker?: boolean;
+        }) =>
+          Stream.unwrap(
+            Queue.offer(subscribeInputs, input).pipe(Effect.as(Stream.fromQueue(events))),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+        target: TARGET,
+        state: yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE),
+        session: yield* SubscriptionRef.make<Option.Option<RpcSession.RpcSession>>(
+          Option.some(session(client)),
+        ),
+        prepared: yield* SubscriptionRef.make(Option.some(PREPARED)),
+        connect: Effect.void,
+        disconnect: Effect.void,
+        retryNow: Effect.void,
+      } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+      const cache = Persistence.EnvironmentCacheStore.of({
+        loadShell: () => Effect.succeed(Option.some(cachedSnapshot)),
+        saveShell: () => Effect.void,
+        loadThread: () => Effect.succeed(Option.none()),
+        saveThread: () => Effect.void,
+        removeThread: () => Effect.void,
+        loadServerConfig: () => Effect.succeed(Option.none()),
+        saveServerConfig: () => Effect.void,
+        loadVcsRefs: () => Effect.succeed(Option.none()),
+        saveVcsRefs: () => Effect.void,
+        removeVcsRefs: () => Effect.void,
+        clearVcsRefs: () => Effect.void,
+        clear: () => Effect.void,
+      });
+      const snapshotLoader = ShellSnapshotLoader.of({
+        load: () => Ref.update(loaderCalls, (count) => count + 1).pipe(Effect.as(Option.none())),
+      });
+      const shellState = yield* makeEnvironmentShellState().pipe(
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+        Effect.provideService(ShellSnapshotLoader, snapshotLoader),
+      );
+
+      // Without a fresh HTTP snapshot the cached cursor may be stale, so the
+      // socket must send a full snapshot instead of resuming from it.
+      const subscribeInput = yield* Queue.take(subscribeInputs);
+      expect(subscribeInput.afterSequence).toBeUndefined();
+      expect(subscribeInput.requestCompletionMarker).toBe(true);
+      expect(yield* Ref.get(loaderCalls)).toBe(1);
+      const synchronizing = yield* SubscriptionRef.get(shellState);
+      expect(synchronizing.status).toBe("synchronizing");
+      expect(Option.getOrThrow(synchronizing.snapshot)).toEqual(cachedSnapshot);
+
+      yield* Queue.offer(events, { kind: "snapshot", snapshot: resetSnapshot });
+      yield* Queue.offer(events, { kind: "synchronized" });
+      const live = yield* SubscriptionRef.changes(shellState).pipe(
+        Stream.filter((value) => value.status === "live"),
+        Stream.runHead,
+        Effect.map(Option.getOrThrow),
+      );
+      expect(Option.getOrThrow(live.snapshot)).toEqual(resetSnapshot);
+    }),
+  );
+
+  it.effect("resumes from the HTTP snapshot cursor on a warm cache", () =>
+    Effect.gen(function* () {
+      const cachedSnapshot: OrchestrationShellSnapshot = {
+        snapshotSequence: 5,
+        projects: [],
         threads: [{ id: "stale-thread" } as never],
         usageLimits: [],
         updatedAt: "2026-06-06T00:00:00.000Z",
