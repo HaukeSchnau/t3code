@@ -26,6 +26,7 @@ import {
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
   getStageInstallArgs,
+  LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
   LINUX_CAPTURE_EXTRA_RESOURCES,
   LINUX_FILE_EXCLUSIONS,
   MAC_FILE_EXCLUSIONS,
@@ -544,12 +545,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("limits Electron locales and excludes separately packaged resources", () => {
     assert.deepStrictEqual(DESKTOP_ELECTRON_LANGUAGES, ["en-US"]);
-    // Every WSL staging input is emitted once at resources/, so adding one
+    // Every platform staging input is emitted once at resources/, so adding one
     // without its exclusion silently packs a second copy into app.asar. The
     // snapshot below cannot catch that on its own: adding a resource and
     // forgetting the exclusion leaves the exclusion list untouched, so it still
     // matches. Assert the invariant first, where the failure names the culprit.
-    for (const resource of WSL_RUNTIME_EXTRA_RESOURCES) {
+    for (const resource of [
+      ...WSL_RUNTIME_EXTRA_RESOURCES,
+      ...LINUX_BROWSER_SECRET_EXTRA_RESOURCES,
+    ]) {
       assert.include(
         DESKTOP_FILE_EXCLUSIONS,
         `!${resource.from}`,
@@ -561,6 +565,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!**/node_modules/@anthropic-ai/claude-agent-sdk-*/**/*",
       "!**/*.map",
       "!**/*.d.cts",
+      "!apps/desktop/resources/browser-secret",
+      "!apps/desktop/resources/browser-secret/**/*",
+      "!apps/desktop/prod-resources/browser-secret",
+      "!apps/desktop/prod-resources/browser-secret/**/*",
       "!apps/desktop/prod-resources/windows-server",
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
@@ -891,7 +899,10 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
               readonly args: ReadonlyArray<string>;
             };
             commands.push(childProcess);
-            const fails = childProcess.command === "cargo" || childProcess.command === "rustc";
+            const fails =
+              childProcess.command === "cargo" ||
+              childProcess.command === "rustc" ||
+              childProcess.command === "pkg-config";
             return Effect.succeed(mockProcess(fails ? 1 : 0));
           }),
         );
@@ -902,10 +913,13 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         );
 
         assert.instanceOf(error, LinuxDesktopBuildPrerequisitesMissingError);
-        assert.deepStrictEqual(error.missing, ["cargo", "rust-target"]);
+        assert.deepStrictEqual(error.missing, ["cargo", "rust-target", "libsecret"]);
         assert.include(error.message, "Rust compiler and Cargo (cargo, rustc)");
         assert.include(error.message, "Requested Rust standard library");
-        assert.include(error.message, "sudo apt-get install cargo rustc");
+        assert.include(
+          error.message,
+          "sudo apt-get install cargo rustc libsecret-1-dev pkg-config",
+        );
         assert.include(error.message, "rustup target add aarch64-unknown-linux-gnu");
         assert.isTrue(
           commands.some(
