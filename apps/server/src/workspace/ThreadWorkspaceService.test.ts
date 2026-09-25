@@ -255,6 +255,131 @@ layer("ThreadWorkspaceService", (it) => {
     }),
   );
 
+  for (const origin of ["missing", "without-branch", "with-branch"] as const) {
+    it.effect(`starts a git workspace from origin only when origin has the base (${origin})`, () =>
+      Effect.gen(function* () {
+        const baseDir = makeTempDir("t3-workspace-origin-base-");
+        const sourcePath = makeTempDir("t3-workspace-origin-source-");
+        let fetches = 0;
+        let createdFrom: string | undefined;
+        yield* Effect.gen(function* () {
+          const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+          yield* service.prepareWorkspace({
+            threadId: ThreadId.make(`thread-origin-${origin}`),
+            kind: "git-detached",
+            roots: [
+              {
+                projectId: ProjectId.make("project-origin"),
+                sourcePath,
+                role: "primary",
+                baseRevision: "main",
+                startFromOrigin: true,
+              },
+            ],
+            retentionPolicy: "explicit-delete",
+          });
+        }).pipe(
+          Effect.provide(
+            makeTestLayer({
+              baseDir,
+              gitWorkflow: {
+                remoteExists: () => Effect.succeed(origin !== "missing"),
+                fetchRemote: () =>
+                  Effect.sync(() => {
+                    fetches += 1;
+                  }),
+                remoteBranchExists: () => Effect.succeed(origin === "with-branch"),
+                resolveRemoteTrackingCommit: () =>
+                  Effect.succeed({ commitSha: "origin-main-sha", remoteRefName: "origin/main" }),
+                createWorktree: ({ path, refName }) =>
+                  Effect.sync(() => {
+                    assert.isNotNull(path);
+                    createdFrom = refName;
+                    NodeFS.mkdirSync(path, { recursive: true });
+                    return { worktree: { refName, path } };
+                  }),
+              },
+            }),
+          ),
+        );
+        assert.equal(fetches, origin === "missing" ? 0 : 1);
+        assert.equal(createdFrom, origin === "with-branch" ? "origin-main-sha" : "main");
+      }),
+    );
+  }
+
+  for (const lsRemoteCode of [2, 128] as const) {
+    it.effect(
+      `${lsRemoteCode === 2 ? "keeps the local base" : "fails"} when an isolated origin fetch fails and ls-remote exits ${lsRemoteCode}`,
+      () => {
+        const sourcePath = makeTempDir("t3-isolated-origin-source-");
+        const baseDir = makeTempDir("t3-isolated-origin-base-");
+        let forkedRevision: string | undefined;
+        return Effect.gen(function* () {
+          const service = yield* ThreadWorkspaceService.ThreadWorkspaceService;
+          const prepared = yield* Effect.exit(
+            service.prepareWorkspace({
+              threadId: ThreadId.make(`isolated-origin-${lsRemoteCode}`),
+              kind: "isolated",
+              roots: [
+                {
+                  projectId: ProjectId.make("isolated-origin-project"),
+                  sourcePath,
+                  role: "primary",
+                  baseRevision: "main",
+                  startFromOrigin: true,
+                },
+              ],
+              retentionPolicy: "explicit-delete",
+              profile: "minimal",
+            }),
+          );
+          if (lsRemoteCode === 2) {
+            assert.isTrue(Exit.isSuccess(prepared));
+            assert.equal(forkedRevision, "main");
+          } else {
+            assert.isTrue(Exit.isFailure(prepared));
+            assert.isUndefined(forkedRevision);
+          }
+        }).pipe(
+          Effect.provide(
+            makeTestLayer({
+              baseDir,
+              platform: "linux",
+              environment: { T3CODE_EXECUTION_LAUNCHER: "/test/agent-exec" },
+              gitWorkflow: { remoteExists: () => Effect.succeed(true) },
+              processRunner: {
+                run: (input) =>
+                  Effect.sync(() => {
+                    if (input.command === "git") {
+                      return input.args.includes("fetch")
+                        ? makeProcessOutput({
+                            code: ChildProcessSpawner.ExitCode(128),
+                            stderr: "fatal: couldn't find remote ref main",
+                          })
+                        : makeProcessOutput({ code: ChildProcessSpawner.ExitCode(lsRemoteCode) });
+                    }
+                    forkedRevision = input.args[input.args.indexOf("--revision") + 1];
+                    const checkoutPath = input.args[2]!;
+                    NodeFS.mkdirSync(checkoutPath, { recursive: true });
+                    return makeProcessOutput({
+                      stdout: encodeIsolatedRegistration({
+                        root: checkoutPath,
+                        workspace: {
+                          id: input.args[input.args.indexOf("--workspace-id") + 1]!,
+                          sourceRevision: "source-commit",
+                        },
+                      }),
+                    });
+                  }),
+              },
+            }),
+          ),
+        );
+      },
+    );
+  }
+
   it("recognizes Linux BTRFS reflink directory-copy capabilities", () => {
     const destinationFileSystemType = ThreadWorkspaceService.__testing.fileSystemTypeFromStatfsType(
       ThreadWorkspaceService.__testing.BTRFS_STATFS_TYPE,
