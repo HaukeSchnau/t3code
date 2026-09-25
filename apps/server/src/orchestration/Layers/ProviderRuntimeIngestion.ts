@@ -2009,9 +2009,20 @@ const make = Effect.gen(function* () {
       const isTerminalTurn = event.type === "turn.completed" || event.type === "turn.aborted";
       const isCompactedThreadState =
         event.type === "thread.state.changed" && event.payload.state === "compacted";
-      const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
-        threadId: thread.id,
-      });
+      // Only lifecycle and compaction events consult the pending turn start.
+      // Skipping the lookup keeps streamed tool output off this per-event query.
+      const pendingTurnStart =
+        event.type === "session.started" ||
+        event.type === "session.state.changed" ||
+        event.type === "session.exited" ||
+        event.type === "thread.started" ||
+        event.type === "turn.started" ||
+        isTerminalTurn ||
+        isCompactedThreadState
+          ? yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+              threadId: thread.id,
+            })
+          : Option.none();
       const hasPendingTurnStart = Option.isSome(pendingTurnStart);
       const hasPendingRunningTurnStart =
         hasPendingTurnStart && thread.session?.status === "running";

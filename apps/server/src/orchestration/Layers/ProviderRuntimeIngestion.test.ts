@@ -2835,6 +2835,39 @@ describe("ProviderRuntimeIngestion", () => {
     ]);
   });
 
+  it("streams tool output without a pending turn lookup per chunk", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    await harness.emitAndDrain([
+      {
+        type: "turn.started",
+        eventId: asEventId("evt-turn-started-tool-output"),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-tool-output"),
+      },
+    ]);
+
+    const eventCount = 500;
+    const before = harness.sqlCount();
+    await harness.emitAndDrain(
+      Array.from({ length: eventCount }, (_, index) => ({
+        type: "content.delta",
+        eventId: asEventId(`evt-tool-output-${index}`),
+        provider: ProviderDriverKind.make("codex"),
+        createdAt: now,
+        threadId: asThreadId("thread-1"),
+        turnId: asTurnId("turn-tool-output"),
+        itemId: asItemId("item-tool-output"),
+        payload: { streamKind: "command_output", delta: "x" },
+      })),
+    );
+
+    // One statement per chunk remains; the pending turn start is read only for lifecycle events.
+    expect(harness.sqlCount() - before).toBeLessThanOrEqual(eventCount);
+  });
+
   it("buffers assistant deltas with one lifecycle query per event until completion", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
