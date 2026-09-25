@@ -36,6 +36,47 @@ it.effect("serves an unauthenticated constant-time health response", () =>
 );
 
 describe("guarded media responses", () => {
+  it.effect("uses current descriptor metadata after an in-place truncate or extension", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const directory = yield* fs.makeTempDirectoryScoped({ prefix: "t3-guarded-current-stat-" });
+      const filePath = path.join(directory, "clip.mp4");
+      for (const [contents, range, method, expected, status, contentRange] of [
+        ["1234", undefined, "GET", "1234", 200, null],
+        ["0123456789abcdef", undefined, "GET", "0123456789abcdef", 200, null],
+        ["1234", "bytes=4-", "GET", "", 416, "bytes */4"],
+        ["1234", "bytes=1-20", "GET", "234", 206, "bytes 1-3/4"],
+        ["0123456789abcdef", "bytes=10-", "GET", "abcdef", 206, "bytes 10-15/16"],
+        ["0123456789abcdef", undefined, "HEAD", "", 200, null],
+        ["", undefined, "GET", "", 200, null],
+        ["", "bytes=0-1", "GET", "", 416, "bytes */0"],
+      ] as const) {
+        yield* fs.writeFileString(filePath, "0123456789");
+        const canonicalPath = yield* fs.realPath(filePath);
+        const file = yield* openMediaFile(canonicalPath);
+        if (!file) throw new Error("Expected an opened media file");
+        yield* fs.writeFileString(filePath, contents);
+        const response = HttpServerResponse.toWeb(
+          yield* assetFileResponse(
+            { path: canonicalPath, file, mimeType: "video/mp4" },
+            range,
+            undefined,
+            method,
+          ),
+        );
+        expect(response.status).toBe(status);
+        expect(response.headers.get("content-range")).toBe(contentRange);
+        if (status !== 416) {
+          expect(response.headers.get("content-length")).toBe(
+            String(method === "HEAD" ? contents.length : expected.length),
+          );
+        }
+        expect(yield* Effect.promise(() => response.text())).toBe(expected);
+      }
+    }).pipe(Effect.provide(fileResponseLayer)),
+  );
+
   it.effect(
     "rejects unaddressable ranges before streaming and preserves small ranges on large files",
     () =>
@@ -363,15 +404,13 @@ describe("assetResponseHeaders", () => {
       "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
     });
   });
-  it("declares utf-8 for HTML assets so non-ASCII content renders correctly", () => {
-    expect(assetResponseHeaders("/workspace/page.html")).toHaveProperty(
-      "Content-Type",
-      "text/html; charset=utf-8",
-    );
-    expect(assetResponseHeaders("/workspace/PAGE.HTM")).toHaveProperty(
-      "Content-Type",
-      "text/html; charset=utf-8",
-    );
+  it("serves HTML assets as utf-8 inside a sandboxed origin", () => {
+    for (const path of ["/workspace/page.html", "/workspace/PAGE.HTM", "/tmp/report.html"]) {
+      expect(assetResponseHeaders(path)).toMatchObject({
+        "Content-Type": "text/html; charset=utf-8",
+        "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
+      });
+    }
   });
 
   it("downloads uploaded documents without executing their content", () => {
