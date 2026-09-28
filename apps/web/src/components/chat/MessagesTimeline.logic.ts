@@ -434,12 +434,6 @@ export type MessagesTimelineRow =
       proposedPlan: ProposedPlan;
     }
   | {
-      kind: "turn-plan";
-      id: string;
-      createdAt: string;
-      turnPlan: Extract<TimelineEntry, { kind: "turn-plan" }>["turnPlan"];
-    }
-  | {
       kind: "working";
       id: string;
       createdAt: string | null;
@@ -616,9 +610,6 @@ function timelineEntryTurnId(entry: TimelineEntry): TurnId | null {
   }
   if (entry.kind === "proposed-plan") {
     return entry.proposedPlan.turnId;
-  }
-  if (entry.kind === "turn-plan") {
-    return entry.turnPlan.turnId;
   }
   return entry.kind === "work" ? (entry.entry.turnId ?? null) : null;
 }
@@ -1412,16 +1403,6 @@ export function deriveMessagesTimelineRows(input: {
       continue;
     }
 
-    if (timelineEntry.kind === "turn-plan") {
-      nextRows.push({
-        kind: "turn-plan",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        turnPlan: timelineEntry.turnPlan,
-      });
-      continue;
-    }
-
     const assistantResponseStillInProgress =
       timelineEntry.message.role === "assistant" &&
       timelineEntry.message.turnId !== null &&
@@ -1694,9 +1675,6 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
 
     case "proposed-plan":
       return a.proposedPlan === (b as typeof a).proposedPlan;
-
-    case "turn-plan":
-      return a.turnPlan === (b as typeof a).turnPlan;
 
     case "queued-message": {
       const bq = b as typeof a;
