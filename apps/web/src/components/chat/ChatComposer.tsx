@@ -930,7 +930,7 @@ import {
   type ProviderInstanceEntry,
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
-import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import type { ClientSettings, UnifiedSettings } from "@t3tools/contracts/settings";
 import {
   isVideoAttachment,
   type ChatMessage,
@@ -1212,6 +1212,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  followUpBehavior: ClientSettings["followUpBehavior"];
   canPauseTurn: boolean;
   canResumeInterruptedTurn: boolean;
   showPlanFollowUpPrompt: boolean;
@@ -1257,6 +1258,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        followUpBehavior={props.followUpBehavior}
         canPauseTurn={props.canPauseTurn}
         canResumeInterruptedTurn={props.canResumeInterruptedTurn}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
@@ -7151,6 +7153,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   activeThreadModelDisplayName={activeThreadModelDisplayName}
                   pendingAction={pendingPrimaryAction}
                   isRunning={phase === "running"}
+                  followUpBehavior={settings.followUpBehavior}
                   canPauseTurn={canPauseTurn}
                   canResumeInterruptedTurn={canResumeInterruptedTurn}
                   onResumeInterruptedTurn={onResumeInterruptedTurn}

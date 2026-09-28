@@ -2,7 +2,7 @@
 
 ## Summary
 
-T3 Code supports queueing user messages while a provider turn is running. Submitting from the composer during a running turn now creates a durable queued message instead of steering immediately. Users can still steer by sending a queued item immediately from the queue strip.
+T3 Code supports queueing user messages while a provider turn is running. On web and desktop, upstream's **Follow-up behavior** client setting decides what a send during a running turn does. **Queue**, the default, creates a durable queued message. **Steer** sends a normal `thread.turn.start`, which the provider applies to the running turn. That is the same path as sending a queued item from the queue strip. The alternate send shortcut does the opposite for one message, and preview annotations always steer, as upstream sends them.
 
 ## Behavior
 
@@ -12,7 +12,7 @@ T3 Code supports queueing user messages while a provider turn is running. Submit
 - Failed, cancelled, interrupted, stopped, and manually interrupted turns leave the queue intact.
 - Queued messages are projected to SQLite, included in thread detail snapshots, and streamed through `orchestration.subscribeThread`, so they survive app restart/reconnect and update the active chat UI immediately.
 
-Upstream now also offers a browser-local queue that sends at tool boundaries. Keep the server-owned queue here: turn completion controls dispatch, and SQLite makes queued messages available after reconnect and from other clients. Queued attachments and inline context use the same normalization as an immediate send.
+Upstream now also offers a browser-local queue that sends at tool boundaries. Keep the server-owned queue here: turn completion controls dispatch, and SQLite makes queued messages available after reconnect and from other clients. Queued attachments and inline context use the same normalization as an immediate send. `shouldQueueFollowUp` in `ThreadTurnSubmission.ts` applies upstream's queue-or-steer decision to this queue for both Chat and Monitor. Mobile keeps its own composer behavior because upstream's mobile app does not read the setting either.
 
 Remove this patch when upstream provides those durability and dispatch guarantees.
 
@@ -29,3 +29,4 @@ When syncing upstream, verify:
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` still dispatches queued messages only after completed turns.
 - `apps/web/src/components/chat/useThreadDurableOutbox.ts` owns queued-message send-now/remove controls and optimistic durable-outbox projection for both Chat and Monitor surfaces.
 - `apps/web/src/components/chat/QueuedMessagesStrip.tsx` and the composer running actions still expose send-now and remove controls.
+- ChatView and MonitorView decide queue versus steer through `shouldQueueFollowUp`, and the composer's running send button is labeled for the selected behavior.
