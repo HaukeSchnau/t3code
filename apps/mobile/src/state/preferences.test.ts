@@ -10,6 +10,7 @@ import { createElement } from "react";
 import { renderToString } from "react-dom/server";
 
 vi.mock("expo-secure-store", () => ({
+  AFTER_FIRST_UNLOCK: 0,
   getItemAsync: vi.fn(),
   setItemAsync: vi.fn(),
 }));

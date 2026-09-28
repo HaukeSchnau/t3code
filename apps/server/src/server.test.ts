@@ -5,6 +5,7 @@ import * as NodeCrypto from "node:crypto";
 import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
 import {
+  ApprovalRequestId,
   AuthAccessTokenType,
   AuthSessionId,
   AuthStandardClientScopes,
@@ -58,7 +59,7 @@ import {
 } from "@t3tools/shared/dpop";
 import { RELAY_HEALTH_REQUEST_TYP, RELAY_MINT_REQUEST_TYP } from "@t3tools/shared/relayJwt";
 import * as RelayClient from "@t3tools/shared/relayClient";
-import { assert, it } from "@effect/vitest";
+import { assert, describe, it } from "@effect/vitest";
 import { assertFailure, assertInclude, assertTrue } from "@effect/vitest/utils";
 import { resolveAttachmentRelativePath } from "./attachmentPaths.ts";
 import { resolveObservedMediaPath } from "./observedMediaStore.ts";
@@ -132,6 +133,7 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as RemoteOpenTargets from "./environment/RemoteOpenTargets.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
+import { OrchestrationCommandReceiptRepository } from "./persistence/Services/OrchestrationCommandReceipts.ts";
 import {
   OrchestrationCommandReceiptMismatchError,
   OrchestrationThreadSettleBlockedError,
@@ -569,6 +571,7 @@ const buildAppUnderTest = (options?: {
     >;
     terminalManager?: Partial<TerminalManager.TerminalManager["Service"]>;
     orchestrationEngine?: Partial<OrchestrationEngine.OrchestrationEngineService["Service"]>;
+    commandReceipts?: Partial<OrchestrationCommandReceiptRepository["Service"]>;
     threadDeletionReactor?: Partial<ThreadDeletionReactor["Service"]>;
     analyticsService?: Partial<AnalyticsService.AnalyticsService["Service"]>;
     commandPreprocessingCoordinator?: CommandPreprocessingCoordinator.CommandPreprocessingCoordinator["Service"];
@@ -1175,6 +1178,10 @@ const buildAppUnderTest = (options?: {
               streamDomainEvents: Stream.empty,
               latestSequence: Effect.succeed(0),
               ...options?.layers?.orchestrationEngine,
+            }),
+            Layer.mock(OrchestrationCommandReceiptRepository)({
+              getByCommandId: () => Effect.succeed(Option.none()),
+              ...options?.layers?.commandReceipts,
             }),
             Layer.mock(ThreadDeletionReactor)({
               start: () => Effect.void,
@@ -11543,6 +11550,150 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
+  describe("thread replies", () => {
+    const questionActivity: OrchestrationThreadActivity = {
+      id: EventId.make("activity-question"),
+      tone: "approval",
+      kind: "user-input.requested",
+      summary: "Question",
+      payload: {
+        requestId: "request-runner",
+        questions: [
+          {
+            id: "runner",
+            header: "Runner",
+            question: "Which runner should the package use?",
+            options: [
+              { label: "Vitest", description: "" },
+              { label: "Bun test", description: "" },
+            ],
+          },
+        ],
+      },
+      turnId: TurnId.make("turn-question"),
+      createdAt: "2026-01-01T00:00:01.000Z",
+    };
+    const postReply = (body: { readonly replyId: string; readonly text: string }) =>
+      Effect.gen(function* () {
+        const accessToken = yield* getAuthenticatedBearerSessionToken();
+        const response = yield* fetchEffect(
+          yield* getHttpServerUrl(`/api/orchestration/threads/${defaultThreadId}/reply`),
+          {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${accessToken}`,
+              "content-type": "application/json",
+            },
+            body: jsonRequestBody(body),
+          },
+        );
+        return { status: response.status, body: yield* responseJsonEffect<unknown>(response) };
+      });
+
+    it.effect("answers the thread's only pending question", () =>
+      Effect.gen(function* () {
+        const dispatch = vi.fn((_command: OrchestrationCommand) => Effect.succeed({ sequence: 7 }));
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: { dispatch },
+            projectionSnapshotQuery: {
+              getThreadShellById: () =>
+                Effect.succeed(
+                  Option.some(makeDefaultOrchestrationThreadShell({ hasPendingUserInput: true })),
+                ),
+              getThreadDetailSnapshot: () =>
+                Effect.succeed(
+                  Option.some({
+                    snapshotSequence: 1,
+                    activityDetailMode: "full" as const,
+                    thread: {
+                      ...makeDefaultOrchestrationReadModel().threads[0]!,
+                      activities: [questionActivity],
+                    },
+                  }),
+                ),
+            },
+          },
+        });
+
+        const reply = yield* postReply({ replyId: "reply-1", text: "bun test please" });
+
+        assert.deepEqual(reply, { status: 200, body: { outcome: "answered" } });
+        assert.deepInclude(dispatch.mock.calls[0]?.[0], {
+          type: "thread.user-input.respond",
+          commandId: CommandId.make("thread-reply:reply-1"),
+          threadId: defaultThreadId,
+          requestId: ApprovalRequestId.make("request-runner"),
+          answers: { runner: "Bun test" },
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+
+    it.effect("sends a message with the thread's own modes when nothing is pending", () =>
+      Effect.gen(function* () {
+        const dispatch = vi.fn((_command: OrchestrationCommand) => Effect.succeed({ sequence: 8 }));
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: { dispatch },
+            projectionSnapshotQuery: {
+              getThreadShellById: () =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      runtimeMode: "approval-required",
+                      interactionMode: "plan",
+                    }),
+                  ),
+                ),
+            },
+          },
+        });
+
+        const reply = yield* postReply({ replyId: "reply-2", text: "Push it and open a PR" });
+
+        assert.deepEqual(reply, { status: 200, body: { outcome: "sent" } });
+        assert.deepInclude(dispatch.mock.calls[0]?.[0], {
+          type: "thread.message.queue",
+          commandId: CommandId.make("thread-reply:reply-2"),
+          runtimeMode: "approval-required",
+          interactionMode: "plan",
+        });
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+
+    it.effect("reports a retry of an accepted reply as delivered without dispatching again", () =>
+      Effect.gen(function* () {
+        const dispatch = vi.fn((_command: OrchestrationCommand) => Effect.succeed({ sequence: 9 }));
+        yield* buildAppUnderTest({
+          layers: {
+            orchestrationEngine: { dispatch },
+            commandReceipts: {
+              getByCommandId: ({ commandId }) =>
+                Effect.succeed(
+                  Option.some({
+                    commandId,
+                    aggregateKind: "thread" as const,
+                    aggregateId: defaultThreadId,
+                    commandVariant: "thread.user-input.respond",
+                    envelopeFingerprint: "fingerprint",
+                    acceptedAt: "2026-01-01T00:00:02.000Z",
+                    resultSequence: 7,
+                    status: "accepted" as const,
+                    error: null,
+                  }),
+                ),
+            },
+          },
+        });
+
+        const reply = yield* postReply({ replyId: "reply-1", text: "bun test please" });
+
+        assert.deepEqual(reply, { status: 200, body: { outcome: "already_delivered" } });
+        assert.equal(dispatch.mock.calls.length, 0);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+  });
+
   it.effect("rejects bootstrap commands at the generic HTTP dispatch boundary", () =>
     Effect.gen(function* () {
       const dispatch = vi.fn(() => Effect.succeed({ sequence: 1 }));

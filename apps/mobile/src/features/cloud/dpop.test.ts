@@ -37,6 +37,7 @@ vi.mock("expo-crypto", () => ({
 
 const secureStore = new Map<string, string>();
 vi.mock("expo-secure-store", () => ({
+  AFTER_FIRST_UNLOCK: 0,
   getItemAsync: (key: string) => Promise.resolve(secureStore.get(key) ?? null),
   setItemAsync: (key: string, value: string) => {
     secureStore.set(key, value);

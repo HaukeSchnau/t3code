@@ -52,6 +52,8 @@ authorization boundary and is intentionally not removed.
 - Persist device registrations in the paired server's secret store and publish that server's local
   aggregate directly to APNs. Cross-environment aggregation is intentionally unsupported: each
   server knows only its own threads, and the first reachable server is authoritative for the card.
+- Alerts go out as regular notifications so they can carry Reply actions; see
+  [notification replies](notification-replies.md).
 
 ## APNs server configuration
 

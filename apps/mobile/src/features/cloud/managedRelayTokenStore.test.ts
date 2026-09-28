@@ -7,6 +7,7 @@ import { vi } from "vite-plus/test";
 const secureStore = vi.hoisted(() => new Map<string, string>());
 
 vi.mock("expo-secure-store", () => ({
+  AFTER_FIRST_UNLOCK: 0,
   getItemAsync: vi.fn((key: string) => Promise.resolve(secureStore.get(key) ?? null)),
   setItemAsync: vi.fn((key: string, value: string) => {
     secureStore.set(key, value);
