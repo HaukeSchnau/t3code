@@ -8263,21 +8263,33 @@ export default function ChatView(props: ChatViewProps) {
       lifecycle: {
         begin: () => beginLocalDispatch({ preparingWorktree: Boolean(baseRevisionForWorkspace) }),
         prepared: (prepared) => {
-          // A new row becomes the anchored end-space target while the reply
-          // streams into the reserved space below it.
-          isAtEndRef.current = true;
-          timelineScrollModeRef.current = "anchoring-new-turn";
-          liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-          setTimelineLiveFollowEnabled(true);
-          pendingTimelineAnchorRef.current = prepared.messageId;
-          activeTimelineAnchorIndexRef.current = null;
-          showScrollDebouncer.current.cancel();
-          setShowScrollToBottom(false);
-          setTimelineAnchor({
-            threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-            messageId: prepared.messageId,
-          });
           setThreadError(threadIdForSend, null);
+          // Queued messages wait in the queue strip and leave the timeline alone.
+          if (prepared.queue) return;
+          // Only a thread's first message becomes the anchored end-space target,
+          // so the reply streams into the reserved space below it. Follow-ups
+          // return to the live edge.
+          const shouldAnchorFirstMessage =
+            activeThread.latestTurn === null &&
+            !timelineMessages.some((message) => message.role === "user");
+          if (shouldAnchorFirstMessage) {
+            isAtEndRef.current = true;
+            timelineScrollModeRef.current = "anchoring-new-turn";
+            liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+            setTimelineLiveFollowEnabled(true);
+            pendingTimelineAnchorRef.current = prepared.messageId;
+            activeTimelineAnchorIndexRef.current = null;
+            showScrollDebouncer.current.cancel();
+            setShowScrollToBottom(false);
+            setTimelineAnchor({
+              threadKey: scopedThreadKey(
+                scopeThreadRef(activeThread.environmentId, threadIdForSend),
+              ),
+              messageId: prepared.messageId,
+            });
+          } else {
+            scrollToEnd();
+          }
         },
         updateTitle: async (nextTitle) => {
           const result = await updateThreadMetadata({
