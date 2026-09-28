@@ -956,13 +956,7 @@ function buildRevertTurnCountByUserMessageId(input: {
   const entryCount = input.supportsConversationRollback ? input.timelineEntries.length : 0;
   for (let index = 0; index < entryCount; index += 1) {
     const entry = input.timelineEntries[index];
-    // Watch and wait notifications are not user turns and cannot be reverted to.
-    if (
-      !entry ||
-      entry.kind !== "message" ||
-      entry.message.role !== "user" ||
-      entry.message.origin !== undefined
-    ) {
+    if (!entry || entry.kind !== "message" || entry.message.role !== "user") {
       continue;
     }
 
