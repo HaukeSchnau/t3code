@@ -2,7 +2,7 @@
 
 ## Summary
 
-T3 Code supports queueing user messages while a provider turn is running. On web and desktop, upstream's **Follow-up behavior** client setting decides what a send during a running turn does. **Queue**, the default, creates a durable queued message. **Steer** sends a normal `thread.turn.start`, which the provider applies to the running turn. That is the same path as sending a queued item from the queue strip. The alternate send shortcut does the opposite for one message, and preview annotations always steer, as upstream sends them.
+T3 Code supports queueing user messages while a provider turn is running. On web and desktop, upstream's **Follow-up behavior** client setting decides what a send during a running turn does. **Queue**, the default, creates a durable queued message. **Steer** sends a normal `thread.turn.start`, which the provider applies to the running turn. The queue strip's send-now uses `thread.queued-message.dispatch` instead; both end in the same `thread.turn-start-requested` provider step. The alternate send shortcut does the opposite for one message, and preview annotations always steer, as upstream sends them.
 
 ## Behavior
 
