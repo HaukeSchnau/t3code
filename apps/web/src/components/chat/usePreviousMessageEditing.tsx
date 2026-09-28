@@ -47,7 +47,7 @@ import { type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { useEnvironmentSettings } from "../../hooks/useSettings";
 import { useTheme } from "../../hooks/useTheme";
 import { useEnvironment } from "../../state/environments";
-import { useProject, useProviderUsageLimits, useThread } from "../../state/entities";
+import { useProject, useThread } from "../../state/entities";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../../terminalUiStateStore";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE } from "../../types";
@@ -139,17 +139,6 @@ export function usePreviousMessageEditing({
   const settings = useEnvironmentSettings(environmentId);
   const providerStatuses = environment?.serverConfig?.providers ?? EMPTY_PROVIDER_STATUSES;
   const composerProviderStatuses = useMemo(() => [...providerStatuses], [providerStatuses]);
-  const providerUsageLimits = useProviderUsageLimits(environmentId);
-  const usageLimitsSources = useMemo(
-    () =>
-      providerUsageLimits.map((entry) => ({
-        provider: entry.provider,
-        providerInstanceId: entry.providerInstanceId,
-        usageLimits: [entry.usageLimits],
-        usageHistory: entry.history,
-      })),
-    [providerUsageLimits],
-  );
   const { resolvedTheme } = useTheme();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const terminalOpen = useTerminalUiStateStore(
@@ -737,7 +726,6 @@ export function usePreviousMessageEditing({
         providerStatuses={composerProviderStatuses}
         activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
         activeThreadModelSelection={activeThread?.modelSelection}
-        usageLimitsSources={usageLimitsSources}
         resolvedTheme={resolvedTheme}
         settings={settings}
         keybindings={keybindings}
@@ -775,7 +763,6 @@ export function usePreviousMessageEditing({
     activeProject?.defaultModelSelection,
     activeThread,
     activeThreadId,
-    usageLimitsSources,
     cancelEditUserMessage,
     composerProviderStatuses,
     draftId,

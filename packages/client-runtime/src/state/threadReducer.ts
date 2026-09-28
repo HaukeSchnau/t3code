@@ -92,7 +92,6 @@ const activityIdIndex = new WeakMap<
 function activityProducesWorkLogRow(activity: OrchestrationThreadActivity): boolean {
   if (activity.kind === "tool.started" || activity.kind === "task.started") return false;
   if (activity.kind === "context-window.updated") return false;
-  if (activity.kind === "account.rate-limits.updated") return false;
   if (activity.kind === "subagent.thread") return false;
   if (activity.summary === "Checkpoint captured") return false;
   if (activity.kind !== "tool.updated" && activity.kind !== "tool.completed") return true;

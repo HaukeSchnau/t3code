@@ -21,7 +21,6 @@ import {
   ProjectMetaUpdatedPayload,
   OrchestrationProjectShell,
   OrchestrationProposedPlan,
-  OrchestrationProviderUsageLimits,
   OrchestrationSession,
   OrchestrationShellStreamItem,
   OrchestrationSubscribeShellInput,
@@ -61,7 +60,6 @@ const decodeThreadTurnStartRequestedPayload = Schema.decodeUnknownEffect(
 );
 const decodeOrchestrationLatestTurn = Schema.decodeUnknownEffect(OrchestrationLatestTurn);
 const decodeOrchestrationProposedPlan = Schema.decodeUnknownEffect(OrchestrationProposedPlan);
-const decodeProviderUsageLimits = Schema.decodeUnknownEffect(OrchestrationProviderUsageLimits);
 const decodeOrchestrationSession = Schema.decodeUnknownEffect(OrchestrationSession);
 const decodeOrchestrationThread = Schema.decodeUnknownEffect(OrchestrationThread);
 const decodeOrchestrationThreadShell = Schema.decodeUnknownEffect(OrchestrationThreadShell);
@@ -83,9 +81,9 @@ const decodeLegacySubscribeShellInput = Schema.decodeUnknownEffect(
   Schema.Struct({ afterSequence: Schema.optionalKey(Schema.Number) }),
 );
 
-it.effect("decodes provider usage history and defaults older snapshots to no history", () =>
+it.effect("decodes usage-limit shell items from servers that still project usage limits", () =>
   Effect.gen(function* () {
-    const base = {
+    const usageLimits = {
       provider: "codex",
       providerInstanceId: "codex",
       usageLimits: {
@@ -94,36 +92,35 @@ it.effect("decodes provider usage history and defaults older snapshots to no his
         planType: "pro",
         rateLimitReachedType: null,
         credits: null,
-        primary: {
-          usedPercent: 5,
-          resetsAt: "2026-08-20T08:15:43.000Z",
-          windowDurationMins: 10080,
-        },
+        primary: { usedPercent: 5, resetsAt: "2026-08-20T08:15:43.000Z", windowDurationMins: 300 },
         secondary: null,
         updatedAt: "2026-08-13T10:10:00.000Z",
       },
+      history: [],
     };
 
-    const legacy = yield* decodeProviderUsageLimits(base);
-    assert.strictEqual(legacy.history, undefined);
-
-    const decoded = yield* decodeProviderUsageLimits({
-      ...base,
-      history: [
-        {
-          resetsAt: "2026-08-13T08:15:43.000Z",
-          windowDurationMins: 10080,
-          points: [{ observedAt: "2026-08-06T10:10:00.000Z", usedPercent: 7 }],
-        },
-      ],
+    const item = yield* decodeShellStreamItem({
+      kind: "usage-limits-updated",
+      sequence: 9,
+      usageLimits,
     });
-    assert.deepStrictEqual(decoded.history, [
-      {
-        resetsAt: "2026-08-13T08:15:43.000Z",
-        windowDurationMins: 10080,
-        points: [{ observedAt: "2026-08-06T10:10:00.000Z", usedPercent: 7 }],
+    assert.deepStrictEqual(item, { kind: "usage-limits-updated", sequence: 9 });
+
+    const snapshot = yield* decodeShellStreamItem({
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 9,
+        projects: [],
+        threads: [],
+        usageLimits: [usageLimits],
+        updatedAt: "2026-08-13T10:10:00.000Z",
       },
-    ]);
+    });
+    assert.strictEqual(snapshot.kind, "snapshot");
+    if (snapshot.kind === "snapshot") {
+      assert.strictEqual(snapshot.snapshot.snapshotSequence, 9);
+      assert.notProperty(snapshot.snapshot, "usageLimits");
+    }
   }),
 );
 

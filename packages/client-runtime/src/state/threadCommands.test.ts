@@ -31,7 +31,6 @@ const SNAPSHOT: OrchestrationShellSnapshot = {
   snapshotSequence: 1,
   updatedAt: NOW,
   projects: [],
-  usageLimits: [],
   threads: [
     {
       id: THREAD_ID,

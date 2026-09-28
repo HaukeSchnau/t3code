@@ -45,7 +45,6 @@ const makeProjectionSnapshotQueryLayer = (importedWorkspaceRoots: ReadonlyArray<
         snapshotSequence: 0,
         projects: importedWorkspaceRoots.map((workspaceRoot) => makeProjectShell(workspaceRoot)),
         threads: [],
-        usageLimits: [],
         updatedAt: "2026-01-01T00:00:00.000Z",
       }),
     getDeletedWorktreeThreads: () => Effect.die("unused"),

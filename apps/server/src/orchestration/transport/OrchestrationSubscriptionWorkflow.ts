@@ -204,7 +204,7 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
   });
 
   const retryShellProjectionRead = <A, E>(
-    aggregateKind: "project" | "provider" | "thread",
+    aggregateKind: "project" | "thread",
     aggregateId: string,
     read: Effect.Effect<A, E>,
   ): Effect.Effect<Option.Option<A>, never, never> =>
@@ -261,42 +261,6 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
       ),
     );
 
-  const providerUsageLimitsUpsert = (
-    event: Extract<OrchestrationEvent, { type: "provider.usage-limits-updated" }>,
-  ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> => {
-    const fallback = {
-      provider: event.payload.provider,
-      providerInstanceId: event.payload.providerInstanceId,
-      usageLimits: event.payload.usageLimits,
-    };
-    const read = input.projectionSnapshotQuery.getProviderUsageLimitsByInstanceId;
-    if (!read) {
-      return Effect.succeed(
-        Option.some({
-          kind: "usage-limits-updated",
-          sequence: event.sequence,
-          usageLimits: fallback,
-        }),
-      );
-    }
-
-    return retryShellProjectionRead(
-      "provider",
-      event.payload.providerInstanceId,
-      read(event.payload.providerInstanceId),
-    ).pipe(
-      Effect.map((result) =>
-        Option.some({
-          kind: "usage-limits-updated" as const,
-          sequence: event.sequence,
-          usageLimits: Option.flatMap(result, (value) => value).pipe(
-            Option.getOrElse(() => fallback),
-          ),
-        }),
-      ),
-    );
-  };
-
   const coordinationUpdate = (
     sequence: number,
   ): Effect.Effect<Option.Option<ShellLiveItem>, never, never> => {
@@ -349,8 +313,6 @@ export function makeOrchestrationSubscriptionWorkflow(input: {
         );
       case "thread.unarchived":
         return threadUpsertOrRemove(event.payload.threadId, event.sequence);
-      case "provider.usage-limits-updated":
-        return providerUsageLimitsUpsert(event);
       default:
         if (event.aggregateKind !== "thread" || !isShellVisibleThreadEvent(event)) {
           return Effect.succeed(Option.some(shellCursor(event)));
