@@ -507,8 +507,12 @@ export function useThreadActions() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Thread deleted, but workspace removal failed",
-            description: `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`,
+            title: removalFailed
+              ? "Failed to delete workspace"
+              : "Workspace deleted, but Git status refresh failed",
+            description: removalFailed
+              ? `Could not remove ${displayWorktreePath ?? orphanedWorktreePath}. ${message}`
+              : message,
           }),
         );
         // The thread was deleted. Cleanup has its own toast; returning its
