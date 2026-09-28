@@ -48,20 +48,24 @@ See [images and videos](#images-and-videos-in-messages) for previewing and savin
 
 ## Send while the agent is working
 
-On web and desktop, a message sent during a running turn waits at the end of the conversation as a
-dashed bubble. It goes out on its own when the agent finishes its next tool
-call, or when the turn ends. Use the arrow under the bubble to send it right
-away, or the X to move it back into the composer. Stop returns every queued
-message to the composer.
+On web and desktop, **Settings → General → Follow-up behavior** decides what a
+message sent during a running turn does. The setting applies to the current
+client.
 
-In **Settings → General → Follow-up behavior**, choose **Queue** to keep this
-behavior or **Steer** to send new messages immediately. This setting applies to
-the current client. Messages already queued keep their place.
+- **Queue**, the default, holds the message on the server and lists it above the
+  composer. It goes out when the turn completes. A failed, stopped, or
+  interrupted turn leaves the queue alone. Queued messages survive a reload and
+  show on every client connected to the thread.
+- **Steer** sends the message into the running turn right away.
 
-Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on Windows and Linux to send
-the oldest queued message now. Change `thread.steerQueuedMessage` in
-**Settings → Keybindings** to use another shortcut. It leaves the current draft
-in the composer and waits if the agent needs an approval or an answer.
+Press `mod+Enter` to do the other one for a single message, or `mod+Shift+Enter`
+when sending itself requires `mod+Enter`.
+
+Each queued message has a button to send it now, which steers the running turn,
+and one to remove it. Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on
+Windows and Linux to send the oldest queued message now. Change
+`thread.steerQueuedMessage` in **Settings → Keybindings** to use another
+shortcut.
 
 ## Queue messages offline on mobile
 

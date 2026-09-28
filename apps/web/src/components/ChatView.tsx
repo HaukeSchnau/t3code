@@ -422,6 +422,7 @@ import {
   formatThreadTurnOutgoingText,
   resolveThreadTurnOutgoingText,
   resolveNewThreadSubmissionTitle,
+  shouldQueueFollowUp,
   submitThreadTurn,
   threadComposerRevision,
   threadTurnDraftFromComposer,
@@ -7956,7 +7957,14 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const threadIdForSend = activeThread.id;
-    const shouldQueueMessage = phase === "running";
+    // Preview annotations always reach the running turn, as upstream sends them.
+    const shouldQueueMessage =
+      !directAnnotation &&
+      shouldQueueFollowUp({
+        running: phase === "running",
+        followUpBehavior: settings.followUpBehavior,
+        submissionIntent,
+      });
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const shouldPrepareWorkspace =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
