@@ -1641,7 +1641,7 @@ describe("applyThreadDetailEvent", () => {
       }
     });
 
-    it("replaces the previous null-turn context snapshot without collapsing rate limits", () => {
+    it("replaces the previous null-turn context snapshot without collapsing other activities", () => {
       const priorContext = {
         id: EventId.make("context-old"),
         tone: "info" as const,
@@ -1652,18 +1652,18 @@ describe("applyThreadDetailEvent", () => {
         sequence: 1,
         createdAt: "2026-04-01T10:00:00.000Z",
       };
-      const rateLimit = {
-        id: EventId.make("rate-limit"),
+      const warning = {
+        id: EventId.make("warning"),
         tone: "info" as const,
-        kind: "account.rate-limits.updated",
-        summary: "Rate limits",
-        payload: { primary: { usedPercent: 20 } },
+        kind: "runtime.warning",
+        summary: "Runtime warning",
+        payload: { message: "Slow provider" },
         turnId: null,
         sequence: 2,
         createdAt: "2026-04-01T10:01:00.000Z",
       };
       const result = applyThreadDetailEvent(
-        { ...baseThread, activities: [priorContext, rateLimit] },
+        { ...baseThread, activities: [priorContext, warning] },
         {
           ...baseEventFields,
           sequence: 12,
@@ -1688,7 +1688,7 @@ describe("applyThreadDetailEvent", () => {
       expect(result.kind).toBe("updated");
       if (result.kind === "updated") {
         expect(result.thread.activities.map((entry) => entry.id)).toEqual([
-          "rate-limit",
+          "warning",
           "context-new",
         ]);
       }
