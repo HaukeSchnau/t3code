@@ -1,4 +1,4 @@
-import { threadHasStarted } from "../ChatView.logic";
+import { threadHasStarted, threadShellHasStarted } from "../ChatView.logic";
 import {
   providerSupportsManualCompaction,
   shouldReserveContextWindowMeter,
@@ -939,6 +939,7 @@ import {
   type ChatMessage,
   type SessionPhase,
   type Thread,
+  type ThreadShell,
   videoMimeType,
 } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
@@ -1370,6 +1371,8 @@ export interface ChatComposerProps {
   activeThreadId: ThreadId | null;
   activeThreadEnvironmentId: EnvironmentId | undefined;
   activeThread: Thread | undefined;
+  /** The routed server thread's shell, present before its detail loads. */
+  activeThreadShell?: ThreadShell | null;
   /** Timeline messages including optimistic sends, for ArrowUp prompt recall. */
   promptHistoryMessages?: ReadonlyArray<ChatMessage>;
   isServerThread: boolean;
@@ -2135,7 +2138,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const reserveContextWindowMeter = shouldReserveContextWindowMeter({
     meterEnabled: settings.contextWindowMeterEnabled,
     detailLoading: props.threadSyncPhase === "loading",
-    threadStarted: threadHasStarted(props.activeThread),
+    // The loading thread carries no messages; its shell still knows it started.
+    threadStarted:
+      threadShellHasStarted(props.activeThreadShell) || threadHasStarted(props.activeThread),
     providerReportsContextWindow: selectedProviderStatus
       ? selectedProviderStatus.reportsContextWindow === true
       : null,
