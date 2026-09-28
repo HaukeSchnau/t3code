@@ -363,7 +363,6 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
-  useProviderUsageLimits,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -2973,17 +2972,6 @@ export default function ChatView(props: ChatViewProps) {
   const supportsConversationRollback =
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
-  const providerUsageLimits = useProviderUsageLimits(activeThread?.environmentId ?? null);
-  const usageLimitsSources = useMemo(
-    () =>
-      providerUsageLimits.map((entry) => ({
-        provider: entry.provider,
-        providerInstanceId: entry.providerInstanceId,
-        usageLimits: [entry.usageLimits],
-        usageHistory: entry.history,
-      })),
-    [providerUsageLimits],
-  );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
@@ -9907,7 +9895,6 @@ export default function ChatView(props: ChatViewProps) {
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeContextWindow={activeContextWindow}
-                            usageLimitsSources={usageLimitsSources}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}
                             onCompactContext={onCompactContext}

@@ -307,7 +307,6 @@ import {
   subscribeToPendingSnapShotAnimations,
 } from "../../lib/snapShotAnimation";
 import { resizeSnapShotSource } from "../../lib/snapShotSource";
-import { UsageLimitsMeter } from "./UsageLimitsMeter";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, isMacPlatform, randomUUID } from "~/lib/utils";
 import {
@@ -948,11 +947,6 @@ import {
   resolveProviderSkillsForCwd,
   resolveProviderSlashCommandsForCwd,
 } from "@t3tools/client-runtime/providerSkills";
-import {
-  deriveLatestUsageLimitsSnapshotForSources,
-  type UsageLimitsActivitySource,
-  type UsageLimitsSnapshot,
-} from "../../lib/usageLimits";
 import { searchProviderSkills } from "../../providerSkillSearch";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -1170,38 +1164,9 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   );
 });
 
-export function ComposerUsageLimitsMeterSlot(props: {
-  compact: boolean;
-  selectedProvider: ProviderDriverKind;
-  selectedModel?: string | null;
-  activeUsageLimits: UsageLimitsSnapshot | null;
-}) {
-  const selectedModelSeparator = props.selectedModel?.indexOf("/") ?? -1;
-  const selectedOpenCodeProvider =
-    selectedModelSeparator > 0 ? props.selectedModel?.slice(0, selectedModelSeparator) : null;
-  const selectedOpenCodeModel =
-    selectedModelSeparator > 0 ? props.selectedModel?.slice(selectedModelSeparator + 1) : null;
-  const supportsOpenCodeGlmUsageLimits =
-    props.selectedProvider === ProviderDriverKind.make("opencode") &&
-    selectedOpenCodeModel?.toLowerCase().startsWith("glm-") === true &&
-    selectedOpenCodeProvider === props.activeUsageLimits?.limitId;
-  const supportsUsageLimits =
-    props.selectedProvider === ProviderDriverKind.make("codex") ||
-    props.selectedProvider === ProviderDriverKind.make("claudeAgent") ||
-    supportsOpenCodeGlmUsageLimits;
-  if (!supportsUsageLimits || !props.activeUsageLimits) {
-    return null;
-  }
-
-  return <UsageLimitsMeter usageLimits={props.activeUsageLimits} compact={props.compact} />;
-}
-
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
-  selectedProvider: ProviderDriverKind;
-  selectedModel: string;
   activeContextWindow: ContextWindowSnapshot | null;
-  activeUsageLimits: UsageLimitsSnapshot | null;
   activeThreadModelDisplayName: string | null;
   isPreparingWorktree: boolean;
   pendingAction: {
@@ -1244,12 +1209,6 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
           compactDisabledReason={props.compactDisabledReason}
         />
       ) : null}
-      <ComposerUsageLimitsMeterSlot
-        compact={props.compact}
-        selectedProvider={props.selectedProvider}
-        selectedModel={props.selectedModel}
-        activeUsageLimits={props.activeUsageLimits}
-      />
       {props.isPreparingWorktree ? (
         <span className="text-secondary-label text-xs">Preparing worktree...</span>
       ) : null}
@@ -1434,7 +1393,6 @@ export interface ChatComposerProps {
 
   // Context window
   activeContextWindow?: ContextWindowSnapshot | null;
-  usageLimitsSources?: ReadonlyArray<UsageLimitsActivitySource>;
   compactDisabled?: boolean;
   compactDisabledReason?: string | null;
 
@@ -1568,7 +1526,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeContextWindow = null,
-    usageLimitsSources = [],
     compactDisabled = false,
     compactDisabledReason = null,
     resolvedTheme,
@@ -1963,15 +1920,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // disabled.
   const selectedProvider: ProviderDriverKind =
     selectedProviderEntry?.driverKind ?? requestedDriverKind;
-  const activeUsageLimits = useMemo(
-    () =>
-      deriveLatestUsageLimitsSnapshotForSources(
-        usageLimitsSources,
-        selectedProvider,
-        selectedInstanceId,
-      ),
-    [selectedInstanceId, selectedProvider, usageLimitsSources],
-  );
 
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadRef: composerDraftTarget,
@@ -7140,9 +7088,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   </Button>
                 ) : null}
                 <ComposerFooterPrimaryActions
-                  selectedProvider={selectedProvider}
-                  selectedModel={selectedModel}
-                  activeUsageLimits={activeUsageLimits}
                   compact={isComposerResting || isComposerPrimaryActionsCompact}
                   activeContextWindow={
                     settings.contextWindowMeterEnabled ? activeContextWindow : null

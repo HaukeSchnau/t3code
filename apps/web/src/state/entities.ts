@@ -8,12 +8,7 @@ import {
   type EnvironmentThreadStatus,
   mergeEnvironmentThread,
 } from "@t3tools/client-runtime/state/threads";
-import type {
-  OrchestrationProviderUsageLimits,
-  ScopedProjectRef,
-  ScopedThreadRef,
-  ServerConfig,
-} from "@t3tools/contracts";
+import type { ScopedProjectRef, ScopedThreadRef, ServerConfig } from "@t3tools/contracts";
 import type { EnvironmentId } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 import { useMemo } from "react";
@@ -23,7 +18,6 @@ import { environmentServerConfigsAtom } from "./server";
 import {
   allEnvironmentProjectSnapshotsReadyAtom,
   allEnvironmentShellsBootstrappedAtom,
-  environmentSnapshotAtom,
 } from "./shell";
 import { environmentThreadDetails, environmentThreadShells } from "./threads";
 
@@ -43,16 +37,6 @@ const EMPTY_THREAD_DETAIL_ATOM = Atom.make<EnvironmentThread | null>(null).pipe(
 );
 const EMPTY_THREAD_STATUS_ATOM = Atom.make<EnvironmentThreadStatus>("empty").pipe(
   Atom.withLabel("web-thread-status:empty"),
-);
-const EMPTY_USAGE_LIMITS: ReadonlyArray<OrchestrationProviderUsageLimits> = Object.freeze([]);
-const EMPTY_USAGE_LIMITS_ATOM = Atom.make(EMPTY_USAGE_LIMITS).pipe(
-  Atom.withLabel("web-provider-usage-limits:empty"),
-);
-const PROVIDER_USAGE_LIMITS_ATOM = Atom.family((environmentId: EnvironmentId) =>
-  Atom.make(
-    (get): ReadonlyArray<OrchestrationProviderUsageLimits> =>
-      get(environmentSnapshotAtom(environmentId))?.usageLimits ?? EMPTY_USAGE_LIMITS,
-  ).pipe(Atom.withLabel(`web-provider-usage-limits:${environmentId}`)),
 );
 
 const activeEnvironmentIdAtom = Atom.make<EnvironmentId | null>(null).pipe(
@@ -88,14 +72,6 @@ export function useProjects(): ReadonlyArray<EnvironmentProject> {
 
 export function useServerConfigs(): ReadonlyMap<EnvironmentId, ServerConfig> {
   return useAtomValue(environmentServerConfigsAtom);
-}
-
-export function useProviderUsageLimits(
-  environmentId: EnvironmentId | null,
-): ReadonlyArray<OrchestrationProviderUsageLimits> {
-  return useAtomValue(
-    environmentId === null ? EMPTY_USAGE_LIMITS_ATOM : PROVIDER_USAGE_LIMITS_ATOM(environmentId),
-  );
 }
 
 export function useThreadShells(): ReadonlyArray<EnvironmentThreadShell> {
