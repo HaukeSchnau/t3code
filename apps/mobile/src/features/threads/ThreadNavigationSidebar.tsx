@@ -78,6 +78,7 @@ import {
   ThreadListShowMoreRow,
 } from "./thread-list-items";
 import {
+  ThreadListV2OrchestrationRow,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
@@ -85,11 +86,15 @@ import {
   ThreadListV2SnoozedShelfHeader,
 } from "./thread-list-v2-items";
 import { resolveThreadProviderInstance } from "./thread-provider-instance";
+import { useThreadOrchestrationExpansion } from "./use-thread-orchestration-expansion";
+import { useThreadLineage } from "../../state/coordination";
 import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
   threadListV2NeedsUser,
+  threadListV2OrchestrationItemsAreEqual,
+  threadListV2TopLevel,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
@@ -485,12 +490,30 @@ function ThreadNavigationSidebarPane(
     [serverConfigs],
   );
   const pendingOrder = usePendingThreadOrder(nowMinute, snoozeWakeTick);
+  const threadLineage = useThreadLineage();
+  const orchestrationExpansion = useThreadOrchestrationExpansion();
   const threadMovePlanners = useMemo(() => {
+    const sectionInput = {
+      threads,
+      pendingOrder,
+      now: new Date().toISOString(),
+      settlementEnvironmentIds,
+      snoozeEnvironmentIds,
+      queuedThreadKeys,
+    };
+    // Sorted once, shared by the planners and the top-level rows.
+    const ordered = {
+      pinned: getThreadListV2OrderedSection({ ...sectionInput, section: "pinned" }),
+      active: getThreadListV2OrderedSection({ ...sectionInput, section: "active" }),
+    };
+    const topLevel = threadListV2TopLevel({ ...ordered, lineage: threadLineage });
+    const needsUser = threadListV2NeedsUser(threads);
     const sectionPlanner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
         allThreads: threads,
         section,
-        ...(section === "active" ? { needsUser: threadListV2NeedsUser(threads) } : {}),
+        topLevel,
+        ...(section === "active" ? { needsUser } : {}),
         reorderableEnvironmentIds: new Set(
           [...serverConfigs].flatMap(([id, config]) =>
             (section === "pinned"
@@ -500,21 +523,27 @@ function ThreadNavigationSidebarPane(
               : [],
           ),
         ),
-        ordered: getThreadListV2OrderedSection({
-          threads,
-          section,
-          pendingOrder,
-          now: new Date().toISOString(),
-          settlementEnvironmentIds,
-          snoozeEnvironmentIds,
-          queuedThreadKeys,
-        }),
+        ordered: ordered[section],
       });
-    return { pinned: sectionPlanner("pinned"), active: sectionPlanner("active") };
+    const keyOf = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+    return {
+      pinned: sectionPlanner("pinned"),
+      active: sectionPlanner("active"),
+      // What Move up/down availability depends on beyond a row's own data:
+      // the top-level rows and bands around it, and whether a move is held.
+      layoutKey: [
+        pendingOrder === null ? "" : "held",
+        ...[...ordered.pinned, ...ordered.active].map((thread) => {
+          const key = keyOf(thread);
+          return `${key}${topLevel(key) ? "^" : ""}${needsUser(key) ? "!" : ""}`;
+        }),
+      ].join("|"),
+    };
   }, [
     serverConfigs,
     threads,
     pendingOrder,
+    threadLineage,
     queuedThreadKeys,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
@@ -610,6 +639,15 @@ function ThreadNavigationSidebarPane(
       settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
       snoozeLabelNow: `${nowMinute}:00.000Z`,
       groupWorkspaces: selectedProjectRefs !== null,
+      ...(v2SearchQuery.length > 0
+        ? {}
+        : {
+            orchestration: {
+              lineage: threadLineage,
+              selectedThreadKey: props.selectedThreadKey,
+              isExpanded: orchestrationExpansion.isExpanded,
+            },
+          }),
     });
     if (settledShelfExpanded && threadListV2Layout.hiddenSettledCount > 0) {
       items.push({
@@ -623,13 +661,16 @@ function ThreadNavigationSidebarPane(
     listLayout.items,
     nowMinute,
     options.selectedEnvironmentId,
+    orchestrationExpansion.isExpanded,
     pendingTasks,
     props.searchQuery,
+    props.selectedThreadKey,
     selectedProjectRefs,
     settledShelfExpanded,
     snoozedShelfExpanded,
     threadListV2Enabled,
     threadListV2Layout,
+    threadLineage,
   ]);
   const listMenuActions = useMemo<MenuAction[]>(
     () => [
@@ -795,9 +836,17 @@ function ThreadNavigationSidebarPane(
   // Project shells load after the first rows draw, so the maps they feed have
   // to bust the recycler's memoization — otherwise a row keeps the blank
   // favicon and fallback title it was first rendered with.
+  // LegendList re-renders a recycled row only when its key, data or
+  // extraData change, so values a row reads from its neighbours go here.
+  const moveLayoutKey = threadMovePlanners.layoutKey;
+  const selectedThreadTitle = threads.find(
+    (thread) => `${thread.environmentId}:${thread.id}` === props.selectedThreadKey,
+  )?.title;
   const listExtraData = useMemo(
     () => ({
       selectedThreadKey: props.selectedThreadKey ?? "",
+      selectedThreadTitle,
+      moveLayoutKey,
       projectByKey,
       projectTitleByProjectKey,
       savedConnectionsById,
@@ -807,6 +856,8 @@ function ThreadNavigationSidebarPane(
     }),
     [
       props.selectedThreadKey,
+      selectedThreadTitle,
+      moveLayoutKey,
       projectByKey,
       projectTitleByProjectKey,
       savedConnectionsById,
@@ -825,8 +876,12 @@ function ThreadNavigationSidebarPane(
           previous.item.variant === item.item.variant &&
           previous.item.snoozed === item.item.snoozed &&
           previous.item.pinned === item.item.pinned &&
-          previous.snoozeWakeLabelText === item.snoozeWakeLabelText
+          previous.snoozeWakeLabelText === item.snoozeWakeLabelText &&
+          threadListV2OrchestrationItemsAreEqual(previous.orchestration, item.orchestration)
         );
+      }
+      if (previous.type === "v2-orchestration" && item.type === "v2-orchestration") {
+        return threadListV2OrchestrationItemsAreEqual(previous.item, item.item);
       }
       if (previous.type === "v2-show-more" && item.type === "v2-show-more") {
         return previous.hiddenCount === item.hiddenCount;
@@ -848,6 +903,8 @@ function ThreadNavigationSidebarPane(
       if (
         previous.type === "v2-workspace" ||
         item.type === "v2-workspace" ||
+        previous.type === "v2-orchestration" ||
+        item.type === "v2-orchestration" ||
         previous.type === "v2-thread" ||
         previous.type === "v2-show-more" ||
         previous.type === "v2-pending" ||
@@ -935,6 +992,8 @@ function ThreadNavigationSidebarPane(
               pinned={item.item.pinned}
               snoozePresetMinute={nowMinute}
               snoozeWakeLabelText={item.snoozeWakeLabelText}
+              {...(item.orchestration === undefined ? {} : { orchestration: item.orchestration })}
+              onToggleOrchestrationContainer={orchestrationExpansion.toggle}
               project={projectByKey.get(scopeKey) ?? null}
               projectTitle={projectTitleByProjectKey.get(scopeKey)}
               providerInstance={resolveThreadProviderInstance(serverConfigs, thread)}
@@ -982,6 +1041,25 @@ function ThreadNavigationSidebarPane(
               onSwipeableClose={handleSwipeableClose}
               onSwipeableWillOpen={handleSwipeableWillOpen}
               simultaneousSwipeGesture={sidebarScrollGesture}
+            />
+          );
+        }
+        case "v2-orchestration": {
+          const orchestrationItem = item.item;
+          const selectedTitle =
+            orchestrationItem.type === "viewing"
+              ? threads.find(
+                  (thread) =>
+                    `${thread.environmentId}:${thread.id}` === orchestrationItem.threadKey,
+                )?.title
+              : undefined;
+          return (
+            <ThreadListV2OrchestrationRow
+              item={orchestrationItem}
+              {...(selectedTitle === undefined ? {} : { selectedTitle })}
+              pane="sidebar"
+              onToggle={orchestrationExpansion.toggle}
+              onReveal={orchestrationExpansion.reveal}
             />
           );
         }
@@ -1096,6 +1174,9 @@ function ThreadNavigationSidebarPane(
     [
       archiveThread,
       activeReorderEnvironmentIds,
+      orchestrationExpansion.reveal,
+      orchestrationExpansion.toggle,
+      threads,
       threadMovePlanners,
       pendingOrder,
       queuedThreadKeys,
