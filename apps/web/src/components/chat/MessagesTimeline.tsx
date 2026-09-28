@@ -3513,6 +3513,17 @@ function ActivityShimmerOverlay({ children }: { children: ReactNode }) {
   );
 }
 
+const failedToolIconClassName = "text-tool-error-icon/40";
+
+/** Image icons and the gradient computer-use mark cannot take a currentColor
+ *  tint, so failed rows using them get a trailing x instead. */
+function toolIconAcceptsTint(
+  iconName: WorkEntryIconName,
+  toolIcon: ToolActivityIcon | undefined,
+): boolean {
+  return toolIcon === undefined && iconName !== "computer";
+}
+
 function LiveActivityRow({
   label,
   iconName,
@@ -3573,38 +3584,39 @@ function LiveActivityContent({
   active?: boolean;
   highlighted?: boolean;
 }) {
-  const isSpecialToolIcon =
-    iconName === "browser" || iconName === "computer" || iconName === "t3-code";
-  const resolvedIconName = failed && !isSpecialToolIcon ? "circle-alert" : iconName;
+  const showTrailingFailureMark =
+    failed && iconName !== undefined && !toolIconAcceptsTint(iconName, toolIcon);
 
   return (
-    <div
+    <span
       className={cn(
         "flex min-h-6 min-w-0 items-center gap-1.5 py-0.5",
-        resolvedIconName ? "px-0.5" : "px-1",
-        "text-secondary-label",
+        iconName ? "px-0.5" : "px-1",
+        highlighted ? "text-foreground" : "text-secondary-label",
       )}
     >
-      {resolvedIconName ? (
+      {iconName ? (
         <span
           className={cn(
             "flex size-6 shrink-0 items-center justify-center",
-            failed ? "text-destructive" : "text-icon-muted",
+            failed ? failedToolIconClassName : highlighted ? "text-foreground" : "text-icon-muted",
           )}
           role={announceFailure ? "img" : undefined}
           aria-label={announceFailure ? "Tool call failed" : undefined}
         >
           <ToolActivityIconView
-            icon={failed && !isSpecialToolIcon ? undefined : toolIcon}
-            fallbackName={resolvedIconName}
+            icon={toolIcon}
+            fallbackName={iconName}
             className="block size-4 shrink-0 stroke-[1.8]"
             muted={!highlighted}
           />
         </span>
       ) : null}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {failed && isSpecialToolIcon ? <XIcon aria-hidden className="size-3 shrink-0" /> : null}
-    </div>
+      {showTrailingFailureMark ? (
+        <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
+      ) : null}
+    </span>
   );
 }
 
@@ -4950,27 +4962,47 @@ function workEntryRawCommand(
 function buildToolCallExpandedBody(
   workEntry: TimelineWorkEntry,
   workspaceRoot: string | undefined,
+  visibleLabel: string,
+  viewedImagePath: string | null,
 ): string | null {
   const blocks: string[] = [];
+  const seen = new Set<string>([visibleLabel.trim()]);
+  const addBlock = (value: string | null | undefined) => {
+    const text = value?.trim();
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    blocks.push(text);
+  };
   if (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) {
-    blocks.push(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
+    addBlock(`MCP call\n${JSON.stringify(workEntry.toolData, null, 2)}`);
   }
+  const command = workEntry.command?.trim();
   const raw = workEntryRawCommand(workEntry);
-  if (raw?.trim()) {
-    blocks.push(raw.trim());
-  } else if (workEntry.command?.trim()) {
-    blocks.push(workEntry.command.trim());
+  if (command === visibleLabel.trim()) {
+    seen.add(command);
+  } else {
+    addBlock(raw ?? command);
   }
-  if (workEntry.detail?.trim()) {
-    blocks.push(workEntry.detail.trim());
+  const detail = workEntry.detail?.trim();
+  if (detail !== viewedImagePath?.trim()) {
+    addBlock(detail);
   }
-  const changedFiles = workEntry.changedFiles ?? [];
+  const viewedImagePaths = new Set(
+    viewedImagePath
+      ? [viewedImagePath.trim(), formatWorkspaceRelativePath(viewedImagePath, workspaceRoot)]
+      : [],
+  );
+  const changedFiles = (workEntry.changedFiles ?? []).flatMap((filePath) => {
+    const formattedPath = formatWorkspaceRelativePath(filePath, workspaceRoot);
+    return viewedImagePaths.has(filePath) ||
+      viewedImagePaths.has(formattedPath) ||
+      filePath.trim() === detail ||
+      formattedPath === detail
+      ? []
+      : [formattedPath];
+  });
   if (changedFiles.length > 0) {
-    blocks.push(
-      changedFiles
-        .map((filePath) => formatWorkspaceRelativePath(filePath, workspaceRoot))
-        .join("\n"),
-    );
+    addBlock([...new Set(changedFiles)].join("\n"));
   }
   return blocks.length > 0 ? blocks.join("\n\n") : null;
 }
@@ -5181,7 +5213,7 @@ function AgentSpawnMemberRow({
           <span
             className={cn(
               "min-w-0 truncate",
-              agent.status === "failed" ? "text-tool-error-icon/40" : "text-foreground/80",
+              agent.status === "failed" ? failedToolIconClassName : "text-foreground/80",
             )}
           >
             {agent.title}
@@ -5294,20 +5326,19 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const iconConfig = workToneIcon(workEntry.tone);
   const showWarningIndicator = workEntry.sourceActivityKind === "runtime.warning";
   const showFailedIndicator = workEntryDisplayIndicatesToolFailure(workEntry);
-  const toolPresentation = resolveWorkEntryToolPresentation(workEntry);
-  const hasSpecialToolIcon = toolPresentation !== null || workEntry.toolSurface !== undefined;
-  const severeFailure = workEntrySignalsSevereFailure(workEntry);
+  const showDestructiveRowStyle =
+    showFailedIndicator &&
+    (workEntrySignalsSevereFailure(workEntry) || !workLogEntryIsToolLike(workEntry));
   const entryIconName =
-    showWarningIndicator || (showFailedIndicator && !hasSpecialToolIcon)
-      ? "circle-alert"
-      : workEntryIconName(workEntry);
+    showWarningIndicator || showDestructiveRowStyle ? "circle-alert" : workEntryIconName(workEntry);
+  const entryToolIcon =
+    showWarningIndicator || showDestructiveRowStyle
+      ? undefined
+      : (workEntry.toolIcon ?? workEntry.toolSource?.icon);
   const previewText = displayLabel ?? workEntryDisplayLabel(workEntry, workspaceRoot);
   const answerPreview = workEntry.questionAnswer
     ? getQuestionAnswerPreview(workEntry.questionAnswer)
     : null;
-  const displayText =
-    !toolPresentation && expanded && workEntry.command?.trim() ? "Command" : previewText;
-  const expandedBody = expanded ? buildToolCallExpandedBody(workEntry, workspaceRoot) : null;
   const viewedImagePath = workEntryViewedImagePath(workEntry);
   const viewedImage =
     viewedImagePath && threadRef
@@ -5320,25 +5351,35 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
   const canExpand =
     Boolean(workEntry.questionAnswer) ||
     hasObservedMediaPreviews ||
-    viewedImage !== null ||
+    (showFailedIndicator && previewText.trim().length > 0) ||
     (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||
     Boolean(
       workEntryRawCommand(workEntry) ||
       workEntry.command?.trim() ||
       workEntry.detail?.trim() ||
-      workEntry.changedFiles?.length,
+      workEntry.changedFiles?.length ||
+      viewedImage,
     );
-  const showDestructiveRowStyle =
-    showFailedIndicator && (severeFailure || !workLogEntryIsToolLike(workEntry));
+  const expandedBody = expanded
+    ? buildToolCallExpandedBody(
+        workEntry,
+        workspaceRoot,
+        previewText,
+        viewedImage ? viewedImagePath : null,
+      )
+    : null;
+  // Reserve destructive row styling for severe failures, not routine tool errors.
   const iconWrapperClass = cn(
     "flex size-6 shrink-0 items-center justify-center",
     showWarningIndicator
       ? "text-warning"
       : showDestructiveRowStyle
         ? "text-destructive"
-        : workEntry.tone === "tool" || showFailedIndicator
-          ? "text-icon-muted"
-          : iconConfig.className,
+        : showFailedIndicator
+          ? failedToolIconClassName
+          : workEntry.tone === "tool"
+            ? "text-icon-muted"
+            : iconConfig.className,
   );
   const headingClass = showWarningIndicator
     ? "font-medium text-warning"
@@ -5385,11 +5426,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           aria-label={showFailedIndicator ? "Tool call failed" : undefined}
         >
           <ToolActivityIconView
-            icon={
-              showWarningIndicator || (showFailedIndicator && !hasSpecialToolIcon)
-                ? undefined
-                : (workEntry.toolIcon ?? workEntry.toolSource?.icon)
-            }
+            icon={entryToolIcon}
             fallbackName={entryIconName}
             className="block size-4 shrink-0 stroke-[1.8]"
             muted
@@ -5407,7 +5444,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
                 onClick={expanded ? stopRowToggleWhileSelectingText : undefined}
                 onPointerDown={expanded ? stopRowToggle : undefined}
               >
-                {displayText}
+                {previewText}
               </span>
               {answerPreview ? (
                 <span
@@ -5425,8 +5462,10 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
               ) : null}
             </p>
           </div>
-          {showFailedIndicator && hasSpecialToolIcon ? (
-            <XIcon aria-hidden className="size-3 shrink-0 text-icon-muted" />
+          {showFailedIndicator &&
+          !showDestructiveRowStyle &&
+          !toolIconAcceptsTint(entryIconName, entryToolIcon) ? (
+            <XIcon aria-hidden className={cn("size-3 shrink-0", failedToolIconClassName)} />
           ) : null}
           <TimelineRowTimestamp createdAt={workEntry.createdAt} timestampFormat={timestampFormat} />
           <span
@@ -5445,7 +5484,7 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           </span>
         </div>
       </div>
-      {viewedImage && threadRef ? (
+      {expanded && viewedImage && threadRef ? (
         <div
           className="mt-1 ms-7 cursor-default"
           onClick={stopRowToggle}
@@ -5465,9 +5504,12 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       {expanded && workEntry.questionAnswer ? (
         <QuestionAnswerHistory answer={workEntry.questionAnswer} />
       ) : null}
-      {expanded && canExpand && !workEntry.questionAnswer ? (
+      {expanded &&
+      canExpand &&
+      (expandedBody || hasObservedMediaPreviews) &&
+      !workEntry.questionAnswer ? (
         <div
-          className="mt-1 ms-7 cursor-default border-s border-border/45 ps-3 pt-0.5"
+          className="mt-1 ms-7 cursor-default rounded-md bg-muted/40 px-3 py-2"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
