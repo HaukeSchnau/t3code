@@ -11,6 +11,7 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import type { AsyncResult } from "effect/unstable/reactivity";
 import {
   planPinnedReorder,
+  sortActiveThreadsByAttention,
   sortActiveThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import {
@@ -19,7 +20,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
   getThreadSortTimestamp,
-  sortThreadsByAttention,
   resolveSettledThreadTimestamp,
   sortThreads,
   toSortableTimestamp,
@@ -944,17 +944,9 @@ export function sortThreadsForSidebar<
     readonly activeOrderKey?: string | null | undefined;
   },
 >(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
-  if (getBand === undefined) {
-    return sortActiveThreadsByOrderKey(threads);
-  }
-  const attentionOrdered = sortThreadsByAttention(threads, getBand);
-  const sortBand = (band: SidebarAttentionBand) => {
-    const bandThreads = attentionOrdered.filter((thread) => getBand(thread) === band);
-    return bandThreads.some((thread) => thread.activeOrderKey != null)
-      ? sortActiveThreadsByOrderKey(bandThreads)
-      : bandThreads;
-  };
-  return [...sortBand("attention"), ...sortBand("normal")];
+  return getBand === undefined
+    ? sortActiveThreadsByOrderKey(threads)
+    : sortActiveThreadsByAttention(threads, getBand);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime

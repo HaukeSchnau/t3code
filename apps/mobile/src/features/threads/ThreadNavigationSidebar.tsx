@@ -89,6 +89,7 @@ import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
+  threadListV2NeedsUser,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
@@ -489,6 +490,7 @@ function ThreadNavigationSidebarPane(
       createThreadMovePlanner({
         allThreads: threads,
         section,
+        ...(section === "active" ? { needsUser: threadListV2NeedsUser(threads) } : {}),
         reorderableEnvironmentIds: new Set(
           [...serverConfigs].flatMap(([id, config]) =>
             (section === "pinned"

@@ -80,6 +80,10 @@ export function createThreadMovePlanner(input: {
   readonly allThreads?: readonly OrderRow[];
   readonly section: PendingThreadOrder["section"];
   readonly reorderableEnvironmentIds: ReadonlySet<EnvironmentId>;
+  /** Fork: active threads that need the user lead whatever their keys
+   * (patches/attention-ordered-sidebar.md). A move stays inside the moved
+   * thread's band and writes keys among that band only. */
+  readonly needsUser?: (id: string) => boolean;
 }) {
   const orderedIds = input.ordered.map(rowId);
   const keysById = new Map(
@@ -97,7 +101,15 @@ export function createThreadMovePlanner(input: {
     if (!writableIds.has(movedId)) return null;
     const nextIds = threadOrderAfterMove(orderedIds, movedId, direction);
     if (nextIds === null) return null;
-    const assignments = planPinnedReorder({ orderedIds: nextIds, keysById, movedId });
+    const needsUser = input.needsUser ?? (() => false);
+    const banded = [...nextIds.filter(needsUser), ...nextIds.filter((id) => !needsUser(id))];
+    if (banded.some((id, index) => id !== nextIds[index])) return null;
+    const movedNeedsUser = needsUser(movedId);
+    const assignments = planPinnedReorder({
+      orderedIds: nextIds.filter((id) => needsUser(id) === movedNeedsUser),
+      keysById,
+      movedId,
+    });
     return assignments === null ||
       assignments.length === 0 ||
       assignments.some((assignment) => !writableIds.has(assignment.id))
