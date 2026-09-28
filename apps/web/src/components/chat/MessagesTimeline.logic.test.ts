@@ -1146,6 +1146,62 @@ describe("deriveMessagesTimelineRows", () => {
     ]);
   });
 
+  it("offers no revert target for watch and wait notifications", () => {
+    const at = (second: number) => `2026-01-01T00:00:0${second}Z`;
+    const message = (
+      id: string,
+      role: "user" | "assistant",
+      second: number,
+      origin?: ChatMessage["origin"],
+    ) => ({
+      id,
+      kind: "message" as const,
+      createdAt: at(second),
+      message: {
+        id: MessageId.make(id),
+        role,
+        text: id,
+        turnId: null,
+        createdAt: at(second),
+        updatedAt: at(second),
+        streaming: false,
+        ...(origin ? { origin } : {}),
+      },
+    });
+    const summary = (assistantId: string, turnId: string, checkpointTurnCount: number) => ({
+      turnId: TurnId.make(turnId),
+      checkpointTurnCount,
+      checkpointRef: CheckpointRef.make(`refs/t3/checkpoints/${turnId}`),
+      status: "ready" as const,
+      files: [],
+      assistantMessageId: MessageId.make(assistantId),
+      completedAt: at(9),
+    });
+    const rows = deriveMessagesTimelineRows({
+      timelineEntries: [
+        message("user", "user", 1),
+        message("reply", "assistant", 2),
+        message("wait-result", "user", 3, {
+          type: "wait",
+          waitId: "wait-1" as never,
+          state: "satisfied",
+        }),
+        message("wait-reply", "assistant", 4),
+      ],
+      isWorking: false,
+      activeTurnStartedAt: null,
+      turnDiffSummaries: [summary("reply", "turn-1", 1), summary("wait-reply", "turn-2", 2)],
+      supportsConversationRollback: true,
+    });
+    const revertTurnCount = (id: string) =>
+      rows.flatMap((row) =>
+        row.kind === "message" && row.message.id === id ? [row.revertTurnCount] : [],
+      )[0];
+
+    expect(revertTurnCount("user")).toBe(0);
+    expect(revertTurnCount("wait-result")).toBeUndefined();
+  });
+
   it("leads the worktree setup card with the working header", () => {
     const snapshot: WorktreeSetupSnapshot = {
       threadId: ThreadId.make("thread-setup"),
