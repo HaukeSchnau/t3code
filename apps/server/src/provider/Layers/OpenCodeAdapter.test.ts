@@ -770,8 +770,18 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
         source,
       );
       NodeAssert.equal(openCodeZaiUsageSource(zaiProviderList, "anthropic/sonnet"), null);
-      // The provider probe has no selected model and takes any Z.AI provider.
+      // The provider probe has no selected model and takes any Z.AI provider,
+      // preferring a Coding Plan over a pay-as-you-go key on the same host.
       NodeAssert.deepEqual(openCodeInventoryZaiUsageSource(zaiProviderList), source);
+      const [codingPlan] = zaiProviderList.all;
+      NodeAssert.ok(codingPlan);
+      NodeAssert.deepEqual(
+        openCodeInventoryZaiUsageSource({
+          ...zaiProviderList,
+          all: [{ ...codingPlan, id: "zai", options: { apiKey: "pay-as-you-go-key" } }, codingPlan],
+        }),
+        source,
+      );
       NodeAssert.equal(openCodeInventoryZaiUsageSource({ ...zaiProviderList, all: [] }), null);
     }),
   );
@@ -821,11 +831,22 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const errorEvent = promiseWithResolvers<unknown>();
       const usageObserved = promiseWithResolvers<void>();
       runtimeMock.state.providerList = zaiProviderList;
-      runtimeMock.state.zaiUsageWindows = testZaiUsageWindows.map((window) => ({
-        ...window,
-        usedPercent: 100,
-        resetsAt: resetAt,
-      }));
+      runtimeMock.state.zaiUsageWindows = [
+        ...testZaiUsageWindows.map((window) => ({
+          ...window,
+          usedPercent: 100,
+          resetsAt: resetAt,
+        })),
+        // An exhausted MCP allowance with an earlier reset must not park coding retries.
+        {
+          id: "zai_mcp",
+          kind: "monthly",
+          label: "GLM · MCP",
+          usedPercent: 100,
+          resetsAt: "2026-09-02T00:00:00.000Z",
+          windowDurationMins: 44_640,
+        },
+      ];
       runtimeMock.state.zaiUsageObserved = () => usageObserved.resolve(undefined);
       runtimeMock.state.subscribedEvents = [errorEvent.promise];
 
