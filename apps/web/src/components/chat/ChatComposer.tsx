@@ -149,6 +149,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { useComposerMenuState } from "./useComposerMenuState";
 import { useComposerTriggerState } from "./useComposerTriggerState";
 import { useComposerFocusState } from "./useComposerFocusState";
 import { useComposerMultilinePrompt } from "./useComposerMultilinePrompt";
@@ -1066,10 +1067,12 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   size?: "sm" | "xs";
+  hidden?: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
 }) {
   const size = props.size ?? "sm";
+  const [open, setOpen] = useComposerMenuState(props.hidden);
   const composerFloatingLayerProps = useComposerMenuProps();
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
@@ -1128,6 +1131,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
       <Tooltip>
         <Select
+          open={open}
+          onOpenChange={setOpen}
           value={props.runtimeMode}
           onValueChange={(value) => props.onRuntimeModeChange(value!)}
         >
@@ -5001,6 +5006,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           interactionMode={interactionMode}
           runtimeMode={runtimeMode}
           size={composerControlsInStrip ? "xs" : "sm"}
+          hidden={composerControlsHidden || restingHiddenBlockCount > 0}
           onToggleInteractionMode={toggleInteractionMode}
           onRuntimeModeChange={handleRuntimeModeChange}
         />
@@ -5911,6 +5917,18 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // ------------------------------------------------------------------
   // Imperative handle
   // ------------------------------------------------------------------
+  const openModelPicker = useCallback(() => {
+    if (composerControlsHidden) {
+      if (composerBlurFrameRef.current !== null) {
+        window.cancelAnimationFrame(composerBlurFrameRef.current);
+        composerBlurFrameRef.current = null;
+      }
+      setIsComposerScrollCollapsed(false);
+      setIsComposerFocused(true);
+    }
+    setIsComposerModelPickerOpen(true);
+  }, [composerControlsHidden, setIsComposerFocused, setIsComposerScrollCollapsed]);
+
   useImperativeHandle(
     composerRef,
     () => ({
@@ -5997,11 +6015,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           "cursor",
           { ensureLeadingBoundary: true, citationCommentAnchor: sourceAnchor },
         ),
-      openModelPicker: () => {
-        setIsComposerModelPickerOpen(true);
-      },
+      openModelPicker,
       toggleModelPicker: () => {
-        setIsComposerModelPickerOpen((open) => !open);
+        if (isComposerModelPickerOpen) {
+          setIsComposerModelPickerOpen(false);
+        } else {
+          openModelPicker();
+        }
       },
       cycleReasoningEffort: () => {
         const nextOptions = cycleComposerReasoningEffort({
@@ -6160,6 +6180,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       projectSelectionRequired,
       applyPromptReplacement,
       isComposerModelPickerOpen,
+      openModelPicker,
       readComposerSnapshot,
       resetComposerTrigger,
       setComposerTrigger,
