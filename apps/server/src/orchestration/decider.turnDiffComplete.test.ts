@@ -23,7 +23,6 @@ const TURN_ID = TurnId.make("turn-1");
 function makeReadModel(checkpoints: ReadonlyArray<OrchestrationCheckpointSummary>) {
   return {
     snapshotSequence: 0,
-    usageLimits: [],
     projects: [],
     threads: [
       {

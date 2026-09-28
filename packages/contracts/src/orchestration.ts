@@ -27,7 +27,7 @@ import {
   TrimmedString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
+import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   isProviderOverloadedError,
   ProviderErrorClass,
@@ -1003,69 +1003,10 @@ export const OrchestrationThread = Schema.Struct({
 });
 export type OrchestrationThread = typeof OrchestrationThread.Type;
 
-export const OrchestrationUsageLimitWindowSnapshot = Schema.Struct({
-  // Optional so older snapshots remain decodable. New provider-neutral
-  // snapshots use the key to keep same-duration limits and their histories
-  // separate, such as Claude's overall and model-scoped weekly limits.
-  key: Schema.optional(TrimmedNonEmptyString),
-  label: Schema.optional(TrimmedNonEmptyString),
-  usedPercent: Schema.Number,
-  resetsAt: Schema.NullOr(IsoDateTime),
-  windowDurationMins: Schema.NullOr(Schema.Number),
-});
-export type OrchestrationUsageLimitWindowSnapshot =
-  typeof OrchestrationUsageLimitWindowSnapshot.Type;
-
-export const OrchestrationUsageLimitsSnapshot = Schema.Struct({
-  limitId: Schema.NullOr(Schema.String),
-  limitName: Schema.NullOr(Schema.String),
-  planType: Schema.NullOr(Schema.String),
-  rateLimitReachedType: Schema.NullOr(Schema.String),
-  credits: Schema.NullOr(
-    Schema.Struct({
-      balance: Schema.NullOr(Schema.String),
-      hasCredits: Schema.Boolean,
-      unlimited: Schema.Boolean,
-    }),
-  ),
-  primary: Schema.NullOr(OrchestrationUsageLimitWindowSnapshot),
-  secondary: Schema.NullOr(OrchestrationUsageLimitWindowSnapshot),
-  // New clients prefer the complete keyed list. Primary and secondary stay on
-  // the wire so old clients can render the two compact provider windows.
-  windows: Schema.optional(Schema.Array(OrchestrationUsageLimitWindowSnapshot)),
-  updatedAt: IsoDateTime,
-});
-export type OrchestrationUsageLimitsSnapshot = typeof OrchestrationUsageLimitsSnapshot.Type;
-
-export const OrchestrationUsageLimitObservation = Schema.Struct({
-  observedAt: IsoDateTime,
-  usedPercent: Schema.Number,
-});
-export type OrchestrationUsageLimitObservation = typeof OrchestrationUsageLimitObservation.Type;
-
-export const OrchestrationUsageLimitHistoryWindow = Schema.Struct({
-  windowKey: Schema.optional(TrimmedNonEmptyString),
-  resetsAt: IsoDateTime,
-  windowDurationMins: Schema.Number,
-  points: Schema.Array(OrchestrationUsageLimitObservation),
-});
-export type OrchestrationUsageLimitHistoryWindow = typeof OrchestrationUsageLimitHistoryWindow.Type;
-
-export const OrchestrationProviderUsageLimits = Schema.Struct({
-  provider: ProviderDriverKind,
-  providerInstanceId: ProviderInstanceId,
-  usageLimits: OrchestrationUsageLimitsSnapshot,
-  history: Schema.optional(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
-});
-export type OrchestrationProviderUsageLimits = typeof OrchestrationProviderUsageLimits.Type;
-
 export const OrchestrationReadModel = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProject),
   threads: Schema.Array(OrchestrationThread),
-  usageLimits: Schema.Array(OrchestrationProviderUsageLimits).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   updatedAt: IsoDateTime,
 });
 export type OrchestrationReadModel = typeof OrchestrationReadModel.Type;
@@ -1280,9 +1221,6 @@ export const OrchestrationShellSnapshot = Schema.Struct({
   snapshotSequence: NonNegativeInt,
   projects: Schema.Array(OrchestrationProjectShell),
   threads: Schema.Array(OrchestrationThreadShell),
-  usageLimits: Schema.Array(OrchestrationProviderUsageLimits).pipe(
-    Schema.withDecodingDefault(Effect.succeed([])),
-  ),
   coordination: Schema.optional(OrchestrationCoordinationShell),
   updatedAt: IsoDateTime,
 });
@@ -1309,10 +1247,12 @@ export const OrchestrationShellStreamEvent = Schema.Union([
     sequence: NonNegativeInt,
     threadId: ThreadId,
   }),
+  // TODO: Remove once no paired environment runs a server from before the fork
+  // dropped its usage-limit projection. Those servers still push this item;
+  // clients only advance their cursor past it.
   Schema.Struct({
     kind: Schema.Literal("usage-limits-updated"),
     sequence: NonNegativeInt,
-    usageLimits: OrchestrationProviderUsageLimits,
   }),
   Schema.Struct({
     kind: Schema.Literal("coordination-updated"),
@@ -2137,15 +2077,6 @@ const ThreadHistoryPruneCompleteCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
-const ProviderUsageLimitsUpdateCommand = Schema.Struct({
-  type: Schema.Literal("provider.usage-limits.update"),
-  commandId: CommandId,
-  provider: ProviderDriverKind,
-  providerInstanceId: ProviderInstanceId,
-  usageLimits: OrchestrationUsageLimitsSnapshot,
-  createdAt: IsoDateTime,
-});
-
 const ThreadTitleGenerateCompleteCommand = Schema.Struct({
   type: Schema.Literal("thread.title.generate.complete"),
   commandId: CommandId,
@@ -2215,7 +2146,6 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadHistoryPruneCompleteCommand,
-  ProviderUsageLimitsUpdateCommand,
   ThreadTitleRegenerationCompleteCommand,
   ThreadTitleGenerateCompleteCommand,
   ThreadTitleRefineCommand,
@@ -2270,11 +2200,10 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
-  "provider.usage-limits-updated",
 ]);
 export type OrchestrationEventType = typeof OrchestrationEventType.Type;
 
-export const OrchestrationAggregateKind = Schema.Literals(["project", "thread", "provider"]);
+export const OrchestrationAggregateKind = Schema.Literals(["project", "thread"]);
 export type OrchestrationAggregateKind = typeof OrchestrationAggregateKind.Type;
 export const OrchestrationActorKind = Schema.Literals(["client", "server", "provider"]);
 
@@ -2597,12 +2526,6 @@ export const ThreadActivityAppendedPayload = Schema.Struct({
   activity: OrchestrationThreadActivity,
 });
 
-export const ProviderUsageLimitsUpdatedPayload = Schema.Struct({
-  provider: ProviderDriverKind,
-  providerInstanceId: ProviderInstanceId,
-  usageLimits: OrchestrationUsageLimitsSnapshot,
-});
-
 /**
  * Which client connection dispatched the command that produced an event.
  * Stamped by the orchestration engine on client-dispatched commands; absent on
@@ -2636,7 +2559,7 @@ const EventBaseFields = {
   sequence: NonNegativeInt,
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -2839,11 +2762,6 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.activity-appended"),
     payload: ThreadActivityAppendedPayload,
-  }),
-  Schema.Struct({
-    ...EventBaseFields,
-    type: Schema.Literal("provider.usage-limits-updated"),
-    payload: ProviderUsageLimitsUpdatedPayload,
   }),
 ]);
 export type OrchestrationEvent = typeof OrchestrationEvent.Type;

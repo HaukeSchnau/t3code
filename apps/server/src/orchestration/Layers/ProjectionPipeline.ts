@@ -24,7 +24,6 @@ import {
 import { toPersistenceSqlError, type ProjectionRepositoryError } from "../../persistence/Errors.ts";
 import { OrchestrationEventStore } from "../../persistence/Services/OrchestrationEventStore.ts";
 import { ProjectionPendingApprovalRepository } from "../../persistence/Services/ProjectionPendingApprovals.ts";
-import { ProjectionProviderUsageLimitsRepository } from "../../persistence/Services/ProjectionProviderUsageLimits.ts";
 import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
 import { ProjectionStateRepository } from "../../persistence/Services/ProjectionState.ts";
 import { ProjectionThreadActivityRepository } from "../../persistence/Services/ProjectionThreadActivities.ts";
@@ -49,7 +48,6 @@ import {
   ProjectionThreadRepository,
 } from "../../persistence/Services/ProjectionThreads.ts";
 import { ProjectionPendingApprovalRepositoryLive } from "../../persistence/Layers/ProjectionPendingApprovals.ts";
-import { ProjectionProviderUsageLimitsRepositoryLive } from "../../persistence/Layers/ProjectionProviderUsageLimits.ts";
 import { ProjectionProjectRepositoryLive } from "../../persistence/Layers/ProjectionProjects.ts";
 import { ProjectionStateRepositoryLive } from "../../persistence/Layers/ProjectionState.ts";
 import { ProjectionThreadActivityRepositoryLive } from "../../persistence/Layers/ProjectionThreadActivities.ts";
@@ -84,7 +82,6 @@ export const ORCHESTRATION_PROJECTOR_NAMES = {
   threadTurns: "projection.thread-turns",
   checkpoints: "projection.checkpoints",
   pendingApprovals: "projection.pending-approvals",
-  providerUsageLimits: "projection.provider-usage-limits",
 } as const;
 
 const ATTACHMENT_CLEANUP_PROJECTOR = "projection.attachment-cleanup" as const;
@@ -182,8 +179,7 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
     case ORCHESTRATION_PROJECTOR_NAMES.threadActivities:
       return (
         event.type === "thread.created" ||
-        (event.type === "thread.activity-appended" &&
-          event.payload.activity.kind !== "account.rate-limits.updated") ||
+        event.type === "thread.activity-appended" ||
         event.type === "thread.reverted" ||
         event.type === "thread.history-pruned"
       );
@@ -221,9 +217,6 @@ function projectorHandlesEvent(name: ProjectorName, event: OrchestrationEvent): 
             event.payload.activity.kind === "provider.approval.respond.failed")) ||
         event.type === "thread.approval-response-requested"
       );
-
-    case ORCHESTRATION_PROJECTOR_NAMES.providerUsageLimits:
-      return event.type === "provider.usage-limits-updated";
 
     case ATTACHMENT_CLEANUP_PROJECTOR:
       return event.type === "thread.reverted" || event.type === "thread.deleted";
@@ -762,7 +755,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
     const projectionThreadPullRequestRepository =
       yield* ProjectionThreadPullRequests.ProjectionThreadPullRequestRepository;
     const projectionThreadActivityRepository = yield* ProjectionThreadActivityRepository;
-    const projectionProviderUsageLimitsRepository = yield* ProjectionProviderUsageLimitsRepository;
     const projectionThreadSessionRepository = yield* ProjectionThreadSessionRepository;
     const projectionTurnRepository = yield* ProjectionTurnRepository;
     const projectionPendingApprovalRepository = yield* ProjectionPendingApprovalRepository;
@@ -1857,9 +1849,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
           return;
 
         case "thread.activity-appended":
-          if (event.payload.activity.kind === "account.rate-limits.updated") {
-            return;
-          }
           yield* projectionThreadActivityRepository.upsert({
             activityId: event.payload.activity.id,
             threadId: event.payload.threadId,
@@ -2418,24 +2407,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
       }
     });
 
-    const applyProviderUsageLimitsProjection: ProjectorDefinition["apply"] = Effect.fn(
-      "applyProviderUsageLimitsProjection",
-    )(function* (event, _attachmentSideEffects) {
-      switch (event.type) {
-        case "provider.usage-limits-updated":
-          yield* projectionProviderUsageLimitsRepository.upsert({
-            provider: event.payload.provider,
-            providerInstanceId: event.payload.providerInstanceId,
-            usageLimits: event.payload.usageLimits,
-            updatedAt: event.payload.usageLimits.updatedAt,
-          });
-          return;
-
-        default:
-          return;
-      }
-    });
-
     const applyCheckpointsProjection: ProjectorDefinition["apply"] = () => Effect.void;
 
     const applyPendingApprovalsProjection: ProjectorDefinition["apply"] = Effect.fn(
@@ -2658,12 +2629,6 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
         handles: (event) =>
           projectorHandlesEvent(ORCHESTRATION_PROJECTOR_NAMES.pendingApprovals, event),
         apply: applyPendingApprovalsProjection,
-      },
-      {
-        name: ORCHESTRATION_PROJECTOR_NAMES.providerUsageLimits,
-        handles: (event) =>
-          projectorHandlesEvent(ORCHESTRATION_PROJECTOR_NAMES.providerUsageLimits, event),
-        apply: applyProviderUsageLimitsProjection,
       },
       {
         name: ORCHESTRATION_PROJECTOR_NAMES.threads,
@@ -2915,6 +2880,5 @@ export const OrchestrationProjectionPipelineLive = Layer.effect(
   Layer.provideMerge(ProjectionThreadSessionRepositoryLive),
   Layer.provideMerge(ProjectionTurnRepositoryLive),
   Layer.provideMerge(ProjectionPendingApprovalRepositoryLive),
-  Layer.provideMerge(ProjectionProviderUsageLimitsRepositoryLive),
   Layer.provideMerge(ProjectionStateRepositoryLive),
 );

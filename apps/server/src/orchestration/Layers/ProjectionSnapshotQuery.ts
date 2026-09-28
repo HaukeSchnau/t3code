@@ -8,7 +8,6 @@ import {
   MessageId,
   NonNegativeInt,
   OrchestrationCheckpointFile,
-  OrchestrationUsageLimitHistoryWindow,
   OrchestrationCheckpointStatus,
   OrchestrationProposedPlanId,
   OrchestrationReadModel,
@@ -16,7 +15,6 @@ import {
   OrchestrationTurnRetry,
   OrchestrationQueuedMessage,
   OrchestrationNotificationOrigin,
-  OrchestrationUsageLimitsSnapshot,
   OrchestrationShellSnapshot,
   OrchestrationThread,
   OrchestrationThreadDetailSnapshot,
@@ -34,7 +32,6 @@ import {
   type OrchestrationThreadShell,
   ModelSelection,
   ProjectId,
-  ProviderInstanceId,
   ProviderUnavailable,
   ThreadLinkedPullRequest,
   ThreadTitleState,
@@ -63,10 +60,6 @@ import {
   toPersistenceSqlError,
   type ProjectionRepositoryError,
 } from "../../persistence/Errors.ts";
-import {
-  GetProjectionProviderUsageLimitsInput,
-  ProjectionProviderUsageLimits,
-} from "../../persistence/Services/ProjectionProviderUsageLimits.ts";
 import { ThreadBackgroundLivenessService } from "../ThreadBackgroundLiveness.ts";
 import {
   make as makeThreadPlanProgress,
@@ -166,12 +159,6 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     titleState: Schema.NullOr(Schema.fromJsonString(ThreadTitleState)),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
-  }),
-);
-const ProjectionProviderUsageLimitsDbRowSchema = ProjectionProviderUsageLimits.mapFields(
-  Struct.assign({
-    usageLimits: Schema.fromJsonString(OrchestrationUsageLimitsSnapshot),
-    history: Schema.fromJsonString(Schema.Array(OrchestrationUsageLimitHistoryWindow)),
   }),
 );
 const ProjectionThreadActivityIdRowSchema = Schema.Struct({
@@ -1130,38 +1117,6 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           last_applied_sequence AS "lastAppliedSequence",
           updated_at AS "updatedAt"
         FROM projection_state
-      `,
-  });
-
-  const listProviderUsageLimitsRows = SqlSchema.findAll({
-    Request: Schema.Void,
-    Result: ProjectionProviderUsageLimitsDbRowSchema,
-    execute: () =>
-      sql`
-        SELECT
-          provider_instance_id AS "providerInstanceId",
-          provider,
-          usage_limits_json AS "usageLimits",
-          history_json AS "history",
-          updated_at AS "updatedAt"
-        FROM projection_provider_usage_limits
-        ORDER BY updated_at DESC, provider_instance_id ASC
-      `,
-  });
-
-  const getProviderUsageLimitsRow = SqlSchema.findOneOption({
-    Request: GetProjectionProviderUsageLimitsInput,
-    Result: ProjectionProviderUsageLimitsDbRowSchema,
-    execute: ({ providerInstanceId }) =>
-      sql`
-        SELECT
-          provider_instance_id AS "providerInstanceId",
-          provider,
-          usage_limits_json AS "usageLimits",
-          history_json AS "history",
-          updated_at AS "updatedAt"
-        FROM projection_provider_usage_limits
-        WHERE provider_instance_id = ${providerInstanceId}
       `,
   });
 
@@ -2267,14 +2222,6 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listProviderUsageLimitsRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getSnapshot:listProviderUsageLimits:query",
-                "ProjectionSnapshotQuery.getSnapshot:listProviderUsageLimits:decodeRows",
-              ),
-            ),
-          ),
         ]),
       )
       .pipe(
@@ -2292,7 +2239,6 @@ pending_approval_requests AS (
             checkpointRows,
             latestTurnRows,
             stateRows,
-            usageLimitRows,
           ]) =>
             Effect.gen(function* () {
               const messagesByThread = new Map<string, Array<OrchestrationMessage>>();
@@ -2317,9 +2263,6 @@ pending_approval_requests AS (
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of stateRows) {
-                updatedAt = maxIso(updatedAt, row.updatedAt);
-              }
-              for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of messageRows) {
@@ -2518,12 +2461,6 @@ pending_approval_requests AS (
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
-                usageLimits: usageLimitRows.map((row) => ({
-                  provider: row.provider,
-                  providerInstanceId: row.providerInstanceId,
-                  usageLimits: row.usageLimits,
-                  history: row.history,
-                })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               };
 
@@ -2610,14 +2547,6 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listProviderUsageLimitsRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getCommandReadModel:listProviderUsageLimits:query",
-                "ProjectionSnapshotQuery.getCommandReadModel:listProviderUsageLimits:decodeRows",
-              ),
-            ),
-          ),
         ]),
       )
       .pipe(
@@ -2631,7 +2560,6 @@ pending_approval_requests AS (
             sessionRows,
             latestTurnRows,
             stateRows,
-            usageLimitRows,
           ]) =>
             Effect.gen(function* () {
               const linkedThreadIds = new Set(pullRequestRows.map((row) => row.threadId));
@@ -2712,13 +2640,6 @@ pending_approval_requests AS (
               }
               for (let index = 0; index < stateRows.length; index += 1) {
                 const row = stateRows[index];
-                if (!row) {
-                  continue;
-                }
-                updatedAt = maxIso(updatedAt, row.updatedAt);
-              }
-              for (let index = 0; index < usageLimitRows.length; index += 1) {
-                const row = usageLimitRows[index];
                 if (!row) {
                   continue;
                 }
@@ -2819,12 +2740,6 @@ pending_approval_requests AS (
                 snapshotSequence: computeSnapshotSequence(stateRows),
                 projects,
                 threads,
-                usageLimits: usageLimitRows.map((row) => ({
-                  provider: row.provider,
-                  providerInstanceId: row.providerInstanceId,
-                  usageLimits: row.usageLimits,
-                  history: row.history,
-                })),
                 updatedAt: updatedAt ?? "1970-01-01T00:00:00.000Z",
               } satisfies OrchestrationReadModel;
             }),
@@ -2889,14 +2804,6 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listProviderUsageLimitsRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getShellSnapshot:listProviderUsageLimits:query",
-                "ProjectionSnapshotQuery.getShellSnapshot:listProviderUsageLimits:decodeRows",
-              ),
-            ),
-          ),
           listThreadCoordinationActivityRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -2916,7 +2823,6 @@ pending_approval_requests AS (
             pullRequestRows,
             latestTurnRows,
             stateRows,
-            usageLimitRows,
             coordinationRows,
           ]) =>
             Effect.gen(function* () {
@@ -2940,9 +2846,6 @@ pending_approval_requests AS (
                 }
               }
               for (const row of stateRows) {
-                updatedAt = maxIso(updatedAt, row.updatedAt);
-              }
-              for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of coordinationRows) {
@@ -3016,12 +2919,6 @@ pending_approval_requests AS (
                       } satisfies OrchestrationThreadShell)
                     : Result.failVoid,
                 ),
-                usageLimits: usageLimitRows.map((row) => ({
-                  provider: row.provider,
-                  providerInstanceId: row.providerInstanceId,
-                  usageLimits: row.usageLimits,
-                  history: row.history,
-                })),
                 coordination: deriveThreadCoordinationShell(
                   coordinationRows.map(mapProjectionActivityRow),
                 ),
@@ -3097,14 +2994,6 @@ pending_approval_requests AS (
               ),
             ),
           ),
-          listProviderUsageLimitsRows(undefined).pipe(
-            Effect.mapError(
-              toPersistenceSqlOrDecodeError(
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProviderUsageLimits:query",
-                "ProjectionSnapshotQuery.getArchivedShellSnapshot:listProviderUsageLimits:decodeRows",
-              ),
-            ),
-          ),
           listThreadCoordinationActivityRows(undefined).pipe(
             Effect.mapError(
               toPersistenceSqlOrDecodeError(
@@ -3124,7 +3013,6 @@ pending_approval_requests AS (
             pullRequestRows,
             latestTurnRows,
             stateRows,
-            usageLimitRows,
             coordinationRows,
           ]) =>
             Effect.gen(function* () {
@@ -3148,9 +3036,6 @@ pending_approval_requests AS (
                 }
               }
               for (const row of stateRows) {
-                updatedAt = maxIso(updatedAt, row.updatedAt);
-              }
-              for (const row of usageLimitRows) {
                 updatedAt = maxIso(updatedAt, row.updatedAt);
               }
               for (const row of coordinationRows) {
@@ -3220,12 +3105,6 @@ pending_approval_requests AS (
                     row.threadId,
                   ),
                   planProgress: threadPlanProgress.getThreadPlanProgress(row.threadId),
-                })),
-                usageLimits: usageLimitRows.map((row) => ({
-                  provider: row.provider,
-                  providerInstanceId: row.providerInstanceId,
-                  usageLimits: row.usageLimits,
-                  history: row.history,
                 })),
                 coordination: deriveThreadCoordinationShell(
                   coordinationRows.map(mapProjectionActivityRow),
@@ -3366,26 +3245,6 @@ pending_approval_requests AS (
                   Option.some(mapProjectShellRow(option.value, repositoryIdentity)),
                 ),
               ),
-      ),
-    );
-
-  const getProviderUsageLimitsByInstanceId: NonNullable<
-    ProjectionSnapshotQueryShape["getProviderUsageLimitsByInstanceId"]
-  > = (providerInstanceId: ProviderInstanceId) =>
-    getProviderUsageLimitsRow({ providerInstanceId }).pipe(
-      Effect.mapError(
-        toPersistenceSqlOrDecodeError(
-          "ProjectionSnapshotQuery.getProviderUsageLimitsByInstanceId:query",
-          "ProjectionSnapshotQuery.getProviderUsageLimitsByInstanceId:decodeRow",
-        ),
-      ),
-      Effect.map(
-        Option.map((row) => ({
-          provider: row.provider,
-          providerInstanceId: row.providerInstanceId,
-          usageLimits: row.usageLimits,
-          history: row.history,
-        })),
       ),
     );
 
@@ -4171,7 +4030,6 @@ pending_approval_requests AS (
     getRestartSafetyState,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
-    getProviderUsageLimitsByInstanceId,
     getProjectShells,
     getFirstActiveThreadIdByProjectId,
     getImportedAgentSessionSources,

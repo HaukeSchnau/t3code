@@ -65,7 +65,6 @@ function makeReadModel(
         session,
       },
     ],
-    usageLimits: [],
     updatedAt: NOW,
   };
 }

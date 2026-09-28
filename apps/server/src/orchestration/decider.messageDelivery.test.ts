@@ -71,7 +71,6 @@ function makeReadModel(): OrchestrationReadModel {
         },
       },
     ],
-    usageLimits: [],
     updatedAt: NOW,
   };
 }

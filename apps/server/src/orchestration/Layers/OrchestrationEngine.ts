@@ -3,7 +3,6 @@ import type {
   OrchestrationClientOrigin,
   OrchestrationEvent,
   OrchestrationReadModel,
-  ProviderInstanceId,
   ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
@@ -69,15 +68,15 @@ interface CommandEnvelope {
 
 interface CommandReceiptIdentity {
   readonly commandId: OrchestrationCommand["commandId"];
-  readonly aggregateKind: "project" | "thread" | "provider";
-  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
+  readonly aggregateKind: "project" | "thread";
+  readonly aggregateId: ProjectId | ThreadId;
   readonly commandVariant: OrchestrationCommand["type"];
   readonly envelopeFingerprint: string;
 }
 
 function commandToAggregateRef(command: OrchestrationCommand): {
-  readonly aggregateKind: "project" | "thread" | "provider";
-  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
+  readonly aggregateKind: "project" | "thread";
+  readonly aggregateId: ProjectId | ThreadId;
 } {
   switch (command.type) {
     case "project.create":
@@ -86,11 +85,6 @@ function commandToAggregateRef(command: OrchestrationCommand): {
       return {
         aggregateKind: "project",
         aggregateId: command.projectId,
-      };
-    case "provider.usage-limits.update":
-      return {
-        aggregateKind: "provider",
-        aggregateId: command.providerInstanceId,
       };
     default:
       return {
@@ -598,7 +592,7 @@ const makeOrchestrationEngine = Effect.gen(function* () {
             probeFromSequence(fromSequenceExclusive, maxEvents),
           probeAggregateReplay: (
             aggregateKind: OrchestrationAggregateKind,
-            aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+            aggregateId: ProjectId | ThreadId,
             fromSequenceExclusive: number,
             maxEvents: number,
           ) =>
