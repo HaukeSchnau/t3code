@@ -14,16 +14,24 @@ authorization boundary and is intentionally not removed.
   no hosted web app, and an `app.t3.codes` link would load upstream's client against this server.
 - Web keeps the upstream managed-relay interfaces behind a fail-closed compatibility layer so shared
   connection runtime types do not need a fork-wide rewrite. No account credential is read or sent.
-- Mobile keeps upstream's T3 Connect code unchanged and switched off. Fork builds set no Clerk or
+- Mobile keeps upstream's T3 Connect code in the tree and switched off. Fork builds set no Clerk or
   relay config, so `hasCloudPublicConfig` is false: `CloudAuthProvider` mounts no `ClerkProvider`,
   Settings shows no account row, and the managed relay client gets the disabled `relay.invalid` URL.
-  Fork builds must never set `T3CODE_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`, or
-  `T3CODE_RELAY_URL`. Together they turn account sign-in on.
+- Fork builds must never set a Clerk or relay variable that `resolvePublicConfig` in
+  `scripts/lib/public-config.ts` accepts: `T3CODE_CLERK_PUBLISHABLE_KEY`,
+  `VITE_CLERK_PUBLISHABLE_KEY`, `EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY`, `T3CODE_CLERK_JWT_TEMPLATE`,
+  `VITE_CLERK_JWT_TEMPLATE`, `EXPO_PUBLIC_CLERK_JWT_TEMPLATE`, `T3CODE_CLERK_CLI_OAUTH_CLIENT_ID`,
+  `VITE_CLERK_CLI_OAUTH_CLIENT_ID`, `T3CODE_RELAY_URL`, or `VITE_T3CODE_RELAY_URL`. It reads them
+  from the process environment and from the repository's root `.env` and `.env.local`. Together
+  they turn account sign-in on. `scripts/mobile-update.ts` and `scripts/mobile-testflight.ts` refuse
+  to ship when the public Expo config sets `extra.clerk.publishableKey`, `extra.clerk.jwtTemplate`,
+  or `extra.relay.url`, so a stray variable on a runner cannot reach the phone.
 - Mobile `app.config.ts` still omits the `@clerk/expo` config plugin, Sign in with Apple, and the
   Clerk associated domains. The fork's bundle identifiers and team cannot sign those entitlements.
   The package stays installed and autolinked, so importing its JavaScript is safe without the plugin.
-- Upstream's `CloudAuthProvider` mounted Clerk with a key and relay URL even without the JWT
-  template. The fork gates it on `hasCloudPublicConfig`, so partial config never loads Clerk.
+- Upstream's `CloudAuthProvider` mounts Clerk with a key and relay URL even without the JWT
+  template. The fork gates it on `hasCloudPublicConfig`, so partial config never loads Clerk. This
+  is the only change to upstream's cloud files.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
   directly instead.
 - Register an iOS device and its Live Activity update token over the authenticated environment RPC.
@@ -56,7 +64,19 @@ Prefer upstream direct-pairing and direct-push implementations if they become av
 web's fail-closed managed-relay compatibility layer once `packages/client-runtime` no longer requires
 those services for direct connections.
 
-Take upstream's mobile cloud files as they are during syncs. The fork's mobile deltas are the
-`CloudAuthProvider` gate, the relay hook no-ops, `AccountlessAgentAwarenessProvider` in `App.tsx`,
-the Notifications screen, the Notifications row in local Settings, and the `app.config.ts` signing
-removals.
+Take upstream's mobile cloud files as they are during syncs, keeping the `CloudAuthProvider` gate.
+The other mobile deltas live in upstream-owned files, so check each one survives a merge:
+
+- `features/connection/useConnectionController.ts`: `removeEnvironment` asks the environment to
+  forget the device before removing it. The rest of the file is upstream's, so this is the easiest
+  delta to lose.
+- `features/agent-awareness/remoteRegistration.ts` and `registrationPayload.ts`: rewritten to
+  register over the environment RPC instead of the relay. `remoteRegistration.ts` also keeps the
+  relay token hooks as no-ops.
+- `features/agent-awareness/liveActivityPreferences.ts`: toggling Live Activities updates the
+  registration without linking environments to T3 Connect.
+- `features/settings/SettingsNotificationsRouteScreen.tsx`: the direct APNs path.
+- `features/settings/SettingsRouteScreen.tsx`: the Notifications row in local Settings.
+- `connection/migration.ts`: drops legacy relay-managed connections.
+- `App.tsx`: mounts the fork-only `AccountlessAgentAwarenessProvider` inside `CloudAuthProvider`.
+- `app.config.ts`: the signing removals above.
