@@ -607,6 +607,29 @@ describe("buildSidebarOrchestrationItems", () => {
     ).toHaveLength(1);
   });
 
+  it("lists an attempt replaced by two threads once", () => {
+    const twiceReplaced = buildThreadLineage([
+      coordination({
+        relationships: [
+          { kind: "replaces", actor: ref("retry-a"), target: ref("first"), createdAt: at(1) },
+          { kind: "replaces", actor: ref("retry-b"), target: ref("first"), createdAt: at(2) },
+        ],
+      }),
+    ]);
+    const model = buildSidebarOrchestrationItems({
+      lineage: twiceReplaced,
+      orderedThreadKeys: [key("retry-a"), key("retry-b"), key("first")],
+      isExpanded: () => true,
+      stateOf: () => null,
+    });
+    const threadKeys = model.items.flatMap((item) =>
+      item.type === "thread" ? [item.threadKey] : [],
+    );
+
+    expect(threadKeys.filter((threadKey) => threadKey === key("first"))).toHaveLength(1);
+    expect(new Set(model.items.map((item) => item.key)).size).toBe(model.items.length);
+  });
+
   it("suppresses an earlier attempt when its replacement is outside the live inbox", () => {
     const model = buildSidebarOrchestrationItems({
       lineage,
