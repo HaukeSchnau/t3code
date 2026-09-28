@@ -536,7 +536,6 @@ describe("OrchestrationEngine", () => {
           session: null,
         },
       ],
-      usageLimits: [],
     };
     const commandReadModel = {
       ...projectionSnapshot,
@@ -566,7 +565,6 @@ describe("OrchestrationEngine", () => {
               snapshotSequence: projectionSnapshot.snapshotSequence,
               projects: [],
               threads: [],
-              usageLimits: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
           getDeletedWorktreeThreads: () => Effect.die("unused"),
@@ -575,7 +573,6 @@ describe("OrchestrationEngine", () => {
               snapshotSequence: projectionSnapshot.snapshotSequence,
               projects: [],
               threads: [],
-              usageLimits: [],
               updatedAt: projectionSnapshot.updatedAt,
             }),
           getSnapshotSequence: () =>

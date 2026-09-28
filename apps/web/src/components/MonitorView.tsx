@@ -1,4 +1,5 @@
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import type { ComposerSubmissionIntent } from "../composer-logic";
 import { environmentServerConfigsAtom } from "../state/server";
 import {
   ArrowRightIcon,
@@ -79,12 +80,13 @@ import {
   analyzeThreadTurnDraft,
   createDirectThreadTurnDeliveryAdapter,
   resolveFollowUpSubmissionTitle,
+  shouldQueueFollowUp,
   submitThreadTurn,
   threadComposerRevision,
   threadTurnDraftFromComposer,
 } from "./chat/ThreadTurnSubmission";
 import { useThreadQueuedMessageControls } from "./chat/useThreadDurableOutbox";
-import { useProjects, useProviderUsageLimits, useThread } from "../state/entities";
+import { useProjects, useThread } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { useSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 
@@ -727,17 +729,6 @@ function MonitorThreadActions({
         : undefined,
     [projects, thread],
   );
-  const providerUsageLimits = useProviderUsageLimits(threadRef.environmentId);
-  const usageLimitsSources = useMemo(
-    () =>
-      providerUsageLimits.map((entry) => ({
-        provider: entry.provider,
-        providerInstanceId: entry.providerInstanceId,
-        usageLimits: [entry.usageLimits],
-        usageHistory: entry.history,
-      })),
-    [providerUsageLimits],
-  );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(threadRef)?.runtimeMode ?? null,
   );
@@ -956,88 +947,96 @@ function MonitorThreadActions({
     ],
   );
 
-  const send = useCallback(async () => {
-    if (!thread || busy) return;
-    const sendContext = composerRef.current?.getSendContext();
-    if (!sendContext) return;
-    // Monitor has never submitted review comments; retain that behavior while
-    // sharing the same prompt/context and command transaction as ChatView.
-    const submissionDraft = threadTurnDraftFromComposer(sendContext, { reviewComments: [] });
-    const analysis = analyzeThreadTurnDraft(submissionDraft);
-    if (!analysis.hasSendableContent) return;
-    const api = readEnvironmentApi(threadRef.environmentId);
-    if (!api) return;
-    setBusy(true);
-    setError(null);
-    await submitThreadTurn({
-      draft: submissionDraft,
-      analysis,
-      target: {
-        environmentId: threadRef.environmentId,
-        threadId: threadRef.threadId,
-        threadCreatedAt: thread.createdAt,
-        threadWorktreePath: thread.worktreePath,
-        projectId: thread.projectId,
-        projectWorkspaceRoot: activeProject?.workspaceRoot ?? "",
-        projectDefaultModelSelection: activeProject?.defaultModelSelection,
-        isServerThread: true,
-        isLocalDraftThread: false,
-        isFirstMessage: false,
-        queue: isRunning,
-        prepareWorkspace: false,
-        activeBranch: thread.branch,
-        baseRevision: null,
-        startFromOrigin: false,
-        runtimeMode,
-        interactionMode,
-      },
-      title: resolveFollowUpSubmissionTitle(analysis, thread.title),
-      delivery: createDirectThreadTurnDeliveryAdapter({
-        supportsInlineMessageContext:
-          appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
-            ?.environment.capabilities.inlineMessageContext === true,
-        dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
-      }),
-      composer: {
-        clearOnSuccess: "always",
-        readCurrentRevision: () => {
-          const currentDraft = useComposerDraftStore.getState().getComposerDraft(threadRef);
-          return threadComposerRevision({
-            prompt: promptRef.current,
-            images: composerImagesRef.current,
-            files: currentDraft?.files ?? [],
-            terminalContexts: composerTerminalContextsRef.current,
-            previewAnnotations: currentDraft?.previewAnnotations ?? [],
-            reviewComments: [],
-          });
+  const send = useCallback(
+    async (_event?: unknown, intent?: ComposerSubmissionIntent) => {
+      if (!thread || busy) return;
+      const sendContext = composerRef.current?.getSendContext();
+      if (!sendContext) return;
+      // Monitor has never submitted review comments; retain that behavior while
+      // sharing the same prompt/context and command transaction as ChatView.
+      const submissionDraft = threadTurnDraftFromComposer(sendContext, { reviewComments: [] });
+      const analysis = analyzeThreadTurnDraft(submissionDraft);
+      if (!analysis.hasSendableContent) return;
+      const api = readEnvironmentApi(threadRef.environmentId);
+      if (!api) return;
+      setBusy(true);
+      setError(null);
+      await submitThreadTurn({
+        draft: submissionDraft,
+        analysis,
+        target: {
+          environmentId: threadRef.environmentId,
+          threadId: threadRef.threadId,
+          threadCreatedAt: thread.createdAt,
+          threadWorktreePath: thread.worktreePath,
+          projectId: thread.projectId,
+          projectWorkspaceRoot: activeProject?.workspaceRoot ?? "",
+          projectDefaultModelSelection: activeProject?.defaultModelSelection,
+          isServerThread: true,
+          isLocalDraftThread: false,
+          isFirstMessage: false,
+          queue: shouldQueueFollowUp({
+            running: isRunning,
+            followUpBehavior: settings.followUpBehavior,
+            submissionIntent: intent ?? "foreground",
+          }),
+          prepareWorkspace: false,
+          activeBranch: thread.branch,
+          baseRevision: null,
+          startFromOrigin: false,
+          runtimeMode,
+          interactionMode,
         },
-        clear: () => {
-          promptRef.current = "";
-          clearComposerDraftContent(threadRef);
-          composerRef.current?.resetCursorState();
+        title: resolveFollowUpSubmissionTitle(analysis, thread.title),
+        delivery: createDirectThreadTurnDeliveryAdapter({
+          supportsInlineMessageContext:
+            appAtomRegistry.get(environmentServerConfigsAtom).get(threadRef.environmentId)
+              ?.environment.capabilities.inlineMessageContext === true,
+          dispatchCommand: (command) => api.orchestration.dispatchCommand(command),
+        }),
+        composer: {
+          clearOnSuccess: "always",
+          readCurrentRevision: () => {
+            const currentDraft = useComposerDraftStore.getState().getComposerDraft(threadRef);
+            return threadComposerRevision({
+              prompt: promptRef.current,
+              images: composerImagesRef.current,
+              files: currentDraft?.files ?? [],
+              terminalContexts: composerTerminalContextsRef.current,
+              previewAnnotations: currentDraft?.previewAnnotations ?? [],
+              reviewComments: [],
+            });
+          },
+          clear: () => {
+            promptRef.current = "";
+            clearComposerDraftContent(threadRef);
+            composerRef.current?.resetCursorState();
+          },
         },
-      },
-      lifecycle: {
-        delivered: () => setComposerExpanded(false),
-        failed: (error) =>
-          setError(error instanceof Error ? error.message : "Failed to send follow-up."),
-        settled: () => setBusy(false),
-      },
-      makeCommandId: newCommandId,
-      makeMessageId: newMessageId,
-      now: () => new Date().toISOString(),
-    });
-  }, [
-    activeProject?.defaultModelSelection,
-    activeProject?.workspaceRoot,
-    busy,
-    clearComposerDraftContent,
-    interactionMode,
-    isRunning,
-    runtimeMode,
-    thread,
-    threadRef,
-  ]);
+        lifecycle: {
+          delivered: () => setComposerExpanded(false),
+          failed: (error) =>
+            setError(error instanceof Error ? error.message : "Failed to send follow-up."),
+          settled: () => setBusy(false),
+        },
+        makeCommandId: newCommandId,
+        makeMessageId: newMessageId,
+        now: () => new Date().toISOString(),
+      });
+    },
+    [
+      activeProject?.defaultModelSelection,
+      activeProject?.workspaceRoot,
+      busy,
+      clearComposerDraftContent,
+      interactionMode,
+      isRunning,
+      runtimeMode,
+      settings.followUpBehavior,
+      thread,
+      threadRef,
+    ],
+  );
 
   const interrupt = useCallback(async () => {
     const api = readEnvironmentApi(threadRef.environmentId);
@@ -1140,7 +1139,6 @@ function MonitorThreadActions({
                 providerStatuses={providerStatuses}
                 activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                 activeThreadModelSelection={thread.modelSelection}
-                usageLimitsSources={usageLimitsSources}
                 resolvedTheme={resolvedTheme}
                 settings={settings}
                 keybindings={keybindings}

@@ -16,7 +16,6 @@ import type {
   OrchestrationMessage,
   OrchestrationProject,
   OrchestrationProjectShell,
-  OrchestrationProviderUsageLimits,
   OrchestrationReadModel,
   OrchestrationSearchThreadsInput,
   OrchestrationSearchThreadsResult,
@@ -30,7 +29,6 @@ import type {
   OrchestrationThreadShell,
   OrchestrationSession,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
   ThreadWorkspaceId,
   TurnId,
@@ -158,11 +156,6 @@ export interface ProjectionSnapshotQueryShape {
     OrchestrationShellSnapshot,
     ProjectionRepositoryError
   >;
-
-  /** Read one provider's latest limits and bounded forecast history. */
-  readonly getProviderUsageLimitsByInstanceId?: (
-    providerInstanceId: ProviderInstanceId,
-  ) => Effect.Effect<Option.Option<OrchestrationProviderUsageLimits>, ProjectionRepositoryError>;
 
   /**
    * Read archived thread shell summaries for the archive page.

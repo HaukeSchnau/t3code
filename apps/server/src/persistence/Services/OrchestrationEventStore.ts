@@ -13,7 +13,6 @@ import type {
   OrchestrationAggregateKind,
   OrchestrationEvent,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -78,7 +77,7 @@ export interface OrchestrationEventStoreShape {
   /** Replay one aggregate stream without decoding unrelated global events. */
   readonly readAggregateFromSequence?: (
     aggregateKind: OrchestrationAggregateKind,
-    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+    aggregateId: ProjectId | ThreadId,
     sequenceExclusive: number,
     limit?: number,
   ) => Stream.Stream<OrchestrationEvent, OrchestrationEventStoreError>;
@@ -95,7 +94,7 @@ export interface OrchestrationEventStoreShape {
   /** Inspect one aggregate replay range using its indexed sequence path. */
   readonly probeAggregateFromSequence?: (
     aggregateKind: OrchestrationAggregateKind,
-    aggregateId: ProjectId | ThreadId | ProviderInstanceId,
+    aggregateId: ProjectId | ThreadId,
     sequenceExclusive: number,
     maxEvents: number,
   ) => Effect.Effect<OrchestrationReplayProbe, OrchestrationEventStoreError>;

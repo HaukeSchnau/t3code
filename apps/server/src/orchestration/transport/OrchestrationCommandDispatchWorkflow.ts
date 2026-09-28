@@ -399,24 +399,41 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
                     }),
               ),
             );
+          // A failed script still hands off to the agent, but the stage must say it failed.
+          const settleStage = (
+            completion: ProjectSetupScriptRunner.ProjectSetupScriptCompletion | null,
+          ) =>
+            track(
+              completion === null || completion.exitCode === 0
+                ? tracker.stageStatus(command.threadId, "setup-script", "done")
+                : tracker.stageStatus(
+                    command.threadId,
+                    "setup-script",
+                    "failed",
+                    completion.exitCode === null
+                      ? "terminal closed before the script finished"
+                      : `exit ${completion.exitCode}`,
+                  ),
+            );
+          if (
+            setupResult.status === "started" &&
+            setupResult.async &&
+            setupResult.completion !== undefined
+          ) {
+            // An async script runs alongside the agent, as upstream does. Its durable
+            // launch claim already prevents a retry from running it twice.
+            progress = yield* input.commandPreprocessing.markCompleted(command, "setup-completed");
+            return yield* setupResult.completion.pipe(
+              Effect.flatMap(settleStage),
+              Effect.forkDetach,
+            );
+          }
           const completion =
             setupResult.status === "started" && setupResult.completion !== undefined
               ? yield* setupResult.completion
               : null;
           progress = yield* input.commandPreprocessing.markCompleted(command, "setup-completed");
-          // A failed script still hands off to the agent, but the stage must say it failed.
-          yield* track(
-            completion === null || completion.exitCode === 0
-              ? tracker.stageStatus(command.threadId, "setup-script", "done")
-              : tracker.stageStatus(
-                  command.threadId,
-                  "setup-script",
-                  "failed",
-                  completion.exitCode === null
-                    ? "terminal closed before the script finished"
-                    : `exit ${completion.exitCode}`,
-                ),
-          );
+          yield* settleStage(completion);
         });
 
       const bootstrapProgram = Effect.gen(function* () {
@@ -547,7 +564,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
           }
         }
 
-        yield* runSetupProgram();
+        const pendingSetupScript = yield* runSetupProgram();
 
         // Bootstrap remains in the durable envelope fingerprint even though the
         // decider intentionally excludes it from emitted events.
@@ -555,7 +572,17 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
         yield* track(tracker.markUncancellable(command.threadId));
         const result = yield* Effect.uninterruptible(dispatchCommand(command));
         yield* track(tracker.stageStatus(command.threadId, "agent", "done"));
-        yield* finish("done");
+        // An async setup script outlives the handoff: the setup row stays running
+        // beside the agent's work and settles when the script exits.
+        if (pendingSetupScript) {
+          yield* Fiber.join(pendingSetupScript).pipe(
+            Effect.ignoreCause({ log: true }),
+            Effect.andThen(finish("done")),
+            Effect.forkDetach,
+          );
+        } else {
+          yield* finish("done");
+        }
         return result;
       });
 

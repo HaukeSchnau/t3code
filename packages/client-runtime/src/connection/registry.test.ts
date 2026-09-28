@@ -131,7 +131,6 @@ const CACHED_SNAPSHOT: OrchestrationShellSnapshot = {
   snapshotSequence: 1,
   projects: [],
   threads: [],
-  usageLimits: [],
   updatedAt: "2026-06-06T00:00:00.000Z",
 };
 

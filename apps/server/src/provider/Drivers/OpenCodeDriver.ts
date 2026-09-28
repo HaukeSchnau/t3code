@@ -12,6 +12,7 @@
  *
  * @module provider/Drivers/OpenCodeDriver
  */
+import type { OpencodeClient } from "@opencode-ai/sdk/v2";
 import { OpenCodeSettings, ProviderDriverKind } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -36,7 +37,7 @@ import {
 } from "../Layers/OpenCodeProvider.ts";
 import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import { OpenCodeRuntime, loadOpenCodeCommands } from "../opencodeRuntime.ts";
+import { OpenCodeRuntime, loadOpenCodeCommands, runOpenCodeSdk } from "../opencodeRuntime.ts";
 import * as OpenCodeServerOwner from "../OpenCodeServerOwner.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -44,6 +45,7 @@ import {
   type ProviderInstance,
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
+import { openCodeInventoryZaiUsageSource, withZaiUsageLimits } from "../zaiUsage.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   enrichProviderSnapshotWithVersionAdvisory,
@@ -158,6 +160,45 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
         Effect.provideService(OpenCodeServerOwner.OpenCodeServerOwner, serverOwner),
       );
 
+      /** Runs `use` against this instance's configured server, or the shared local one. */
+      const withOpenCodeClient = <A, E, R>(
+        cwd: string,
+        use: (client: OpencodeClient) => Effect.Effect<A, E, R>,
+      ) =>
+        effectiveConfig.serverUrl.trim().length > 0
+          ? Effect.scoped(
+              Effect.gen(function* () {
+                const server = yield* openCodeRuntime.connectToOpenCodeServer({
+                  binaryPath: effectiveConfig.binaryPath,
+                  directory: cwd,
+                  serverUrl: effectiveConfig.serverUrl,
+                  ...(effectiveConfig.serverPassword
+                    ? { serverPassword: effectiveConfig.serverPassword }
+                    : {}),
+                  environment: processEnv,
+                });
+                const client = openCodeRuntime.createOpenCodeSdkClient({
+                  baseUrl: server.url,
+                  directory: cwd,
+                  ...(effectiveConfig.serverPassword
+                    ? { serverPassword: effectiveConfig.serverPassword }
+                    : {}),
+                });
+                return yield* use(client);
+              }),
+            )
+          : serverOwner.withServer((server) =>
+              use(
+                openCodeRuntime.createOpenCodeSdkClient({
+                  baseUrl: server.url,
+                  directory: cwd,
+                  ...(server.serverPassword !== undefined
+                    ? { serverPassword: server.serverPassword }
+                    : {}),
+                }),
+              ),
+            );
+
       const checkProvider = Effect.all(
         {
           provider: checkOpenCodeProviderStatus(effectiveConfig, serverConfig.cwd, processEnv),
@@ -165,7 +206,25 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
             enabled: effectiveConfig.enabled,
             serverUrl: effectiveConfig.serverUrl,
             environment: processEnv,
-          }),
+          }).pipe(
+            // Fork: a Z.AI Coding Plan configured in OpenCode joins the Go windows.
+            Effect.flatMap((usageLimits) =>
+              effectiveConfig.enabled
+                ? withZaiUsageLimits(
+                    usageLimits,
+                    withOpenCodeClient(serverConfig.cwd, (client) =>
+                      runOpenCodeSdk("provider.list", (signal) =>
+                        client.provider.list(undefined, { signal }),
+                      ).pipe(
+                        Effect.map((list) =>
+                          list.data ? openCodeInventoryZaiUsageSource(list.data) : null,
+                        ),
+                      ),
+                    ),
+                  )
+                : Effect.succeed(usageLimits),
+            ),
+          ),
         },
         { concurrency: "unbounded" },
       ).pipe(
@@ -196,40 +255,7 @@ export const OpenCodeDriver: ProviderDriver<OpenCodeSettings, OpenCodeDriverEnv>
           },
           { concurrency: "unbounded" },
         );
-      const loadWorkspaceForCwd = (cwd: string) =>
-        effectiveConfig.serverUrl.trim().length > 0
-          ? Effect.scoped(
-              Effect.gen(function* () {
-                const server = yield* openCodeRuntime.connectToOpenCodeServer({
-                  binaryPath: effectiveConfig.binaryPath,
-                  directory: cwd,
-                  serverUrl: effectiveConfig.serverUrl,
-                  ...(effectiveConfig.serverPassword
-                    ? { serverPassword: effectiveConfig.serverPassword }
-                    : {}),
-                  environment: processEnv,
-                });
-                const client = openCodeRuntime.createOpenCodeSdkClient({
-                  baseUrl: server.url,
-                  directory: cwd,
-                  ...(effectiveConfig.serverPassword
-                    ? { serverPassword: effectiveConfig.serverPassword }
-                    : {}),
-                });
-                return yield* loadWorkspaceInventory(client);
-              }),
-            )
-          : serverOwner.withServer((server) =>
-              loadWorkspaceInventory(
-                openCodeRuntime.createOpenCodeSdkClient({
-                  baseUrl: server.url,
-                  directory: cwd,
-                  ...(server.serverPassword !== undefined
-                    ? { serverPassword: server.serverPassword }
-                    : {}),
-                }),
-              ),
-            );
+      const loadWorkspaceForCwd = (cwd: string) => withOpenCodeClient(cwd, loadWorkspaceInventory);
 
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<OpenCodeSettings>>(

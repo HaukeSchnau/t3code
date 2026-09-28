@@ -173,21 +173,11 @@ function makeHarness(config?: {
   readonly instanceId?: ProviderInstanceId;
   readonly scopedLimitNames?: ClaudeAdapterLiveOptions["scopedLimitNames"];
   readonly environment?: ClaudeAdapterLiveOptions["environment"];
-  readonly usageResponse?: unknown;
   readonly acceptRuntimeEvent?: ClaudeAdapterLiveOptions["acceptRuntimeEvent"];
   readonly getSessionMessages?: ClaudeAdapterLiveOptions["getSessionMessages"];
   readonly forkSession?: ClaudeAdapterLiveOptions["forkSession"];
 }) {
   const query = new FakeClaudeQuery();
-  let usageCalls = 0;
-  if (config?.usageResponse !== undefined) {
-    Object.assign(query, {
-      usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET: async () => {
-        usageCalls += 1;
-        return config.usageResponse;
-      },
-    });
-  }
   const queries = [query];
   let createInput:
     | {
@@ -239,7 +229,6 @@ function makeHarness(config?: {
       Layer.provideMerge(NodeServices.layer),
     ),
     query,
-    getUsageCalls: () => usageCalls,
     queries,
     getLastCreateQueryInput: () => createInput,
   };
@@ -1580,7 +1569,7 @@ describe("ClaudeAdapterLive", () => {
       }) as unknown as SDKMessage;
     const limitsUpdates = (events: Iterable<ProviderRuntimeEvent>) =>
       Array.from(events).flatMap((event) =>
-        event.type === "account.rate-limits.updated" ? [event.payload.rateLimits] : [],
+        event.type === "account.rate-limits.updated" ? [event.payload.limits] : [],
       );
     return Effect.gen(function* () {
       const adapter = yield* ClaudeAdapter;
@@ -1626,239 +1615,6 @@ describe("ClaudeAdapterLive", () => {
           ],
         },
       ]);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("publishes Claude subscription limits when a session starts", () => {
-    const harness = makeHarness({
-      usageResponse: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
-          seven_day: { utilization: 7, resets_at: "2026-08-28T05:00:00.000Z" },
-        },
-      },
-    });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const usageEventFiber = yield* Stream.filter(
-        adapter.streamEvents,
-        (event) => event.type === "account.rate-limits.updated",
-      ).pipe(Stream.runHead, Effect.forkChild);
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-
-      const usageEvent = yield* Fiber.join(usageEventFiber);
-      assert.equal(usageEvent._tag, "Some");
-      if (usageEvent._tag === "Some") {
-        assert.equal(usageEvent.value.type, "account.rate-limits.updated");
-        if (usageEvent.value.type === "account.rate-limits.updated") {
-          assert.deepEqual(
-            (usageEvent.value.payload.rateLimits as { readonly windows?: ReadonlyArray<unknown> })
-              .windows,
-            [
-              {
-                id: "five_hour",
-                kind: "session",
-                label: "Session",
-                usedPercent: 42,
-                resetsAt: "2026-08-21T17:00:00.000Z",
-                windowDurationMins: 300,
-              },
-              {
-                id: "seven_day",
-                kind: "weekly",
-                label: "Weekly",
-                usedPercent: 7,
-                resetsAt: "2026-08-28T05:00:00.000Z",
-                windowDurationMins: 10080,
-              },
-            ],
-          );
-        }
-      }
-      assert.equal(harness.getUsageCalls(), 1);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("coalesces a post-turn usage refresh until the one-minute cooldown ends", () => {
-    const harness = makeHarness({
-      usageResponse: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
-        },
-      },
-    });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const initialUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-      yield* Fiber.join(initialUsageFiber);
-
-      const completedFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "turn.completed"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-      yield* adapter.sendTurn({ threadId: THREAD_ID, input: "hello", attachments: [] });
-      harness.query.emit({
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        errors: [],
-        session_id: "sdk-session-usage-refresh",
-        uuid: "result-usage-refresh",
-      } as unknown as SDKMessage);
-      yield* Fiber.join(completedFiber);
-
-      const refreshedUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-      yield* TestClock.adjust("1 minute");
-      const refreshedUsage = yield* Fiber.join(refreshedUsageFiber);
-
-      assert.equal(refreshedUsage._tag, "Some");
-      assert.equal(harness.getUsageCalls(), 2);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("refreshes Claude usage every five minutes while a session is alive", () => {
-    const harness = makeHarness({
-      usageResponse: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
-        },
-      },
-    });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const initialUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-      yield* Fiber.join(initialUsageFiber);
-
-      const refreshedUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-      yield* TestClock.adjust("5 minutes");
-      const refreshedUsage = yield* Fiber.join(refreshedUsageFiber);
-
-      assert.equal(refreshedUsage._tag, "Some");
-      assert.equal(harness.getUsageCalls(), 2);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("refreshes immediately when Claude reports a rate-limit event", () => {
-    const harness = makeHarness({
-      usageResponse: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
-        },
-      },
-    });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const initialUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-      yield* Fiber.join(initialUsageFiber);
-
-      const refreshedUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-      harness.query.emit({ type: "rate_limit_event" } as unknown as SDKMessage);
-      const refreshedUsage = yield* Fiber.join(refreshedUsageFiber);
-
-      assert.equal(refreshedUsage._tag, "Some");
-      assert.equal(harness.getUsageCalls(), 2);
-    }).pipe(
-      Effect.provideService(Random.Random, makeDeterministicRandomService()),
-      Effect.provide(harness.layer),
-    );
-  });
-
-  it.effect("does not poll after the final Claude session stops", () => {
-    const harness = makeHarness({
-      usageResponse: {
-        rate_limits_available: true,
-        rate_limits: {
-          five_hour: { utilization: 42, resets_at: "2026-08-21T17:00:00.000Z" },
-        },
-      },
-    });
-
-    return Effect.gen(function* () {
-      const adapter = yield* ClaudeAdapter;
-      const initialUsageFiber = yield* adapter.streamEvents.pipe(
-        Stream.filter((event) => event.type === "account.rate-limits.updated"),
-        Stream.runHead,
-        Effect.forkChild,
-      );
-
-      yield* adapter.startSession({
-        threadId: THREAD_ID,
-        provider: ProviderDriverKind.make("claudeAgent"),
-        runtimeMode: "full-access",
-      });
-      yield* Fiber.join(initialUsageFiber);
-      yield* adapter.stopSession(THREAD_ID);
-      yield* TestClock.adjust("5 minutes");
-
-      assert.equal(harness.getUsageCalls(), 1);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

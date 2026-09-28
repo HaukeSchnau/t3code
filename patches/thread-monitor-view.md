@@ -32,9 +32,9 @@ supports direct approval, simple user-input, interrupt, and full-thread navigati
   triggering it on `/monitor` returns to the most recent non-monitor app route, preserving search
   params and hash where possible.
 - Tile follow-up composers intentionally mount the full shared chat composer as the baseline
-  experience, including model/runtime controls, attachment support, usage meters, and primary
-  actions. The composer stays collapsed by default in monitor tiles, expands inline on explicit
-  follow-up intent, and remains open while a draft/error/busy state needs the full surface.
+  experience, including model/runtime controls, attachment support, the context-window meter, and
+  primary actions. The composer stays collapsed by default in monitor tiles, expands inline on
+  explicit follow-up intent, and remains open while a draft/error/busy state needs the full surface.
 - Queued follow-up messages must be visible in monitor tiles and use the shared queued-message
   strip/actions so users can steer or remove queued work without opening the full thread. Keep the
   strip's standard inset/layering relative to the collapsed or expanded composer surface.
