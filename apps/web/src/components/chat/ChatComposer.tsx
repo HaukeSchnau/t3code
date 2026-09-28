@@ -1259,6 +1259,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
         followUpBehavior={props.followUpBehavior}
+        showSendWhileRunning={props.showSendWhileRunning ?? false}
         canPauseTurn={props.canPauseTurn}
         canResumeInterruptedTurn={props.canResumeInterruptedTurn}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
