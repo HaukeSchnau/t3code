@@ -51,10 +51,6 @@ import {
   selectProjectGroupingSettings,
 } from "../logicalProject";
 import { useUiStateStore } from "../uiStateStore";
-import {
-  PanelAnimationSuppressionProvider,
-  usePanelNavigationSuppression,
-} from "../panelAnimations";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
 import {
@@ -142,9 +138,6 @@ function RootRouteNotFoundView() {
 function RootRouteView() {
   useEffect(() => installDesktopPasteAsText(window.desktopBridge, window), []);
   const pathname = useLocation({ select: (location) => location.pathname });
-  // State a route restores must paint in place; panel motion resumes after the
-  // first frame of each navigation.
-  const panelAnimationsSuppressed = usePanelNavigationSuppression(pathname);
   const { authGateState } = Route.useRouteContext();
   const primaryEnvironmentAuthenticated = authGateState.status === "authenticated";
   const cachedAuthentication = authGateState.status === "offline-authenticated";
@@ -187,11 +180,9 @@ function RootRouteView() {
           <FontAppearanceSync />
           <CustomSnoozeDialogHost />
           <CommandPalette>
-            <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
-              <AppSidebarLayout>
-                <Outlet />
-              </AppSidebarLayout>
-            </PanelAnimationSuppressionProvider>
+            <AppSidebarLayout>
+              <Outlet />
+            </AppSidebarLayout>
           </CommandPalette>
         </AnchoredToastProvider>
       </ToastProvider>
@@ -213,11 +204,9 @@ function RootRouteView() {
 
   const appShell = (
     <CommandPalette>
-      <PanelAnimationSuppressionProvider value={panelAnimationsSuppressed}>
-        <AppSidebarLayout>
-          <Outlet />
-        </AppSidebarLayout>
-      </PanelAnimationSuppressionProvider>
+      <AppSidebarLayout>
+        <Outlet />
+      </AppSidebarLayout>
     </CommandPalette>
   );
 
