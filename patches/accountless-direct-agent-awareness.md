@@ -18,7 +18,7 @@ authorization boundary and is intentionally not removed.
   true. Upstream imports it statically, which puts `@clerk/react` in the startup graph of every
   build. Fork builds never use it, and the lazy import removes 154 KB (41 KB gzip) of startup
   JavaScript. Clerk code still loads, without effect, when Settings, `/welcome`, or `/connect`
-  opens.
+  opens. Drop the gate once upstream lazy-loads the dialog.
 - Fork builds must never set `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`,
   `VITE_T3CODE_RELAY_URL`, or the `T3CODE_CLERK_*` and `T3CODE_RELAY_URL` values that
   `scripts/lib/public-config.ts` maps onto them. Together they turn account sign-in on.
