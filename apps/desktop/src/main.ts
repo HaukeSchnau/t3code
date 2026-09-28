@@ -35,6 +35,7 @@ import * as DesktopApp from "./app/DesktopApp.ts";
 import * as DesktopAppActivation from "./app/DesktopAppActivation.ts";
 import * as DesktopAppIdentity from "./app/DesktopAppIdentity.ts";
 import * as DesktopConnectionCatalogStore from "./app/DesktopConnectionCatalogStore.ts";
+import * as DesktopClerk from "./app/DesktopClerk.ts";
 import * as DesktopOpenWorkspace from "./app/DesktopOpenWorkspace.ts";
 import * as DesktopApplicationMenu from "./window/DesktopApplicationMenu.ts";
 import * as DesktopAssets from "./app/DesktopAssets.ts";
@@ -195,7 +196,6 @@ const desktopApplicationLayer = Layer.mergeAll(
   desktopAppActivationLayer,
   DesktopApplicationMenu.layer,
   DesktopLinuxUrlHandler.layer,
-  DesktopOpenWorkspace.layer,
   DesktopShellEnvironment.layer,
   desktopSshLayer,
 ).pipe(
@@ -205,15 +205,29 @@ const desktopApplicationLayer = Layer.mergeAll(
   Layer.provideMerge(desktopLocalEnvironmentAuthLayer),
 );
 
+const desktopClerkLayer = DesktopClerk.layer.pipe(
+  Layer.provideMerge(desktopEnvironmentLayer),
+  // Deeplinks queue here until the renderer drains them over IPC, so the
+  // application layer must share this instance through the Clerk context.
+  Layer.provideMerge(DesktopOpenWorkspace.layer),
+  Layer.provideMerge(NodeServices.layer),
+  Layer.provideMerge(ElectronApp.layer),
+);
+
 const desktopApplicationRuntimeLayer = desktopApplicationLayer.pipe(
+  Layer.provideMerge(NodeServices.layer),
   Layer.provideMerge(NodeHttpClient.layerUndici),
   Layer.provideMerge(NetService.layer),
   Layer.provideMerge(electronLayer),
 );
 
-const desktopRuntimeLayer = desktopApplicationRuntimeLayer.pipe(
+// Acquire strict pre-ready setup before Clerk, whose userData resolution can
+// yield and let Electron emit ready.
+const desktopRuntimeLayer = desktopClerkLayer.pipe(
+  Layer.flatMap((clerkContext) =>
+    desktopApplicationRuntimeLayer.pipe(Layer.provideMerge(Layer.succeedContext(clerkContext))),
+  ),
   Layer.provideMerge(DesktopPreReadyPlatform.layer),
-  Layer.provideMerge(NodeServices.layer),
 );
 
 DesktopApp.program.pipe(Effect.provide(desktopRuntimeLayer), NodeRuntime.runMain);
