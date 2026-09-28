@@ -30,7 +30,10 @@ import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { makeCodexTextGeneration } from "../../textGeneration/CodexTextGeneration.ts";
+import {
+  CodexManagedAuthRefreshError,
+  makeCodexTextGeneration,
+} from "../../textGeneration/CodexTextGeneration.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { ServerConfig } from "../../config.ts";
 import { expandHomePath } from "../../pathExpansion.ts";
@@ -253,7 +256,27 @@ export const CodexDriver: ProviderDriver<CodexSettings, CodexDriverEnv> = {
       const textGeneration = yield* makeCodexTextGeneration(
         effectiveConfig,
         processEnv,
-        {},
+        {
+          // Direct title requests read auth.json but never rotate it. After a 401,
+          // `account/read` lets the official app-server refresh managed ChatGPT auth.
+          refreshManagedAuth: () =>
+            withCodexAppServerClient({
+              binaryPath: effectiveConfig.binaryPath,
+              homePath: effectiveConfig.homePath,
+              launchArgs: resolveCodexLaunchArgs(effectiveConfig.launchArgs, processEnv),
+              cwd: process.cwd(),
+              environment: processEnv,
+            }).pipe(
+              Effect.flatMap(({ client }) =>
+                client.request("account/read", { refreshToken: true }),
+              ),
+              Effect.scoped,
+              Effect.timeout("30 seconds"),
+              Effect.asVoid,
+              Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+              Effect.mapError((cause) => new CodexManagedAuthRefreshError({ cause })),
+            ),
+        },
         snapshot.getSnapshot.pipe(Effect.map((value) => value.models)),
       );
       const snapshotForCwd = (cwd: string) =>

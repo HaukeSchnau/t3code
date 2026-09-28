@@ -8,7 +8,6 @@ import {
   SkillPackId,
   ThreadId,
   ThreadWorkspaceId,
-  ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
   ThreadOrchestrationWatchId,
@@ -63,15 +62,6 @@ class ThreadCliRootCoordinationError extends Data.TaggedError(
 class ThreadCliModelSelectionError extends Data.TaggedError("ThreadCliModelSelectionError")<{}> {
   override get message(): string {
     return "Pass --provider-instance and --model together. --option also requires both flags.";
-  }
-}
-
-class ThreadCliBatchWorkerError extends Data.TaggedError("ThreadCliBatchWorkerError")<{
-  readonly label: string;
-  readonly value: string;
-}> {
-  override get message(): string {
-    return `Invalid --worker '${this.label}=${this.value}'. Use label=provider-instance/model?option:value.`;
   }
 }
 
@@ -180,9 +170,6 @@ const threadIdArgument = Argument.String("thread-id").pipe(
 const promptArgument = Argument.String("prompt").pipe(
   Argument.withDescription("Message to submit to the thread."),
 );
-const batchIdArgument = Argument.String("batch-id").pipe(
-  Argument.withDescription("Orchestration batch id."),
-);
 const effortIdArgument = Argument.String("effort-id").pipe(
   Argument.withDescription("Orchestration effort id."),
 );
@@ -228,46 +215,6 @@ const modelSelectionFromFlags = (flags: {
     model,
     ...(options.length > 0 ? { options } : {}),
   });
-};
-
-const batchWorkerModelSelection = (
-  label: string,
-  value: string,
-): Effect.Effect<ModelSelection, ThreadCliBatchWorkerError> => {
-  const separator = value.indexOf("/");
-  if (separator <= 0 || separator === value.length - 1) {
-    return Effect.fail(new ThreadCliBatchWorkerError({ label, value }));
-  }
-  const instanceId = value.slice(0, separator);
-  const modelAndOptions = value.slice(separator + 1);
-  const querySeparator = modelAndOptions.indexOf("?");
-  const model = querySeparator === -1 ? modelAndOptions : modelAndOptions.slice(0, querySeparator);
-  if (!model) return Effect.fail(new ThreadCliBatchWorkerError({ label, value }));
-  const query = querySeparator === -1 ? "" : modelAndOptions.slice(querySeparator + 1);
-  return Effect.try({
-    try: () =>
-      query.length === 0
-        ? []
-        : query.split("&").map((entry) => {
-            const optionSeparator = entry.indexOf(":");
-            if (optionSeparator <= 0 || optionSeparator === entry.length - 1) {
-              throw new Error("Invalid worker option");
-            }
-            const id = decodeURIComponent(entry.slice(0, optionSeparator));
-            const rawValue = decodeURIComponent(entry.slice(optionSeparator + 1));
-            return {
-              id,
-              value: rawValue === "true" ? true : rawValue === "false" ? false : rawValue,
-            };
-          }),
-    catch: () => new ThreadCliBatchWorkerError({ label, value }),
-  }).pipe(
-    Effect.map((options) => ({
-      instanceId: ProviderInstanceId.make(instanceId),
-      model,
-      ...(options.length > 0 ? { options } : {}),
-    })),
-  );
 };
 
 const actorScope = (
@@ -1291,161 +1238,6 @@ const stopCommand = Command.make("stop", {
   ),
 );
 
-const batchCreateCommand = Command.make("create", {
-  ...scopedFlags,
-  prompt: promptArgument,
-  workers: Flag.KeyValuePair("worker").pipe(
-    Flag.withDescription(
-      "Worker as label=provider-instance/model?option:value. Repeat for multiple workers.",
-    ),
-  ),
-  project: Flag.String("project").pipe(Flag.withDescription("Target project id."), Flag.optional),
-  worktree: Flag.Boolean("worktree").pipe(
-    Flag.withDescription("Give each worker a managed workspace."),
-    Flag.withDefault(false),
-  ),
-  allowLegacyModel: allowLegacyModelFlag,
-  runtimeMode: runtimeModeFlag,
-  interactionMode: interactionModeFlag,
-  title: Flag.String("title").pipe(Flag.withDescription("Batch title."), Flag.optional),
-  timeoutMs: Flag.Int("timeout-ms").pipe(
-    Flag.withDescription("Server-owned batch deadline."),
-    Flag.optional,
-  ),
-}).pipe(
-  Command.withDescription("Create a durable batch and launch all workers."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
-      Effect.gen(function* () {
-        const caller = currentCallerThreadId(flags.fromThread);
-        if (caller === undefined) return yield* new ThreadCliCallerRequiredError();
-        const workers = yield* Effect.forEach(
-          Object.entries(flags.workers),
-          ([label, value]) =>
-            batchWorkerModelSelection(label, value).pipe(
-              Effect.map((modelSelection) => ({
-                label,
-                modelSelection,
-                ...(Option.isSome(flags.runtimeMode)
-                  ? { runtimeMode: flags.runtimeMode.value }
-                  : {}),
-                ...(Option.isSome(flags.interactionMode)
-                  ? { interactionMode: flags.interactionMode.value }
-                  : {}),
-                ...(Option.isSome(flags.environment) ||
-                Option.isSome(flags.project) ||
-                flags.worktree
-                  ? {
-                      target: {
-                        ...(Option.isSome(flags.environment)
-                          ? { environmentId: EnvironmentId.make(flags.environment.value) }
-                          : {}),
-                        ...(Option.isSome(flags.project)
-                          ? { projectId: ProjectId.make(flags.project.value) }
-                          : {}),
-                        ...(flags.worktree ? { environment: { type: "worktree" as const } } : {}),
-                      },
-                    }
-                  : {}),
-              })),
-            ),
-          { concurrency: "unbounded" },
-        );
-        const result = yield* client.threadOrchestration.createBatch({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: {
-              prompt: flags.prompt,
-              workers,
-              ...(flags.allowLegacyModel ? { allowLegacyModel: true } : {}),
-              ...(Option.isSome(flags.title) ? { title: flags.title.value } : {}),
-              ...(Option.isSome(flags.timeoutMs) ? { timeoutMs: flags.timeoutMs.value } : {}),
-            },
-          },
-        });
-        yield* Console.log(render(result, flags.json));
-      }),
-    ),
-  ),
-);
-
-const batchReadCommand = Command.make("read", {
-  ...scopedFlags,
-  batchId: batchIdArgument,
-}).pipe(
-  Command.withDescription("Read a batch and every worker's honest outcome."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
-      Effect.gen(function* () {
-        const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
-        const result = yield* client.threadOrchestration.readBatch({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: { batchId: ThreadOrchestrationBatchId.make(flags.batchId) },
-          },
-        });
-        yield* Console.log(render(result, flags.json));
-      }),
-    ),
-  ),
-);
-
-const batchCancelCommand = Command.make("cancel", {
-  ...scopedFlags,
-  batchId: batchIdArgument,
-}).pipe(
-  Command.withDescription("Interrupt live local workers in a batch."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
-      Effect.gen(function* () {
-        const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
-        const result = yield* client.threadOrchestration.cancelBatch({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: { batchId: ThreadOrchestrationBatchId.make(flags.batchId) },
-          },
-        });
-        yield* Console.log(render(result, flags.json));
-      }),
-    ),
-  ),
-);
-
-const batchCleanupCommand = Command.make("cleanup", {
-  ...scopedFlags,
-  batchId: batchIdArgument,
-}).pipe(
-  Command.withDescription("Delete terminal local workers' managed workspaces."),
-  Command.withHandler((flags) =>
-    withClientAndEnvironment(flags, ({ client, headers, environmentId }) =>
-      Effect.gen(function* () {
-        const caller = currentCallerThreadId(flags.fromThread) ?? ThreadId.make("t3-cli");
-        const result = yield* client.threadOrchestration.cleanupBatch({
-          headers,
-          payload: {
-            scope: actorScope(environmentId, caller),
-            input: { batchId: ThreadOrchestrationBatchId.make(flags.batchId) },
-          },
-        });
-        yield* Console.log(render(result, flags.json));
-      }),
-    ),
-  ),
-);
-
-const batchCommand = Command.make("batch").pipe(
-  Command.withDescription("Create and manage durable orchestration batches."),
-  Command.withSubcommands([
-    batchCreateCommand,
-    batchReadCommand,
-    batchCancelCommand,
-    batchCleanupCommand,
-  ]),
-);
-
 export const threadCommand = Command.make("thread").pipe(
   Command.withDescription("Inspect and control T3 Code threads."),
   Command.withSubcommands([
@@ -1455,7 +1247,6 @@ export const threadCommand = Command.make("thread").pipe(
     readCommand,
     resultCommand,
     graphCommand,
-    batchCommand,
     effortCommand,
     waitCommand,
     watchCommand,

@@ -1,14 +1,11 @@
 import {
-  EnvironmentId,
   OrchestrationCoordinationShell,
   OrchestrationEffortShell,
   OrchestrationThreadRef,
   OrchestrationThreadRelationshipShell,
   OrchestrationWaitShell,
   OrchestrationWatchShell,
-  ThreadId,
   TurnId,
-  ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortActivityPayload,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationRelationship,
@@ -25,29 +22,6 @@ const decodeRelationship = Schema.decodeUnknownOption(ThreadOrchestrationRelatio
 const decodeEffortActivity = Schema.decodeUnknownOption(ThreadOrchestrationEffortActivityPayload);
 const decodeWaitActivity = Schema.decodeUnknownOption(ThreadOrchestrationWaitActivityPayload);
 const decodeWatchActivity = Schema.decodeUnknownOption(ThreadOrchestrationWatchActivityPayload);
-
-const BatchCreatedPayload = Schema.Struct({
-  batchId: ThreadOrchestrationBatchId,
-  coordinatorEnvironmentId: EnvironmentId,
-  coordinatorThreadId: ThreadId,
-  title: Schema.String,
-  members: Schema.Array(
-    Schema.Struct({
-      label: Schema.String,
-      environmentId: EnvironmentId,
-      threadId: ThreadId,
-    }),
-  ),
-  createdAt: Schema.String,
-  deadlineAt: Schema.NullOr(Schema.String),
-});
-const decodeBatchCreated = Schema.decodeUnknownOption(BatchCreatedPayload);
-
-const BatchLifecyclePayload = Schema.Struct({
-  batchId: ThreadOrchestrationBatchId,
-  status: Schema.optional(Schema.String),
-});
-const decodeBatchLifecycle = Schema.decodeUnknownOption(BatchLifecyclePayload);
 
 function refKey(ref: OrchestrationThreadRef): string {
   return `${ref.environmentId ?? "local"}:${ref.threadId}`;
@@ -219,69 +193,6 @@ export function deriveThreadCoordinationShell(
         });
       }
       continue;
-    }
-
-    // Existing batches remain visible while agents migrate to independent
-    // efforts and waits. This compatibility projection does not change their
-    // persisted meaning.
-    if (activity.kind === "thread-orchestration.batch.created") {
-      const decoded = decodeBatchCreated(activity.payload);
-      if (Option.isNone(decoded)) continue;
-      const batch = decoded.value;
-      const effortId = ThreadOrchestrationEffortId.make(batch.batchId);
-      const waitId = ThreadOrchestrationWaitId.make(batch.batchId);
-      const coordinator = {
-        environmentId: batch.coordinatorEnvironmentId,
-        threadId: batch.coordinatorThreadId,
-      };
-      efforts.set(effortId, {
-        effortId,
-        coordinator,
-        title: batch.title,
-        members: batch.members.map((member) => ({
-          thread: { environmentId: member.environmentId, threadId: member.threadId },
-          label: member.label,
-          joinedAt: batch.createdAt,
-        })),
-        openedAt: batch.createdAt,
-        closedAt: null,
-      });
-      waits.set(waitId, {
-        waitId,
-        coordinator,
-        effortId,
-        members: batch.members.map((member) => ({
-          thread: { environmentId: member.environmentId, threadId: member.threadId },
-          outcome: "unknown" as const,
-        })),
-        mode: "all",
-        state: "open",
-        openedAt: batch.createdAt,
-        deadlineAt: batch.deadlineAt,
-        resolvedAt: null,
-      });
-      continue;
-    }
-
-    if (activity.kind.startsWith("thread-orchestration.batch.")) {
-      const decoded = decodeBatchLifecycle(activity.payload);
-      if (Option.isNone(decoded)) continue;
-      const waitId = ThreadOrchestrationWaitId.make(decoded.value.batchId);
-      const effortId = ThreadOrchestrationEffortId.make(decoded.value.batchId);
-      const wait = waits.get(waitId);
-      const effort = efforts.get(effortId);
-      if (wait === undefined) continue;
-      const state =
-        activity.kind === "thread-orchestration.batch.cancelled"
-          ? ("cancelled" as const)
-          : decoded.value.status === "deadline-exceeded"
-            ? ("deadline-exceeded" as const)
-            : activity.kind === "thread-orchestration.batch.settled"
-              ? ("satisfied" as const)
-              : null;
-      if (state === null) continue;
-      waits.set(waitId, { ...wait, state, resolvedAt: activity.createdAt });
-      if (effort !== undefined) efforts.set(effortId, { ...effort, closedAt: activity.createdAt });
     }
   }
 

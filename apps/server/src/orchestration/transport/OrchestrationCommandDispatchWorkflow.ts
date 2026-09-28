@@ -373,7 +373,7 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
 
           yield* track(tracker.stageStatus(command.threadId, "setup-script", "running"));
           const requestedAt = yield* nowIso;
-          yield* input.projectSetupScriptRunner
+          const setupResult = yield* input.projectSetupScriptRunner
             .runForThread({
               ...runnerInput,
               reconcileClaimedLaunch,
@@ -384,25 +384,39 @@ export function makeOrchestrationCommandDispatchWorkflow(input: {
               },
             })
             .pipe(
-              Effect.matchEffect({
-                onFailure: (error) =>
-                  recordSetupScriptLaunchFailure({ error, requestedAt, worktreePath }).pipe(
-                    Effect.andThen(Effect.fail(error)),
-                  ),
-                onSuccess: (setupResult) =>
-                  setupResult.status !== "started"
-                    ? Effect.void
-                    : recordSetupScriptStarted({
-                        requestedAt,
-                        worktreePath,
-                        scriptId: setupResult.scriptId,
-                        scriptName: setupResult.scriptName,
-                        terminalId: setupResult.terminalId,
-                      }),
-              }),
+              Effect.tapError((error) =>
+                recordSetupScriptLaunchFailure({ error, requestedAt, worktreePath }),
+              ),
+              Effect.tap((setupResult) =>
+                setupResult.status !== "started"
+                  ? Effect.void
+                  : recordSetupScriptStarted({
+                      requestedAt,
+                      worktreePath,
+                      scriptId: setupResult.scriptId,
+                      scriptName: setupResult.scriptName,
+                      terminalId: setupResult.terminalId,
+                    }),
+              ),
             );
+          const completion =
+            setupResult.status === "started" && setupResult.completion !== undefined
+              ? yield* setupResult.completion
+              : null;
           progress = yield* input.commandPreprocessing.markCompleted(command, "setup-completed");
-          yield* track(tracker.stageStatus(command.threadId, "setup-script", "done"));
+          // A failed script still hands off to the agent, but the stage must say it failed.
+          yield* track(
+            completion === null || completion.exitCode === 0
+              ? tracker.stageStatus(command.threadId, "setup-script", "done")
+              : tracker.stageStatus(
+                  command.threadId,
+                  "setup-script",
+                  "failed",
+                  completion.exitCode === null
+                    ? "terminal closed before the script finished"
+                    : `exit ${completion.exitCode}`,
+                ),
+          );
         });
 
       const bootstrapProgram = Effect.gen(function* () {

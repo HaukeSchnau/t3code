@@ -453,7 +453,6 @@ it.layer(NodeServices.layer)("bin cli parsing", (it) => {
         "read",
         "result",
         "graph",
-        "batch",
         "effort",
         "wait",
         "watch",

@@ -357,14 +357,21 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.forkScoped,
   );
 
-  const setSynchronizing = SubscriptionRef.update(state, (current) =>
-    current.status === "deleted"
-      ? current
-      : {
-          ...current,
-          status: "synchronizing" as const,
-          error: Option.none(),
-        },
+  // A defect ends this subscription until its session is replaced. Connection
+  // updates and buffered items must not hide that diagnostic behind a spinner.
+  const subscriptionDefect = yield* Ref.make(false);
+  const setSynchronizing = Ref.get(subscriptionDefect).pipe(
+    Effect.flatMap((defect) =>
+      SubscriptionRef.update(state, (current) =>
+        current.status === "deleted" || defect
+          ? current
+          : {
+              ...current,
+              status: "synchronizing" as const,
+              error: Option.none(),
+            },
+      ),
+    ),
   );
   const markGenerationUnsynchronized = (generation: number) =>
     Ref.update(subscriptionSynchronization, (current) =>
@@ -376,11 +383,13 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     Effect.all([
       Ref.get(subscriptionSynchronization),
       SubscriptionRef.get(supervisor.session),
+      Ref.get(subscriptionDefect),
     ]).pipe(
-      Effect.flatMap(([synchronization, currentSession]) =>
+      Effect.flatMap(([synchronization, currentSession, defect]) =>
         SubscriptionRef.update(state, (current) =>
           current.status === "live" ||
           current.status === "deleted" ||
+          defect ||
           (synchronization.generation === generation &&
             synchronization.synchronized &&
             Option.isSome(currentSession) &&
@@ -456,10 +465,16 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
     page: Option.Option<EnvironmentThreadPageState> | "keep",
   ) {
     const waiting = yield* Ref.get(awaitingCompletion);
+    const defect = yield* Ref.get(subscriptionDefect);
     yield* SubscriptionRef.update(state, (current) => ({
       data: Option.some(thread),
-      status: waiting ? ("synchronizing" as const) : ("live" as const),
-      error: Option.none(),
+      // Buffered items from a defective attempt can still arrive after its error.
+      status: defect
+        ? ("cached" as const)
+        : waiting
+          ? ("synchronizing" as const)
+          : ("live" as const),
+      error: defect ? current.error : Option.none(),
       page: page === "keep" ? current.page : page,
     }));
     // Active threads can update many times per second and retain large tool
@@ -620,7 +635,7 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
           ? [false, current]
           : [true, { generation: itemGeneration, session: itemSession, synchronized: true }],
       );
-      if (!accepted) return;
+      if (!accepted || (yield* Ref.get(subscriptionDefect))) return;
       yield* Ref.set(awaitingCompletion, false);
       yield* SubscriptionRef.update(state, (current) =>
         Option.isSome(current.data) && current.status !== "deleted"
@@ -967,6 +982,8 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
             yield* Ref.set(reasoningMessagesSupported, supportsReasoningMessages);
             yield* Ref.set(paginationSupported, supportsPagination);
             yield* Ref.set(awaitingCompletion, supportsCompletionMarker);
+            // This attempt replaces any defective one; success clears its diagnostic.
+            yield* Ref.set(subscriptionDefect, false);
             // Preserve a prior refresh diagnostic while the subscription
             // restarts; readiness/success will clear it once data is current.
             yield* SubscriptionRef.update(state, (current) =>
@@ -1058,6 +1075,12 @@ export const makeEnvironmentThreadState = Effect.fn("EnvironmentThreadState.make
               maxConcurrent: 3,
               releaseWhen: (item) => item.kind === "synchronized",
             },
+            onDefect: () =>
+              Ref.set(subscriptionDefect, true).pipe(
+                Effect.andThen(
+                  setStreamError(Cause.fail(new Error("Could not synchronize the thread."))),
+                ),
+              ),
             onExpectedFailure: setStreamError,
             retryExpectedFailureAfter: "250 millis",
             resubscribe: foregroundResubscriptions,

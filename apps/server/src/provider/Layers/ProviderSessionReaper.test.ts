@@ -213,7 +213,6 @@ describe("ProviderSessionReaper", () => {
       getCapabilities: () =>
         Effect.succeed({
           sessionModelSwitch: "in-session",
-          assistantTranscriptRecovery: "none",
         }),
       assertConversationRollbackSupported: () => unsupported(),
       getInstanceInfo: (instanceId) => {

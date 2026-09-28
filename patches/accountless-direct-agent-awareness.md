@@ -10,13 +10,16 @@ authorization boundary and is intentionally not removed.
 
 - Remove account sign-in, account settings, cloud discovery, cloud-link dialogs, and browser OAuth
   routes from the clients. The mobile theme generator omits the unused Clerk native theme JSON.
+- Pairing links in Connections settings always open the backend's own `/pair` page. The fork ships
+  no hosted web app, and an `app.t3.codes` link would load upstream's client against this server.
 - Keep the upstream managed-relay interfaces behind fail-closed compatibility layers so shared
   connection runtime types do not need a fork-wide rewrite. No account credential is read or sent.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
   directly instead.
 - Register an iOS device and its Live Activity update token over the authenticated environment RPC.
-  The first reachable saved direct environment owns the device registration. Unregistration is sent
-  to every saved direct environment so stale device records are removed.
+  The first reachable saved direct environment owns the device registration. Removing a saved
+  environment first asks it to forget the device, so it stops pushing to the phone. That request is
+  best effort and bounded to five seconds, so an unreachable server cannot block removal.
 - Persist device registrations in the paired server's secret store and publish that server's local
   aggregate directly to APNs. Cross-environment aggregation is intentionally unsupported: each
   server knows only its own threads, and the first reachable server is authoritative for the card.

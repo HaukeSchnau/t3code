@@ -16,7 +16,6 @@ import {
 } from "../diagnostics/WorkloadDiagnostics.ts";
 import { isPersistenceError } from "../persistence/Errors.ts";
 import { OrchestrationCommandReceiptRepository } from "../persistence/Services/OrchestrationCommandReceipts.ts";
-import { ProviderService } from "../provider/Services/ProviderService.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
 
@@ -242,20 +241,8 @@ function updateTranscript(state: ProjectionState, event: ProviderRuntimeEvent) {
 export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
-  const providerService = yield* ProviderService;
   const commandReceiptRepository = yield* OrchestrationCommandReceiptRepository;
   const states = new Map<string, ProjectionState>();
-
-  const hasAuthoritativeTranscriptRecovery = Effect.fn(
-    "ProviderSubagentActivityProjection.hasAuthoritativeTranscriptRecovery",
-  )(function* (event: ProviderRuntimeEvent, journalBacked: boolean) {
-    if (journalBacked) return true;
-    const instanceId = event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider);
-    return yield* providerService.getCapabilities(instanceId).pipe(
-      Effect.map((capabilities) => capabilities.assistantTranscriptRecovery === "authoritative"),
-      Effect.orElseSucceed(() => false),
-    );
-  });
 
   const hydrate = Effect.fn("ProviderSubagentActivityProjection.hydrate")(function* (input: {
     readonly event: ProviderRuntimeEvent & {
@@ -454,8 +441,7 @@ export const makeProviderSubagentActivityProjection = Effect.gen(function* () {
 
     const existingState = states.get(key);
     const authoritativeTranscriptRecovery =
-      existingState?.authoritativeTranscriptRecovery === true ||
-      (yield* hasAuthoritativeTranscriptRecovery(event, journalBacked));
+      existingState?.authoritativeTranscriptRecovery === true || journalBacked;
     const hydratedState =
       existingState ??
       (yield* hydrate({ event, threadId, activityId, authoritativeTranscriptRecovery }));

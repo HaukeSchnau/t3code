@@ -128,7 +128,6 @@ function createProviderServiceHarness(
     getCapabilities: () =>
       Effect.succeed({
         sessionModelSwitch: "in-session",
-        assistantTranscriptRecovery: "none",
       }),
     assertConversationRollbackSupported,
     getInstanceInfo: (instanceId) =>

@@ -580,16 +580,8 @@ function EffortSection({
   );
 }
 
-export function WorkPanel({
-  threadRef,
-  actions: providedActions,
-}: {
-  readonly threadRef: ScopedThreadRef;
-  /** Overrides the production corrections; the dev fixture routes them into its reducer. */
-  readonly actions?: WorkActions;
-}) {
-  const productionActions = useProductionWorkActions();
-  const actions = providedActions ?? productionActions;
+export function WorkPanel({ threadRef }: { readonly threadRef: ScopedThreadRef }) {
+  const actions = useProductionWorkActions();
   const lineage = useThreadLineage();
   const threads = useThreadShells();
   const serverConfigs = useServerConfigs();

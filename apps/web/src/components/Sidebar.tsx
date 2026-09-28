@@ -87,7 +87,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useLocation, useParams, useRouter } from "@tanstack/react-router";
+import { useParams, useRouter } from "@tanstack/react-router";
 
 import { useRightPanelStore } from "../rightPanelStore";
 import {
@@ -223,10 +223,6 @@ import { SidebarChromeFooter, SidebarChromeHeader } from "./sidebar/SidebarChrom
 import { usePublishSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 import { SidebarThreadDetailPrewarmer } from "./sidebar/SidebarThreadDetailPrewarmer";
 import {
-  FIXTURE_ENVIRONMENT_ID,
-  FIXTURE_ENVIRONMENT_LABEL,
-} from "./orchestration-fixture/environmentId";
-import {
   buildSidebarOrchestrationItems,
   resolveWorkerState,
   type SidebarOrchestrationThreadItem,
@@ -237,7 +233,6 @@ import {
   SidebarViewingRow,
 } from "./sidebar/SidebarLineageGroup";
 import { useThreadLineage } from "../state/coordination";
-import { DelegationSidebarFixture } from "./delegation-fixture/DelegationSidebarFixture";
 import { SidebarHeaderIconButton, SidebarThreadHeader } from "./sidebar/SidebarThreadHeader";
 import { Popover, PopoverPopup, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
@@ -2116,9 +2111,6 @@ export default function Sidebar() {
   const projects = useProjects();
   const threads = useThreadShells();
   const router = useRouter();
-  const showDelegationFixture = useLocation({
-    select: (location) => location.pathname === "/fixtures/delegation",
-  });
   const threadLineage = useThreadLineage();
   const { isMobile, setOpenMobile } = useSidebar();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
@@ -2237,13 +2229,13 @@ export default function Sidebar() {
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
 
-  const environmentLabelById = useMemo(() => {
-    const labels = new Map(
-      environments.map((environment) => [environment.environmentId, environment.label] as const),
-    );
-    if (import.meta.env.DEV) labels.set(FIXTURE_ENVIRONMENT_ID, FIXTURE_ENVIRONMENT_LABEL);
-    return labels;
-  }, [environments]);
+  const environmentLabelById = useMemo(
+    () =>
+      new Map(
+        environments.map((environment) => [environment.environmentId, environment.label] as const),
+      ),
+    [environments],
+  );
   const environmentMachineById = useMemo(
     () =>
       new Map(
@@ -4474,16 +4466,6 @@ export default function Sidebar() {
                       routeDraftId={routeDraftIdForRows}
                       onNavigateToDraft={navigateToDraft}
                     />,
-                    showDelegationFixture ? (
-                      <DelegationSidebarFixture key="delegation-fixture" />
-                    ) : null,
-                    showDelegationFixture ? (
-                      <li
-                        key="delegation-fixture-divider"
-                        aria-hidden
-                        className="mx-2.5 my-1.5 h-px list-none bg-sidebar-border/60"
-                      />
-                    ) : null,
                     pinnedOrchestrationItems.length > 0 ? (
                       <li key="pinned-dnd" className="list-none">
                         <DndContext
