@@ -36,6 +36,9 @@ and fork lockfile check.
   their own sessions do not escape cleanup. Cancellation reads the process table once rather than
   spawning one `ps` command per descendant, which keeps it responsive when a job reaches its memory
   limit.
+- Cancellation sends TERM, then kills whatever still runs after `CI_CANCEL_GRACE_SECONDS` (10 by
+  default). TypeScript 7's native `tsc` catches TERM and keeps checking until it finishes; under
+  memory pressure a cancelled typecheck ran for hours.
 - T3 Code jobs request the `t3code-ci` runner pool. Its two instances have separate stable workspace
   slots, so they can run concurrently without claiming the runner reserved for another project.
 - The non-server test job has a 25-minute limit. Package tests alone took almost 13 minutes in
