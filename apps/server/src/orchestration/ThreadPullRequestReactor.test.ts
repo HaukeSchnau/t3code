@@ -140,7 +140,6 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
     snapshotSequence: 1,
     projects: [options.project ?? project],
     threads: options.threads,
-    usageLimits: [],
     updatedAt: NOW,
   });
   const reads = yield* Queue.unbounded<void>();

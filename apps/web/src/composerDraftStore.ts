@@ -2832,6 +2832,15 @@ function toHydratedDraftThreadState(
       : {}),
     envMode: persistedDraftThread.envMode,
     startFromOrigin: persistedDraftThread.startFromOrigin,
+    ...(persistedDraftThread.environmentSelection
+      ? { environmentSelection: persistedDraftThread.environmentSelection }
+      : {}),
+    ...(persistedDraftThread.loadBalancedEnvironmentId !== undefined
+      ? {
+          loadBalancedEnvironmentId:
+            persistedDraftThread.loadBalancedEnvironmentId as EnvironmentId | null,
+        }
+      : {}),
     ...(persistedDraftThread.skillPackIds
       ? { skillPackIds: persistedDraftThread.skillPackIds }
       : {}),

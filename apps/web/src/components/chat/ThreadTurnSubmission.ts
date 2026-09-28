@@ -25,6 +25,7 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import { truncate } from "@t3tools/shared/String";
+import type { ClientSettings } from "@t3tools/contracts/settings";
 
 import type { ComposerImageAttachment, ComposerFileAttachment } from "../../composerDraftStore";
 import { shouldClearComposerAfterDurableEnqueue } from "../../durableCommandOutbox";
@@ -37,6 +38,7 @@ import {
 } from "../../lib/composerContextReferences";
 import { getUploadedAttachments } from "../../lib/attachmentUploadQueue";
 import type { ChatMessage } from "../../types";
+import type { ComposerSubmissionIntent } from "../../composer-logic";
 import { getProviderModelCapabilities } from "../../providerModels";
 import {
   cloneComposerImageForRetry,
@@ -278,6 +280,23 @@ export function resolveNewThreadSubmissionTitle(
       (firstTerminalContext ? formatTerminalContextLabel(firstTerminalContext) : "") ||
       (firstFile ? `File: ${firstFile.name}` : "") ||
       "New thread",
+  );
+}
+
+/**
+ * Whether a send joins the thread's durable queue instead of starting a turn.
+ * Only a running turn queues. "Queue" waits for the turn to complete, "Steer"
+ * sends into the running turn like the queue strip's "Send now". The
+ * alternate send shortcut does the opposite for one message.
+ */
+export function shouldQueueFollowUp(input: {
+  readonly running: boolean;
+  readonly followUpBehavior: ClientSettings["followUpBehavior"];
+  readonly submissionIntent: ComposerSubmissionIntent;
+}): boolean {
+  return (
+    input.running &&
+    (input.followUpBehavior === "queue") !== (input.submissionIntent === "alternate")
   );
 }
 

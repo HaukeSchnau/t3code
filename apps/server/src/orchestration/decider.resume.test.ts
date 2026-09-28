@@ -69,7 +69,6 @@ function makeReadModel(
         },
       },
     ],
-    usageLimits: [],
     updatedAt: NOW,
   } satisfies OrchestrationReadModel;
 }

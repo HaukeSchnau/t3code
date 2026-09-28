@@ -243,7 +243,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
               snapshotSequence: 1,
               projects: [project],
               threads: [thread],
-              usageLimits: [],
               updatedAt: now,
             } satisfies OrchestrationShellSnapshot),
           getThreadShellById: () =>
@@ -737,7 +736,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
           getShellSnapshot: () =>
             Effect.succeed({
               snapshotSequence: 1,
-              usageLimits: [],
               projects: [],
               threads: [],
               updatedAt: now,
@@ -964,7 +962,6 @@ describe.sequential("signRelayAgentActivityPublishProof", () => {
             getShellSnapshot: () =>
               Effect.succeed({
                 snapshotSequence: 1,
-                usageLimits: [],
                 projects: [project],
                 threads: [thread],
                 updatedAt: now,

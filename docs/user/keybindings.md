@@ -30,12 +30,14 @@ on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
 Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
 in Settings.
 
-## Copy pull request references
+## Copy pull request and thread references
 
-With a PR open in the right panel or on the Pull Requests page, use `mod+shift+c`
-to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
+In any thread, `mod+shift+c` copies the thread's pull request link, or its thread
+ID when it has no pull request. It also works while the command palette is open.
+With a PR open in the right panel or on the Pull Requests page, `mod+shift+c`
+copies that PR's URL and `mod+shift+k` copies its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
-or “Copy Number”. They copy the selected PR and leave terminal input alone.
+or “Copy Number”. They leave terminal input alone.
 
 ## iPad
 

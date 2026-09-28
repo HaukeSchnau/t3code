@@ -18,6 +18,7 @@ import {
   resolveFollowUpSubmissionTitle,
   resolveNewThreadSubmissionTitle,
   serializeThreadTurnPrompt,
+  shouldQueueFollowUp,
   submitThreadTurn,
   threadComposerRevision,
   type ThreadComposerRevision,
@@ -147,6 +148,21 @@ describe("ThreadTurnSubmission", () => {
 
     assert.equal(resolveNewThreadSubmissionTitle(imageDraft, analysis), "Image: screenshot.png");
     assert.equal(resolveFollowUpSubmissionTitle(analysis, "Existing title"), "Existing title");
+  });
+
+  it("queues or steers a follow-up per the setting, flipped by the alternate shortcut", () => {
+    const decide = (
+      running: boolean,
+      followUpBehavior: "queue" | "steer",
+      submissionIntent: "foreground" | "alternate",
+    ) => shouldQueueFollowUp({ running, followUpBehavior, submissionIntent });
+
+    assert.equal(decide(true, "queue", "foreground"), true);
+    assert.equal(decide(true, "queue", "alternate"), false);
+    assert.equal(decide(true, "steer", "foreground"), false);
+    assert.equal(decide(true, "steer", "alternate"), true);
+    assert.equal(decide(false, "queue", "foreground"), false);
+    assert.equal(decide(false, "steer", "alternate"), false);
   });
 
   it("uses durable and direct delivery adapters at the same command seam", async () => {

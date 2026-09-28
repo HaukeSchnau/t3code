@@ -44,7 +44,6 @@ const readModel: OrchestrationReadModel = {
       session: null,
     },
   ],
-  usageLimits: [],
   updatedAt: UPDATED_AT,
 };
 

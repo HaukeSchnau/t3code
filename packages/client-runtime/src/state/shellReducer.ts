@@ -60,21 +60,8 @@ export function applyShellStreamEvent(
         threads: snapshot.threads.filter((thread) => thread.id !== event.threadId),
         snapshotSequence: event.sequence,
       };
-    case "usage-limits-updated": {
-      const current = snapshot.usageLimits.find(
-        (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
-      );
-      const nextUsageLimits =
-        current?.history !== undefined && event.usageLimits.history === undefined
-          ? { ...event.usageLimits, history: current.history }
-          : event.usageLimits;
-      const usageLimits = upsertBy(
-        snapshot.usageLimits,
-        nextUsageLimits,
-        (entry) => entry.providerInstanceId === event.usageLimits.providerInstanceId,
-      );
-      return { ...snapshot, usageLimits, snapshotSequence: event.sequence };
-    }
+    case "usage-limits-updated":
+      return { ...snapshot, snapshotSequence: event.sequence };
     case "coordination-updated":
       return {
         ...snapshot,

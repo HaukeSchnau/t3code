@@ -57,12 +57,7 @@ import { type EnvironmentConnectionPresentation } from "@t3tools/client-runtime/
 import type { CodexArtifactTemplate } from "@t3tools/client-runtime/codex-artifact-templates";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import { projectEnvironmentConnectionFreshness } from "@t3tools/client-runtime/state/connection-freshness";
-import {
-  changeRequestAutoSettles,
-  effectiveSettled,
-  effectiveSnoozed,
-  threadWokeAt,
-} from "@t3tools/client-runtime/state/thread-settled";
+import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import {
@@ -142,11 +137,11 @@ import {
   deriveActivePlanState,
   derivePendingApprovals,
   derivePendingUserInputs,
-  deriveTurnPlans,
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
   isLatestTurnSettled,
+  selectHandoffImageResources,
   type TimelineEntriesProjection,
 } from "../session-logic";
 import { type LegendListRef } from "@legendapp/list/react";
@@ -181,7 +176,6 @@ import {
   isImageAttachment,
   type SessionPhase,
   type Thread,
-  type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -288,7 +282,6 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useAutoBalanceUpdateBanner } from "./chat/useAutoBalanceUpdateBanner";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -363,7 +356,6 @@ import { useEnvironments, usePrimaryEnvironment } from "../state/environments";
 import {
   useProject,
   useProjects,
-  useProviderUsageLimits,
   useThread,
   useThreadRefs,
   useThreadShell,
@@ -422,6 +414,7 @@ import {
   formatThreadTurnOutgoingText,
   resolveThreadTurnOutgoingText,
   resolveNewThreadSubmissionTitle,
+  shouldQueueFollowUp,
   submitThreadTurn,
   threadComposerRevision,
   threadTurnDraftFromComposer,
@@ -449,7 +442,6 @@ import {
   buildLoadingThreadFromShell,
   buildRunningThreadTurnInterruptInput,
   buildThreadTurnInterruptInput,
-  buildRevertTurnCountByUserMessageId,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   dismissBranchMismatchForSession,
@@ -473,6 +465,8 @@ import {
   prepareRevertedMessageAttachments,
   waitForRevertedMessage,
   reconcileMountedTerminalThreadIds,
+  recallCheckoutIsRepo,
+  rememberCheckoutIsRepo,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
   getAntigravitySendBlockReason,
@@ -811,6 +805,10 @@ function useLocalDispatchState(input: {
     (message) => message.role === "user",
   );
   const latestUserMessageId = latestUserMessage?.id ?? null;
+  const currentTurnStartFailureId =
+    localDispatch === null
+      ? null
+      : latestTurnStartFailureId(input.activeThread, latestUserMessageId);
 
   const resetLocalDispatch = useCallback(() => {
     setLocalDispatch(null);
@@ -829,6 +827,7 @@ function useLocalDispatchState(input: {
         session: input.activeThread?.session ?? null,
         hasPendingApproval: input.activePendingApproval !== null,
         hasPendingUserInput: input.activePendingUserInput !== null,
+        latestTurnStartFailureId: currentTurnStartFailureId,
         threadError: input.threadError,
       }),
     [
@@ -840,6 +839,7 @@ function useLocalDispatchState(input: {
       input.phase,
       input.threadError,
       latestUserMessageId,
+      currentTurnStartFailureId,
       localDispatch,
     ],
   );
@@ -2112,8 +2112,8 @@ export default function ChatView(props: ChatViewProps) {
     panelAnimationDurationMs,
   );
   const rightPanelPresent = rightPanelPresence.present;
-  const rightPanelControlsInPanel =
-    rightPanelPresent && (!shouldUseRightPanelSheet || rightPanelOpen);
+  const rightPanelControlsInPanel = shouldUseRightPanelSheet && rightPanelPresent && rightPanelOpen;
+  const rightPanelControlsAtRoot = rightPanelPresent && !shouldUseRightPanelSheet;
   const renderedRightPanelSurface = rightPanelPresence.value?.activeSurface ?? null;
   const renderedRightPanelSurfaces = rightPanelPresence.value?.surfaces ?? [];
   const previewMiniPlayerVisible = shouldRenderPreviewMiniPlayer(
@@ -2973,17 +2973,6 @@ export default function ChatView(props: ChatViewProps) {
   const supportsConversationRollback =
     conversationProviderStatus !== null &&
     conversationProviderStatus.supportsConversationRollback !== false;
-  const providerUsageLimits = useProviderUsageLimits(activeThread?.environmentId ?? null);
-  const usageLimitsSources = useMemo(
-    () =>
-      providerUsageLimits.map((entry) => ({
-        provider: entry.provider,
-        providerInstanceId: entry.providerInstanceId,
-        usageLimits: [entry.usageLimits],
-        usageHistory: entry.history,
-      })),
-    [providerUsageLimits],
-  );
   const phase = derivePhase(activeThread?.session ?? null);
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const latestCheckpointCompletedAt = activeThread?.checkpoints.at(-1)?.completedAt ?? null;
@@ -2998,7 +2987,6 @@ export default function ChatView(props: ChatViewProps) {
     [threadActivities],
   );
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
-  const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
@@ -3195,21 +3183,6 @@ export default function ChatView(props: ChatViewProps) {
     activeComposerTasksProgress && activePlan && activePlan.turnId === activeLatestTurn?.turnId
       ? activePlan.steps
       : null;
-  // Current step for the in-chat working row: only for the running turn's own
-  // plan (deriveActivePlanState falls back to older turns' plans, which must
-  // not label fresh work). Falls back to the first pending step so an
-  // all-pending freshly written plan labels the row, matching the chip and
-  // the server's planProgress.
-  const workingStepLabel = useMemo(() => {
-    if (!activePlan || activePlan.turnId !== (activeLatestTurn?.turnId ?? null)) {
-      return null;
-    }
-    return (
-      activePlan.steps.find((step) => step.status === "inProgress")?.step ??
-      activePlan.steps.find((step) => step.status === "pending")?.step ??
-      null
-    );
-  }, [activeLatestTurn?.turnId, activePlan]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3493,33 +3466,22 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef],
   );
-  const serverAttachmentIds = useMemo(() => {
-    const attachmentIds = new Set<string>();
-    for (const message of serverMessages ?? []) {
-      for (const attachment of message.attachments ?? []) {
-        attachmentIds.add(attachment.id);
-      }
-    }
-    return [...attachmentIds];
-  }, [serverMessages]);
+  // Mounted timeline rows request their own image URLs. Only messages waiting to
+  // swap a local preview for the stored image need URLs here, even offscreen.
   const serverAttachmentResources = useMemo(
-    () =>
-      serverAttachmentIds.map((attachmentId) => ({
-        _tag: "attachment" as const,
-        attachmentId,
-      })),
-    [serverAttachmentIds],
+    () => selectHandoffImageResources(serverMessages, attachmentPreviewHandoffByMessageId),
+    [serverMessages, attachmentPreviewHandoffByMessageId],
   );
   const serverAttachmentUrls = useAssetUrls(environmentId, serverAttachmentResources);
   const serverAttachmentUrlById = useMemo(
     () =>
       new Map(
-        serverAttachmentIds.flatMap((attachmentId, index) => {
+        serverAttachmentResources.flatMap((resource, index) => {
           const url = serverAttachmentUrls[index];
-          return url ? [[attachmentId, url] as const] : [];
+          return url ? [[resource.attachmentId, url] as const] : [];
         }),
       ),
-    [serverAttachmentIds, serverAttachmentUrls],
+    [serverAttachmentResources, serverAttachmentUrls],
   );
   const resolveImageAttachmentUrl = useCallback(
     async (attachment: ChatImageAttachment) => {
@@ -3698,7 +3660,6 @@ export default function ChatView(props: ChatViewProps) {
       activeThread?.proposedPlans ?? [],
       workLogEntries,
       previous?.threadKey === activeThreadKey ? previous.projection : null,
-      turnPlans,
     );
     timelineProjectionRef.current = { threadKey: activeThreadKey, projection };
     return projection.entries;
@@ -3707,7 +3668,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     activeThread?.proposedPlans,
     timelineMessages,
-    turnPlans,
     workLogEntries,
   ]);
   const displayedTimeline = resolveThreadSwitchTimeline({
@@ -3805,31 +3765,6 @@ export default function ChatView(props: ChatViewProps) {
     attachDraftHeroComposerAnchorRef,
     captureDraftHeroComposerRect,
   ] = useDraftHeroLayoutTransition(isDraftHeroState);
-  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
-    useTurnDiffSummaries(activeThread);
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const byMessageId = new Map<MessageId, TurnDiffSummary>();
-    for (const summary of turnDiffSummaries) {
-      if (!summary.assistantMessageId) continue;
-      byMessageId.set(summary.assistantMessageId, summary);
-    }
-    return byMessageId;
-  }, [turnDiffSummaries]);
-  const revertTurnCountByUserMessageId = useMemo(
-    () =>
-      buildRevertTurnCountByUserMessageId({
-        supportsConversationRollback,
-        timelineEntries,
-        turnDiffSummaryByAssistantMessageId,
-        inferredCheckpointTurnCountByTurnId,
-      }),
-    [
-      supportsConversationRollback,
-      inferredCheckpointTurnCountByTurnId,
-      timelineEntries,
-      turnDiffSummaryByAssistantMessageId,
-    ],
-  );
   const editableUserMessageIdsRef = useRef<ReadonlySet<MessageId>>(new Set());
   const editableUserMessageIds = useMemo(() => {
     const messageIds = new Set<MessageId>();
@@ -3955,8 +3890,17 @@ export default function ChatView(props: ChatViewProps) {
     : null;
   const activeTerminalLaunchContext =
     terminalUiLaunchContext?.threadId === activeThreadId ? terminalUiLaunchContext : null;
-  // Default true while loading to avoid toolbar flicker.
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  // Git status arrives after the composer paints. A checkout seen earlier in
+  // this session answers from memory, so a non-Git project does not mount the
+  // branch strip and then drop it. A never-seen checkout assumes Git, which
+  // is what nearly every project is.
+  const liveIsGitRepo = gitStatusQuery.data?.isRepo;
+  useEffect(() => {
+    if (gitStatusCwd !== null && liveIsGitRepo !== undefined) {
+      rememberCheckoutIsRepo(environmentId, gitStatusCwd, liveIsGitRepo);
+    }
+  }, [environmentId, gitStatusCwd, liveIsGitRepo]);
+  const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
   // Skill packs: a server thread carries its materialized scope, a draft keeps
   // its picks locally until the first turn creates the thread.
   const skillPackCatalog = activeEnvironment?.serverConfig?.skillPackCatalog ?? null;
@@ -6219,11 +6163,6 @@ export default function ChatView(props: ChatViewProps) {
         : null,
     [activeThreadBranch, activeWorktreePath, envMode, gitStatusQuery.data?.refName, isServerThread],
   );
-  // Settled state of the open thread, resolved exactly like the sidebar
-  // partition (same shell, same capability gate, same PR auto-settle input)
-  // so the banner and the sidebar row never disagree.
-  const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
-  const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     activeThreadRef?.environmentId ?? null,
     linkedThreadPullRequest,
@@ -6372,18 +6311,6 @@ export default function ChatView(props: ChatViewProps) {
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
-  // Primitive slice of the displayed PR for the settle-rule memos below:
-  // resolveDisplayedThreadPr returns a fresh object every render, so memoize
-  // on the fields the rules read instead of the object identity.
-  const activeThreadPrState = activeThreadPr?.state ?? null;
-  const activeThreadPrUpdatedAt = activeThreadPr?.updatedAt ?? null;
-  const activeThreadChangeRequest = useMemo(
-    () =>
-      activeThreadPrState === null
-        ? null
-        : { state: activeThreadPrState, updatedAt: activeThreadPrUpdatedAt },
-    [activeThreadPrState, activeThreadPrUpdatedAt],
-  );
   const supportsPinning = serverConfig?.environment.capabilities.threadPinning === true;
   const activeThreadPinned = supportsPinning && activeThreadShell?.pinnedAt != null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
@@ -6414,21 +6341,13 @@ export default function ChatView(props: ChatViewProps) {
     if (activeThreadRef === null || activeThreadWokeAt === null) return;
     markThreadVisited(scopedThreadKey(activeThreadRef), activeThreadWokeAt);
   }, [activeThreadRef, activeThreadWokeAt, markThreadVisited]);
-  // Mirror of the sidebar's Woke pill for the open thread. It uses the same
-  // visit comparison and change request settle rule.
+  // Mirror of the sidebar's Woke pill for the open thread.
   const activeThreadLastVisitedAt = useUiStateStore((store) =>
     activeThreadKey === null ? undefined : store.threadLastVisitedAtById[activeThreadKey],
   );
   const activeThreadWokeVisible = useMemo(() => {
     if (activeThreadWokeAt === null) return false;
-    if (
-      changeRequestAutoSettles(activeThreadChangeRequest, {
-        autoSettleOnMerge,
-        thread: activeThreadShell,
-      })
-    ) {
-      return false;
-    }
+    if (activeThreadShell?.settledOverride === "settled") return false;
     const wokeAtMs = Date.parse(activeThreadWokeAt);
     if (Number.isNaN(wokeAtMs)) return false;
     // Having the thread open counts as a visit at completedAt (the effect
@@ -6448,28 +6367,12 @@ export default function ChatView(props: ChatViewProps) {
   }, [
     activeLatestTurn?.completedAt,
     activeThreadLastVisitedAt,
-    activeThreadChangeRequest,
     activeThreadShell,
     activeThreadWokeAt,
-    autoSettleOnMerge,
   ]);
-  const activeThreadSettled = useMemo(() => {
-    if (activeThreadShell === null || !supportsSettlement) return false;
-    return effectiveSettled(activeThreadShell, {
-      now: `${nowMinute}:00.000Z`,
-      autoSettleAfterDays,
-      autoSettleOnMerge,
-      changeRequest: activeThreadChangeRequest,
-    });
-  }, [
-    activeThreadChangeRequest,
-    activeThreadShell,
-    autoSettleAfterDays,
-    autoSettleOnMerge,
-    changeRequestSnapshotByKey,
-    nowMinute,
-    supportsSettlement,
-  ]);
+  // The server-projected settled state keeps the banner and sidebar in sync.
+  const activeThreadSettled =
+    supportsSettlement && activeThreadShell?.settledOverride === "settled";
   const unsettleThreadMutation = useAtomCommand(threadEnvironment.unsettle, {
     reportFailure: false,
   });
@@ -7112,6 +7015,13 @@ export default function ChatView(props: ChatViewProps) {
         context: shortcutContext,
       });
       if (!command) return;
+
+      if (command === "thread.copyReference") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) copyActiveThreadReference();
+        return;
+      }
 
       if (command === "thread.settle") {
         event.preventDefault();
@@ -7956,7 +7866,14 @@ export default function ChatView(props: ChatViewProps) {
       return;
     }
     const threadIdForSend = activeThread.id;
-    const shouldQueueMessage = phase === "running";
+    // Preview annotations always reach the running turn, as upstream sends them.
+    const shouldQueueMessage =
+      !directAnnotation &&
+      shouldQueueFollowUp({
+        running: phase === "running",
+        followUpBehavior: settings.followUpBehavior,
+        submissionIntent,
+      });
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
     const shouldPrepareWorkspace =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
@@ -8263,21 +8180,33 @@ export default function ChatView(props: ChatViewProps) {
       lifecycle: {
         begin: () => beginLocalDispatch({ preparingWorktree: Boolean(baseRevisionForWorkspace) }),
         prepared: (prepared) => {
-          // A new row becomes the anchored end-space target while the reply
-          // streams into the reserved space below it.
-          isAtEndRef.current = true;
-          timelineScrollModeRef.current = "anchoring-new-turn";
-          liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
-          setTimelineLiveFollowEnabled(true);
-          pendingTimelineAnchorRef.current = prepared.messageId;
-          activeTimelineAnchorIndexRef.current = null;
-          showScrollDebouncer.current.cancel();
-          setShowScrollToBottom(false);
-          setTimelineAnchor({
-            threadKey: scopedThreadKey(scopeThreadRef(activeThread.environmentId, threadIdForSend)),
-            messageId: prepared.messageId,
-          });
           setThreadError(threadIdForSend, null);
+          // Queued messages wait in the queue strip and leave the timeline alone.
+          if (prepared.queue) return;
+          // Only a thread's first message becomes the anchored end-space target,
+          // so the reply streams into the reserved space below it. Follow-ups
+          // return to the live edge.
+          const shouldAnchorFirstMessage =
+            activeThread.latestTurn === null &&
+            !timelineMessages.some((message) => message.role === "user");
+          if (shouldAnchorFirstMessage) {
+            isAtEndRef.current = true;
+            timelineScrollModeRef.current = "anchoring-new-turn";
+            liveFollowUserScrollGenerationRef.current = anchorUserScrollGenerationRef.current;
+            setTimelineLiveFollowEnabled(true);
+            pendingTimelineAnchorRef.current = prepared.messageId;
+            activeTimelineAnchorIndexRef.current = null;
+            showScrollDebouncer.current.cancel();
+            setShowScrollToBottom(false);
+            setTimelineAnchor({
+              threadKey: scopedThreadKey(
+                scopeThreadRef(activeThread.environmentId, threadIdForSend),
+              ),
+              messageId: prepared.messageId,
+            });
+          } else {
+            scrollToEnd();
+          }
         },
         updateTitle: async (nextTitle) => {
           const result = await updateThreadMetadata({
@@ -8314,6 +8243,10 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(stackedThreadToast({ type: "warning", ...toastCopy }));
         },
         delivered: () => {
+          // The turn will spend quota, so that thread's limits snapshot is
+          // stale. Uploads may have outlasted a navigation, so only the
+          // sending thread's panel clears.
+          clearUsageLimitsFor(routeThreadKey);
           acknowledgeActiveThreadWoke();
           // Queued turns are durable as soon as the outbox accepts them. Keep
           // the outbox entry as the delivery indicator and release the
@@ -9157,17 +9090,14 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
   );
-  const revertTurnCountRef = useRef(revertTurnCountByUserMessageId);
-  revertTurnCountRef.current = revertTurnCountByUserMessageId;
-  const onRevertUserMessage = useCallback(
-    (messageId: MessageId) => {
-      const targetTurnCount = revertTurnCountRef.current.get(messageId);
-      if (typeof targetTurnCount === "number") {
-        void onRevertToTurnCount(targetTurnCount, messageId);
-      }
-    },
-    [onRevertToTurnCount],
-  );
+  // Timeline rows carry their revert target, so ChatView does not rebuild a
+  // revert map on every streaming update. The handler reads a ref to stay
+  // stable for TimelineRowCtx.
+  const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
+  onRevertToTurnCountRef.current = onRevertToTurnCount;
+  const onRevertUserMessage = useCallback((messageId: MessageId, targetTurnCount: number) => {
+    void onRevertToTurnCountRef.current(targetTurnCount, messageId);
+  }, []);
   const onForkAssistantMessage = useCodexMessageForking(activeThreadRef);
 
   const prepareTimelineForOptimisticMessage = useCallback(async () => {
@@ -9541,6 +9471,7 @@ export default function ChatView(props: ChatViewProps) {
           ) : null}
         </WizardPopup>
       </Dialog>
+      {rightPanelControlsAtRoot ? panelLayoutControls : null}
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
@@ -9555,7 +9486,13 @@ export default function ChatView(props: ChatViewProps) {
           reserveNativeControls={reserveTitleBarControlInset && !inlineRightPanelOwnsTitleBar}
           className="relative bg-background"
         >
-          {!shouldUseRightPanelSheet || !rightPanelControlsInPanel ? panelLayoutControls : null}
+          {isElectron && rightPanelControlsAtRoot ? (
+            <span
+              aria-hidden
+              className="pointer-events-none fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] h-[var(--workspace-topbar-height)] w-28 [-webkit-app-region:no-drag]"
+            />
+          ) : null}
+          {!rightPanelControlsAtRoot && !rightPanelControlsInPanel ? panelLayoutControls : null}
           <ChatHeader
             {...(!supportsPullRequests || activeProjectRepository === null
               ? {}
@@ -9565,7 +9502,6 @@ export default function ChatView(props: ChatViewProps) {
             {...(routeKind === "draft" && draftId ? { draftId } : {})}
             activeThreadTitle={activeThread.title}
             isServerThread={isServerThread}
-            changeRequest={activeThreadChangeRequest}
             activeProjectName={activeProject?.title}
             isGitRepo={isGitRepo}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
@@ -9595,15 +9531,6 @@ export default function ChatView(props: ChatViewProps) {
           <CoordinationStrip threadRef={activeThreadRef} onOpenWork={addWorkSurface} />
         ) : null}
 
-        <ThreadErrorBanner
-          error={visibleThreadError}
-          detail={turnRetryDetail}
-          onDismiss={() => {
-            setThreadError(activeThread.id, null);
-            dismissThreadErrorBannerForSession(threadErrorBannerKey);
-            setThreadErrorBannerDismissTick((tick) => tick + 1);
-          }}
-        />
         {/* Main content area with optional plan sidebar */}
         <div className="flex min-h-0 min-w-0 flex-1">
           {/* Chat column */}
@@ -9629,12 +9556,21 @@ export default function ChatView(props: ChatViewProps) {
                 </div>
               </div>
             ) : null}
-            {/* Provider status overlays the timeline without changing its content height. */}
-            <div className="pointer-events-none absolute inset-x-0 top-0 z-20">
+            {/* Banners overlay the timeline without changing its content height. */}
+            <div className="pointer-events-none absolute inset-x-0 top-0 z-20 flex flex-col">
               <ProviderStatusBanner
                 status={visibleProviderStatus}
                 onDismiss={() => setDismissedProviderStatusBannerKey(providerStatusBannerKey)}
                 onOpenProviderSetup={openProviderSetup}
+              />
+              <ThreadErrorBanner
+                error={visibleThreadError}
+                detail={turnRetryDetail}
+                onDismiss={() => {
+                  setThreadError(activeThread.id, null);
+                  dismissThreadErrorBannerForSession(threadErrorBannerKey);
+                  setThreadErrorBannerDismissTick((tick) => tick + 1);
+                }}
               />
             </div>
             {/* Messages Wrapper */}
@@ -9652,7 +9588,8 @@ export default function ChatView(props: ChatViewProps) {
                     }
                   : {})}
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}
-                workingStepLabel={paintOnlyDisplayedTimeline ? null : workingStepLabel}
+                isPreparingWorktree={!paintOnlyDisplayedTimeline && isPreparingWorktree}
+                isCompacting={!paintOnlyDisplayedTimeline && isCompacting}
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}
                 onCancelWorktreeSetup={onCancelWorktreeSetup}
@@ -9667,9 +9604,8 @@ export default function ChatView(props: ChatViewProps) {
                       hydratedHistoricalTurnIds,
                       onHydrateHistoricalTurn: hydrateHistoricalTurn,
                       onReleaseHistoricalTurn: releaseHistoricalTurn,
-                      turnDiffSummaryByAssistantMessageId,
                       editableUserMessageIds,
-                      revertTurnCountByUserMessageId,
+                      supportsConversationRollback,
                       onRevertUserMessage,
                       onForkAssistantMessage,
                       userMessageEditing: previousMessageEditing.timelineController,
@@ -9853,6 +9789,7 @@ export default function ChatView(props: ChatViewProps) {
                             activeThreadId={activeThreadId}
                             activeThreadEnvironmentId={activeThread?.environmentId}
                             activeThread={activeThread}
+                            activeThreadShell={routeServerThreadShell}
                             promptHistoryMessages={timelineMessages}
                             isServerThread={isServerThread}
                             isLocalDraftThread={isLocalDraftThread}
@@ -9907,7 +9844,6 @@ export default function ChatView(props: ChatViewProps) {
                             activeProjectDefaultModelSelection={activeProjectDefaultModelSelection}
                             activeThreadModelSelection={activeThread?.modelSelection}
                             activeContextWindow={activeContextWindow}
-                            usageLimitsSources={usageLimitsSources}
                             compactDisabled={compactDisabled}
                             compactDisabledReason={compactDisabledReason}
                             onCompactContext={onCompactContext}

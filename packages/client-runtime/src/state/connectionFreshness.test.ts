@@ -19,7 +19,6 @@ const SNAPSHOT: OrchestrationShellSnapshot = {
   snapshotSequence: 42,
   projects: [],
   threads: [],
-  usageLimits: [],
   updatedAt: "2026-07-15T12:00:00.000Z",
 };
 

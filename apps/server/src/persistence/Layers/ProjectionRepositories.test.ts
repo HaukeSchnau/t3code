@@ -1,6 +1,5 @@
 import {
   ProjectId,
-  ProviderDriverKind,
   ThreadId,
   ThreadWorkspaceId,
   TurnId,
@@ -8,15 +7,12 @@ import {
   OrchestrationProposedPlanId,
 } from "@t3tools/contracts";
 import { assert, it } from "@effect/vitest";
-import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as Statement from "effect/unstable/sql/Statement";
 
-import { ProjectionProviderUsageLimitsRepositoryLive } from "./ProjectionProviderUsageLimits.ts";
-import { ProjectionProviderUsageLimitsRepository } from "../Services/ProjectionProviderUsageLimits.ts";
 import { SqlitePersistenceMemory } from "./Sqlite.ts";
 import { ProjectionProjectRepositoryLive } from "./ProjectionProjects.ts";
 import { ProjectionThreadRepositoryLive } from "./ProjectionThreads.ts";
@@ -36,69 +32,11 @@ const projectionRepositoriesLayer = it.layer(
     ProjectionThreadRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadPullRequests.layer.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     ProjectionThreadProposedPlanRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
-    ProjectionProviderUsageLimitsRepositoryLive.pipe(Layer.provideMerge(SqlitePersistenceMemory)),
     SqlitePersistenceMemory,
   ),
 );
 
 projectionRepositoriesLayer("Projection repositories", (it) => {
-  it.effect("retains bounded usage changes for adaptive forecasting", () =>
-    Effect.gen(function* () {
-      const usageLimits = yield* ProjectionProviderUsageLimitsRepository;
-      const providerInstanceId = ProviderInstanceId.make("codex");
-      const resetAt = "2026-08-20T08:15:43.000Z";
-
-      const upsertUsage = (usedPercent: number, updatedAt: string, resetsAt = resetAt) =>
-        usageLimits.upsert({
-          provider: ProviderDriverKind.make("codex"),
-          providerInstanceId,
-          usageLimits: {
-            limitId: "codex",
-            limitName: "Codex",
-            planType: "pro",
-            rateLimitReachedType: null,
-            credits: null,
-            primary: { usedPercent, resetsAt, windowDurationMins: 10080 },
-            secondary: null,
-            updatedAt,
-          },
-          updatedAt,
-        });
-
-      yield* upsertUsage(5, "2026-08-13T10:10:00.000Z");
-      yield* upsertUsage(5, "2026-08-13T10:11:00.000Z");
-      yield* upsertUsage(8, "2026-08-13T12:10:00.000Z");
-
-      const persisted = Option.getOrThrow(
-        yield* usageLimits.getByProviderInstanceId({ providerInstanceId }),
-      );
-      assert.deepStrictEqual(persisted.history, [
-        {
-          resetsAt: resetAt,
-          windowDurationMins: 10080,
-          points: [
-            { observedAt: "2026-08-13T10:10:00.000Z", usedPercent: 5 },
-            { observedAt: "2026-08-13T12:10:00.000Z", usedPercent: 8 },
-          ],
-        },
-      ]);
-
-      for (let week = 1; week <= 9; week += 1) {
-        const reset = DateTime.add(DateTime.makeUnsafe(resetAt), { weeks: week });
-        const resetsAt = DateTime.formatIso(reset);
-        yield* upsertUsage(week, DateTime.formatIso(DateTime.add(reset, { days: -6 })), resetsAt);
-      }
-
-      const bounded = Option.getOrThrow(
-        yield* usageLimits.getByProviderInstanceId({ providerInstanceId }),
-      );
-      assert.strictEqual(bounded.history.length, 8);
-      assert.ok(
-        bounded.history.every((window) => window.points.every((point) => point.usedPercent > 0)),
-      );
-    }),
-  );
-
   it.effect("selects the latest-turn plan before checking implementation status", () =>
     Effect.gen(function* () {
       const plans = yield* ProjectionThreadProposedPlanRepository;

@@ -1,5 +1,13 @@
 import { memo, type PointerEventHandler } from "react";
-import { ChevronDownIcon, ChevronLeftIcon, ListPlusIcon, PauseIcon, PlayIcon } from "lucide-react";
+import {
+  ArrowUpIcon,
+  ChevronDownIcon,
+  ChevronLeftIcon,
+  ListPlusIcon,
+  PauseIcon,
+  PlayIcon,
+} from "lucide-react";
+import type { ClientSettings } from "@t3tools/contracts/settings";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
 import { cn } from "~/lib/utils";
 import { StageBackdropButtonArt, useSidebarStageBackdropVariant } from "../SidebarStageBackdrop";
@@ -20,6 +28,8 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  /** What a send does while the turn runs: join the queue or steer the turn. */
+  followUpBehavior?: ClientSettings["followUpBehavior"];
   showSendWhileRunning?: boolean;
   canPauseTurn?: boolean;
   canResumeInterruptedTurn?: boolean;
@@ -64,6 +74,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  followUpBehavior = "queue",
   showSendWhileRunning = false,
   canPauseTurn = false,
   canResumeInterruptedTurn = false,
@@ -170,6 +181,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
+  const steersWhileRunning = followUpBehavior === "steer";
   if (isRunning && !showSendWhileRunning) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
@@ -180,10 +192,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             className={cn("rounded-full", compact ? "" : "px-3")}
             {...pointerFocusProps}
             disabled={isSendBusy || isPreparingWorktree}
-            aria-label="Queue message"
+            aria-label={steersWhileRunning ? "Steer message" : "Queue message"}
           >
-            <ListPlusIcon className="size-3.5" />
-            {compact ? null : <span>Queue</span>}
+            {steersWhileRunning ? (
+              <ArrowUpIcon className="size-3.5" />
+            ) : (
+              <ListPlusIcon className="size-3.5" />
+            )}
+            {compact ? null : <span>{steersWhileRunning ? "Steer" : "Queue"}</span>}
           </Button>
         ) : null}
         {renderStopGenerationButton(false)}
@@ -285,7 +301,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
               : isEnvironmentUnavailable || isConnecting
                 ? "Save message for delivery"
                 : isRunning
-                  ? "Queue message"
+                  ? steersWhileRunning
+                    ? "Steer message"
+                    : "Queue message"
                   : "Send message"
       }
     >
@@ -314,8 +332,8 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     return sendButton;
   }
 
-  // While a turn runs, a sendable draft queues for the next tool boundary, so
-  // the send button stays next to Stop on every viewport.
+  // While a turn runs, a sendable draft queues or steers per the follow-up
+  // setting, so the send button stays next to Stop on every viewport.
   return (
     <>
       {renderStopGenerationButton(false)}
