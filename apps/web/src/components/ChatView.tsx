@@ -182,7 +182,6 @@ import {
   isImageAttachment,
   type SessionPhase,
   type Thread,
-  type TurnDiffSummary,
 } from "../types";
 import { useTheme } from "../hooks/useTheme";
 import { writeTextToClipboard } from "../hooks/useCopyToClipboard";
@@ -289,7 +288,6 @@ import {
 import { useNowMinute } from "../hooks/useNowMinute";
 import { usePanelAnimationSettings, usePanelPresence } from "../panelAnimations";
 import { useNewThreadHandler } from "../hooks/useHandleNewThread";
-import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useAutoBalanceUpdateBanner } from "./chat/useAutoBalanceUpdateBanner";
 import { useRemoveClonedProject } from "../hooks/useRemoveClonedProject";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
@@ -450,7 +448,6 @@ import {
   buildLoadingThreadFromShell,
   buildRunningThreadTurnInterruptInput,
   buildThreadTurnInterruptInput,
-  buildRevertTurnCountByUserMessageId,
   collectUserMessageBlobPreviewUrls,
   createLocalDispatchSnapshot,
   dismissBranchMismatchForSession,
@@ -3801,31 +3798,6 @@ export default function ChatView(props: ChatViewProps) {
     attachDraftHeroComposerAnchorRef,
     captureDraftHeroComposerRect,
   ] = useDraftHeroLayoutTransition(isDraftHeroState);
-  const { turnDiffSummaries, inferredCheckpointTurnCountByTurnId } =
-    useTurnDiffSummaries(activeThread);
-  const turnDiffSummaryByAssistantMessageId = useMemo(() => {
-    const byMessageId = new Map<MessageId, TurnDiffSummary>();
-    for (const summary of turnDiffSummaries) {
-      if (!summary.assistantMessageId) continue;
-      byMessageId.set(summary.assistantMessageId, summary);
-    }
-    return byMessageId;
-  }, [turnDiffSummaries]);
-  const revertTurnCountByUserMessageId = useMemo(
-    () =>
-      buildRevertTurnCountByUserMessageId({
-        supportsConversationRollback,
-        timelineEntries,
-        turnDiffSummaryByAssistantMessageId,
-        inferredCheckpointTurnCountByTurnId,
-      }),
-    [
-      supportsConversationRollback,
-      inferredCheckpointTurnCountByTurnId,
-      timelineEntries,
-      turnDiffSummaryByAssistantMessageId,
-    ],
-  );
   const editableUserMessageIdsRef = useRef<ReadonlySet<MessageId>>(new Set());
   const editableUserMessageIds = useMemo(() => {
     const messageIds = new Set<MessageId>();
@@ -9172,17 +9144,14 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef, diffOpen, isServerThread, onDiffPanelOpen],
   );
-  const revertTurnCountRef = useRef(revertTurnCountByUserMessageId);
-  revertTurnCountRef.current = revertTurnCountByUserMessageId;
-  const onRevertUserMessage = useCallback(
-    (messageId: MessageId) => {
-      const targetTurnCount = revertTurnCountRef.current.get(messageId);
-      if (typeof targetTurnCount === "number") {
-        void onRevertToTurnCount(targetTurnCount, messageId);
-      }
-    },
-    [onRevertToTurnCount],
-  );
+  // Timeline rows carry their revert target, so ChatView does not rebuild a
+  // revert map on every streaming update. The handler reads a ref to stay
+  // stable for TimelineRowCtx.
+  const onRevertToTurnCountRef = useRef(onRevertToTurnCount);
+  onRevertToTurnCountRef.current = onRevertToTurnCount;
+  const onRevertUserMessage = useCallback((messageId: MessageId, targetTurnCount: number) => {
+    void onRevertToTurnCountRef.current(targetTurnCount, messageId);
+  }, []);
   const onForkAssistantMessage = useCodexMessageForking(activeThreadRef);
 
   const prepareTimelineForOptimisticMessage = useCallback(async () => {
@@ -9684,9 +9653,8 @@ export default function ChatView(props: ChatViewProps) {
                       hydratedHistoricalTurnIds,
                       onHydrateHistoricalTurn: hydrateHistoricalTurn,
                       onReleaseHistoricalTurn: releaseHistoricalTurn,
-                      turnDiffSummaryByAssistantMessageId,
                       editableUserMessageIds,
-                      revertTurnCountByUserMessageId,
+                      supportsConversationRollback,
                       onRevertUserMessage,
                       onForkAssistantMessage,
                       userMessageEditing: previousMessageEditing.timelineController,
