@@ -2,7 +2,6 @@ export {
   getLatestThreadForProject,
   getThreadSortTimestamp,
   resolveSettledThreadTimestamp,
-  sortThreadsByAttention,
   sortThreads,
   toSortableTimestamp,
   type SidebarAttentionBand,

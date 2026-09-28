@@ -5,6 +5,7 @@ import { createHashHistory, createBrowserHistory } from "@tanstack/react-router"
 import "./index.css";
 
 import { isElectron } from "./env";
+import { hasCloudPublicConfig } from "./cloud/publicConfig";
 import { getRouter } from "./router";
 import {
   syncDocumentElectronPlatformClasses,
@@ -23,6 +24,8 @@ if (isElectron) {
   syncDocumentWindowControlsOverlayClass();
 }
 
+const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+
 // A failed split-chunk fetch usually means the hashed assets went stale under
 // a deploy; one guarded reload picks up the fresh index.html.
 let chunkLoadFailed = false;
@@ -37,12 +40,27 @@ window.addEventListener("vite:preloadError", (event) => {
 
 const app = <AppRoot router={router} />;
 
+// Managed auth is cloud-only, and the Electron Clerk provider bundles the full
+// clerk-js runtime. Loading only the selected runtime as a split chunk keeps
+// every Clerk byte out of the startup graph for local-mode users, and keeps
+// the bundled clerk-js out of the browser build entirely.
+const managedAuthShellModule =
+  clerkPublishableKey && hasCloudPublicConfig()
+    ? isElectron
+      ? import("./components/clerk/ElectronManagedAuthShell")
+      : import("./components/clerk/BrowserManagedAuthShell")
+    : null;
+
 // The index.html boot splash lives inside #root, and React's first commit
-// clears it. Resolve the initial route's split chunks before rendering, so the
-// splash holds until real UI paints instead of dropping to a blank window.
-export const startup = router
-  .load()
-  .then(() => {
+// clears it. Resolve everything that first commit needs, the selected
+// managed-auth runtime and the initial route's split chunks, before
+// rendering, so the splash holds until real UI paints instead of dropping to
+// a blank window while chunks download.
+export const startup = Promise.all([
+  managedAuthShellModule?.then((module) => module.default) ?? null,
+  router.load(),
+])
+  .then(([ManagedAuthShell]) => {
     // A route chunk failure still resolves router.load(): the error is parked in
     // the lazy component and surfaces through the route error boundary. Skip the
     // paint when a reload is on its way, and only re-arm the guard after a boot
@@ -50,14 +68,17 @@ export const startup = router
     if (reloadScheduled) return;
     if (!chunkLoadFailed) clearChunkReloadGuard();
     ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-      <React.StrictMode>{app}</React.StrictMode>,
+      <React.StrictMode>
+        {ManagedAuthShell && clerkPublishableKey ? (
+          <ManagedAuthShell publishableKey={clerkPublishableKey}>{app}</ManagedAuthShell>
+        ) : (
+          app
+        )}
+      </React.StrictMode>,
     );
   })
   .catch((error: unknown) => {
-    // The auth shell chunk failed and the guarded reload is spent. Say so
-    // instead of leaving the splash up forever.
+    // Let the bootstrap entry show the error unless a reload is already scheduled.
     if (reloadScheduled) return;
-    console.error("T3 Code failed to load its startup chunks.", error);
-    const bootShell = document.getElementById("boot-shell");
-    if (bootShell) bootShell.textContent = "T3 Code could not load. Reload to try again.";
+    throw error;
   });

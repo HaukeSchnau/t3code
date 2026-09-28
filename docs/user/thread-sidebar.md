@@ -18,7 +18,9 @@ control aligned below the project icon; ordinary top-level threads use that spac
 Closing the disclosure hides every descendant, including effort members, unassigned work, retries,
 nested coordinators, and past-effort history. Effort, retry, and nested-coordinator sections can still
 be opened and closed independently. Their summaries put work that needs you first, then working and
-done counts, and finally the number of hidden rows.
+done counts, and finally the number of hidden rows. On mobile, **Move up** and **Move down** move a
+top-level thread past the neighbouring thread and everything nested below it; nested threads follow
+their parent and have no move of their own.
 
 Every thread keeps the normal sidebar card and its existing actions, regardless of its depth or
 lifecycle. If the thread you are viewing is hidden by a closed section, a **Viewing** row remains next
@@ -110,6 +112,16 @@ settle a thread. The dragged card shows the action before you release it. Expand
 or **Settled** to drag a parked thread back into either live section. Each drop saves; **Done** returns to the thread list.
 **Move up** and **Move down** are also available in the thread menu. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
+
+Threads that need you always stay above the rest of the active list, so you can drag a thread only
+within its own group.
+
+On web and desktop, start dragging a thread with delegated work from its top-level card. Reordering
+it moves its nested threads with it. Dragging it to another section pins, unpins, or settles
+only that thread, like the matching menu action; its nested threads stay where they are. To move a
+nested thread, use its row actions or menu. When a project filter shows threads from more than one
+workspace, the active list follows the workspaces, so dragging there changes a thread's section but
+not its position.
 
 On web and desktop, the list also animates section changes made with thread actions such as
 **Pin**, **Settle**, and **Snooze**. These transitions respect your system's reduced-motion

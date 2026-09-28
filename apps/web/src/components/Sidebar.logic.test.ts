@@ -5,6 +5,7 @@ import { AsyncResult } from "effect/unstable/reactivity";
 import {
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
+  buildSidebarBlocks,
   archiveSelectedThreadEntries,
   buildBulkTitleRegenerationContextMenuItem,
   buildBulkUnpinContextMenuItem,
@@ -38,6 +39,8 @@ import {
   resolveSidebarDropTarget,
   pinOrderKeyBetween,
   planPinnedReorder,
+  isSidebarActiveOrderLocked,
+  planSidebarBlockDrop,
   planSidebarThreadDrop,
   sidebarMarkerId,
   sidebarListItemId,
@@ -2697,4 +2700,191 @@ describe("navigation after parking a thread", () => {
       ).toBe(expected);
     },
   );
+});
+
+describe("buildSidebarBlocks", () => {
+  const item = (key: string, rootKey = key) => ({ key, rootKey });
+
+  it("keeps each tree together and splits pinned from active roots", () => {
+    const blocks = buildSidebarBlocks({
+      items: [item("p"), item("p-child", "p"), item("a"), item("a-child", "a"), item("b")],
+      pinnedKeys: new Set(["p", "p-child"]),
+      workspaceOf: null,
+    });
+    expect(blocks.pinned.map((block) => block.items.map((row) => row.key))).toEqual([
+      ["p", "p-child"],
+    ]);
+    expect(blocks.activeGroups).toEqual([
+      {
+        key: null,
+        label: null,
+        blocks: [
+          { rootKey: "a", items: [item("a"), item("a-child", "a")] },
+          { rootKey: "b", items: [item("b")] },
+        ],
+      },
+    ]);
+  });
+
+  it("groups a scoped active list by workspace in first-appearance order", () => {
+    const workspace = { a1: "A", b1: "B", a2: "A", b2: "B" } as Record<string, string>;
+    const blocks = buildSidebarBlocks({
+      items: ["a1", "b1", "a2", "b2"].map((key) => item(key)),
+      pinnedKeys: new Set(),
+      workspaceOf: (rootKey) => ({ key: workspace[rootKey]!, label: workspace[rootKey]! }),
+    });
+    expect(
+      blocks.activeGroups.map((group) => [group.key, group.blocks.map((block) => block.rootKey)]),
+    ).toEqual([
+      ["A", ["a1", "a2"]],
+      ["B", ["b1", "b2"]],
+    ]);
+    expect(isSidebarActiveOrderLocked(blocks.activeGroups, "A")).toBe(true);
+  });
+
+  it("locks active ordering only when the list or the moved thread spans workspaces", () => {
+    const group = (key: string | null) => ({ key, label: key, blocks: [] });
+    expect(isSidebarActiveOrderLocked([group(null)], null)).toBe(false);
+    expect(isSidebarActiveOrderLocked([group("A")], "A")).toBe(false);
+    expect(isSidebarActiveOrderLocked([group("A")], "B")).toBe(true);
+    expect(isSidebarActiveOrderLocked([], "B")).toBe(false);
+  });
+});
+
+describe("planSidebarBlockDrop", () => {
+  const plan = (
+    input: Partial<Parameters<typeof planSidebarBlockDrop>[0]> &
+      Pick<Parameters<typeof planSidebarBlockDrop>[0], "activeKey" | "activeSection" | "target">,
+  ) =>
+    planSidebarBlockDrop({
+      pinnedOrder: [],
+      pinnedKeysById: new Map(),
+      activeOrder: [],
+      activeKeysById: new Map(),
+      nestsAfterDrop: () => false,
+      needsUser: () => false,
+      activeOrderLocked: false,
+      ...input,
+    });
+
+  it("writes only the moved thread's key within its attention band", () => {
+    // a1 needs the user and leads the list whatever its key.
+    const input = {
+      activeKey: "n2",
+      activeSection: "active" as const,
+      activeOrder: ["a1", "n1", "n2"],
+      activeKeysById: new Map([
+        ["a1", "w"],
+        ["n1", "m"],
+        ["n2", "t"],
+      ]),
+      needsUser: (key: string) => key === "a1",
+    };
+    const topOfBand = plan({
+      ...input,
+      target: { section: "active", pinnedOrder: [], activeOrder: ["a1", "n2", "n1"] },
+    });
+    expect(topOfBand).toEqual({
+      plan: expect.objectContaining({
+        kind: "move-active",
+        assignments: [{ id: "n2", orderKey: expect.any(String) }],
+      }),
+      heldOrder: ["a1", "n2", "n1"],
+    });
+    if (topOfBand.plan.kind !== "move-active") throw new Error("Expected move-active");
+    expect(topOfBand.plan.assignments[0]!.orderKey < "m").toBe(true);
+  });
+
+  it("offers no slot across the attention boundary", () => {
+    const needsUser = (key: string) => key === "a1";
+    // A normal thread above the thread that needs the user...
+    expect(
+      plan({
+        activeKey: "n1",
+        activeSection: "active",
+        activeOrder: ["a1", "n1"],
+        needsUser,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["n1", "a1"] },
+      }),
+    ).toEqual({ plan: { kind: "none" }, heldOrder: null });
+    // ...or a thread that needs the user below a normal one.
+    expect(
+      plan({
+        activeKey: "a1",
+        activeSection: "active",
+        activeOrder: ["a1", "n1"],
+        needsUser,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["n1", "a1"] },
+      }),
+    ).toEqual({ plan: { kind: "none" }, heldOrder: null });
+  });
+
+  it("changes the section without a position while active ordering is locked", () => {
+    const target = { section: "active" as const, pinnedOrder: [], activeOrder: ["a1", "p", "b1"] };
+    expect(
+      plan({ activeKey: "a1", activeSection: "active", activeOrderLocked: true, target }),
+    ).toEqual({ plan: { kind: "none" }, heldOrder: null });
+    expect(
+      plan({ activeKey: "p", activeSection: "pinned", activeOrderLocked: true, target }),
+    ).toEqual({
+      plan: expect.objectContaining({ kind: "move-active", assignments: [], unpin: true }),
+      heldOrder: null,
+    });
+  });
+
+  it("leaves rows that will nest under the dropped parent out of the order", () => {
+    const result = plan({
+      activeKey: "parent",
+      activeSection: "pinned",
+      activeOrder: ["child-1", "child-2", "other"],
+      activeKeysById: new Map([
+        ["child-1", "f"],
+        ["child-2", "m"],
+        ["other", "t"],
+      ]),
+      nestsAfterDrop: (key) => key.startsWith("child"),
+      target: {
+        section: "active",
+        pinnedOrder: [],
+        activeOrder: ["child-1", "parent", "child-2", "other"],
+      },
+    });
+    expect(result).toEqual({
+      plan: expect.objectContaining({
+        kind: "move-active",
+        order: ["parent", "other"],
+        unpin: true,
+      }),
+      heldOrder: ["parent", "other"],
+    });
+  });
+
+  it("writes no position for a thread that will nest under its parent", () => {
+    const nestsAfterDrop = (key: string) => key === "child";
+    expect(
+      plan({
+        activeKey: "child",
+        activeSection: "pinned",
+        activeOrder: ["parent"],
+        nestsAfterDrop,
+        target: { section: "active", pinnedOrder: [], activeOrder: ["child", "parent"] },
+      }),
+    ).toEqual({
+      plan: expect.objectContaining({ kind: "move-active", assignments: [], unpin: true }),
+      heldOrder: null,
+    });
+    expect(
+      plan({
+        activeKey: "child",
+        activeSection: "active",
+        pinnedOrder: ["parent"],
+        pinnedKeysById: new Map([["parent", "m"]]),
+        nestsAfterDrop,
+        target: { section: "pinned", pinnedOrder: ["child", "parent"], activeOrder: [] },
+      }),
+    ).toEqual({
+      plan: { kind: "pin", order: ["parent"], orderKey: undefined, extraAssignments: [] },
+      heldOrder: ["parent"],
+    });
+  });
 });

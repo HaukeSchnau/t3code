@@ -39,6 +39,8 @@ import { useThreadSearch } from "../../state/queries";
 import { useThreadJumpShortcuts } from "../keyboard/threadKeyboardShortcuts";
 import { useThreadListV2Enabled } from "../threads/use-thread-list-v2-enabled";
 import { usePendingThreadOrder } from "../../state/thread-order";
+import { useThreadLineage } from "../../state/coordination";
+import { useThreadOrchestrationExpansion } from "../threads/use-thread-orchestration-expansion";
 import { environmentServerConfigsAtom } from "../../state/server";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
 import { useQueuedThreadKeys } from "../../state/use-thread-outbox";
@@ -49,6 +51,7 @@ import {
   ThreadListShowMoreRow,
 } from "../threads/thread-list-items";
 import {
+  ThreadListV2OrchestrationRow,
   ThreadListV2PendingRow,
   ThreadListV2Row,
   ThreadListV2SettledShelfHeader,
@@ -60,6 +63,8 @@ import {
   buildThreadListV2Items,
   getThreadListV2OrderedSection,
   buildThreadListV2ListItems,
+  threadListV2NeedsUser,
+  threadListV2TopLevel,
   THREAD_LIST_V2_SETTLED_INITIAL_COUNT,
   THREAD_LIST_V2_SETTLED_PAGE_COUNT,
   type ThreadListV2ListItem,
@@ -656,11 +661,30 @@ export function HomeScreen(props: HomeScreenProps) {
     [serverConfigs],
   );
   const pendingOrder = usePendingThreadOrder(nowMinute, snoozeWakeTick);
+  const threadLineage = useThreadLineage();
+  const orchestrationExpansion = useThreadOrchestrationExpansion();
   const threadMovePlanners = useMemo(() => {
+    const sectionInput = {
+      threads: props.threads,
+      pendingOrder,
+      now: new Date().toISOString(),
+      settlementEnvironmentIds,
+      snoozeEnvironmentIds,
+      queuedThreadKeys,
+    };
+    // Sorted once, shared by the planners and the top-level rows.
+    const ordered = {
+      pinned: getThreadListV2OrderedSection({ ...sectionInput, section: "pinned" }),
+      active: getThreadListV2OrderedSection({ ...sectionInput, section: "active" }),
+    };
+    const topLevel = threadListV2TopLevel({ ...ordered, lineage: threadLineage });
+    const needsUser = threadListV2NeedsUser(props.threads);
     const sectionPlanner = (section: "pinned" | "active") =>
       createThreadMovePlanner({
         allThreads: props.threads,
         section,
+        topLevel,
+        ...(section === "active" ? { needsUser } : {}),
         reorderableEnvironmentIds: new Set(
           [...serverConfigs].flatMap(([id, config]) =>
             (section === "pinned"
@@ -670,21 +694,14 @@ export function HomeScreen(props: HomeScreenProps) {
               : [],
           ),
         ),
-        ordered: getThreadListV2OrderedSection({
-          threads: props.threads,
-          section,
-          pendingOrder,
-          now: new Date().toISOString(),
-          settlementEnvironmentIds,
-          snoozeEnvironmentIds,
-          queuedThreadKeys,
-        }),
+        ordered: ordered[section],
       });
     return { pinned: sectionPlanner("pinned"), active: sectionPlanner("active") };
   }, [
     serverConfigs,
     props.threads,
     pendingOrder,
+    threadLineage,
     queuedThreadKeys,
     settlementEnvironmentIds,
     snoozeEnvironmentIds,
@@ -784,8 +801,19 @@ export function HomeScreen(props: HomeScreenProps) {
         settledShelfHeaderIndex: threadListV2Layout.settledShelfHeaderIndex,
         snoozeLabelNow: `${nowMinute}:00.000Z`,
         groupWorkspaces: v2ScopedProjectKeys !== null,
+        ...(v2SearchQuery.length > 0
+          ? {}
+          : {
+              orchestration: {
+                lineage: threadLineage,
+                isExpanded: orchestrationExpansion.isExpanded,
+              },
+            }),
       }),
     [
+      orchestrationExpansion.isExpanded,
+      threadLineage,
+      v2SearchQuery.length,
       settledShelfExpanded,
       snoozedShelfExpanded,
       threadListV2Layout,
@@ -859,6 +887,23 @@ export function HomeScreen(props: HomeScreenProps) {
             {item.label}
           </Text>
         );
+      if (item.type === "v2-orchestration") {
+        const orchestrationItem = item.item;
+        const selectedTitle =
+          orchestrationItem.type === "viewing"
+            ? props.threads.find(
+                (thread) => `${thread.environmentId}:${thread.id}` === orchestrationItem.threadKey,
+              )?.title
+            : undefined;
+        return (
+          <ThreadListV2OrchestrationRow
+            item={orchestrationItem}
+            {...(selectedTitle === undefined ? {} : { selectedTitle })}
+            onToggle={orchestrationExpansion.toggle}
+            onReveal={orchestrationExpansion.reveal}
+          />
+        );
+      }
       const thread = item.item.thread;
       const movePlanner = item.item.pinned ? threadMovePlanners.pinned : threadMovePlanners.active;
       const movedId = `${thread.environmentId}:${thread.id}`;
@@ -872,6 +917,8 @@ export function HomeScreen(props: HomeScreenProps) {
           pinned={item.item.pinned}
           snoozePresetMinute={nowMinute}
           snoozeWakeLabelText={item.snoozeWakeLabelText}
+          {...(item.orchestration === undefined ? {} : { orchestration: item.orchestration })}
+          onToggleOrchestrationContainer={orchestrationExpansion.toggle}
           showTrailingDivider={showTrailingDivider}
           project={
             projectByKey.get(scopedProjectKey(thread.environmentId, thread.projectId)) ?? null
@@ -924,6 +971,9 @@ export function HomeScreen(props: HomeScreenProps) {
     [
       handleDeleteThread,
       activeReorderEnvironmentIds,
+      orchestrationExpansion.reveal,
+      orchestrationExpansion.toggle,
+      props.threads,
       threadMovePlanners,
       pendingOrder,
       queuedThreadKeys,

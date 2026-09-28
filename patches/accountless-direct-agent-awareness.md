@@ -8,17 +8,28 @@ authorization boundary and is intentionally not removed.
 
 ## Implementation
 
-- Remove account sign-in, account settings, cloud discovery, cloud-link dialogs, and browser OAuth
-  routes from the clients. The mobile theme generator omits the unused Clerk native theme JSON.
+- Remove account sign-in, account settings, cloud discovery, and cloud-link screens from the mobile
+  client. The mobile theme generator omits the unused Clerk native theme JSON.
+- Web keeps upstream's T3 Connect code in the tree and switched off. Fork builds set no Clerk or
+  relay config, so `hasCloudPublicConfig()` is false: `main.tsx` never loads a Clerk shell, Settings
+  and the welcome wizard show no T3 Connect sign-in or cloud environments, `/connect` redirects
+  home, and the managed relay client gets the disabled `relay.invalid` URL.
+- `routes/__root.tsx` lazy-loads `ConnectOnboardingDialog` only when `hasCloudPublicConfig()` is
+  true. Upstream imports it statically, which puts `@clerk/react` in the startup graph of every
+  build. Fork builds never use it, and the lazy import removes 154 KB (41 KB gzip) of startup
+  JavaScript. Clerk code still loads, without effect, when Settings, `/welcome`, or `/connect`
+  opens. Drop the gate once upstream lazy-loads the dialog.
+- Fork builds must never set `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`,
+  `VITE_T3CODE_RELAY_URL`, or the `T3CODE_CLERK_*` and `T3CODE_RELAY_URL` values that
+  `scripts/lib/public-config.ts` maps onto them. Together they turn account sign-in on.
 - Desktop keeps upstream's Clerk bridge. It holds Electron's single-instance lock and routes
   deeplinks from a second launch, and it stays inert without a publishable key: the renderer never
   mounts Clerk. Signed macOS builds skip the passkey entitlements that only account sign-in needs.
-- The first-run welcome wizard stays, but its connection step offers direct pairing only. It has no
-  T3 Connect sign-in or cloud computer list.
 - Pairing links in Connections settings always open the backend's own `/pair` page. The fork ships
   no hosted web app, and an `app.t3.codes` link would load upstream's client against this server.
-- Keep the upstream managed-relay interfaces behind fail-closed compatibility layers so shared
-  connection runtime types do not need a fork-wide rewrite. No account credential is read or sent.
+- Mobile keeps the upstream managed-relay interfaces behind a fail-closed compatibility layer so
+  shared connection runtime types do not need a fork-wide rewrite. No account credential is read or
+  sent.
 - Drop legacy relay-managed mobile connections during migration; users pair those environments
   directly instead.
 - Register an iOS device and its Live Activity update token over the authenticated environment RPC.
@@ -45,6 +56,9 @@ locally signed Release apps register sandbox tokens; distribution builds registe
 
 ## Upstream maintenance
 
-Prefer upstream direct-pairing and direct-push implementations if they become available. Retire the
-fail-closed managed-relay compatibility layers once `packages/client-runtime` no longer requires
-those services for direct connections.
+Prefer upstream direct-pairing and direct-push implementations if they become available. Retire
+mobile's fail-closed managed-relay compatibility layer once `packages/client-runtime` no longer
+requires those services for direct connections.
+
+Take upstream's web cloud files as they are during syncs. The web deltas left here are the `/pair`
+link in `ConnectionsSettings.tsx` and the lazy `ConnectOnboardingDialog` in `routes/__root.tsx`.

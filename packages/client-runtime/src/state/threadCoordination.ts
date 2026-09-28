@@ -775,10 +775,21 @@ export function buildSidebarOrchestrationItems(input: {
   for (const key of currentKeys) {
     const attempts: string[] = [];
     const seen = new Set([key]);
+    let replacer = key;
     let cursor = input.lineage.entries.get(key)?.replacesKey;
-    while (cursor !== null && cursor !== undefined && visible.has(cursor) && !seen.has(cursor)) {
+    // Several threads can replace the same attempt (`--replaces X` twice).
+    // The attempt's own record names one replacer; only that chain lists it,
+    // so it renders once.
+    while (
+      cursor !== null &&
+      cursor !== undefined &&
+      visible.has(cursor) &&
+      !seen.has(cursor) &&
+      input.lineage.entries.get(cursor)?.replacedByKey === replacer
+    ) {
       attempts.push(cursor);
       seen.add(cursor);
+      replacer = cursor;
       cursor = input.lineage.entries.get(cursor)?.replacesKey;
     }
     if (attempts.length > 0) attemptsByKey.set(key, attempts);

@@ -11,6 +11,7 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import type { AsyncResult } from "effect/unstable/reactivity";
 import {
   planPinnedReorder,
+  sortActiveThreadsByAttention,
   sortActiveThreadsByOrderKey,
 } from "@t3tools/client-runtime/state/thread-sort";
 import {
@@ -19,7 +20,6 @@ import {
 } from "@t3tools/client-runtime/state/thread-settled";
 import {
   getThreadSortTimestamp,
-  sortThreadsByAttention,
   resolveSettledThreadTimestamp,
   sortThreads,
   toSortableTimestamp,
@@ -114,10 +114,6 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
 export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
-/** Legacy name used by the fork sidebar while the motion split is rolled out. */
-export const animatePinnedLayoutChanges: AnimateLayoutChanges = (args) =>
-  args.isSorting ? defaultAnimateLayoutChanges(args) : false;
-
 // Rows and section markers share one sortable list. The separators resolve
 // the lifecycle action; Sidebar.drag previews the resulting layout. Pinned
 // and active threads keep the dragged position; settled threads use time
@@ -139,7 +135,11 @@ export type SidebarListMarker =
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
   | "snoozed-header"
-  | "settled-header";
+  | "settled-header"
+  /** Fork: a workspace heading in a project-scoped active list
+      (patches/workspaces.md). It shifts with the rows at rest and hides while
+      a drag previews the flat active order. */
+  | `workspace-header:${string}`;
 
 export function sidebarMarkerId(marker: SidebarListMarker): string {
   return `${SIDEBAR_MARKER_PREFIX}${marker}`;
@@ -338,6 +338,140 @@ export function planSidebarThreadDrop(input: {
           ? assignments
           : assignments.filter((assignment) => assignment.id !== activeKey),
       };
+    }
+  }
+}
+
+// Fork: the default sidebar renders pinned and active threads as
+// orchestration trees (docs/internals/thread-orchestration-sidebar.md). Each
+// top-level thread and its visible subtree is one sortable block keyed by the
+// root thread, and drop orders list roots only. See
+// patches/sidebar-orchestration-drag.md.
+
+export interface SidebarBlock<TItem> {
+  readonly rootKey: string;
+  readonly items: readonly TItem[];
+}
+
+export interface SidebarWorkspaceGroup<TItem> {
+  /** Null for an unscoped list, which shows one ungrouped run. */
+  readonly key: string | null;
+  readonly label: string | null;
+  readonly blocks: readonly SidebarBlock<TItem>[];
+}
+
+/** Splits the orchestration items into pinned and active blocks. A
+    project-scoped list (`workspaceOf` present) also groups active blocks by
+    workspace, in first-appearance order (patches/workspaces.md). */
+export function buildSidebarBlocks<TItem extends { readonly rootKey: string }>(input: {
+  readonly items: readonly TItem[];
+  readonly pinnedKeys: ReadonlySet<string>;
+  readonly workspaceOf: ((rootKey: string) => { key: string; label: string }) | null;
+}): {
+  readonly pinned: readonly SidebarBlock<TItem>[];
+  readonly activeGroups: readonly SidebarWorkspaceGroup<TItem>[];
+} {
+  const pinned: { rootKey: string; items: TItem[] }[] = [];
+  const active: { rootKey: string; items: TItem[] }[] = [];
+  for (const item of input.items) {
+    const blocks = input.pinnedKeys.has(item.rootKey) ? pinned : active;
+    const last = blocks.at(-1);
+    if (last?.rootKey === item.rootKey) last.items.push(item);
+    else blocks.push({ rootKey: item.rootKey, items: [item] });
+  }
+  const { workspaceOf } = input;
+  if (workspaceOf === null) {
+    return { pinned, activeGroups: [{ key: null, label: null, blocks: active }] };
+  }
+  const groups = new Map<string, { key: string; label: string; blocks: SidebarBlock<TItem>[] }>();
+  for (const block of active) {
+    const workspace = workspaceOf(block.rootKey);
+    const group = groups.get(workspace.key);
+    if (group) group.blocks.push(block);
+    else groups.set(workspace.key, { ...workspace, blocks: [block] });
+  }
+  return { pinned, activeGroups: [...groups.values()] };
+}
+
+/** A project-scoped active list spanning several workspaces shows workspace
+    groups rather than the order-key order, so a drop there can change a
+    thread's section but cannot place it (patches/workspaces.md). */
+export function isSidebarActiveOrderLocked(
+  groups: readonly SidebarWorkspaceGroup<unknown>[],
+  movedWorkspaceKey: string | null,
+): boolean {
+  const keys = new Set(groups.flatMap((group) => (group.key === null ? [] : [group.key])));
+  if (movedWorkspaceKey !== null) keys.add(movedWorkspaceKey);
+  return keys.size > 1;
+}
+
+/** Plans a drop for the block list: upstream's planSidebarThreadDrop over
+    the rows that stay top-level once the drop lands, plus the root order to
+    hold until the writes arrive (null holds only the section change).
+
+    - Rows that will nest (the moved thread's descendants joining it, or the
+      moved thread joining its parent) take no part in the order.
+    - Threads that need the user lead the active list whatever their keys
+      (patches/attention-ordered-sidebar.md). An active drop must land in the
+      moved thread's own band and writes keys only within it.
+    - A locked active list (isSidebarActiveOrderLocked) takes section
+      changes without writing a position. */
+export function planSidebarBlockDrop(
+  input: Parameters<typeof planSidebarThreadDrop>[0] & {
+    readonly nestsAfterDrop: (key: string) => boolean;
+    readonly needsUser: (key: string) => boolean;
+    readonly activeOrderLocked: boolean;
+  },
+): { readonly plan: SidebarThreadDropPlan; readonly heldOrder: readonly string[] | null } {
+  const { nestsAfterDrop, needsUser, activeOrderLocked, target, ...base } = input;
+  const topLevel = (order: readonly string[]) => order.filter((key) => !nestsAfterDrop(key));
+  switch (target.section) {
+    case "settled":
+      return { plan: planSidebarThreadDrop({ ...base, target }), heldOrder: null };
+    case "pinned": {
+      // A thread that nests under its pinned parent gets no position: the
+      // planner finds no slot for it and writes nothing.
+      const plan = planSidebarThreadDrop({
+        ...base,
+        target: { ...target, pinnedOrder: topLevel(target.pinnedOrder) },
+      });
+      return {
+        plan,
+        heldOrder: plan.kind === "pin" || plan.kind === "reorder-pinned" ? plan.order : null,
+      };
+    }
+    case "active": {
+      const activeOrder = topLevel(target.activeOrder);
+      if (activeOrderLocked || nestsAfterDrop(base.activeKey)) {
+        if (base.activeSection === "active") return { plan: { kind: "none" }, heldOrder: null };
+        // No position is written, so ordering support is not required.
+        const { activeReorderableKeys: _activeReorderableKeys, ...sectionChange } = base;
+        const plan = planSidebarThreadDrop({
+          ...sectionChange,
+          target: { ...target, activeOrder },
+        });
+        return {
+          plan: plan.kind === "move-active" ? { ...plan, assignments: [] } : plan,
+          heldOrder: null,
+        };
+      }
+      // A slot on the other side of the attention boundary is not a real
+      // destination: the bands would move the thread right back.
+      const banded = [
+        ...activeOrder.filter(needsUser),
+        ...activeOrder.filter((key) => !needsUser(key)),
+      ];
+      if (banded.some((key, index) => key !== activeOrder[index])) {
+        return { plan: { kind: "none" }, heldOrder: null };
+      }
+      const movedNeedsUser = needsUser(base.activeKey);
+      const inBand = (key: string) => needsUser(key) === movedNeedsUser;
+      const plan = planSidebarThreadDrop({
+        ...base,
+        target: { ...target, activeOrder: activeOrder.filter(inBand) },
+        activeOrder: base.activeOrder.filter(inBand),
+      });
+      return { plan, heldOrder: plan.kind === "move-active" ? activeOrder : null };
     }
   }
 }
@@ -944,17 +1078,9 @@ export function sortThreadsForSidebar<
     readonly activeOrderKey?: string | null | undefined;
   },
 >(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
-  if (getBand === undefined) {
-    return sortActiveThreadsByOrderKey(threads);
-  }
-  const attentionOrdered = sortThreadsByAttention(threads, getBand);
-  const sortBand = (band: SidebarAttentionBand) => {
-    const bandThreads = attentionOrdered.filter((thread) => getBand(thread) === band);
-    return bandThreads.some((thread) => thread.activeOrderKey != null)
-      ? sortActiveThreadsByOrderKey(bandThreads)
-      : bandThreads;
-  };
-  return [...sortBand("attention"), ...sortBand("normal")];
+  return getBand === undefined
+    ? sortActiveThreadsByOrderKey(threads)
+    : sortActiveThreadsByAttention(threads, getBand);
 }
 
 // Pinned-reorder key math and the keyed sort live in client-runtime

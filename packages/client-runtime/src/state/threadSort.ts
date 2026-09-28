@@ -150,23 +150,23 @@ export function sortThreadsByAttention<
     readonly latestUserMessageAt?: string | null;
   },
 >(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
-  return [...threads].sort((left, right) => {
-    const byBand =
-      SIDEBAR_ATTENTION_BAND_ORDER[getBand(left)] - SIDEBAR_ATTENTION_BAND_ORDER[getBand(right)];
-    if (byBand !== 0) return byBand;
-
-    const leftTimestamp =
-      getFirstSortableTimestamp(left.latestUserMessageAt, left.createdAt) ??
-      Number.NEGATIVE_INFINITY;
-    const rightTimestamp =
-      getFirstSortableTimestamp(right.latestUserMessageAt, right.createdAt) ??
-      Number.NEGATIVE_INFINITY;
-    return (
-      rightTimestamp - leftTimestamp ||
-      left.id.localeCompare(right.id) ||
-      (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
-    );
-  });
+  // Resolve each band and timestamp once: the comparator runs O(n log n)
+  // times, and parsing timestamps there dominated large lists.
+  const entries = threads.map((thread) => ({
+    thread,
+    band: SIDEBAR_ATTENTION_BAND_ORDER[getBand(thread)],
+    timestamp:
+      getFirstSortableTimestamp(thread.latestUserMessageAt, thread.createdAt) ??
+      Number.NEGATIVE_INFINITY,
+  }));
+  entries.sort(
+    (left, right) =>
+      left.band - right.band ||
+      right.timestamp - left.timestamp ||
+      left.thread.id.localeCompare(right.thread.id) ||
+      (left.thread.environmentId ?? "").localeCompare(right.thread.environmentId ?? ""),
+  );
+  return entries.map((entry) => entry.thread);
 }
 
 export function getLatestThreadForProject<
@@ -391,6 +391,34 @@ export function sortActiveThreadsByOrderKey<
       (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
     );
   });
+}
+
+/**
+ * The default sidebar's active order on every client
+ * (patches/attention-ordered-sidebar.md): threads that need the user lead,
+ * and inside each band an explicit Active order wins once the band has one.
+ * Until then the latest user message orders the band.
+ */
+export function sortActiveThreadsByAttention<
+  T extends {
+    readonly id: string;
+    readonly environmentId?: string | undefined;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+    readonly unsettledAt?: string | null | undefined;
+    readonly activeOrderKey?: string | null | undefined;
+  },
+>(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+  const bands = new Map(threads.map((thread) => [thread, getBand(thread)] as const));
+  const bandOf = (thread: T) => bands.get(thread)!;
+  const attentionOrdered = sortThreadsByAttention(threads, bandOf);
+  const sortBand = (band: SidebarAttentionBand) => {
+    const bandThreads = attentionOrdered.filter((thread) => bandOf(thread) === band);
+    return bandThreads.some((thread) => thread.activeOrderKey != null)
+      ? sortActiveThreadsByOrderKey(bandThreads)
+      : bandThreads;
+  };
+  return [...sortBand("attention"), ...sortBand("normal")];
 }
 
 /**

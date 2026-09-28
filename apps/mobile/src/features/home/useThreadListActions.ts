@@ -26,7 +26,12 @@ import {
   createThreadMovePlanner,
   threadDropLifecycle,
 } from "../threads/threadOrder";
-import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import {
+  getThreadListV2OrderedSection,
+  threadListV2NeedsUser,
+  threadListV2TopLevel,
+} from "../threads/threadListV2";
+import { useThreadLineage } from "../../state/coordination";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
@@ -254,6 +259,7 @@ export function useThreadListActions(): {
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
+  const threadLineage = useThreadLineage();
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -566,9 +572,8 @@ export function useThreadListActions(): {
         );
         return false;
       }
-      const ordered = getThreadListV2OrderedSection({
+      const sectionInput = {
         threads: shells,
-        section,
         now: new Date().toISOString(),
         queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
         settlementEnvironmentIds: new Set(
@@ -581,11 +586,19 @@ export function useThreadListActions(): {
             config.environment.capabilities.threadSnooze === true ? [id] : [],
           ),
         ),
-      });
+      };
+      const sections = {
+        pinned: getThreadListV2OrderedSection({ ...sectionInput, section: "pinned" }),
+        active: getThreadListV2OrderedSection({ ...sectionInput, section: "active" }),
+      };
+      const ordered = sections[section];
+      const topLevel = threadListV2TopLevel({ ...sections, lineage: threadLineage });
       const assignments = createThreadMovePlanner({
         allThreads: shells,
         ordered,
         section,
+        topLevel,
+        ...(section === "active" ? { needsUser: threadListV2NeedsUser(shells) } : {}),
         reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
       })(scopedThreadKey(thread.environmentId, thread.id), direction);
       if (assignments === null) return false;
@@ -617,6 +630,7 @@ export function useThreadListActions(): {
               movedId: scopedThreadKey(thread.environmentId, thread.id),
               direction,
               assignments,
+              topLevel,
             }),
           );
       let succeeded = false;
@@ -681,6 +695,7 @@ export function useThreadListActions(): {
       reorderActiveMutation,
       reorderPinnedMutation,
       pinMutation,
+      threadLineage,
       unpinThread,
       unsettleThread,
       unsnoozeThread,

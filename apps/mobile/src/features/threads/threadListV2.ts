@@ -11,9 +11,18 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
+  buildSidebarOrchestrationItems,
+  resolveWorkerState,
+  type SidebarOrchestrationItem,
+  type SidebarOrchestrationThreadItem,
+  type ThreadLineage,
+} from "@t3tools/client-runtime/state/threads";
+import {
+  sortActiveThreadsByAttention,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
+  type SidebarAttentionBand,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
@@ -151,6 +160,38 @@ export function resolveThreadListV2Status(
   return "ready";
 }
 
+/** Mobile has no persisted visit state, so it promotes the server-backed
+    states that need the user (patches/attention-ordered-sidebar.md). */
+export function resolveThreadListV2AttentionBand(
+  thread: EnvironmentThreadShell,
+): SidebarAttentionBand {
+  const status = resolveThreadListV2Status(thread);
+  const hasPlanReadyPrompt =
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    thread.latestTurn?.completedAt != null &&
+    thread.session?.status !== "running" &&
+    thread.session?.status !== "starting";
+  if (status === "approval" || status === "input" || status === "failed" || hasPlanReadyPrompt) {
+    return "attention";
+  }
+  return "normal";
+}
+
+/** For thread move planners: which scoped thread keys need the user. */
+export function threadListV2NeedsUser(
+  threads: readonly EnvironmentThreadShell[],
+): (id: string) => boolean {
+  const ids = new Set(
+    threads.flatMap((thread) =>
+      resolveThreadListV2AttentionBand(thread) === "attention"
+        ? [`${thread.environmentId}:${thread.id}`]
+        : [],
+    ),
+  );
+  return (id) => ids.has(id);
+}
+
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 function parseTimestampMs(isoDate: string): number {
@@ -158,18 +199,23 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** The active order shared by web and native: new/reopened rows, then the
-    saved arrangement. Activity does not move a thread. */
+/** The active order shared by web and native. With a band resolver, threads
+    that need the user lead (sortActiveThreadsByAttention); without one, new
+    and reopened rows lead the saved arrangement. Activity does not move a
+    thread. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
->(threads: readonly T[]): T[] {
-  return sortActiveThreadsByOrderKey(threads);
+>(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
+  return getBand === undefined
+    ? sortActiveThreadsByOrderKey(threads)
+    : sortActiveThreadsByAttention(threads, getBand);
 }
 
 /** Canonical card section for Move up/down, independent of search or scope. */
@@ -202,12 +248,35 @@ export function getThreadListV2OrderedSection(input: {
   const ordered =
     input.section === "pinned"
       ? sortPinnedThreadsByOrderKey(threads)
-      : sortActiveThreadsByOrderKey(threads);
+      : sortThreadsForListV2(threads, resolveThreadListV2AttentionBand);
   const pending =
     input.pendingOrder?.section === input.section
       ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
       : null;
   return applyPendingThreadOrder(ordered, input.section, pending);
+}
+
+/** Top-level pinned and active cards once delegated work nests under its
+    root, for the Move up/down planners. Takes the canonical sections the
+    planners already built with getThreadListV2OrderedSection. */
+export function threadListV2TopLevel(input: {
+  readonly pinned: readonly EnvironmentThreadShell[];
+  readonly active: readonly EnvironmentThreadShell[];
+  readonly lineage: ThreadLineage;
+}): (id: string) => boolean {
+  const keyOf = (thread: EnvironmentThreadShell) => `${thread.environmentId}:${thread.id}`;
+  const pinnedKeys = new Set(input.pinned.map(keyOf));
+  const { items } = buildSidebarOrchestrationItems({
+    lineage: input.lineage,
+    orderedThreadKeys: [...input.pinned, ...input.active].map(keyOf),
+    isExpanded: () => false,
+    stateOf: () => null,
+    isPinned: (key) => pinnedKeys.has(key),
+  });
+  const topLevel = new Set(
+    items.flatMap((item) => (item.type === "thread" && item.depth === 0 ? [item.threadKey] : [])),
+  );
+  return (id) => topLevel.has(id);
 }
 
 export interface ThreadListV2Item {
@@ -245,6 +314,13 @@ export interface ThreadListV2ThreadListItem {
   readonly item: ThreadListV2Item;
   /** Precomputed so recycled-list equality can see a minute-tick change. */
   readonly snoozeWakeLabelText: string | undefined;
+  readonly orchestration?: SidebarOrchestrationThreadItem;
+}
+
+export interface ThreadListV2OrchestrationListItem {
+  readonly type: "v2-orchestration";
+  readonly key: string;
+  readonly item: Exclude<SidebarOrchestrationItem, SidebarOrchestrationThreadItem>;
 }
 
 export interface ThreadListV2PendingListItem {
@@ -278,9 +354,94 @@ export interface ThreadListV2WorkspaceHeader {
 export type ThreadListV2ListItem =
   | ThreadListV2WorkspaceHeader
   | ThreadListV2ThreadListItem
+  | ThreadListV2OrchestrationListItem
   | ThreadListV2PendingListItem
   | ThreadListV2SnoozedShelfListItem
   | ThreadListV2SettledShelfListItem;
+
+function lineageContainersAreEqual(
+  left: SidebarOrchestrationThreadItem["lineageContainer"],
+  right: SidebarOrchestrationThreadItem["lineageContainer"],
+): boolean {
+  return (
+    left === right ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.expanded === right.expanded &&
+      left.summary === right.summary &&
+      left.attention === right.attention &&
+      left.root === right.root)
+  );
+}
+
+function attemptsContainersAreEqual(
+  left: SidebarOrchestrationThreadItem["attemptsContainer"],
+  right: SidebarOrchestrationThreadItem["attemptsContainer"],
+): boolean {
+  return (
+    left === right ||
+    (left !== null &&
+      right !== null &&
+      left.id === right.id &&
+      left.expanded === right.expanded &&
+      left.count === right.count)
+  );
+}
+
+/** Structural equality for orchestration data held by recycled native rows. */
+export function threadListV2OrchestrationItemsAreEqual(
+  left: SidebarOrchestrationItem | undefined,
+  right: SidebarOrchestrationItem | undefined,
+): boolean {
+  if (left === undefined || right === undefined) return left === right;
+  if (left.type !== right.type) return false;
+  switch (left.type) {
+    case "thread":
+      if (right.type !== "thread") return false;
+      return (
+        left.key === right.key &&
+        left.threadKey === right.threadKey &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        lineageContainersAreEqual(left.lineageContainer, right.lineageContainer) &&
+        attemptsContainersAreEqual(left.attemptsContainer, right.attemptsContainer)
+      );
+    case "section":
+      if (right.type !== "section") return false;
+      return (
+        left.key === right.key &&
+        left.containerId === right.containerId &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.title === right.title &&
+        left.expanded === right.expanded &&
+        left.summary === right.summary &&
+        left.attention === right.attention &&
+        left.muted === right.muted &&
+        left.closed === right.closed
+      );
+    case "history":
+      if (right.type !== "history") return false;
+      return (
+        left.key === right.key &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.title === right.title &&
+        left.summary === right.summary
+      );
+    case "viewing":
+      if (right.type !== "viewing") return false;
+      return (
+        left.key === right.key &&
+        left.rootKey === right.rootKey &&
+        left.depth === right.depth &&
+        left.threadKey === right.threadKey &&
+        left.containerIds.length === right.containerIds.length &&
+        left.containerIds.every((containerId, index) => containerId === right.containerIds[index])
+      );
+  }
+}
 
 /**
  * Builds the shared mobile order: active → pending → snoozed shelf → settled.
@@ -298,6 +459,14 @@ export function buildThreadListV2ListItems(input: {
   readonly settledShelfHeaderIndex?: number | null;
   readonly snoozeLabelNow?: string;
   readonly groupWorkspaces?: boolean;
+  /** Pinned and active cards render as delegated-work trees
+      (docs/internals/thread-orchestration-sidebar.md). Omit while searching:
+      search results stay flat. */
+  readonly orchestration?: {
+    readonly lineage: ThreadLineage;
+    readonly selectedThreadKey?: string | null;
+    readonly isExpanded: (containerId: string) => boolean;
+  };
 }): ThreadListV2ListItem[] {
   const threadItems = input.items.map((item): ThreadListV2ThreadListItem => ({
     type: "v2-thread",
@@ -321,15 +490,53 @@ export function buildThreadListV2ListItems(input: {
   const activeEnd = snoozedShelfHeaderIndex ?? settledShelfHeaderIndex ?? threadItems.length;
   const snoozedEnd = settledShelfHeaderIndex ?? threadItems.length;
   const activeItems = threadItems.slice(0, activeEnd);
+  const itemByThreadKey = new Map(
+    threadItems.map((item) => [`${item.item.thread.environmentId}:${item.item.thread.id}`, item]),
+  );
+  const organizedActiveItems: ReadonlyArray<
+    ThreadListV2ThreadListItem | ThreadListV2OrchestrationListItem
+  > =
+    input.orchestration === undefined
+      ? activeItems
+      : buildSidebarOrchestrationItems({
+          lineage: input.orchestration.lineage,
+          orderedThreadKeys: activeItems.map(
+            (item) => `${item.item.thread.environmentId}:${item.item.thread.id}`,
+          ),
+          ...(input.orchestration.selectedThreadKey === undefined
+            ? {}
+            : { selectedThreadKey: input.orchestration.selectedThreadKey }),
+          isExpanded: input.orchestration.isExpanded,
+          stateOf: (threadKey) => {
+            const thread = itemByThreadKey.get(threadKey)?.item.thread;
+            return thread === undefined ? null : resolveWorkerState(thread);
+          },
+          isPinned: (threadKey) => itemByThreadKey.get(threadKey)?.item.pinned === true,
+        }).items.flatMap(
+          (item): ReadonlyArray<ThreadListV2ThreadListItem | ThreadListV2OrchestrationListItem> => {
+            if (item.type !== "thread") {
+              return [{ type: "v2-orchestration", key: `v2-${item.key}`, item }];
+            }
+            const threadItem = itemByThreadKey.get(item.threadKey);
+            return threadItem === undefined ? [] : [{ ...threadItem, orchestration: item }];
+          },
+        );
   const result: ThreadListV2ListItem[] = [];
   if (input.groupWorkspaces) {
-    const groups = new Map<string, { label: string; items: ThreadListV2ThreadListItem[] }>();
-    for (const item of activeItems) {
-      if (item.item.pinned) {
+    const groups = new Map<
+      string,
+      { label: string; items: (ThreadListV2ThreadListItem | ThreadListV2OrchestrationListItem)[] }
+    >();
+    for (const item of organizedActiveItems) {
+      // Keep each tree together: rows group under their root's checkout.
+      const rootKey =
+        item.type === "v2-orchestration" ? item.item.rootKey : item.orchestration?.rootKey;
+      const root = (rootKey === undefined ? undefined : itemByThreadKey.get(rootKey)) ?? item;
+      if (root.type !== "v2-thread" || root.item.pinned) {
         result.push(item);
         continue;
       }
-      const thread = item.item.thread;
+      const thread = root.item.thread;
       const key = JSON.stringify([thread.environmentId, thread.projectId, thread.worktreePath]);
       const group = groups.get(key);
       if (group) group.items.push(item);
@@ -344,7 +551,7 @@ export function buildThreadListV2ListItems(input: {
         { type: "v2-workspace", key: `workspace:${key}`, label: group.label },
         ...group.items,
       );
-  } else result.push(...activeItems);
+  } else result.push(...organizedActiveItems);
   result.push(...pendingItems);
   if (snoozedShelfHeaderIndex !== null && snoozedCount > 0) {
     result.push({
@@ -472,7 +679,11 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  const orderedActive = applyPendingThreadOrder(
+    sortThreadsForListV2(active, resolveThreadListV2AttentionBand),
+    "active",
+    pending,
+  );
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),

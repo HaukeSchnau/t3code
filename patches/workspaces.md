@@ -7,11 +7,14 @@ workspace retains its files and runtime without copying another thread's message
 
 The composer on web, desktop and mobile chooses a new workspace, an existing one, or
 the project checkout. Project-scoped lists group active conversations by workspace;
-pinned order and orchestration trees stay intact. A workspace leaves the normal picker
-when all its threads settle or archive. Search and Show settled reuse the existing
-archive query to find retained workspaces. Merely reading history does not wake work.
-Settlement never merges or deletes files, and preview leases remain independent.
-Explicit deletion refuses workspaces still referenced by active or running threads.
+pinned order and orchestration trees stay intact. Because that grouping does not follow the
+active order keys, a web sidebar drop into a filtered active list spanning several workspaces
+changes the thread's section without writing a position (`isSidebarActiveOrderLocked`).
+A workspace leaves the normal picker when all its threads settle or archive. Search and
+Show settled reuse the existing archive query to find retained workspaces. Merely reading
+history does not wake work. Settlement never merges or deletes files, and preview leases
+remain independent. Explicit deletion refuses workspaces still referenced by active or
+running threads.
 
 On Linux with `T3CODE_EXECUTION_LAUNCHER`, automatic workspaces use the
 private infra runtime's independent checkouts and execution environment. Git sources,
