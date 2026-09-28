@@ -158,7 +158,7 @@ const claimWrapperExecution = (input: TerminalManager.TerminalCommandOpenInput) 
 
 describe("ProjectSetupScriptRunner", () => {
   it.effect.each([false, true])(
-    "streams setup output and releases its listener when launch finishes (failure: %s)",
+    "streams async setup output and releases its listener once settled (failure: %s)",
     (failLaunch) => {
       let listener:
         | Parameters<TerminalManager.TerminalManager["Service"]["subscribe"]>[0]
@@ -226,8 +226,6 @@ describe("ProjectSetupScriptRunner", () => {
           })
           .pipe(Effect.result);
         expect(subscribe).toHaveBeenCalledOnce();
-        expect(unsubscribe).toHaveBeenCalledOnce();
-        expect(listener).toBeUndefined();
         if (failLaunch) {
           expect(result._tag).toBe("Failure");
           expect(lines).toEqual([]);
@@ -240,8 +238,12 @@ describe("ProjectSetupScriptRunner", () => {
           ) {
             throw new Error("Expected a completed setup execution");
           }
+          // The launched script keeps streaming until its completion settles.
+          expect(unsubscribe).not.toHaveBeenCalled();
           expect((yield* result.success.completion).exitCode).toBe(0);
         }
+        expect(unsubscribe).toHaveBeenCalledOnce();
+        expect(listener).toBeUndefined();
       }).pipe(
         Effect.provide(
           testLayer(
@@ -537,6 +539,7 @@ describe("ProjectSetupScriptRunner", () => {
         command: "bun install",
         icon: "configure",
         runOnWorktreeCreate: true,
+        async: false,
       },
     ]);
 
@@ -582,6 +585,66 @@ describe("ProjectSetupScriptRunner", () => {
       expect(open).toHaveBeenCalledOnce();
       expect(launch).toHaveBeenCalledOnce();
     }).pipe(Effect.provide(testLayer(project, { open, launch }, onCompletionCheck)));
+  });
+
+  it.effect("hands an async setup script off after launch and reports its exit later", () => {
+    let wrapperPath = "";
+    const open = vi.fn(() => Effect.succeed({} as never));
+    const launch = vi.fn(
+      (input: Parameters<TerminalManager.TerminalManager["Service"]["open"]>[0]) =>
+        Effect.gen(function* () {
+          const fileSystem = yield* FileSystem.FileSystem;
+          const path = yield* Path.Path;
+          wrapperPath = wrapperPathFromLaunch(input);
+          yield* fileSystem.makeDirectory(path.join(path.dirname(wrapperPath), "claimed"));
+        }).pipe(Effect.provide(NodeServices.layer), Effect.orDie),
+    );
+    const project = makeProject([
+      {
+        id: "setup",
+        name: "Setup",
+        command: "bun install",
+        icon: "configure",
+        runOnWorktreeCreate: true,
+      },
+    ]);
+
+    return Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const runner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
+      const input = {
+        threadId: "thread-1",
+        projectId: "project-1",
+        worktreePath: "/repo/worktrees/a",
+        preferredTerminalId: "setup-setup",
+        observeCompletion: {},
+      };
+      // Returning at all proves the handoff: no completion journal exists yet.
+      const started = yield* runner.runForThread(input);
+      const retried = yield* runner.runForThread({ ...input, reconcileClaimedLaunch: true });
+      expect(launch).toHaveBeenCalledOnce();
+      if (
+        started.status !== "started" ||
+        retried.status !== "started" ||
+        !started.completion ||
+        !retried.completion
+      ) {
+        throw new Error("Expected observed setup executions");
+      }
+      expect(started.async).toBe(true);
+      const completion = yield* Effect.all([started.completion, retried.completion]).pipe(
+        Effect.forkChild,
+      );
+      yield* fileSystem.writeFileString(
+        path.join(path.dirname(wrapperPath), "completed.json"),
+        validCompletion(),
+      );
+      yield* TestClock.adjust(Duration.millis(100));
+      const [first, second] = yield* Fiber.join(completion);
+      expect(first.exitCode).toBe(0);
+      expect(second.exitCode).toBe(0);
+    }).pipe(Effect.provide(testLayer(project, { open, launch })));
   });
 
   it.effect("rejects malformed and mismatched completion journals", () => {
@@ -692,6 +755,7 @@ describe("ProjectSetupScriptRunner", () => {
         command: "bun install",
         icon: "configure",
         runOnWorktreeCreate: true,
+        async: false,
       },
     ]);
 

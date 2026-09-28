@@ -12766,7 +12766,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
   it.effect.each([
     {
-      caseName: "async setup metadata still waits for durable script completion",
+      caseName: "async setup scripts hand off to the agent and settle when they exit",
       async: true,
       cancel: false,
       exitCode: 0,
@@ -12794,24 +12794,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const scriptExit = yield* Deferred.make<void>();
+      const completion = Deferred.await(scriptExit).pipe(Effect.as({ exitCode, durationMs: 1 }));
+      const started = {
+        status: "started" as const,
+        scriptId: "setup",
+        scriptName: "Setup",
+        scriptCommand: "npm install",
+        terminalId: "setup-setup",
+        cwd: "/tmp/bootstrap-worktree",
+        async,
+      };
+      // Mirrors the runner: async scripts return after launch, sync scripts after exit.
       const runForThread = vi.fn(
         (
           _: Parameters<
             ProjectSetupScriptRunner.ProjectSetupScriptRunner["Service"]["runForThread"]
           >[0],
         ) =>
-          Deferred.await(scriptExit).pipe(
-            Effect.as({
-              status: "started" as const,
-              scriptId: "setup",
-              scriptName: "Setup",
-              scriptCommand: "npm install",
-              terminalId: "setup-setup",
-              cwd: "/tmp/bootstrap-worktree",
-              async,
-              completion: Effect.succeed({ exitCode, durationMs: 1 }),
-            }),
-          ),
+          async
+            ? Effect.succeed({ ...started, completion })
+            : Deferred.await(scriptExit).pipe(
+                Effect.as({ ...started, completion: Effect.succeed({ exitCode, durationMs: 1 }) }),
+              ),
       );
 
       yield* buildAppUnderTest({
@@ -12903,12 +12907,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const stageStatus = (snapshot: WorktreeSetupSnapshot, id: WorktreeSetupStageId) =>
         snapshot.stages.find((stage) => stage.id === id)?.status;
 
-      // The script is running and the turn has not been dispatched yet.
-      const running = yield* snapshotWhere(
-        (snapshot) => stageStatus(snapshot, "setup-script") === "running",
-      );
-      assert.equal(stageStatus(running, "agent"), "pending");
-      assert.isFalse(turnStarted());
+      if (async) {
+        // The turn starts while the setup row still shows the script running.
+        const handedOff = yield* snapshotWhere(
+          (snapshot) => stageStatus(snapshot, "agent") === "done",
+        );
+        assert.equal(stageStatus(handedOff, "setup-script"), "running");
+        assert.equal(handedOff.phase, "running");
+        assertTrue(turnStarted());
+      } else {
+        // The script is running and the turn has not been dispatched yet.
+        const running = yield* snapshotWhere(
+          (snapshot) => stageStatus(snapshot, "setup-script") === "running",
+        );
+        assert.equal(stageStatus(running, "agent"), "pending");
+        assert.isFalse(turnStarted());
+      }
 
       if (cancel) {
         const cancelled = yield* Effect.scoped(
@@ -12935,7 +12949,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       // connection: the thread already exists for every client, so it must
       // finish and start the turn regardless.
       yield* Fiber.interrupt(dispatchFiber);
-      assert.isFalse(turnStarted());
+      assert.equal(turnStarted(), async);
 
       yield* Deferred.succeed(scriptExit, undefined);
       yield* snapshotWhere((snapshot) => stageStatus(snapshot, "agent") === "done");
