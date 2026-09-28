@@ -14,7 +14,10 @@ const APP_VARIANT = resolveAppVariant(repoEnv.APP_VARIANT);
 const APNS_ENVIRONMENT = resolveApnsEnvironment(repoEnv.T3CODE_APNS_ENVIRONMENT, APP_VARIANT);
 const IOS_TEAM_ID = repoEnv.T3CODE_IOS_TEAM_ID?.trim() || "2243J9RD68";
 const IOS_DEPLOYMENT_TARGET = "18.0";
-const RUNTIME_VERSION_POLICY = resolveRuntimeVersionPolicy(process.env.MOBILE_VERSION_POLICY);
+const RUNTIME_VERSION_POLICY = resolveRuntimeVersionPolicy(
+  process.env.MOBILE_VERSION_POLICY,
+  APP_VARIANT,
+);
 // CI-only distribution inputs; see scripts/mobile-update.ts and scripts/mobile-testflight.ts.
 const MOBILE_UPDATES_URL = optionalEnv("T3CODE_MOBILE_UPDATES_URL", /^https:\/\/\S+$/);
 const MOBILE_RUNTIME_VERSION = optionalEnv(
@@ -28,6 +31,9 @@ const personalTeamBundleIdentifier = repoEnv.T3CODE_IOS_PERSONAL_TEAM_BUNDLE_ID?
 const IOS_BUNDLE_IDENTIFIER_PATTERN = /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
 
 const fromRepoRoot = (relativePath: string) => `../../${relativePath}`;
+// Android layers are rendered by scripts/export-android-icons.ts from the Icon Composer sources.
+// The wordmark sits inside the adaptive safe zone; the variant artwork is a full-bleed background.
+const androidAdaptiveForeground = "./assets/android-icon-foreground.png";
 
 if (
   isIosPersonalTeamBuild &&
@@ -43,8 +49,8 @@ const DEVELOPMENT_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIconComposerProject),
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.developmentIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.developmentUniversalIconPng),
-  androidAdaptiveBackgroundColor: "#00639B",
+  androidAdaptiveForeground,
+  androidAdaptiveBackgroundColor: "#347FF8",
   androidAdaptiveBackgroundImage: "./assets/android-icon-background-dev.png",
   androidSplashIcon: "./assets/android-splash-icon-dev.png",
   androidMonochromeIcon: "./assets/android-icon-mark.png",
@@ -56,7 +62,7 @@ const PREVIEW_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIconComposerProject),
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.nightlyIosIconPng),
-  androidAdaptiveForeground: fromRepoRoot(BRAND_ASSET_PATHS.nightlyLinuxIconPng),
+  androidAdaptiveForeground,
   androidAdaptiveBackgroundColor: "#111533",
   androidAdaptiveBackgroundImage: "./assets/android-icon-background-nightly.png",
   androidSplashIcon: "./assets/android-splash-icon-nightly.png",
@@ -69,7 +75,7 @@ const RELEASE_ASSETS = {
   appIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
   iosIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIconComposerProject),
   splashIcon: fromRepoRoot(BRAND_ASSET_PATHS.productionIosIconPng),
-  androidAdaptiveForeground: "./assets/android-icon-mark.png",
+  androidAdaptiveForeground,
   androidAdaptiveBackgroundColor: "#000000",
   androidAdaptiveBackgroundImage: undefined,
   androidSplashIcon: "./assets/android-splash-icon-prod.png",
@@ -197,12 +203,14 @@ const sharingPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
         supportsText: true,
         supportsWebUrlWithMaxCount: 1,
         supportsImageWithMaxCount: 8,
+        supportsMovieWithMaxCount: 8,
+        supportsFileWithMaxCount: 8,
       },
     },
     android: {
       enabled: true,
-      singleShareMimeTypes: ["text/plain", "image/*"],
-      multipleShareMimeTypes: ["image/*"],
+      singleShareMimeTypes: ["*/*"],
+      multipleShareMimeTypes: ["*/*"],
     },
   },
 ];
@@ -217,10 +225,9 @@ const config: ExpoConfig = {
   platforms: ["ios", "android"],
   scheme: variant.scheme,
   version: "1.2.1",
-  // Fingerprint (not appVersion) so an OTA only reaches binaries whose native
-  // project — native deps, config plugins, AND patches/ — matches the update.
-  // With appVersion, every 0.1.0 build shares a runtime version, so a JS update
-  // could land on a binary missing the native changes it needs and crash.
+  // Development manifests resolve on every launch, so avoid fingerprint's
+  // expensive native-project calculation there. Preview and production stay
+  // fingerprinted so OTAs only reach binaries with matching native projects.
   // Distribution CI resolves the fingerprint once and pins it here, so the
   // binary and its updates cannot disagree across build hosts.
   runtimeVersion: MOBILE_RUNTIME_VERSION ?? { policy: RUNTIME_VERSION_POLICY },
@@ -249,12 +256,17 @@ const config: ExpoConfig = {
     // Pin code signing to this fork's Apple Developer team so non-interactive
     // builds keep the App Group and push-notification entitlements intact.
     appleTeamId: IOS_TEAM_ID,
+    // expo-secure-store keeps environment credentials in this bundle-scoped Keychain group.
+    entitlements: {
+      "keychain-access-groups": [`$(AppIdentifierPrefix)${iosBundleIdentifier}`],
+    },
     infoPlist: {
       NSAppTransportSecurity: {
         NSAllowsArbitraryLoads: true,
       },
       NSLocalNetworkUsageDescription:
         "Allow T3 Code to connect to T3 Code servers on your local network or tailnet.",
+      NSPhotoLibraryAddUsageDescription: "Allow T3 Code to save images to your photo library.",
       ITSAppUsesNonExemptEncryption: false,
       // The App Store screenshot harness rotates the iPad interface from
       // inside the app (CI denies osascript the Accessibility access that
@@ -349,6 +361,15 @@ const config: ExpoConfig = {
               : {}),
           },
         },
+      },
+    ],
+    [
+      "expo-audio",
+      {
+        microphonePermission: "Allow T3 Code to use your microphone for voice input.",
+        recordAudioAndroid: false,
+        enableBackgroundPlayback: false,
+        enableBackgroundRecording: false,
       },
     ],
     [
@@ -460,17 +481,6 @@ function optionalEnv(name: string, pattern: RegExp): string | undefined {
   return value;
 }
 
-function resolveRuntimeVersionPolicy(value: string | undefined) {
-  switch (value) {
-    case "appVersion":
-    case "nativeVersion":
-    case "sdkVersion":
-      return value;
-    default:
-      return "fingerprint" as const;
-  }
-}
-
 export function resolveApnsEnvironment(
   value: string | undefined,
   appVariant: AppVariant,
@@ -483,4 +493,16 @@ export function resolveApnsEnvironment(
     throw new Error("T3CODE_APNS_ENVIRONMENT must be either sandbox or production.");
   }
   return appVariant === "development" ? "sandbox" : "production";
+}
+
+function resolveRuntimeVersionPolicy(value: string | undefined, appVariant: AppVariant) {
+  switch (value) {
+    case "appVersion":
+    case "fingerprint":
+    case "nativeVersion":
+    case "sdkVersion":
+      return value;
+    default:
+      return appVariant === "development" ? "appVersion" : "fingerprint";
+  }
 }

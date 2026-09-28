@@ -34,6 +34,12 @@ it("gives the app and generated widget extension the same iOS deployment target"
   ]);
 });
 
+it("scopes the Keychain access group to the fork's bundle identifier", () => {
+  expect(config.ios?.entitlements?.["keychain-access-groups"]).toEqual([
+    `$(AppIdentifierPrefix)${config.ios?.bundleIdentifier}`,
+  ]);
+});
+
 it("allows signed builds to override the variant's default APNs gateway", () => {
   expect(resolveApnsEnvironment("sandbox", "production")).toBe("sandbox");
   expect(resolveApnsEnvironment(undefined, "development")).toBe("sandbox");
