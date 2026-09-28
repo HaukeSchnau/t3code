@@ -95,7 +95,6 @@ export function isShellVisibleThreadEvent(event: OrchestrationEvent): boolean {
     case "project.created":
     case "project.meta-updated":
     case "project.deleted":
-    case "provider.usage-limits-updated":
     case "thread.message-queued":
     case "thread.queued-message-deleted":
     case "thread.queued-message-dispatched":

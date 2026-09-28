@@ -97,7 +97,6 @@ const shellSnapshot = OrchestrationShellSnapshot.make({
   snapshotSequence: 0,
   projects: [],
   threads: [],
-  usageLimits: [],
   updatedAt: now,
 });
 
