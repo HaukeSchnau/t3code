@@ -5320,35 +5320,34 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
 }) {
   const { workEntry, workspaceRoot, isExpandedToolGroupEntry, displayLabel } = props;
   const ctx = use(TimelineRowCtx);
-  const observedMediaResources = useMemo(
-    () =>
-      (workEntry.media ?? []).map((media) => ({
-        _tag: "observed-media" as const,
-        storageId: media.storageId,
-      })),
-    [workEntry.media],
-  );
-  const observedMediaUrls = useAssetUrls(ctx.activeThreadEnvironmentId, observedMediaResources);
-  const observedMediaPreviews = useMemo(
-    () =>
-      (workEntry.media ?? []).flatMap((media, index) => {
-        const previewUrl = observedMediaUrls[index];
-        return previewUrl
-          ? [
-              {
-                id: media.id,
-                name: media.name,
-                previewUrl,
-              },
-            ]
-          : [];
-      }),
-    [observedMediaUrls, workEntry.media],
-  );
   const { threadRef, onImageExpand, timestampFormat } = ctx;
   const groupView = use(WorkGroupViewCtx);
   const [expanded, setExpanded] = useState(
     () => groupView?.state.expandedEntries.has(workEntry.id) ?? false,
+  );
+  // Observed images only request signed URLs once the row is expanded, so a
+  // long work log does not sign every image it has ever shown.
+  const hasObservedMedia = (workEntry.media?.length ?? 0) > 0;
+  const observedMediaResources = useMemo(
+    () =>
+      expanded
+        ? (workEntry.media ?? []).map((media) => ({
+            _tag: "observed-media" as const,
+            storageId: media.storageId,
+          }))
+        : [],
+    [expanded, workEntry.media],
+  );
+  const observedMediaUrls = useAssetUrls(ctx.activeThreadEnvironmentId, observedMediaResources);
+  const observedMediaPreviews = useMemo(
+    () =>
+      observedMediaResources.length === 0
+        ? []
+        : (workEntry.media ?? []).flatMap((media, index) => {
+            const previewUrl = observedMediaUrls[index];
+            return previewUrl ? [{ id: media.id, name: media.name, previewUrl }] : [];
+          }),
+    [observedMediaResources, observedMediaUrls, workEntry.media],
   );
   const toggleExpanded = () => {
     const next = !expanded;
@@ -5385,10 +5384,9 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
           workspaceRoot,
         })
       : null;
-  const hasObservedMediaPreviews = observedMediaPreviews.length > 0;
   const canExpand =
     Boolean(workEntry.questionAnswer) ||
-    hasObservedMediaPreviews ||
+    hasObservedMedia ||
     (showFailedIndicator && previewText.trim().length > 0) ||
     (workEntry.itemType === "mcp_tool_call" && workEntry.toolData !== undefined) ||
     Boolean(
@@ -5544,14 +5542,14 @@ const PlainWorkEntryRow = memo(function PlainWorkEntryRow(props: {
       ) : null}
       {expanded &&
       canExpand &&
-      (expandedBody || hasObservedMediaPreviews) &&
+      (expandedBody || hasObservedMedia) &&
       !workEntry.questionAnswer ? (
         <div
           className="mt-1 ms-7 cursor-default rounded-md bg-muted/40 px-3 py-2"
           onClick={stopRowToggle}
           onPointerDown={stopRowToggle}
         >
-          {hasObservedMediaPreviews ? (
+          {observedMediaPreviews.length > 0 ? (
             <div className="mb-1.5 flex flex-wrap gap-2">
               {observedMediaPreviews.map((preview) => (
                 <button
