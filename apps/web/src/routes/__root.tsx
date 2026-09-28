@@ -12,7 +12,7 @@ import {
   useRouter,
 } from "@tanstack/react-router";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 
 import { APP_BASE_NAME, APP_DISPLAY_NAME, APP_STAGE_LABEL, APP_VERSION } from "../branding";
 import { resolveServerBackedAppDisplayName } from "../branding.logic";
@@ -21,8 +21,8 @@ import { CommandPalette } from "../components/CommandPalette";
 import { CustomSnoozeDialogHost } from "../components/CustomSnoozeDialog";
 import { ConfirmDialogHost } from "../components/ConfirmDialogHost";
 import { FirstRunGate } from "../components/onboarding/FirstRunGate";
-import { ConnectOnboardingDialog } from "../components/cloud/ConnectOnboardingDialog";
 import { RelayClientInstallDialog } from "../components/cloud/RelayClientInstallDialog";
+import { hasCloudPublicConfig } from "../cloud/publicConfig";
 import { SshPasswordPromptDialog } from "../components/desktop/SshPasswordPromptDialog";
 import { SnapShotCoordinator } from "../components/desktop/SnapShotCoordinator";
 import { DesktopAppActivationCoordinator } from "../components/desktop/DesktopAppActivationCoordinator";
@@ -82,6 +82,17 @@ import {
 import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import { installDesktopPasteAsText } from "../lib/desktopPasteAsText";
 import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+
+// Fork: this dialog imports @clerk/react. Fork builds never set cloud config, so it loads only
+// when T3 Connect is configured, keeping Clerk out of the startup graph.
+// See patches/accountless-direct-agent-awareness.md.
+const ConnectOnboardingDialog = hasCloudPublicConfig()
+  ? lazy(() =>
+      import("../components/cloud/ConnectOnboardingDialog").then((module) => ({
+        default: module.ConnectOnboardingDialog,
+      })),
+    )
+  : null;
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
@@ -231,7 +242,11 @@ function RootRouteView() {
           {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
           {primaryEnvironmentAuthenticated ? <DesktopAppActivationCoordinator /> : null}
           <RelayClientInstallDialog />
-          <ConnectOnboardingDialog />
+          {ConnectOnboardingDialog ? (
+            <Suspense fallback={null}>
+              <ConnectOnboardingDialog />
+            </Suspense>
+          ) : null}
           <SshPasswordPromptDialog />
           <SnapShotCoordinator />
           <ThreadNotificationCoordinator />

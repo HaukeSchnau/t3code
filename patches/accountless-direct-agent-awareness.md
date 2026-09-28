@@ -10,10 +10,15 @@ authorization boundary and is intentionally not removed.
 
 - Remove account sign-in, account settings, cloud discovery, and cloud-link screens from the mobile
   client. The mobile theme generator omits the unused Clerk native theme JSON.
-- Web keeps upstream's T3 Connect code unchanged and switched off. Fork builds set no Clerk or relay
-  config, so `hasCloudPublicConfig()` is false: `main.tsx` never loads a Clerk shell, Settings and
-  the welcome wizard show no T3 Connect sign-in or cloud environments, `/connect` redirects home, and
-  the managed relay client gets the disabled `relay.invalid` URL.
+- Web keeps upstream's T3 Connect code in the tree and switched off. Fork builds set no Clerk or
+  relay config, so `hasCloudPublicConfig()` is false: `main.tsx` never loads a Clerk shell, Settings
+  and the welcome wizard show no T3 Connect sign-in or cloud environments, `/connect` redirects
+  home, and the managed relay client gets the disabled `relay.invalid` URL.
+- `routes/__root.tsx` lazy-loads `ConnectOnboardingDialog` only when `hasCloudPublicConfig()` is
+  true. Upstream imports it statically, which puts `@clerk/react` in the startup graph of every
+  build. Fork builds never use it, and the lazy import removes 154 KB (41 KB gzip) of startup
+  JavaScript. Clerk code still loads, without effect, when Settings, `/welcome`, or `/connect`
+  opens.
 - Fork builds must never set `VITE_CLERK_PUBLISHABLE_KEY`, `VITE_CLERK_JWT_TEMPLATE`,
   `VITE_T3CODE_RELAY_URL`, or the `T3CODE_CLERK_*` and `T3CODE_RELAY_URL` values that
   `scripts/lib/public-config.ts` maps onto them. Together they turn account sign-in on.
@@ -55,5 +60,5 @@ Prefer upstream direct-pairing and direct-push implementations if they become av
 mobile's fail-closed managed-relay compatibility layer once `packages/client-runtime` no longer
 requires those services for direct connections.
 
-Take upstream's web cloud files as they are during syncs. The only web delta left here is the
-`/pair` link in `ConnectionsSettings.tsx`.
+Take upstream's web cloud files as they are during syncs. The web deltas left here are the `/pair`
+link in `ConnectionsSettings.tsx` and the lazy `ConnectOnboardingDialog` in `routes/__root.tsx`.
