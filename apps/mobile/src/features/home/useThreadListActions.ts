@@ -26,7 +26,7 @@ import {
   createThreadMovePlanner,
   threadDropLifecycle,
 } from "../threads/threadOrder";
-import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { getThreadListV2OrderedSection, threadListV2NeedsUser } from "../threads/threadListV2";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
@@ -586,6 +586,7 @@ export function useThreadListActions(): {
         allThreads: shells,
         ordered,
         section,
+        ...(section === "active" ? { needsUser: threadListV2NeedsUser(shells) } : {}),
         reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
       })(scopedThreadKey(thread.environmentId, thread.id), direction);
       if (assignments === null) return false;

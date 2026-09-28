@@ -394,6 +394,32 @@ export function sortActiveThreadsByOrderKey<
 }
 
 /**
+ * The default sidebar's active order on every client
+ * (patches/attention-ordered-sidebar.md): threads that need the user lead,
+ * and inside each band an explicit Active order wins once the band has one.
+ * Until then the latest user message orders the band.
+ */
+export function sortActiveThreadsByAttention<
+  T extends {
+    readonly id: string;
+    readonly environmentId?: string | undefined;
+    readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
+    readonly unsettledAt?: string | null | undefined;
+    readonly activeOrderKey?: string | null | undefined;
+  },
+>(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
+  const attentionOrdered = sortThreadsByAttention(threads, getBand);
+  const sortBand = (band: SidebarAttentionBand) => {
+    const bandThreads = attentionOrdered.filter((thread) => getBand(thread) === band);
+    return bandThreads.some((thread) => thread.activeOrderKey != null)
+      ? sortActiveThreadsByOrderKey(bandThreads)
+      : bandThreads;
+  };
+  return [...sortBand("attention"), ...sortBand("normal")];
+}
+
+/**
  * planPinnedReorder specialized for mobile's Move up / Move down menu
  * actions: swap the moved thread with its displayed neighbor. Null when the
  * move falls off either end of the list. Same single-write-per-move

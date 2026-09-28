@@ -27,6 +27,7 @@ import {
   buildThreadListV2Items,
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
+  threadListV2NeedsUser,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -1526,5 +1527,45 @@ describe("cross-section thread drops", () => {
         NOW,
       ),
     ).toEqual({ pin: false, unpin: false, unsettle: false, unsnooze: false });
+  });
+});
+
+describe("mobile attention bands", () => {
+  const thread = (id: string, fields: Partial<EnvironmentThreadShell> = {}) =>
+    makeThread({ id: ThreadId.make(id), title: id, ...fields });
+  const key = (id: string) => `${environmentId}:${id}`;
+
+  it("lists threads that need the user first, then each band's saved order", () => {
+    const threads = [
+      thread("normal-late", { activeOrderKey: "t" }),
+      thread("normal-early", { activeOrderKey: "f" }),
+      thread("approval", { hasPendingApprovals: true, activeOrderKey: "w" }),
+    ];
+    expect(
+      getThreadListV2OrderedSection({ threads, section: "active", now: NOW }).map((row) => row.id),
+    ).toEqual(["approval", "normal-early", "normal-late"]);
+  });
+
+  it("plans moves within the moved thread's band and not across it", () => {
+    // The keyless approval thread would otherwise force a rewrite of every key.
+    const threads = [
+      thread("approval", { hasPendingApprovals: true }),
+      thread("normal-1"),
+      thread("normal-2", { activeOrderKey: "m" }),
+    ];
+    const plan = createThreadMovePlanner({
+      ordered: getThreadListV2OrderedSection({ threads, section: "active", now: NOW }),
+      allThreads: threads,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+      needsUser: threadListV2NeedsUser(threads),
+    });
+    const assignments = plan(key("normal-2"), "up");
+    expect(assignments?.map((assignment) => assignment.id).toSorted()).toEqual([
+      key("normal-1"),
+      key("normal-2"),
+    ]);
+    expect(plan(key("normal-1"), "up")).toBeNull();
+    expect(plan(key("approval"), "down")).toBeNull();
   });
 });

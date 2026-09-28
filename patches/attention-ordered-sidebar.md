@@ -14,10 +14,13 @@ threads alphabetically.
 
 ## Implementation boundary
 
-The shared comparator lives in `packages/client-runtime/src/state/threadSort.ts` so web and mobile
-use the same bands and timestamp fallback. Each client derives attention from the state it owns.
-Web includes locally acknowledged completions and wakes; mobile currently has no persisted visit
-state, so it promotes server-backed approval, input, failure, and plan-ready states.
+The shared comparator (`sortActiveThreadsByAttention`) lives in
+`packages/client-runtime/src/state/threadSort.ts` so web and mobile use the same bands, order keys
+and timestamp fallback. Each client derives attention from the state it owns. Web includes locally
+acknowledged completions and wakes; mobile currently has no persisted visit state, so it promotes
+server-backed approval, input, failure, and plan-ready states. Mobile Move up/down and Arrange
+threads keep a thread inside its band and write keys among that band only
+(`createThreadMovePlanner`'s `needsUser`).
 
 The legacy sidebar retains its explicit project and thread sort controls. The default sidebar does
 not expose a sort preference.

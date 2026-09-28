@@ -11,9 +11,11 @@ import type { SnoozePreset } from "@t3tools/client-runtime/state/thread-settled"
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import {
+  sortActiveThreadsByAttention,
   sortActiveThreadsByOrderKey,
   resolveSettledThreadTimestamp,
   sortPinnedThreadsByOrderKey,
+  type SidebarAttentionBand,
 } from "@t3tools/client-runtime/state/thread-sort";
 import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 
@@ -151,6 +153,38 @@ export function resolveThreadListV2Status(
   return "ready";
 }
 
+/** Mobile has no persisted visit state, so it promotes the server-backed
+    states that need the user (patches/attention-ordered-sidebar.md). */
+export function resolveThreadListV2AttentionBand(
+  thread: EnvironmentThreadShell,
+): SidebarAttentionBand {
+  const status = resolveThreadListV2Status(thread);
+  const hasPlanReadyPrompt =
+    thread.interactionMode === "plan" &&
+    thread.hasActionableProposedPlan &&
+    thread.latestTurn?.completedAt != null &&
+    thread.session?.status !== "running" &&
+    thread.session?.status !== "starting";
+  if (status === "approval" || status === "input" || status === "failed" || hasPlanReadyPrompt) {
+    return "attention";
+  }
+  return "normal";
+}
+
+/** For thread move planners: which scoped thread keys need the user. */
+export function threadListV2NeedsUser(
+  threads: readonly EnvironmentThreadShell[],
+): (id: string) => boolean {
+  const ids = new Set(
+    threads.flatMap((thread) =>
+      resolveThreadListV2AttentionBand(thread) === "attention"
+        ? [`${thread.environmentId}:${thread.id}`]
+        : [],
+    ),
+  );
+  return (id) => ids.has(id);
+}
+
 /** NaN-safe Date.parse for sort comparators: a malformed timestamp must not
     poison the whole ordering, so it sinks to the epoch instead. */
 function parseTimestampMs(isoDate: string): number {
@@ -158,18 +192,23 @@ function parseTimestampMs(isoDate: string): number {
   return Number.isNaN(parsed) ? 0 : parsed;
 }
 
-/** The active order shared by web and native: new/reopened rows, then the
-    saved arrangement. Activity does not move a thread. */
+/** The active order shared by web and native. With a band resolver, threads
+    that need the user lead (sortActiveThreadsByAttention); without one, new
+    and reopened rows lead the saved arrangement. Activity does not move a
+    thread. */
 export function sortThreadsForListV2<
   T extends {
     readonly id: string;
     readonly createdAt: string;
+    readonly latestUserMessageAt?: string | null;
     readonly unsettledAt?: string | null | undefined;
     readonly activeOrderKey?: string | null | undefined;
     readonly environmentId?: string | undefined;
   },
->(threads: readonly T[]): T[] {
-  return sortActiveThreadsByOrderKey(threads);
+>(threads: readonly T[], getBand?: (thread: T) => SidebarAttentionBand): T[] {
+  return getBand === undefined
+    ? sortActiveThreadsByOrderKey(threads)
+    : sortActiveThreadsByAttention(threads, getBand);
 }
 
 /** Canonical card section for Move up/down, independent of search or scope. */
@@ -202,7 +241,7 @@ export function getThreadListV2OrderedSection(input: {
   const ordered =
     input.section === "pinned"
       ? sortPinnedThreadsByOrderKey(threads)
-      : sortActiveThreadsByOrderKey(threads);
+      : sortThreadsForListV2(threads, resolveThreadListV2AttentionBand);
   const pending =
     input.pendingOrder?.section === input.section
       ? reconcilePendingThreadOrder(input.pendingOrder, ordered)
@@ -472,7 +511,11 @@ export function buildThreadListV2Items(input: {
     }
   }
 
-  const orderedActive = applyPendingThreadOrder(sortThreadsForListV2(active), "active", pending);
+  const orderedActive = applyPendingThreadOrder(
+    sortThreadsForListV2(active, resolveThreadListV2AttentionBand),
+    "active",
+    pending,
+  );
   const orderedSnoozed = [...snoozed].sort(
     (left, right) =>
       parseTimestampMs(left.snoozedUntil ?? "") - parseTimestampMs(right.snoozedUntil ?? ""),
