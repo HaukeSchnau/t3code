@@ -10,6 +10,7 @@ import { createStaticNavigation } from "@react-navigation/native";
 import { RegistryContext } from "@effect/atom-react";
 import { ThreadArrangementHost } from "./features/threads/ThreadArrangementSheet";
 import { ConfirmDialogHost } from "./components/ConfirmDialogHost";
+import { CloudAuthProvider } from "./features/cloud/CloudAuthProvider";
 import { AccountlessAgentAwarenessProvider } from "./features/agent-awareness/AccountlessAgentAwarenessProvider";
 import { prepareNativeShowcaseCapture } from "./features/showcase/nativeShowcaseScene";
 import { IncomingShareProvider } from "./features/sharing/IncomingShareProvider";
@@ -56,11 +57,13 @@ function SplashScreenCoordinator() {
 export default function App() {
   return (
     <RegistryContext.Provider value={appAtomRegistry}>
-      <AccountlessAgentAwarenessProvider>
-        <AppearancePreferencesProvider>
-          <AppContent />
-        </AppearancePreferencesProvider>
-      </AccountlessAgentAwarenessProvider>
+      <CloudAuthProvider>
+        <AccountlessAgentAwarenessProvider>
+          <AppearancePreferencesProvider>
+            <AppContent />
+          </AppearancePreferencesProvider>
+        </AccountlessAgentAwarenessProvider>
+      </CloudAuthProvider>
     </RegistryContext.Provider>
   );
 }

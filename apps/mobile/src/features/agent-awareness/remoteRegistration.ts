@@ -220,6 +220,24 @@ export function setAgentAwarenessEnvironmentTransport(
   enqueueDeviceRegistration({}, "device registration after environment activation failed");
 }
 
+// Upstream's CloudAuthProvider hands T3 Connect credentials to relay-backed
+// awareness through these hooks. Here devices register with paired environments
+// instead, so account sign-in, sign-out, and remounts leave registration alone.
+// TODO: Remove these no-ops when the fork adopts upstream's awareness transport
+// or upstream's CloudAuthProvider stops calling into agent awareness.
+export function setAgentAwarenessRelayTokenProvider(
+  _provider: (() => Promise<string | null>) | null,
+  _identity?: string,
+): void {}
+
+export function releaseAgentAwarenessRelayTokenProvider(): void {}
+
+export function unregisterAgentAwarenessDeviceForCurrentUser(
+  _tokenProvider: () => Promise<string | null>,
+): Effect.Effect<void> {
+  return Effect.void;
+}
+
 function iosMajorVersion(): number {
   const version = Platform.Version;
   if (typeof version === "number") {
