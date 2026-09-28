@@ -3189,53 +3189,6 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
-  it.effect("requires diagnostics capture scope for energy capture requests", () =>
-    Effect.gen(function* () {
-      yield* buildAppUnderTest();
-
-      const ownerCookie = yield* getAuthenticatedSessionCookieHeader();
-      const credentialResponse = yield* HttpClient.post("/api/auth/pairing-token", {
-        headers: { cookie: ownerCookie },
-        body: yield* HttpBody.json({}),
-      });
-      const credential = (yield* credentialResponse.json) as { readonly credential: string };
-      const pairedCookie = yield* getAuthenticatedSessionCookieHeader(credential.credential);
-      const captureUrl = yield* getHttpServerUrl("/api/diagnostics/energy-capture");
-      const captureBody = jsonRequestBody({ durationMs: 1_000, waitTimeoutMs: 1_000 });
-
-      const pairedResponse = yield* fetchEffect(captureUrl, {
-        method: "POST",
-        headers: {
-          cookie: pairedCookie,
-          "content-type": "application/json",
-        },
-        body: captureBody,
-      });
-      const pairedBody = yield* responseJsonEffect<{
-        readonly _tag?: string;
-        readonly requiredScope?: string;
-      }>(pairedResponse);
-      assert.equal(pairedResponse.status, 403);
-      assert.equal(pairedBody._tag, "EnvironmentScopeRequiredError");
-      assert.equal(pairedBody.requiredScope, "diagnostics:capture");
-
-      const ownerResponse = yield* fetchEffect(captureUrl, {
-        method: "POST",
-        headers: {
-          cookie: ownerCookie,
-          "content-type": "application/json",
-        },
-        body: captureBody,
-      });
-      const ownerBody = yield* responseJsonEffect<{
-        readonly status?: string;
-        readonly message?: string;
-      }>(ownerResponse);
-      assert.equal(ownerResponse.status, 200);
-      assert.equal(ownerBody.status, "rejected");
-      assert.include(ownerBody.message, "capture duration plus");
-    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
-  );
   it.effect("serves metadata-only workload diagnostics to standard read clients", () =>
     Effect.gen(function* () {
       yield* buildAppUnderTest();
@@ -12816,19 +12769,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       caseName: "async setup metadata still waits for durable script completion",
       async: true,
       cancel: false,
+      exitCode: 0,
     },
     {
       caseName: "sync setup scripts hold the turn until the script exits",
       async: false,
       cancel: false,
+      exitCode: 0,
+    },
+    {
+      caseName: "a failing setup script reports its exit code and still starts the agent",
+      async: false,
+      cancel: false,
+      exitCode: 1,
     },
     {
       caseName:
         "cancelling worktree setup publishes its outcome and retains the prepared workspace",
       async: false,
       cancel: true,
+      exitCode: 0,
     },
-  ])("$caseName", ({ async, cancel }) =>
+  ])("$caseName", ({ async, cancel, exitCode }) =>
     Effect.gen(function* () {
       const dispatchedCommands: Array<OrchestrationCommand> = [];
       const scriptExit = yield* Deferred.make<void>();
@@ -12847,7 +12809,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               terminalId: "setup-setup",
               cwd: "/tmp/bootstrap-worktree",
               async,
-              completion: Effect.succeed({ exitCode: 0, durationMs: 1 }),
+              completion: Effect.succeed({ exitCode, durationMs: 1 }),
             }),
           ),
       );
@@ -12980,7 +12942,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assertTrue(turnStarted());
       const settled = yield* snapshotWhere((snapshot) => snapshot.phase !== "running");
       assert.equal(settled.phase, "done");
-      assert.equal(stageStatus(settled, "setup-script"), "done");
+      const setupStage = settled.stages.find((stage) => stage.id === "setup-script");
+      assert.equal(setupStage?.status, exitCode === 0 ? "done" : "failed");
+      assert.equal(setupStage?.detail ?? null, exitCode === 0 ? null : `exit ${exitCode}`);
       assert.equal(stageStatus(settled, "agent"), "done");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );

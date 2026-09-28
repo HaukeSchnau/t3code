@@ -7,7 +7,6 @@ import {
   type ProjectId,
   type ModelSelection,
   ThreadId,
-  ThreadOrchestrationBatchId,
   ThreadOrchestrationEffortId,
   ThreadOrchestrationWaitId,
   ThreadOrchestrationWatchId,
@@ -21,11 +20,6 @@ import {
   type OrchestrationWaitShell,
   type OrchestrationWatchShell,
   type ThreadOrchestrationActorScope,
-  type ThreadOrchestrationBatch,
-  type ThreadOrchestrationBatchStatus,
-  type ThreadOrchestrationCancelBatchInput,
-  type ThreadOrchestrationCleanupBatchInput,
-  type ThreadOrchestrationCleanupBatchResult,
   type ThreadOrchestrationCreateEffortInput,
   type ThreadOrchestrationReadEffortInput,
   type ThreadOrchestrationListEffortsInput,
@@ -46,8 +40,6 @@ import {
   type ThreadOrchestrationListWatchesResult,
   type ThreadOrchestrationCancelWatchInput,
   type ThreadOrchestrationStopThreadInput,
-  type ThreadOrchestrationCreateBatchInput,
-  type ThreadOrchestrationCreateBatchResult,
   type ThreadOrchestrationCreateThreadInput,
   type ThreadOrchestrationCreateThreadResult,
   type ProviderInteractionMode,
@@ -59,7 +51,6 @@ import {
   type ThreadOrchestrationListThreadsInput,
   type ThreadOrchestrationListThreadsResult,
   type ThreadOrchestrationReadThreadInput,
-  type ThreadOrchestrationReadBatchInput,
   type ThreadOrchestrationReadThreadResultInput,
   type ThreadOrchestrationReasoningOption,
   type ThreadOrchestrationRelationship,
@@ -101,7 +92,6 @@ import {
   type ProjectionThreadResultContext,
 } from "../../../orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ProviderRegistry } from "../../../provider/Services/ProviderRegistry.ts";
-import type * as McpInvocationContext from "../../McpInvocationContext.ts";
 import { CodexThreadForkImporter } from "./CodexThreadForkImporter.ts";
 import { RemoteThreadOrchestrationClient } from "./RemoteThreadOrchestrationClient.ts";
 import {
@@ -114,7 +104,7 @@ import {
 
 const DEFAULT_THREAD_LIMIT = 20;
 const MAX_THREAD_LIMIT = 100;
-const MAX_BATCH_TIMEOUT_MS = 7 * 24 * 60 * 60 * 1_000;
+const MAX_DEADLINE_MS = 7 * 24 * 60 * 60 * 1_000;
 
 const HIDDEN_THREAD_MODEL_SLUGS = new Set([
   "gpt-5.3-codex-spark",
@@ -155,126 +145,106 @@ export class ThreadOrchestrationService extends Context.Service<
       ThreadOrchestrationError
     >;
     readonly listThreads: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationListThreadsInput,
     ) => Effect.Effect<ThreadOrchestrationListThreadsResult, ThreadOrchestrationError>;
     readonly readThread: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadThreadInput,
     ) => Effect.Effect<ThreadOrchestrationThreadDetail, ThreadOrchestrationError>;
     readonly readThreadResult: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadThreadResultInput,
     ) => Effect.Effect<ThreadOrchestrationThreadResult, ThreadOrchestrationError>;
     readonly getThreadGraph: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationThreadGraphInput,
     ) => Effect.Effect<ThreadOrchestrationThreadGraphResult, ThreadOrchestrationError>;
     readonly createThread: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCreateThreadInput,
     ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
     readonly createRootThread: (
       input: ThreadOrchestrationCreateThreadInput,
     ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
-    readonly createBatch: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationCreateBatchInput,
-    ) => Effect.Effect<ThreadOrchestrationCreateBatchResult, ThreadOrchestrationError>;
-    readonly readBatch: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationReadBatchInput,
-    ) => Effect.Effect<ThreadOrchestrationBatch, ThreadOrchestrationError>;
-    readonly cancelBatch: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationCancelBatchInput,
-    ) => Effect.Effect<ThreadOrchestrationBatch, ThreadOrchestrationError>;
-    readonly cleanupBatch: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationCleanupBatchInput,
-    ) => Effect.Effect<ThreadOrchestrationCleanupBatchResult, ThreadOrchestrationError>;
     readonly createEffort: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCreateEffortInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly readEffort: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadEffortInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly listEfforts: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationListEffortsInput,
     ) => Effect.Effect<ThreadOrchestrationListEffortsResult, ThreadOrchestrationError>;
     readonly renameEffort: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationRenameEffortInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly closeEffort: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCloseEffortInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly reopenEffort: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReopenEffortInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly addEffortMember: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationAddEffortMemberInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly removeEffortMember: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationRemoveEffortMemberInput,
     ) => Effect.Effect<OrchestrationEffortShell, ThreadOrchestrationError>;
     readonly createWait: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCreateWaitInput,
     ) => Effect.Effect<OrchestrationWaitShell, ThreadOrchestrationError>;
     readonly readWait: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadWaitInput,
     ) => Effect.Effect<OrchestrationWaitShell, ThreadOrchestrationError>;
     readonly listWaits: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationListWaitsInput,
     ) => Effect.Effect<ThreadOrchestrationListWaitsResult, ThreadOrchestrationError>;
     readonly cancelWait: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCancelWaitInput,
     ) => Effect.Effect<OrchestrationWaitShell, ThreadOrchestrationError>;
     readonly createWatch: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCreateWatchInput,
     ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
     readonly readWatch: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationReadWatchInput,
     ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
     readonly listWatches: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationListWatchesInput,
     ) => Effect.Effect<ThreadOrchestrationListWatchesResult, ThreadOrchestrationError>;
     readonly cancelWatch: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationCancelWatchInput,
     ) => Effect.Effect<OrchestrationWatchShell, ThreadOrchestrationError>;
     readonly stopThread: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationStopThreadInput,
     ) => Effect.Effect<ThreadOrchestrationThreadSummary, ThreadOrchestrationError>;
-    readonly createThreadFromRemote: (
-      scope: McpInvocationContext.McpInvocationScope,
-      input: ThreadOrchestrationCreateThreadInput,
-    ) => Effect.Effect<ThreadOrchestrationCreateThreadResult, ThreadOrchestrationError>;
     readonly forkThread: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationForkThreadInput,
     ) => Effect.Effect<ThreadOrchestrationForkThreadResult, ThreadOrchestrationError>;
     readonly sendMessageToThread: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationSendMessageInput,
     ) => Effect.Effect<ThreadOrchestrationSendMessageResult, ThreadOrchestrationError>;
     readonly setThreadTitle: (
-      scope: McpInvocationContext.McpInvocationScope,
+      scope: ThreadOrchestrationActorScope,
       input: ThreadOrchestrationSetThreadTitleInput,
     ) => Effect.Effect<ThreadOrchestrationThreadSummary, ThreadOrchestrationError>;
   }
@@ -330,93 +300,10 @@ const makeId = <A>(crypto: Crypto.Crypto, prefix: string, make: (value: string) 
 type ThreadSummarySource = OrchestrationThread | OrchestrationThreadShell;
 type ProjectSummarySource = OrchestrationProjectShell;
 
-type StoredBatchMember = {
-  readonly label: string;
-  readonly environmentId: EnvironmentId;
-  readonly threadId: ThreadId;
-  readonly workspaceIsolation: "shared" | "worktree";
-};
-
-type StoredBatchDefinition = {
-  readonly batchId: ThreadOrchestrationBatchId;
-  readonly coordinatorEnvironmentId: EnvironmentId;
-  readonly coordinatorThreadId: ThreadId;
-  readonly title: string;
-  readonly prompt: string;
-  readonly members: ReadonlyArray<StoredBatchMember>;
-  readonly createdAt: string;
-  readonly deadlineAt: string | null;
-};
-
-function batchDefinitionFromActivity(
-  activity: OrchestrationThreadActivity,
-): StoredBatchDefinition | null {
-  if (activity.kind !== "thread-orchestration.batch.created") return null;
-  const candidate = activity.payload as Partial<StoredBatchDefinition> | null | undefined;
-  if (
-    candidate == null ||
-    typeof candidate.batchId !== "string" ||
-    typeof candidate.coordinatorEnvironmentId !== "string" ||
-    typeof candidate.coordinatorThreadId !== "string" ||
-    typeof candidate.title !== "string" ||
-    typeof candidate.prompt !== "string" ||
-    !Array.isArray(candidate.members) ||
-    typeof candidate.createdAt !== "string"
-  ) {
-    return null;
-  }
-  const members = candidate.members.flatMap((member) =>
-    typeof member?.label === "string" &&
-    typeof member.environmentId === "string" &&
-    typeof member.threadId === "string"
-      ? [
-          {
-            label: member.label,
-            environmentId: EnvironmentId.make(member.environmentId),
-            threadId: ThreadId.make(member.threadId),
-            workspaceIsolation:
-              member.workspaceIsolation === "worktree"
-                ? ("worktree" as const)
-                : ("shared" as const),
-          },
-        ]
-      : [],
-  );
-  if (members.length !== candidate.members.length) return null;
-  return {
-    batchId: ThreadOrchestrationBatchId.make(candidate.batchId),
-    coordinatorEnvironmentId: EnvironmentId.make(candidate.coordinatorEnvironmentId),
-    coordinatorThreadId: ThreadId.make(candidate.coordinatorThreadId),
-    title: candidate.title,
-    prompt: candidate.prompt,
-    members,
-    createdAt: candidate.createdAt,
-    deadlineAt: typeof candidate.deadlineAt === "string" ? candidate.deadlineAt : null,
-  };
-}
-
-function hasBatchActivity(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-  kind: string,
-  batchId: ThreadOrchestrationBatchId,
-): OrchestrationThreadActivity | undefined {
-  return activities.find(
-    (activity) =>
-      activity.kind === kind &&
-      typeof activity.payload === "object" &&
-      activity.payload !== null &&
-      (activity.payload as { readonly batchId?: unknown }).batchId === batchId,
-  );
-}
-
-function isTerminalBatchMemberOutcome(
+function isTerminalMemberOutcome(
   outcome: NonNullable<ThreadOrchestrationThreadSummary["outcome"]>,
 ): boolean {
   return ["completed", "failed", "interrupted"].includes(outcome);
-}
-
-function isTerminalBatchStatus(status: ThreadOrchestrationBatchStatus): boolean {
-  return ["completed", "failed", "cancelled", "deadline-exceeded"].includes(status);
 }
 
 function deliveryForCoordinatorNotification(
@@ -429,21 +316,6 @@ function deliveryForCoordinatorNotification(
   )
     ? "immediate"
     : "queued";
-}
-
-function statusForBatch(input: {
-  readonly cancelled: boolean;
-  readonly deadlineExceeded: boolean;
-  readonly outcomes: ReadonlyArray<NonNullable<ThreadOrchestrationThreadSummary["outcome"]>>;
-}): ThreadOrchestrationBatchStatus {
-  if (input.cancelled) return "cancelled";
-  if (input.deadlineExceeded) return "deadline-exceeded";
-  if (input.outcomes.every(isTerminalBatchMemberOutcome)) {
-    return input.outcomes.every((outcome) => outcome === "completed") ? "completed" : "failed";
-  }
-  return input.outcomes.some((outcome) => ["blocked-approval", "blocked-input"].includes(outcome))
-    ? "blocked"
-    : "running";
 }
 
 function statusForThread(thread: ThreadSummarySource): string {
@@ -660,9 +532,6 @@ function relationshipFromActivity(
       ? { targetEnvironmentId: EnvironmentId.make(candidate.targetEnvironmentId) }
       : {}),
     targetThreadId: ThreadId.make(candidate.targetThreadId),
-    ...(typeof candidate.batchId === "string"
-      ? { batchId: ThreadOrchestrationBatchId.make(candidate.batchId) }
-      : {}),
     ...(typeof candidate.effortId === "string"
       ? { effortId: ThreadOrchestrationEffortId.make(candidate.effortId) }
       : {}),
@@ -711,15 +580,6 @@ const make = Effect.gen(function* () {
     Effect.mapError(toThreadOrchestrationError("environment.resolve")),
   );
 
-  const scopeForRemote = (
-    scope: McpInvocationContext.McpInvocationScope,
-  ): ThreadOrchestrationActorScope => ({
-    environmentId: scope.environmentId,
-    threadId: scope.threadId,
-    providerSessionId: scope.providerSessionId,
-    providerInstanceId: scope.providerInstanceId,
-  });
-
   const shouldRouteRemote = (environmentId: EnvironmentId | undefined) =>
     Effect.gen(function* () {
       if (environmentId === undefined) return false;
@@ -752,7 +612,7 @@ const make = Effect.gen(function* () {
   });
 
   const resolveCreateInput = (
-    scope: McpInvocationContext.McpInvocationScope | undefined,
+    scope: ThreadOrchestrationActorScope | undefined,
     sourceThread: OrchestrationThreadShell | undefined,
     input: ThreadOrchestrationCreateThreadInput,
   ): Effect.Effect<ResolvedCreateThreadInput, ThreadOrchestrationError> =>
@@ -781,13 +641,12 @@ const make = Effect.gen(function* () {
     });
 
   const appendRelationship = (input: {
-    readonly scope: McpInvocationContext.McpInvocationScope;
+    readonly scope: ThreadOrchestrationActorScope;
     readonly actor?: OrchestrationThreadRef;
     readonly kind: ThreadOrchestrationRelationshipKind;
     readonly targetThreadId: ThreadId;
     readonly summary: string;
     readonly createdAt: string;
-    readonly batchId?: ThreadOrchestrationBatchId;
     readonly effortId?: ThreadOrchestrationEffortId;
     readonly label?: string;
     readonly launchTurnId?: string | null;
@@ -807,7 +666,6 @@ const make = Effect.gen(function* () {
           actorThreadId: input.actor?.threadId ?? input.scope.threadId,
           targetEnvironmentId: input.targetEnvironmentId ?? (yield* localEnvironmentId),
           targetThreadId: input.targetThreadId,
-          ...(input.batchId !== undefined ? { batchId: input.batchId } : {}),
           ...(input.effortId !== undefined ? { effortId: input.effortId } : {}),
           ...(input.label !== undefined ? { label: input.label } : {}),
           ...(input.launchTurnId !== undefined ? { launchTurnId: input.launchTurnId } : {}),
@@ -833,38 +691,6 @@ const make = Effect.gen(function* () {
         }),
       ),
     );
-
-  const appendBatchActivity = (input: {
-    readonly threadId: ThreadId;
-    readonly batchId: ThreadOrchestrationBatchId;
-    readonly kind:
-      | "thread-orchestration.batch.created"
-      | "thread-orchestration.batch.attention"
-      | "thread-orchestration.batch.cancelled"
-      | "thread-orchestration.batch.settled"
-      | "thread-orchestration.batch.notified"
-      | "thread-orchestration.batch.cleaned";
-    readonly summary: string;
-    readonly payload?: Readonly<Record<string, unknown>>;
-    readonly createdAt: string;
-  }) =>
-    engine
-      .dispatch({
-        type: "thread.activity.append",
-        commandId: CommandId.make(`${input.batchId}:${input.kind}:command`),
-        threadId: input.threadId,
-        activity: {
-          id: EventId.make(`${input.batchId}:${input.kind}`),
-          tone: "tool",
-          kind: input.kind,
-          summary: input.summary,
-          payload: { batchId: input.batchId, ...input.payload },
-          turnId: null,
-          createdAt: input.createdAt,
-        },
-        createdAt: input.createdAt,
-      })
-      .pipe(Effect.mapError(toThreadOrchestrationError(input.kind, { threadId: input.threadId })));
 
   const appendCoordinationActivity = (input: {
     readonly threadId: ThreadId;
@@ -966,12 +792,12 @@ const make = Effect.gen(function* () {
     });
 
   const readThreadResult = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadThreadResultInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.readThreadResult(scopeForRemote(scope), input);
+        return yield* remoteClient.readThreadResult(scope, input);
       }
       const context = yield* readThreadResultContext(input.threadId, "read_thread_result");
       return yield* threadResultFromContext(context);
@@ -1059,12 +885,12 @@ const make = Effect.gen(function* () {
     });
 
   const listThreads = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationListThreadsInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.listThreads(scopeForRemote(scope), input);
+        return yield* remoteClient.listThreads(scope, input);
       }
       const currentEnvironmentId = yield* localEnvironmentId;
       return yield* shellSnapshot.pipe(
@@ -1099,12 +925,12 @@ const make = Effect.gen(function* () {
     });
 
   const readThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadThreadInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.readThread(scopeForRemote(scope), input);
+        return yield* remoteClient.readThread(scope, input);
       }
       const threadOption = yield* snapshotQuery.getThreadDetailById(input.threadId).pipe(
         Effect.mapError(
@@ -1158,12 +984,12 @@ const make = Effect.gen(function* () {
     });
 
   const getThreadGraph = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationThreadGraphInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.getThreadGraph(scopeForRemote(scope), input);
+        return yield* remoteClient.getThreadGraph(scope, input);
       }
       const [model, relationshipActivities] = yield* Effect.all(
         [
@@ -1239,11 +1065,10 @@ const make = Effect.gen(function* () {
     });
 
   const createThreadInternal = (
-    scope: McpInvocationContext.McpInvocationScope | undefined,
+    scope: ThreadOrchestrationActorScope | undefined,
     input: ThreadOrchestrationCreateThreadInput,
     options: {
       readonly modelSelectionIntent: "explicit" | "inherited";
-      readonly batchId?: ThreadOrchestrationBatchId;
     },
   ) =>
     Effect.gen(function* () {
@@ -1306,7 +1131,7 @@ const make = Effect.gen(function* () {
         if (scope === undefined) {
           return yield* remoteClient.createRootThread(resolvedInput);
         }
-        const result = yield* remoteClient.createThread(scopeForRemote(scope), resolvedInput);
+        const result = yield* remoteClient.createThread(scope, resolvedInput);
         const createdAt = yield* nowIso;
         yield* appendRelationship({
           scope,
@@ -1314,7 +1139,6 @@ const make = Effect.gen(function* () {
           targetThreadId: result.thread.threadId,
           targetEnvironmentId: result.thread.environmentId,
           recordOnThreadId: scope.threadId,
-          ...(options.batchId !== undefined ? { batchId: options.batchId } : {}),
           ...(effortId !== undefined ? { effortId } : {}),
           ...(createCoordination?.label !== undefined ? { label: createCoordination.label } : {}),
           summary: `Created remote thread ${result.thread.threadId}.`,
@@ -1492,10 +1316,9 @@ const make = Effect.gen(function* () {
           scope,
           kind: "createdBy",
           targetThreadId: nextThreadId,
-          ...(options.batchId !== undefined ? { batchId: options.batchId } : {}),
           ...(effortId !== undefined ? { effortId } : {}),
           ...(createCoordination?.label !== undefined ? { label: createCoordination.label } : {}),
-          wakeCoordinator: options.batchId === undefined && effortId === undefined,
+          wakeCoordinator: effortId === undefined,
           summary: `Created by thread ${scope.threadId}.`,
           createdAt,
         });
@@ -1529,7 +1352,7 @@ const make = Effect.gen(function* () {
           });
         }
       }
-      if (scope !== undefined && options.batchId === undefined && effortId === undefined) {
+      if (scope !== undefined && effortId === undefined) {
         yield* monitorDelegatedThread(scope, nextThreadId).pipe(
           Effect.ignoreCause({ log: true }),
           Effect.forkDetach,
@@ -1570,7 +1393,7 @@ const make = Effect.gen(function* () {
     });
 
   const createThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCreateThreadInput,
   ) =>
     createThreadInternal(scope, input, {
@@ -1579,505 +1402,6 @@ const make = Effect.gen(function* () {
 
   const createRootThread = (input: ThreadOrchestrationCreateThreadInput) =>
     createThreadInternal(undefined, input, { modelSelectionIntent: "explicit" });
-
-  const createThreadFromRemote = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationCreateThreadInput,
-  ) =>
-    createThreadInternal(scope, input, {
-      modelSelectionIntent: input.modelSelection === undefined ? "inherited" : "explicit",
-    });
-
-  const resolveBatchDefinition = (
-    scope: McpInvocationContext.McpInvocationScope,
-    batchId: ThreadOrchestrationBatchId,
-  ) =>
-    Effect.gen(function* () {
-      const globalBatchActivities = Object.hasOwn(
-        snapshotQuery,
-        "listThreadOrchestrationBatchActivities",
-      )
-        ? yield* snapshotQuery.listThreadOrchestrationBatchActivities!().pipe(
-            Effect.mapError(toThreadOrchestrationError("read_batch.activities")),
-          )
-        : undefined;
-      const definition = globalBatchActivities
-        ?.map(batchDefinitionFromActivity)
-        .find((candidate) => candidate?.batchId === batchId);
-      if (globalBatchActivities !== undefined && definition == null) {
-        return yield* new ThreadOrchestrationError({
-          operation: "read_batch",
-          code: "not_found",
-          message: `Batch '${batchId}' was not found.`,
-          resourceType: "batch",
-          resourceId: batchId,
-        });
-      }
-      const coordinatorThreadId = definition?.coordinatorThreadId ?? scope.threadId;
-      const coordinatorOption = yield* snapshotQuery.getThreadDetailById(coordinatorThreadId).pipe(
-        Effect.mapError(
-          toThreadOrchestrationError("read_batch.coordinator", {
-            threadId: coordinatorThreadId,
-          }),
-        ),
-      );
-      if (Option.isNone(coordinatorOption)) {
-        return yield* notFoundError("read_batch", "thread", coordinatorThreadId, {
-          threadId: coordinatorThreadId,
-        });
-      }
-      const resolvedDefinition =
-        definition ??
-        coordinatorOption.value.activities
-          .map(batchDefinitionFromActivity)
-          .find((candidate) => candidate?.batchId === batchId);
-      if (resolvedDefinition == null) {
-        return yield* new ThreadOrchestrationError({
-          operation: "read_batch",
-          code: "not_found",
-          message: `Batch '${batchId}' was not found on coordinator thread '${scope.threadId}'.`,
-          threadId: scope.threadId,
-          resourceType: "batch",
-          resourceId: batchId,
-        });
-      }
-      return { definition: resolvedDefinition, coordinator: coordinatorOption.value };
-    });
-
-  const readBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationReadBatchInput,
-  ) =>
-    Effect.gen(function* () {
-      const { definition, coordinator } = yield* resolveBatchDefinition(scope, input.batchId);
-      const results = yield* Effect.forEach(
-        definition.members,
-        (member) =>
-          readThreadResult(scope, {
-            environmentId: member.environmentId,
-            threadId: member.threadId,
-          }).pipe(Effect.map((result) => ({ member, result }))),
-        { concurrency: "unbounded" },
-      );
-      const members = results.map(({ member, result }) => ({
-        label: member.label,
-        workspaceIsolation: member.workspaceIsolation,
-        outcome: result.thread.outcome ?? ("unknown" as const),
-        thread: result.thread,
-        latestAssistantMessage: result.latestAssistantMessage,
-        queuedMessageCount: result.queuedMessageCount,
-      }));
-      const cancelled = hasBatchActivity(
-        coordinator.activities,
-        "thread-orchestration.batch.cancelled",
-        input.batchId,
-      );
-      const settled = hasBatchActivity(
-        coordinator.activities,
-        "thread-orchestration.batch.settled",
-        input.batchId,
-      );
-      const notified = hasBatchActivity(
-        coordinator.activities,
-        "thread-orchestration.batch.notified",
-        input.batchId,
-      );
-      const currentTimeMillis = yield* Clock.currentTimeMillis;
-      const deadlineExceeded =
-        definition.deadlineAt !== null &&
-        currentTimeMillis >= DateTime.toEpochMillis(DateTime.makeUnsafe(definition.deadlineAt));
-      const outcomes = members.map((member) => member.outcome);
-      const status = statusForBatch({
-        cancelled: cancelled !== undefined,
-        deadlineExceeded,
-        outcomes,
-      });
-      return {
-        batchId: definition.batchId,
-        coordinatorEnvironmentId: definition.coordinatorEnvironmentId,
-        coordinatorThreadId: definition.coordinatorThreadId,
-        title: definition.title,
-        prompt: definition.prompt,
-        status,
-        members,
-        createdAt: definition.createdAt,
-        deadlineAt: definition.deadlineAt,
-        settledAt: settled?.createdAt ?? null,
-        notifiedAt: notified?.createdAt ?? null,
-      } satisfies ThreadOrchestrationBatch;
-    });
-
-  const interruptLocalBatchMembers = (batch: ThreadOrchestrationBatch) =>
-    Effect.gen(function* () {
-      const currentEnvironmentId = yield* localEnvironmentId;
-      const createdDateTime = yield* DateTime.now;
-      const createdAt = DateTime.formatIso(createdDateTime);
-      yield* Effect.forEach(
-        batch.members.filter(
-          (member) =>
-            member.thread.environmentId === currentEnvironmentId &&
-            ["queued", "running", "blocked-approval", "blocked-input"].includes(member.outcome),
-        ),
-        (member) =>
-          engine
-            .dispatch({
-              type: "thread.turn.interrupt",
-              commandId: CommandId.make(`${batch.batchId}:${member.thread.threadId}:interrupt`),
-              threadId: member.thread.threadId,
-              createdAt,
-            })
-            .pipe(
-              Effect.mapError(
-                toThreadOrchestrationError("cancel_batch.interrupt", {
-                  threadId: member.thread.threadId,
-                }),
-              ),
-            ),
-        { concurrency: "unbounded", discard: true },
-      );
-    });
-
-  const notifySettledBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    batch: ThreadOrchestrationBatch,
-  ) =>
-    Effect.gen(function* () {
-      if (batch.settledAt === null) {
-        const settledAt = yield* nowIso;
-        yield* appendBatchActivity({
-          threadId: scope.threadId,
-          batchId: batch.batchId,
-          kind: "thread-orchestration.batch.settled",
-          summary: `Batch ${batch.title} settled as ${batch.status}.`,
-          payload: { status: batch.status },
-          createdAt: settledAt,
-        });
-      }
-      if (batch.notifiedAt !== null) return;
-      const notifiedAt = yield* nowIso;
-      const coordinatorOption = yield* snapshotQuery
-        .getThreadShellById(scope.threadId)
-        .pipe(
-          Effect.mapError(
-            toThreadOrchestrationError("batch.notify.coordinator", { threadId: scope.threadId }),
-          ),
-        );
-      if (Option.isNone(coordinatorOption)) {
-        return yield* notFoundError("batch.notify", "thread", scope.threadId, {
-          threadId: scope.threadId,
-        });
-      }
-      const resultLines = batch.members.map(
-        (member) => `- ${member.label}: ${member.outcome} (${member.thread.threadId})`,
-      );
-      yield* engine
-        .dispatch({
-          type: "thread.message.queue",
-          commandId: CommandId.make(`${batch.batchId}:notify:command`),
-          threadId: scope.threadId,
-          message: {
-            messageId: MessageId.make(`${batch.batchId}:notify:message`),
-            role: "user",
-            text: [
-              `Orchestration batch "${batch.title}" settled as ${batch.status}.`,
-              ...resultLines,
-              `Read the full results with: t3 thread batch read ${batch.batchId} --json`,
-            ].join("\n"),
-            attachments: [],
-          },
-          runtimeMode: coordinatorOption.value.runtimeMode,
-          interactionMode: coordinatorOption.value.interactionMode,
-          delivery: deliveryForCoordinatorNotification(
-            batch.members.map((member) => member.outcome),
-          ),
-          createdAt: notifiedAt,
-        })
-        .pipe(
-          Effect.mapError(toThreadOrchestrationError("batch.notify", { threadId: scope.threadId })),
-        );
-      yield* appendBatchActivity({
-        threadId: batch.coordinatorThreadId,
-        batchId: batch.batchId,
-        kind: "thread-orchestration.batch.notified",
-        summary: `Coordinator notified that batch ${batch.title} settled.`,
-        createdAt: notifiedAt,
-      });
-    });
-
-  const notifyBlockedBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    batch: ThreadOrchestrationBatch,
-  ) =>
-    Effect.gen(function* () {
-      const { coordinator } = yield* resolveBatchDefinition(scope, batch.batchId);
-      if (
-        hasBatchActivity(
-          coordinator.activities,
-          "thread-orchestration.batch.attention",
-          batch.batchId,
-        )
-      ) {
-        return;
-      }
-      const coordinatorOption = yield* snapshotQuery.getThreadShellById(scope.threadId).pipe(
-        Effect.mapError(
-          toThreadOrchestrationError("batch.attention.coordinator", {
-            threadId: scope.threadId,
-          }),
-        ),
-      );
-      if (Option.isNone(coordinatorOption)) return;
-      const blocked = batch.members.filter((member) =>
-        ["blocked-approval", "blocked-input"].includes(member.outcome),
-      );
-      const createdAt = yield* nowIso;
-      yield* engine
-        .dispatch({
-          type: "thread.message.queue",
-          commandId: CommandId.make(`${batch.batchId}:attention:command`),
-          threadId: scope.threadId,
-          message: {
-            messageId: MessageId.make(`${batch.batchId}:attention:message`),
-            role: "user",
-            text: [
-              `Orchestration batch "${batch.title}" needs attention; its barrier remains open.`,
-              ...blocked.map((member) => `- ${member.label}: ${member.outcome}`),
-            ].join("\n"),
-            attachments: [],
-          },
-          runtimeMode: coordinatorOption.value.runtimeMode,
-          interactionMode: coordinatorOption.value.interactionMode,
-          delivery: deliveryForCoordinatorNotification(blocked.map((member) => member.outcome)),
-          createdAt,
-        })
-        .pipe(
-          Effect.mapError(
-            toThreadOrchestrationError("batch.attention", { threadId: scope.threadId }),
-          ),
-        );
-      yield* appendBatchActivity({
-        threadId: batch.coordinatorThreadId,
-        batchId: batch.batchId,
-        kind: "thread-orchestration.batch.attention",
-        summary: `Batch ${batch.title} needs coordinator attention.`,
-        createdAt,
-      });
-    });
-
-  const monitorBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    batchId: ThreadOrchestrationBatchId,
-  ): Effect.Effect<void, ThreadOrchestrationError> =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
-          ? yield* engine.liveSubscriptionCapability!.subscribe
-          : engine.streamDomainEvents;
-        const batch = yield* readBatch(scope, { batchId });
-        if (isTerminalBatchStatus(batch.status)) {
-          if (batch.status === "deadline-exceeded") {
-            yield* interruptLocalBatchMembers(batch);
-          }
-          return yield* notifySettledBatch(scope, batch);
-        }
-        if (batch.status === "blocked") {
-          yield* notifyBlockedBatch(scope, batch);
-        }
-        const memberThreadIds = new Set(batch.members.map((member) => member.thread.threadId));
-        const nextMemberEvent = eventStream.pipe(
-          Stream.filter(
-            (event) =>
-              event.aggregateKind === "thread" &&
-              memberThreadIds.has(ThreadId.make(event.aggregateId)),
-          ),
-          Stream.runHead,
-          Effect.asVoid,
-        );
-        const deadlineSignal =
-          batch.deadlineAt === null
-            ? Effect.never
-            : Effect.gen(function* () {
-                const remaining =
-                  DateTime.toEpochMillis(DateTime.makeUnsafe(batch.deadlineAt!)) -
-                  (yield* Clock.currentTimeMillis);
-                if (remaining > 0) yield* Effect.sleep(Duration.millis(remaining));
-              });
-        yield* Effect.raceFirst(nextMemberEvent, deadlineSignal);
-        return yield* monitorBatch(scope, batchId);
-      }),
-    );
-
-  const createBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationCreateBatchInput,
-  ) =>
-    Effect.gen(function* () {
-      const batchId = yield* makeId(
-        crypto,
-        "thread-orchestration:batch",
-        ThreadOrchestrationBatchId.make,
-      );
-      const createdDateTime = yield* DateTime.now;
-      const createdAt = DateTime.formatIso(createdDateTime);
-      const timeoutMs =
-        input.timeoutMs === undefined ? undefined : Math.min(input.timeoutMs, MAX_BATCH_TIMEOUT_MS);
-      const deadlineAt =
-        timeoutMs === undefined
-          ? null
-          : DateTime.formatIso(DateTime.add(createdDateTime, { milliseconds: timeoutMs }));
-      const created = yield* Effect.forEach(
-        input.workers,
-        (worker) =>
-          createThreadInternal(
-            scope,
-            {
-              prompt: worker.prompt ?? input.prompt,
-              ...(worker.target !== undefined ? { target: worker.target } : {}),
-              ...(worker.modelSelection !== undefined
-                ? { modelSelection: worker.modelSelection }
-                : {}),
-              ...(input.allowLegacyModel === true ? { allowLegacyModel: true } : {}),
-              ...(worker.runtimeMode !== undefined ? { runtimeMode: worker.runtimeMode } : {}),
-              ...(worker.interactionMode !== undefined
-                ? { interactionMode: worker.interactionMode }
-                : {}),
-              title: worker.title ?? worker.label,
-            },
-            {
-              modelSelectionIntent: worker.modelSelection === undefined ? "inherited" : "explicit",
-              batchId,
-            },
-          ).pipe(
-            Effect.map((result) => ({
-              label: worker.label,
-              workspaceIsolation:
-                worker.target?.environment?.type === "worktree"
-                  ? ("worktree" as const)
-                  : ("shared" as const),
-              result,
-            })),
-          ),
-        { concurrency: "unbounded" },
-      );
-      const coordinatorEnvironmentId = yield* localEnvironmentId;
-      const definition: StoredBatchDefinition = {
-        batchId,
-        coordinatorEnvironmentId,
-        coordinatorThreadId: scope.threadId,
-        title: input.title ?? `${input.workers.length} worker effort`,
-        prompt: input.prompt,
-        members: created.map(({ label, workspaceIsolation, result }) => ({
-          label,
-          environmentId: result.thread.environmentId,
-          threadId: result.thread.threadId,
-          workspaceIsolation,
-        })),
-        createdAt,
-        deadlineAt,
-      };
-      yield* appendBatchActivity({
-        threadId: scope.threadId,
-        batchId,
-        kind: "thread-orchestration.batch.created",
-        summary: `Started ${definition.title} with ${definition.members.length} workers.`,
-        payload: definition,
-        createdAt,
-      });
-      yield* monitorBatch(scope, batchId).pipe(
-        Effect.ignoreCause({ log: true }),
-        Effect.forkDetach,
-      );
-      return { batch: yield* readBatch(scope, { batchId }) };
-    });
-
-  const cancelBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationCancelBatchInput,
-  ) =>
-    Effect.gen(function* () {
-      const batch = yield* readBatch(scope, input);
-      const currentEnvironmentId = yield* localEnvironmentId;
-      const remoteMembers = batch.members.filter(
-        (member) => member.thread.environmentId !== currentEnvironmentId,
-      );
-      if (remoteMembers.length > 0) {
-        return yield* new ThreadOrchestrationError({
-          operation: "cancel_batch",
-          code: "cross_host_operation_unsupported",
-          message: `Batch '${input.batchId}' has ${remoteMembers.length} remote member(s). Cross-host cancellation is not available yet; no workers were interrupted.`,
-          threadId: batch.coordinatorThreadId,
-          resourceType: "batch",
-          resourceId: input.batchId,
-        });
-      }
-      yield* interruptLocalBatchMembers(batch);
-      const cancelledAt = yield* nowIso;
-      yield* appendBatchActivity({
-        threadId: batch.coordinatorThreadId,
-        batchId: input.batchId,
-        kind: "thread-orchestration.batch.cancelled",
-        summary: `Cancelled batch ${batch.title}.`,
-        createdAt: cancelledAt,
-      });
-      return yield* readBatch(scope, input);
-    });
-
-  const cleanupBatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    input: ThreadOrchestrationCleanupBatchInput,
-  ) =>
-    Effect.gen(function* () {
-      const batch = yield* readBatch(scope, input);
-      if (!batch.members.every((member) => isTerminalBatchMemberOutcome(member.outcome))) {
-        return yield* new ThreadOrchestrationError({
-          operation: "cleanup_batch",
-          code: "batch_members_active",
-          message: `Batch '${input.batchId}' still has queued, running, or blocked members. Cancel and wait for every worker to stop before cleanup.`,
-          threadId: batch.coordinatorThreadId,
-          resourceType: "batch",
-          resourceId: input.batchId,
-        });
-      }
-      const currentEnvironmentId = yield* localEnvironmentId;
-      if (batch.members.some((member) => member.thread.environmentId !== currentEnvironmentId)) {
-        return yield* new ThreadOrchestrationError({
-          operation: "cleanup_batch",
-          code: "cross_host_operation_unsupported",
-          message: `Batch '${input.batchId}' has remote members. Cross-host cleanup is not available yet; no workspaces were deleted.`,
-          threadId: batch.coordinatorThreadId,
-          resourceType: "batch",
-          resourceId: input.batchId,
-        });
-      }
-      const workspaceIds = yield* Effect.forEach(
-        batch.members.filter((member) => member.thread.environmentId === currentEnvironmentId),
-        (member) => snapshotQuery.getThreadShellById(member.thread.threadId),
-        { concurrency: "unbounded" },
-      ).pipe(
-        Effect.mapError(toThreadOrchestrationError("cleanup_batch.resolve_workspaces")),
-        Effect.map((threads) =>
-          threads.flatMap((thread) => {
-            const workspaceId = Option.isSome(thread) ? thread.value.workspaceId : undefined;
-            return workspaceId == null ? [] : [workspaceId];
-          }),
-        ),
-      );
-      yield* Effect.forEach(
-        workspaceIds,
-        (workspaceId) => workspaceService.deleteWorkspace({ workspaceId, force: true }),
-        { concurrency: 2, discard: true },
-      ).pipe(Effect.mapError(toThreadOrchestrationError("cleanup_batch.delete_workspaces")));
-      const cleanedAt = yield* nowIso;
-      yield* appendBatchActivity({
-        threadId: batch.coordinatorThreadId,
-        batchId: input.batchId,
-        kind: "thread-orchestration.batch.cleaned",
-        summary: `Cleaned ${workspaceIds.length} managed batch workspaces.`,
-        payload: { deletedWorkspaceCount: workspaceIds.length },
-        createdAt: cleanedAt,
-      });
-      return { batch: yield* readBatch(scope, input), deletedWorkspaceCount: workspaceIds.length };
-    });
 
   const coordinationShell = () =>
     snapshotQuery.getThreadCoordinationShell === undefined
@@ -2088,7 +1412,7 @@ const make = Effect.gen(function* () {
 
   const assertCoordinator = (
     operation: string,
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     coordinator: OrchestrationThreadRef,
     resourceType: "effort" | "wait" | "watch",
     resourceId: string,
@@ -2113,7 +1437,7 @@ const make = Effect.gen(function* () {
     });
 
   const readEffort = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadEffortInput,
   ) =>
     Effect.gen(function* () {
@@ -2135,7 +1459,7 @@ const make = Effect.gen(function* () {
     });
 
   const listEfforts = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationListEffortsInput,
   ) =>
     Effect.gen(function* () {
@@ -2153,7 +1477,7 @@ const make = Effect.gen(function* () {
     });
 
   const createEffort = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCreateEffortInput,
   ) =>
     Effect.gen(function* () {
@@ -2183,7 +1507,7 @@ const make = Effect.gen(function* () {
     });
 
   const renameEffort = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationRenameEffortInput,
   ) =>
     Effect.gen(function* () {
@@ -2207,7 +1531,7 @@ const make = Effect.gen(function* () {
     });
 
   const stopThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationStopThreadInput,
   ) =>
     Effect.gen(function* () {
@@ -2223,7 +1547,7 @@ const make = Effect.gen(function* () {
         });
       }
       const current = yield* readThreadResult(scope, { threadId: input.threadId });
-      if (isTerminalBatchMemberOutcome(current.thread.outcome ?? "unknown")) {
+      if (isTerminalMemberOutcome(current.thread.outcome ?? "unknown")) {
         return current.thread;
       }
       const createdAt = yield* nowIso;
@@ -2241,7 +1565,7 @@ const make = Effect.gen(function* () {
     });
 
   const closeEffort = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCloseEffortInput,
   ) =>
     Effect.gen(function* () {
@@ -2290,7 +1614,7 @@ const make = Effect.gen(function* () {
     });
 
   const reopenEffort = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReopenEffortInput,
   ) =>
     Effect.gen(function* () {
@@ -2314,7 +1638,7 @@ const make = Effect.gen(function* () {
     });
 
   const addEffortMember = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationAddEffortMemberInput,
   ) =>
     Effect.gen(function* () {
@@ -2372,7 +1696,7 @@ const make = Effect.gen(function* () {
     });
 
   const removeEffortMember = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationRemoveEffortMemberInput,
   ) =>
     Effect.gen(function* () {
@@ -2404,10 +1728,7 @@ const make = Effect.gen(function* () {
       };
     });
 
-  const refreshWait = (
-    scope: McpInvocationContext.McpInvocationScope,
-    wait: OrchestrationWaitShell,
-  ) =>
+  const refreshWait = (scope: ThreadOrchestrationActorScope, wait: OrchestrationWaitShell) =>
     Effect.gen(function* () {
       const members = yield* Effect.forEach(
         wait.members,
@@ -2429,7 +1750,7 @@ const make = Effect.gen(function* () {
     });
 
   const readWait = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadWaitInput,
   ) =>
     Effect.gen(function* () {
@@ -2449,7 +1770,7 @@ const make = Effect.gen(function* () {
     });
 
   const listWaits = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationListWaitsInput,
   ) =>
     Effect.gen(function* () {
@@ -2471,7 +1792,7 @@ const make = Effect.gen(function* () {
     });
 
   const notifyWait = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     wait: OrchestrationWaitShell,
     kind: "attention" | "resolved",
   ) =>
@@ -2614,13 +1935,13 @@ const make = Effect.gen(function* () {
 
   const waitIsSatisfied = (wait: OrchestrationWaitShell) => {
     const terminal = wait.members.filter((member) =>
-      isTerminalBatchMemberOutcome(member.outcome ?? "unknown"),
+      isTerminalMemberOutcome(member.outcome ?? "unknown"),
     ).length;
     return wait.mode === "all" ? terminal === wait.members.length : terminal > 0;
   };
 
   const monitorWait = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     waitId: ThreadOrchestrationWaitId,
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
@@ -2692,7 +2013,7 @@ const make = Effect.gen(function* () {
     );
 
   const createWait = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCreateWaitInput,
   ) =>
     Effect.gen(function* () {
@@ -2749,9 +2070,7 @@ const make = Effect.gen(function* () {
       const openedDateTime = yield* DateTime.now;
       const openedAt = DateTime.formatIso(openedDateTime);
       const deadlineMs =
-        input.deadlineMs === undefined
-          ? undefined
-          : Math.min(input.deadlineMs, MAX_BATCH_TIMEOUT_MS);
+        input.deadlineMs === undefined ? undefined : Math.min(input.deadlineMs, MAX_DEADLINE_MS);
       const wait: OrchestrationWaitShell = {
         waitId,
         coordinator: { environmentId: currentEnvironmentId, threadId: scope.threadId },
@@ -2780,7 +2099,7 @@ const make = Effect.gen(function* () {
     });
 
   const cancelWait = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCancelWaitInput,
   ) =>
     Effect.gen(function* () {
@@ -2806,7 +2125,7 @@ const make = Effect.gen(function* () {
     });
 
   const readWatch = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadWatchInput,
   ) =>
     Effect.gen(function* () {
@@ -2826,7 +2145,7 @@ const make = Effect.gen(function* () {
     });
 
   const listWatches = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationListWatchesInput,
   ) =>
     Effect.gen(function* () {
@@ -2844,7 +2163,7 @@ const make = Effect.gen(function* () {
     });
 
   const closeWatchInternal = (
-    _scope: McpInvocationContext.McpInvocationScope,
+    _scope: ThreadOrchestrationActorScope,
     watch: OrchestrationWatchShell,
     state: "completed" | "cancelled" | "failed",
     reason: string,
@@ -2975,10 +2294,7 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  const startWatch = (
-    scope: McpInvocationContext.McpInvocationScope,
-    watchId: ThreadOrchestrationWatchId,
-  ) =>
+  const startWatch = (scope: ThreadOrchestrationActorScope, watchId: ThreadOrchestrationWatchId) =>
     Effect.gen(function* () {
       if (watchFibers.has(watchId)) return;
       const watch = yield* readWatch(scope, { watchId });
@@ -3186,7 +2502,7 @@ const make = Effect.gen(function* () {
     });
 
   const createWatch = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCreateWatchInput,
   ) =>
     Effect.gen(function* () {
@@ -3216,9 +2532,7 @@ const make = Effect.gen(function* () {
       const openedDateTime = yield* DateTime.now;
       const openedAt = DateTime.formatIso(openedDateTime);
       const deadlineMs =
-        input.deadlineMs === undefined
-          ? undefined
-          : Math.min(input.deadlineMs, MAX_BATCH_TIMEOUT_MS);
+        input.deadlineMs === undefined ? undefined : Math.min(input.deadlineMs, MAX_DEADLINE_MS);
       const watch: OrchestrationWatchShell = {
         watchId,
         coordinator: { environmentId: currentEnvironmentId, threadId: scope.threadId },
@@ -3250,7 +2564,7 @@ const make = Effect.gen(function* () {
     });
 
   const cancelWatch = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationCancelWatchInput,
   ) =>
     Effect.gen(function* () {
@@ -3260,7 +2574,7 @@ const make = Effect.gen(function* () {
     });
 
   const monitorDelegatedThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     targetThreadId: ThreadId,
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
@@ -3268,7 +2582,7 @@ const make = Effect.gen(function* () {
         const result = yield* readThreadResult(scope, { threadId: targetThreadId });
         const outcome = result.thread.outcome ?? "unknown";
         const shouldWake =
-          isTerminalBatchMemberOutcome(outcome) ||
+          isTerminalMemberOutcome(outcome) ||
           ["blocked-approval", "blocked-input"].includes(outcome);
         if (shouldWake) {
           const coordination = yield* coordinationShell();
@@ -3326,7 +2640,7 @@ const make = Effect.gen(function* () {
               });
             }
           }
-          if (isTerminalBatchMemberOutcome(outcome) || coveredByWait) return;
+          if (isTerminalMemberOutcome(outcome) || coveredByWait) return;
         }
         const eventStream = Object.hasOwn(engine, "liveSubscriptionCapability")
           ? yield* engine.liveSubscriptionCapability!.subscribe
@@ -3342,7 +2656,7 @@ const make = Effect.gen(function* () {
     );
 
   const forkThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationForkThreadInput,
   ) =>
     Effect.gen(function* () {
@@ -3558,12 +2872,12 @@ const make = Effect.gen(function* () {
     });
 
   const sendMessageToThread = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationSendMessageInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.sendMessageToThread(scopeForRemote(scope), input);
+        return yield* remoteClient.sendMessageToThread(scope, input);
       }
       yield* assertExplicitModelSelectionAllowed("send_message_to_thread", input.modelSelection);
       yield* assertLegacyModelSelectionAllowed(
@@ -3649,12 +2963,12 @@ const make = Effect.gen(function* () {
     });
 
   const setThreadTitle = (
-    scope: McpInvocationContext.McpInvocationScope,
+    scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationSetThreadTitleInput,
   ) =>
     Effect.gen(function* () {
       if (yield* shouldRouteRemote(input.environmentId)) {
-        return yield* remoteClient.setThreadTitle(scopeForRemote(scope), input);
+        return yield* remoteClient.setThreadTitle(scope, input);
       }
       const createdAt = yield* nowIso;
       yield* engine
@@ -3684,34 +2998,6 @@ const make = Effect.gen(function* () {
       return { ...summary, title: input.title, updatedAt: createdAt };
     });
 
-  // Batch definitions and notification markers are durable activities. Rebuild
-  // the small set of unfinished barriers when the server restarts.
-  yield* Effect.gen(function* () {
-    if (!Object.hasOwn(snapshotQuery, "listThreadOrchestrationBatchActivities")) return;
-    const activities = yield* snapshotQuery.listThreadOrchestrationBatchActivities!().pipe(
-      Effect.mapError(toThreadOrchestrationError("batch.recover")),
-    );
-    for (const definition of activities.flatMap(
-      (activity) => batchDefinitionFromActivity(activity) ?? [],
-    )) {
-      if (hasBatchActivity(activities, "thread-orchestration.batch.notified", definition.batchId)) {
-        continue;
-      }
-      const recoveryScope: McpInvocationContext.McpInvocationScope = {
-        environmentId: definition.coordinatorEnvironmentId,
-        threadId: definition.coordinatorThreadId,
-        providerSessionId: "t3-batch-barrier",
-        providerInstanceId: ProviderInstanceId.make("t3-batch-barrier"),
-        capabilities: new Set(["threads"]),
-        issuedAt: 0,
-      };
-      yield* monitorBatch(recoveryScope, definition.batchId).pipe(
-        Effect.ignoreCause({ log: true }),
-        Effect.forkDetach,
-      );
-    }
-  }).pipe(Effect.ignoreCause({ log: true }));
-
   // Wait definitions are durable activities too. Reattach monitors for every
   // open local wait after a server restart.
   yield* Effect.gen(function* () {
@@ -3725,13 +3011,11 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      const recoveryScope: McpInvocationContext.McpInvocationScope = {
+      const recoveryScope: ThreadOrchestrationActorScope = {
         environmentId: currentEnvironmentId,
         threadId: wait.coordinator.threadId,
         providerSessionId: "t3-effort-wait",
         providerInstanceId: ProviderInstanceId.make("t3-effort-wait"),
-        capabilities: new Set(["threads"]),
-        issuedAt: 0,
       };
       yield* monitorWait(recoveryScope, wait.waitId).pipe(
         Effect.ignoreCause({ log: true }),
@@ -3753,13 +3037,11 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      const recoveryScope: McpInvocationContext.McpInvocationScope = {
+      const recoveryScope: ThreadOrchestrationActorScope = {
         environmentId: currentEnvironmentId,
         threadId: watch.coordinator.threadId,
         providerSessionId: "t3-durable-watch",
         providerInstanceId: ProviderInstanceId.make("t3-durable-watch"),
-        capabilities: new Set(["threads"]),
-        issuedAt: 0,
       };
       yield* startWatch(recoveryScope, watch.watchId);
     }
@@ -3773,13 +3055,11 @@ const make = Effect.gen(function* () {
       Effect.gen(function* () {
         const coordination = yield* coordinationShell();
         const currentEnvironmentId = yield* localEnvironmentId;
-        const scope: McpInvocationContext.McpInvocationScope = {
+        const scope: ThreadOrchestrationActorScope = {
           environmentId: currentEnvironmentId,
           threadId: ThreadId.make(event.aggregateId),
           providerSessionId: "t3-durable-watch",
           providerInstanceId: ProviderInstanceId.make("t3-durable-watch"),
-          capabilities: new Set(["threads"]),
-          issuedAt: 0,
         };
         yield* Effect.forEach(
           coordination.watches.filter(
@@ -3818,13 +3098,11 @@ const make = Effect.gen(function* () {
       ) {
         continue;
       }
-      const recoveryScope: McpInvocationContext.McpInvocationScope = {
+      const recoveryScope: ThreadOrchestrationActorScope = {
         environmentId: currentEnvironmentId,
         threadId: relationship.actorThreadId,
         providerSessionId: "t3-delegation-monitor",
         providerInstanceId: ProviderInstanceId.make("t3-delegation-monitor"),
-        capabilities: new Set(["threads"]),
-        issuedAt: 0,
       };
       yield* monitorDelegatedThread(recoveryScope, relationship.targetThreadId).pipe(
         Effect.ignoreCause({ log: true }),
@@ -3842,10 +3120,6 @@ const make = Effect.gen(function* () {
     readThread,
     readThreadResult,
     getThreadGraph,
-    createBatch,
-    readBatch,
-    cancelBatch,
-    cleanupBatch,
     createEffort,
     readEffort,
     listEfforts,
@@ -3865,7 +3139,6 @@ const make = Effect.gen(function* () {
     stopThread,
     createThread,
     createRootThread,
-    createThreadFromRemote,
     forkThread,
     sendMessageToThread,
     setThreadTitle,
@@ -3876,7 +3149,5 @@ export const layer = Layer.effect(ThreadOrchestrationService, make);
 
 export const __testing = {
   deliveryForCoordinatorNotification,
-  isTerminalBatchMemberOutcome,
-  isTerminalBatchStatus,
-  statusForBatch,
+  isTerminalMemberOutcome,
 };

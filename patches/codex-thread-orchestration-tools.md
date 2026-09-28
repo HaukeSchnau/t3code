@@ -1,8 +1,7 @@
 # Codex thread orchestration CLI
 
-T3 Code retains its Desktop-style thread orchestration implementation, but does
-not register those MCP tools or advertise them to Codex-backed agents. The
-operations are exposed through `t3 thread` commands instead. Codex provider
+T3 Code implements Desktop-style thread orchestration as a server service and
+exposes it through `t3 thread` commands, not MCP tools. Codex provider
 processes receive `T3CODE_THREAD_ID`, which supplies caller identity and normal
 inheritance when the agent runs the CLI.
 
@@ -32,8 +31,7 @@ current environment and registered remotes. Agents pass the returned id through
 provider defaults.
 
 The CLI mapping is documented in `patches/desktop-thread-orchestration.md` and
-the user guide. The dormant MCP toolkit stays compiled and tested, but the CLI
-is the supported agent entrypoint.
+the user guide.
 
 The CLI includes compact passive observability commands:
 
@@ -78,13 +76,13 @@ The message-level fork action is destination-aware. The fork button opens a menu
   `thread/fork` with the prepared cwd. On JJ repositories this resolves to a cheap
   `jj-workspace`; `directory-copy` is reserved for explicit preservation of ignored or
   untracked runtime state.
-- A disabled `Fork to host...` placeholder. Cross-host Codex continuation remains blocked
-  until provider-thread transfer/export semantics are proven.
+
+Forking to another host is not offered until provider-thread transfer/export semantics are proven.
 
 The user-triggered Codex fork RPC is intentionally Codex-only and idle-only. The server rejects
 archived sources, running latest turns, active provider turns, streaming messages, queued messages,
 pending approvals, and pending user-input requests before preparing any workspace or forking provider
-history. The CLI and dormant MCP `fork_thread` paths also reject busy sources before
+history. The CLI `fork` path also rejects busy sources before
 preparing a workspace, so explicit UI handoffs and tool-driven worktree forks do not diverge on the
 "source must be idle" rule. The public RPC accepts `auto` and `directory-copy`, defaulting to
 `auto` so repository-backed projects avoid copying dependency directories and other ignored payloads.

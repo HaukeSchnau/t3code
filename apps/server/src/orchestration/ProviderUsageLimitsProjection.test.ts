@@ -101,4 +101,29 @@ describe("usageLimitsFromRuntimeEvent", () => {
       ],
     });
   });
+
+  it("keys upstream windows by id so same-length weekly limits stay separate", () => {
+    const limits = usageLimitsFromRuntimeEvent(
+      event({
+        windows: [
+          {
+            id: "seven_day",
+            kind: "weekly",
+            label: "Weekly",
+            usedPercent: 40,
+            windowDurationMins: 10080,
+          },
+          {
+            id: "seven_day_opus",
+            kind: "weekly",
+            label: "Weekly · Opus",
+            usedPercent: 10,
+            windowDurationMins: 10080,
+          },
+        ],
+      }),
+    );
+
+    expect(limits?.windows?.map((window) => window.key)).toEqual(["seven_day", "seven_day_opus"]);
+  });
 });

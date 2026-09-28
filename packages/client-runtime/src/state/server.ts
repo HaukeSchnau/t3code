@@ -1071,10 +1071,6 @@ export function createServerEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
-    energyDiagnosticsCaptureRequests: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
-      label: "environment-data:server:energy-diagnostics-capture-requests",
-      tag: WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
-    }),
     refreshProviders: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-providers",
       tag: WS_METHODS.serverRefreshProviders,
@@ -1117,22 +1113,6 @@ export function createServerEnvironmentAtoms<R, E>(
     signalProcess: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:signal-process",
       tag: WS_METHODS.serverSignalProcess,
-    }),
-    claimEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:claim-energy-diagnostics-capture",
-      tag: WS_METHODS.serverClaimEnergyDiagnosticsCapture,
-    }),
-    releaseEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:release-energy-diagnostics-capture",
-      tag: WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
-    }),
-    completeEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:complete-energy-diagnostics-capture",
-      tag: WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
-    }),
-    failEnergyDiagnosticsCapture: createEnvironmentRpcCommand(runtime, {
-      label: "environment-data:server:fail-energy-diagnostics-capture",
-      tag: WS_METHODS.serverFailEnergyDiagnosticsCapture,
     }),
     refreshUsageRates: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:server:refresh-usage-rates",

@@ -52,8 +52,6 @@ import {
 import { useUiStateStore } from "../uiStateStore";
 import { syncBrowserChromeTheme } from "../hooks/useTheme";
 import { configureClientTracing } from "../observability/clientTracing";
-import { EnergyDiagnosticsCaptureRequestConsumer } from "../diagnostics/EnergyDiagnosticsCaptureRequestConsumer";
-import { EnergyDiagnosticsProfiler } from "../diagnostics/EnergyDiagnosticsProfiler";
 import {
   clearOfflineAuthProof,
   offlineAuthProofExpiresAtEpochMs,
@@ -84,12 +82,7 @@ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
 
 export const Route = createRootRoute({
   beforeLoad: async ({ location }) => {
-    const currentUrl = new URL(location.href, window.location.origin);
-    const browserUrl = new URL(window.location.href);
-    if (
-      location.pathname === "/pair" &&
-      (hasHostedPairingRequest(currentUrl) || hasHostedPairingRequest(browserUrl))
-    ) {
+    if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-pairing",
@@ -97,7 +90,7 @@ export const Route = createRootRoute({
       };
     }
 
-    if (isLocalEnvironmentDisabled() || isHostedStaticApp(currentUrl)) {
+    if (isLocalEnvironmentDisabled() || isHostedStaticApp(new URL(window.location.href))) {
       return {
         authGateState: {
           status: "hosted-static",
@@ -180,13 +173,11 @@ function RootRouteView() {
   }
 
   const appShell = (
-    <EnergyDiagnosticsProfiler id="app-shell">
-      <CommandPalette>
-        <AppSidebarLayout>
-          <Outlet />
-        </AppSidebarLayout>
-      </CommandPalette>
-    </EnergyDiagnosticsProfiler>
+    <CommandPalette>
+      <AppSidebarLayout>
+        <Outlet />
+      </AppSidebarLayout>
+    </CommandPalette>
   );
 
   return (
@@ -208,7 +199,6 @@ function RootRouteView() {
         <SlowRpcRequestToastCoordinator />
         <HostedStaticEnvironmentBootstrap />
         {cachedAuthentication ? <OfflineAuthenticationRevalidator /> : null}
-        {primaryEnvironmentAuthenticated ? <EnergyDiagnosticsCaptureRequestConsumer /> : null}
         {primaryEnvironmentAuthenticated ? (
           <EventRouter skipInitialBootstrapNavigation={false} />
         ) : null}

@@ -27,10 +27,8 @@ placeholder must not leave the thread looking permanently busy.
   orchestration dispatch and journal acknowledgement. Every original journal row stays associated with its batch.
 - Delivered/removal acknowledgment for every source row in a batch is atomic and chunked, avoiding thousands
   of SQLite connection acquisitions without permitting a partially acknowledged replay batch.
-- Journal-backed assistant transcript events count as authoritative recovery for buffered delivery on every
-  provider. Adapter transcript capabilities are consulted only for events that bypass the durable acceptance
-  seam, so production Codex, Claude, Cursor, Grok, and OpenCode turns honor the server streaming preference
-  without weakening the conservative fallback for plugins and test harnesses.
+- Only journal-backed assistant transcript events may be buffered, on every provider. Events that bypass the
+  durable acceptance seam, such as those from plugins and test harnesses, always stream token by token.
 
 ## Files
 

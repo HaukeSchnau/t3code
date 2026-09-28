@@ -160,34 +160,6 @@ it("does not restore relationship-backed membership after an explicit removal", 
   assert.deepStrictEqual(coordination.efforts[0]?.members, []);
 });
 
-it("projects existing batches as compatibility efforts and waits", () => {
-  const createdAt = "2026-09-02T11:00:00.000Z";
-  const coordination = deriveThreadCoordinationShell([
-    activity(
-      "thread-orchestration.batch.created",
-      {
-        batchId: "batch-1",
-        coordinatorEnvironmentId,
-        coordinatorThreadId,
-        title: "Two approaches",
-        members: [
-          {
-            label: "Worker A",
-            environmentId: coordinatorEnvironmentId,
-            threadId: workerThreadId,
-          },
-        ],
-        createdAt,
-        deadlineAt: null,
-      },
-      createdAt,
-    ),
-  ]);
-
-  assert.strictEqual(coordination.efforts[0]?.title, "Two approaches");
-  assert.strictEqual(coordination.waits[0]?.state, "open");
-});
-
 it("reduces durable watch generations, events, and closure", () => {
   const openedAt = "2026-09-02T12:00:00.000Z";
   const eventAt = "2026-09-02T12:00:01.000Z";

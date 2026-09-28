@@ -1,9 +1,3 @@
-import {
-  FixtureChatView,
-  FixtureNavigationContext,
-  isFixtureEnvironment,
-  startFixtureEnvironmentSync,
-} from "./orchestration-fixture";
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -50,7 +44,7 @@ import { resolveThreadSyncPhase } from "../threadSync";
  * Rendered by the `_chat` layout rather than by the two leaf routes, since
  * an element only survives a route swap when the same parent renders it.
  */
-function ServerThreadRouteView({ target }: { target: ThreadRouteTarget }) {
+export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
   const navigate = useNavigate();
   const draftId = target.kind === "draft" ? target.draftId : null;
   const draftSession = useComposerDraftStore((store) =>
@@ -217,35 +211,4 @@ function ServerThreadRouteView({ target }: { target: ThreadRouteTarget }) {
       {view}
     </SidebarInset>
   );
-}
-
-if (import.meta.env.DEV) {
-  startFixtureEnvironmentSync();
-}
-
-export function ThreadRouteView({ target }: { target: ThreadRouteTarget }) {
-  const navigate = useNavigate();
-  if (
-    import.meta.env.DEV &&
-    target.kind === "server" &&
-    isFixtureEnvironment(target.threadRef.environmentId)
-  ) {
-    return (
-      <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-        <FixtureNavigationContext
-          value={{
-            openThread: (threadId) => {
-              void navigate({
-                to: "/$environmentId/$threadId",
-                params: { environmentId: target.threadRef.environmentId, threadId },
-              });
-            },
-          }}
-        >
-          <FixtureChatView threadId={target.threadRef.threadId} />
-        </FixtureNavigationContext>
-      </SidebarInset>
-    );
-  }
-  return <ServerThreadRouteView target={target} />;
 }

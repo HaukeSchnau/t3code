@@ -1,7 +1,6 @@
 import * as Schema from "effect/Schema";
 
 const PAIRING_TOKEN_PARAM = "token";
-const HOSTED_PAIRING_ENVIRONMENT_ID_PARAM = "environmentId";
 const HOSTED_PAIRING_HOST_PARAM = "host";
 const HOSTED_PAIRING_LABEL_PARAM = "label";
 const SUPPORTED_REMOTE_BACKEND_PROTOCOLS = new Set(["http:", "https:", "ws:", "wss:"]);
@@ -140,7 +139,6 @@ export interface HostedPairingRequest {
   readonly host: string;
   readonly token: string;
   readonly label: string;
-  readonly environmentId: string | null;
 }
 
 export const getPairingTokenFromUrl = (url: URL): string | null => {
@@ -172,7 +170,6 @@ export const setPairingTokenOnUrl = (url: URL, credential: string): URL => {
 };
 
 export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null => {
-  const environmentId = url.searchParams.get(HOSTED_PAIRING_ENVIRONMENT_ID_PARAM)?.trim() ?? "";
   const host = url.searchParams.get(HOSTED_PAIRING_HOST_PARAM)?.trim() ?? "";
   const token = getPairingTokenFromUrl(url)?.trim() ?? "";
   const label = url.searchParams.get(HOSTED_PAIRING_LABEL_PARAM)?.trim() ?? "";
@@ -185,7 +182,6 @@ export const readHostedPairingRequest = (url: URL): HostedPairingRequest | null 
     host,
     token,
     label,
-    environmentId: environmentId || null,
   };
 };
 
