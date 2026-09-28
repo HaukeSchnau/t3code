@@ -84,7 +84,7 @@ import {
   threadTurnDraftFromComposer,
 } from "./chat/ThreadTurnSubmission";
 import { useThreadQueuedMessageControls } from "./chat/useThreadDurableOutbox";
-import { useProjects, useProviderUsageLimits, useThread } from "../state/entities";
+import { useProjects, useThread } from "../state/entities";
 import { primaryServerConfigAtom, primaryServerKeybindingsAtom } from "../state/server";
 import { useSidebarCardThreads } from "./sidebar/SidebarCardThreadsContext";
 
@@ -727,17 +727,6 @@ function MonitorThreadActions({
         : undefined,
     [projects, thread],
   );
-  const providerUsageLimits = useProviderUsageLimits(threadRef.environmentId);
-  const usageLimitsSources = useMemo(
-    () =>
-      providerUsageLimits.map((entry) => ({
-        provider: entry.provider,
-        providerInstanceId: entry.providerInstanceId,
-        usageLimits: [entry.usageLimits],
-        usageHistory: entry.history,
-      })),
-    [providerUsageLimits],
-  );
   const composerRuntimeMode = useComposerDraftStore(
     (store) => store.getComposerDraft(threadRef)?.runtimeMode ?? null,
   );
@@ -1140,7 +1129,6 @@ function MonitorThreadActions({
                 providerStatuses={providerStatuses}
                 activeProjectDefaultModelSelection={activeProject?.defaultModelSelection}
                 activeThreadModelSelection={thread.modelSelection}
-                usageLimitsSources={usageLimitsSources}
                 resolvedTheme={resolvedTheme}
                 settings={settings}
                 keybindings={keybindings}
