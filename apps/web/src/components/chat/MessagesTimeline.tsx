@@ -326,6 +326,8 @@ interface TimelineRowSharedState {
 
 interface TimelineRowActivityState {
   isWorking: boolean;
+  isPreparingWorktree: boolean;
+  isCompacting: boolean;
   activeTurnInProgress: boolean;
   isRevertingCheckpoint: boolean;
   latestTurnId: TurnId | null;
@@ -439,6 +441,8 @@ interface MessagesTimelineProps {
   agentPanelModel?: AgentPanelModel;
   onOpenAgents?: () => void;
   isWorking: boolean;
+  isPreparingWorktree?: boolean;
+  isCompacting?: boolean;
   activeTurnInProgress?: boolean;
   workingStepLabel?: string | null;
   activeTurnStartedAt: string | null;
@@ -529,6 +533,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   citationHistoryLoading = false,
   onCiteAssistantText,
   isWorking,
+  isPreparingWorktree = false,
+  isCompacting = false,
   activeTurnInProgress = false,
   workingStepLabel = null,
   worktreeSetup = null,
@@ -1310,6 +1316,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   const activityState = useMemo<TimelineRowActivityState>(
     () => ({
       isWorking,
+      isPreparingWorktree,
+      isCompacting,
       activeTurnInProgress,
       isRevertingCheckpoint,
       latestTurnId: latestTurn?.turnId ?? null,
@@ -1323,8 +1331,10 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       backgroundWorktreeSetup,
       activeTurnInProgress,
       workingStepLabel,
+      isCompacting,
       isRevertingCheckpoint,
       isWorking,
+      isPreparingWorktree,
       // Deliberately the fields `deriveUnsettledTurnId` reads, not the object:
       // its identity changes on every thread-shell patch.
       latestTurn?.turnId,
@@ -1840,7 +1850,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
       {row.kind === "proposed-plan" ? <ProposedPlanTimelineRow row={row} /> : null}
       {row.kind === "turn-plan" ? <TurnPlanTimelineRow row={row} /> : null}
       {row.kind === "working" ? <WorkingTimelineRow row={row} /> : null}
-      {row.kind === "thinking" ? <ThinkingActivityRow /> : null}
+      {row.kind === "thinking" ? <ThinkingTimelineRow /> : null}
       {row.kind === "worktree-setup" ? <WorktreeSetupTimelineRow row={row} /> : null}
       {row.kind === "queued-message" ? <QueuedMessageTimelineRow row={row} /> : null}
     </div>
@@ -2912,8 +2922,16 @@ const TurnPlanTimelineRow = memo(function TurnPlanTimelineRow({
 });
 
 function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "working" }> }) {
-  const { workingStepLabel, backgroundWorktreeSetup } = use(TimelineRowActivityCtx);
-  const label = row.createdAt ? (
+  const { isCompacting, isPreparingWorktree, workingStepLabel, backgroundWorktreeSetup } =
+    use(TimelineRowActivityCtx);
+  // One span for every label so the setup-to-working handoff swaps text in
+  // place instead of remounting the row.
+  const shimmer = isPreparingWorktree || isCompacting;
+  const label = isPreparingWorktree ? (
+    "Setting up worktree…"
+  ) : isCompacting ? (
+    <CompactingLabel />
+  ) : row.createdAt ? (
     <>
       Working for <WorkingTimer createdAt={row.createdAt} />
     </>
@@ -2923,9 +2941,13 @@ function WorkingTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "workin
   return (
     <div className="border-b border-border/60 pb-2 pt-1">
       <div className="flex h-6 min-w-0 items-baseline gap-2 px-1 text-sm leading-relaxed text-muted-foreground tabular-nums">
-        <span className="relative shrink-0 overflow-hidden whitespace-nowrap">
+        <span
+          ref={shimmer ? observeVisibleAnimation : undefined}
+          className="relative shrink-0 overflow-hidden whitespace-nowrap"
+        >
           {label}
-          {workingStepLabel ? (
+          {shimmer ? <ActivityShimmerOverlay>{label}</ActivityShimmerOverlay> : null}
+          {!shimmer && workingStepLabel ? (
             <span className="ml-2 text-muted-foreground/55">· {workingStepLabel}</span>
           ) : null}
         </span>
@@ -3563,8 +3585,16 @@ function LiveActivityRow({
   );
 }
 
-function ThinkingActivityRow() {
-  return <LiveActivityRow label="Thinking" iconName="brain" />;
+function ThinkingTimelineRow() {
+  const { isCompacting, isPreparingWorktree } = use(TimelineRowActivityCtx);
+  // Reserve the activity row during setup so the handoff keeps the same height.
+  return (
+    <div className="min-h-7">
+      {isPreparingWorktree || isCompacting ? null : (
+        <LiveActivityRow label="Thinking" iconName="brain" active shimmer />
+      )}
+    </div>
+  );
 }
 
 function LiveActivityContent({
