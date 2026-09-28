@@ -163,6 +163,8 @@ export function zaiQuotaUrlForApiUrl(apiUrl: string): string | null {
 
 type OpenCodeProvider = ProviderListResponse["all"][number];
 
+const isCodingPlanProvider = (provider: OpenCodeProvider) => provider.id.endsWith("-coding-plan");
+
 function providerZaiUsageSource(
   provider: OpenCodeProvider,
   model: OpenCodeProvider["models"][string],
@@ -187,11 +189,18 @@ export function openCodeZaiUsageSource(
   return provider && model ? providerZaiUsageSource(provider, model) : null;
 }
 
-/** A probe has no selected model; the first provider serving a Z.AI model qualifies. */
+/**
+ * A probe has no selected model, so the first provider serving a Z.AI model
+ * qualifies. Coding Plan providers (`zai-coding-plan`, `zhipuai-coding-plan`)
+ * come first: a pay-as-you-go key reaches the same host but has no plan quota.
+ */
 export function openCodeInventoryZaiUsageSource(
   providerList: ProviderListResponse,
 ): ZaiUsageSource | null {
-  for (const provider of providerList.all) {
+  const providers = providerList.all.toSorted(
+    (left, right) => Number(isCodingPlanProvider(right)) - Number(isCodingPlanProvider(left)),
+  );
+  for (const provider of providers) {
     for (const model of Object.values(provider.models)) {
       const source = providerZaiUsageSource(provider, model);
       if (source) return source;
@@ -232,32 +241,35 @@ export const fetchZaiUsageWindows = Effect.fn("fetchZaiUsageWindows")(function* 
  * Adds the Z.AI Coding Plan to an OpenCode probe's usage limits. The OpenCode
  * Go read reports `unsupported` without a Go key, and runtime updates never
  * land on an unsupported snapshot, so a configured Z.AI provider has to count
- * here. A source lookup that fails leaves the Go result unchanged.
+ * here.
+ *
+ * A failure on either side yields `probeFailed`, which keeps the windows the
+ * last good probe published: publishing only the side that succeeded would
+ * wipe the other side's windows. The provider lookup counts as a Z.AI failure
+ * because it cannot tell an unreadable config from a missing plan.
  */
 export const withZaiUsageLimits = <E, R>(
   limits: ServerProviderUsageLimits,
   source: Effect.Effect<ZaiUsageSource | null, E, R>,
 ) =>
-  Effect.gen(function* () {
-    // The lookup may start OpenCode's local server, which has its own start timeout.
-    const resolved = yield* source.pipe(Effect.orElseSucceed(() => null));
-    if (!resolved) return limits;
-    return yield* fetchZaiUsageWindows(resolved).pipe(
-      Effect.timeout("5 seconds"),
-      Effect.map((windows) =>
-        makeUsageLimits({
+  limits.unavailable?.reason === "probeFailed"
+    ? Effect.succeed(limits)
+    : Effect.gen(function* () {
+        const resolved = yield* source;
+        if (!resolved) return limits;
+        const windows = yield* fetchZaiUsageWindows(resolved);
+        // An unsupported Go read has no windows of its own.
+        return makeUsageLimits({
           checkedAt: limits.checkedAt,
-          windows: [...(limits.unavailable ? [] : limits.windows), ...windows],
-        }),
-      ),
-      Effect.orElseSucceed(() =>
-        limits.unavailable?.reason === "unsupported"
-          ? makeUnavailableUsageLimits({
-              checkedAt: limits.checkedAt,
-              reason: "probeFailed",
-              message: "Z.AI could not read usage.",
-            })
-          : limits,
-      ),
-    );
-  });
+          windows: [...limits.windows, ...windows],
+        });
+      }).pipe(
+        Effect.timeout("5 seconds"),
+        Effect.orElseSucceed(() =>
+          makeUnavailableUsageLimits({
+            checkedAt: limits.checkedAt,
+            reason: "probeFailed",
+            message: "Z.AI could not read usage.",
+          }),
+        ),
+      );

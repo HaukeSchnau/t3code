@@ -750,12 +750,20 @@ function sessionErrorMessage(error: unknown): string {
     : "OpenCode session failed.";
 }
 
+/**
+ * The earliest reset among exhausted coding windows. The monthly MCP allowance
+ * only gates Z.AI's search and reader tools, so it never explains a 429.
+ */
 function exhaustedUsageRetryAt(
   windows: ReadonlyArray<ServerProviderUsageWindow> | undefined,
 ): string | null {
   return (
     windows
-      ?.flatMap((window) => (window.usedPercent >= 100 && window.resetsAt ? [window.resetsAt] : []))
+      ?.flatMap((window) =>
+        window.id !== "zai_mcp" && window.usedPercent >= 100 && window.resetsAt
+          ? [window.resetsAt]
+          : [],
+      )
       .toSorted()
       .at(0) ?? null
   );

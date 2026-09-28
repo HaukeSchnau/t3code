@@ -3,7 +3,12 @@ import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/u
 import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 
-import { applyUsageLimitsUpdate, makeUnavailableUsageLimits } from "./providerUsageLimits.ts";
+import {
+  applyUsageLimitsUpdate,
+  makeUnavailableUsageLimits,
+  makeUsageLimits,
+  resolveUsageLimitsAfterProbe,
+} from "./providerUsageLimits.ts";
 import {
   fetchZaiUsageWindows,
   withZaiUsageLimits,
@@ -176,6 +181,50 @@ describe("withZaiUsageLimits", () => {
       Effect.tap((limits) => Effect.sync(() => expect(limits).toBe(goUnsupported))),
       Effect.asVoid,
     ),
+  );
+
+  effectIt.effect("keeps the last good windows when either side of the probe fails", () =>
+    Effect.gen(function* () {
+      const goWindow = {
+        id: "go_rolling",
+        kind: "session",
+        label: "Go · Session",
+        usedPercent: 12,
+      } as const;
+      const goRead = makeUsageLimits({ checkedAt, windows: [goWindow] });
+      const goFailed = makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" });
+      const published = makeUsageLimits({
+        checkedAt,
+        windows: [
+          goWindow,
+          { id: "zai_5h", kind: "session", label: "GLM · Session", usedPercent: 6 },
+        ],
+      });
+      const failingQuota = quotaClient([], { code: 500, success: false, data: { limits: [] } });
+
+      const probes = [
+        // OpenCode's provider list could not be read.
+        yield* withZaiUsageLimits(goUnsupported, Effect.fail("provider.list failed")).pipe(
+          Effect.provideService(HttpClient.HttpClient, failingQuota),
+        ),
+        // Go read fine, Z.AI did not.
+        yield* withZaiUsageLimits(goRead, Effect.succeed(SOURCE)).pipe(
+          Effect.provideService(HttpClient.HttpClient, failingQuota),
+        ),
+        // Go failed; Z.AI alone must not replace the Go windows.
+        yield* withZaiUsageLimits(goFailed, Effect.succeed(SOURCE)).pipe(
+          Effect.provideService(
+            HttpClient.HttpClient,
+            HttpClient.make(() => Effect.die("unexpected Z.AI request")),
+          ),
+        ),
+      ];
+
+      for (const probed of probes) {
+        expect(probed.unavailable?.reason).toBe("probeFailed");
+        expect(resolveUsageLimitsAfterProbe({ published, probed })).toBe(published);
+      }
+    }),
   );
 
   effectIt.effect("reports a failed read instead of unsupported when Z.AI is configured", () =>

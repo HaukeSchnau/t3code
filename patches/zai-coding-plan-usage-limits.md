@@ -10,7 +10,8 @@ Upstream's OpenCode driver only reads OpenCode Go.
 
 - Discover the plan from OpenCode's resolved provider inventory: a provider serving a model whose API
   URL is `https://api.z.ai` or `https://open.bigmodel.cn`, with a resolved API key. A session uses its
-  selected model's provider; the status probe, which has no model, takes the first matching provider.
+  selected model's provider. The status probe has no model, so it takes the first matching provider,
+  preferring `*-coding-plan` providers over pay-as-you-go keys on the same host.
 - Send the API key only to the matching HTTPS quota endpoint. Never log it, persist it, or send it
   through T3 Code's client contracts.
 - Publish upstream usage windows with stable ids: `zai_5h` (session), `zai_weekly` (weekly), and
@@ -18,14 +19,16 @@ Upstream's OpenCode driver only reads OpenCode Go.
   coding window publishes nothing.
 - The OpenCode status probe merges these windows into the OpenCode Go result. Without a Go key the Go
   read reports `unsupported`, and upstream never applies runtime updates to an unsupported snapshot,
-  so a configured Z.AI provider replaces it with the Z.AI windows, or with `probeFailed` when the quota
-  read fails.
+  so a configured Z.AI provider replaces it with the Z.AI windows. A failure on either side, including
+  an unreadable provider list or a lookup and quota read that take over five seconds, publishes
+  `probeFailed`, so upstream keeps the windows of the last good probe.
 - Between probes the adapter refreshes after a matching session starts, after completed turns, and
   every five minutes while an identified Z.AI session is alive. One scheduler is shared across
   sessions; requests coalesce and run at most once a minute. Results travel as
   `account.rate-limits.updated` and merge by window id.
 - Refreshes are best effort. A failed lookup or quota read keeps the last published windows.
-- A 429 from a Z.AI model takes the earliest exhausted window's reset as its retry time.
+- A 429 from a Z.AI model takes the earliest exhausted coding window's reset as its retry time. The
+  MCP allowance only gates Z.AI's search and reader tools, so it never sets the retry time.
 
 ## Surfaces
 
@@ -46,9 +49,10 @@ Upstream's OpenCode driver only reads OpenCode Go.
 ## Verification
 
 - `zaiUsage.test.ts` covers window mapping, rejected responses, allowed hosts, where the key is sent,
-  and a probe result taking a live update through upstream's `applyUsageLimitsUpdate`.
-- `OpenCodeAdapter.test.ts` covers provider discovery, startup publication, five-minute polling, and
-  the 429 retry time.
+  a probe result taking a live update through upstream's `applyUsageLimitsUpdate`, and failed probes
+  keeping the last good windows.
+- `OpenCodeAdapter.test.ts` covers provider discovery and Coding Plan preference, startup publication,
+  five-minute polling, and the 429 retry time.
 
 ## Maintenance
 
