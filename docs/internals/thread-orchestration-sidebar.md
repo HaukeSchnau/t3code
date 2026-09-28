@@ -28,7 +28,12 @@ Closed efforts with visible work remain in the current tree; closed efforts with
 represented by compact history rows. Active or attention-needed effort sections sort before completed
 and closed sections without time-based reordering.
 
-Web owns the DOM row controls and pinned drag-and-drop. Desktop wraps the web client and therefore
+Web owns the DOM row controls and the sidebar drag-and-drop. Each top-level thread and its visible
+subtree form one sortable block, and only the root row can pick it up. A reorder moves the block, but
+a section change applies to the root alone, consistent with per-thread pin state, so the lifted block
+shows only its root over another section. Drop orders and order-key writes cover top-level threads
+only: rows that will nest once the drop lands, including the moved thread when it joins its parent,
+are left out of the order. Desktop wraps the web client and therefore
 uses the same projection and interactions without Electron-specific code. Mobile consumes the same
 projection in both the phone Home list and tablet navigation sidebar, with native disclosure and
 reveal controls. The model is provider-neutral and environment-scoped, so local, remote, relay, and

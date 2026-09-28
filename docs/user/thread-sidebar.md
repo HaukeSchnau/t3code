@@ -111,6 +111,16 @@ or **Settled** to drag a parked thread back into either live section. Each drop 
 **Move up** and **Move down** are also available in the thread menu. The server
 saves the order, so it survives a refresh and appears on your other connected devices.
 
+Threads that need you always stay above the rest of the active list, so you can drag a thread only
+within its own group.
+
+On web and desktop, start dragging a thread with delegated work from its top-level card. Reordering
+it moves its nested threads with it. Dragging it to another section pins, unpins, or settles
+only that thread, like the matching menu action; its nested threads stay where they are. To move a
+nested thread, use its row actions or menu. When a project filter shows threads from more than one
+workspace, the active list follows the workspaces, so dragging there changes a thread's section but
+not its position.
+
 On web and desktop, the list also animates section changes made with thread actions such as
 **Pin**, **Settle**, and **Snooze**. These transitions respect your system's reduced-motion
 preference. While dragging, rows follow the insertion gap without replaying a second transition

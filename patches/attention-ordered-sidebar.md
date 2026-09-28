@@ -26,6 +26,10 @@ state, so it promotes server-backed approval, input, failure, and plan-ready sta
 The legacy sidebar retains its explicit project and thread sort controls. The default sidebar does
 not expose a sort preference.
 
+Web drags only offer active slots inside the moved thread's own band (`planSidebarBlockDrop` in
+`apps/web/src/components/Sidebar.logic.ts`), so the preview matches where the thread lands. Keys are
+planned among that band only, so a drop never rewrites the other band's keys.
+
 ## Verification
 
 - `packages/client-runtime/src/state/threadSort.test.ts`
