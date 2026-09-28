@@ -1,4 +1,4 @@
-import { type AuthSessionState } from "@t3tools/contracts";
+import type { AuthSessionState } from "@t3tools/contracts";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import React, { startTransition, useEffect, useRef, useState, useCallback } from "react";
 
@@ -9,12 +9,7 @@ import {
   stripPairingTokenFromUrl,
   submitServerAuthCredential,
 } from "../../environments/primary";
-import {
-  buildDirectHostedPairingUrl,
-  isHostedPairingBrowserNetworkDenied,
-  readHostedPairingRequest,
-  type HostedPairingRequest,
-} from "../../hostedPairing";
+import { readHostedPairingRequest } from "../../hostedPairing";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { StandalonePage, StandalonePageHeader } from "../ui/standalone-page";
@@ -158,11 +153,6 @@ export function HostedPairingRouteSurface() {
       ? "Connecting to this backend."
       : "This pairing link is missing its backend host or token.",
   );
-  const [directPairingUrl, setDirectPairingUrl] = useState(() =>
-    hostedPairingRequestRef.current
-      ? buildDirectHostedPairingUrl(hostedPairingRequestRef.current)
-      : null,
-  );
   const [canRetry, setCanRetry] = useState(false);
   const submitAttemptedRef = useRef(false);
   const tokenSubmittedRef = useRef(false);
@@ -187,8 +177,6 @@ export function HostedPairingRouteSurface() {
     setStatus("pairing");
     setMessage("Connecting to this backend.");
     setCanRetry(false);
-    setDirectPairingUrl(buildDirectHostedPairingUrl(request));
-
     tokenSubmittedRef.current = true;
 
     const result = await connectPairingEnvironment({
@@ -202,14 +190,10 @@ export function HostedPairingRouteSurface() {
     }
 
     tokenSubmittedRef.current = false;
-    const cause = squashAtomCommandFailure(result);
-    const browserDenied = isHostedPairingBrowserNetworkDenied(cause);
     setStatus("error");
-    setCanRetry(!browserDenied);
+    setCanRetry(true);
     setMessage(
-      browserDenied
-        ? "This browser blocked the hosted app from contacting the backend directly. Open the backend-hosted app instead."
-        : `${errorMessageFromUnknown(cause)} If the backend accepted this one-time token, request a new pairing link before retrying.`,
+      `${errorMessageFromUnknown(squashAtomCommandFailure(result))} If the backend accepted this one-time token, request a new pairing link before retrying.`,
     );
   }, [connectPairingEnvironment]);
 
@@ -247,9 +231,8 @@ export function HostedPairingRouteSurface() {
 
       {status === "error" ? (
         <div className="mt-5 rounded-lg border border-destructive/30 bg-destructive/6 px-3 py-2 text-sm text-destructive">
-          {directPairingUrl
-            ? "Open the backend directly to avoid cross-origin browser restrictions."
-            : "Verify the backend is reachable from this browser, supports CORS for hosted clients, and is served over HTTPS when opening this page from HTTPS."}
+          Verify the backend is reachable from this browser, supports CORS for hosted clients, and
+          is served over HTTPS when opening this page from HTTPS.
         </div>
       ) : null}
 
@@ -266,17 +249,6 @@ export function HostedPairingRouteSurface() {
         {status === "paired" ? (
           <Button size="sm" variant="outline" onClick={() => (window.location.href = "/")}>
             Open app
-          </Button>
-        ) : null}
-        {status === "error" && directPairingUrl ? (
-          <Button
-            size="sm"
-            variant={canRetry ? "outline" : "default"}
-            onClick={() => {
-              window.location.href = directPairingUrl;
-            }}
-          >
-            Open backend directly
           </Button>
         ) : null}
       </div>

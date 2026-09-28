@@ -157,7 +157,6 @@ import * as LocalAgentAwareness from "./agentAwareness/LocalAgentAwareness.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { requiredScopeForRpcMethod, requiredScopeForDeviceList } from "./auth/RpcAuthorization.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
-import * as EnergyCaptureRequests from "./diagnostics/EnergyCaptureRequests.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as HostResources from "./resourceTelemetry/HostResources.ts";
@@ -490,7 +489,6 @@ const makeWsRpcLayer = (
   clientOrigin: OrchestrationClientOrigin,
   clientAnalyticsProps: Readonly<Record<string, unknown>>,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
-  energyCaptureRequests: EnergyCaptureRequests.EnergyCaptureRequests["Service"],
   providerProcessSpawner: ChildProcessSpawner.ChildProcessSpawner["Service"],
 ) =>
   WsRpcGroup.toLayer(
@@ -1834,30 +1832,6 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.serverSignalProcess, processDiagnostics.signal(input), {
             "rpc.aggregate": "server",
           }),
-        [WS_METHODS.serverClaimEnergyDiagnosticsCapture]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverClaimEnergyDiagnosticsCapture,
-            energyCaptureRequests.claimCapture(input),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverReleaseEnergyDiagnosticsCapture]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverReleaseEnergyDiagnosticsCapture,
-            energyCaptureRequests.releaseCapture(input),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverCompleteEnergyDiagnosticsCapture]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverCompleteEnergyDiagnosticsCapture,
-            energyCaptureRequests.completeCapture(input),
-            { "rpc.aggregate": "server" },
-          ),
-        [WS_METHODS.serverFailEnergyDiagnosticsCapture]: (input) =>
-          observeRpcEffect(
-            WS_METHODS.serverFailEnergyDiagnosticsCapture,
-            energyCaptureRequests.failCapture(input),
-            { "rpc.aggregate": "server" },
-          ),
         [WS_METHODS.serverReportClientActivity]: (input, metadata) =>
           Ref.update(rpcClientIds, (clientIds) => {
             const next = new Set(clientIds);
@@ -2915,12 +2889,6 @@ const makeWsRpcLayer = (
             }),
             { "rpc.aggregate": "server" },
           ),
-        [WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests]: (_input) =>
-          observeRpcStream(
-            WS_METHODS.subscribeEnergyDiagnosticsCaptureRequests,
-            energyCaptureRequests.requests,
-            { "rpc.aggregate": "server" },
-          ),
         [WS_METHODS.subscribeAuthAccess]: (_input) =>
           observeRpcStreamEffect(
             WS_METHODS.subscribeAuthAccess,
@@ -2980,7 +2948,6 @@ const makeWsRpcLayer = (
 export const websocketRpcRouteLayer = Layer.unwrap(
   Effect.gen(function* () {
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
-    const energyCaptureRequests = yield* EnergyCaptureRequests.EnergyCaptureRequests;
     const threadWorkspaceService = yield* ThreadWorkspaceService.ThreadWorkspaceService;
     const localAgentAwareness = yield* LocalAgentAwareness.LocalAgentAwareness;
     const providerProcessSpawner = yield* ProviderProcessSpawner.configured;
@@ -3050,7 +3017,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               clientOrigin,
               clientAnalyticsProps,
               previewAutomationBroker,
-              energyCaptureRequests,
               providerProcessSpawner,
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),

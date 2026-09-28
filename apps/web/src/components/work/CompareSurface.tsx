@@ -23,7 +23,7 @@ import ChatMarkdown from "../ChatMarkdown";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
-import { useCompareColumnHook, type CompareColumnData } from "./compareData";
+import { useCompareColumn, type CompareColumnData } from "./compareData";
 import { useWorkPanelStore, type CompareLens } from "./workPanelStore";
 import { workerStateVisual } from "./workPresentation";
 
@@ -198,8 +198,7 @@ function CompareColumn({
   readonly onCapabilities: (key: string, capabilities: ColumnCapabilities) => void;
   readonly onOpenLens: (lens: CompareLens) => void;
 }) {
-  const useColumn = useCompareColumnHook();
-  const data = useColumn(threadRef);
+  const data = useCompareColumn(threadRef);
   const navigate = useNavigate();
   const capabilities = capabilitiesOf(data);
   useEffect(() => {

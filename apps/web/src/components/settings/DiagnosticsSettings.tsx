@@ -1,15 +1,12 @@
 import { ProcessSignalActions } from "./ProcessSignalActions";
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import {
-  ActivityIcon,
   AlertTriangleIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   CopyIcon,
-  FileJsonIcon,
   FolderOpenIcon,
   InfoIcon,
-  PlayIcon,
 } from "lucide-react";
 import {
   isAtomCommandInterrupted,
@@ -41,11 +38,6 @@ import { ExpandableText } from "./ExpandableText";
 import { ResourceTelemetryDiagnostics } from "./ResourceTelemetryDiagnostics";
 import { SettingsPageContainer, SettingsSection, useRelativeTimeTick } from "./settingsLayout";
 import { useAtomCommand } from "../../state/use-atom-command";
-import {
-  recordEnergyDiagnosticsCapture,
-  type EnergyDiagnosticsCaptureResult,
-  type EnergyDiagnosticsServerSnapshot,
-} from "../../diagnostics/energyDiagnosticsCapture";
 import { useSettingsScope } from "./SettingsScopeContext";
 
 const NUMBER_FORMAT = new Intl.NumberFormat();
@@ -452,12 +444,6 @@ const RESOURCE_HISTORY_WINDOWS = [
   { label: "1h", windowMs: 60 * 60_000, bucketMs: 5 * 60_000 },
 ] as const;
 
-const ENERGY_CAPTURE_DURATIONS = [
-  { label: "30s", durationMs: 30_000 },
-  { label: "60s", durationMs: 60_000 },
-  { label: "5m", durationMs: 5 * 60_000 },
-] as const;
-
 function formatCpuTime(seconds: number): string {
   if (seconds < 60) return `${seconds.toFixed(seconds >= 10 ? 1 : 2)}s`;
   const minutes = seconds / 60;
@@ -581,78 +567,6 @@ function ResourceHistoryWindowSelector({
         </Toggle>
       ))}
     </ToggleGroup>
-  );
-}
-
-function EnergyCaptureSummary({
-  result,
-  onReveal,
-}: {
-  result: EnergyDiagnosticsCaptureResult | null;
-  onReveal: (path: string) => void;
-}) {
-  const { copyToClipboard, isCopied } = useCopyToClipboard({
-    target: "artifact path",
-    timeout: 1_200,
-  });
-
-  if (!result) {
-    return null;
-  }
-
-  const desktopProcessSampleCount = result.artifact.desktop.processSnapshots.reduce(
-    (count, snapshot) => count + snapshot.processes.length,
-    0,
-  );
-  const ipcChannelCount = result.artifact.desktop.ipcPressureSnapshots.at(-1)?.counters.length ?? 0;
-
-  return (
-    <>
-      <StatsGrid>
-        <StatBlock label="Desktop Samples" value={formatCount(desktopProcessSampleCount)} />
-        <StatBlock
-          label="Renderer Commits"
-          value={formatCount(result.artifact.renderer.commits.length)}
-        />
-        <StatBlock
-          label="Long Tasks"
-          value={formatCount(result.artifact.renderer.longTasks.length)}
-          tone={result.artifact.renderer.longTasks.length > 0 ? "warning" : "default"}
-        />
-        <StatBlock label="IPC Channels" value={formatCount(ipcChannelCount)} />
-      </StatsGrid>
-      <div className="flex min-w-0 flex-wrap items-center gap-2 border-t border-border/60 px-4 py-3 text-xs sm:px-5">
-        <FileJsonIcon className="size-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate font-mono text-muted-foreground">
-          {result.artifactPath ??
-            "Capture completed in memory; desktop artifact writer unavailable."}
-        </span>
-        {result.artifactPath ? (
-          <>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="h-6 rounded-sm px-2"
-              onClick={() => copyToClipboard(result.artifactPath ?? "")}
-            >
-              <CopyIcon className="size-3" />
-              {isCopied ? "Copied" : "Copy"}
-            </Button>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="h-6 rounded-sm px-2"
-              onClick={() => {
-                if (result.artifactPath) onReveal(result.artifactPath);
-              }}
-            >
-              <FolderOpenIcon className="size-3" />
-              Reveal
-            </Button>
-          </>
-        ) : null}
-      </div>
-    </>
   );
 }
 
@@ -865,12 +779,6 @@ export function DiagnosticsSettingsPanel() {
   const signalingPidRef = useRef<number | null>(null);
   const environmentIdRef = useRef(environmentId);
   const processDataRef = useRef(processData);
-  const [isEnergyCapturePending, setIsEnergyCapturePending] = useState(false);
-  const [energyCaptureResult, setEnergyCaptureResult] =
-    useState<EnergyDiagnosticsCaptureResult | null>(null);
-  const [energyCaptureError, setEnergyCaptureError] = useState<string | null>(null);
-  const desktopEnergyDiagnosticsAvailable =
-    typeof window !== "undefined" && Boolean(window.desktopBridge?.energyDiagnostics);
   useEffect(() => {
     processDataRef.current = processData;
   }, [processData]);
@@ -914,67 +822,6 @@ export function DiagnosticsSettingsPanel() {
       }
     })();
   }, [availableEditors, environmentId, observability?.logsDirectoryPath, openInEditor]);
-
-  const readEnergyServerSnapshot = useCallback(
-    (): EnergyDiagnosticsServerSnapshot => ({
-      traceDiagnostics: data,
-      processDiagnostics: processData,
-      processResourceHistory: resourceData,
-    }),
-    [data, processData, resourceData],
-  );
-
-  const refreshEnergyServerDiagnostics = useCallback(() => {
-    refresh();
-    refreshProcesses();
-    refreshResources();
-  }, [refresh, refreshProcesses, refreshResources]);
-
-  const startEnergyCapture = useCallback(
-    (durationMs: number) => {
-      if (isEnergyCapturePending) return;
-
-      setIsEnergyCapturePending(true);
-      setEnergyCaptureError(null);
-      void (async () => {
-        try {
-          const result = await recordEnergyDiagnosticsCapture({
-            durationMs,
-            bridge: typeof window === "undefined" ? undefined : window.desktopBridge,
-            readServerSnapshot: readEnergyServerSnapshot,
-            refreshServerDiagnostics: refreshEnergyServerDiagnostics,
-          });
-          setEnergyCaptureResult(result);
-          toastManager.add({
-            type: "success",
-            title: "Energy capture saved",
-            description: result.artifactPath ?? "Capture completed in memory.",
-          });
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Energy capture failed.";
-          setEnergyCaptureError(message);
-          toastManager.add({
-            type: "error",
-            title: "Energy capture failed",
-            description: message,
-          });
-        } finally {
-          setIsEnergyCapturePending(false);
-        }
-      })();
-    },
-    [isEnergyCapturePending, readEnergyServerSnapshot, refreshEnergyServerDiagnostics],
-  );
-
-  const revealEnergyCaptureArtifact = useCallback((path: string) => {
-    void window.desktopBridge?.energyDiagnostics?.revealCaptureArtifact(path).catch((error) => {
-      toastManager.add({
-        type: "error",
-        title: "Could not reveal capture",
-        description: error instanceof Error ? error.message : "Failed to reveal capture artifact.",
-      });
-    });
-  }, []);
 
   const isInitialLoading = isPending && data === null;
   const isProcessInitialLoading = isProcessPending && processData === null;
@@ -1077,60 +924,6 @@ export function DiagnosticsSettingsPanel() {
   return (
     <SettingsPageContainer width="expanded" className="gap-10">
       <ResourceTelemetryDiagnostics environmentId={environmentId} />
-
-      <SettingsSection
-        title="Energy Capture"
-        headerAction={
-          <div className="flex flex-wrap items-center justify-end gap-1.5">
-            {ENERGY_CAPTURE_DURATIONS.map((option) => (
-              <Button
-                key={option.durationMs}
-                size="xs"
-                variant={option.durationMs === 30_000 ? "default" : "outline"}
-                className="h-6 rounded-sm px-2"
-                disabled={isEnergyCapturePending}
-                onClick={() => startEnergyCapture(option.durationMs)}
-              >
-                {isEnergyCapturePending ? (
-                  <ActivityIcon className="size-3 animate-pulse" />
-                ) : (
-                  <PlayIcon className="size-3" />
-                )}
-                {option.label}
-              </Button>
-            ))}
-          </div>
-        }
-      >
-        <StatsGrid>
-          <StatBlock
-            label="Mode"
-            value={desktopEnergyDiagnosticsAvailable ? "Desktop" : "Browser"}
-            tooltip="Desktop captures include Electron process metrics, IPC pressure, renderer commits, long tasks, and server diagnostics. Browser captures omit desktop-only process and IPC data."
-          />
-          <StatBlock
-            label="Status"
-            value={isEnergyCapturePending ? "Recording" : energyCaptureResult ? "Ready" : "Idle"}
-          />
-          <StatBlock
-            label="Duration"
-            value={
-              energyCaptureResult ? formatDuration(energyCaptureResult.artifact.durationMs) : "..."
-            }
-          />
-          <StatBlock
-            label="Artifact"
-            value={energyCaptureResult?.artifactPath ? "Saved" : "None"}
-          />
-        </StatsGrid>
-        {energyCaptureError ? (
-          <div className="flex items-start gap-2 border-t border-border/60 px-4 py-3 text-xs text-destructive sm:px-5">
-            <AlertTriangleIcon className="mt-0.5 size-3.5 shrink-0" />
-            <ExpandableText text={energyCaptureError} />
-          </div>
-        ) : null}
-        <EnergyCaptureSummary result={energyCaptureResult} onReveal={revealEnergyCaptureArtifact} />
-      </SettingsSection>
 
       <SettingsSection
         title="Live Processes"

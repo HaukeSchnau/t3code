@@ -105,3 +105,10 @@ configuration. Those hosts can set `services.t3code.createUser = false`, `create
 
 Provider CLIs such as Codex, Claude, Cursor, or OpenCode are intentionally not bundled into the package. Add
 them through `services.t3code.providerPackages` or configure absolute binary paths in T3 Code settings.
+
+## Offline license notices
+
+The Nix web build runs upstream's third-party license generation. Its SPDX templates come from a
+pinned fixed-output source in `nix/spdx.nix`, because sandboxed builds cannot fetch them on demand.
+Package overrides supply verified MIT notices that the fastdom, strictdom and khroma npm packages
+omit. Remove those overrides when the published packages contain usable notices.
