@@ -2681,6 +2681,14 @@ function OpenCommandPaletteDialog(props: {
       }
       return;
     }
+    if (command === "thread.copyReference") {
+      event.preventDefault();
+      event.stopPropagation();
+      if (activeThreadReferenceCopyTarget === null) return;
+      setOpen(false);
+      void copyActiveThreadReference();
+      return;
+    }
 
     if (addProjectCloneFlow?.step === "repository" && event.key === "Enter") {
       event.preventDefault();
