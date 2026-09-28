@@ -8302,6 +8302,10 @@ export default function ChatView(props: ChatViewProps) {
           toastManager.add(stackedThreadToast({ type: "warning", ...toastCopy }));
         },
         delivered: () => {
+          // The turn will spend quota, so that thread's limits snapshot is
+          // stale. Uploads may have outlasted a navigation, so only the
+          // sending thread's panel clears.
+          clearUsageLimitsFor(routeThreadKey);
           acknowledgeActiveThreadWoke();
           // Queued turns are durable as soon as the outbox accepts them. Keep
           // the outbox entry as the delivery indicator and release the
