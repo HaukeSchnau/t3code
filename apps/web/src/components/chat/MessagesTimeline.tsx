@@ -2760,7 +2760,6 @@ function AssistantForkButton({ row }: { row: Extract<TimelineRow, { kind: "messa
         >
           Fork into new workspace
         </MenuItem>
-        <MenuItem disabled>Fork to host...</MenuItem>
       </MenuPopup>
     </Menu>
   );

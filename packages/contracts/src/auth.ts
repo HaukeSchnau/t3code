@@ -80,6 +80,8 @@ export type ServerAuthSessionMethod = typeof ServerAuthSessionMethod.Type;
 
 export const AuthOrchestrationReadScope = "orchestration:read" as const;
 export const AuthOrchestrationOperateScope = "orchestration:operate" as const;
+// TODO: Remove once stored sessions no longer carry this retired energy-capture scope.
+// It stays decodable so existing administrative sessions remain valid.
 export const AuthDiagnosticsCaptureScope = "diagnostics:capture" as const;
 export const AuthTerminalOperateScope = "terminal:operate" as const;
 export const AuthReviewWriteScope = "review:write" as const;
@@ -111,7 +113,6 @@ export const AuthStandardClientScopes = [
 ] as const;
 export const AuthAdministrativeScopes = [
   ...AuthStandardClientScopes,
-  AuthDiagnosticsCaptureScope,
   AuthAccessReadScope,
   AuthAccessWriteScope,
   AuthRelayWriteScope,

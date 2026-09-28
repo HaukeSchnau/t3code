@@ -4,13 +4,12 @@
  * Compare composes real per-thread surfaces, so the column data comes from
  * the same atoms those surfaces read: thread detail for the answer and
  * changed files, the checkpoint diff query for the patch, preview sessions
- * for the frame. The hook is exposed through a context so the dev fixture can
- * substitute its scenario data without a second Compare implementation.
+ * for the frame.
  */
 import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveWorkerState, type WorkerState } from "@t3tools/client-runtime/state/threads";
 import type { OrchestrationCheckpointFile, ScopedThreadRef } from "@t3tools/contracts";
-import { createContext, use, useMemo, type ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { isPreviewSupportedInRuntime, useThreadPreviewState } from "../../previewStateStore";
@@ -39,8 +38,6 @@ export interface CompareColumnData {
   readonly terminalAvailable: boolean;
 }
 
-export type CompareColumnHook = (ref: ScopedThreadRef) => CompareColumnData;
-
 const EMPTY_FILES: ReadonlyArray<OrchestrationCheckpointFile> = [];
 
 /** Merges every checkpoint's files into one list, summing counts per path. */
@@ -68,7 +65,7 @@ export function mergeCheckpointFiles(
   return [...byPath.values()];
 }
 
-export function useProductionCompareColumn(ref: ScopedThreadRef): CompareColumnData {
+export function useCompareColumn(ref: ScopedThreadRef): CompareColumnData {
   const key = scopedThreadKey(ref);
   const shell = useThreadShell(ref);
   const thread = useThread(ref);
@@ -127,12 +124,4 @@ export function useProductionCompareColumn(ref: ScopedThreadRef): CompareColumnD
       : null,
     terminalAvailable: runningTerminalIds.length > 0,
   };
-}
-
-export const CompareColumnDataContext = createContext<CompareColumnHook>(
-  useProductionCompareColumn,
-);
-
-export function useCompareColumnHook(): CompareColumnHook {
-  return use(CompareColumnDataContext);
 }

@@ -344,6 +344,7 @@ export const prepareDispatchCommand = (
             name: attachment.name,
             mimeType: parsed.mimeType.toLowerCase(),
             sizeBytes: bytes.byteLength,
+            ...(attachment.source ? { source: attachment.source } : {}),
           };
           attachmentsWithDecodedSizes[index] = persistedAttachment;
           const decodedLimitError = getProviderAttachmentLimitError(attachmentsWithDecodedSizes);
