@@ -58,8 +58,9 @@ client.
   show on every client connected to the thread.
 - **Steer** sends the message into the running turn right away.
 
-Press `mod+Enter` to do the other one for a single message, or `mod+Shift+Enter`
-when sending itself requires `mod+Enter`.
+Press `Cmd+Enter` on macOS or `Ctrl+Enter` on Windows and Linux to do the other
+one for a single message. When sending itself requires that shortcut, add
+`Shift`.
 
 Each queued message has a button to send it now, which steers the running turn,
 and one to remove it. Use `Cmd+Shift+Enter` on macOS or `Ctrl+Shift+Enter` on
