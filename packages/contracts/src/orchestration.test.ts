@@ -81,6 +81,49 @@ const decodeLegacySubscribeShellInput = Schema.decodeUnknownEffect(
   Schema.Struct({ afterSequence: Schema.optionalKey(Schema.Number) }),
 );
 
+it.effect("decodes usage-limit shell items from servers that still project usage limits", () =>
+  Effect.gen(function* () {
+    const usageLimits = {
+      provider: "codex",
+      providerInstanceId: "codex",
+      usageLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        planType: "pro",
+        rateLimitReachedType: null,
+        credits: null,
+        primary: { usedPercent: 5, resetsAt: "2026-08-20T08:15:43.000Z", windowDurationMins: 300 },
+        secondary: null,
+        updatedAt: "2026-08-13T10:10:00.000Z",
+      },
+      history: [],
+    };
+
+    const item = yield* decodeShellStreamItem({
+      kind: "usage-limits-updated",
+      sequence: 9,
+      usageLimits,
+    });
+    assert.deepStrictEqual(item, { kind: "usage-limits-updated", sequence: 9 });
+
+    const snapshot = yield* decodeShellStreamItem({
+      kind: "snapshot",
+      snapshot: {
+        snapshotSequence: 9,
+        projects: [],
+        threads: [],
+        usageLimits: [usageLimits],
+        updatedAt: "2026-08-13T10:10:00.000Z",
+      },
+    });
+    assert.strictEqual(snapshot.kind, "snapshot");
+    if (snapshot.kind === "snapshot") {
+      assert.strictEqual(snapshot.snapshot.snapshotSequence, 9);
+      assert.notProperty(snapshot.snapshot, "usageLimits");
+    }
+  }),
+);
+
 it.effect("decodes capability-gated shell cursor items", () =>
   Effect.gen(function* () {
     const cursor = yield* decodeShellStreamItem({ kind: "cursor", sequence: 42 });
