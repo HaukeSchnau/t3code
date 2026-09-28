@@ -129,7 +129,9 @@ it.layer(NodeServices.layer)("Claude capability probe SDK boundary", (it) => {
           "    });",
           "  }",
           "});",
-          "setInterval(() => {}, 1_000);",
+          // Like the real CLI, exit once the SDK closes stdin. The SDK only signals the
+          // child two seconds after closing it, and Vitest ends the test fork sooner.
+          'lines.on("close", () => process.exit(0));',
           "",
         ].join("\n"),
       );
