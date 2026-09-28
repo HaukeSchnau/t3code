@@ -877,17 +877,22 @@ export const make = Effect.gen(function* () {
         } as ElectronUpdater.ElectronUpdaterFeedUrl);
       }
 
-      const settings = yield* desktopSettings.get;
+      // Fork: the fork publishes a single feed, so the build's own version picks the
+      // channel. A stored "nightly" preference would otherwise drop every update
+      // (patches/desktop-distribution.md).
+      const channel = resolveDefaultDesktopUpdateChannel(environment.appVersion);
       const enabled = yield* shouldEnableAutoUpdates;
-      yield* setState(createBaseUpdateState(settings.updateChannel, enabled, environment));
+      yield* setState(createBaseUpdateState(channel, enabled, environment));
       if (!enabled) {
         return;
       }
       yield* Ref.set(updaterConfiguredRef, true);
 
-      yield* electronUpdater.setAutoDownload(false);
+      // Fork: builds land several times a day, so updates download on their own and the
+      // user only confirms the restart.
+      yield* electronUpdater.setAutoDownload(true);
       yield* electronUpdater.setAutoInstallOnAppQuit(false);
-      yield* applyAutoUpdaterChannel(settings.updateChannel);
+      yield* applyAutoUpdaterChannel(channel);
       yield* electronUpdater.setDisableDifferentialDownload(
         isArm64HostRunningIntelBuild(environment.runtimeInfo),
       );
