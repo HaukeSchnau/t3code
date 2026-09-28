@@ -13,6 +13,7 @@ import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../serverSettings.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -68,7 +69,12 @@ export interface ProjectSetupScriptRunnerResultStarted {
   readonly scriptId: string;
   readonly scriptName: string;
   readonly scriptCommand: string;
+  /** True when the script runs alongside the agent instead of holding the handoff. */
   readonly async: boolean;
+  /**
+   * Present when the caller observes completion. For an async script it waits for
+   * the exit and owns the output subscription, so callers must run it.
+   */
   readonly completion?: Effect.Effect<ProjectSetupScriptCompletion>;
   readonly terminalId: string;
   readonly cwd: string;
@@ -462,7 +468,35 @@ export const make = Effect.gen(function* () {
       "completion",
     );
 
+    // Async scripts (upstream's default) hand off to the agent after the durable
+    // launch claim. Their completion reports the exit status once the wrapper's
+    // journal lands; a journal timeout or read error settles as an unknown exit
+    // instead of failing a turn that has already started.
+    const isAsync = script.async !== false;
+    const settleCompletion: Effect.Effect<ProjectSetupScriptCompletion> = awaitCompletion.pipe(
+      Effect.andThen(completedResult),
+      Effect.flatMap(
+        (result) => result.completion ?? Effect.succeed({ exitCode: null, durationMs: 0 }),
+      ),
+      Effect.catch(() =>
+        Clock.currentTimeMillis.pipe(
+          Effect.map((nowMs) => ({ exitCode: null, durationMs: nowMs - startedAtMs })),
+        ),
+      ),
+    );
+    const handedOffResult = (completion: Effect.Effect<ProjectSetupScriptCompletion>) => ({
+      status: "started" as const,
+      scriptId: script.id,
+      scriptName: script.name,
+      scriptCommand: script.command,
+      terminalId,
+      cwd,
+      async: true,
+      ...(input.observeCompletion ? { completion } : {}),
+    });
+
     if (claimed && input.reconcileClaimedLaunch) {
+      if (isAsync) return handedOffResult(settleCompletion);
       yield* awaitCompletion;
       return yield* completedResult;
     }
@@ -510,7 +544,7 @@ export const make = Effect.gen(function* () {
               { discard: true },
             );
           }),
-      () =>
+      (unsubscribe) =>
         Effect.gen(function* () {
           const terminal = yield* terminalManager
             .open({
@@ -546,14 +580,23 @@ export const make = Effect.gen(function* () {
           // its actual launch with an atomic claim; reopening a live PTY just attaches.
           yield* awaitJournal(executionExists(claimDir), SETUP_LAUNCH_TIMEOUT_MILLIS, "launch");
 
-          // The caller may only persist `setup-completed` after this durable wrapper
-          // completion exists. Waiting is interruptible, so shutdown leaves the durable
-          // claim for a bounded exact-retry reconciliation.
+          if (isAsync) {
+            return handedOffResult(
+              settleCompletion.pipe(Effect.ensuring(Effect.sync(unsubscribe))),
+            );
+          }
+
+          // A synchronous script holds the handoff: the caller may only persist
+          // `setup-completed` after this durable wrapper completion exists. Waiting is
+          // interruptible, so shutdown leaves the claim for a bounded exact-retry
+          // reconciliation.
           yield* awaitCompletion;
 
           return yield* completedResult;
         }),
-      (unsubscribe) => Effect.sync(unsubscribe),
+      // Once an async script has launched, its `completion` owns the output listener.
+      (unsubscribe, exit) =>
+        isAsync && Exit.isSuccess(exit) ? Effect.void : Effect.sync(unsubscribe),
     );
   });
 
