@@ -42,6 +42,32 @@ export function threadOrderAfterMove(
   return result;
 }
 
+/** Fork: delegated-work trees (docs/internals/thread-orchestration-sidebar.md)
+ * place nested rows under their root, so Move up/down steps a top-level row
+ * past the neighbouring top-level row. Nested rows have no move. Without
+ * `topLevel`, a step is a plain neighbour swap. */
+function resolveMoveDestination(
+  orderedIds: readonly string[],
+  movedId: string,
+  direction: ThreadMoveDestination,
+  topLevel: ((id: string) => boolean) | undefined,
+): ThreadMoveDestination | null {
+  if (topLevel === undefined || typeof direction !== "string") return direction;
+  if (!topLevel(movedId)) return null;
+  const step = direction === "up" ? -1 : 1;
+  for (
+    let index = orderedIds.indexOf(movedId) + step;
+    index >= 0 && index < orderedIds.length;
+    index += step
+  ) {
+    const targetId = orderedIds[index]!;
+    if (topLevel(targetId)) {
+      return { targetId, placement: direction === "up" ? "before" : "after" };
+    }
+  }
+  return null;
+}
+
 type OrderRow = Pick<
   EnvironmentThreadShell,
   | "id"
@@ -84,6 +110,8 @@ export function createThreadMovePlanner(input: {
    * (patches/attention-ordered-sidebar.md). A move stays inside the moved
    * thread's band and writes keys among that band only. */
   readonly needsUser?: (id: string) => boolean;
+  /** Top-level rows when the list shows delegated-work trees. */
+  readonly topLevel?: (id: string) => boolean;
 }) {
   const orderedIds = input.ordered.map(rowId);
   const keysById = new Map(
@@ -99,7 +127,9 @@ export function createThreadMovePlanner(input: {
   );
   return (movedId: string, direction: ThreadMoveDestination) => {
     if (!writableIds.has(movedId)) return null;
-    const nextIds = threadOrderAfterMove(orderedIds, movedId, direction);
+    const destination = resolveMoveDestination(orderedIds, movedId, direction, input.topLevel);
+    const nextIds =
+      destination === null ? null : threadOrderAfterMove(orderedIds, movedId, destination);
     if (nextIds === null) return null;
     const needsUser = input.needsUser ?? (() => false);
     const banded = [...nextIds.filter(needsUser), ...nextIds.filter((id) => !needsUser(id))];
@@ -124,8 +154,13 @@ export function createPendingThreadOrder(input: {
   readonly movedId: string;
   readonly direction: ThreadMoveDestination;
   readonly assignments: readonly { readonly id: string; readonly orderKey: string }[];
+  /** Same as the planner's, so the hold shows the planned order. */
+  readonly topLevel?: (id: string) => boolean;
 }): PendingThreadOrder {
-  const orderedIds = threadOrderAfterMove(input.ordered.map(rowId), input.movedId, input.direction);
+  const ids = input.ordered.map(rowId);
+  const destination = resolveMoveDestination(ids, input.movedId, input.direction, input.topLevel);
+  const orderedIds =
+    destination === null ? null : threadOrderAfterMove(ids, input.movedId, destination);
   if (orderedIds === null) throw new Error("Cannot begin an invalid thread move");
   return {
     section: input.section,

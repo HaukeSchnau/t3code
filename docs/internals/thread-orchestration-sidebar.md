@@ -33,3 +33,8 @@ uses the same projection and interactions without Electron-specific code. Mobile
 projection in both the phone Home list and tablet navigation sidebar, with native disclosure and
 reveal controls. The model is provider-neutral and environment-scoped, so local, remote, relay, and
 tunnel connections follow the same behavior.
+
+Mobile's Move up/down keeps upstream's flat order keys and pending-order hold but steps a top-level
+row past the neighbouring top-level row (`resolveMoveDestination` in
+`apps/mobile/src/features/threads/threadOrder.ts`); nested rows have no move. A project-scoped list
+groups each tree under its root's workspace, so a tree never splits across workspace groups.

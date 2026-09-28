@@ -10,6 +10,7 @@ import {
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import { resolveSnoozePresets } from "@t3tools/client-runtime/state/thread-settled";
+import { buildThreadLineage, type ThreadLineage } from "@t3tools/client-runtime/state/threads";
 import {
   CommandId,
   EnvironmentId,
@@ -28,6 +29,8 @@ import {
   buildThreadListV2ListItems,
   getThreadListV2OrderedSection,
   threadListV2NeedsUser,
+  threadListV2OrchestrationItemsAreEqual,
+  threadListV2TopLevel,
   resolveThreadListV2Enabled,
   resolveThreadListV2SnoozeMenuSelection,
   resolveThreadListV2SnoozeGateExpiryMs,
@@ -1567,5 +1570,281 @@ describe("mobile attention bands", () => {
     ]);
     expect(plan(key("normal-1"), "up")).toBeNull();
     expect(plan(key("approval"), "down")).toBeNull();
+  });
+});
+
+// Restored from the fork's last working version (lost in merge c362388727).
+describe("delegated-work trees", () => {
+  it("adapts the shared orchestration projection without replacing thread cards", () => {
+    const root = makeThread({ id: ThreadId.make("root"), title: "root" });
+    const child = makeThread({ id: ThreadId.make("child"), title: "child" });
+    const active = buildThreadListV2Items({
+      threads: [root, child],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const lineage = buildThreadLineage([
+      {
+        environmentId,
+        coordination: {
+          relationships: [
+            {
+              kind: "createdBy",
+              actor: { threadId: root.id },
+              target: { threadId: child.id },
+              createdAt: NOW,
+            },
+          ],
+          efforts: [],
+          waits: [],
+          watches: [],
+        },
+      },
+    ]);
+    const collapsed = buildThreadListV2ListItems({
+      items: active.items,
+      pendingTasks: [],
+      orchestration: {
+        lineage,
+        selectedThreadKey: `${environmentId}:${child.id}`,
+        isExpanded: () => false,
+      },
+    });
+
+    expect(collapsed.map((item) => item.type)).toEqual(["v2-thread", "v2-orchestration"]);
+    expect(collapsed[0]).toMatchObject({
+      type: "v2-thread",
+      item: { thread: root },
+      orchestration: { lineageContainer: { root: true, expanded: false } },
+    });
+    expect(collapsed[1]).toMatchObject({
+      type: "v2-orchestration",
+      item: { type: "viewing", threadKey: `${environmentId}:${child.id}` },
+    });
+
+    const expanded = buildThreadListV2ListItems({
+      items: active.items,
+      pendingTasks: [],
+      orchestration: { lineage, isExpanded: () => true },
+    });
+    expect(
+      expanded.flatMap((item) => (item.type === "v2-thread" ? [item.item.thread.id] : [])),
+    ).toEqual([root.id, child.id]);
+    const collapsedRoot = collapsed.find((item) => item.type === "v2-thread")?.orchestration;
+    const expandedRoot = expanded.find((item) => item.type === "v2-thread")?.orchestration;
+    expect(threadListV2OrchestrationItemsAreEqual(collapsedRoot, expandedRoot)).toBe(false);
+  });
+
+  it.each([
+    { pinnedId: "child", expected: ["child", "root"] },
+    { pinnedId: "root", expected: ["root", "child"] },
+  ])(
+    "keeps the $pinnedId side of a pin boundary in its own list block",
+    ({ pinnedId, expected }) => {
+      const root = makeThread({
+        id: ThreadId.make("root"),
+        title: "root",
+        pinnedAt: pinnedId === "root" ? NOW : null,
+      });
+      const child = makeThread({
+        id: ThreadId.make("child"),
+        title: "child",
+        pinnedAt: pinnedId === "child" ? NOW : null,
+      });
+      const active = buildThreadListV2Items({
+        threads: [root, child],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+      });
+      const lineage = buildThreadLineage([
+        {
+          environmentId,
+          coordination: {
+            relationships: [
+              {
+                kind: "createdBy",
+                actor: { threadId: root.id },
+                target: { threadId: child.id },
+                createdAt: NOW,
+              },
+            ],
+            efforts: [],
+            waits: [],
+            watches: [],
+          },
+        },
+      ]);
+      const items = buildThreadListV2ListItems({
+        items: active.items,
+        pendingTasks: [],
+        orchestration: { lineage, isExpanded: () => true },
+      });
+      const rows = items.filter((item) => item.type === "v2-thread");
+
+      expect(rows.map((item) => item.item.thread.id)).toEqual(expected);
+      expect(
+        rows.every(
+          (item) => item.orchestration?.depth === 0 && item.orchestration.lineageContainer === null,
+        ),
+      ).toBe(true);
+    },
+  );
+
+  it.each([
+    {
+      lifecycle: "snoozed",
+      replacement: {
+        snoozedAt: "2026-06-01T12:00:00.000Z",
+        snoozedUntil: "2026-06-03T09:00:00.000Z",
+      },
+    },
+    {
+      lifecycle: "settled",
+      replacement: { settledOverride: "settled" as const, settledAt: NOW },
+    },
+  ])(
+    "does not revive a superseded attempt when its replacement is $lifecycle",
+    ({ replacement }) => {
+      const earlier = makeThread({ id: ThreadId.make("earlier"), title: "earlier" });
+      const latest = makeThread({ id: ThreadId.make("latest"), title: "latest", ...replacement });
+      const lifecycleLayout = buildThreadListV2Items({
+        threads: [earlier, latest],
+        environmentId: null,
+        searchQuery: "",
+        now: NOW,
+        snoozedShelfExpanded: true,
+        settledShelfExpanded: true,
+      });
+      const lineage = buildThreadLineage([
+        {
+          environmentId,
+          coordination: {
+            relationships: [
+              {
+                kind: "replaces",
+                actor: { threadId: latest.id },
+                target: { threadId: earlier.id },
+                createdAt: NOW,
+              },
+            ],
+            efforts: [],
+            waits: [],
+            watches: [],
+          },
+        },
+      ]);
+      const items = buildThreadListV2ListItems({
+        items: lifecycleLayout.items,
+        pendingTasks: [],
+        snoozedCount: lifecycleLayout.snoozedCount,
+        snoozedShelfExpanded: true,
+        snoozedShelfHeaderIndex: lifecycleLayout.snoozedShelfHeaderIndex,
+        settledCount: lifecycleLayout.settledCount,
+        settledShelfExpanded: true,
+        settledShelfHeaderIndex: lifecycleLayout.settledShelfHeaderIndex,
+        orchestration: { lineage, isExpanded: () => true },
+      });
+
+      expect(
+        items.flatMap((item) => (item.type === "v2-thread" ? [item.item.thread.id] : [])),
+      ).toEqual([latest.id]);
+    },
+  );
+});
+
+describe("delegated-work trees with later list features", () => {
+  const createdBy = (parentId: string, childId: string): ThreadLineage =>
+    buildThreadLineage([
+      {
+        environmentId,
+        coordination: {
+          relationships: [
+            {
+              kind: "createdBy",
+              actor: { threadId: ThreadId.make(parentId) },
+              target: { threadId: ThreadId.make(childId) },
+              createdAt: NOW,
+            },
+          ],
+          efforts: [],
+          waits: [],
+          watches: [],
+        },
+      },
+    ]);
+
+  it("groups a tree under its root's workspace", () => {
+    const root = makeThread({ id: ThreadId.make("root"), title: "root" });
+    const child = makeThread({
+      id: ThreadId.make("child"),
+      title: "child",
+      worktreePath: "/work/child-checkout",
+    });
+    const other = makeThread({
+      id: ThreadId.make("other"),
+      title: "other",
+      worktreePath: "/work/child-checkout",
+    });
+    const layout = buildThreadListV2Items({
+      threads: [root, child, other],
+      environmentId: null,
+      searchQuery: "",
+      now: NOW,
+    });
+    const items = buildThreadListV2ListItems({
+      items: layout.items,
+      pendingTasks: [],
+      groupWorkspaces: true,
+      orchestration: { lineage: createdBy("root", "child"), isExpanded: () => true },
+    });
+    const groupOf = new Map<string, string | null>();
+    let group: string | null = null;
+    for (const item of items) {
+      if (item.type === "v2-workspace") group = item.label;
+      else if (item.type === "v2-thread") groupOf.set(item.item.thread.id, group);
+    }
+    // The child renders under its root, in the root's checkout group, even
+    // though its own checkout has a group of its own.
+    expect(groupOf.get("child")).toBe("Project checkout");
+    expect(groupOf.get("root")).toBe("Project checkout");
+    expect(groupOf.get("other")).not.toBe("Project checkout");
+  });
+
+  it("moves a top-level row past a whole tree and gives nested rows no move", () => {
+    const later = makeThread({ id: ThreadId.make("later"), title: "later", activeOrderKey: "t" });
+    const child = makeThread({ id: ThreadId.make("child"), title: "child", activeOrderKey: "m" });
+    const root = makeThread({ id: ThreadId.make("root"), title: "root", activeOrderKey: "f" });
+    const threads = [later, child, root];
+    const sectionInput = { threads, now: NOW };
+    const ordered = getThreadListV2OrderedSection({ ...sectionInput, section: "active" });
+    const topLevel = threadListV2TopLevel({
+      pinned: getThreadListV2OrderedSection({ ...sectionInput, section: "pinned" }),
+      active: ordered,
+      lineage: createdBy("root", "child"),
+    });
+    const plan = createThreadMovePlanner({
+      ordered,
+      section: "active",
+      reorderableEnvironmentIds: new Set([environmentId]),
+      topLevel,
+    });
+    const key = (id: string) => `${environmentId}:${id}`;
+    // Flat order is root, child, later; the list shows root's tree, then later.
+    const assignments = plan(key("later"), "up");
+    expect(assignments).toEqual([{ id: key("later"), orderKey: expect.any(String) }]);
+    expect(assignments![0]!.orderKey < "f").toBe(true);
+    expect(plan(key("child"), "up")).toBeNull();
+    expect(plan(key("child"), "down")).toBeNull();
+    const pending = createPendingThreadOrder({
+      section: "active",
+      ordered,
+      movedId: key("later"),
+      direction: "up",
+      assignments: assignments!,
+      topLevel,
+    });
+    expect(pending.orderedIds).toEqual([key("later"), key("root"), key("child")]);
   });
 });

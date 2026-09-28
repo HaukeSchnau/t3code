@@ -18,7 +18,9 @@ control aligned below the project icon; ordinary top-level threads use that spac
 Closing the disclosure hides every descendant, including effort members, unassigned work, retries,
 nested coordinators, and past-effort history. Effort, retry, and nested-coordinator sections can still
 be opened and closed independently. Their summaries put work that needs you first, then working and
-done counts, and finally the number of hidden rows.
+done counts, and finally the number of hidden rows. On mobile, **Move up** and **Move down** move a
+top-level thread past the neighbouring thread and everything nested below it; nested threads follow
+their parent and have no move of their own.
 
 Every thread keeps the normal sidebar card and its existing actions, regardless of its depth or
 lifecycle. If the thread you are viewing is hidden by a closed section, a **Viewing** row remains next
