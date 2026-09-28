@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Checked before anything starts: invalid arithmetic inside the cancellation
+# trap would kill the supervisor mid-cancel and orphan the command.
+cancel_grace_seconds="${CI_CANCEL_GRACE_SECONDS:-10}"
+if [[ ! "$cancel_grace_seconds" =~ ^[0-9]+$ ]]; then
+  echo "CI_CANCEL_GRACE_SECONDS must be a whole number of seconds" >&2
+  exit 2
+fi
+
 supervise_command() {
   local child_pid="" cancelling=""
   local -a descendants=()
@@ -56,7 +64,7 @@ supervise_command() {
     # Some tools keep working after TERM: TypeScript 7's native tsc finishes
     # its whole check first. Kill whatever is still running after a grace
     # period so a cancelled job cannot leave work behind for hours.
-    deadline=$((SECONDS + ${CI_CANCEL_GRACE_SECONDS:-10}))
+    deadline=$((SECONDS + 10#$cancel_grace_seconds))
     while ((SECONDS < deadline)); do
       [[ -n "$(running_processes)" ]] || return 0
       sleep 0.2

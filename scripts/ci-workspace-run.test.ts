@@ -64,3 +64,21 @@ it.skipIf(NodeProcess.platform !== "linux")(
     await expect.poll(() => pids.filter(isRunning)).toEqual([]);
   },
 );
+
+it.each(["10s", "soon", "-1"])(
+  "refuses CI_CANCEL_GRACE_SECONDS=%s before starting the command",
+  (graceSeconds) => {
+    const result = NodeChildProcess.spawnSync(
+      runner,
+      [import.meta.dirname, NodeProcess.execPath, "-e", 'console.log("started")'],
+      {
+        env: { ...NodeProcess.env, CI_CANCEL_GRACE_SECONDS: graceSeconds },
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("CI_CANCEL_GRACE_SECONDS must be a whole number of seconds");
+    expect(result.stdout).not.toContain("started");
+  },
+);
