@@ -142,7 +142,6 @@ import {
   deriveActivePlanState,
   derivePendingApprovals,
   derivePendingUserInputs,
-  deriveTurnPlans,
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasActionableProposedPlan,
@@ -3002,7 +3001,6 @@ export default function ChatView(props: ChatViewProps) {
     [threadActivities],
   );
   const workLogEntries = useMemo(() => deriveWorkLogEntries(threadActivities), [threadActivities]);
-  const turnPlans = useMemo(() => deriveTurnPlans(threadActivities), [threadActivities]);
   // Native subagent fold: memoized by activity-list identity, shared by the
   // Agents surface, live strip, and workflow cards. v2Projection is null
   // until orchestration-v2 lands (source precedence lives in the derive).
@@ -3199,21 +3197,6 @@ export default function ChatView(props: ChatViewProps) {
     activeComposerTasksProgress && activePlan && activePlan.turnId === activeLatestTurn?.turnId
       ? activePlan.steps
       : null;
-  // Current step for the in-chat working row: only for the running turn's own
-  // plan (deriveActivePlanState falls back to older turns' plans, which must
-  // not label fresh work). Falls back to the first pending step so an
-  // all-pending freshly written plan labels the row, matching the chip and
-  // the server's planProgress.
-  const workingStepLabel = useMemo(() => {
-    if (!activePlan || activePlan.turnId !== (activeLatestTurn?.turnId ?? null)) {
-      return null;
-    }
-    return (
-      activePlan.steps.find((step) => step.status === "inProgress")?.step ??
-      activePlan.steps.find((step) => step.status === "pending")?.step ??
-      null
-    );
-  }, [activeLatestTurn?.turnId, activePlan]);
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
     interactionMode === "plan" &&
@@ -3691,7 +3674,6 @@ export default function ChatView(props: ChatViewProps) {
       activeThread?.proposedPlans ?? [],
       workLogEntries,
       previous?.threadKey === activeThreadKey ? previous.projection : null,
-      turnPlans,
     );
     timelineProjectionRef.current = { threadKey: activeThreadKey, projection };
     return projection.entries;
@@ -3700,7 +3682,6 @@ export default function ChatView(props: ChatViewProps) {
     activeThreadKey,
     activeThread?.proposedPlans,
     timelineMessages,
-    turnPlans,
     workLogEntries,
   ]);
   const displayedTimeline = resolveThreadSwitchTimeline({
@@ -9645,7 +9626,6 @@ export default function ChatView(props: ChatViewProps) {
                 isWorking={!paintOnlyDisplayedTimeline && isWorking}
                 isPreparingWorktree={!paintOnlyDisplayedTimeline && isPreparingWorktree}
                 isCompacting={!paintOnlyDisplayedTimeline && isCompacting}
-                workingStepLabel={paintOnlyDisplayedTimeline ? null : workingStepLabel}
                 activeTurnStartedAt={paintOnlyDisplayedTimeline ? null : activeWorkStartedAt}
                 worktreeSetup={paintOnlyDisplayedTimeline ? null : worktreeSetup}
                 onCancelWorktreeSetup={onCancelWorktreeSetup}
