@@ -5,6 +5,7 @@ import {
   ProviderInstanceId,
   type ProviderUnavailable,
   type ProviderRuntimeEvent,
+  type ServerProviderUsageWindow,
   type ProviderSendTurnInput,
   type ProviderSession,
   RuntimeItemId,
@@ -30,13 +31,7 @@ import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import type {
-  OpencodeClient,
-  Part,
-  PermissionRequest,
-  ProviderListResponse,
-  QuestionRequest,
-} from "@opencode-ai/sdk/v2";
+import type { OpencodeClient, Part, PermissionRequest, QuestionRequest } from "@opencode-ai/sdk/v2";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 
 import { resolveAttachmentPath } from "../../attachmentStore.ts";
@@ -72,12 +67,7 @@ import {
   type OpenCodeServerConnection,
 } from "../opencodeRuntime.ts";
 import * as Option from "effect/Option";
-import {
-  fetchZaiUsageLimits,
-  type ZaiUsageLimits,
-  type ZaiUsageSource,
-  zaiQuotaUrlForApiUrl,
-} from "../zaiUsage.ts";
+import { fetchZaiUsageWindows, openCodeZaiUsageSource } from "../zaiUsage.ts";
 
 const PROVIDER = ProviderDriverKind.make("opencode");
 const OPENCODE_ZAI_USAGE_MIN_REFRESH_INTERVAL_MS = 60 * 1000;
@@ -292,34 +282,6 @@ function trimText(value: string | undefined | null): string | undefined {
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
 }
 
-const decodeStringOption = Schema.decodeUnknownOption(Schema.String);
-
-/** Resolves Z.AI quota access from OpenCode's provider inventory for one selected model. */
-export function openCodeZaiUsageSource(
-  providerList: ProviderListResponse,
-  modelSlug: string | null | undefined,
-): ZaiUsageSource | null {
-  const parsed = parseOpenCodeModelSlug(modelSlug);
-  if (!parsed) return null;
-
-  const provider = providerList.all.find((candidate) => candidate.id === parsed.providerID);
-  const model = provider?.models[parsed.modelID];
-  if (!provider || !model) return null;
-
-  const quotaUrl = zaiQuotaUrlForApiUrl(model.api.url);
-  if (!quotaUrl) return null;
-
-  const optionsApiKey = Option.getOrUndefined(decodeStringOption(provider.options.apiKey));
-  const apiKey = trimText(provider.key) ?? trimText(optionsApiKey);
-  if (!apiKey) return null;
-
-  return {
-    apiKey,
-    limitId: provider.id,
-    quotaUrl,
-  };
-}
-
 function openCodeEventSessionId(event: OpenCodeSubscribedEvent): string | undefined {
   const properties = "properties" in event ? event.properties : undefined;
   if (!properties || typeof properties !== "object") {
@@ -423,7 +385,10 @@ interface OpenCodeSessionContext {
   promptGeneration: number;
   promptAdmission: OpenCodePromptAdmission | undefined;
   zaiUsageSnapshot:
-    | { readonly model: string | undefined; readonly limits: ZaiUsageLimits }
+    | {
+        readonly model: string | undefined;
+        readonly windows: ReadonlyArray<ServerProviderUsageWindow>;
+      }
     | undefined;
   readonly commandFibers: Set<Fiber.Fiber<void, ProviderAdapterRequestError>>;
   readonly promptSemaphore: Semaphore.Semaphore;
@@ -523,7 +488,7 @@ export interface OpenCodeAdapterLiveOptions {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
   readonly acceptRuntimeEvent?: ProviderRuntimeEventAcceptance;
-  readonly fetchZaiUsageLimits?: typeof fetchZaiUsageLimits;
+  readonly fetchZaiUsageWindows?: typeof fetchZaiUsageWindows;
 }
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -785,16 +750,12 @@ function sessionErrorMessage(error: unknown): string {
     : "OpenCode session failed.";
 }
 
-function exhaustedUsageRetryAt(usageLimits: ZaiUsageLimits | undefined): string | null {
-  if (!usageLimits) return null;
-  const windows = usageLimits.windows?.length
-    ? usageLimits.windows
-    : [usageLimits.primary, usageLimits.secondary];
+function exhaustedUsageRetryAt(
+  windows: ReadonlyArray<ServerProviderUsageWindow> | undefined,
+): string | null {
   return (
     windows
-      .flatMap((window) =>
-        window && window.usedPercent >= 100 && window.resetsAt ? [window.resetsAt] : [],
-      )
+      ?.flatMap((window) => (window.usedPercent >= 100 && window.resetsAt ? [window.resetsAt] : []))
       .toSorted()
       .at(0) ?? null
   );
@@ -829,14 +790,14 @@ function openCodeProviderUnavailable(input: {
   readonly error: OpenCodeSessionError;
   readonly providerInstanceId: ProviderInstanceId;
   readonly model: string | undefined;
-  readonly usageLimits: ZaiUsageLimits | undefined;
+  readonly usageWindows: ReadonlyArray<ServerProviderUsageWindow> | undefined;
   readonly observedAt: string;
 }): ProviderUnavailable | undefined {
   if (input.error?.name !== "APIError" || input.error.data.statusCode !== 429) {
     return undefined;
   }
   const retryAt =
-    exhaustedUsageRetryAt(input.usageLimits) ??
+    exhaustedUsageRetryAt(input.usageWindows) ??
     retryAtFromOpenCodeHeaders(input.error.data.responseHeaders, input.observedAt);
   return {
     type: "provider_unavailable",
@@ -1093,7 +1054,7 @@ export function makeOpenCodeAdapter(
     const runtimeEvents = yield* Queue.unbounded<ProviderRuntimeEvent>();
     const zaiUsageRefreshQueue = yield* Queue.unbounded<ThreadId>();
     const acceptRuntimeEvent = options?.acceptRuntimeEvent ?? (() => Effect.succeed(true));
-    const readZaiUsageLimits = options?.fetchZaiUsageLimits ?? fetchZaiUsageLimits;
+    const readZaiUsageWindows = options?.fetchZaiUsageWindows ?? fetchZaiUsageWindows;
     const sessions = new Map<ThreadId, OpenCodeSessionContext>();
     const zaiUsageEligibility = new Map<
       ThreadId,
@@ -1258,12 +1219,12 @@ export function makeOpenCodeAdapter(
         isZai: true,
       });
 
-      const rateLimits = yield* readZaiUsageLimits(source);
-      context.zaiUsageSnapshot = { model: context.session.model, limits: rateLimits };
+      const windows = yield* readZaiUsageWindows(source);
+      context.zaiUsageSnapshot = { model: context.session.model, windows };
       yield* emit({
         ...(yield* buildEventBase({ threadId: context.session.threadId })),
         type: "account.rate-limits.updated",
-        payload: { rateLimits },
+        payload: { limits: { windows } },
       });
     });
 
@@ -2907,9 +2868,9 @@ export function makeOpenCodeAdapter(
             error: event.properties.error,
             providerInstanceId: boundInstanceId,
             model: context.session.model,
-            usageLimits:
+            usageWindows:
               usageSnapshot && usageSnapshot.model === context.session.model
-                ? usageSnapshot.limits
+                ? usageSnapshot.windows
                 : undefined,
             observedAt,
           });

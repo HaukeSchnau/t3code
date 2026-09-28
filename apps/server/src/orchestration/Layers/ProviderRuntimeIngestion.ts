@@ -72,7 +72,6 @@ import {
   shouldPersistStandaloneSubagentActivity,
 } from "../ProviderSubagentActivityProjection.ts";
 import { makeProviderTranscriptJournalIngestion } from "../ProviderTranscriptJournalIngestion.ts";
-import { usageLimitsFromRuntimeEvent } from "../ProviderUsageLimitsProjection.ts";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { canReplaceThreadTitle } from "../threadTitles.ts";
 import { MAX_PROVIDER_TURN_RETRY_ATTEMPTS, providerTurnRetryAt } from "../providerTurnRetry.ts";
@@ -1959,21 +1958,6 @@ const make = Effect.gen(function* () {
   const processRuntimeEvent = (event: ProviderRuntimeEvent, journalBacked: boolean) =>
     Effect.gen(function* () {
       const now = event.createdAt;
-
-      if (event.type === "account.rate-limits.updated") {
-        const usageLimits = usageLimitsFromRuntimeEvent(event);
-        if (!usageLimits) return;
-        yield* orchestrationEngine.dispatch({
-          type: "provider.usage-limits.update",
-          commandId: yield* providerCommandId(event, "provider-usage-limits-update"),
-          provider: event.provider,
-          providerInstanceId:
-            event.providerInstanceId ?? defaultInstanceIdForDriver(event.provider),
-          usageLimits,
-          createdAt: now,
-        });
-        return;
-      }
 
       if (isSubagentRuntimeEvent(event)) {
         const threadId = ThreadId.make(event.threadId);

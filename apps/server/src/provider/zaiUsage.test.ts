@@ -3,149 +3,98 @@ import { HttpClient, HttpClientResponse, type HttpClientRequest } from "effect/u
 import { it as effectIt } from "@effect/vitest";
 import { describe, expect, it } from "vite-plus/test";
 
+import { applyUsageLimitsUpdate, makeUnavailableUsageLimits } from "./providerUsageLimits.ts";
 import {
-  fetchZaiUsageLimits,
+  fetchZaiUsageWindows,
+  withZaiUsageLimits,
   zaiQuotaUrlForApiUrl,
-  zaiUsageLimitsFromResponse,
+  zaiUsageWindowsFromResponse,
 } from "./zaiUsage.ts";
 
-describe("zaiUsageLimitsFromResponse", () => {
-  it("keeps the monthly MCP allowance separate from the primary coding quota", () => {
+const SOURCE = {
+  apiKey: "secret-test-key",
+  quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
+};
+
+const quotaResponse = (limits: ReadonlyArray<Record<string, unknown>>) => ({
+  code: 200,
+  success: true,
+  data: { level: "Pro", limits },
+});
+
+const FIVE_HOUR_LIMIT = {
+  type: "TOKENS_LIMIT",
+  unit: 3,
+  number: 5,
+  percentage: 6,
+  nextResetTime: 1_788_186_101_938,
+};
+const MCP_LIMIT = {
+  type: "TIME_LIMIT",
+  unit: 5,
+  number: 1,
+  percentage: 9,
+  nextResetTime: 1_788_454_881_998,
+};
+
+const quotaClient = (requests: Array<HttpClientRequest.HttpClientRequest>, body: unknown) =>
+  HttpClient.make((request) =>
+    Effect.sync(() => {
+      requests.push(request);
+      return HttpClientResponse.fromWeb(request, Response.json(body));
+    }),
+  );
+
+describe("zaiUsageWindowsFromResponse", () => {
+  it("maps coding and MCP quotas onto stable upstream windows", () => {
     expect(
-      zaiUsageLimitsFromResponse(
-        {
-          code: 200,
-          success: true,
-          data: {
-            level: "Pro",
-            limits: [
-              {
-                type: "TIME_LIMIT",
-                unit: 5,
-                number: 1,
-                percentage: 0,
-                nextResetTime: 1_788_454_881_998,
-              },
-              {
-                type: "TOKENS_LIMIT",
-                unit: 3,
-                number: 5,
-                percentage: 6,
-                nextResetTime: 1_788_186_101_938,
-              },
-            ],
+      zaiUsageWindowsFromResponse(
+        quotaResponse([
+          MCP_LIMIT,
+          {
+            type: "TOKENS_LIMIT",
+            unit: 6,
+            number: 1,
+            percentage: 41,
+            nextResetTime: 1_788_480_000,
           },
-        },
-        "zai-coding-plan",
+          FIVE_HOUR_LIMIT,
+        ]),
       ),
-    ).toEqual({
-      limitId: "zai-coding-plan",
-      limitName: "GLM Coding Plan",
-      planType: "Pro",
-      rateLimitReachedType: null,
-      credits: null,
-      primary: {
-        key: "zai:tokens:3:5",
-        label: "Current window",
+    ).toEqual([
+      {
+        id: "zai_mcp",
+        kind: "monthly",
+        label: "GLM · MCP",
+        usedPercent: 9,
+        resetsAt: "2026-09-03T17:01:21.998Z",
+        windowDurationMins: 44_640,
+      },
+      {
+        id: "zai_weekly",
+        kind: "weekly",
+        label: "GLM · Weekly",
+        usedPercent: 41,
+        resetsAt: "2026-09-04T00:00:00.000Z",
+        windowDurationMins: 10_080,
+      },
+      {
+        id: "zai_5h",
+        kind: "session",
+        label: "GLM · Session",
         usedPercent: 6,
         resetsAt: "2026-08-31T14:21:41.938Z",
         windowDurationMins: 300,
       },
-      secondary: null,
-      windows: [
-        {
-          key: "zai:tokens:3:5",
-          label: "Current window",
-          usedPercent: 6,
-          resetsAt: "2026-08-31T14:21:41.938Z",
-          windowDurationMins: 300,
-        },
-        {
-          key: "zai:mcp:5:1",
-          label: "MCP quota",
-          usedPercent: 0,
-          resetsAt: "2026-09-03T17:01:21.998Z",
-          windowDurationMins: 44_640,
-        },
-      ],
-    });
-  });
-
-  it("keeps an optional weekly window secondary when MCP is also present", () => {
-    const usage = zaiUsageLimitsFromResponse(
-      {
-        code: 200,
-        success: true,
-        data: {
-          planName: "Max",
-          limits: [
-            {
-              type: "TIME_LIMIT",
-              unit: 5,
-              number: 1,
-              percentage: 9,
-              nextResetTime: 1_788_454_881_998,
-            },
-            {
-              type: "TOKENS_LIMIT",
-              unit: 6,
-              number: 1,
-              percentage: 41,
-              nextResetTime: 1_788_480_000_000,
-            },
-            {
-              type: "TOKENS_LIMIT",
-              unit: 3,
-              number: 5,
-              percentage: 18,
-              nextResetTime: 1_788_192_000_000,
-            },
-          ],
-        },
-      },
-      "zai-coding-plan",
-    );
-
-    expect(usage?.primary).toMatchObject({
-      key: "zai:tokens:3:5",
-      label: "Current window",
-      usedPercent: 18,
-      windowDurationMins: 300,
-    });
-    expect(usage?.secondary).toMatchObject({
-      key: "zai:tokens:6:1",
-      label: "Weekly",
-      usedPercent: 41,
-      windowDurationMins: 10_080,
-    });
-    expect(usage?.planType).toBe("Max");
-    expect(usage?.windows?.map((window) => window.key)).toEqual([
-      "zai:tokens:3:5",
-      "zai:tokens:6:1",
-      "zai:mcp:5:1",
     ]);
   });
 
   it("rejects unsuccessful, malformed, and responses without coding quota", () => {
     expect(
-      zaiUsageLimitsFromResponse(
-        { code: 500, success: false, data: { limits: [] } },
-        "zai-coding-plan",
-      ),
+      zaiUsageWindowsFromResponse({ code: 500, success: false, data: { limits: [] } }),
     ).toBeUndefined();
-    expect(zaiUsageLimitsFromResponse({ success: true }, "zai-coding-plan")).toBeUndefined();
-    expect(
-      zaiUsageLimitsFromResponse(
-        {
-          code: 200,
-          success: true,
-          data: {
-            limits: [{ type: "TIME_LIMIT", unit: 5, number: 1, percentage: 10 }],
-          },
-        },
-        "zai-coding-plan",
-      ),
-    ).toBeUndefined();
+    expect(zaiUsageWindowsFromResponse({ success: true })).toBeUndefined();
+    expect(zaiUsageWindowsFromResponse(quotaResponse([MCP_LIMIT]))).toBeUndefined();
   });
 });
 
@@ -166,48 +115,79 @@ describe("zaiQuotaUrlForApiUrl", () => {
   });
 });
 
-describe("fetchZaiUsageLimits", () => {
+describe("fetchZaiUsageWindows", () => {
   effectIt.effect("sends the raw API key only to the resolved quota URL", () => {
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
-    const client = HttpClient.make((request) =>
-      Effect.sync(() => {
-        requests.push(request);
-        return HttpClientResponse.fromWeb(
-          request,
-          Response.json({
-            code: 200,
-            success: true,
-            data: {
-              limits: [
-                {
-                  type: "TOKENS_LIMIT",
-                  unit: 3,
-                  number: 5,
-                  percentage: 6,
-                  nextResetTime: 1_788_186_101_938,
-                },
-              ],
-            },
-          }),
-        );
-      }),
-    );
-
-    return fetchZaiUsageLimits({
-      apiKey: "secret-test-key",
-      limitId: "zai-coding-plan",
-      quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
-    }).pipe(
-      Effect.provideService(HttpClient.HttpClient, client),
-      Effect.tap((usage) =>
+    return fetchZaiUsageWindows(SOURCE).pipe(
+      Effect.provideService(
+        HttpClient.HttpClient,
+        quotaClient(requests, quotaResponse([FIVE_HOUR_LIMIT])),
+      ),
+      Effect.tap((windows) =>
         Effect.sync(() => {
           expect(requests).toHaveLength(1);
-          expect(requests[0]?.url).toBe("https://api.z.ai/api/monitor/usage/quota/limit");
+          expect(requests[0]?.url).toBe(SOURCE.quotaUrl);
           expect(requests[0]?.headers.authorization).toBe("secret-test-key");
-          expect(usage.primary?.usedPercent).toBe(6);
+          expect(windows.map((window) => window.id)).toEqual(["zai_5h"]);
         }),
       ),
       Effect.asVoid,
     );
   });
+});
+
+describe("withZaiUsageLimits", () => {
+  const checkedAt = "2026-08-31T12:00:00.000Z";
+  const goUnsupported = makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" });
+
+  effectIt.effect("lets live Z.AI updates land on an OpenCode snapshot without OpenCode Go", () =>
+    withZaiUsageLimits(goUnsupported, Effect.succeed(SOURCE)).pipe(
+      Effect.provideService(
+        HttpClient.HttpClient,
+        quotaClient([], quotaResponse([FIVE_HOUR_LIMIT, MCP_LIMIT])),
+      ),
+      Effect.tap((probed) =>
+        Effect.sync(() => {
+          expect(probed.unavailable).toBeUndefined();
+          expect(probed.windows.map((window) => window.id)).toEqual(["zai_5h", "zai_mcp"]);
+
+          // The adapter's poll arrives as a sparse `account.rate-limits.updated`.
+          const merged = applyUsageLimitsUpdate({
+            previous: probed,
+            update: { windows: [{ ...probed.windows[0]!, usedPercent: 40 }] },
+            checkedAt: "2026-08-31T12:05:00.000Z",
+          });
+          expect(merged?.windows.map((window) => [window.id, window.usedPercent])).toEqual([
+            ["zai_5h", 40],
+            ["zai_mcp", 9],
+          ]);
+        }),
+      ),
+      Effect.asVoid,
+    ),
+  );
+
+  effectIt.effect("keeps the Go result when no Z.AI provider is configured", () =>
+    withZaiUsageLimits(goUnsupported, Effect.succeed(null)).pipe(
+      Effect.provideService(
+        HttpClient.HttpClient,
+        HttpClient.make(() => Effect.die("unexpected Z.AI request")),
+      ),
+      Effect.tap((limits) => Effect.sync(() => expect(limits).toBe(goUnsupported))),
+      Effect.asVoid,
+    ),
+  );
+
+  effectIt.effect("reports a failed read instead of unsupported when Z.AI is configured", () =>
+    withZaiUsageLimits(goUnsupported, Effect.succeed(SOURCE)).pipe(
+      Effect.provideService(
+        HttpClient.HttpClient,
+        quotaClient([], { code: 500, success: false, data: { limits: [] } }),
+      ),
+      Effect.tap((limits) =>
+        Effect.sync(() => expect(limits.unavailable?.reason).toBe("probeFailed")),
+      ),
+      Effect.asVoid,
+    ),
+  );
 });
