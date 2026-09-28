@@ -2,7 +2,6 @@ import {
   CommandId,
   type OrchestrationCommand,
   type ProjectId,
-  type ProviderInstanceId,
   type ThreadId,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -37,8 +36,8 @@ export type CommandPreprocessingSetupState =
 
 export interface CommandPreprocessingProgress {
   readonly commandId: CommandId;
-  readonly aggregateKind: "project" | "thread" | "provider";
-  readonly aggregateId: ProjectId | ThreadId | ProviderInstanceId;
+  readonly aggregateKind: "project" | "thread";
+  readonly aggregateId: ProjectId | ThreadId;
   readonly commandVariant: OrchestrationCommand["type"];
   readonly envelopeFingerprint: string;
   readonly deferredPreprocessingCompleted: boolean;
@@ -73,8 +72,6 @@ function aggregateRef(command: OrchestrationCommand): {
     case "project.meta.update":
     case "project.delete":
       return { aggregateKind: "project", aggregateId: command.projectId };
-    case "provider.usage-limits.update":
-      return { aggregateKind: "provider", aggregateId: command.providerInstanceId };
     default:
       return { aggregateKind: "thread", aggregateId: command.threadId };
   }

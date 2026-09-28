@@ -25,7 +25,6 @@ const shellSnapshot = (snapshotSequence: number): OrchestrationShellSnapshot => 
   snapshotSequence,
   projects: [],
   threads: [],
-  usageLimits: [],
   updatedAt: "2026-07-17T13:00:00.000Z",
 });
 

@@ -13,7 +13,6 @@ import {
   OrchestrationAggregateKind,
   OrchestrationCommandReceiptStatus,
   ProjectId,
-  ProviderInstanceId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
@@ -26,7 +25,7 @@ import type { OrchestrationCommandReceiptRepositoryError } from "../Errors.ts";
 export const OrchestrationCommandReceipt = Schema.Struct({
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   commandVariant: Schema.NullOr(Schema.String),
   envelopeFingerprint: Schema.NullOr(Schema.String),
   acceptedAt: IsoDateTime,
@@ -39,7 +38,7 @@ export type OrchestrationCommandReceipt = typeof OrchestrationCommandReceipt.Typ
 const newReceiptIdentityFields = {
   commandId: CommandId,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   commandVariant: Schema.String,
   envelopeFingerprint: Schema.String,
 } as const;

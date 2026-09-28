@@ -2010,6 +2010,32 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(file && composerFileNeedsReattach(file)).toBe(true);
   });
 
+  it("keeps a draft's automatic machine choice after reload", () => {
+    const store = useComposerDraftStore.getState();
+    store.setProjectDraftThreadId(projectRef, draftId, {
+      threadId,
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+    const persistApi = useComposerDraftStore.persist as unknown as {
+      getOptions: () => {
+        merge: (
+          persistedState: unknown,
+          currentState: ReturnType<typeof useComposerDraftStore.getState>,
+        ) => ReturnType<typeof useComposerDraftStore.getState>;
+      };
+    };
+    const persisted = partializeComposerDraftStoreState(useComposerDraftStore.getState());
+    useComposerDraftStore.setState(
+      persistApi.getOptions().merge(persisted, useComposerDraftStore.getState()),
+    );
+
+    expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
+      environmentSelection: "auto",
+      loadBalancedEnvironmentId: OTHER_TEST_ENVIRONMENT_ID,
+    });
+  });
+
   it("rechecks balancing when an empty draft is remapped to another project member", () => {
     const store = useComposerDraftStore.getState();
     store.setProjectDraftThreadId(projectRef, draftId, {

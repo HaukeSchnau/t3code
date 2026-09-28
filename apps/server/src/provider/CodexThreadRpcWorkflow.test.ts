@@ -83,7 +83,6 @@ const readModel = (thread: OrchestrationThread): OrchestrationReadModel => ({
   snapshotSequence: 1,
   projects: [project],
   threads: [thread],
-  usageLimits: [],
   updatedAt: now,
 });
 

@@ -10,6 +10,11 @@ authorization boundary and is intentionally not removed.
 
 - Remove account sign-in, account settings, cloud discovery, cloud-link dialogs, and browser OAuth
   routes from the clients. The mobile theme generator omits the unused Clerk native theme JSON.
+- Desktop keeps upstream's Clerk bridge. It holds Electron's single-instance lock and routes
+  deeplinks from a second launch, and it stays inert without a publishable key: the renderer never
+  mounts Clerk. Signed macOS builds skip the passkey entitlements that only account sign-in needs.
+- The first-run welcome wizard stays, but its connection step offers direct pairing only. It has no
+  T3 Connect sign-in or cloud computer list.
 - Pairing links in Connections settings always open the backend's own `/pair` page. The fork ships
   no hosted web app, and an `app.t3.codes` link would load upstream's client against this server.
 - Keep the upstream managed-relay interfaces behind fail-closed compatibility layers so shared

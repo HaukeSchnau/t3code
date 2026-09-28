@@ -171,12 +171,6 @@ export type TimelineEntry =
     }
   | {
       id: string;
-      kind: "turn-plan";
-      createdAt: string;
-      turnPlan: TurnPlanEntry;
-    }
-  | {
-      id: string;
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
@@ -185,7 +179,6 @@ export type TimelineEntry =
 export interface TimelineEntriesProjection {
   readonly messages: ReadonlyArray<ChatMessage>;
   readonly proposedPlans: ReadonlyArray<ProposedPlan>;
-  readonly turnPlans: ReadonlyArray<TurnPlanEntry>;
   readonly workEntries: ReadonlyArray<WorkLogEntry>;
   readonly entries: TimelineEntry[];
 }
@@ -565,62 +558,6 @@ export function deriveActivePlanState(
   return addPlanStepDurations(plan, matchingActivities.slice(latestClearIndex + 1));
 }
 
-export interface TurnPlanEntry {
-  /** Stable per-turn row id (plans rewrite constantly; the row must not churn). */
-  id: string;
-  /** Anchor timestamp: the turn's FIRST plan activity, so the chip renders where planning began. */
-  createdAt: string;
-  turnId: TurnId | null;
-  plan: ActivePlanState;
-}
-
-/**
- * One inline plan chip per turn that produced plan/todo steps: the latest
- * snapshot for the turn, anchored at the first snapshot's timestamp. Turn-less
- * plan activities collapse into a single chip keyed by thread order.
- */
-export function deriveTurnPlans(
-  activities: ReadonlyArray<OrchestrationThreadActivity>,
-): TurnPlanEntry[] {
-  const ordered = [...activities].toSorted(compareActivitiesByOrder);
-  const byTurn = new Map<
-    string,
-    { activities: OrchestrationThreadActivity[]; entry: TurnPlanEntry }
-  >();
-  for (const activity of ordered) {
-    if (activity.kind !== "turn.plan.updated") {
-      continue;
-    }
-    const plan = planStateFromActivity(activity);
-    const key = activity.turnId ?? "no-turn";
-    if (!plan) {
-      // A later snapshot with no steps clears the turn's plan; keeping the
-      // stale entry would freeze the chip on a withdrawn plan.
-      byTurn.delete(key);
-      continue;
-    }
-    const existing = byTurn.get(key);
-    if (existing) {
-      existing.entry.plan = plan;
-      existing.activities.push(activity);
-    } else {
-      byTurn.set(key, {
-        activities: [activity],
-        entry: {
-          id: `turn-plan:${key}`,
-          createdAt: activity.createdAt,
-          turnId: activity.turnId,
-          plan,
-        },
-      });
-    }
-  }
-  return [...byTurn.values()].map(({ activities: planActivities, entry }) => ({
-    ...entry,
-    plan: addPlanStepDurations(entry.plan, planActivities),
-  }));
-}
-
 export function findLatestProposedPlan(
   proposedPlans: ReadonlyArray<ProposedPlan>,
   latestTurnId: TurnId | string | null | undefined,
@@ -739,6 +676,12 @@ export function deriveWorkLogEntries(
   }
   const entries: DerivedWorkLogEntry[] = [];
   for (const activity of foldUserInputActivities(ordered)) {
+    if (
+      isWorktreeSetupActivity(activity.kind) &&
+      (activity.tone !== "error" || activity.kind === "worktree-setup")
+    ) {
+      continue;
+    }
     if (activity.kind === "tool.started") continue;
     // Agent task.started rows are CTA seeds: they carry the true spawn turn,
     // which is the batch key (completions of background subagents arrive
@@ -748,9 +691,10 @@ export function deriveWorkLogEntries(
     if (activity.kind === "task.updated") continue;
     if (activity.kind === "tool.progress") continue;
     if (activity.kind === "context-window.updated") continue;
-    if (activity.kind === "account.rate-limits.updated") continue;
     if (activity.kind === "subagent.thread") continue;
+    if (activity.kind === "turn.plan.updated") continue;
     if (activity.summary === "Checkpoint captured") continue;
+    if (isNoContentRuntimeWarning(activity)) continue;
     if (isPlanBoundaryToolActivity(activity)) continue;
     if (isAgentInternalActivity(activity)) continue;
     const entry = toDerivedWorkLogEntry(activity);
@@ -808,6 +752,17 @@ export function deriveHistoricalWorkLogEntries(
           },
         ];
   });
+}
+
+/** Adapters forward unknown wire-only SDK messages (background_tasks_changed,
+ *  commands_changed, ...) as runtime warnings. The suffix comes from
+ *  describeUnknownSdkMessage in the Claude adapter; a row with no displayable
+ *  text carries nothing a user can act on, so it does not render. */
+function isNoContentRuntimeWarning(activity: OrchestrationThreadActivity): boolean {
+  return (
+    activity.kind === "runtime.warning" &&
+    activity.summary.endsWith("(no displayable text content)")
+  );
 }
 
 function isPlanBoundaryToolActivity(activity: OrchestrationThreadActivity): boolean {
@@ -1799,15 +1754,6 @@ function timelineEntryFromProposedPlan(proposedPlan: ProposedPlan): TimelineEntr
   };
 }
 
-function timelineEntryFromTurnPlan(turnPlan: TurnPlanEntry): TimelineEntry {
-  return {
-    id: turnPlan.id,
-    kind: "turn-plan",
-    createdAt: turnPlan.createdAt,
-    turnPlan,
-  };
-}
-
 function timelineEntryFromWork(workEntry: WorkLogEntry): TimelineEntry {
   return {
     id: workEntry.id,
@@ -1827,10 +1773,8 @@ function timelineEntrySourceOrder(entry: TimelineEntry): number {
       return 0;
     case "proposed-plan":
       return 1;
-    case "turn-plan":
-      return 2;
     case "work":
-      return 3;
+      return 2;
   }
 }
 
@@ -1838,9 +1782,8 @@ function shouldTakePreviousTimelineEntry(previous: TimelineEntry, suffix: Timeli
   const createdAtComparison = compareTimelineEntriesByCreatedAt(previous, suffix);
   if (createdAtComparison !== 0) return createdAtComparison < 0;
   // The original full derivation sorts a source-ordered array with a stable
-  // comparator. On a tie, messages precede proposed plans, proposed plans
-  // precede turn plans, and turn plans precede work. Older items in one source
-  // array precede newly appended items.
+  // comparator. On a tie, messages precede plans, plans precede work, and an
+  // older item in the same source array precedes a newly appended item.
   return timelineEntrySourceOrder(previous) <= timelineEntrySourceOrder(suffix);
 }
 
@@ -2020,19 +1963,16 @@ export function deriveTimelineEntriesWithState(
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
   previous: TimelineEntriesProjection | null = null,
-  turnPlans: ReadonlyArray<TurnPlanEntry> = [],
 ): TimelineEntriesProjection {
   if (
     previous !== null &&
     previous.proposedPlans.length === proposedPlans.length &&
-    previous.turnPlans.length === turnPlans.length &&
     previous.workEntries.length === workEntries.length &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
     hasExactArrayPrefix(previous.workEntries, workEntries)
   ) {
     const entries = replaceStreamingTimelineMessages(messages, previous);
-    if (entries !== null) return { messages, proposedPlans, turnPlans, workEntries, entries };
+    if (entries !== null) return { messages, proposedPlans, workEntries, entries };
   }
   const foldedAnswerMessageIds = new Set(
     workEntries.flatMap((entry) =>
@@ -2046,7 +1986,6 @@ export function deriveTimelineEntriesWithState(
     !previous.entries.some((entry) => entry.kind === "message" && !showMessage(entry.message)) &&
     hasExactArrayPrefix(previous.messages, messages) &&
     hasExactArrayPrefix(previous.proposedPlans, proposedPlans) &&
-    hasExactArrayPrefix(previous.turnPlans, turnPlans) &&
     hasExactArrayPrefix(previous.workEntries, workEntries);
 
   if (canAppend) {
@@ -2057,15 +1996,13 @@ export function deriveTimelineEntriesWithState(
     const proposedPlanRows = proposedPlans
       .slice(previous.proposedPlans.length)
       .map(timelineEntryFromProposedPlan);
-    const turnPlanRows = turnPlans.slice(previous.turnPlans.length).map(timelineEntryFromTurnPlan);
     const workRows = workEntries.slice(previous.workEntries.length).map(timelineEntryFromWork);
-    const suffix = [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted(
+    const suffix = [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
       compareTimelineEntriesByCreatedAt,
     );
     return {
       messages,
       proposedPlans,
-      turnPlans,
       workEntries,
       entries: mergeTimelineEntrySuffix(previous.entries, suffix),
     };
@@ -2073,14 +2010,12 @@ export function deriveTimelineEntriesWithState(
 
   const messageRows = messages.filter(showMessage).map(timelineEntryFromMessage);
   const proposedPlanRows = proposedPlans.map(timelineEntryFromProposedPlan);
-  const turnPlanRows = turnPlans.map(timelineEntryFromTurnPlan);
   const workRows = workEntries.map(timelineEntryFromWork);
   return {
     messages,
     proposedPlans,
-    turnPlans,
     workEntries,
-    entries: [...messageRows, ...proposedPlanRows, ...turnPlanRows, ...workRows].toSorted(
+    entries: [...messageRows, ...proposedPlanRows, ...workRows].toSorted(
       compareTimelineEntriesByCreatedAt,
     ),
   };
@@ -2090,10 +2025,8 @@ export function deriveTimelineEntries(
   messages: ReadonlyArray<ChatMessage>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
   workEntries: ReadonlyArray<WorkLogEntry>,
-  turnPlans: ReadonlyArray<TurnPlanEntry> = [],
 ): TimelineEntry[] {
-  return deriveTimelineEntriesWithState(messages, proposedPlans, workEntries, null, turnPlans)
-    .entries;
+  return deriveTimelineEntriesWithState(messages, proposedPlans, workEntries).entries;
 }
 
 export function inferCheckpointTurnCountByTurnId(

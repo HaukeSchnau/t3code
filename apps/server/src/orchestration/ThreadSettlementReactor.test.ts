@@ -121,7 +121,6 @@ function makeSnapshot(
     snapshotSequence: 1,
     projects,
     threads,
-    usageLimits: [],
     updatedAt: NOW,
   };
 }

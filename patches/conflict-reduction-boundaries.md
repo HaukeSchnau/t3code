@@ -12,7 +12,7 @@ facades. Preserve these ownership boundaries when extending a fork patch.
   `provider/CodexThreadRpcWorkflow.ts`.
 - `apps/server/src/orchestration/Layers/ProviderRuntimeIngestion.ts` owns runtime lifecycle composition.
   Transcript journal recovery/delivery belongs in `ProviderTranscriptJournalIngestion.ts`; subagent activity,
-  usage limits, event-ledger deduplication, and observed media belong in their adjacent policy modules.
+  event-ledger deduplication, and observed media belong in their adjacent policy modules.
 - `apps/server/src/orchestration/Layers/ProjectionSnapshotQuery.ts` is the public read facade. Operational,
   thread-activity, snapshot/search, and row-mapping implementation belongs in the adjacent
   `Projection*Reads.ts` and `ProjectionReadMappings.ts` modules.

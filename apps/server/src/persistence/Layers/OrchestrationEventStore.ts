@@ -8,7 +8,6 @@ import {
   OrchestrationEvent,
   OrchestrationEventMetadata,
   OrchestrationEventType,
-  ProviderInstanceId,
   ProjectId,
   ProjectIconOverride,
   ThreadId,
@@ -40,7 +39,7 @@ const EventMetadataFromJsonString = Schema.fromJsonString(OrchestrationEventMeta
 const AppendEventRequestSchema = Schema.Struct({
   eventId: EventId,
   aggregateKind: OrchestrationAggregateKind,
-  streamId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  streamId: Schema.Union([ProjectId, ThreadId]),
   type: OrchestrationEventType,
   causationEventId: Schema.NullOr(EventId),
   correlationId: Schema.NullOr(CommandId),
@@ -56,7 +55,7 @@ const OrchestrationEventPersistedRowSchema = Schema.Struct({
   eventId: EventId,
   type: OrchestrationEventType,
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   occurredAt: IsoDateTime,
   commandId: Schema.NullOr(CommandId),
   causationEventId: Schema.NullOr(EventId),
@@ -78,7 +77,7 @@ const ReadFromSequenceRequestSchema = Schema.Struct({
 });
 const ReadAggregateFromSequenceRequestSchema = Schema.Struct({
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   sequenceExclusive: NonNegativeInt,
   limit: Schema.Number,
 });
@@ -88,7 +87,7 @@ const ProbeFromSequenceRequestSchema = Schema.Struct({
 });
 const ProbeAggregateFromSequenceRequestSchema = Schema.Struct({
   aggregateKind: OrchestrationAggregateKind,
-  aggregateId: Schema.Union([ProjectId, ThreadId, ProviderInstanceId]),
+  aggregateId: Schema.Union([ProjectId, ThreadId]),
   sequenceExclusive: NonNegativeInt,
   limit: Schema.Number,
 });

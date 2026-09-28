@@ -69,15 +69,18 @@ The coordinator therefore treats `setup-claimed` as a reconciliation requirement
 setup was launched. The deterministic terminal writes a generated wrapper whose filesystem `mkdir`
 atomically claims the execution identity before invoking the user command and whose completion record
 is atomically published after exit. An exact retry with no execution claim safely resubmits the same
-wrapper; competing writes still execute the user command once. A completed execution is reused. A
-normal launch waits interruptibly for the wrapper's atomic completion journal. The journal is
+wrapper; competing writes still execute the user command once. A completed execution is reused.
+
+Scripts follow upstream's `async` flag. An async script (the default) persists `setup-completed` once
+the wrapper's launch claim exists and dispatches the turn beside it; the claim alone prevents a retry
+from running it twice. A script with `async: false` waits interruptibly for the wrapper's atomic
+completion journal, and only a valid journal permits `setup-completed` and the turn. The journal is
 Schema-decoded and must match its version, deterministic execution key, SHA-256 setup-command digest,
 exit code, signal, and error fields; malformed or stale journals fail closed. An unclaimed launch has
-a 30-second watchdog. After launch, normal execution and exact claimed retries allow 15 minutes for
-completion so dependency installs can finish. Both deadlines return a typed, retryable reconciliation
-timeout rather than falling through. Only valid durable wrapper completion permits
-`setup-completed` to be persisted and the original turn to dispatch. Terminal
-launch/reconciliation errors are recorded as setup activity and returned.
+a 30-second watchdog. After launch, the journal gets 15 minutes so dependency installs can finish.
+For a waiting script both deadlines return a typed, retryable reconciliation timeout rather than
+falling through; an async script that misses the journal settles its setup stage as an unknown exit.
+Terminal launch/reconciliation errors are recorded as setup activity and returned.
 
 The generic HTTP orchestration endpoint rejects bootstrap-bearing turn starts. Bootstrap remains on
 the WebSocket path that owns thread, workspace, setup, and completion reconciliation, preventing the

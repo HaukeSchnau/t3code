@@ -26,7 +26,7 @@ If the path contains spaces or other URL-sensitive characters, percent-encode th
 
 - The packaged desktop app registers the `t3code` and `t3` URL schemes with macOS.
 - The development macOS launcher registers `t3code-dev` and `t3`.
-- The desktop main process handles `open-url` and `second-instance` early enough for cold-start launches.
+- The desktop main process handles `open-url` and `second-instance` early enough for cold-start launches. Both handlers live in `DesktopClerk.configure` because upstream's Clerk bridge owns the single-instance lock; removing that bridge also removes deeplink delivery.
 - The supported action is `<scheme>://open?cwd=<path>`.
 - `cwd` is forwarded to the existing web-side project creation/opening flow instead of duplicating project persistence logic in Electron.
 - Requests received before the web app is ready are queued and replayed after startup.

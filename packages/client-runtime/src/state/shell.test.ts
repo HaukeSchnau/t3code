@@ -39,7 +39,6 @@ function shellState(input: {
             updatedAt: input.updatedAt,
             projects: [],
             threads: [],
-            usageLimits: [],
           }),
     status: input.status,
     error: input.error === undefined ? Option.none() : Option.some(input.error),

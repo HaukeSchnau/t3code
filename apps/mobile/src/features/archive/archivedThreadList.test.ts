@@ -58,7 +58,6 @@ function makeSnapshot(
       snapshotSequence: 1,
       projects,
       threads,
-      usageLimits: [],
       updatedAt: "2026-06-04T00:00:00.000Z",
     },
   };

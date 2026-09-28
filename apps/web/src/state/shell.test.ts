@@ -25,7 +25,6 @@ function shellState(status: EnvironmentShellState["status"]): EnvironmentShellSt
             updatedAt: "2026-09-04T00:00:00.000Z",
             projects: [],
             threads: [],
-            usageLimits: [],
           }),
     error: Option.none(),
   };

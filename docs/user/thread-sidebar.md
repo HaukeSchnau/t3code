@@ -135,16 +135,17 @@ otherwise accurate title.
 Editing a title yourself stops automatic updates for that thread. Choose **Regenerate title** to
 generate a new title from the current conversation and resume automatic updates. Existing threads
 from older T3 Code versions remain unchanged until you regenerate their titles.
-Choose **Settle thread** from its menu to move finished work out of the active list
-without deleting the conversation. **Un-settle thread** restores it to active work
-and prevents automatic settlement until new activity resumes the usual rules.
-Manually settling an idle thread dismisses unanswered async questions without
-sending an answer or restarting the agent.
 
 Turn off **Automatic thread titles** in General settings to keep first-message generation
 without later automatic updates. Explicit title regeneration remains available.
 
 ## Settle finished work
+
+Choose **Settle thread** from its menu to move finished work out of the active list
+without deleting the conversation. **Un-settle thread** restores it to active work
+and prevents automatic settlement until new activity resumes the usual rules.
+Manually settling an idle thread dismisses unanswered async questions without
+sending an answer or restarting the agent.
 
 By default, environments settle inactive threads after three days and settle
 threads whose pull request merged. A closed pull request can also settle an idle

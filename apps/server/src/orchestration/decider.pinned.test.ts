@@ -55,7 +55,6 @@ function makeReadModel(input: {
         session: null,
       },
     ],
-    usageLimits: [],
     updatedAt: NOW,
   };
 }
