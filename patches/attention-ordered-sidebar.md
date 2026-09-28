@@ -8,6 +8,10 @@ user message orders threads inside each group. Working and monitoring remain nor
 keep their recency position. Opening a thread, assistant output, tool activity, and metadata changes
 do not affect its position.
 
+Upstream 45bd3b631b (#9759) mutes background working threads in the web row through
+`shouldRecedeSidebarThread`. The fork row keeps its own rule (only quiet ready rows recede), so that
+helper stays unused. Adopt it only together with retiring the prominence requirement above.
+
 Pinned, snoozed, and settled sections retain their existing order. Project pickers derive their
 order from the first live thread each project owns in the sidebar, then place projects without live
 threads alphabetically.
