@@ -23,6 +23,7 @@ import {
 } from "@t3tools/client-runtime/connection";
 import { bootstrapRemoteBearerSession } from "@t3tools/client-runtime/authorization";
 import { fetchRemoteEnvironmentDescriptor } from "@t3tools/client-runtime/environment";
+import { managedRelayAccountChanges, managedRelaySessionAtom } from "@t3tools/client-runtime/relay";
 import { EnvironmentRpcRequestObserver } from "@t3tools/client-runtime/rpc";
 import {
   AuthStandardClientScopes,
@@ -56,6 +57,7 @@ import {
 import { clearComposerDraftsEnvironment } from "../composerDraftStore";
 import { isHostedStaticApp } from "../hostedPairing";
 import { isLocalEnvironmentDisabled } from "../localEnvironment";
+import { appAtomRegistry } from "../rpc/atomRegistry";
 import { acknowledgeRpcRequest, trackRpcRequestSent } from "../rpc/requestLatencyState";
 import {
   desktopLocalConnectionId,
@@ -95,22 +97,27 @@ const connectivityLayer = Connectivity.layer({
 });
 
 const wakeupsLayer = Wakeups.layer({
-  changes: Stream.callback<"application-active">((queue) =>
-    Effect.acquireRelease(
-      Effect.sync(() => {
-        const listener = () => {
-          if (document.visibilityState === "visible") {
-            Queue.offerUnsafe(queue, "application-active");
-          }
-        };
-        document.addEventListener("visibilitychange", listener);
-        return listener;
-      }),
-      (listener) =>
+  changes: Stream.merge(
+    Stream.callback<"application-active">((queue) =>
+      Effect.acquireRelease(
         Effect.sync(() => {
-          document.removeEventListener("visibilitychange", listener);
+          const listener = () => {
+            if (document.visibilityState === "visible") {
+              Queue.offerUnsafe(queue, "application-active");
+            }
+          };
+          document.addEventListener("visibilitychange", listener);
+          return listener;
         }),
-    ).pipe(Effect.asVoid),
+        (listener) =>
+          Effect.sync(() => {
+            document.removeEventListener("visibilitychange", listener);
+          }),
+      ).pipe(Effect.asVoid),
+    ),
+    managedRelayAccountChanges(appAtomRegistry).pipe(
+      Stream.map(() => "credentials-changed" as const),
+    ),
   ),
 });
 
@@ -181,13 +188,34 @@ const capabilitiesLayer = Layer.effectContext(
       scopes: AuthStandardClientScopes,
     });
     const cloudSession = CloudSession.of({
-      identity: Effect.succeed(Option.none()),
-      clerkToken: Effect.fail(
-        new ConnectionBlockedError({
-          reason: "unsupported",
-          detail: "T3 Connect authentication is disabled in this fork.",
-        }),
+      identity: Effect.sync(() =>
+        Option.fromNullishOr(appAtomRegistry.get(managedRelaySessionAtom)),
       ),
+      clerkToken: Effect.gen(function* () {
+        const session = appAtomRegistry.get(managedRelaySessionAtom);
+        if (session === null) {
+          return yield* new ConnectionBlockedError({
+            reason: "authentication",
+            detail: "Sign in to T3 Connect to connect this environment.",
+          });
+        }
+        const token = yield* session.readClerkToken().pipe(
+          Effect.mapError(
+            (error) =>
+              new ConnectionTransientError({
+                reason: "network",
+                detail: error.message,
+              }),
+          ),
+        );
+        if (token === null) {
+          return yield* new ConnectionBlockedError({
+            reason: "authentication",
+            detail: "The T3 Connect session is unavailable.",
+          });
+        }
+        return token;
+      }),
     });
     const identity = RelayDeviceIdentity.of({
       deviceId: Effect.succeed(Option.none()),

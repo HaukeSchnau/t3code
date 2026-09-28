@@ -60,6 +60,16 @@ row that reopens its precise container path. Search and the global Snoozed and S
 flat. The shared projection and its surface contract are documented in
 `docs/internals/thread-orchestration-sidebar.md`.
 
+On mobile, two upstream-owned list features change for trees. Project-scoped workspace grouping in
+`buildThreadListV2ListItems` groups each tree under its root's workspace so a tree never splits.
+Upstream's Move up/down (`apps/mobile/src/features/threads/threadOrder.ts`) keeps its flat order
+keys and pending-order hold, but a top-level row steps past the neighbouring top-level row and nested
+rows have no move (`resolveMoveDestination`, `threadListV2TopLevel`); a plain neighbour swap would
+often pass a nested child and leave the screen unchanged. Move availability is computed on the
+canonical, unscoped tree, so a child shown as a top-level row only because a project filter hides
+its parent gets no move. Retire this mobile glue if upstream renders delegated-work trees itself or
+drops Move up/down from the tree list.
+
 Codex-backed `t3 thread fork` calls follow the official Codex fork semantics:
 T3 Code asks Codex App Server to run `thread/fork`, imports the returned copied
 history into the new T3 Code thread, binds that thread back to the forked Codex
