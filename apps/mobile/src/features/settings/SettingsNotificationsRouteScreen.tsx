@@ -56,6 +56,10 @@ export function SettingsNotificationsRouteScreen() {
   const savePreferences = useAtomSet(updateMobilePreferencesAtom);
   const agentAwarenessPushAvailable = supportsAgentAwarenessPush();
   const agentAwarenessPlatform = resolveAgentAwarenessPlatformPresentation(Platform.OS);
+  const agentAwarenessSubtitle =
+    Platform.OS === "android" && !agentAwarenessPushAvailable
+      ? "Install a newer app build to enable notifications"
+      : agentAwarenessPlatform.subtitle;
   const insets = useSafeAreaInsets();
   const { savedConnectionsById } = useSavedRemoteConnections();
   const [notificationStatus, setNotificationStatus] = useState<NotificationStatus>("checking");
@@ -266,7 +270,7 @@ export function SettingsNotificationsRouteScreen() {
               notificationStatus === "checking" ||
               notificationStatus === "unsupported"
             }
-            subtitle={agentAwarenessPlatform.subtitle}
+            subtitle={agentAwarenessSubtitle}
             // Only reads as on when this device is actually registered with the
             // paired server; otherwise notifications cannot be delivered regardless of
             // the local iOS permission.
@@ -284,8 +288,14 @@ export function SettingsNotificationsRouteScreen() {
               liveActivityStatus === "updating"
             }
             icon="bolt.circle"
-            label="Live Activity Updates"
-            subtitle={agentAwarenessPlatform.subtitle}
+            label={
+              Platform.OS === "android"
+                ? supportsAndroidLiveUpdateSettings()
+                  ? "Agent Live Updates"
+                  : "Ongoing Agent Activity"
+                : "Live Activity Updates"
+            }
+            subtitle={agentAwarenessSubtitle}
             // Same gate: a saved preference is meaningless until the device
             // registration the paired server needs to push updates has succeeded.
             value={
