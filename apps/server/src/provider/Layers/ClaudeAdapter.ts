@@ -28,7 +28,6 @@ import {
   type PermissionResult,
   type PermissionUpdate,
   type SDKMessage,
-  type SDKControlGetUsageResponse,
   type SDKRateLimitInfo,
   type SDKResultMessage,
   type SettingSource,
@@ -37,12 +36,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { parseCliArgs } from "@t3tools/shared/cliArgs";
 import { isWorkspaceImagePreviewPath } from "@t3tools/shared/filePreview";
-import {
-  type ClaudeScopedLimitNames,
-  claudeRateLimitEventToUpdate,
-  claudeUsageResponseToLimits,
-  recordClaudeUsageResponse,
-} from "./claudeUsageLimits.ts";
+import { type ClaudeScopedLimitNames, claudeRateLimitEventToUpdate } from "./claudeUsageLimits.ts";
 import {
   ApprovalRequestId,
   classifyTaskAgentKind,
@@ -94,7 +88,6 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
@@ -244,8 +237,6 @@ const remapClaudeForkTurnBoundaries = (
 };
 
 const PROVIDER = ProviderDriverKind.make("claudeAgent");
-const CLAUDE_USAGE_MIN_REFRESH_INTERVAL_MS = 60 * 1000;
-const CLAUDE_USAGE_POLL_INTERVAL_MS = 5 * 60 * 1000;
 type ClaudeTextStreamKind = Extract<
   RuntimeContentStreamKind,
   "assistant_text" | "reasoning_text" | "reasoning_summary_text"
@@ -474,7 +465,6 @@ interface ClaudeSessionContext {
   lastThreadStartedId: string | undefined;
   /** Limits already announced for the running turn, keyed `window:resetsAt`. */
   announcedUsageLimits: { turnId: string; keys: Set<string> } | undefined;
-  readonly scheduleUsageLimitsRefresh: (force?: boolean) => void;
   stopped: boolean;
 }
 
@@ -483,7 +473,6 @@ interface ClaudeQueryRuntime extends AsyncIterable<SDKMessage> {
   readonly setPermissionMode: (mode: PermissionMode) => Promise<void>;
   readonly setMaxThinkingTokens: (maxThinkingTokens: number | null) => Promise<void>;
   readonly close: () => void;
-  readonly usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET?: () => Promise<unknown>;
 }
 
 export interface ClaudeAdapterLiveOptions {
@@ -2131,11 +2120,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
-  const usageLimitsRefreshQueue = yield* Queue.unbounded<{
-    readonly threadId: ThreadId;
-    readonly force: boolean;
-  }>();
-  let nextUsageLimitsRefreshAtMs = 0;
 
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const randomUUIDv4 = crypto.randomUUIDv4.pipe(
@@ -2160,95 +2144,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ),
       Effect.asVoid,
     );
-
-  const refreshClaudeUsageLimits = Effect.fn("refreshClaudeUsageLimits")(function* (
-    context: ClaudeSessionContext,
-  ) {
-    const readUsage = context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
-    if (!readUsage || context.stopped) return;
-
-    const response = yield* Effect.tryPromise({
-      try: () => readUsage.call(context.query),
-      catch: () => undefined,
-    });
-    if (!response || typeof response !== "object") return;
-
-    const checkedAt = yield* nowIso;
-    const decoded = response as SDKControlGetUsageResponse;
-    const rateLimits = options?.scopedLimitNames
-      ? yield* recordClaudeUsageResponse(options.scopedLimitNames, {
-          response: decoded,
-          checkedAt,
-        })
-      : claudeUsageResponseToLimits({ response: decoded, checkedAt }).limits;
-    const stamp = yield* makeEventStamp();
-    yield* offerRuntimeEvent({
-      type: "account.rate-limits.updated",
-      eventId: stamp.eventId,
-      provider: PROVIDER,
-      createdAt: stamp.createdAt,
-      threadId: context.session.threadId,
-      payload: { rateLimits },
-      providerRefs: {},
-    });
-  });
-
-  const selectUsageLimitsContext = (threadId: ThreadId): ClaudeSessionContext | undefined => {
-    const requested = sessions.get(threadId);
-    if (
-      requested &&
-      !requested.stopped &&
-      requested.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-    ) {
-      return requested;
-    }
-    for (const context of sessions.values()) {
-      if (
-        !context.stopped &&
-        context.query.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET
-      ) {
-        return context;
-      }
-    }
-    return undefined;
-  };
-
-  const runUsageLimitsRefresh = Effect.gen(function* () {
-    const first = yield* Queue.take(usageLimitsRefreshQueue);
-    const rest = [] as Array<typeof first>;
-    while (true) {
-      const next = yield* Queue.poll(usageLimitsRefreshQueue);
-      if (Option.isNone(next)) break;
-      rest.push(next.value);
-    }
-    const force = first.force || rest.some((request) => request.force);
-    if (!force) {
-      const waitMs = nextUsageLimitsRefreshAtMs - DateTime.toEpochMillis(yield* DateTime.now);
-      if (waitMs > 0) yield* Effect.sleep(waitMs);
-    }
-    const context = selectUsageLimitsContext(rest.at(-1)?.threadId ?? first.threadId);
-    if (!context) return;
-    nextUsageLimitsRefreshAtMs =
-      DateTime.toEpochMillis(yield* DateTime.now) + CLAUDE_USAGE_MIN_REFRESH_INTERVAL_MS;
-    yield* refreshClaudeUsageLimits(context);
-  }).pipe(Effect.catch(() => Effect.void));
-
-  yield* runUsageLimitsRefresh.pipe(Effect.forever, Effect.forkScoped);
-  yield* Effect.sleep(CLAUDE_USAGE_POLL_INTERVAL_MS).pipe(
-    Effect.andThen(
-      Effect.suspend(() => {
-        const context = Array.from(sessions.values()).find((candidate) => !candidate.stopped);
-        return context
-          ? Queue.offer(usageLimitsRefreshQueue, {
-              threadId: context.session.threadId,
-              force: false,
-            }).pipe(Effect.asVoid)
-          : Effect.void;
-      }),
-    ),
-    Effect.forever,
-    Effect.forkScoped,
-  );
 
   const logNativeSdkMessage = Effect.fnUntraced(function* (
     context: ClaudeSessionContext,
@@ -2887,7 +2782,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         hasUsage: result?.usage !== undefined,
         ...(errorMessage ? { errorMessage } : {}),
       });
-      context.scheduleUsageLimitsRefresh();
       return;
     }
 
@@ -2975,7 +2869,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(status === "failed" && errorMessage ? { lastError: errorMessage } : {}),
     };
     yield* updateResumeCursor(context);
-    context.scheduleUsageLimitsRefresh();
   });
 
   const handleStreamEvent = Effect.fn("handleStreamEvent")(function* (
@@ -4205,7 +4098,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
-      context.scheduleUsageLimitsRefresh(true);
       const rateLimitInfo = message.rate_limit_info;
       if (!rateLimitInfo) return;
       const names = options?.scopedLimitNames
@@ -4216,7 +4108,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         yield* offerRuntimeEvent({
           ...base,
           type: "account.rate-limits.updated",
-          payload: { rateLimits: limits },
+          payload: { limits },
         });
       }
       // A rejected window parks the turn inside the SDK: no further messages
@@ -5240,14 +5132,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         lastAssistantUuid: resumeState?.resumeSessionAt,
         lastThreadStartedId: undefined,
         announcedUsageLimits: undefined,
-        scheduleUsageLimitsRefresh: (force = false) => {
-          runFork(
-            Queue.offer(usageLimitsRefreshQueue, {
-              threadId,
-              force,
-            }).pipe(Effect.asVoid),
-          );
-        },
         stopped: false,
       };
       yield* Ref.set(contextRef, context);
@@ -5320,7 +5204,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           context.streamFiber = undefined;
         }
       });
-      context.scheduleUsageLimitsRefresh();
 
       return {
         ...session,
@@ -5753,7 +5636,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         Effect.logError("Failed to emit Claude session shutdown event.", { cause }),
       ),
       Effect.tap(() => Queue.shutdown(runtimeEventQueue)),
-      Effect.tap(() => Queue.shutdown(usageLimitsRefreshQueue)),
       Effect.tap(() => managedNativeEventLogger?.close() ?? Effect.void),
     ),
   );

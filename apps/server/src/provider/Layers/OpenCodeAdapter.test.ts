@@ -31,6 +31,7 @@ import {
   OpenCodeSettings,
   ProviderDriverKind,
   ProviderInstanceId,
+  type ServerProviderUsageWindow,
   ThreadId,
 } from "@t3tools/contracts";
 import { createModelSelection } from "@t3tools/shared/model";
@@ -50,9 +51,12 @@ import {
   isSameOpenCodeDirectory,
   makeOpenCodeAdapter,
   mergeOpenCodeAssistantText,
-  openCodeZaiUsageSource,
 } from "./OpenCodeAdapter.ts";
-import type { ZaiUsageLimits, ZaiUsageSource } from "../zaiUsage.ts";
+import {
+  openCodeInventoryZaiUsageSource,
+  openCodeZaiUsageSource,
+  type ZaiUsageSource,
+} from "../zaiUsage.ts";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 
 // Test-local service tag so the rest of the file can keep using `yield* OpenCodeAdapter`.
@@ -103,30 +107,16 @@ const zaiProviderList: ProviderListResponse = {
   connected: ["zai-coding-plan"],
 };
 
-const testZaiUsageLimits: ZaiUsageLimits = {
-  limitId: "zai-coding-plan",
-  limitName: "GLM Coding Plan",
-  planType: "Pro",
-  rateLimitReachedType: null,
-  credits: null,
-  primary: {
-    key: "zai:tokens:3:5",
-    label: "Current window",
+const testZaiUsageWindows: ReadonlyArray<ServerProviderUsageWindow> = [
+  {
+    id: "zai_5h",
+    kind: "session",
+    label: "GLM · Session",
     usedPercent: 6,
     resetsAt: "2026-08-31T14:21:41.938Z",
     windowDurationMins: 300,
   },
-  secondary: null,
-  windows: [
-    {
-      key: "zai:tokens:3:5",
-      label: "Current window",
-      usedPercent: 6,
-      resetsAt: "2026-08-31T14:21:41.938Z",
-      windowDurationMins: 300,
-    },
-  ],
-};
+];
 
 type MessageEntry = {
   info: {
@@ -209,7 +199,7 @@ const runtimeMock = {
     providerList: { all: [], default: {}, connected: [] } as ProviderListResponse,
     providerListCalls: 0,
     zaiUsageSources: [] as ZaiUsageSource[],
-    zaiUsageLimits: testZaiUsageLimits as ZaiUsageLimits,
+    zaiUsageWindows: testZaiUsageWindows,
     zaiUsageObserved: null as (() => void) | null,
   },
   reset() {
@@ -273,7 +263,7 @@ const runtimeMock = {
     this.state.providerList = { all: [], default: {}, connected: [] };
     this.state.providerListCalls = 0;
     this.state.zaiUsageSources.length = 0;
-    this.state.zaiUsageLimits = testZaiUsageLimits;
+    this.state.zaiUsageWindows = testZaiUsageWindows;
     this.state.zaiUsageObserved = null;
   },
 };
@@ -692,11 +682,11 @@ const openCodeAdapterTestSettings = Schema.decodeSync(OpenCodeSettings)({
 const OpenCodeAdapterTestLayer = Layer.effect(
   OpenCodeAdapter,
   makeOpenCodeAdapter(openCodeAdapterTestSettings, {
-    fetchZaiUsageLimits: (source) =>
+    fetchZaiUsageWindows: (source) =>
       Effect.sync(() => {
         runtimeMock.state.zaiUsageSources.push(source);
         runtimeMock.state.zaiUsageObserved?.();
-        return runtimeMock.state.zaiUsageLimits;
+        return runtimeMock.state.zaiUsageWindows;
       }),
   }),
 ).pipe(
@@ -771,12 +761,18 @@ const questionRequest = (id: string, sessionID: string): QuestionRequest => ({
 it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
   it.effect("discovers Z.AI credentials only for a matching configured model", () =>
     Effect.sync(() => {
-      NodeAssert.deepEqual(openCodeZaiUsageSource(zaiProviderList, "zai-coding-plan/glm-5.2"), {
+      const source = {
         apiKey: "test-zai-api-key",
-        limitId: "zai-coding-plan",
         quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
-      });
+      };
+      NodeAssert.deepEqual(
+        openCodeZaiUsageSource(zaiProviderList, "zai-coding-plan/glm-5.2"),
+        source,
+      );
       NodeAssert.equal(openCodeZaiUsageSource(zaiProviderList, "anthropic/sonnet"), null);
+      // The provider probe has no selected model and takes any Z.AI provider.
+      NodeAssert.deepEqual(openCodeInventoryZaiUsageSource(zaiProviderList), source);
+      NodeAssert.equal(openCodeInventoryZaiUsageSource({ ...zaiProviderList, all: [] }), null);
     }),
   );
 
@@ -803,11 +799,10 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const event = Option.getOrThrow(yield* Fiber.join(usageEventFiber));
       NodeAssert.equal(event.type, "account.rate-limits.updated");
       if (event.type !== "account.rate-limits.updated") return;
-      NodeAssert.deepEqual(event.payload.rateLimits, testZaiUsageLimits);
+      NodeAssert.deepEqual(event.payload.limits, { windows: testZaiUsageWindows });
       NodeAssert.deepEqual(runtimeMock.state.zaiUsageSources, [
         {
           apiKey: "test-zai-api-key",
-          limitId: "zai-coding-plan",
           quotaUrl: "https://api.z.ai/api/monitor/usage/quota/limit",
         },
       ]);
@@ -826,15 +821,11 @@ it.layer(OpenCodeAdapterTestLayer)("OpenCodeAdapterLive", (it) => {
       const errorEvent = promiseWithResolvers<unknown>();
       const usageObserved = promiseWithResolvers<void>();
       runtimeMock.state.providerList = zaiProviderList;
-      runtimeMock.state.zaiUsageLimits = {
-        ...testZaiUsageLimits,
-        primary: { ...testZaiUsageLimits.primary!, usedPercent: 100, resetsAt: resetAt },
-        windows: testZaiUsageLimits.windows?.map((window) => ({
-          ...window,
-          usedPercent: 100,
-          resetsAt: resetAt,
-        })),
-      };
+      runtimeMock.state.zaiUsageWindows = testZaiUsageWindows.map((window) => ({
+        ...window,
+        usedPercent: 100,
+        resetsAt: resetAt,
+      }));
       runtimeMock.state.zaiUsageObserved = () => usageObserved.resolve(undefined);
       runtimeMock.state.subscribedEvents = [errorEvent.promise];
 
