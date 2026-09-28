@@ -31,6 +31,7 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
+import { ThreadReplyInput, ThreadReplyResult } from "./agentAwareness.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { WorkloadDiagnosticsSnapshot } from "./diagnostics.ts";
 import {
@@ -617,6 +618,16 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       payload: ClientOrchestrationCommand,
       success: DispatchResult,
       error: EnvironmentOrchestrationDispatchErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    // Fork: free-text replies from notification actions. See patches/notification-replies.md.
+    HttpApiEndpoint.post("reply", "/api/orchestration/threads/:threadId/reply", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      payload: ThreadReplyInput,
+      success: ThreadReplyResult,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}
 

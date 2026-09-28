@@ -7,6 +7,7 @@ vi.mock("react-native", () => ({
 }));
 
 vi.mock("expo-secure-store", () => ({
+  AFTER_FIRST_UNLOCK: 0,
   deleteItemAsync: vi.fn(),
   getItemAsync: vi.fn(),
   setItemAsync: vi.fn(),

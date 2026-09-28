@@ -71,6 +71,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("expo-secure-store", () => ({
+  AFTER_FIRST_UNLOCK: 0,
   deleteItemAsync: mocks.deleteItemAsync,
   getItemAsync: mocks.getItemAsync,
   setItemAsync: mocks.setItemAsync,

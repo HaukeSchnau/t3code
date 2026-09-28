@@ -87,11 +87,33 @@ export function extractAgentNotificationDeepLink(response: unknown): string | nu
   return null;
 }
 
+/**
+ * Notification actions the native module answers in the background
+ * (modules/t3-agent-notifications/ios/AgentReplyHandler.swift). expo-notifications still reports
+ * them here, and as the last response on the next launch, but they must not open the thread.
+ */
+export const NATIVE_AGENT_NOTIFICATION_ACTIONS: ReadonlySet<string> = new Set([
+  "AGENT_REPLY",
+  "AGENT_RETRY",
+]);
+
+function actionIdentifierFromNotificationResponse(response: unknown): string | null {
+  if (typeof response !== "object" || response === null) {
+    return null;
+  }
+  const actionIdentifier = (response as { readonly actionIdentifier?: unknown }).actionIdentifier;
+  return typeof actionIdentifier === "string" ? actionIdentifier : null;
+}
+
 export function routeAgentNotificationResponseOnce(input: {
   readonly handledResponseIds: Set<string>;
   readonly response: unknown;
   readonly navigate: (deepLink: string) => void;
 }): void {
+  const actionIdentifier = actionIdentifierFromNotificationResponse(input.response);
+  if (actionIdentifier !== null && NATIVE_AGENT_NOTIFICATION_ACTIONS.has(actionIdentifier)) {
+    return;
+  }
   const responseId = identifierFromNotificationResponse(input.response);
   if (responseId && input.handledResponseIds.has(responseId)) {
     return;

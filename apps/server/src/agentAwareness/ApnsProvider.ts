@@ -33,6 +33,12 @@ export interface ApnsAlert {
   readonly body: string;
 }
 
+/**
+ * Notification categories the iOS app registers at launch (t3-agent-notifications). Each one
+ * adds a text Reply action, which the app hands to the thread reply endpoint without opening.
+ */
+export type ApnsNotificationCategory = "AGENT_INPUT" | "AGENT_DONE";
+
 export interface ApnsDeliveryResult {
   readonly ok: boolean;
   readonly status: number;
@@ -129,11 +135,15 @@ export function makeNotificationPayload(input: {
   readonly environmentId: string;
   readonly threadId: string;
   readonly deepLink: string;
+  readonly category?: ApnsNotificationCategory | undefined;
 }) {
   return {
     aps: {
       alert: { title: input.title, body: input.body },
       sound: "default",
+      // Groups a thread's notifications on the lock screen and the watch.
+      "thread-id": `${input.environmentId}/${input.threadId}`,
+      ...(input.category ? { category: input.category } : {}),
     },
     environmentId: input.environmentId,
     threadId: input.threadId,
@@ -272,6 +282,7 @@ export class ApnsProvider extends Context.Service<
       readonly environmentId: string;
       readonly threadId: string;
       readonly deepLink: string;
+      readonly category?: ApnsNotificationCategory | undefined;
     }) => Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError>;
   }
 >()("t3/agentAwareness/ApnsProvider") {}

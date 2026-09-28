@@ -3,6 +3,7 @@ import {
   AuthOrchestrationReadScope,
   EnvironmentHttpApi,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as HttpApiBuilder from "effect/unstable/httpapi/HttpApiBuilder";
@@ -16,10 +17,13 @@ import {
   failEnvironmentNotFound,
   requireEnvironmentScope,
 } from "../auth/http.ts";
+import { OrchestrationCommandReceiptRepository } from "../persistence/Services/OrchestrationCommandReceipts.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
+import { openRequests } from "./decider.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotMaterializer } from "./Services/ProjectionSnapshotMaterializer.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { planThreadReply, threadReplyCommandId, threadReplyMessageId } from "./threadReply.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
   EnvironmentHttpApi,
@@ -30,6 +34,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const orchestrationEngine = yield* OrchestrationEngineService;
     const commandPreprocessing = yield* CommandPreprocessingCoordinator;
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
+    const commandReceipts = yield* OrchestrationCommandReceiptRepository;
 
     return handlers
       .handle(
@@ -191,6 +196,94 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
               "threadId" in args.payload ? args.payload.threadId : undefined,
             ),
         ),
+      )
+      .handle(
+        // Fork: free-text replies from notification actions. See patches/notification-replies.md.
+        "reply",
+        Effect.fn("environment.orchestration.reply")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationOperateScope);
+          const threadId = args.params.threadId;
+          const commandId = threadReplyCommandId(args.payload.replyId);
+          const failDispatch = (cause: unknown) =>
+            failEnvironmentInternal("orchestration_dispatch_failed", cause);
+
+          // A retry after a lost response finds the first attempt's receipt. Checking it before
+          // planning matters: the answered question is gone by now, so the plan would differ.
+          const receipt = yield* commandReceipts
+            .getByCommandId({ commandId })
+            .pipe(Effect.catch(failDispatch));
+          if (Option.isSome(receipt)) {
+            return receipt.value.status === "accepted"
+              ? ({ outcome: "already_delivered" } as const)
+              : yield* failDispatch(receipt.value.error ?? "Previously rejected.");
+          }
+
+          const shell = yield* projectionSnapshotQuery
+            .getThreadShellById(threadId)
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+              ),
+            );
+          if (Option.isNone(shell)) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+          const detail = shell.value.hasPendingUserInput
+            ? yield* projectionSnapshotQuery
+                .getThreadDetailSnapshot(threadId, "full")
+                .pipe(
+                  Effect.catch((cause) =>
+                    failEnvironmentInternal("orchestration_thread_snapshot_failed", cause),
+                  ),
+                )
+            : Option.none();
+          const plan = planThreadReply({
+            text: args.payload.text,
+            hasPendingApprovals: shell.value.hasPendingApprovals,
+            hasPendingUserInput: shell.value.hasPendingUserInput,
+            openRequests: Option.match(detail, {
+              onNone: () => [],
+              onSome: (snapshot) => [...openRequests(snapshot.thread).values()],
+            }),
+          });
+          if (plan._tag === "Rejected") {
+            return { outcome: "rejected", reason: plan.reason } as const;
+          }
+
+          const createdAt = DateTime.formatIso(yield* DateTime.now);
+          if (plan._tag === "Answer") {
+            yield* orchestrationEngine
+              .dispatch({
+                type: "thread.user-input.respond",
+                commandId,
+                threadId,
+                requestId: plan.requestId,
+                answers: plan.answers,
+                createdAt,
+              })
+              .pipe(Effect.catch(failDispatch));
+            return { outcome: "answered" } as const;
+          }
+          // Queue-while-busy, like the composer: starts a turn when the thread is idle.
+          yield* orchestrationEngine
+            .dispatch({
+              type: "thread.message.queue",
+              commandId,
+              threadId,
+              message: {
+                messageId: threadReplyMessageId(args.payload.replyId),
+                role: "user",
+                text: args.payload.text,
+                attachments: [],
+              },
+              runtimeMode: shell.value.runtimeMode,
+              interactionMode: shell.value.interactionMode,
+              createdAt,
+            })
+            .pipe(Effect.catch(failDispatch));
+          return { outcome: "sent" } as const;
+        }),
       );
   }),
 );
