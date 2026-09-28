@@ -2,7 +2,6 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 
 mobile_device := env_var_or_default("T3CODE_IOS_DEVICE", "iPhone von Hauke")
 apple_team_id := env_var_or_default("T3CODE_APPLE_TEAM_ID", "2243J9RD68")
-desktop_output_dir := env_var_or_default("T3CODE_DESKTOP_INSTALL_OUTPUT_DIR", "release/local-desktop-install")
 agent_device_session := env_var_or_default("T3CODE_AGENT_DEVICE_SESSION", "t3dev-physical")
 non_server_test_workers := env_var_or_default("T3CODE_NON_SERVER_TEST_WORKERS", "3")
 agent_device_ios_bundle_id := env_var_or_default("T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID", "dev.schnau.agentdevice.runner")
@@ -66,6 +65,16 @@ ci-mobile-update:
       --updates-url "$T3CODE_MOBILE_UPDATES_URL" \
       --runtime-version "$runtime_version" \
       --updates-dir "$T3CODE_MOBILE_UPDATES_DIR"
+
+# Publish the macOS build that CI's Desktop package job produced. Entry point for Desktop publish.
+ci-desktop-publish artifacts_dir:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    : "${T3CODE_DESKTOP_UPDATES_DIR:?The runner must provide a writable desktop update directory.}"
+    node scripts/desktop-publish.ts \
+      --artifacts-dir {{ quote(artifacts_dir) }} \
+      --updates-dir "$T3CODE_DESKTOP_UPDATES_DIR" \
+      --commit "$GITHUB_SHA"
 
 # Build and install the iOS development app on the configured device.
 mobile-dev:
@@ -139,48 +148,10 @@ mobile-dev-snapshot:
         --device "{{ mobile_device }}" \
         --target mobile
 
-# Build a macOS desktop DMG and install the contained app into /Applications.
+# Install the newest CI build of the macOS desktop app. Signed builds keep their permissions and
+# update themselves; see patches/desktop-distribution.md.
 desktop-macos:
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    out_dir="{{ desktop_output_dir }}"
-    rm -rf "$out_dir"
-    mkdir -p "$out_dir"
-
-    node scripts/build-desktop-artifact.ts --platform mac --target dmg --output-dir "$out_dir"
-
-    dmg_path="$(find "$out_dir" -maxdepth 1 -type f -name '*.dmg' -print -quit)"
-    if [[ -z "$dmg_path" ]]; then
-      echo "No DMG artifact was produced in $out_dir." >&2
-      exit 1
-    fi
-
-    mount_dir="$(mktemp -d /tmp/t3code-desktop-dmg.XXXXXX)"
-    cleanup() {
-      hdiutil detach "$mount_dir" -quiet >/dev/null 2>&1 || true
-      rmdir "$mount_dir" >/dev/null 2>&1 || true
-    }
-    trap cleanup EXIT
-
-    hdiutil attach "$dmg_path" -mountpoint "$mount_dir" -nobrowse -quiet
-
-    app_path="$(find "$mount_dir" -maxdepth 1 -type d -name '*.app' -print -quit)"
-    if [[ -z "$app_path" ]]; then
-      echo "No .app bundle was found in $dmg_path." >&2
-      exit 1
-    fi
-
-    app_name="$(basename "$app_path")"
-    if [[ "$app_name" != *.app ]]; then
-      echo "Refusing to install unexpected app bundle name: $app_name" >&2
-      exit 1
-    fi
-
-    install_path="/Applications/$app_name"
-    rm -rf "$install_path"
-    ditto "$app_path" "$install_path"
-    echo "Installed $install_path"
+    curl -fsSL https://t3code-updates.schnau.dev/desktop/install.sh | sh
 
 _mobile-ios variant configuration scheme:
     #!/usr/bin/env bash

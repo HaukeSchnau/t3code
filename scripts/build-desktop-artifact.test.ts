@@ -58,7 +58,9 @@ import {
   resolveResourceMonitorRustTargets,
   resolveWindowsServerAsarIgnoreGlobs,
   resourceMonitorExecutableName,
-  resolveGitHubPublishConfig,
+  resolveDesktopPublishConfig,
+  resolveMacDesignatedRequirement,
+  InvalidAppleTeamIdError,
   resolveMockUpdateServerPort,
   resolveMockUpdateServerUrl,
   resolvePackageManagerUserAgent,
@@ -263,7 +265,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
   });
 
   it("switches desktop packaging product names to nightly for nightly builds", () => {
-    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code (Alpha)");
+    assert.equal(resolveDesktopProductName("0.0.17"), "T3 Code Schnau");
     assert.equal(resolveDesktopProductName("0.0.17-nightly.20260413.42"), "T3 Code (Nightly)");
   });
 
@@ -286,44 +288,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     assert.equal(resolveDesktopWebAssetBrand("0.0.17-nightly.20260413.42"), "nightly");
   });
 
-  it.effect("resolves GitHub desktop publish config from Effect config", () =>
+  it.effect("publishes fork builds only to the configured HTTP feed", () =>
     Effect.gen(function* () {
-      const latestConfig = yield* resolveGitHubPublishConfig("latest").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                T3CODE_DESKTOP_UPDATE_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
+      const provide = (env: Record<string, string>) =>
+        Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env })));
+      const configured = yield* resolveDesktopPublishConfig("latest").pipe(
+        provide({ T3CODE_DESKTOP_UPDATE_URL: " https://updates.example.test/desktop " }),
       );
-      const nightlyConfig = yield* resolveGitHubPublishConfig("nightly").pipe(
-        Effect.provide(
-          ConfigProvider.layer(
-            ConfigProvider.fromEnv({
-              env: {
-                GITHUB_REPOSITORY: "pingdotgg/t3code",
-              },
-            }),
-          ),
-        ),
+      // Gitea runners set GITHUB_REPOSITORY to the Gitea path, which is no GitHub feed.
+      const ambientOnly = yield* resolveDesktopPublishConfig("latest").pipe(
+        provide({ GITHUB_REPOSITORY: "schnau/t3code" }),
       );
 
-      assert.deepStrictEqual(latestConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "release",
+      assert.deepStrictEqual(configured, {
+        provider: "generic",
+        url: "https://updates.example.test/desktop",
+        channel: "latest",
       });
-      assert.deepStrictEqual(nightlyConfig, {
-        provider: "github",
-        owner: "pingdotgg",
-        repo: "t3code",
-        releaseType: "prerelease",
-        channel: "nightly",
-      });
+      assert.isUndefined(ambientOnly);
     }),
   );
 
@@ -361,17 +343,14 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(preview, "publish");
       assert.notProperty(previewChannel, "publish");
       assert.deepStrictEqual(release.publish, [
-        {
-          provider: "github",
-          owner: "pingdotgg",
-          repo: "t3code",
-          releaseType: "release",
-        },
+        { provider: "generic", url: "https://updates.example.test/desktop", channel: "latest" },
       ]);
     }).pipe(
       Effect.provide(
         ConfigProvider.layer(
-          ConfigProvider.fromEnv({ env: { GITHUB_REPOSITORY: "pingdotgg/t3code" } }),
+          ConfigProvider.fromEnv({
+            env: { T3CODE_DESKTOP_UPDATE_URL: "https://updates.example.test/desktop" },
+          }),
         ),
       ),
     ),
@@ -670,7 +649,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         "**/*.map",
       ]);
       assert.deepStrictEqual(mac.dmg, {
-        title: "T3 Code (Alpha) 1.2.3 Installer",
+        title: "T3 Code Schnau 1.2.3 Installer",
         background: "dmg/dmg-background-latest.png",
         window: { width: 640, height: 432 },
         contents: [
@@ -1766,7 +1745,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     });
 
     assert.deepStrictEqual(configuration, {
-      appId: "com.t3tools.t3code",
+      appId: "dev.schnau.t3code.desktop",
       teamId: "ABC1234567",
       rpDomains: ["example.clerk.accounts.dev"],
       provisioningProfilePath: "/tmp/t3code.provisionprofile",
@@ -1786,11 +1765,25 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "clerk.example.com",
       "example.clerk.accounts.dev",
     ]);
-    assert.include(entitlements, "<string>ABC1234567.com.t3tools.t3code</string>");
+    assert.include(entitlements, "<string>ABC1234567.dev.schnau.t3code.desktop</string>");
     assert.include(entitlements, "<string>webcredentials:clerk.example.com</string>");
     assert.include(entitlements, "<string>webcredentials:example.clerk.accounts.dev</string>");
     assert.include(entitlements, "<key>com.apple.security.cs.allow-jit</key>");
   });
+
+  it.effect("pins the macOS designated requirement to the signing team", () =>
+    Effect.gen(function* () {
+      assert.equal(
+        yield* resolveMacDesignatedRequirement({ T3CODE_APPLE_TEAM_ID: " abc1234567 " }),
+        'designated => identifier "dev.schnau.t3code.desktop" and anchor apple generic and certificate leaf[subject.OU] = "ABC1234567"',
+      );
+      assert.isUndefined(yield* resolveMacDesignatedRequirement({}));
+      const invalid = yield* resolveMacDesignatedRequirement({ T3CODE_APPLE_TEAM_ID: "urbs" }).pipe(
+        Effect.flip,
+      );
+      assert.instanceOf(invalid, InvalidAppleTeamIdError);
+    }),
+  );
 
   it("rejects incomplete macOS passkey signing configuration", () => {
     const captureError = (env: Readonly<Record<string, string | undefined>>) => {
@@ -1881,7 +1874,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       });
 
       const mac = config.mac as Record<string, unknown>;
-      assert.equal(config.appId, "com.t3tools.t3code");
+      assert.equal(config.appId, "dev.schnau.t3code.desktop");
       assert.equal(mac.entitlements, "/tmp/entitlements.mac.plist");
       assert.equal(mac.provisioningProfile, "/tmp/t3code.provisionprofile");
       assert.match(String(mac.sign), /[\\/]scripts[\\/]sign-macos\.ts$/);
