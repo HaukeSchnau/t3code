@@ -292,7 +292,7 @@ interface TimelineRowSharedState {
   inlineReplyStore: InlineReplyDraftStore | null;
   activeThreadEnvironmentId: EnvironmentId;
   canForkAssistantMessage: boolean;
-  onRevertUserMessage: (messageId: MessageId) => void;
+  onRevertUserMessage: (messageId: MessageId, targetTurnCount: number) => void;
   onForkAssistantMessage: (
     messageId: MessageId,
     turnId: TurnId,
@@ -472,7 +472,7 @@ interface MessagesTimelineProps {
   onOpenTurnDiff: (turnId: TurnId, filePath?: string) => void;
   editableUserMessageIds?: ReadonlySet<MessageId>;
   revertTurnCountByUserMessageId?: Map<MessageId, number>;
-  onRevertUserMessage?: (messageId: MessageId) => void;
+  onRevertUserMessage?: (messageId: MessageId, targetTurnCount: number) => void;
   onForkAssistantMessage?: (
     messageId: MessageId,
     turnId: TurnId,
@@ -2252,7 +2252,7 @@ function UserMessageTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "me
     ],
   );
   const canEditUserMessage = row.canEditUserMessage;
-  const canRevertAgentWork = typeof row.revertTurnCount === "number";
+  const revertTurnCount = row.revertTurnCount;
   const isEditing = ctx.userMessageEditing.editingUserMessageId === row.message.id;
 
   if (isEditing) {
@@ -2417,7 +2417,9 @@ function UserMessageTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "me
           </Tooltip>
           <div className="flex items-center gap-0.5">
             {canEditUserMessage && <EditUserMessageButton messageId={row.message.id} />}
-            {canRevertAgentWork && <RevertUserMessageButton messageId={row.message.id} />}
+            {typeof revertTurnCount === "number" && (
+              <RevertUserMessageButton messageId={row.message.id} turnCount={revertTurnCount} />
+            )}
             {resolvedContext.text && (
               <MessageCopyButton
                 // Structured paste needs the canonical links to retain their positions.
@@ -2495,7 +2497,13 @@ function EditUserMessageButton({ messageId }: { messageId: MessageId }) {
   );
 }
 
-function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
+function RevertUserMessageButton({
+  messageId,
+  turnCount,
+}: {
+  messageId: MessageId;
+  turnCount: number;
+}) {
   const ctx = use(TimelineRowCtx);
   const activity = use(TimelineRowActivityCtx);
 
@@ -2508,7 +2516,7 @@ function RevertUserMessageButton({ messageId }: { messageId: MessageId }) {
             size="xs"
             variant="ghost"
             disabled={activity.isRevertingCheckpoint || activity.isWorking}
-            onClick={() => ctx.onRevertUserMessage(messageId)}
+            onClick={() => ctx.onRevertUserMessage(messageId, turnCount)}
             aria-label="Revert to this message"
           />
         }

@@ -120,8 +120,8 @@ describe("streaming row projection", () => {
       runningTurnId: turnId,
       isWorking: true,
       activeTurnStartedAt: time(5),
-      turnDiffSummaryByAssistantMessageId: new Map<MessageId, TurnDiffSummary>(),
-      revertTurnCountByUserMessageId: new Map<MessageId, number>(),
+      turnDiffSummaries: [],
+      supportsConversationRollback: false,
     } satisfies Parameters<typeof deriveMessagesTimelineRows>[0];
     return { messages, work, timeline, input, time, turnId, historyTurnId };
   }
@@ -266,25 +266,36 @@ describe("streaming row projection", () => {
     },
   );
 
-  it("reuses rows across streaming and equal checkpoint metadata snapshots", () => {
+  it("owns checkpoint lookups across streaming and equal source snapshots", () => {
     const initial = fixture("Partial");
+    let checkpointLookupReads = 0;
     const summary: TurnDiffSummary = {
       turnId: initial.historyTurnId,
-      checkpointTurnCount: 1,
+      get checkpointTurnCount() {
+        checkpointLookupReads += 1;
+        return 1;
+      },
       checkpointRef: CheckpointRef.make("refs/t3/checkpoints/history-turn"),
       status: "ready",
       files: [],
-      assistantMessageId: MessageId.make("history-assistant"),
-      completedAt: initial.time(4),
+      get assistantMessageId() {
+        checkpointLookupReads += 1;
+        return MessageId.make("history-assistant");
+      },
+      get completedAt() {
+        checkpointLookupReads += 1;
+        return initial.time(4);
+      },
     };
     const input = {
       ...initial.input,
-      turnDiffSummaryByAssistantMessageId: new Map([[summary.assistantMessageId!, summary]]),
-      revertTurnCountByUserMessageId: new Map([[MessageId.make("history-user"), 0]]),
+      turnDiffSummaries: [summary],
+      supportsConversationRollback: true,
       expandedTurnIds: new Set([initial.historyTurnId]),
       expandedWorkGroupIds: new Set<string>(),
     };
     const previous = deriveMessagesTimelineRowsWithState(input);
+    expect(checkpointLookupReads).toBeGreaterThan(0);
     expect(previous.rows.some((row) => row.kind === "message" && row.revertTurnCount === 0)).toBe(
       true,
     );
@@ -294,13 +305,14 @@ describe("streaming row projection", () => {
     const nextInput = {
       ...input,
       timelineEntries: timeline.entries,
-      turnDiffSummaryByAssistantMessageId: input.turnDiffSummaryByAssistantMessageId,
-      revertTurnCountByUserMessageId: input.revertTurnCountByUserMessageId,
+      turnDiffSummaries: [...input.turnDiffSummaries],
       latestTurn: { ...input.latestTurn },
       expandedTurnIds: new Set(input.expandedTurnIds),
       expandedWorkGroupIds: new Set(input.expandedWorkGroupIds),
     };
+    checkpointLookupReads = 0;
     const next = deriveMessagesTimelineRowsWithState(nextInput, previous);
+    expect(checkpointLookupReads).toBe(0);
     expect(next.rows).toEqual(deriveMessagesTimelineRows(nextInput));
     for (const [index, row] of previous.rows.entries()) {
       if ((row.kind === "message" || row.kind === "assistant-meta") && row.message === last) {
@@ -311,20 +323,14 @@ describe("streaming row projection", () => {
     }
 
     const changed = deriveMessagesTimelineRowsWithState(
-      {
-        ...nextInput,
-        turnDiffSummaryByAssistantMessageId: new Map([
-          [summary.assistantMessageId!, { ...summary, checkpointTurnCount: 3 }],
-        ]),
-        revertTurnCountByUserMessageId: new Map([[MessageId.make("history-user"), 2]]),
-      },
+      { ...nextInput, turnDiffSummaries: [{ ...summary, checkpointTurnCount: 3 }] },
       next,
     );
     expect(
       changed.rows.find((row) => row.kind === "message" && row.message.id === messages[0]?.id),
     ).toMatchObject({ revertTurnCount: 2 });
     const unsupported = deriveMessagesTimelineRowsWithState(
-      { ...changed.input, revertTurnCountByUserMessageId: new Map() },
+      { ...changed.input, supportsConversationRollback: false },
       changed,
     );
     expect(
