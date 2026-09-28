@@ -567,6 +567,55 @@ describe("sidebar drag projection", () => {
     },
   );
 
+  describe("fork block rows", () => {
+    // Fork layout: "a" is a 165px block (root card plus one delegated card),
+    // and settled rows are 82px cards instead of slim rows.
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a", "active"),
+      thread("b", "active"),
+      settledHeader,
+      thread("s1", "settled"),
+      thread("s2", "settled"),
+    ];
+    const heights = [0, 82, 0, 165, 82, 32, 82, 82];
+    let top = 100;
+    const rects = heights.map((height) => {
+      const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
+      top += height + 1;
+      return rect;
+    });
+    const at = (strategy: SortingStrategy, over: string, key: string) =>
+      strategy({
+        activeIndex: 3,
+        overIndex: items.findIndex((item) => sidebarListItemId(item) === over),
+        activeNodeRect: rects[3]!,
+        rects,
+        index: items.findIndex((item) => sidebarListItemId(item) === key),
+      });
+    const strategy = createSidebarSortingStrategy({
+      items,
+      settledOrder: ["s1", "a", "s2"],
+      settledExpanded: true,
+      measuredRows: true,
+      crossSectionHeight: 82,
+    });
+
+    it("moves the whole tree within its own section", () => {
+      // b closes the gap above a, which keeps its 165px below b.
+      expect(at(strategy, "b", "b")?.y).toBe(-166);
+    });
+
+    it("previews only the root card in another section", () => {
+      expect(at(strategy, "s2", sidebarMarkerId("settled-header"))?.y).toBe(-166);
+      // a takes one 82px card in its settled slot; the whole 165px tree would
+      // leave s2 where it is.
+      expect(at(strategy, "s2", "s2")?.y).toBe(-83);
+    });
+  });
+
   it("removes the snoozed header when its last row leaves", () => {
     const items = [
       pinnedHeader,

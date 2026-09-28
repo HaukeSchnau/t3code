@@ -106,6 +106,14 @@ export function createSidebarSortingStrategy(input: {
   /** Space each pinned boundary opens for its label while dragging. The
    * markers stay zero height at rest, so nothing is reserved until pickup. */
   boundaryLabelHeight?: number;
+  /** Fork: rows keep their measured height in every section. The fork renders
+   * full cards on the shelves too, and a pinned or active row can carry its
+   * delegated subtree (patches/sidebar-orchestration-drag.md). */
+  measuredRows?: boolean;
+  /** Fork: with measuredRows, the moved row's height in another section. A
+   * tree moving across sections previews only its root card, the one thread
+   * the drop moves. */
+  crossSectionHeight?: number;
 }): SortingStrategy {
   const { items } = input;
   const indices = new Map(items.map((item, index) => [sidebarListItemId(item), index]));
@@ -135,7 +143,7 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active")
+      if (item.section === "pinned" || item.section === "active" || input.measuredRows)
         cardHeight ??= rects[index]?.height;
       else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
@@ -203,9 +211,11 @@ export function createSidebarSortingStrategy(input: {
         ? labelHeight
         : item.kind === "marker" && item.marker.endsWith("placeholder")
           ? slimHeight
-          : moved
+          : moved && !input.measuredRows
             ? fallback
-            : (rect?.height ?? fallback);
+            : moved && target.section !== active.section && input.crossSectionHeight !== undefined
+              ? input.crossSectionHeight
+              : (rect?.height ?? fallback);
     });
     const firstShelf = items.findIndex(
       (item) =>
