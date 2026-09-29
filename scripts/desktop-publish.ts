@@ -107,11 +107,11 @@ const writeAtomically = Effect.fn("desktopPublish.writeAtomically")(function* (
   yield* fs.rename(temporary, target);
 });
 
-/** Git output, or "" when git fails (for example when the range predates a shallow checkout). */
-const git = Effect.fn("desktopPublish.git")(function* (args: ReadonlyArray<string>) {
+/** Git output from `repo`, or "" when git fails (for example when the range predates a shallow checkout). */
+const git = Effect.fn("desktopPublish.git")(function* (repo: string, args: ReadonlyArray<string>) {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   return yield* spawner
-    .string(ChildProcess.make("git", [...args]))
+    .string(ChildProcess.make("git", [...args], { cwd: repo }))
     .pipe(Effect.orElseSucceed(() => ""));
 });
 
@@ -123,18 +123,19 @@ const subjectLines = (output: string) =>
 
 /** Commit subjects since the previous build, or just this commit's when history is shallower. */
 const collectReleaseNotes = Effect.fn("desktopPublish.collectReleaseNotes")(function* (
+  repo: string,
   commit: string,
   previousCommit: string | undefined,
 ) {
   const sincePrevious = previousCommit
     ? subjectLines(
-        yield* git(["log", "--first-parent", "--format=%s", `${previousCommit}..${commit}`]),
+        yield* git(repo, ["log", "--first-parent", "--format=%s", `${previousCommit}..${commit}`]),
       )
     : [];
   const subjects =
     sincePrevious.length > 0
       ? sincePrevious
-      : subjectLines(yield* git(["log", "-1", "--format=%s", commit]));
+      : subjectLines(yield* git(repo, ["log", "-1", "--format=%s", commit]));
   return subjects.slice(0, MAX_RELEASE_NOTES).map(releaseNoteFromSubject);
 });
 
@@ -151,6 +152,11 @@ const publishCommand = Command.make(
     feedUrl: Flag.String("feed-url").pipe(
       Flag.withDefault("https://t3code-updates.schnau.dev/desktop"),
     ),
+    // CI's workspace sync leaves .git behind, so the job points this at its own checkout.
+    repo: Flag.Directory("repo", { mustExist: true }).pipe(
+      Flag.withDescription("Git checkout that holds the commit history for release notes."),
+      Flag.withDefault("."),
+    ),
     installScript: Flag.File("install-script", { mustExist: true }).pipe(
       Flag.withDefault("scripts/desktop-install.sh"),
     ),
@@ -160,6 +166,7 @@ const publishCommand = Command.make(
     updatesDir,
     commit,
     feedUrl,
+    repo,
     installScript,
   }) {
     const fs = yield* FileSystem.FileSystem;
@@ -201,6 +208,7 @@ const publishCommand = Command.make(
       );
     }
     const notes = yield* collectReleaseNotes(
+      repo,
       commit,
       Option.getOrUndefined(Option.map(previous, (build) => build.commit)),
     );
