@@ -16,9 +16,10 @@ This app has three variants:
 
 Run commands from `apps/mobile`.
 
-This fork has no T3 Connect account or sign-in flow. Add environments by pairing directly with a
-T3 Code server. Public observability configuration belongs in the repository-root `.env` or
-`.env.local`, not an `apps/mobile/.env` file. See [`../../.env.example`](../../.env.example).
+This fork ships without T3 Connect. Upstream's account code stays in the tree but only turns on
+when the build sets Clerk and relay config, so add environments by pairing directly with a T3 Code
+server. Public observability configuration belongs in the repository-root `.env` or `.env.local`,
+not an `apps/mobile/.env` file. See [`../../.env.example`](../../.env.example).
 
 ## Development
 
@@ -192,8 +193,11 @@ mobile-prod` or `vp run ios:*` run only their embedded bundle. See
 
 CI uses Expo fingerprinting with the `preview:dev` profile to reuse an existing compatible build when possible, or start a new internal EAS build when native runtime inputs change. Production and default local builds continue to use the `appVersion` runtime policy.
 
-Preview and production builds do not require account-authentication environment variables. Configure
-APNs provider credentials on each paired T3 Code server instead; they are never embedded in the app.
+Fork builds must not set any Clerk or relay variable (`T3CODE_CLERK_*`, `EXPO_PUBLIC_CLERK_*`,
+`VITE_CLERK_*`, `T3CODE_RELAY_URL`, `VITE_T3CODE_RELAY_URL`), neither in the environment nor in the
+repository-root `.env` or `.env.local`. Together they turn on T3 Connect sign-in, so the update and
+TestFlight scripts refuse to ship a build that sets them. Configure APNs provider credentials on
+each paired T3 Code server instead; they are never embedded in the app.
 
 Create a PR preview dev-client build manually:
 
