@@ -74,7 +74,8 @@ ci-desktop-publish artifacts_dir:
     node scripts/desktop-publish.ts \
       --artifacts-dir {{ quote(artifacts_dir) }} \
       --updates-dir "$T3CODE_DESKTOP_UPDATES_DIR" \
-      --commit "$GITHUB_SHA"
+      --commit "$GITHUB_SHA" \
+      --repo "$GITHUB_WORKSPACE"
 
 # Build and install the iOS development app on the configured device.
 mobile-dev:
