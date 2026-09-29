@@ -54,7 +54,9 @@ import { Command, Flag } from "effect/unstable/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const LINUX_ICON_SIZES = [16, 22, 24, 32, 48, 64, 128, 256, 512] as const;
-const DESKTOP_APP_ID = "com.t3tools.t3code";
+// Fork identity (patches/desktop-distribution.md). The `.desktop` suffix keeps it apart from
+// the fork's iOS app, which Apple Silicon Macs can also run.
+const DESKTOP_APP_ID = "dev.schnau.t3code.desktop";
 const APPLE_TEAM_ID_PATTERN = /^[A-Z0-9]{10}$/u;
 
 const BuildPlatform = Schema.Literals(["mac", "linux", "win"]);
@@ -1234,6 +1236,23 @@ function normalizePasskeyRpDomain(value: string): string {
 
   return parsed.hostname;
 }
+
+/**
+ * Fork: a team-based designated requirement for the main bundle, when T3CODE_APPLE_TEAM_ID is
+ * set. macOS then keeps recognizing the app (permission grants, keychain access, Squirrel
+ * updates) across certificate renewals and certificate types from the same team, instead
+ * of pinning the signing certificate's name.
+ */
+export const resolveMacDesignatedRequirement = Effect.fn("resolveMacDesignatedRequirement")(
+  function* (env: Readonly<Record<string, string | undefined>>) {
+    const teamId = env.T3CODE_APPLE_TEAM_ID?.trim().toUpperCase();
+    if (!teamId) return undefined;
+    if (!APPLE_TEAM_ID_PATTERN.test(teamId)) {
+      return yield* new InvalidAppleTeamIdError({ teamId });
+    }
+    return `designated => identifier "${DESKTOP_APP_ID}" and anchor apple generic and certificate leaf[subject.OU] = "${teamId}"`;
+  },
+);
 
 export function resolveMacPasskeySigningConfiguration(
   env: Readonly<Record<string, string | undefined>>,
@@ -2546,30 +2565,20 @@ export function resolveDesktopRuntimeDependencies(
   );
 }
 
-export const resolveGitHubPublishConfig = Effect.fn("resolveGitHubPublishConfig")(function* (
+// Fork builds update only from the HTTP feed named by T3CODE_DESKTOP_UPDATE_URL
+// (patches/desktop-distribution.md). There is deliberately no GITHUB_REPOSITORY
+// fallback: Gitea runners set it to the fork's Gitea path, which names an
+// unrelated GitHub account.
+export const resolveDesktopPublishConfig = Effect.fn("resolveDesktopPublishConfig")(function* (
   updateChannel: "latest" | "nightly",
 ) {
-  const env = yield* Config.all({
-    updateRepository: Config.String("T3CODE_DESKTOP_UPDATE_REPOSITORY").pipe(Config.option),
-    githubRepository: Config.String("GITHUB_REPOSITORY").pipe(Config.option),
-  });
-  const rawRepo = (
-    Option.getOrUndefined(env.updateRepository)?.trim() ||
-    Option.getOrUndefined(env.githubRepository)?.trim() ||
-    ""
-  ).trim();
-  if (!rawRepo) return undefined;
+  const updateUrl = yield* Config.String("T3CODE_DESKTOP_UPDATE_URL").pipe(Config.option);
+  const url = Option.getOrUndefined(updateUrl)?.trim();
+  if (!url) return undefined;
 
-  const [owner, repo, ...rest] = rawRepo.split("/");
-  if (!owner || !repo || rest.length > 0) return undefined;
-
-  return {
-    provider: "github",
-    owner,
-    repo,
-    releaseType: updateChannel === "nightly" ? "prerelease" : "release",
-    ...(updateChannel === "nightly" ? { channel: "nightly" as const } : {}),
-  };
+  // An explicit channel, or electron-builder names the feed after the version's prerelease
+  // tag (`schnau-mac.yml`) while the app asks for `latest-mac.yml`.
+  return { provider: "generic", url, channel: updateChannel };
 });
 
 export function resolveDesktopUpdateChannel(version: string): "latest" | "nightly" {
@@ -2681,7 +2690,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   };
   const updateChannel = resolveDesktopUpdateChannel(version);
   if (!isDesktopPreviewVersion(version)) {
-    const publishConfig = yield* resolveGitHubPublishConfig(updateChannel);
+    const publishConfig = yield* resolveDesktopPublishConfig(updateChannel);
     if (publishConfig) {
       buildConfig.publish = [publishConfig];
     } else if (mockUpdates) {
@@ -3596,12 +3605,21 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   const stageProdResourcesDir = path.join(stageAppDir, "apps/desktop/prod-resources");
   yield* fs.copy(stageResourcesDir, stageProdResourcesDir);
 
+  const repoEnv = loadRepoEnv({ repoRoot });
+  // Fork: passkeys need T3 Connect's associated domain and a provisioning profile. The fork
+  // has no T3 Connect, so a signed build without a profile skips the passkey entitlements.
   const configuredMacPasskeySigning =
-    options.platform === "mac" && options.signed
+    options.platform === "mac" &&
+    options.signed &&
+    repoEnv.T3CODE_MACOS_PROVISIONING_PROFILE?.trim()
       ? yield* Effect.try({
-          try: () => resolveMacPasskeySigningConfiguration(loadRepoEnv({ repoRoot })),
+          try: () => resolveMacPasskeySigningConfiguration(repoEnv),
           catch: MacPasskeySigningConfigurationResolutionError.fromCause,
         })
+      : undefined;
+  const macDesignatedRequirement =
+    options.platform === "mac" && options.signed
+      ? yield* resolveMacDesignatedRequirement(repoEnv)
       : undefined;
   const macPasskeySigning = configuredMacPasskeySigning
     ? {
@@ -3750,6 +3768,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     if (value === "") {
       delete buildEnv[key];
     }
+  }
+  if (macDesignatedRequirement) {
+    // Read by scripts/sign-macos.ts, which applies it to the main bundle only.
+    buildEnv.T3CODE_MACOS_DESIGNATED_REQUIREMENT = macDesignatedRequirement;
   }
   if (!options.signed) {
     buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";

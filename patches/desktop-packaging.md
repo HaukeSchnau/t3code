@@ -17,5 +17,5 @@ packages as optional dependencies.
 ## Verification
 
 - `scripts/build-desktop-artifact.test.ts` asserts the staged install arguments.
-- `just desktop-macos` should produce and install a macOS app whose backend process reaches the HTTP readiness
-  endpoint instead of crash-looping with `MODULE_NOT_FOUND`.
+- A CI build installed with `just desktop-macos` (see `desktop-distribution.md`) should start a backend process
+  that reaches the HTTP readiness endpoint instead of crash-looping with `MODULE_NOT_FOUND`.
