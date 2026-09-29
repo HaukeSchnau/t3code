@@ -27,6 +27,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeModule from "node:module";
 
+import { requireAccountlessExpoConfig } from "./lib/accountless-expo-config.ts";
+
 export class MobileUpdateError extends Schema.TaggedError<MobileUpdateError>()(
   "MobileUpdateError",
   { message: Schema.String },
@@ -319,13 +321,13 @@ const publishCommand = Command.make(
       T3CODE_MOBILE_RUNTIME_VERSION: runtimeVersion,
     };
 
+    const publicConfig = yield* expo("expo", ["config", "--type", "public", "--json"], env);
+    yield* requireAccountlessExpoConfig(publicConfig);
+    const expoClient = yield* decodeJson(publicConfig);
     yield* expo("expo", ["export", "--platform", platform, "--output-dir", exportDir], {
       ...env,
       ...(yield* hermesOverride(scratch)),
     });
-    const expoClient = yield* decodeJson(
-      yield* expo("expo", ["config", "--type", "public", "--json"], env),
-    );
     const exported = (yield* decodeExportMetadata(
       yield* fs.readFileString(path.join(exportDir, "metadata.json")),
     )).fileMetadata[platform];

@@ -31,6 +31,8 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 // App Store Connect tokens are ES256 JWTs; WebCrypto would need a PKCS#8 import dance for the same result.
 import * as NodeCrypto from "node:crypto";
 
+import { requireAccountlessExpoConfig } from "./lib/accountless-expo-config.ts";
+
 export class TestFlightError extends Schema.TaggedError<TestFlightError>()("TestFlightError", {
   message: Schema.String,
 }) {}
@@ -239,13 +241,13 @@ const releaseCommand = Command.make(
       T3CODE_MOBILE_UPDATES_URL: updatesUrl.href,
     };
     const expo = path.join(mobile, "node_modules/.bin/expo");
-    const { ios } = yield* decodeExpoConfig(
-      yield* run(expo, ["config", "--type", "public", "--json"], {
-        cwd: mobile,
-        env,
-        capture: true,
-      }),
-    );
+    const publicConfig = yield* run(expo, ["config", "--type", "public", "--json"], {
+      cwd: mobile,
+      env,
+      capture: true,
+    });
+    yield* requireAccountlessExpoConfig(publicConfig);
+    const { ios } = yield* decodeExpoConfig(publicConfig);
 
     const [app] = (yield* decodeApps(
       yield* asc(

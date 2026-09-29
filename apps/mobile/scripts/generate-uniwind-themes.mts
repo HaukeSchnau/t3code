@@ -23,6 +23,7 @@ const GENERATED_DEFAULT_VARIABLES_PATH = NodePath.resolve(
   import.meta.dirname,
   "../generated-uniwind-default-theme-variables.json",
 );
+const GENERATED_CLERK_THEME_PATH = NodePath.resolve(import.meta.dirname, "../clerk-theme.json");
 
 type TailwindColorFamily = keyof typeof tailwindColors;
 type TailwindColorShade = 50 | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900 | 950;
@@ -244,6 +245,10 @@ export const getGeneratedUniwindThemeOutputs = (): ReadonlyArray<
   [GENERATED_CSS_PATH, renderUniwindThemesCSS()],
   [GENERATED_NAMES_PATH, `${JSON.stringify(customThemeNames, null, 2)}\n`],
   [GENERATED_DEFAULT_VARIABLES_PATH, renderDefaultThemeVariablesJSON()],
+  [
+    GENERATED_CLERK_THEME_PATH,
+    `${JSON.stringify({ colors: clerkColorsFor("light"), darkColors: clerkColorsFor("dark"), design: { borderRadius: 18 } }, null, 2)}\n`,
+  ],
 ];
 
 const writeFileAtomically = (filename: string, contents: string) => {
