@@ -88,7 +88,8 @@ jobs:
   test_non_server:
     name: Test packages and clients
     runs-on: t3code-ci-non-server
-    timeout-minutes: 25
+    # Measured 4-22 min on the shared runners; the limit only catches hangs.
+    timeout-minutes: 35
     steps:
       - name: Checkout exact revision
         uses: actions/checkout@v4
@@ -107,7 +108,9 @@ jobs:
   test_server:
     name: Test server ${{ matrix.shard }}/3
     runs-on: t3code-ci
-    timeout-minutes: 15
+    # Shards measured 9-14 min on the shared runners and kept growing; at 15
+    # the limit cancelled healthy runs. It only needs to catch hangs.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
