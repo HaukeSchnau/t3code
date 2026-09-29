@@ -149,7 +149,7 @@ export function ConnectionEnvironmentRow(props: {
         >
           {props.environment.isRelayManaged ? (
             <Text className="text-sm text-foreground-muted">
-              Legacy cloud connection. Pair this environment directly to use it in this fork.
+              Managed by T3 Connect. Tunnel details update automatically.
             </Text>
           ) : (
             <>
