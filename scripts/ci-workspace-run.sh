@@ -1,37 +1,80 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Checked before anything starts: invalid arithmetic inside the cancellation
+# trap would kill the supervisor mid-cancel and orphan the command.
+cancel_grace_seconds="${CI_CANCEL_GRACE_SECONDS:-10}"
+if [[ ! "$cancel_grace_seconds" =~ ^[0-9]+$ ]]; then
+  echo "CI_CANCEL_GRACE_SECONDS must be a whole number of seconds" >&2
+  exit 2
+fi
+
 supervise_command() {
-  local child_pid=""
+  local child_pid="" cancelling=""
+  local -a descendants=()
+
+  # Adds the command's current descendants to `descendants`. Some test tools
+  # create their own sessions and would otherwise escape group cleanup. A
+  # single process snapshot keeps cancellation responsive under pressure.
+  # shellcheck disable=SC2329 # Called from forward_signal, which the traps invoke.
+  capture_descendants() {
+    local parent_pid descendant_pid index pid ppid
+    local -a pending=("$child_pid")
+    local -A children_by_parent=()
+
+    while read -r pid ppid; do
+      [[ -n "$pid" && -n "$ppid" ]] || continue
+      children_by_parent[$ppid]="${children_by_parent[$ppid]:-} $pid"
+    done < <(ps -eo pid=,ppid= 2>/dev/null || true)
+
+    for ((index = 0; index < ${#pending[@]}; index++)); do
+      parent_pid="${pending[$index]}"
+      for descendant_pid in ${children_by_parent[$parent_pid]:-}; do
+        descendants+=("$descendant_pid")
+        pending+=("$descendant_pid")
+      done
+    done
+  }
+
+  # Prints the captured descendants and command-session members that are
+  # still running. Zombies are finished; their parents only have not reaped them.
+  # shellcheck disable=SC2329 # Called from forward_signal, which the traps invoke.
+  running_processes() {
+    {
+      if ((${#descendants[@]} > 0)); then
+        ps -o pid=,stat= -p "$(IFS=,; echo "${descendants[*]}")" 2>/dev/null || true
+      fi
+      ps -o pid=,stat= -s "$child_pid" 2>/dev/null || true
+    } | awk '$2 !~ /^Z/ { print $1 }' | sort -u
+  }
 
   # shellcheck disable=SC2329 # Called indirectly by the signal traps below.
   forward_signal() {
-    if [[ -n "$child_pid" ]]; then
-      local parent_pid descendant_pid index pid ppid
-      local -a pending=("$child_pid") descendants=()
-      local -A children_by_parent=()
+    [[ -n "$child_pid" && -z "$cancelling" ]] || return 0
+    cancelling=1
+    local pid deadline
+    local -a survivors=()
 
-      # Capture descendants before signalling the main group. Some test tools
-      # create their own sessions and would otherwise escape group cleanup. A
-      # single process snapshot keeps cancellation responsive under pressure.
-      while read -r pid ppid; do
-        [[ -n "$pid" && -n "$ppid" ]] || continue
-        children_by_parent[$ppid]="${children_by_parent[$ppid]:-} $pid"
-      done < <(ps -eo pid=,ppid= 2>/dev/null || true)
+    capture_descendants
+    for pid in "${descendants[@]}"; do
+      kill -s "$1" "$pid" 2>/dev/null || true
+    done
+    kill -s "$1" -- "-$child_pid" 2>/dev/null || true
 
-      for ((index = 0; index < ${#pending[@]}; index++)); do
-        parent_pid="${pending[$index]}"
-        for descendant_pid in ${children_by_parent[$parent_pid]:-}; do
-          descendants+=("$descendant_pid")
-          pending+=("$descendant_pid")
-        done
-      done
-
-      for descendant_pid in "${descendants[@]}"; do
-        kill -s "$1" "$descendant_pid" 2>/dev/null || true
-      done
-      kill -s "$1" -- "-$child_pid" 2>/dev/null || true
-    fi
+    # Some tools keep working after TERM: TypeScript 7's native tsc finishes
+    # its whole check first. Kill whatever is still running after a grace
+    # period so a cancelled job cannot leave work behind for hours.
+    deadline=$((SECONDS + 10#$cancel_grace_seconds))
+    while ((SECONDS < deadline)); do
+      [[ -n "$(running_processes)" ]] || return 0
+      sleep 0.2
+    done
+    capture_descendants
+    mapfile -t survivors < <(running_processes)
+    for pid in "${survivors[@]}"; do
+      kill -s KILL "$pid" 2>/dev/null || true
+    done
+    kill -s KILL -- "-$child_pid" 2>/dev/null || true
   }
 
   trap 'forward_signal TERM' TERM
