@@ -174,3 +174,89 @@ jobs:
     uses: schnau/nix-infra-modules/.gitea/workflows/project-release.yml@main
     with:
       runner_label: t3code-ci
+
+  # Fork: every main push packages the signed macOS app on the Apple builder while
+  # the rest of CI runs, and desktop_publish ships it once CI passes. See
+  # patches/desktop-distribution.md.
+  desktop_package:
+    name: Desktop package
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: apple-builder
+    timeout-minutes: 60
+    # The Apple builder provides Xcode, Node and the signing keychain. This
+    # flake's older nixpkgs misbehaves on macOS 27, so Rust comes from the
+    # builder's own pinned nixpkgs registry entry.
+    env:
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+
+      # The builder sits behind a slow home uplink; pnpm's 60 s default aborts
+      # large tarballs when many download at once.
+      - name: Install dependencies
+        env:
+          pnpm_config_fetch_timeout: "600000"
+        run: corepack pnpm install --frozen-lockfile --trust-lockfile --network-concurrency 4
+
+      # Gitea run numbers only grow, so the updater sees every build as newer.
+      - name: Stamp the build version
+        run: |
+          set -euo pipefail
+          base_version="$(node -p "require('./apps/desktop/package.json').version")"
+          node scripts/update-release-package-versions.ts "${base_version}-schnau.${GITHUB_RUN_NUMBER}"
+
+      - name: Package and sign
+        env:
+          T3CODE_DESKTOP_UPDATE_URL: https://t3code-updates.schnau.dev/desktop
+          # Urbs UG's Apple Development identity in the runner's login keychain.
+          # The team-based designated requirement keeps updates and macOS
+          # permissions working when that certificate is replaced.
+          CSC_NAME: "Apple Development: Created via API (85N8Y9CZC4)"
+          T3CODE_APPLE_TEAM_ID: 2243J9RD68
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/node_modules/.bin:/run/current-system/sw/bin:$PATH"
+          nix shell nixpkgs#cargo nixpkgs#rustc --command \
+            node scripts/build-desktop-artifact.ts \
+              --platform mac --target zip --arch arm64 --signed --output-dir desktop-release
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-mac-arm64
+          path: |
+            desktop-release/*-arm64.zip
+            desktop-release/*-arm64.zip.blockmap
+            desktop-release/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 3
+
+  desktop_publish:
+    name: Desktop publish
+    needs: [release_check, desktop_package]
+    runs-on: t3code-ci
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          # Release notes list the main commits since the previous build.
+          fetch-depth: 100
+
+      - name: Download build
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-mac-arm64
+          path: desktop-release
+
+      - name: Publish to the update feed
+        run: |
+          set -euo pipefail
+          if [ -x /run/current-system/sw/bin/nix ]; then
+            export PATH="/run/current-system/sw/bin:$PATH"
+          fi
+          source_workspace="$GITHUB_WORKSPACE"
+          exec nix develop .#ci --command \
+            "$source_workspace/scripts/ci-workspace-run.sh" \
+            "$source_workspace" just ci-desktop-publish desktop-release
