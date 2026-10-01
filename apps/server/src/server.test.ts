@@ -1323,6 +1323,11 @@ const buildAppUnderTest = (options?: {
           }),
         ),
         Layer.provide(
+          Layer.mock(ServerEnvironment.ServerEnvironmentIdentity)({
+            getEnvironmentId: Effect.succeed(testEnvironmentDescriptor.environmentId),
+          }),
+        ),
+        Layer.provide(
           Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
             resolve: () => Effect.succeed(null),
             ...options?.layers?.repositoryIdentityResolver,
@@ -11690,6 +11695,62 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         assert.deepEqual(reply, { status: 200, body: { outcome: "already_delivered" } });
         assert.equal(dispatch.mock.calls.length, 0);
+      }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+    );
+
+    it.effect("summarizes a waiting thread for the watch, question included", () =>
+      Effect.gen(function* () {
+        yield* buildAppUnderTest({
+          layers: {
+            projectionSnapshotQuery: {
+              getThreadShellById: () =>
+                Effect.succeed(
+                  Option.some(
+                    makeDefaultOrchestrationThreadShell({
+                      hasPendingUserInput: true,
+                      session: {
+                        threadId: defaultThreadId,
+                        status: "running",
+                        providerName: "codex",
+                        runtimeMode: "full-access",
+                        activeTurnId: null,
+                        lastError: null,
+                        updatedAt: "2026-01-01T00:00:01.000Z",
+                      },
+                    }),
+                  ),
+                ),
+              getThreadDetailSnapshot: () =>
+                Effect.succeed(
+                  Option.some({
+                    snapshotSequence: 1,
+                    activityDetailMode: "full" as const,
+                    thread: {
+                      ...makeDefaultOrchestrationReadModel().threads[0]!,
+                      activities: [questionActivity],
+                    },
+                  }),
+                ),
+            },
+          },
+        });
+        const accessToken = yield* getAuthenticatedBearerSessionToken();
+        const response = yield* fetchEffect(
+          yield* getHttpServerUrl(`/api/orchestration/threads/${defaultThreadId}/glance`),
+          { headers: { authorization: `Bearer ${accessToken}` } },
+        );
+
+        assert.equal(response.status, 200);
+        assert.deepInclude(yield* responseJsonEffect<Record<string, unknown>>(response), {
+          environmentId: testEnvironmentDescriptor.environmentId,
+          phase: "waiting_for_input",
+          question: {
+            text: "Which runner should the package use?",
+            options: ["Vitest", "Bun test"],
+            allowsFreeText: true,
+          },
+          canStop: true,
+        });
       }).pipe(Effect.provide(NodeHttpServer.layerTest)),
     );
   });
