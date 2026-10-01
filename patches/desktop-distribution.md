@@ -9,13 +9,15 @@ passkeys) don't apply to the fork.
 
 ## Implementation
 
-- CI's `desktop_package` job (`.gitea/workflows/project-release.yml`) runs on the m1 Apple builder
-  for every push to `main`, alongside the rest of CI. It stamps `<version>-schnau.<run>` with
-  `scripts/update-release-package-versions.ts`: electron-updater only installs a strictly higher
-  version, and Gitea run numbers only grow. `desktop_publish` needs `release_check` and the
-  package, so only green commits ship. A newer push cancels both, so the newest commit wins.
-- Chosen tradeoff: while m1 is paused, on battery, low on disk or busy, the CI workflow stays
-  open until the desktop jobs finish. The Mobile workflow follows CI completion and waits with it.
+- `.gitea/workflows/desktop.yml` follows CI the way `mobile.yml` does: it runs when CI completes
+  green for a push to `main`. Its Package job builds and signs the app on the m1 Apple builder, and
+  its Publish job writes it to the feed from srv-2. CI never waits for m1, so a paused or busy
+  builder delays only the desktop build, and a desktop failure never turns CI red or skips the
+  mobile update. A newer green commit cancels an older desktop build.
+- Builds are versioned `<version>-schnau.<CI run number>` (`github.event.workflow_run.run_number`)
+  with `scripts/update-release-package-versions.ts`. electron-updater only installs a strictly
+  higher version, and CI's run number only grows. It also continues the numbering of the builds
+  made while the desktop jobs ran inside CI.
 - Signing uses Urbs UG's Apple Development identity from the runner's login keychain
   (`CSC_NAME`), without notarization. Gatekeeper only checks notarization on quarantined files.
   curl and the updater don't quarantine, so installs go through `scripts/desktop-install.sh`
