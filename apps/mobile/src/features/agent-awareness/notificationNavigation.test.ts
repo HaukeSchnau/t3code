@@ -176,4 +176,20 @@ describe("routeAgentNotificationResponseOnce", () => {
 
     expect(navigations).toEqual(["/threads/env/thread"]);
   });
+
+  it("leaves Reply and Retry to the native handler instead of opening the thread", () => {
+    const navigations: Array<string> = [];
+    const reply = {
+      ...responseWithData({ environmentId: "env", threadId: "thread" }),
+      actionIdentifier: "AGENT_REPLY",
+    };
+
+    routeAgentNotificationResponseOnce({
+      handledResponseIds: new Set(),
+      response: reply,
+      navigate: (deepLink) => navigations.push(deepLink),
+    });
+
+    expect(navigations).toEqual([]);
+  });
 });

@@ -248,4 +248,45 @@ describe("local agent-awareness aggregation", () => {
       expect(yield* Ref.get(deliveryCount)).toBe(2);
     }),
   );
+
+  it.effect("sends alerts as Reply notifications and keeps the Live Activity quiet", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(Date.parse("2026-08-10T12:00:30.000Z"));
+      const delivered = { ok: true, status: 200, reason: null, apnsId: "apns-id" } as const;
+      const liveActivityAlerts = yield* Ref.make<ReadonlyArray<ApnsProvider.ApnsAlert | null>>([]);
+      const categories = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
+      const apns = {
+        configured: true,
+        sendLiveActivity: (input) =>
+          Ref.update(liveActivityAlerts, (alerts) => [...alerts, input.alert ?? null]).pipe(
+            Effect.as(delivered),
+          ),
+        sendNotification: (input) =>
+          Ref.update(categories, (sent) => [...sent, input.category]).pipe(Effect.as(delivered)),
+      } satisfies ApnsProvider.ApnsProvider["Service"];
+      const awareness = yield* makeLocalAgentAwareness.pipe(
+        Effect.provideService(ServerSecretStore.ServerSecretStore, makeMemorySecretStore()),
+        Effect.provideService(ApnsProvider.ApnsProvider, apns),
+      );
+      yield* awareness.registerDevice(registration);
+      yield* awareness.registerLiveActivity({
+        deviceId: registration.deviceId,
+        activityPushToken: "activity-token",
+      });
+
+      yield* awareness.publish({ threadId: runningState.threadId, state: runningState });
+      yield* awareness.publish({
+        threadId: runningState.threadId,
+        state: {
+          ...runningState,
+          phase: "waiting_for_input",
+          headline: "Input",
+          updatedAt: "2026-08-10T12:00:20.000Z",
+        },
+      });
+
+      expect(yield* Ref.get(liveActivityAlerts)).toEqual([null, null]);
+      expect(yield* Ref.get(categories)).toEqual(["AGENT_INPUT"]);
+    }),
+  );
 });
