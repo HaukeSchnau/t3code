@@ -33,7 +33,7 @@ export class MobileSecureStorage extends Context.Service<
  * The iOS keychain service for everything this app stores. Its items stay readable from the
  * first unlock after a reboot, so the native notification Reply handler can read the saved
  * connections while the phone is locked. Keep in sync with the service name in
- * modules/t3-agent-notifications/ios/AgentReplyConnections.swift.
+ * modules/t3-agent-notifications/ios/EnvironmentConnections.swift.
  *
  * Earlier builds used expo-secure-store's defaults, service "app" and WHEN_UNLOCKED. Re-saving
  * can't migrate those items, because expo-secure-store's update path keeps the old protection

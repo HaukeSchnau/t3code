@@ -87,7 +87,9 @@ final class AgentReplyHandler: NotificationDelegate, @unchecked Sendable {
     return true
   }
 
-  private func send(_ reply: AgentReply) {
+  /// Sends a reply and posts "Reply not delivered" when it fails. Also used for replies the
+  /// watch queued while the phone was out of reach.
+  func send(_ reply: AgentReply) {
     let application = UIApplication.shared
     var backgroundTask = UIBackgroundTaskIdentifier.invalid
     let finish = {
@@ -233,44 +235,66 @@ enum AgentReplyFailure: Error {
   }
 }
 
+/// One request to a saved environment, authorized with its bearer token.
+enum EnvironmentClient {
+  /// Calls `path` below the environment's base URL. The completion gets the HTTP status and the
+  /// raw body, or a nil status when the request never got a response.
+  static func request(
+    _ connection: EnvironmentConnection,
+    method: String,
+    path: [String],
+    body: [String: Any]? = nil,
+    completion: @escaping (_ status: Int?, _ data: Data?) -> Void
+  ) {
+    let url = path.reduce(connection.httpBaseUrl) { $0.appendingPathComponent($1) }
+    var request = URLRequest(url: url, timeoutInterval: 20)
+    request.httpMethod = method
+    request.setValue("Bearer \(connection.bearerToken)", forHTTPHeaderField: "Authorization")
+    if let body {
+      request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+      request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+    }
+    URLSession.shared.dataTask(with: request) { data, response, error in
+      guard error == nil, let http = response as? HTTPURLResponse else {
+        return completion(nil, nil)
+      }
+      completion(http.statusCode, data)
+    }.resume()
+  }
+
+  /// Maps an unsuccessful status onto the failure the user sees.
+  static func failure(for status: Int?) -> AgentReplyFailure {
+    switch status {
+    case 401, 403: return .unauthorized
+    case 404: return .threadGone
+    default: return .unreachable
+    }
+  }
+}
+
 enum AgentReplyClient {
   static func send(_ reply: AgentReply, completion: @escaping (AgentReplyFailure?) -> Void) {
-    let connection: AgentReplyConnection
-    switch AgentReplyConnections.find(environmentId: reply.environmentId) {
+    let connection: EnvironmentConnection
+    switch EnvironmentConnections.find(environmentId: reply.environmentId) {
     case .success(let found):
       connection = found
     case .failure(let failure):
       return completion(failure)
     }
-    let url = connection.httpBaseUrl
-      .appendingPathComponent("api/orchestration/threads")
-      .appendingPathComponent(reply.threadId)
-      .appendingPathComponent("reply")
-    var request = URLRequest(url: url, timeoutInterval: 20)
-    request.httpMethod = "POST"
-    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-    request.setValue("Bearer \(connection.bearerToken)", forHTTPHeaderField: "Authorization")
-    request.httpBody = try? JSONSerialization.data(
-      withJSONObject: ["replyId": reply.replyId, "text": reply.text]
-    )
-    URLSession.shared.dataTask(with: request) { data, response, error in
-      guard error == nil, let http = response as? HTTPURLResponse else {
-        return completion(.unreachable)
+    EnvironmentClient.request(
+      connection,
+      method: "POST",
+      path: ["api", "orchestration", "threads", reply.threadId, "reply"],
+      body: ["replyId": reply.replyId, "text": reply.text]
+    ) { status, data in
+      guard let status, (200..<300).contains(status) else {
+        return completion(EnvironmentClient.failure(for: status))
       }
-      switch http.statusCode {
-      case 200..<300:
-        let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-        if body?["outcome"] as? String == "rejected" {
-          return completion(.rejected(reason: body?["reason"] as? String ?? ""))
-        }
-        completion(nil)
-      case 401, 403:
-        completion(.unauthorized)
-      case 404:
-        completion(.threadGone)
-      default:
-        completion(.unreachable)
+      let body = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+      if body?["outcome"] as? String == "rejected" {
+        return completion(.rejected(reason: body?["reason"] as? String ?? ""))
       }
-    }.resume()
+      completion(nil)
+    }
   }
 }
