@@ -43,26 +43,34 @@ export function planThreadReply(input: {
   if (input.hasPendingApprovals) return { _tag: "Rejected", reason: "approval_pending" };
   if (!input.hasPendingUserInput) return { _tag: "Message" };
 
-  const [request, ...others] = input.openRequests.filter(
-    (activity) => activity.kind === "user-input.requested",
-  );
-  if (!request || others.length > 0) return { _tag: "Rejected", reason: "question_needs_client" };
-  const payload = decodeQuestions(request.payload);
-  const requestId = (request.payload as { readonly requestId?: unknown }).requestId;
-  if (Option.isNone(payload) || typeof requestId !== "string") {
-    return { _tag: "Rejected", reason: "question_needs_client" };
-  }
-  const [question, ...moreQuestions] = payload.value.questions;
-  if (!question || moreQuestions.length > 0) {
-    return { _tag: "Rejected", reason: "question_needs_client" };
-  }
-  const answer = matchUserInputAnswer(question, input.text);
+  const pending = singlePendingQuestion(input.openRequests);
+  if (!pending) return { _tag: "Rejected", reason: "question_needs_client" };
+  const answer = matchUserInputAnswer(pending.question, input.text);
   if (answer === null) return { _tag: "Rejected", reason: "no_matching_option" };
   return {
     _tag: "Answer",
-    requestId: ApprovalRequestId.make(requestId),
-    answers: { [question.id]: answer },
+    requestId: pending.requestId,
+    answers: { [pending.question.id]: answer },
   };
+}
+
+/**
+ * The thread's pending question when there is exactly one request with exactly one part, which
+ * is what a notification reply or the watch can answer. Anything else needs the full client.
+ */
+export function singlePendingQuestion(
+  openRequests: ReadonlyArray<OrchestrationThreadActivity>,
+): { readonly requestId: ApprovalRequestId; readonly question: UserInputQuestion } | null {
+  const [request, ...others] = openRequests.filter(
+    (activity) => activity.kind === "user-input.requested",
+  );
+  if (!request || others.length > 0) return null;
+  const payload = decodeQuestions(request.payload);
+  const requestId = (request.payload as { readonly requestId?: unknown }).requestId;
+  if (Option.isNone(payload) || typeof requestId !== "string") return null;
+  const [question, ...moreQuestions] = payload.value.questions;
+  if (!question || moreQuestions.length > 0) return null;
+  return { requestId: ApprovalRequestId.make(requestId), question };
 }
 
 const NUMBER_WORDS = [
