@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# apple-targets writes the watch app icon from the build variant's icon at prebuild.
+/targets/*/Assets.xcassets/

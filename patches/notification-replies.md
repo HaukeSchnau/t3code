@@ -33,6 +33,6 @@ open the thread.
 ## Upstream maintenance
 
 Keep the keychain service and catalog key in `mobile-secure-storage.ts`, `catalog-store.ts` and
-`AgentReplyConnections.swift` in agreement, and the action ids in `AgentReplyHandler.swift` and
+`EnvironmentConnections.swift` in agreement, and the action ids in `AgentReplyHandler.swift` and
 `notificationPayload.ts`. Drop this patch if upstream ships notification actions backed by a
 server-side reply path. A future Apple Watch app is meant to reuse the reply endpoint.

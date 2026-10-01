@@ -13,6 +13,7 @@ Pod::Spec.new do |s|
 
   s.dependency 'ExpoModulesCore'
   s.dependency 'ExpoNotifications'
+  s.frameworks = 'WatchConnectivity'
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
   }
