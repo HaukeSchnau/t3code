@@ -66,15 +66,15 @@ ci-mobile-update:
       --runtime-version "$runtime_version" \
       --updates-dir "$T3CODE_MOBILE_UPDATES_DIR"
 
-# Publish the macOS build that CI's Desktop package job produced. Entry point for Desktop publish.
-ci-desktop-publish artifacts_dir:
+# Publish the Desktop workflow's macOS build of `commit`. Entry point for its Publish job.
+ci-desktop-publish artifacts_dir commit:
     #!/usr/bin/env bash
     set -euo pipefail
     : "${T3CODE_DESKTOP_UPDATES_DIR:?The runner must provide a writable desktop update directory.}"
     node scripts/desktop-publish.ts \
       --artifacts-dir {{ quote(artifacts_dir) }} \
       --updates-dir "$T3CODE_DESKTOP_UPDATES_DIR" \
-      --commit "$GITHUB_SHA" \
+      --commit {{ quote(commit) }} \
       --repo "$GITHUB_WORKSPACE"
 
 # Build and install the iOS development app on the configured device.
