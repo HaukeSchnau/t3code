@@ -30,6 +30,12 @@ Tap a notification to open its thread. Finished results stay in the Live Activit
 minutes. Alerts stay quiet while the app is open, but the Live Activity keeps updating. Viewing a
 thread on another device does not silence the phone.
 
+A question has an **Answer** action, and finished or failed work has **Reply**. Both work from the
+Lock Screen and from an Apple Watch without opening the app. To answer a question, name one of its
+options or answer in your own words. A reply to finished or failed work becomes the agent's next
+message. Approvals and questions with several parts still open the app. If a reply doesn't arrive,
+a **Reply not delivered** notification says why and offers **Retry** when it can help.
+
 With several paired environments, the first one the phone reaches handles notifications. Each
 server knows only its own threads, so alerts and the Live Activity cover that server's work only.
 

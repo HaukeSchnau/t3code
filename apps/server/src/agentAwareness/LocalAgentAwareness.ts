@@ -193,6 +193,21 @@ function preferenceAllowsAlert(
   }
 }
 
+// Questions and finished or failed work get a Reply action. Approvals stay tap-to-open.
+function notificationCategory(
+  phase: RelayAgentActivityState["phase"],
+): ApnsProvider.ApnsNotificationCategory | undefined {
+  switch (phase) {
+    case "waiting_for_input":
+      return "AGENT_INPUT";
+    case "completed":
+    case "failed":
+      return "AGENT_DONE";
+    default:
+      return undefined;
+  }
+}
+
 export function alertForLocalAgentActivityTransition(input: {
   readonly previous: RelayAgentActivityAggregateStateType | null;
   readonly next: RelayAgentActivityAggregateStateType | null;
@@ -226,6 +241,7 @@ function notificationForTransition(input: {
         title: nextRow.threadTitle,
         body: `${nextRow.status}: ${nextRow.projectTitle}`,
       },
+      category: notificationCategory(nextRow.phase),
       row: nextRow,
     };
   }
@@ -356,6 +372,15 @@ export const make = Effect.gen(function* () {
       registration: input.device.registration,
       nowMs: input.nowMs,
     });
+    const pushToken = input.device.registration.pushToken;
+    const pushTarget = pushToken ? deliveryTarget(input.device, pushToken) : null;
+    // Only regular notifications carry Reply actions, so an alert goes out as one whenever the
+    // device has a push token. The Live Activity then updates without its own alert, and the
+    // phone still buzzes once per transition.
+    const alertPush = notification && pushTarget ? { notification, target: pushTarget } : null;
+    let device = input.device;
+    let delivered = true;
+
     const liveActivityToken = input.device.activityPushToken;
     if (liveActivityToken) {
       const target = deliveryTarget(input.device, liveActivityToken);
@@ -369,7 +394,7 @@ export const make = Effect.gen(function* () {
           target,
           event: shouldEnd ? "end" : "update",
           state: input.aggregate,
-          alert: notification?.alert ?? null,
+          alert: alertPush ? null : (notification?.alert ?? null),
         })
         .pipe(
           Effect.catch((cause) =>
@@ -380,46 +405,44 @@ export const make = Effect.gen(function* () {
           ),
         );
       if (result === null) return input.device;
-      return {
-        ...input.device,
+      device = {
+        ...device,
         activityPushToken:
           shouldEnd || permanentTokenFailure(result) ? null : input.device.activityPushToken,
-        lastAggregate: result.ok ? input.aggregate : input.device.lastAggregate,
       };
-    }
-    const pushToken = input.device.registration.pushToken;
-    if (!notification) {
+      delivered = result.ok;
+    } else if (!notification) {
       return { ...input.device, lastAggregate: input.aggregate };
+    } else if (!alertPush) {
+      return input.device;
     }
-    if (!pushToken) return input.device;
-    const target = deliveryTarget(input.device, pushToken);
-    if (!target) return input.device;
-    const result = yield* apns
-      .sendNotification({
-        target,
-        title: notification.alert.title,
-        body: notification.alert.body,
-        environmentId: notification.row.environmentId,
-        threadId: notification.row.threadId,
-        deepLink: notification.row.deepLink,
-      })
-      .pipe(
-        Effect.catch((cause) =>
-          Effect.logWarning("Accountless push notification delivery failed", {
-            deviceId: input.device.registration.deviceId,
-            cause,
-          }).pipe(Effect.as(null)),
-        ),
-      );
-    if (result === null) return input.device;
-    const registration = permanentTokenFailure(result)
-      ? { ...input.device.registration, pushToken: undefined }
-      : input.device.registration;
-    return {
-      ...input.device,
-      registration,
-      lastAggregate: result.ok ? input.aggregate : input.device.lastAggregate,
-    };
+
+    if (alertPush) {
+      const result = yield* apns
+        .sendNotification({
+          target: alertPush.target,
+          title: alertPush.notification.alert.title,
+          body: alertPush.notification.alert.body,
+          environmentId: alertPush.notification.row.environmentId,
+          threadId: alertPush.notification.row.threadId,
+          deepLink: alertPush.notification.row.deepLink,
+          category: alertPush.notification.category,
+        })
+        .pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Accountless push notification delivery failed", {
+              deviceId: input.device.registration.deviceId,
+              cause,
+            }).pipe(Effect.as(null)),
+          ),
+        );
+      if (result === null) return device;
+      if (permanentTokenFailure(result)) {
+        device = { ...device, registration: { ...device.registration, pushToken: undefined } };
+      }
+      delivered = delivered && result.ok;
+    }
+    return { ...device, lastAggregate: delivered ? input.aggregate : input.device.lastAggregate };
   });
 
   const publish: LocalAgentAwareness["Service"]["publish"] = Effect.fn(

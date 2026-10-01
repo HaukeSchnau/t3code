@@ -77,16 +77,19 @@ describe("accountless APNs provider", () => {
   it("keeps notification routing metadata outside the aps dictionary", () => {
     expect(
       makeNotificationPayload({
-        title: "Approval needed",
-        body: "Review: T3 Code",
+        title: "Question",
+        body: "Input: T3 Code",
         environmentId: "environment-1",
         threadId: "thread-1",
         deepLink: "/environment/environment-1/thread/thread-1",
+        category: "AGENT_INPUT",
       }),
     ).toEqual({
       aps: {
-        alert: { title: "Approval needed", body: "Review: T3 Code" },
+        alert: { title: "Question", body: "Input: T3 Code" },
         sound: "default",
+        "thread-id": "environment-1/thread-1",
+        category: "AGENT_INPUT",
       },
       environmentId: "environment-1",
       threadId: "thread-1",
