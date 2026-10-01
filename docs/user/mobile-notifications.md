@@ -36,6 +36,10 @@ options or answer in your own words. A reply to finished or failed work becomes 
 message. Approvals and questions with several parts still open the app. If a reply doesn't arrive,
 a **Reply not delivered** notification says why and offers **Retry** when it can help.
 
+Questions and approvals are Time Sensitive, so they reach you during a Focus. To stop that, turn
+off **Time Sensitive Notifications** for T3 Code in the iPhone's Settings app under
+**Notifications**.
+
 With several paired environments, the first one the phone reaches handles notifications. Each
 server knows only its own threads, so alerts and the Live Activity cover that server's work only.
 

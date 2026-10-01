@@ -256,9 +256,11 @@ const config: ExpoConfig = {
     // Pin code signing to this fork's Apple Developer team so non-interactive
     // builds keep the App Group and push-notification entitlements intact.
     appleTeamId: IOS_TEAM_ID,
-    // expo-secure-store keeps environment credentials in this bundle-scoped Keychain group.
     entitlements: {
+      // expo-secure-store keeps environment credentials in this bundle-scoped Keychain group.
       "keychain-access-groups": [`$(AppIdentifierPrefix)${iosBundleIdentifier}`],
+      // Lets agent questions and approvals break through Focus (see patches/notification-replies.md).
+      "com.apple.developer.usernotifications.time-sensitive": true,
     },
     infoPlist: {
       NSAppTransportSecurity: {
