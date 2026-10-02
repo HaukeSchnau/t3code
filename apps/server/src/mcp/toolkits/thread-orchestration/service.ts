@@ -306,6 +306,18 @@ function isTerminalMemberOutcome(
   return ["completed", "failed", "interrupted"].includes(outcome);
 }
 
+function wakesCoordinator(outcome: NonNullable<ThreadOrchestrationThreadSummary["outcome"]>) {
+  return (
+    isTerminalMemberOutcome(outcome) || ["blocked-approval", "blocked-input"].includes(outcome)
+  );
+}
+
+// Identifies one coordinator notification about one turn's outcome. Notification commands,
+// messages, and acknowledgments derive from it, so a later turn of the same worker notifies again.
+function delegationNotificationKey(coordinatorThreadId: ThreadId, thread: ThreadSummarySource) {
+  return `${coordinatorThreadId}:${thread.id}:${thread.latestTurn?.turnId ?? "no-turn"}:${outcomeForThread(thread)}`;
+}
+
 function deliveryForCoordinatorNotification(
   outcomes: ReadonlyArray<ThreadOrchestrationThreadSummary["outcome"]>,
   source: "worker-status" | "wait" = "worker-status",
@@ -791,6 +803,30 @@ const make = Effect.gen(function* () {
       return context.value;
     });
 
+  // Notifications the coordinator already saw by reading the worker. The delegation monitor skips
+  // these; a notification queued before the read is withdrawn by acknowledgeDelegatedOutcome.
+  const acknowledgedNotifications = new Set<string>();
+
+  // Reading a worker that reached a wake-worthy outcome counts as receiving its notification.
+  const acknowledgeDelegatedOutcome = (
+    scope: ThreadOrchestrationActorScope,
+    thread: ThreadSummarySource,
+  ) =>
+    Effect.gen(function* () {
+      if (thread.id === scope.threadId || !wakesCoordinator(outcomeForThread(thread))) return;
+      const key = delegationNotificationKey(scope.threadId, thread);
+      acknowledgedNotifications.add(key);
+      const reader = yield* snapshotQuery.getThreadResultContextById(scope.threadId);
+      if (Option.isNone(reader) || reader.value.queuedMessageCount === 0) return;
+      yield* engine.dispatch({
+        type: "thread.queued-message.delete",
+        commandId: CommandId.make(`${key}:acknowledged`),
+        threadId: scope.threadId,
+        messageId: MessageId.make(`${key}:message`),
+        createdAt: yield* nowIso,
+      });
+    }).pipe(Effect.ignoreCause({ log: true }));
+
   const readThreadResult = (
     scope: ThreadOrchestrationActorScope,
     input: ThreadOrchestrationReadThreadResultInput,
@@ -800,6 +836,7 @@ const make = Effect.gen(function* () {
         return yield* remoteClient.readThreadResult(scope, input);
       }
       const context = yield* readThreadResultContext(input.threadId, "read_thread_result");
+      yield* acknowledgeDelegatedOutcome(scope, context.thread);
       return yield* threadResultFromContext(context);
     });
 
@@ -975,6 +1012,7 @@ const make = Effect.gen(function* () {
           createdAt,
         });
       }
+      yield* acknowledgeDelegatedOutcome(scope, thread);
       return {
         thread: summaryForThread(thread, projectOption.value, yield* localEnvironmentId),
         messages: trimMessagesForTurns(thread, input.turnLimit),
@@ -2579,12 +2617,11 @@ const make = Effect.gen(function* () {
   ): Effect.Effect<void, ThreadOrchestrationError> =>
     Effect.scoped(
       Effect.gen(function* () {
-        const result = yield* readThreadResult(scope, { threadId: targetThreadId });
+        const context = yield* readThreadResultContext(targetThreadId, "delegation.monitor");
+        const result = yield* threadResultFromContext(context);
         const outcome = result.thread.outcome ?? "unknown";
-        const shouldWake =
-          isTerminalMemberOutcome(outcome) ||
-          ["blocked-approval", "blocked-input"].includes(outcome);
-        if (shouldWake) {
+        const notificationKey = delegationNotificationKey(scope.threadId, context.thread);
+        if (wakesCoordinator(outcome) && !acknowledgedNotifications.has(notificationKey)) {
           const coordination = yield* coordinationShell();
           const coveredByWait = coordination.waits.some(
             (wait) =>
@@ -2602,7 +2639,7 @@ const make = Effect.gen(function* () {
               );
             if (Option.isSome(coordinator)) {
               const createdAt = yield* nowIso;
-              const stableId = `${scope.threadId}:${targetThreadId}:${outcome}`;
+              const stableId = notificationKey;
               yield* engine
                 .dispatch({
                   type: "thread.message.queue",
