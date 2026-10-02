@@ -136,6 +136,8 @@ export function makeNotificationPayload(input: {
   readonly threadId: string;
   readonly deepLink: string;
   readonly category?: ApnsNotificationCategory | undefined;
+  // Time-sensitive alerts break through Focus. Needs the app's time-sensitive entitlement.
+  readonly interruptionLevel?: "time-sensitive" | undefined;
 }) {
   return {
     aps: {
@@ -144,6 +146,7 @@ export function makeNotificationPayload(input: {
       // Groups a thread's notifications on the lock screen and the watch.
       "thread-id": `${input.environmentId}/${input.threadId}`,
       ...(input.category ? { category: input.category } : {}),
+      ...(input.interruptionLevel ? { "interruption-level": input.interruptionLevel } : {}),
     },
     environmentId: input.environmentId,
     threadId: input.threadId,
@@ -283,6 +286,7 @@ export class ApnsProvider extends Context.Service<
       readonly threadId: string;
       readonly deepLink: string;
       readonly category?: ApnsNotificationCategory | undefined;
+      readonly interruptionLevel?: "time-sensitive" | undefined;
     }) => Effect.Effect<ApnsDeliveryResult, ApnsProviderDeliveryError>;
   }
 >()("t3/agentAwareness/ApnsProvider") {}

@@ -242,6 +242,11 @@ function notificationForTransition(input: {
         body: `${nextRow.status}: ${nextRow.projectTitle}`,
       },
       category: notificationCategory(nextRow.phase),
+      // A blocked agent is worth breaking through Focus for; finished work can wait.
+      interruptionLevel:
+        nextRow.phase === "waiting_for_approval" || nextRow.phase === "waiting_for_input"
+          ? ("time-sensitive" as const)
+          : undefined,
       row: nextRow,
     };
   }
@@ -427,6 +432,7 @@ export const make = Effect.gen(function* () {
           threadId: alertPush.notification.row.threadId,
           deepLink: alertPush.notification.row.deepLink,
           category: alertPush.notification.category,
+          interruptionLevel: alertPush.notification.interruptionLevel,
         })
         .pipe(
           Effect.catch((cause) =>

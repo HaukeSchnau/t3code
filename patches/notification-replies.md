@@ -12,6 +12,9 @@ open the thread.
   category (`AGENT_INPUT`, `AGENT_DONE`) and a per-thread `thread-id`. A device with a Live
   Activity gets that update without its own alert: Live Activity alerts can't carry actions, and
   the phone should buzz once per transition. Approvals keep no category and open the app.
+- Questions and approvals go out with `interruption-level: time-sensitive`, so a blocked agent
+  breaks through Focus. The app carries the time-sensitive entitlement; personal-team builds drop
+  it along with push.
 - `POST /api/orchestration/threads/:threadId/reply` takes free text and a `replyId`, and the server
   decides what the text means. It answers the thread's only pending question, matched to an
   option when it names one. Otherwise it becomes a message with the thread's own runtime and
