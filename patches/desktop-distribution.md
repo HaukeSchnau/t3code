@@ -9,8 +9,9 @@ passkeys) don't apply to the fork.
 
 ## Implementation
 
-- `.gitea/workflows/desktop.yml` follows CI the way `mobile.yml` does: it runs when CI completes
-  green for a push to `main`. Its Package job builds and signs the app on the m1 Apple builder, and
+- `.gitea/workflows/desktop.yml` follows CI the way `mobile.yml` does: Kiln's `apple` step dispatches
+  it with the tested revision and a build number once a push to `main` passed and was promoted. Its
+  Package job builds and signs the app on the m1 Apple builder, and
   its Publish job writes it to the feed from srv-2. CI never waits for m1, so a paused or busy
   builder delays only the desktop build, and a desktop failure never turns CI red or skips the
   mobile update. A newer green commit cancels an older desktop build.
