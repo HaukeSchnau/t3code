@@ -1,7 +1,8 @@
 import * as Schema from "effect/Schema";
 
-import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { EnvironmentId, ThreadId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import {
+  RelayAgentAwarenessPhase,
   RelayAgentActivitySnapshotResponse,
   RelayDeviceRegistrationRequest,
   RelayDeviceUnregistrationParams,
@@ -58,3 +59,47 @@ export const ThreadReplyResult = Schema.Union([
   Schema.Struct({ outcome: Schema.Literal("rejected"), reason: ThreadReplyRejectionReason }),
 ]);
 export type ThreadReplyResult = typeof ThreadReplyResult.Type;
+
+/** One thread in the watch's list: where it lives and what its agent is doing. */
+export const ThreadGlanceRow = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  projectTitle: Schema.String,
+  threadTitle: Schema.String,
+  phase: RelayAgentAwarenessPhase,
+  updatedAt: Schema.String,
+});
+export type ThreadGlanceRow = typeof ThreadGlanceRow.Type;
+
+/** Threads that need the user, are working, or finished recently, attention first. */
+export const ThreadGlanceList = Schema.Struct({
+  threads: Schema.Array(ThreadGlanceRow),
+});
+export type ThreadGlanceList = typeof ThreadGlanceList.Type;
+
+/** A pending question simple enough to answer from the wrist: one part, plain options. */
+export const ThreadGlanceQuestion = Schema.Struct({
+  text: Schema.String,
+  options: Schema.Array(Schema.String),
+  allowsFreeText: Schema.Boolean,
+});
+export type ThreadGlanceQuestion = typeof ThreadGlanceQuestion.Type;
+
+/**
+ * One thread, summarized for a small screen. `phase` is null for a thread with nothing to
+ * report yet. Answers and follow-ups go through the thread reply endpoint.
+ */
+export const ThreadGlance = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  projectTitle: Schema.String,
+  threadTitle: Schema.String,
+  modelTitle: Schema.String,
+  phase: Schema.NullOr(RelayAgentAwarenessPhase),
+  updatedAt: Schema.String,
+  // Plain text from the start of the agent's latest message.
+  excerpt: Schema.optional(Schema.String),
+  question: Schema.optional(ThreadGlanceQuestion),
+  canStop: Schema.Boolean,
+});
+export type ThreadGlance = typeof ThreadGlance.Type;

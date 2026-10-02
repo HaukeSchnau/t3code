@@ -378,6 +378,7 @@ const withLiveProjectCliServer = <A, E, R>(baseDir: string, run: () => Effect.Ef
               discard: () => Effect.void,
             }),
           ),
+          Layer.provide(ServerEnvironment.identityLayer),
         ),
       ),
       Layer.provide(environmentAuthenticatedAuthLayer),

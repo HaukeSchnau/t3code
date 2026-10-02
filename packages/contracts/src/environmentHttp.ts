@@ -31,7 +31,12 @@ import {
   TrimmedNonEmptyString,
   TurnId,
 } from "./baseSchemas.ts";
-import { ThreadReplyInput, ThreadReplyResult } from "./agentAwareness.ts";
+import {
+  ThreadGlance,
+  ThreadGlanceList,
+  ThreadReplyInput,
+  ThreadReplyResult,
+} from "./agentAwareness.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
 import { WorkloadDiagnosticsSnapshot } from "./diagnostics.ts";
 import {
@@ -627,6 +632,22 @@ export class EnvironmentOrchestrationHttpApi extends HttpApiGroup.make("orchestr
       params: EnvironmentOrchestrationThreadSnapshotParams,
       payload: ThreadReplyInput,
       success: ThreadReplyResult,
+      error: EnvironmentOrchestrationThreadSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    // Fork: compact thread state for the Apple Watch. See patches/apple-watch.md.
+    HttpApiEndpoint.get("glance", "/api/orchestration/glance", {
+      headers: OptionalBearerHeaders,
+      success: ThreadGlanceList,
+      error: EnvironmentOrchestrationSnapshotErrors,
+    }).middleware(EnvironmentAuthenticatedAuth),
+  )
+  .add(
+    HttpApiEndpoint.get("threadGlance", "/api/orchestration/threads/:threadId/glance", {
+      headers: OptionalBearerHeaders,
+      params: EnvironmentOrchestrationThreadSnapshotParams,
+      success: ThreadGlance,
       error: EnvironmentOrchestrationThreadSnapshotErrors,
     }).middleware(EnvironmentAuthenticatedAuth),
   ) {}

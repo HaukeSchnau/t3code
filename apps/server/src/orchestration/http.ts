@@ -18,11 +18,13 @@ import {
   requireEnvironmentScope,
 } from "../auth/http.ts";
 import { OrchestrationCommandReceiptRepository } from "../persistence/Services/OrchestrationCommandReceipts.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import { openRequests } from "./decider.ts";
 import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
 import { ProjectionSnapshotMaterializer } from "./Services/ProjectionSnapshotMaterializer.ts";
 import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { buildThreadGlance, buildThreadGlanceList } from "./threadGlance.ts";
 import { planThreadReply, threadReplyCommandId, threadReplyMessageId } from "./threadReply.ts";
 
 export const orchestrationHttpApiLayer = HttpApiBuilder.group(
@@ -35,6 +37,7 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
     const commandPreprocessing = yield* CommandPreprocessingCoordinator;
     const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
     const commandReceipts = yield* OrchestrationCommandReceiptRepository;
+    const environmentIdentity = yield* ServerEnvironment.ServerEnvironmentIdentity;
 
     return handlers
       .handle(
@@ -283,6 +286,66 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
             })
             .pipe(Effect.catch(failDispatch));
           return { outcome: "sent" } as const;
+        }),
+      )
+      .handle(
+        // Fork: compact thread state for the Apple Watch. See patches/apple-watch.md.
+        "glance",
+        Effect.fn("environment.orchestration.glance")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const snapshot = yield* projectionSnapshotMaterializer
+            .getShellSnapshot()
+            .pipe(
+              Effect.catch((cause) =>
+                failEnvironmentInternal("orchestration_snapshot_failed", cause),
+              ),
+            );
+          return buildThreadGlanceList({
+            environmentId: yield* environmentIdentity.getEnvironmentId,
+            snapshot,
+            nowMs: (yield* DateTime.now).epochMilliseconds,
+          });
+        }),
+      )
+      .handle(
+        "threadGlance",
+        Effect.fn("environment.orchestration.threadGlance")(function* (args) {
+          yield* annotateEnvironmentRequest(args.endpoint.name);
+          yield* requireEnvironmentScope(AuthOrchestrationReadScope);
+          const failSnapshot = (cause: unknown) =>
+            failEnvironmentInternal("orchestration_thread_snapshot_failed", cause);
+          const shell = yield* projectionSnapshotQuery
+            .getThreadShellById(args.params.threadId)
+            .pipe(Effect.catch(failSnapshot));
+          if (Option.isNone(shell)) {
+            return yield* failEnvironmentNotFound("thread_not_found");
+          }
+          const project = yield* projectionSnapshotQuery
+            .getProjectShellById(shell.value.projectId)
+            .pipe(Effect.catch(failSnapshot));
+          // The latest turn holds the newest agent message. A pending question needs the full
+          // activity list, the same read the reply endpoint uses.
+          const detail = yield* (
+            shell.value.hasPendingUserInput
+              ? projectionSnapshotQuery.getThreadDetailSnapshot(args.params.threadId, "full")
+              : projectionSnapshotQuery.getThreadDetailSnapshot(args.params.threadId, "compact", {
+                  turnLimit: 1,
+                })
+          ).pipe(Effect.catch(failSnapshot));
+          return buildThreadGlance({
+            environmentId: yield* environmentIdentity.getEnvironmentId,
+            project: Option.getOrElse(project, () => ({ title: "" })),
+            thread: shell.value,
+            messages: Option.match(detail, {
+              onNone: () => [],
+              onSome: (snapshot) => snapshot.thread.messages,
+            }),
+            openRequests: Option.match(detail, {
+              onNone: () => [],
+              onSome: (snapshot) => [...openRequests(snapshot.thread).values()],
+            }),
+          });
         }),
       );
   }),
