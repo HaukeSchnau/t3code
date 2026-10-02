@@ -46,7 +46,10 @@ Automatic worker failure, approval-blocked, and user-input-blocked notifications
 immediate delivery path. Notifications from explicit orchestration waits also deliver immediately
 when the watched condition resolves. Routine unwatched successful completion notifications remain
 queued while a coordinator is running, and all notifications retain the normal idle-thread wake
-behavior.
+behavior. A coordinator that reads the worker with `t3 thread result` or `t3 thread read` has seen
+the outcome: a queued notification for it is withdrawn, and one not yet sent is skipped. Each
+notification belongs to one worker turn, so a later turn of the same worker notifies again.
+Upstream has no delegation notifications, so this stays fork-specific with the rest of the tools.
 
 Full `t3 thread read` still records `readBy` activity when one thread reads
 another. The compact `result` command is passive, so status checks do not add

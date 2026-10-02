@@ -3,6 +3,8 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import {
   CommandId,
   EnvironmentId,
+  EventId,
+  MessageId,
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
@@ -10,8 +12,10 @@ import {
   ThreadOrchestrationError,
   ThreadWorkspaceId,
   ThreadWorkspaceRootId,
+  TurnId,
   type ServerProvider,
   type OrchestrationCommand,
+  type OrchestrationEvent,
   type ProjectId,
   type OrchestrationProject,
   type OrchestrationReadModel,
@@ -2489,4 +2493,242 @@ it.effect("reads relationship graphs without adding read edges", () => {
     ]);
     expect(dispatched).toEqual([]);
   }).pipe(Effect.provide(testLayer));
+});
+
+// The actor created the target with wakeCoordinator, so the service monitors it on startup.
+const makeDelegationModel = (input: {
+  readonly targetTurnState: "completed" | "running";
+  readonly actorQueuedMessageIds?: ReadonlyArray<string>;
+}): OrchestrationReadModel => {
+  const createdAt = "2026-01-01T00:02:00.000Z";
+  return {
+    ...readModel,
+    threads: [
+      {
+        ...makeThread(actorThreadId),
+        queuedMessages: (input.actorQueuedMessageIds ?? []).map((messageId) => ({
+          messageId: MessageId.make(messageId),
+          threadId: actorThreadId,
+          text: "queued",
+          attachments: [],
+          runtimeMode: actorRuntimeMode,
+          interactionMode: actorInteractionMode,
+          createdAt,
+          updatedAt: createdAt,
+        })),
+      },
+      {
+        ...makeThread(targetThreadId),
+        latestTurn: {
+          turnId: TurnId.make("turn-1"),
+          state: input.targetTurnState,
+          requestedAt: createdAt,
+          startedAt: createdAt,
+          completedAt: input.targetTurnState === "completed" ? createdAt : null,
+          assistantMessageId: null,
+        },
+        activities: [
+          {
+            id: EventId.make("activity-created"),
+            tone: "tool",
+            kind: "thread-orchestration.relationship",
+            summary: "Created by actor.",
+            payload: {
+              kind: "createdBy",
+              actorThreadId,
+              targetThreadId,
+              createdAt,
+              wakeCoordinator: true,
+            },
+            turnId: null,
+            createdAt,
+          },
+        ],
+      },
+    ],
+  };
+};
+
+const targetChangedEvent: OrchestrationEvent = {
+  sequence: 2,
+  eventId: EventId.make("event-target-changed"),
+  aggregateKind: "thread",
+  aggregateId: targetThreadId,
+  occurredAt: "2026-01-01T00:03:00.000Z",
+  commandId: null,
+  causationEventId: null,
+  correlationId: null,
+  metadata: {},
+  type: "thread.queued-message-deleted",
+  payload: {
+    threadId: targetThreadId,
+    messageId: MessageId.make("unrelated"),
+    deletedAt: "2026-01-01T00:03:00.000Z",
+  },
+};
+
+// Service over a fixed read model. Each live subscription offers to `subscriptions`, which tells
+// a test the delegation monitor finished deciding and went back to waiting.
+const makeDelegationTestLayer = (input: {
+  readonly model: OrchestrationReadModel;
+  readonly dispatched: OrchestrationCommand[];
+  readonly targetBlockedOnInput: { current: boolean };
+  readonly subscriptions: Queue.Queue<void>;
+  readonly events: Queue.Queue<OrchestrationEvent>;
+}) =>
+  ThreadOrchestrationServiceLive.pipe(
+    Layer.provide(unsupportedCodexForkImporterLayer),
+    Layer.provide(
+      Layer.succeed(OrchestrationEngineService, {
+        readEvents: () => Stream.empty,
+        readThreadEvents: () => Stream.die("unused thread replay"),
+        getThreadReplayStats: () => Effect.die("unused thread replay stats"),
+        resolveReceipt: () => Effect.succeed(Option.none()),
+        dispatch: (command) =>
+          Effect.sync(() => {
+            input.dispatched.push(command);
+            return { sequence: input.dispatched.length };
+          }),
+        latestSequence: Effect.succeed(0),
+        streamDomainEvents: Stream.never,
+        // Only the delegation monitor subscribes through this capability here, so each offer
+        // marks one monitor decision.
+        liveSubscriptionCapability: {
+          kind: "scoped-v1",
+          subscribe: Queue.offer(input.subscriptions, undefined).pipe(
+            Effect.as(Stream.fromQueue(input.events)),
+          ),
+        },
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ProjectionSnapshotQuery, {
+        listActivitiesByKind: () => Effect.die("unexpected activity query"),
+        getDeletedWorktreeThreads: () => Effect.die("unexpected deleted worktree query"),
+        getProjectShells: () => Effect.die("unexpected project shells query"),
+        getCommandReadModel: () => Effect.succeed(input.model),
+        getThreadRuntimeContext: () => Effect.die("unused"),
+        getSnapshot: () => Effect.die("full snapshot should not be read"),
+        getShellSnapshot: () => Effect.die("unused"),
+        getArchivedShellSnapshot: () => Effect.die("unused"),
+        getSnapshotSequence: () => Effect.succeed({ snapshotSequence: 1 }),
+        getCounts: () => Effect.succeed({ projectCount: 1, threadCount: 2 }),
+        getActiveProjectByWorkspaceRoot: () => Effect.succeed(Option.none()),
+        getProjectShellById: getProjectShellById(input.model),
+        getFirstActiveThreadIdByProjectId: () => Effect.succeed(Option.none()),
+        getImportedAgentSessionSources: () => Effect.die("unused"),
+        getThreadCheckpointContext: () => Effect.succeed(Option.none()),
+        getFullThreadDiffContext: () => Effect.succeed(Option.none()),
+        getThreadShellById: getThreadShellById(input.model),
+        getThreadResultContextById: (threadId) =>
+          getThreadResultContextById(input.model)(threadId).pipe(
+            Effect.map(
+              Option.map((context) =>
+                threadId === targetThreadId && input.targetBlockedOnInput.current
+                  ? { ...context, thread: { ...context.thread, hasPendingUserInput: true } }
+                  : context,
+              ),
+            ),
+          ),
+        listThreadRelationshipActivities: listThreadRelationshipActivities(input.model),
+        getThreadDetailById: getThreadDetailById(input.model),
+        getThreadDetailSnapshot: () => Effect.succeed(Option.none()),
+        getTurnStartMessage: () => Effect.succeed(Option.none()),
+        getTurnActivitiesSnapshot: () => Effect.succeed(Option.none()),
+        searchThreads: () => Effect.succeed({ matches: [] }),
+      }),
+    ),
+    Layer.provide(
+      Layer.succeed(ThreadWorkspaceService.ThreadWorkspaceService, {
+        prepareWorkspace: () => Effect.die("unused"),
+        selectWorkspace: () => Effect.succeed(undefined),
+        resolvePrimaryCwd: () => Effect.succeed(undefined as string | undefined),
+        deleteWorkspace: () => Effect.die("unused"),
+      }),
+    ),
+    Layer.provide(testThreadDiscoveryDependencies),
+  );
+
+const runWithDelegationService = <A, E>(
+  model: OrchestrationReadModel,
+  targetBlockedOnInput: { current: boolean },
+  body: (harness: {
+    readonly dispatched: ReadonlyArray<OrchestrationCommand>;
+    readonly subscriptions: Queue.Queue<void>;
+    readonly events: Queue.Queue<OrchestrationEvent>;
+  }) => Effect.Effect<A, E, ThreadOrchestrationService>,
+) =>
+  Effect.gen(function* () {
+    const dispatched: OrchestrationCommand[] = [];
+    const subscriptions = yield* Queue.unbounded<void>();
+    const events = yield* Queue.unbounded<OrchestrationEvent>();
+    return yield* body({ dispatched, subscriptions, events }).pipe(
+      Effect.provide(
+        makeDelegationTestLayer({ model, dispatched, targetBlockedOnInput, subscriptions, events }),
+      ),
+    );
+  });
+
+it.effect("withdraws a queued completion notice once the coordinator reads the worker", () =>
+  runWithDelegationService(
+    makeDelegationModel({
+      targetTurnState: "completed",
+      actorQueuedMessageIds: ["thread-actor:thread-target:turn-1:completed:message"],
+    }),
+    { current: false },
+    ({ dispatched }) =>
+      Effect.gen(function* () {
+        const service = yield* ThreadOrchestrationService;
+        yield* service.readThreadResult(scope, { threadId: targetThreadId });
+
+        expect(
+          dispatched.filter((command) => command.type === "thread.queued-message.delete"),
+        ).toEqual([
+          expect.objectContaining({
+            threadId: actorThreadId,
+            messageId: "thread-actor:thread-target:turn-1:completed:message",
+          }),
+        ]);
+      }),
+  ),
+);
+
+it.effect("names each notice after the worker turn it reports", () =>
+  runWithDelegationService(
+    makeDelegationModel({ targetTurnState: "running" }),
+    { current: true },
+    ({ dispatched, subscriptions }) =>
+      Effect.gen(function* () {
+        yield* Queue.take(subscriptions);
+
+        expect(dispatched.filter((command) => command.type === "thread.message.queue")).toEqual([
+          expect.objectContaining({
+            threadId: actorThreadId,
+            message: expect.objectContaining({
+              messageId: "thread-actor:thread-target:turn-1:blocked-input:message",
+            }),
+          }),
+        ]);
+      }),
+  ),
+);
+
+it.effect("does not notify about a worker outcome the coordinator already read", () => {
+  const targetBlockedOnInput = { current: false };
+  return runWithDelegationService(
+    makeDelegationModel({ targetTurnState: "running" }),
+    targetBlockedOnInput,
+    ({ dispatched, subscriptions, events }) =>
+      Effect.gen(function* () {
+        const service = yield* ThreadOrchestrationService;
+        // The monitor saw a running worker and is waiting for its next event.
+        yield* Queue.take(subscriptions);
+        targetBlockedOnInput.current = true;
+        yield* service.readThreadResult(scope, { threadId: targetThreadId });
+        yield* Queue.offer(events, targetChangedEvent);
+        yield* Queue.take(subscriptions);
+
+        expect(dispatched.filter((command) => command.type === "thread.message.queue")).toEqual([]);
+      }),
+  );
 });
