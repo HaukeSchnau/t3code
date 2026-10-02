@@ -2,15 +2,16 @@ name: Mobile
 
 # Ships every green main commit to the fork's iOS app: an OTA update for the
 # JavaScript bundle, plus a TestFlight binary when the native runtime changed.
-# It follows CI instead of living in it, so a newer push queues behind an
-# in-flight TestFlight build rather than cancelling it.
+# Kiln dispatches it after CI passed and the release was promoted (.kiln/ci.ts,
+# step apple), so a newer push queues behind an in-flight TestFlight build rather
+# than cancelling it.
 on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches: [main]
   workflow_dispatch:
     inputs:
+      sha:
+        description: Revision Kiln tested; empty means the branch head
+        required: false
+        type: string
       force_testflight:
         description: Upload a TestFlight build even if one already serves this runtime
         type: boolean
@@ -31,9 +32,6 @@ env:
 jobs:
   update:
     name: OTA update
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
     runs-on: t3code-ci
     timeout-minutes: 30
     outputs:
@@ -42,7 +40,7 @@ jobs:
       - name: Checkout tested revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.sha || github.sha }}
 
       - name: Publish update
         id: publish
@@ -69,7 +67,7 @@ jobs:
       - name: Checkout tested revision
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          ref: ${{ inputs.sha || github.sha }}
 
       # The builder sits behind a slow home uplink; pnpm's 60 s default aborts
       # large tarballs when many download at once.

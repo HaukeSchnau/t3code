@@ -1,60 +1,28 @@
 // @effect-diagnostics nodeBuiltinImport:off - tests the standalone repository CLI.
 import { assert, describe, it } from "@effect/vitest";
 
-import { newestRunForCommit, parseOptions, parseWorkflowRuns } from "./watch-main-ci.ts";
+import { newestStatus, parseOptions, parseStatuses } from "./watch-main-ci.ts";
 
 describe("main CI watcher", () => {
-  it("selects the newest matching workflow run for the current commit", () => {
-    const runs = parseWorkflowRuns({
-      workflow_runs: [
-        {
-          id: 10,
-          status: "completed",
-          conclusion: "cancelled",
-          head_sha: "old",
-          path: "project-release.yml@refs/heads/main",
-          html_url: "https://example.test/10",
-        },
-        {
-          id: 12,
-          status: "in_progress",
-          conclusion: null,
-          head_sha: "new",
-          path: "project-release.yml@refs/heads/main",
-          html_url: "https://example.test/12",
-        },
-        {
-          id: 11,
-          status: "completed",
-          conclusion: "failure",
-          head_sha: "new",
-          path: "project-release.yml@refs/heads/main",
-          html_url: "https://example.test/11",
-        },
-      ],
-    });
+  it("selects the newest status of the Kiln context", () => {
+    const statuses = parseStatuses([
+      { id: 10, status: "failure", context: "kiln", target_url: "https://kiln.test/run/1" },
+      { id: 12, status: "pending", context: "kiln", target_url: "https://kiln.test/run/2" },
+      { id: 11, status: "success", context: "kiln/static", target_url: "https://kiln.test/run/2" },
+    ]);
 
-    assert.strictEqual(newestRunForCommit(runs, "new", "project-release.yml")?.id, 12);
+    assert.strictEqual(newestStatus(statuses, "kiln")?.id, 12);
   });
 
-  it("ignores runs from other commits and workflows", () => {
-    const runs = parseWorkflowRuns({
-      workflow_runs: [
-        {
-          id: 13,
-          status: "completed",
-          conclusion: "success",
-          head_sha: "new",
-          path: "nightly.yml@refs/heads/main",
-          html_url: "https://example.test/13",
-        },
-      ],
-    });
-    assert.strictEqual(newestRunForCommit(runs, "new", "project-release.yml"), undefined);
+  it("ignores other contexts", () => {
+    const statuses = parseStatuses([
+      { id: 13, status: "success", context: "kiln/static", target_url: "https://kiln.test/run/3" },
+    ]);
+    assert.strictEqual(newestStatus(statuses, "kiln"), undefined);
   });
 
   it("rejects malformed API responses", () => {
-    assert.throws(() => parseWorkflowRuns({ workflow_runs: [{ id: "wrong" }] }), /invalid/);
+    assert.throws(() => parseStatuses([{ id: "wrong" }]), /invalid/);
   });
 
   it("accepts the argument separator forwarded by the workspace runner", () => {
@@ -62,5 +30,6 @@ describe("main CI watcher", () => {
 
     assert.strictEqual(options.revision, "abc123");
     assert.strictEqual(options.pollMilliseconds, 15_000);
+    assert.strictEqual(options.context, "kiln");
   });
 });
