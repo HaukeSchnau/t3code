@@ -84,6 +84,14 @@ cache directories and share native dependency preparation. Setup uses `CI=true` 
 node_modules without an interactive prompt. Production keeps its independent flake build and
 `wait-for-idle` pre-deploy action; migrating development must not force restart an active T3 server.
 
+`wait-for-idle` runs `t3 status idle` from the candidate release against the live database. CLI
+commands therefore attach to an existing database without migrating it (`layerConfigAttached` in
+`persistence/Layers/Sqlite.ts`); only the server migrates, and the CLI creates a database that has
+no migrations table yet. Upstream's CLI migrates whatever database it opens. Here that let the
+candidate release rewrite the schema under the older running server, holding the write lock for the
+whole migration until the task timed out. This can go once upstream stops migrating from CLI
+processes or the idle check no longer opens the database.
+
 Native setup owns dependency installation. Metro starts the installed Expo binary
 directly so pnpm does not attempt a second install when entering a managed
 workspace. The local `.pnpm-store` cache is ignored and excluded from source
