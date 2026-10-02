@@ -431,6 +431,8 @@ const config: ExpoConfig = {
     // would delete the asset catalog) and its xcodeproj mod creates the widget
     // target (which must exist before the compile phase can be attached).
     ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
+    // Generates the Apple Watch app from targets/watch. Personal teams can't sign extra targets.
+    ...(!isIosPersonalTeamBuild ? ["@bacons/apple-targets"] : []),
     "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
