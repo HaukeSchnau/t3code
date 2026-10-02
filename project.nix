@@ -55,7 +55,10 @@
       };
       health = {
         paths = [ "/healthz" ];
-        startupTimeoutSec = 300;
+        # The server migrates before it answers health. Large databases need minutes for migrations
+        # that scan the event store, and a timeout after a migration commits would roll back to a
+        # release that expects the older schema. Activation only runs while T3 is idle.
+        startupTimeoutSec = 1800;
       };
       ingress = {
         compression = true;
