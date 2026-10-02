@@ -8,7 +8,8 @@ fork-only behavior such as accountless connections and native agent awareness.
 
 ## Implementation
 
-- `.gitea/workflows/mobile.yml` runs after CI succeeds on `main`. It queues rather than cancels,
+- `.gitea/workflows/mobile.yml` runs when Kiln's `apple` step dispatches it after a push to `main`
+  passed and was promoted. It queues rather than cancels,
   so a newer push never kills an in-flight TestFlight build.
 - `scripts/mobile-update.ts` resolves the Expo fingerprint once on Linux CI and publishes the
   bundle as a static Expo Updates (protocol v1) update. The `t3code-ci` runners on srv-2 write

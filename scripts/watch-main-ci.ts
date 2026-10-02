@@ -6,12 +6,11 @@ import * as NodePath from "node:path";
 import * as NodeTimersPromises from "node:timers/promises";
 import * as NodeURL from "node:url";
 
-interface WorkflowRun {
+/** A Gitea commit status. Kiln reports the whole run as the `kiln` context. */
+interface CommitStatus {
   readonly id: number;
   readonly status: string;
-  readonly conclusion?: string | null;
-  readonly headSha: string;
-  readonly path: string;
+  readonly context: string;
   readonly url: string;
 }
 
@@ -21,7 +20,7 @@ interface WatchOptions {
   readonly branch: string;
   readonly remote: string;
   readonly revision: string;
-  readonly workflow: string;
+  readonly context: string;
   readonly pollMilliseconds: number;
   readonly log?: (message: string) => void;
 }
@@ -51,42 +50,35 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null;
 }
 
-export function parseWorkflowRuns(value: unknown): ReadonlyArray<WorkflowRun> {
-  if (!isRecord(value) || !Array.isArray(value.workflow_runs)) {
-    throw new Error("The Gitea Actions response did not contain workflow_runs.");
+export function parseStatuses(value: unknown): ReadonlyArray<CommitStatus> {
+  if (!Array.isArray(value)) {
+    throw new Error("The Gitea commit status response was not a list.");
   }
-  return value.workflow_runs.map((candidate) => {
+  return value.map((candidate) => {
     if (
       !isRecord(candidate) ||
       typeof candidate.id !== "number" ||
       typeof candidate.status !== "string" ||
-      typeof candidate.head_sha !== "string" ||
-      typeof candidate.path !== "string" ||
-      typeof candidate.html_url !== "string" ||
-      (candidate.conclusion !== undefined &&
-        candidate.conclusion !== null &&
-        typeof candidate.conclusion !== "string")
+      typeof candidate.context !== "string" ||
+      typeof candidate.target_url !== "string"
     ) {
-      throw new Error("The Gitea Actions response contained an invalid workflow run.");
+      throw new Error("The Gitea commit status response contained an invalid status.");
     }
     return {
       id: candidate.id,
       status: candidate.status,
-      ...(candidate.conclusion !== undefined ? { conclusion: candidate.conclusion } : {}),
-      headSha: candidate.head_sha,
-      path: candidate.path,
-      url: candidate.html_url,
+      context: candidate.context,
+      url: candidate.target_url,
     };
   });
 }
 
-export function newestRunForCommit(
-  runs: ReadonlyArray<WorkflowRun>,
-  headSha: string,
-  workflow: string,
-): WorkflowRun | undefined {
-  return runs
-    .filter((run) => run.headSha === headSha && run.path.startsWith(`${workflow}@`))
+export function newestStatus(
+  statuses: ReadonlyArray<CommitStatus>,
+  context: string,
+): CommitStatus | undefined {
+  return statuses
+    .filter((status) => status.context === context)
     .toSorted((left, right) => right.id - left.id)[0];
 }
 
@@ -128,48 +120,45 @@ function fetchHead(options: WatchOptions, baseline: string): string {
   return head;
 }
 
-function fetchRuns(options: WatchOptions): ReadonlyArray<WorkflowRun> {
-  const endpoint = `/repos/${options.repository}/actions/runs?branch=${encodeURIComponent(options.branch)}&limit=50`;
-  return parseWorkflowRuns(JSON.parse(runCommand(options.rootDir, "tea", ["api", endpoint])));
+function fetchStatuses(options: WatchOptions, head: string): ReadonlyArray<CommitStatus> {
+  const endpoint = `/repos/${options.repository}/commits/${head}/statuses?limit=50`;
+  return parseStatuses(JSON.parse(runCommand(options.rootDir, "tea", ["api", endpoint])));
 }
 
 function delay(milliseconds: number): Promise<void> {
   return NodeTimersPromises.setTimeout(milliseconds);
 }
 
-export async function watchMainCi(options: WatchOptions): Promise<WorkflowRun> {
+export async function watchMainCi(options: WatchOptions): Promise<CommitStatus> {
   const baseline = resolveRevision(options.rootDir, options.revision);
   let previousState = "";
   options.log?.(
-    `Following ${options.workflow} from ${baseline.slice(0, 12)} on ${options.remote}/${options.branch}`,
+    `Following the ${options.context} status from ${baseline.slice(0, 12)} on ${options.remote}/${options.branch}`,
   );
 
   while (true) {
     const head = fetchHead(options, baseline);
-    const run = newestRunForCommit(fetchRuns(options), head, options.workflow);
-    const state = run
-      ? `${head}:${run.id}:${run.status}:${run.conclusion ?? ""}`
-      : `${head}:pending`;
+    const status = newestStatus(fetchStatuses(options, head), options.context);
+    const state = status ? `${head}:${status.id}:${status.status}` : `${head}:waiting`;
     if (state !== previousState) {
       options.log?.(
-        run
-          ? `${head.slice(0, 12)}: run ${run.id} is ${run.status}${run.conclusion ? ` (${run.conclusion})` : ""} — ${run.url}`
-          : `${head.slice(0, 12)}: waiting for ${options.workflow} to start`,
+        status
+          ? `${head.slice(0, 12)}: ${options.context} is ${status.status} — ${status.url}`
+          : `${head.slice(0, 12)}: waiting for Kiln to report ${options.context}`,
       );
       previousState = state;
     }
 
-    if (run?.status === "completed") {
+    if (status !== undefined && status.status !== "pending") {
+      // A newer push supersedes this run; follow the descendant instead of its cancellation.
       const confirmedHead = fetchHead(options, baseline);
       if (confirmedHead !== head) {
         continue;
       }
-      if (run.conclusion === "success") {
-        return run;
+      if (status.status === "success") {
+        return status;
       }
-      throw new Error(
-        `Run ${run.id} completed with ${run.conclusion ?? "an unknown conclusion"}: ${run.url}`,
-      );
+      throw new Error(`${options.context} reported ${status.status}: ${status.url}`);
     }
     await delay(options.pollMilliseconds);
   }
@@ -192,7 +181,7 @@ export function parseOptions(args: ReadonlyArray<string>): WatchOptions {
     "--branch",
     "--remote",
     "--revision",
-    "--workflow",
+    "--context",
     "--poll-seconds",
   ]);
   for (let index = 0; index < optionArgs.length; index += 2) {
@@ -210,7 +199,7 @@ export function parseOptions(args: ReadonlyArray<string>): WatchOptions {
     branch: optionValue(optionArgs, "--branch", "main"),
     remote: optionValue(optionArgs, "--remote", "origin"),
     revision: optionValue(optionArgs, "--revision", "main@origin"),
-    workflow: optionValue(optionArgs, "--workflow", "project-release.yml"),
+    context: optionValue(optionArgs, "--context", "kiln"),
     pollMilliseconds: pollSeconds * 1_000,
     log: console.log,
   };
