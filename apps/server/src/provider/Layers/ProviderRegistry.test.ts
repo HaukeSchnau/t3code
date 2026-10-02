@@ -33,7 +33,11 @@ import { deepMerge } from "@t3tools/shared/Struct";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { applyServerSettingsPatch } from "@t3tools/shared/serverSettings";
 
-import { checkCodexProviderStatus, type CodexAppServerProviderSnapshot } from "./CodexProvider.ts";
+import {
+  checkCodexProviderStatus,
+  makeCodexProviderStatusCheck,
+  type CodexAppServerProviderSnapshot,
+} from "./CodexProvider.ts";
 import { checkClaudeProviderStatus } from "./ClaudeProvider.ts";
 import * as BackgroundPolicy from "../../background/BackgroundPolicy.ts";
 import { AntigravityInstallation } from "../AntigravityInstallation.ts";
@@ -557,7 +561,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
           );
 
           yield* Effect.yieldNow;
-          yield* TestClock.adjust("11 seconds");
+          yield* TestClock.adjust("31 seconds");
           yield* Effect.yieldNow;
 
           const status = yield* Fiber.join(statusFiber);
@@ -567,6 +571,30 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             "Timed out while checking Codex app-server provider status.",
           );
           assert.strictEqual(yield* Ref.get(killCalls), 1);
+        }),
+      );
+
+      it.effect("keeps the last ready status when a later probe times out", () =>
+        Effect.gen(function* () {
+          const probeCalls = yield* Ref.make(0);
+          const checkStatus = yield* makeCodexProviderStatusCheck(defaultCodexSettings, () =>
+            Ref.getAndUpdate(probeCalls, (calls) => calls + 1).pipe(
+              Effect.flatMap((calls) =>
+                calls === 0 ? Effect.succeed(makeCodexProbeSnapshot()) : Effect.never,
+              ),
+            ),
+          );
+
+          const ready = yield* checkStatus;
+          const timedOutFiber = yield* checkStatus.pipe(Effect.forkChild);
+          yield* Effect.yieldNow;
+          yield* TestClock.adjust("31 seconds");
+          const afterTimeout = yield* Fiber.join(timedOutFiber);
+
+          assert.strictEqual(ready.status, "ready");
+          assert.strictEqual(afterTimeout.status, "ready");
+          assert.deepStrictEqual(afterTimeout.models, ready.models);
+          assert.strictEqual(afterTimeout.usageLimits?.unavailable?.reason, "probeFailed");
         }),
       );
     });
