@@ -83,6 +83,7 @@ describe("accountless APNs provider", () => {
         threadId: "thread-1",
         deepLink: "/environment/environment-1/thread/thread-1",
         category: "AGENT_INPUT",
+        interruptionLevel: "time-sensitive",
       }),
     ).toEqual({
       aps: {
@@ -90,6 +91,7 @@ describe("accountless APNs provider", () => {
         sound: "default",
         "thread-id": "environment-1/thread-1",
         category: "AGENT_INPUT",
+        "interruption-level": "time-sensitive",
       },
       environmentId: "environment-1",
       threadId: "thread-1",

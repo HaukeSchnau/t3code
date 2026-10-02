@@ -254,7 +254,12 @@ describe("local agent-awareness aggregation", () => {
       yield* TestClock.setTime(Date.parse("2026-08-10T12:00:30.000Z"));
       const delivered = { ok: true, status: 200, reason: null, apnsId: "apns-id" } as const;
       const liveActivityAlerts = yield* Ref.make<ReadonlyArray<ApnsProvider.ApnsAlert | null>>([]);
-      const categories = yield* Ref.make<ReadonlyArray<string | undefined>>([]);
+      const sent = yield* Ref.make<
+        ReadonlyArray<{
+          readonly category: string | undefined;
+          readonly interruptionLevel: string | undefined;
+        }>
+      >([]);
       const apns = {
         configured: true,
         sendLiveActivity: (input) =>
@@ -262,7 +267,10 @@ describe("local agent-awareness aggregation", () => {
             Effect.as(delivered),
           ),
         sendNotification: (input) =>
-          Ref.update(categories, (sent) => [...sent, input.category]).pipe(Effect.as(delivered)),
+          Ref.update(sent, (all) => [
+            ...all,
+            { category: input.category, interruptionLevel: input.interruptionLevel },
+          ]).pipe(Effect.as(delivered)),
       } satisfies ApnsProvider.ApnsProvider["Service"];
       const awareness = yield* makeLocalAgentAwareness.pipe(
         Effect.provideService(ServerSecretStore.ServerSecretStore, makeMemorySecretStore()),
@@ -285,8 +293,22 @@ describe("local agent-awareness aggregation", () => {
         },
       });
 
-      expect(yield* Ref.get(liveActivityAlerts)).toEqual([null, null]);
-      expect(yield* Ref.get(categories)).toEqual(["AGENT_INPUT"]);
+      yield* awareness.publish({
+        threadId: runningState.threadId,
+        state: {
+          ...runningState,
+          phase: "completed",
+          headline: "Done",
+          updatedAt: "2026-08-10T12:00:25.000Z",
+        },
+      });
+
+      expect(yield* Ref.get(liveActivityAlerts)).toEqual([null, null, null]);
+      // A question breaks through Focus; finished work waits for the next glance.
+      expect(yield* Ref.get(sent)).toEqual([
+        { category: "AGENT_INPUT", interruptionLevel: "time-sensitive" },
+        { category: "AGENT_DONE", interruptionLevel: undefined },
+      ]);
     }),
   );
 });
