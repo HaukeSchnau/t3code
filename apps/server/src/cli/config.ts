@@ -4,6 +4,7 @@ import {
   OtlpProtocol,
   type SignalExport,
 } from "@t3tools/shared/observability";
+import * as OtelEnvironment from "@t3tools/shared/otelEnvironment";
 import { parsePersistedServerObservabilitySettings } from "@t3tools/shared/serverSettings";
 import { DesktopBackendBootstrap, PortSchema } from "@t3tools/contracts";
 import * as Config from "effect/Config";
@@ -27,7 +28,7 @@ const modeFlag = Flag.Literals("mode", ServerConfig.RuntimeMode.literals).pipe(
   Flag.withDescription("Runtime mode. `desktop` keeps loopback defaults unless overridden."),
   Flag.optional,
 );
-export const portFlag = Flag.Int("port").pipe(
+const portFlag = Flag.Int("port").pipe(
   Flag.withSchema(PortSchema),
   Flag.withDescription("Port for the HTTP/WebSocket server."),
   Flag.optional,
@@ -36,7 +37,7 @@ const strictPortFlag = Flag.Boolean("strictPort").pipe(
   Flag.withDescription("Accepted for Vite/Portless dev flag forwarding; ignored by the server."),
   Flag.optional,
 );
-export const hostFlag = Flag.String("host").pipe(
+const hostFlag = Flag.String("host").pipe(
   Flag.withDescription("Host/interface to bind (for example 127.0.0.1, 0.0.0.0, or a Tailnet IP)."),
   Flag.optional,
 );
@@ -46,34 +47,34 @@ export const baseDirFlag = Flag.String("base-dir").pipe(
   ),
   Flag.optional,
 );
-export const devUrlFlag = Flag.String("dev-url").pipe(
+const devUrlFlag = Flag.String("dev-url").pipe(
   Flag.withSchema(Schema.URLFromString),
   Flag.withDescription("Dev web URL to proxy/redirect to (equivalent to VITE_DEV_SERVER_URL)."),
   Flag.optional,
 );
-export const noBrowserFlag = Flag.Boolean("no-browser").pipe(
+const noBrowserFlag = Flag.Boolean("no-browser").pipe(
   Flag.withDescription("Disable automatic browser opening."),
   Flag.optional,
 );
-export const bootstrapFdFlag = Flag.Int("bootstrap-fd").pipe(
+const bootstrapFdFlag = Flag.Int("bootstrap-fd").pipe(
   Flag.withSchema(Schema.Int),
   Flag.withDescription("Read one-time bootstrap secrets from the given file descriptor."),
   Flag.optional,
 );
-export const autoBootstrapProjectFromCwdFlag = Flag.Boolean("auto-bootstrap-project-from-cwd").pipe(
+const autoBootstrapProjectFromCwdFlag = Flag.Boolean("auto-bootstrap-project-from-cwd").pipe(
   Flag.withDescription(
     "Create a project for the current working directory on startup when missing.",
   ),
   Flag.optional,
 );
-export const logWebSocketEventsFlag = Flag.Boolean("log-websocket-events").pipe(
+const logWebSocketEventsFlag = Flag.Boolean("log-websocket-events").pipe(
   Flag.withDescription(
     "Emit server-side logs for outbound WebSocket push traffic (equivalent to T3CODE_LOG_WS_EVENTS).",
   ),
   Flag.withAlias("log-ws-events"),
   Flag.optional,
 );
-export const tailscaleServeFlag = Flag.Boolean("tailscale-serve").pipe(
+const tailscaleServeFlag = Flag.Boolean("tailscale-serve").pipe(
   Flag.withDescription(
     "Configure Tailscale Serve to expose this backend over HTTPS on the Tailnet.",
   ),
@@ -85,16 +86,22 @@ const tailscaleServePortFlag = Flag.Int("tailscale-serve-port").pipe(
   Flag.optional,
 );
 
+// Trace file location, shared by the server and `t3 trace summary`.
+export const traceFileConfig = Config.String("T3CODE_TRACE_FILE").pipe(
+  Config.option,
+  Config.map(Option.getOrUndefined),
+);
+export const traceMaxFilesConfig = Config.Int("T3CODE_TRACE_MAX_FILES").pipe(
+  Config.withDefault(10),
+);
+
 const EnvServerConfig = Config.all({
   logLevel: Config.LogLevel("T3CODE_LOG_LEVEL").pipe(Config.withDefault("Info")),
   traceMinLevel: Config.LogLevel("T3CODE_TRACE_MIN_LEVEL").pipe(Config.withDefault("Info")),
   traceTimingEnabled: Config.Boolean("T3CODE_TRACE_TIMING_ENABLED").pipe(Config.withDefault(true)),
-  traceFile: Config.String("T3CODE_TRACE_FILE").pipe(
-    Config.option,
-    Config.map(Option.getOrUndefined),
-  ),
+  traceFile: traceFileConfig,
   traceMaxBytes: Config.Int("T3CODE_TRACE_MAX_BYTES").pipe(Config.withDefault(10 * 1024 * 1024)),
-  traceMaxFiles: Config.Int("T3CODE_TRACE_MAX_FILES").pipe(Config.withDefault(10)),
+  traceMaxFiles: traceMaxFilesConfig,
   traceBatchWindowMs: Config.Int("T3CODE_TRACE_BATCH_WINDOW_MS").pipe(Config.withDefault(1_000)),
   otlpTracesUrl: Config.String("T3CODE_OTLP_TRACES_URL").pipe(
     Config.option,
@@ -111,7 +118,6 @@ const EnvServerConfig = Config.all({
   otlpExportIntervalMs: Config.Int("T3CODE_OTLP_EXPORT_INTERVAL_MS").pipe(
     Config.withDefault(10_000),
   ),
-  otlpServiceName: Config.String("T3CODE_OTLP_SERVICE_NAME").pipe(Config.withDefault("t3-server")),
   otlpHeaders: Config.schema(OtlpHeadersFromString, "T3CODE_OTLP_HEADERS").pipe(
     Config.option,
     Config.map(Option.getOrUndefined),
@@ -206,7 +212,7 @@ export interface CliAuthLocationFlags {
   readonly devUrl?: Option.Option<URL>;
 }
 
-export const sharedServerLocationFlags = {
+export const authLocationFlags = {
   baseDir: baseDirFlag,
   devUrl: devUrlFlag,
 } as const;
@@ -235,8 +241,6 @@ export const sharedServerCommandFlags = {
   tailscaleServeEnabled: tailscaleServeFlag,
   tailscaleServePort: tailscaleServePortFlag,
 } as const;
-
-export const authLocationFlags = sharedServerLocationFlags;
 
 const resolveOptionPrecedence = <Value>(
   ...values: ReadonlyArray<Option.Option<Value>>
@@ -397,6 +401,8 @@ export const resolveServerConfig = (
     );
     const logLevel = Option.getOrElse(cliLogLevel, () => env.logLevel);
 
+    const otel = yield* OtelEnvironment.load;
+
     // T3 Code's own OTLP variables name no signal, so the one answer they give
     // is the answer for all three.
     const signalExport: SignalExport = {
@@ -404,6 +410,27 @@ export const resolveServerConfig = (
       headers: env.otlpHeaders,
       exportIntervalMs: env.otlpExportIntervalMs,
     };
+    const traces = OtelEnvironment.resolveSignalEndpoint(
+      otel,
+      "traces",
+      { url: env.otlpTracesUrl, export: signalExport },
+      bootstrap?.otlpTracesUrl,
+      persistedObservabilitySettings.otlpTracesUrl,
+    );
+    const metrics = OtelEnvironment.resolveSignalEndpoint(
+      otel,
+      "metrics",
+      { url: env.otlpMetricsUrl, export: signalExport },
+      bootstrap?.otlpMetricsUrl,
+      persistedObservabilitySettings.otlpMetricsUrl,
+    );
+    const logs = OtelEnvironment.resolveSignalEndpoint(
+      otel,
+      "logs",
+      { url: env.otlpLogsUrl, export: signalExport },
+      bootstrap?.otlpLogsUrl,
+      persistedObservabilitySettings.otlpLogsUrl,
+    );
 
     const config: ServerConfig.ServerConfig["Service"] = {
       logLevel,
@@ -412,20 +439,13 @@ export const resolveServerConfig = (
       traceBatchWindowMs: env.traceBatchWindowMs,
       traceMaxBytes: env.traceMaxBytes,
       traceMaxFiles: env.traceMaxFiles,
-      otlpTracesUrl:
-        env.otlpTracesUrl ??
-        bootstrap?.otlpTracesUrl ??
-        persistedObservabilitySettings.otlpTracesUrl,
-      otlpMetricsUrl:
-        env.otlpMetricsUrl ??
-        bootstrap?.otlpMetricsUrl ??
-        persistedObservabilitySettings.otlpMetricsUrl,
-      otlpLogsUrl:
-        env.otlpLogsUrl ?? bootstrap?.otlpLogsUrl ?? persistedObservabilitySettings.otlpLogsUrl,
-      otlpTracesExport: signalExport,
-      otlpMetricsExport: signalExport,
-      otlpLogsExport: signalExport,
-      otlpServiceName: env.otlpServiceName,
+      otlpTracesUrl: traces?.url,
+      otlpMetricsUrl: metrics?.url,
+      otlpLogsUrl: logs?.url,
+      otlpTracesExport: traces?.export ?? signalExport,
+      otlpMetricsExport: metrics?.export ?? signalExport,
+      otlpLogsExport: logs?.export ?? signalExport,
+      otelEnvironment: otel,
       mode,
       port,
       cwd,

@@ -6,7 +6,11 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
 
 import { runMigrations } from "../Migrations.ts";
-import { ServerConfig } from "../../config.ts";
+import { initializeV2Database } from "../initializeV2Database.ts";
+import * as ServerConfig from "../../config.ts";
+
+// Size the -wal file is cut back to on the first commit after a WAL reset.
+export const WAL_SIZE_LIMIT_BYTES = 32 * 1024 * 1024;
 
 const configureConnection = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
@@ -14,6 +18,9 @@ const configureConnection = Effect.gen(function* () {
   yield* sql`PRAGMA busy_timeout = 5000;`;
   yield* sql`PRAGMA foreign_keys = ON;`;
   yield* sql`PRAGMA journal_mode = WAL;`;
+  // PASSIVE checkpoints never shrink the -wal file, so it otherwise keeps its
+  // largest size until the last connection closes.
+  yield* sql.unsafe(`PRAGMA journal_size_limit = ${WAL_SIZE_LIMIT_BYTES};`);
 });
 
 const setup = Layer.effectDiscard(configureConnection.pipe(Effect.andThen(runMigrations())));
@@ -47,7 +54,7 @@ const makePersistence = (name: string, setupLayer: typeof setup) =>
         filename: dbPath,
         spanAttributes: {
           "db.name": path.basename(dbPath),
-          "service.name": "t3-server",
+          "service.name": "t3code-server",
         },
       }),
     );
@@ -67,15 +74,24 @@ export const SqlitePersistenceMemory = Layer.provideMerge(
 
 export const layerConfig = Layer.unwrap(
   Effect.gen(function* () {
-    const { dbPath } = yield* ServerConfig;
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    yield* initializeV2Database(dbPath);
     return makeSqlitePersistenceLive(dbPath);
   }),
 );
 
-// Persistence for CLI commands that share the configured database with a server.
+// Persistence for CLI commands that share the configured database with a server. Until a V2
+// server has created its database, the running server is a V1 release that still uses the
+// `state.sqlite` beside it (see initializeV2Database). A CLI must never create the V2 database,
+// because the next V2 server start would then skip importing the V1 state.
 export const layerConfigAttached = Layer.unwrap(
   Effect.gen(function* () {
-    const { dbPath } = yield* ServerConfig;
-    return makeAttachedSqlitePersistence(dbPath);
+    const { dbPath } = yield* ServerConfig.ServerConfig;
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const attachedPath = (yield* fs.exists(dbPath))
+      ? dbPath
+      : path.join(path.dirname(dbPath), "state.sqlite");
+    return makeAttachedSqlitePersistence(attachedPath);
   }),
 );

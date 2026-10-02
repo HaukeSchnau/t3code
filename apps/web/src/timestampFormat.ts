@@ -53,6 +53,35 @@ function readHostSystemLocale(): string | null {
 
 const timestampLocale = resolveTimestampLocale(readHostSystemLocale());
 
+const WEEKDAY_INDEXES = [0, 1, 2, 3, 4, 5, 6] as const;
+type WeekdayIndex = (typeof WEEKDAY_INDEXES)[number];
+
+type LocaleWithWeekInfo = Intl.Locale & {
+  readonly weekInfo?: { readonly firstDay: number };
+  getWeekInfo?: () => { readonly firstDay: number };
+};
+
+/**
+ * First weekday of a locale as a `Date#getDay` index (0 is Sunday), or
+ * `undefined` when the runtime has no week data, so callers keep their own
+ * default. Without a locale it reads the runtime's.
+ */
+export function resolveWeekStartsOn(locale: string | undefined): WeekdayIndex | undefined {
+  try {
+    const resolved: LocaleWithWeekInfo = new Intl.Locale(
+      locale ?? Intl.DateTimeFormat().resolvedOptions().locale,
+    );
+    // Week info counts Monday as 1 and Sunday as 7.
+    const firstDay = resolved.getWeekInfo?.().firstDay ?? resolved.weekInfo?.firstDay;
+    return firstDay === undefined ? undefined : WEEKDAY_INDEXES[firstDay % 7];
+  } catch {
+    return undefined;
+  }
+}
+
+/** Week start for calendars, from the same locale timestamps are shown in. */
+export const weekStartsOn = resolveWeekStartsOn(timestampLocale);
+
 const timestampFormatterCache = new Map<string, Intl.DateTimeFormat>();
 
 function getTimestampFormatter(
@@ -184,7 +213,8 @@ export function formatUpcomingTimestamp(
   const startOfTargetDay = new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
   const dayDiff = Math.round((startOfTargetDay - startOfToday) / 86_400_000);
 
-  if (dayDiff <= 0) return time;
+  if (dayDiff < 0) return formatDayAwareTimestamp(isoDate, timestampFormat, nowMs);
+  if (dayDiff === 0) return time;
   if (dayDiff === 1) return `tomorrow at ${time}`;
   const dateFormatter =
     date.getFullYear() === now.getFullYear() ? numericDateFormatter : numericDateWithYearFormatter;
@@ -257,13 +287,10 @@ export function formatElapsedDurationLabel(isoDate: string, nowMs: number = Date
 /**
  * Relative time until an ISO instant (e.g. expiry). Mirrors {@link formatRelativeTime} but for future times.
  */
-export function formatRelativeTimeUntil(
-  isoDate: string,
-  nowMs: number = Date.now(),
-): RelativeTimeParts | null {
+export function formatRelativeTimeUntil(isoDate: string): RelativeTimeParts | null {
   const date = parseTimestampDate(isoDate);
   if (!date) return null;
-  const diffMs = date.getTime() - nowMs;
+  const diffMs = date.getTime() - Date.now();
   if (diffMs <= 0) return { value: "Expired", suffix: null };
   const seconds = Math.floor(diffMs / 1000);
   if (seconds < 5) return { value: "Soon", suffix: null };
@@ -276,8 +303,8 @@ export function formatRelativeTimeUntil(
   return { value: `${days}d`, suffix: "left" };
 }
 
-export function formatRelativeTimeUntilLabel(isoDate: string, nowMs: number = Date.now()): string {
-  const relative = formatRelativeTimeUntil(isoDate, nowMs);
+export function formatRelativeTimeUntilLabel(isoDate: string): string {
+  const relative = formatRelativeTimeUntil(isoDate);
   if (!relative) return "";
   return relative.suffix ? `${relative.value} ${relative.suffix}` : relative.value;
 }

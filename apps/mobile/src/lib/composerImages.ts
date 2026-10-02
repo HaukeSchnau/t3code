@@ -24,8 +24,6 @@ import { beginForegroundHandoff } from "./foreground-handoff";
 import { uuidv4 } from "./uuid";
 import { writeFileAtomically } from "./atomic-file";
 
-export { toUploadChatImageAttachments } from "./composerImageAttachments";
-
 export interface DraftComposerImageAttachment extends Omit<UploadChatImageAttachment, "dataUrl"> {
   readonly id: string;
   readonly previewUri: string;
@@ -163,7 +161,7 @@ export async function persistComposerAttachmentFile(
         try {
           let copiedBytes = 0;
           while (true) {
-            const chunk = reader.readBytes(
+            const chunk = await reader.readBytes(
               Math.min(ATTACHMENT_COPY_CHUNK_BYTES, maxBytes - copiedBytes + 1),
             );
             if (chunk.byteLength === 0) {
@@ -173,7 +171,7 @@ export async function persistComposerAttachmentFile(
             if (copiedBytes > maxBytes) {
               throw new Error(fileAttachmentTooLargeMessage(name, maxBytes));
             }
-            writer.writeBytes(chunk);
+            await writer.writeBytes(chunk);
           }
         } finally {
           writer.close();

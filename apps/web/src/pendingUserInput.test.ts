@@ -5,6 +5,8 @@ import {
   carryDisplacedCustomAnswerIntoPrompt,
   countAnsweredPendingUserInputQuestions,
   derivePendingUserInputProgress,
+  findFirstUnansweredPendingUserInputQuestionIndex,
+  isOptionalPendingUserInput,
   resolvePendingUserInputAnswer,
   setPendingUserInputCustomAnswer,
   togglePendingUserInputOptionSelection,
@@ -246,6 +248,29 @@ describe("pending user input question progress", () => {
     ).toBe(1);
   });
 
+  it("finds the first unanswered question", () => {
+    expect(
+      findFirstUnansweredPendingUserInputQuestionIndex(questions, {
+        scope: {
+          selectedOptionValues: ["Orchestration-first"],
+        },
+      }),
+    ).toBe(1);
+  });
+
+  it("returns the last question index when all answers are complete", () => {
+    expect(
+      findFirstUnansweredPendingUserInputQuestionIndex(questions, {
+        scope: {
+          selectedOptionValues: ["Orchestration-first"],
+        },
+        compat: {
+          customAnswer: "Keep it for one release window",
+        },
+      }),
+    ).toBe(1);
+  });
+
   it("derives the active question and advancement state", () => {
     expect(
       derivePendingUserInputProgress(
@@ -339,5 +364,14 @@ describe("carryDisplacedCustomAnswerIntoPrompt", () => {
     expect(carryDisplacedCustomAnswerIntoPrompt("first half\n", "second half")).toBe(
       "first half\n\nsecond half",
     );
+  });
+});
+
+describe("isOptionalPendingUserInput", () => {
+  it("is skippable only when every question is explicitly not required", () => {
+    expect(isOptionalPendingUserInput([{ required: false }, { required: false }])).toBe(true);
+    expect(isOptionalPendingUserInput([{ required: false }, {}])).toBe(false);
+    expect(isOptionalPendingUserInput([{ required: false }, { required: true }])).toBe(false);
+    expect(isOptionalPendingUserInput([])).toBe(false);
   });
 });

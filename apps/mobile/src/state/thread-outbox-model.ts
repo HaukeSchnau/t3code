@@ -1,13 +1,10 @@
 import { isTransportConnectionErrorMessage } from "@t3tools/client-runtime/errors";
-import { fileAttachmentTooLargeMessage } from "@t3tools/client-runtime/state/attachments";
 import {
-  makeDurableCommandDeliveryPlan,
-  type DurableCommandDeliveryPlan,
-} from "@t3tools/client-runtime/operations/command-outbox";
+  clampFileAttachmentUploadBytes,
+  fileAttachmentTooLargeMessage,
+} from "@t3tools/client-runtime/state/attachments";
 import type { EnvironmentShellStatus } from "@t3tools/client-runtime/state/shell";
 import {
-  ThreadWorkspaceId,
-  WorkspaceProfile,
   CommandId,
   EnvironmentId,
   IsoDateTime,
@@ -17,25 +14,20 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
-  SkillPackId,
   ThreadId,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
-  type SkillPackId as SkillPackIdType,
   type ServerProvider,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
-import type { UploadedMobileAttachment } from "../lib/attachmentUpload";
 import { DraftComposerAttachmentSchema } from "../lib/composer-image-schema";
-import { toUploadChatImageAttachments } from "../lib/composerImageAttachments";
+import type { ComposerDispatchMode } from "@t3tools/client-runtime/state/composer-dispatch";
 import type { DraftComposerAttachment } from "../lib/composerImages";
-import { buildProjectThreadStartTurnInput } from "../lib/projectThreadStartTurn";
-import { serializeComposerMessageForServer, uploadedComposerContext } from "../lib/composerContext";
 import { scopedThreadKey } from "../lib/scopedEntities";
-import { resolveProviderInteractionMode } from "../features/threads/legacy-plan-mode";
+import { resolveProviderInteractionMode } from "./legacy-plan-mode";
 
 // Keep current writes until a compatible native baseline includes the v4 reader.
 const THREAD_OUTBOX_SCHEMA_VERSION = 3;
@@ -50,10 +42,7 @@ const QueuedThreadCreationSchema = Schema.Struct({
   workspaceMode: Schema.Literals(["local", "worktree"]),
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
-  workspaceId: Schema.optional(ThreadWorkspaceId),
-  workspaceProfile: Schema.optional(WorkspaceProfile),
   startFromOrigin: Schema.optional(Schema.Boolean),
-  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -66,18 +55,12 @@ export const QueuedThreadMessageSchema = Schema.Struct({
   context: Schema.optional(OrchestrationMessageContext),
   attachments: Schema.Array(DraftComposerAttachmentSchema),
   modelSelection: Schema.optional(ModelSelection),
+  dispatchMode: Schema.optional(Schema.Literals(["auto", "queue", "steer", "restart"])),
   runtimeMode: Schema.optional(RuntimeMode),
   interactionMode: Schema.optional(ProviderInteractionMode),
   // Present when the queued item creates a brand-new thread (pending task)
   // instead of appending a turn to an existing one.
   creation: Schema.optional(QueuedThreadCreationSchema),
-  // Frozen when queued so ambiguous retries replay byte-for-byte equivalent
-  // bootstrap intent rather than generating a new worktree branch.
-  deliveryWorktreeBranchName: Schema.optional(Schema.String),
-  replacesCommandId: Schema.optional(CommandId),
-  supersedesCommandIds: Schema.optional(Schema.Array(CommandId)),
-  acknowledgedAt: Schema.optional(IsoDateTime),
-  discardedAt: Schema.optional(IsoDateTime),
   createdAt: IsoDateTime,
 });
 
@@ -91,10 +74,7 @@ export interface QueuedThreadCreation {
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
-  readonly workspaceId?: ThreadWorkspaceId;
-  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin?: boolean;
-  readonly skillPackIds?: ReadonlyArray<SkillPackIdType>;
 }
 
 export interface QueuedThreadMessage {
@@ -108,98 +88,15 @@ export interface QueuedThreadMessage {
   readonly modelSelection?: ModelSelectionType;
   readonly runtimeMode?: RuntimeModeType;
   readonly interactionMode?: ProviderInteractionModeType;
+  /**
+   * How this message should be delivered if a turn is still running when the
+   * outbox drains. Captured at enqueue time because the drain can fire long
+   * after the tap. Absent on rows written before follow-up behavior existed,
+   * which keep the previous always-queue delivery.
+   */
+  readonly dispatchMode?: ComposerDispatchMode;
   readonly creation?: QueuedThreadCreation;
-  readonly deliveryWorktreeBranchName?: string;
-  readonly replacesCommandId?: CommandId;
-  readonly supersedesCommandIds?: ReadonlyArray<CommandId>;
-  readonly acknowledgedAt?: string;
-  readonly discardedAt?: string;
   readonly createdAt: string;
-}
-
-export function makeQueuedThreadDeliveryPlan(
-  message: QueuedThreadMessage,
-  supportsInlineMessageContext = true,
-): DurableCommandDeliveryPlan {
-  const attachments = queuedMessageWireAttachments(message.attachments);
-  const serializedMessage = serializeComposerMessageForServer(
-    message.creation ? message.text.trim() : message.text,
-    uploadedComposerContext(message.context, message.attachments, attachments),
-    supportsInlineMessageContext,
-  );
-  const settings = {
-    modelSelection: message.modelSelection,
-    runtimeMode: message.runtimeMode ?? "full-access",
-    interactionMode: message.interactionMode ?? "default",
-  } as const;
-  const command = message.creation
-    ? {
-        type: "thread.turn.start" as const,
-        ...buildProjectThreadStartTurnInput({
-          projectId: message.creation.projectId,
-          projectCwd: message.creation.projectCwd ?? "",
-          threadId: message.threadId,
-          commandId: message.commandId,
-          messageId: message.messageId,
-          createdAt: message.createdAt,
-          ...serializedMessage,
-          uploadedAttachments: attachments,
-          modelSelection: message.modelSelection!,
-          runtimeMode: settings.runtimeMode,
-          interactionMode: settings.interactionMode,
-          workspaceMode: message.creation.workspaceMode,
-          branch: message.creation.branch,
-          worktreePath: message.creation.worktreePath,
-          ...(message.creation.workspaceId ? { workspaceId: message.creation.workspaceId } : {}),
-          ...(message.creation.workspaceProfile
-            ? { workspaceProfile: message.creation.workspaceProfile }
-            : {}),
-          startFromOrigin: message.creation.startFromOrigin ?? false,
-          ...(message.creation.skillPackIds ? { skillPackIds: message.creation.skillPackIds } : {}),
-          worktreeBranchName: message.deliveryWorktreeBranchName ?? `t3-code/${message.commandId}`,
-        }),
-      }
-    : {
-        type: "thread.turn.start" as const,
-        commandId: message.commandId,
-        threadId: message.threadId,
-        message: {
-          messageId: message.messageId,
-          role: "user" as const,
-          ...serializedMessage,
-          attachments,
-        },
-        ...settings,
-        createdAt: message.createdAt,
-      };
-  return makeDurableCommandDeliveryPlan({
-    environmentId: message.environmentId,
-    enqueuedAt: message.createdAt,
-    command,
-  });
-}
-
-function queuedMessageWireAttachments(
-  attachments: ReadonlyArray<DraftComposerAttachment>,
-): ReadonlyArray<UploadedMobileAttachment> {
-  const wireAttachments: Array<UploadedMobileAttachment> = [];
-  for (const attachment of attachments) {
-    if (attachment.type === "image") {
-      wireAttachments.push(...toUploadChatImageAttachments([attachment]));
-      continue;
-    }
-    if (attachment.uploadedAttachmentId === undefined) {
-      continue;
-    }
-    wireAttachments.push({
-      type: "file",
-      id: attachment.uploadedAttachmentId,
-      name: attachment.name,
-      mimeType: attachment.mimeType,
-      sizeBytes: attachment.sizeBytes,
-    });
-  }
-  return wireAttachments;
 }
 
 export interface ThreadSettingsSnapshot {
@@ -278,33 +175,6 @@ export function threadOutboxRetryDelayMs(attempt: number): number {
 
 export type ThreadOutboxDeliveryAction = "wait" | "remove" | "send";
 
-export type ThreadOutboxDispatchStep =
-  | { readonly step: "wait" }
-  | { readonly step: "retry" }
-  | { readonly step: "send" }
-  | { readonly step: "restore"; readonly reason: string };
-
-export function resolveThreadOutboxDispatchStep(input: {
-  readonly deliveryAction: ThreadOutboxDeliveryAction;
-  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
-  readonly serverConfig: { readonly maxFileUploadBytes?: number } | null;
-}): ThreadOutboxDispatchStep {
-  if (input.deliveryAction === "wait") return { step: "wait" };
-  if (input.deliveryAction === "remove") return { step: "send" };
-  if (input.serverConfig === null) return { step: "retry" };
-  const maxBytes = input.serverConfig.maxFileUploadBytes;
-  if (maxBytes !== undefined) {
-    const oversized = input.fileAttachments.find((attachment) => attachment.sizeBytes > maxBytes);
-    if (oversized) {
-      return {
-        step: "restore",
-        reason: fileAttachmentTooLargeMessage(oversized.name, maxBytes),
-      };
-    }
-  }
-  return { step: "send" };
-}
-
 export function resolveThreadOutboxDeliveryAction(input: {
   readonly isCreation: boolean;
   readonly threadExists: boolean;
@@ -329,6 +199,46 @@ export function resolveThreadOutboxDeliveryAction(input: {
   return input.environmentConnected ? "send" : "wait";
 }
 
+export type ThreadOutboxDispatchStep =
+  | { readonly step: "wait" }
+  | { readonly step: "remove" }
+  | { readonly step: "retry" }
+  | { readonly step: "restore"; readonly reason: string }
+  | { readonly step: "send" };
+
+/**
+ * Wait for provider and file capabilities before sending. Cleanup does not
+ * need config: a creation whose thread exists, or a message whose thread is
+ * gone, can still be removed while config loads.
+ */
+export function resolveThreadOutboxDispatchStep(input: {
+  readonly deliveryAction: ThreadOutboxDeliveryAction;
+  readonly fileAttachments: ReadonlyArray<{ readonly name: string; readonly sizeBytes: number }>;
+  /** Null while the environment's server config has not synced yet. */
+  readonly serverConfig: { readonly maxFileUploadBytes: number | undefined } | null;
+}): ThreadOutboxDispatchStep {
+  if (input.deliveryAction !== "send") {
+    return { step: input.deliveryAction };
+  }
+  if (input.serverConfig === null) {
+    return { step: "retry" };
+  }
+  if (input.fileAttachments.length === 0) {
+    return { step: "send" };
+  }
+  const maxBytes = input.serverConfig.maxFileUploadBytes;
+  if (maxBytes === undefined) {
+    return { step: "restore", reason: "This server does not support file attachments." };
+  }
+  const effectiveMaxBytes = clampFileAttachmentUploadBytes(maxBytes);
+  const oversized = input.fileAttachments.find(
+    (attachment) => attachment.sizeBytes > effectiveMaxBytes,
+  );
+  return oversized
+    ? { step: "restore", reason: fileAttachmentTooLargeMessage(oversized.name, effectiveMaxBytes) }
+    : { step: "send" };
+}
+
 /**
  * A queued creation can only be dispatched once its payload would pass server
  * validation; incomplete payloads stay pending until the user edits them.
@@ -340,7 +250,7 @@ export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): bo
   if (message.text.trim().length === 0 || message.modelSelection === undefined) {
     return false;
   }
-  return true;
+  return message.creation.workspaceMode !== "worktree" || Boolean(message.creation.branch);
 }
 
 function errorMessage(error: unknown): string | null {
@@ -382,7 +292,7 @@ export function shouldRetryThreadOutboxDelivery(error: unknown): boolean {
 }
 
 export type ThreadOutboxCommandStage = "settings-sync" | "start-turn";
-export type ThreadOutboxFailureAction = "retry" | "discard";
+export type ThreadOutboxFailureAction = "retry" | "restore";
 
 export function resolveThreadOutboxFailureAction(input: {
   readonly stage: ThreadOutboxCommandStage;
@@ -396,5 +306,5 @@ export function resolveThreadOutboxFailureAction(input: {
   ) {
     return "retry";
   }
-  return "discard";
+  return "restore";
 }

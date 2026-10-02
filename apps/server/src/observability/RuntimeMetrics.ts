@@ -1,5 +1,3 @@
-import * as NodePerfHooks from "node:perf_hooks";
-
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
@@ -8,7 +6,6 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schedule from "effect/Schedule";
 
 import {
-  eventLoopDelayMilliseconds,
   runtimeMetricsCollectionErrors,
   sqliteDatabaseSizeBytes,
   sqliteWalSizeBytes,
@@ -31,45 +28,28 @@ const fileSize = Effect.fn("RuntimeMetrics.fileSize")(function* (
   );
 });
 
-export const recordRuntimeMetrics = Effect.fn("RuntimeMetrics.recordRuntimeMetrics")(
-  function* (input: { readonly dbPath: string; readonly eventLoopDelayNanoseconds: number }) {
-    const [databaseSize, walSize] = yield* Effect.all(
-      [
-        fileSize(input.dbPath, { missingIsZero: false }),
-        fileSize(`${input.dbPath}-wal`, { missingIsZero: true }),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    yield* Metric.update(
-      eventLoopDelayMilliseconds,
-      Number.isFinite(input.eventLoopDelayNanoseconds)
-        ? input.eventLoopDelayNanoseconds / 1_000_000
-        : 0,
-    );
-    if (databaseSize !== undefined) {
-      yield* Metric.update(sqliteDatabaseSizeBytes, databaseSize);
-    }
-    if (walSize !== undefined) {
-      yield* Metric.update(sqliteWalSizeBytes, walSize);
-    }
-  },
-);
+export const recordRuntimeMetrics = Effect.fn("RuntimeMetrics.recordRuntimeMetrics")(function* (
+  dbPath: string,
+) {
+  const [databaseSize, walSize] = yield* Effect.all(
+    [
+      fileSize(dbPath, { missingIsZero: false }),
+      fileSize(`${dbPath}-wal`, { missingIsZero: true }),
+    ],
+    { concurrency: "unbounded" },
+  );
+  if (databaseSize !== undefined) {
+    yield* Metric.update(sqliteDatabaseSizeBytes, databaseSize);
+  }
+  if (walSize !== undefined) {
+    yield* Metric.update(sqliteWalSizeBytes, walSize);
+  }
+});
 
 export const layer = (dbPath: string) =>
   Layer.effectDiscard(
-    Effect.gen(function* () {
-      const eventLoopDelay = NodePerfHooks.monitorEventLoopDelay({ resolution: 20 });
-      eventLoopDelay.enable();
-      yield* Effect.addFinalizer(() => Effect.sync(() => eventLoopDelay.disable()));
-
-      const sample = Effect.suspend(() =>
-        recordRuntimeMetrics({
-          dbPath,
-          eventLoopDelayNanoseconds: eventLoopDelay.mean,
-        }),
-      ).pipe(Effect.tap(() => Effect.sync(() => eventLoopDelay.reset())));
-
-      yield* sample.pipe(Effect.repeat(Schedule.spaced("30 seconds")), Effect.forkScoped);
-    }),
+    recordRuntimeMetrics(dbPath).pipe(
+      Effect.repeat(Schedule.spaced("30 seconds")),
+      Effect.forkScoped,
+    ),
   );

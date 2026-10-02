@@ -19,14 +19,25 @@ import {
 } from "./attachmentStore.ts";
 
 describe("attachmentStore", () => {
-  it("derives stable safe ids from durable preprocessing identity", () => {
-    const first = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
-    const replay = createDeterministicAttachmentId("Thread.Foo", "command:attachment:payload");
-    const changed = createDeterministicAttachmentId("Thread.Foo", "command:attachment:changed");
+  it("derives stable attachment ids for idempotent message retries", () => {
+    const first = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const retry = createDeterministicAttachmentId("thread-1", "message-1:0");
+    const next = createDeterministicAttachmentId("thread-1", "message-1:1");
 
-    expect(replay).toBe(first);
-    expect(changed).not.toBe(first);
-    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-foo");
+    expect(first).toBe(retry);
+    expect(next).not.toBe(first);
+    expect(first && parseThreadSegmentFromAttachmentId(first)).toBe("thread-1");
+  });
+
+  it("keeps deterministic ids distinct when sanitized thread segments collide", () => {
+    const dotted = createDeterministicAttachmentId("thread.a", "message-1:0");
+    const dashed = createDeterministicAttachmentId("thread-a", "message-1:0");
+
+    expect(dotted).toBeTruthy();
+    expect(dashed).toBeTruthy();
+    expect(dotted).not.toBe(dashed);
+    expect(dotted && parseThreadSegmentFromAttachmentId(dotted)).toBe("thread-a");
+    expect(dashed && parseThreadSegmentFromAttachmentId(dashed)).toBe("thread-a");
   });
 
   it("sanitizes thread ids when creating attachment ids", () => {

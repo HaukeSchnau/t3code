@@ -2,6 +2,7 @@ import type {
   CustomModelSetting,
   ProviderDriverKind,
   ModelCapabilities,
+  RuntimeMode,
   ServerProvider,
   ServerProviderAuth,
   ServerProviderSkill,
@@ -65,8 +66,8 @@ export interface ServerProviderPresentation {
   readonly badgeLabel?: string;
   readonly showInteractionModeToggle?: boolean;
   readonly reportsContextWindow?: boolean;
+  readonly supportedRuntimeModes?: ReadonlyArray<RuntimeMode>;
   readonly requiresNewThreadForModelChange?: boolean;
-  readonly skillScopeInjection?: "supported" | "unsupported";
   readonly supportsConversationRollback?: boolean;
 }
 
@@ -227,11 +228,11 @@ export function buildServerProvider(input: {
     ...(typeof input.presentation.reportsContextWindow === "boolean"
       ? { reportsContextWindow: input.presentation.reportsContextWindow }
       : {}),
+    ...(input.presentation.supportedRuntimeModes === undefined
+      ? {}
+      : { supportedRuntimeModes: [...input.presentation.supportedRuntimeModes] }),
     ...(typeof input.presentation.requiresNewThreadForModelChange === "boolean"
       ? { requiresNewThreadForModelChange: input.presentation.requiresNewThreadForModelChange }
-      : {}),
-    ...(input.presentation.skillScopeInjection
-      ? { skillScopeInjection: input.presentation.skillScopeInjection }
       : {}),
     enabled: input.enabled,
     installed: input.probe.installed,

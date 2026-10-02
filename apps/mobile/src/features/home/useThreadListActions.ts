@@ -26,12 +26,8 @@ import {
   createThreadMovePlanner,
   threadDropLifecycle,
 } from "../threads/threadOrder";
-import {
-  getThreadListV2OrderedSection,
-  threadListV2NeedsUser,
-  threadListV2TopLevel,
-} from "../threads/threadListV2";
-import { useThreadLineage } from "../../state/coordination";
+import { getThreadListV2OrderedSection } from "../threads/threadListV2";
+import { threadCanArchive } from "./threadArchive";
 import { resolveThreadTitleRename } from "../threads/thread-title-rename";
 
 /** Version skew: never send settle/unsettle to a server that predates them
@@ -61,6 +57,15 @@ function environmentSupportsPinReorder(environmentId: EnvironmentThreadShell["en
   return (
     appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
       .threadPinReorder === true
+  );
+}
+
+function environmentSupportsAutoSettleOptOut(
+  environmentId: EnvironmentThreadShell["environmentId"],
+) {
+  return (
+    appAtomRegistry.get(environmentServerConfigsAtom).get(environmentId)?.environment.capabilities
+      .threadAutoSettleOptOut === true
   );
 }
 
@@ -136,11 +141,7 @@ function useThreadActionExecutor(
         }
         // Archive keeps its original, narrower guard: never interrupt a
         // thread mid-turn.
-        if (
-          action === "archive" &&
-          thread.session?.status === "running" &&
-          thread.session.activeTurnId != null
-        ) {
+        if (action === "archive" && !threadCanArchive(thread.runtime)) {
           Alert.alert(
             actionFailureTitle(action),
             "This thread is working. Interrupt it first, then try again.",
@@ -242,6 +243,11 @@ export function useThreadListActions(): {
   readonly unsettleThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly pinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
   readonly unpinThread: (thread: EnvironmentThreadShell) => Promise<boolean>;
+  /** Sets per-thread automatic settlement on or off. */
+  readonly setThreadAutoSettle: (
+    thread: EnvironmentThreadShell,
+    enabled: boolean,
+  ) => Promise<boolean>;
   readonly moveThread: (
     thread: EnvironmentThreadShell,
     direction: ThreadMoveDestination,
@@ -254,12 +260,14 @@ export function useThreadListActions(): {
   const unsnoozeMutation = useAtomCommand(threadEnvironment.unsnooze, { reportFailure: false });
   const pinMutation = useAtomCommand(threadEnvironment.pin, { reportFailure: false });
   const unpinMutation = useAtomCommand(threadEnvironment.unpin, { reportFailure: false });
+  const setAutoSettleMutation = useAtomCommand(threadEnvironment.setAutoSettle, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
   const snoozeInFlightThreadKeys = useRef(new Set<string>());
   const titleRegenerationInFlightThreadKeys = useRef(new Set<string>());
-  const threadLineage = useThreadLineage();
 
   const archiveThread = useCallback(
     (thread: EnvironmentThreadShell) => {
@@ -441,6 +449,34 @@ export function useThreadListActions(): {
     },
     [unpinMutation],
   );
+  const setThreadAutoSettle = useCallback(
+    async (thread: EnvironmentThreadShell, enabled: boolean) => {
+      if (!environmentSupportsAutoSettleOptOut(thread.environmentId)) {
+        Alert.alert(
+          "Could not update auto-settle",
+          "This environment's server does not support turning auto-settle off per thread yet. Update the server to use it.",
+        );
+        return false;
+      }
+      selectionHaptic();
+      const result = await setAutoSettleMutation({
+        environmentId: thread.environmentId,
+        input: { threadId: thread.id, enabled },
+      });
+      if (result._tag === "Failure") {
+        const error = Cause.squash(result.cause);
+        Alert.alert(
+          "Could not update auto-settle",
+          error instanceof Error && error.message.trim().length > 0
+            ? error.message
+            : "The auto-settle setting could not be changed.",
+        );
+        return false;
+      }
+      return true;
+    },
+    [setAutoSettleMutation],
+  );
   const regenerateThreadTitle = useCallback(
     async (thread: EnvironmentThreadShell) => {
       const key = scopedThreadKey(thread.environmentId, thread.id);
@@ -572,8 +608,9 @@ export function useThreadListActions(): {
         );
         return false;
       }
-      const sectionInput = {
+      const ordered = getThreadListV2OrderedSection({
         threads: shells,
+        section,
         now: new Date().toISOString(),
         queuedThreadKeys: appAtomRegistry.get(queuedThreadKeysAtom),
         settlementEnvironmentIds: new Set(
@@ -586,19 +623,11 @@ export function useThreadListActions(): {
             config.environment.capabilities.threadSnooze === true ? [id] : [],
           ),
         ),
-      };
-      const sections = {
-        pinned: getThreadListV2OrderedSection({ ...sectionInput, section: "pinned" }),
-        active: getThreadListV2OrderedSection({ ...sectionInput, section: "active" }),
-      };
-      const ordered = sections[section];
-      const topLevel = threadListV2TopLevel({ ...sections, lineage: threadLineage });
+      });
       const assignments = createThreadMovePlanner({
         allThreads: shells,
         ordered,
         section,
-        topLevel,
-        ...(section === "active" ? { needsUser: threadListV2NeedsUser(shells) } : {}),
         reorderableEnvironmentIds: new Set([...configs.keys()].filter(supportsReorder)),
       })(scopedThreadKey(thread.environmentId, thread.id), direction);
       if (assignments === null) return false;
@@ -630,7 +659,6 @@ export function useThreadListActions(): {
               movedId: scopedThreadKey(thread.environmentId, thread.id),
               direction,
               assignments,
-              topLevel,
             }),
           );
       let succeeded = false;
@@ -695,7 +723,6 @@ export function useThreadListActions(): {
       reorderActiveMutation,
       reorderPinnedMutation,
       pinMutation,
-      threadLineage,
       unpinThread,
       unsettleThread,
       unsnoozeThread,
@@ -713,6 +740,7 @@ export function useThreadListActions(): {
     unsettleThread,
     pinThread,
     unpinThread,
+    setThreadAutoSettle,
     moveThread,
     renameThread,
     regenerateThreadTitle,

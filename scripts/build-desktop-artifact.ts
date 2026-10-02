@@ -848,18 +848,6 @@ const resolveGitCommitHash = Effect.fn("resolveGitCommitHash")(function* (repoRo
   return hash.toLowerCase();
 });
 
-export function resolveWorkspaceVpCommand(
-  repoRoot: string,
-  path: Path.Path,
-  hostPlatform: NodeJS.Platform,
-): string {
-  return path.join(repoRoot, "node_modules", ".bin", hostPlatform === "win32" ? "vp.cmd" : "vp");
-}
-
-export function getStageInstallArgs(): ReadonlyArray<string> {
-  return STAGE_INSTALL_ARGS;
-}
-
 const resolvePythonForNodeGyp = Effect.fn("resolvePythonForNodeGyp")(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -943,6 +931,7 @@ interface StagePackageJson {
   readonly private: true;
   readonly packageManager: string;
   readonly description: string;
+  readonly homepage: string;
   readonly author: string;
   readonly main: string;
   readonly build: Record<string, unknown>;
@@ -952,9 +941,14 @@ interface StagePackageJson {
   };
 }
 
-const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
+export const STAGE_INSTALL_ARGS = ["install", "--prod"] as const;
 export const DESKTOP_ELECTRON_LANGUAGES = ["en-US"] as const;
 export const DESKTOP_FILE_EXCLUSIONS = [
+  // Cursor finds platform assets by walking up from argv[1]. Keep them outside
+  // asar so spawning helpers and loading native addons both use real paths.
+  "!**/node_modules/@cursor/sdk-*/**/*",
+  "!apps/desktop/prod-resources/cursor-sdk",
+  "!apps/desktop/prod-resources/cursor-sdk/**/*",
   // T3 Code always passes the user's installed Claude executable to the SDK,
   // so the SDK's optional platform packages (each a ~200MB bundled executable)
   // are dead weight. The trailing dash keeps the SDK's own JS package.
@@ -1019,6 +1013,8 @@ export const WINDOWS_NATIVE_ASAR_UNPACK_GLOB =
 // are never spawned at runtime (and are symlinks on POSIX build hosts, which
 // the asar extraction path deliberately does not support).
 export const WINDOWS_SERVER_ASAR_IGNORE_GLOBS = [
+  "**/node_modules/@cursor/sdk-*",
+  "**/node_modules/@cursor/sdk-*/**",
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
   "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
   "**/node_modules/.bin",
@@ -1079,6 +1075,10 @@ export const WSL_RUNTIME_EXTRA_RESOURCES = [
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
 ] as const;
 export const DESKTOP_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/cursor-sdk",
+    to: "node_modules/@cursor",
+  },
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
@@ -1378,6 +1378,24 @@ export function resolveMergedStageDependencies(input: {
     ...resolveFffNativeDependencies(input.platform, input.arch, input.fffNodeVersion),
   };
 }
+
+/** Cursor's helper lookup falls through the archive to this real resources tree. */
+export const stageCursorSdkPlatformPackages = Effect.fn("stageCursorSdkPlatformPackages")(
+  function* (nodeModulesDir: string, destination: string) {
+    const fs = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    yield* fs.makeDirectory(destination, { recursive: true });
+    const sdkDirectory = path.join(nodeModulesDir, "@cursor/sdk");
+    if (!(yield* fs.exists(sdkDirectory))) return;
+    // pnpm's isolated layout puts optional packages beside the real SDK directory.
+    const cursorDirectory = path.dirname(yield* fs.realPath(sdkDirectory));
+    for (const name of yield* fs.readDirectory(cursorDirectory)) {
+      if (!name.startsWith("sdk-")) continue;
+      const source = yield* fs.realPath(path.join(cursorDirectory, name));
+      yield* fs.copy(source, path.join(destination, name));
+    }
+  },
+);
 
 export interface ClerkPasskeyNativeArtifact {
   readonly packageName: string;
@@ -2754,10 +2772,17 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
 
   if (platform === "linux") {
     buildConfig.linux = {
-      target: [target],
+      // The .deb is built from the same unpacked app after the AppImage.
+      // electron-builder lists both in latest-linux.yml and writes
+      // resources/package-type into the .deb only, so electron-updater updates
+      // each install in its own format.
+      target: target === "AppImage" ? [target, "deb"] : [target],
       executableName: "t3code",
       icon: "icons",
       category: "Development",
+      synopsis: "Desktop GUI for coding agents",
+      // Required by the .deb control file.
+      maintainer: "T3 Tools <hello@t3.codes>",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
       // t3code:// OAuth callbacks to the app.
@@ -2772,6 +2797,23 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           StartupWMClass: "t3code",
         },
       },
+    };
+    buildConfig.deb = {
+      // Electron's runtime libraries. Debian 13 and Ubuntu 24.04 renamed some
+      // for 64-bit time; the old name is the fallback for older releases.
+      depends: [
+        "libasound2t64 | libasound2",
+        "libatspi2.0-0t64 | libatspi2.0-0",
+        "libgbm1",
+        "libgtk-3-0t64 | libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libsecret-1-0",
+        "libuuid1",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+      ],
     };
   }
 
@@ -3287,13 +3329,16 @@ export const validateWindowsPackagedPayload = Effect.fn(
         ),
       );
     }
-    const requiredMembers = [
-      `${stem}/t3`,
-      `${stem}/client`,
-      `${stem}/node_modules`,
-      `${stem}/node_modules/node-pty/build/Release/pty.node`,
-    ];
+    const requiredMembers = [`${stem}/t3`, `${stem}/client`, `${stem}/node_modules`];
     const missingMembers = requiredMembers.filter((member) => !members.includes(member));
+    // node-pty can load a source build or the prebuild for the WSL target.
+    const ptyCandidates = [
+      `${stem}/node_modules/node-pty/build/Release/pty.node`,
+      `${stem}/node_modules/node-pty/prebuilds/linux-${input.targetArch}/pty.node`,
+    ];
+    if (!ptyCandidates.some((member) => members.includes(member))) {
+      missingMembers.push(...ptyCandidates);
+    }
     if (missingMembers.length > 0) {
       return yield* new WindowsPackagedPayloadValidationError({
         reason: "wsl-runtime-invalid",
@@ -3672,8 +3717,10 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "T3 Code desktop build",
+    // Required by the .deb control file.
+    homepage: "https://t3.codes",
     author: "T3 Tools",
-    main: "apps/desktop/dist-electron/main.cjs",
+    main: "apps/desktop/dist-electron/boot.cjs",
     build: yield* createBuildConfig(
       options.platform,
       options.target,
@@ -3716,15 +3763,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   yield* Effect.log("[desktop-artifact] Installing staged production dependencies...");
-  // Some desktop runtime packages load native platform binaries published as optional dependencies.
-  const stageInstallArgs = getStageInstallArgs();
-  const installCommand = yield* resolveSpawnCommand("vp", stageInstallArgs);
+  const installCommand = yield* resolveSpawnCommand("vp", [...STAGE_INSTALL_ARGS]);
   yield* runCommand(
     ChildProcess.make(installCommand.command, installCommand.args, {
       cwd: stageAppDir,
       shell: installCommand.shell,
     }),
-    { label: `vp ${stageInstallArgs.join(" ")}`, verbose: options.verbose },
+    { label: "vp install --prod", verbose: options.verbose },
   );
   yield* stageKeyringNativeBinaries(stageAppDir, options.platform, options.arch);
 
@@ -3746,6 +3791,13 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       verbose: options.verbose,
     });
   }
+  yield* stageCursorSdkPlatformPackages(
+    path.join(
+      options.platform === "win" ? path.join(stageRoot, "server") : stageAppDir,
+      "node_modules",
+    ),
+    path.join(stageProdResourcesDir, "cursor-sdk"),
+  );
   if (
     options.wslRuntime !== undefined &&
     bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime })
@@ -3772,6 +3824,11 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (macDesignatedRequirement) {
     // Read by scripts/sign-macos.ts, which applies it to the main bundle only.
     buildEnv.T3CODE_MACOS_DESIGNATED_REQUIREMENT = macDesignatedRequirement;
+  }
+  if (options.platform === "linux") {
+    // fpm compresses the .deb with the system xz through tar. Threaded mode
+    // takes seconds on a many-core runner instead of about two minutes.
+    buildEnv.XZ_DEFAULTS = "-T0";
   }
   if (!options.signed) {
     buildEnv.CSC_IDENTITY_AUTO_DISCOVERY = "false";

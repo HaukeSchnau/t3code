@@ -1,4 +1,4 @@
-import type { OrchestrationShellSnapshot } from "@t3tools/contracts";
+import type { OrchestrationV2ShellSnapshot } from "@t3tools/contracts";
 import { describe, expect, it } from "@effect/vitest";
 import * as Option from "effect/Option";
 
@@ -15,11 +15,12 @@ import {
   retryRemainingMs,
 } from "./connectionFreshness.ts";
 
-const SNAPSHOT: OrchestrationShellSnapshot = {
+const SNAPSHOT: OrchestrationV2ShellSnapshot = {
+  schemaVersion: 1,
   snapshotSequence: 42,
   projects: [],
   threads: [],
-  updatedAt: "2026-07-15T12:00:00.000Z",
+  archivedThreads: [],
 };
 
 function connectionState(
@@ -40,7 +41,7 @@ function connectionState(
 
 function shellState(
   status: EnvironmentShellState["status"],
-  snapshot: Option.Option<OrchestrationShellSnapshot>,
+  snapshot: Option.Option<OrchestrationV2ShellSnapshot>,
   error = Option.none<string>(),
 ): EnvironmentShellState {
   return { status, snapshot, error };
@@ -150,11 +151,8 @@ describe("connection freshness projection", () => {
     expect(retryRemainingMs(projectEnvironmentConnectionProgress(connectionState()), 0)).toBeNull();
   });
 
-  it("keeps snapshot sequence and update time coupled across freshness states", () => {
-    const identity = {
-      contentSequence: SNAPSHOT.snapshotSequence,
-      updatedAt: SNAPSHOT.updatedAt,
-    };
+  it("keeps the snapshot sequence across freshness states", () => {
+    const identity = { contentSequence: SNAPSHOT.snapshotSequence };
 
     expect(projectEnvironmentSnapshotFreshness(shellState("empty", Option.none()))).toEqual({
       status: "empty",
@@ -190,7 +188,7 @@ describe("connection freshness projection", () => {
     expect(projected.connection.phase).toBe("connected");
     expect(projected.snapshot).toEqual({
       status: "cached",
-      snapshot: { contentSequence: 42, updatedAt: "2026-07-15T12:00:00.000Z" },
+      snapshot: { contentSequence: 42 },
       error: "Could not synchronize environment data.",
     });
   });
@@ -233,10 +231,7 @@ describe("connection freshness projection", () => {
       );
       expect(projected.snapshot).toEqual({
         status: "cached",
-        snapshot: {
-          contentSequence: 42,
-          updatedAt: "2026-07-15T12:00:00.000Z",
-        },
+        snapshot: { contentSequence: 42 },
         error: null,
       });
     }

@@ -2,7 +2,6 @@ import { useNavigation } from "@react-navigation/native";
 import { useCallback } from "react";
 import { Alert } from "react-native";
 
-import { threadOutboxManager } from "../../state/thread-outbox";
 import { removeThreadOutboxMessage } from "../../state/thread-outbox-removal";
 import { clearComposerDraftContent } from "../../state/use-composer-drafts";
 import type { PendingNewTask } from "../../state/use-pending-new-tasks";
@@ -61,11 +60,7 @@ export function usePendingTaskListActions(): {
             // Release the edit lock only after removal succeeds, and only if
             // it is held for THIS task — clearing it up front (or for another
             // task) would let the drain deliver a mid-edit payload.
-            const removal =
-              pendingTask.deliveryState?._tag === "Rejected"
-                ? threadOutboxManager.discardRejected(pendingTask.message)
-                : removeThreadOutboxMessage(pendingTask.message);
-            void removal
+            void removeThreadOutboxMessage(pendingTask.message)
               .then(() => releaseEditingQueuedMessage(pendingTask.message.messageId))
               .catch((error) => {
                 Alert.alert(

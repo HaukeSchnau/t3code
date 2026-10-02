@@ -10,7 +10,7 @@ import {
   PreviewAutomationTypeInput,
   PreviewAutomationWaitForInput,
 } from "./previewAutomation.ts";
-import { SnapShotSource } from "./orchestration.ts";
+import { SnapShotSource } from "./chatAttachment.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -40,6 +40,8 @@ export interface ContextMenuItem<T extends string = string> {
   icon?: string;
   /** Inserts a visual section divider immediately before this item. */
   separatorBefore?: boolean;
+  /** Shows a check mark. Used to mark the current option inside a submenu. */
+  checked?: boolean;
   children?: readonly ContextMenuItem<T>[];
 }
 
@@ -55,6 +57,7 @@ export interface ContextMenuItemSchemaType {
   readonly header?: boolean;
   readonly icon?: string;
   readonly separatorBefore?: boolean;
+  readonly checked?: boolean;
   readonly children?: readonly ContextMenuItemSchemaType[];
 }
 
@@ -66,6 +69,7 @@ export const ContextMenuItemSchema: Schema.Codec<ContextMenuItemSchemaType> = Sc
   header: Schema.optionalKey(Schema.Boolean),
   icon: Schema.optionalKey(Schema.String),
   separatorBefore: Schema.optionalKey(Schema.Boolean),
+  checked: Schema.optionalKey(Schema.Boolean),
   children: Schema.optionalKey(
     Schema.Array(
       Schema.suspend((): Schema.Codec<ContextMenuItemSchemaType> => ContextMenuItemSchema),
@@ -272,12 +276,6 @@ export interface DesktopRuntimeInfo {
   runningUnderArm64Translation: boolean;
 }
 
-export const DesktopRuntimeInfoSchema = Schema.Struct({
-  hostArch: DesktopRuntimeArchSchema,
-  appArch: DesktopRuntimeArchSchema,
-  runningUnderArm64Translation: Schema.Boolean,
-});
-
 export interface DesktopUpdateState {
   enabled: boolean;
   status: DesktopUpdateStatus;
@@ -428,14 +426,6 @@ export interface DesktopSshPasswordPromptRequest {
   prompt: string;
   expiresAt: string;
 }
-
-export const DesktopSshPasswordPromptRequestSchema = Schema.Struct({
-  requestId: Schema.String,
-  destination: Schema.String,
-  username: Schema.NullOr(Schema.String),
-  prompt: Schema.String,
-  expiresAt: Schema.String,
-});
 
 export const DesktopSshPasswordPromptCancelledType = "ssh-password-prompt-cancelled" as const;
 
@@ -590,18 +580,6 @@ export const DesktopWslStateSchema = Schema.Struct({
   preflightError: Schema.NullOr(Schema.String),
 });
 
-export const DesktopOpenWorkspaceRequestSchema = Schema.Union([
-  Schema.Struct({
-    type: Schema.Literal("open-workspace"),
-    cwd: Schema.String,
-  }),
-  Schema.Struct({
-    type: Schema.Literal("codex-thread-resume"),
-    threadId: Schema.String,
-  }),
-]);
-export type DesktopOpenWorkspaceRequest = typeof DesktopOpenWorkspaceRequestSchema.Type;
-
 /**
  * Renderer-facing snapshot of a desktop preview tab. Mirrors the main-process
  * PreviewTabState shape but uses serialisable primitives only.
@@ -635,19 +613,6 @@ export interface DesktopPreviewFavicon {
   pageUrl: string;
   capturedAt: number;
 }
-
-export const DesktopPreviewFaviconSchema: Schema.Codec<DesktopPreviewFavicon> = Schema.Struct({
-  dataUrl: Schema.String.check(
-    Schema.isMaxLength(FAVICON_DATA_URL_MAX_LENGTH),
-    Schema.isPattern(/^data:image\/png;base64,[a-z0-9+/]+={0,2}$/i),
-  ),
-  pageUrl: Schema.String.check(Schema.isMaxLength(2_048)),
-  capturedAt: Schema.Number.check(
-    Schema.isFinite(),
-    Schema.isGreaterThanOrEqualTo(0),
-    Schema.isLessThanOrEqualTo(FAVICON_CAPTURED_AT_MAX),
-  ),
-});
 
 export interface DesktopPreviewTabState {
   tabId: string;
@@ -688,43 +653,6 @@ export const DesktopPreviewAutomationStatusSchema = Schema.Struct({
 });
 export type DesktopPreviewAutomationStatus = typeof DesktopPreviewAutomationStatusSchema.Type;
 
-export const DesktopPreviewNavStatusSchema = Schema.Union([
-  Schema.Struct({ kind: Schema.Literal("Idle") }),
-  Schema.Struct({
-    kind: Schema.Literal("Loading"),
-    url: Schema.String,
-    title: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("Success"),
-    url: Schema.String,
-    title: Schema.String,
-  }),
-  Schema.Struct({
-    kind: Schema.Literal("LoadFailed"),
-    url: Schema.String,
-    title: Schema.String,
-    code: Schema.Number,
-    description: Schema.String,
-  }),
-]);
-
-export const DesktopPreviewTabStateSchema: Schema.Codec<DesktopPreviewTabState> = Schema.Struct({
-  tabId: DesktopPreviewTabIdSchema,
-  webContentsId: Schema.NullOr(Schema.Int),
-  navStatus: DesktopPreviewNavStatusSchema,
-  canGoBack: Schema.Boolean,
-  canGoForward: Schema.Boolean,
-  zoomFactor: Schema.Number,
-  pictureInPicture: Schema.Boolean,
-  colorScheme: DesktopPreviewColorSchemeSchema,
-  audioMuted: Schema.Boolean,
-  audible: Schema.Boolean,
-  controller: Schema.Literals(["human", "agent", "none"]),
-  favicon: Schema.optionalKey(DesktopPreviewFaviconSchema),
-  updatedAt: Schema.String,
-});
-
 export interface DesktopPreviewPointerEvent {
   tabId: string;
   phase: "move" | "click";
@@ -733,16 +661,6 @@ export interface DesktopPreviewPointerEvent {
   sequence: number;
   createdAt: string;
 }
-
-export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointerEvent> =
-  Schema.Struct({
-    tabId: DesktopPreviewTabIdSchema,
-    phase: Schema.Literals(["move", "click"]),
-    x: Schema.Number,
-    y: Schema.Number,
-    sequence: Schema.Int,
-    createdAt: Schema.String,
-  });
 
 /** Recording decorations are forwarded separately from the captured page pixels. */
 export const DesktopPreviewRecordingInputSchema = Schema.Union([
@@ -846,28 +764,6 @@ export interface DesktopPreviewRecordingFrame {
   height: number;
   receivedAt: string;
 }
-
-export const DesktopPreviewRecordingFrameSchema: Schema.Codec<DesktopPreviewRecordingFrame> =
-  Schema.Struct({
-    tabId: DesktopPreviewTabIdSchema,
-    data: Schema.String,
-    width: Schema.Number,
-    height: Schema.Number,
-    receivedAt: Schema.String,
-  });
-
-export interface DesktopPreviewRecordingSource {
-  sourceId: string;
-  width: number;
-  height: number;
-}
-
-export const DesktopPreviewRecordingSourceSchema: Schema.Codec<DesktopPreviewRecordingSource> =
-  Schema.Struct({
-    sourceId: Schema.String,
-    width: Schema.Int.check(Schema.isGreaterThan(0)),
-    height: Schema.Int.check(Schema.isGreaterThan(0)),
-  });
 
 export interface DesktopPreviewRecordingArtifact {
   id: string;
@@ -1233,6 +1129,7 @@ export interface DesktopBridge {
   getClientPlatform?: () => string;
   setNotificationBadge?: (badge: { count: number; image: string | null }) => Promise<void>;
   onNotificationBadgeClear?: (listener: () => void) => () => void;
+  onTrackpadScrollEnd?: (listener: () => void) => () => void;
   /**
    * The OS locale as a BCP-47 tag, which the renderer cannot read for itself:
    * the packaged app ships only the `en-US` Chromium locale pak, so
@@ -1315,9 +1212,10 @@ export interface DesktopBridge {
     items: readonly ContextMenuItem<T>[],
     position?: { x: number; y: number },
   ) => Promise<T | null>;
+  /** Receives a local OAuth code for a sign-in owned by a remote environment. */
+  receiveProviderAuthCallback?: (authorizationUrl: string) => Promise<string>;
+  cancelProviderAuthCallback?: (authorizationUrl: string) => Promise<void>;
   openExternal: (url: string) => Promise<boolean>;
-  consumePendingOpenWorkspaceRequests: () => Promise<readonly DesktopOpenWorkspaceRequest[]>;
-  onOpenWorkspaceRequest: (listener: (request: DesktopOpenWorkspaceRequest) => void) => () => void;
   /**
    * Open a System Settings pane by identifier. Optional: older desktop builds
    * lack it, and callers no-op when it is missing.
@@ -1430,7 +1328,7 @@ export interface DesktopPreviewBridge {
   };
   recording: {
     onInput: (listener: (event: DesktopPreviewRecordingInputEvent) => void) => () => void;
-    startScreencast: (tabId: string) => Promise<DesktopPreviewRecordingSource>;
+    startScreencast: (tabId: string) => Promise<void>;
     stopScreencast: (tabId: string) => Promise<void>;
     save: (
       tabId: string,

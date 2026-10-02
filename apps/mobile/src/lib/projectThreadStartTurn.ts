@@ -2,28 +2,17 @@ import {
   CommandId,
   MessageId,
   ThreadId,
+  type ChatAttachment,
   type ModelSelection,
   type OrchestrationMessageContext,
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
-  type SkillPackId,
-  type ThreadWorkspaceId,
-  type WorkspaceProfile,
 } from "@t3tools/contracts";
+import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
 
 import type { UploadedMobileAttachment } from "./attachmentUpload";
-
-export function deriveThreadTitleFromPrompt(value: string): string {
-  const trimmed = assistantCitationsToPlainText(value).trim();
-  if (trimmed.length === 0) {
-    return "New thread";
-  }
-
-  const compact = trimmed.replace(/\s+/g, " ");
-  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
-}
 
 export interface ProjectThreadStartTurnSpec {
   readonly projectId: ProjectId;
@@ -34,18 +23,14 @@ export interface ProjectThreadStartTurnSpec {
   readonly createdAt: string;
   readonly text: string;
   readonly context?: OrchestrationMessageContext;
-  /** Wire attachments from `prepareTurnAttachments`, in composer order. */
-  readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment>;
+  /** New uploads or server-owned attachments from a cancelled setup. */
+  readonly uploadedAttachments: ReadonlyArray<UploadedMobileAttachment | ChatAttachment>;
   readonly modelSelection: ModelSelection;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  /** Draft-chosen packs; absent inherits the project default. */
-  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   readonly workspaceMode: "local" | "worktree";
   readonly branch: string | null;
   readonly worktreePath: string | null;
-  readonly workspaceId?: ThreadWorkspaceId;
-  readonly workspaceProfile?: WorkspaceProfile;
   readonly startFromOrigin: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
@@ -57,10 +42,11 @@ export interface ProjectThreadStartTurnSpec {
  * offline outbox drain so both deliver identical commands.
  */
 export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpec) {
-  const title = deriveThreadTitleFromPrompt(spec.text);
-  const isWorktree = spec.workspaceMode === "worktree" && spec.worktreePath === null;
+  const title = deriveThreadTitleSeed({ text: spec.text, attachments: spec.uploadedAttachments });
+  const isWorktree = spec.workspaceMode === "worktree";
   return {
     commandId: CommandId.make(spec.commandId),
+    creationSource: "mobile" as const,
     threadId: ThreadId.make(spec.threadId),
     message: {
       messageId: MessageId.make(spec.messageId),
@@ -80,26 +66,17 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         modelSelection: spec.modelSelection,
         runtimeMode: spec.runtimeMode,
         interactionMode: spec.interactionMode,
-        ...(spec.skillPackIds ? { skillPackIds: spec.skillPackIds } : {}),
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
-        ...(spec.workspaceId ? { workspaceId: spec.workspaceId } : {}),
         createdAt: spec.createdAt,
       },
       ...(isWorktree
         ? {
-            prepareWorkspace: {
-              kind: "auto" as const,
-              roots: [
-                {
-                  projectId: spec.projectId,
-                  sourcePath: spec.projectCwd,
-                  role: "primary" as const,
-                  ...(spec.branch ? { baseRevision: spec.branch } : {}),
-                  ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
-                },
-              ],
-              ...(spec.workspaceProfile ? { profile: spec.workspaceProfile } : {}),
+            prepareWorktree: {
+              projectCwd: spec.projectCwd,
+              baseBranch: spec.branch!,
+              branch: spec.worktreeBranchName,
+              ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
             },
             runSetupScript: true,
           }
@@ -107,4 +84,14 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
     },
     createdAt: spec.createdAt,
   };
+}
+
+export function deriveThreadTitleFromPrompt(value: string): string {
+  const trimmed = assistantCitationsToPlainText(value).trim();
+  if (trimmed.length === 0) {
+    return "New thread";
+  }
+
+  const compact = trimmed.replace(/\s+/g, " ");
+  return compact.length <= 72 ? compact : `${compact.slice(0, 69).trimEnd()}...`;
 }

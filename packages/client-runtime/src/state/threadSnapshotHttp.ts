@@ -1,66 +1,65 @@
-import type {
-  OrchestrationThreadDetailSnapshot,
-  OrchestrationThreadActivityDetailMode,
-  OrchestrationTurnActivitiesSnapshot,
-  ThreadId,
-  TurnId,
-} from "@t3tools/contracts";
-import * as Cause from "effect/Cause";
+import type { OrchestrationV2ThreadDetailSnapshot, ThreadId } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
-import { HttpClient } from "effect/unstable/http";
 
-import { RemoteEnvironmentAuthorization } from "../authorization/service.ts";
+import * as RemoteEnvironmentAuthorization from "../authorization/service.ts";
 import type { PreparedConnection } from "../connection/model.ts";
 import { environmentEndpointUrl } from "../environment/endpoint.ts";
-import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
+import * as ManagedRelay from "../relay/managedRelay.ts";
+import type { RemoteEnvironmentRequestError } from "../rpc/http.ts";
 import {
-  executeEnvironmentHttpRequest,
-  type RemoteEnvironmentRequestError,
-  makeEnvironmentHttpApiClient,
-} from "../rpc/http.ts";
-import {
-  buildEnvironmentAuthHeaders,
   executeAuthenticatedEnvironmentHttpRequest,
-  withEnvironmentCredentials,
+  withOrchestrationProtocolHeader,
 } from "./environmentHttpAuth.ts";
 
-// Bounded so a pathologically slow endpoint cannot block the (cheaper) socket
-// fallback for long. The cached thread renders while this runs, so the wait only
-// delays the transition to live data on the first open, not the initial paint.
-const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 6_000;
-// Historical payloads can be several MB. Keep this explicit and longer than
-// the base snapshot timeout; Effect interruption/timeout cancels the request.
-const DEFAULT_TURN_ACTIVITIES_TIMEOUT_MS = 30_000;
+// Long enough for a slow but alive server to finish. On a cold open a timeout
+// makes the socket ask the same server for the same snapshot again, and older
+// turn pages have no fallback, so a short deadline only drops work. The socket
+// fallback is for setups where /api fails but /ws works, such as a proxy that
+// blocks /api. A dead server drops the socket session, which interrupts a
+// cold-open load. Older turn pages wait for this deadline.
+const DEFAULT_THREAD_SNAPSHOT_TIMEOUT_MS = 20_000;
+
+/** Progressive history metadata returned by a bounded snapshot loader. */
+export type ThreadSnapshotHistoryMeta = {
+  readonly historyCursor: string | null;
+  readonly hasMoreHistory: boolean;
+  /** Max local turn ordinal from the full projection; optional on older servers. */
+  readonly latestLocalTurnOrdinal?: number | null;
+};
+
+/**
+ * Outcome of an HTTP thread-detail snapshot load.
+ *
+ * - `present`: snapshot body is available (seed projection, resume via socket).
+ * - `missing`: server definitively reported the thread does not exist (404).
+ * - `unavailable`: transport/timeout/5xx/etc.; fall back to the socket path.
+ */
+export type ThreadSnapshotLoadResult =
+  | {
+      readonly _tag: "present";
+      readonly snapshot: OrchestrationV2ThreadDetailSnapshot;
+      readonly history?: ThreadSnapshotHistoryMeta;
+    }
+  | { readonly _tag: "missing" }
+  | { readonly _tag: "unavailable" };
 
 /**
  * Load a thread's detail snapshot over HTTP instead of embedding it in the
  * WebSocket subscription's first frame. The response is gzip-compressible by
  * the transport and keeps the (potentially multi-KB) snapshot off the socket.
  */
-/**
- * Optional turn window for a snapshot fetch. Only send a window to servers
- * that advertise `threadSnapshotPagination`; older servers reject unknown
- * query parameters.
- */
-export interface ThreadSnapshotWindow {
-  readonly turnLimit: number;
-  readonly beforeCursor?: string;
-}
-
 export const fetchEnvironmentThreadSnapshot = Effect.fn(
   "clientRuntime.state.fetchEnvironmentThreadSnapshot",
 )(function* (input: {
   readonly prepared: PreparedConnection;
   readonly threadId: ThreadId;
-  readonly activityDetailMode: OrchestrationThreadActivityDetailMode;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
-  readonly remoteAuthorization?: Option.Option<RemoteEnvironmentAuthorization["Service"]>;
+  readonly signer: Option.Option<ManagedRelay.ManagedRelayDpopSigner["Service"]>;
+  readonly remoteAuthorization?: Option.Option<
+    RemoteEnvironmentAuthorization.RemoteEnvironmentAuthorization["Service"]
+  >;
   readonly timeoutMs?: number;
-  readonly window?: ThreadSnapshotWindow;
-  readonly reasoningMessages?: boolean;
 }) {
   return yield* executeAuthenticatedEnvironmentHttpRequest({
     ...input,
@@ -72,66 +71,20 @@ export const fetchEnvironmentThreadSnapshot = Effect.fn(
     request: ({ client, headers }) =>
       client.threadSnapshot({
         params: { threadId: input.threadId },
-        payload: {
-          activityDetailMode: input.activityDetailMode,
-          ...(input.reasoningMessages === true ? { reasoningMessages: "true" as const } : {}),
-          ...(input.window !== undefined ? { turnLimit: input.window.turnLimit } : {}),
-          ...(input.window?.beforeCursor !== undefined
-            ? { beforeCursor: input.window.beforeCursor }
-            : {}),
-        },
-        headers,
+        headers: withOrchestrationProtocolHeader(headers),
       }),
   });
 });
 
 export type FetchEnvironmentThreadSnapshotError = RemoteEnvironmentRequestError;
 
-export const fetchEnvironmentTurnActivities = Effect.fn(
-  "clientRuntime.state.fetchEnvironmentTurnActivities",
-)(function* (input: {
-  readonly prepared: PreparedConnection;
-  readonly threadId: ThreadId;
-  readonly turnId: TurnId;
-  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
-  readonly timeoutMs?: number;
-}) {
-  const requestUrl = environmentEndpointUrl(
-    input.prepared.httpBaseUrl,
-    `/api/orchestration/threads/${input.threadId}/turns/${input.turnId}/activities`,
-  );
-  const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
-  const headers = yield* buildEnvironmentAuthHeaders(
-    input.prepared.httpAuthorization,
-    "GET",
-    requestUrl,
-    input.signer,
-  );
-  return yield* executeEnvironmentHttpRequest(
-    requestUrl,
-    input.timeoutMs ?? DEFAULT_TURN_ACTIVITIES_TIMEOUT_MS,
-    withEnvironmentCredentials(
-      input.prepared.httpAuthorization,
-      client.orchestration.turnActivities({
-        params: { threadId: input.threadId, turnId: input.turnId },
-        headers,
-      }),
-    ),
-  );
-});
-
-export type FetchEnvironmentTurnActivitiesError = RemoteEnvironmentRequestError;
-
-export type ThreadSnapshotLoadOutcome =
-  | { readonly _tag: "Found"; readonly snapshot: OrchestrationThreadDetailSnapshot }
-  | { readonly _tag: "NotFound" }
-  | { readonly _tag: "TransientFailure"; readonly message: string };
-
 /**
- * Loads a thread detail snapshot over HTTP with explicit not-found and
- * transient-failure outcomes. This lets cold startup fall back to the socket
- * while authoritative compact refreshes distinguish deletion from retryable
- * transport failure.
+ * Loads a thread's detail snapshot over HTTP.
+ *
+ * Distinguishes a definitive missing thread (HTTP 404) from transient snapshot
+ * unavailability so the thread state machine can mark the thread deleted without
+ * opening a socket subscription, while still falling back to the socket when the
+ * HTTP path is merely unavailable.
  */
 export class ThreadSnapshotLoader extends Context.Service<
   ThreadSnapshotLoader,
@@ -139,69 +92,6 @@ export class ThreadSnapshotLoader extends Context.Service<
     readonly load: (
       prepared: PreparedConnection,
       threadId: ThreadId,
-      activityDetailMode: OrchestrationThreadActivityDetailMode,
-      window?: ThreadSnapshotWindow,
-      reasoningMessages?: boolean,
-    ) => Effect.Effect<ThreadSnapshotLoadOutcome>;
-    readonly loadTurnActivities: (
-      prepared: PreparedConnection,
-      threadId: ThreadId,
-      turnId: TurnId,
-    ) => Effect.Effect<OrchestrationTurnActivitiesSnapshot, FetchEnvironmentTurnActivitiesError>;
+    ) => Effect.Effect<ThreadSnapshotLoadResult>;
   }
 >()("@t3tools/client-runtime/state/threadSnapshotHttp/ThreadSnapshotLoader") {}
-
-export const threadSnapshotLoaderLayer: Layer.Layer<
-  ThreadSnapshotLoader,
-  never,
-  HttpClient.HttpClient
-> = Layer.effect(
-  ThreadSnapshotLoader,
-  Effect.gen(function* () {
-    const httpClient = yield* HttpClient.HttpClient;
-    // Resolve the DPoP signer optionally: it is only needed for relay/DPoP
-    // connections, so the loader must not hard-require it (bearer/primary
-    // connections work without one).
-    const signer = yield* Effect.serviceOption(ManagedRelayDpopSigner);
-    const remoteAuthorization = yield* Effect.serviceOption(RemoteEnvironmentAuthorization);
-    return ThreadSnapshotLoader.of({
-      loadTurnActivities: (prepared, threadId, turnId) =>
-        fetchEnvironmentTurnActivities({ prepared, threadId, turnId, signer }).pipe(
-          Effect.provideService(HttpClient.HttpClient, httpClient),
-        ),
-      load: (prepared, threadId, activityDetailMode, window, reasoningMessages) =>
-        fetchEnvironmentThreadSnapshot({
-          prepared,
-          threadId,
-          activityDetailMode,
-          signer,
-          remoteAuthorization,
-          ...(reasoningMessages === true ? { reasoningMessages: true } : {}),
-          ...(window !== undefined ? { window } : {}),
-        }).pipe(
-          Effect.map((snapshot): ThreadSnapshotLoadOutcome => ({ _tag: "Found", snapshot })),
-          Effect.provideService(HttpClient.HttpClient, httpClient),
-          // A genuinely missing thread (404) is expected — the socket
-          // subscription is the source of truth for thread existence and will
-          // surface the deletion — so don't treat it as an error worth warning
-          // about; just defer to the socket path.
-          Effect.catchTags({
-            EnvironmentResourceNotFoundError: () =>
-              Effect.logDebug("Thread snapshot not found over HTTP.").pipe(
-                Effect.annotateLogs({ threadId }),
-                Effect.as<ThreadSnapshotLoadOutcome>({ _tag: "NotFound" }),
-              ),
-          }),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("Could not load the thread snapshot over HTTP.").pipe(
-              Effect.annotateLogs({ threadId, cause: Cause.pretty(cause) }),
-              Effect.as<ThreadSnapshotLoadOutcome>({
-                _tag: "TransientFailure",
-                message: Cause.pretty(cause),
-              }),
-            ),
-          ),
-        ),
-    });
-  }),
-);

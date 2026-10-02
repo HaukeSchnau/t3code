@@ -3,7 +3,7 @@ import {
   type ProviderSetupError,
   TextGenerationError,
 } from "@t3tools/contracts";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
@@ -21,10 +21,6 @@ import { applyAntigravityAcpModelSelection } from "../provider/acp/AntigravityAc
 import { removeAntigravitySessionFiles } from "../provider/acp/AntigravitySessionFiles.ts";
 import type { AcpSessionRuntime } from "../provider/acp/AcpSessionRuntime.ts";
 import type * as TextGeneration from "./TextGeneration.ts";
-import {
-  WaitSummaryGenerationResult,
-  WatchDecisionGenerationResult,
-} from "./TextGenerationSchemas.ts";
 import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
@@ -190,7 +186,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
           );
           yield* runtime.handleElicitation(() =>
             reject("Antigravity text generation requested user input.").pipe(
-              Effect.as({ action: { action: "decline" as const } }),
+              Effect.as({ action: "decline" as const }),
             ),
           );
           yield* runtime.handleReadTextFile(rejectToolRequest);
@@ -242,7 +238,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
             yield* applyAntigravityAcpModelSelection({
               runtime,
               model: input.modelSelection.model,
-              defaultModel: yield* options.defaultModel ?? Effect.succeed(undefined),
+              defaultModel: yield* options.defaultModel ?? Effect.undefined,
               mapError: (cause) =>
                 new TextGenerationError({
                   operation,
@@ -385,10 +381,14 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
     Effect.fn("AntigravityTextGeneration.generateBranchName")(function* (input) {
       const generated = yield* runAntigravityJson({
         operation: "generateBranchName",
-        ...buildBranchNamePrompt({ message: input.message, attachments: input.attachments }),
+        ...buildBranchNamePrompt({
+          message: input.message,
+          attachments: input.attachments,
+          naming: input.naming,
+        }),
         modelSelection: input.modelSelection,
       });
-      return { branch: sanitizeBranchFragment(generated.branch) };
+      return { branch: formatGeneratedBranchName(generated.branch, input.naming) };
     });
 
   const generateThreadTitle: TextGeneration.TextGeneration["Service"]["generateThreadTitle"] =
@@ -409,31 +409,10 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
       };
     });
 
-  const generateNotification: TextGeneration.TextGeneration["Service"]["generateNotification"] =
-    Effect.fn("AntigravityTextGeneration.generateNotification")(function* (input) {
-      if (input.kind === "watchDecision") {
-        const result = yield* runAntigravityJson({
-          operation: "generateNotification",
-          prompt: input.prompt,
-          outputSchema: WatchDecisionGenerationResult,
-          modelSelection: input.modelSelection,
-        });
-        return { kind: input.kind, result };
-      }
-      const result = yield* runAntigravityJson({
-        operation: "generateNotification",
-        prompt: input.prompt,
-        outputSchema: WaitSummaryGenerationResult,
-        modelSelection: input.modelSelection,
-      });
-      return { kind: input.kind, result };
-    });
-
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
-    generateNotification,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

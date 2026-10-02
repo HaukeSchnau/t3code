@@ -7,7 +7,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import type * as EffectAcpErrors from "effect-acp/errors";
 
 import { type GrokSettings, type ModelSelection } from "@t3tools/contracts";
-import { sanitizeBranchFragment, sanitizeFeatureBranchName } from "@t3tools/shared/git";
+import { formatGeneratedBranchName, sanitizeFeatureBranchName } from "@t3tools/shared/git";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import { extractJsonObject } from "@t3tools/shared/schemaJson";
 
@@ -54,15 +54,13 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle"
-      | "generateNotification";
+      | "generateThreadTitle";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
     modelSelection: ModelSelection;
   }): Effect.Effect<S["Type"], TextGenerationError, S["DecodingServices"]> =>
     Effect.gen(function* () {
-      const resolvedModel = resolveGrokAcpBaseModelId(modelSelection.model);
       const outputRef = yield* Ref.make("");
       const runtime = yield* makeGrokAcpRuntime({
         grokSettings,
@@ -85,6 +83,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       });
 
       const promptResult = yield* Effect.gen(function* () {
+        const resolvedModel = resolveGrokAcpBaseModelId(modelSelection.model);
         const started = yield* runtime.start();
         const requestedReasoningEffort = getModelSelectionStringOptionValue(
           modelSelection,
@@ -105,7 +104,6 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
               cause,
             }),
         });
-
         return yield* runtime.prompt({
           prompt: [{ type: "text", text: prompt }],
         });
@@ -226,6 +224,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       const { prompt, outputSchema } = buildBranchNamePrompt({
         message: input.message,
         attachments: input.attachments,
+        naming: input.naming,
       });
 
       const generated = yield* runGrokJson({
@@ -237,7 +236,7 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       });
 
       return {
-        branch: sanitizeBranchFragment(generated.branch),
+        branch: formatGeneratedBranchName(generated.branch, input.naming),
       };
     });
 
@@ -246,7 +245,6 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
-        automaticRefresh: input.automaticRefresh,
         linkedContext: input.linkedContext,
         attachments: input.attachments,
       });
@@ -265,33 +263,10 @@ export const makeGrokTextGeneration = Effect.fn("makeGrokTextGeneration")(functi
       } satisfies TextGeneration.ThreadTitleGenerationResult;
     });
 
-  const generateNotification: TextGeneration.TextGeneration["Service"]["generateNotification"] =
-    Effect.fn("GrokTextGeneration.generateNotification")(function* (input) {
-      if (input.kind === "watchDecision") {
-        const result = yield* runGrokJson({
-          operation: "generateNotification",
-          cwd: input.cwd,
-          prompt: input.prompt,
-          outputSchemaJson: TextGeneration.WatchDecisionGenerationResult,
-          modelSelection: input.modelSelection,
-        });
-        return { kind: input.kind, result };
-      }
-      const result = yield* runGrokJson({
-        operation: "generateNotification",
-        cwd: input.cwd,
-        prompt: input.prompt,
-        outputSchemaJson: TextGeneration.WaitSummaryGenerationResult,
-        modelSelection: input.modelSelection,
-      });
-      return { kind: input.kind, result };
-    });
-
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
-    generateNotification,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

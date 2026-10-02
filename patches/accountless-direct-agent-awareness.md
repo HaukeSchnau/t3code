@@ -50,8 +50,18 @@ authorization boundary and is intentionally not removed.
 - Mobile's Notifications settings always use this direct path and never ask for T3 Connect. The
   relay token hooks that upstream's `CloudAuthProvider` calls in `remoteRegistration.ts` are no-ops.
 - Persist device registrations in the paired server's secret store and publish that server's local
-  aggregate directly to APNs. Cross-environment aggregation is intentionally unsupported: each
-  server knows only its own threads, and the first reachable server is authoritative for the card.
+  aggregate directly to APNs (`agentAwareness/LocalAgentAwareness.ts`, `ApnsProvider.ts`).
+  Cross-environment aggregation is intentionally unsupported. Each server knows only its own
+  threads, and the first reachable server is authoritative for the card.
+- `agentAwareness/LocalAgentAwarenessPublisher.ts` feeds that aggregate from orchestration v2 thread
+  events. It reuses the helpers in upstream's `relay/AgentAwarenessRelay.ts` and follows the relay
+  publisher's rules. Only work that finished after the server started can raise a first terminal
+  alert. A tombstone or a first `completed` state goes out only if the projection still holds it
+  five seconds later, because both appear briefly while a session boots.
+- `ws.ts` serves the four `agentAwareness.*` RPCs that mobile calls: register device, unregister
+  device, register Live Activity, and get snapshot. Upstream's v2 server has none of them.
+  `auth/RpcAuthorization.ts` gives the three writes the operate scope and the snapshot the read
+  scope.
 - Alerts go out as regular notifications so they can carry Reply actions; see
   [notification replies](notification-replies.md).
 
@@ -72,6 +82,11 @@ locally signed Release apps register sandbox tokens; distribution builds registe
 ## Upstream maintenance
 
 Prefer upstream direct-pairing and direct-push implementations if they become available.
+
+The server deltas live in upstream-owned files: the RPC definitions in
+`packages/contracts/src/rpc.ts`, their handlers in `ws.ts`, their scopes in
+`auth/RpcAuthorization.ts`, and the publisher layer in `server.ts`. Leave
+`relay/AgentAwarenessRelay.ts` as upstream ships it.
 
 Take upstream's web cloud files as they are during syncs. The web deltas left here are the `/pair`
 link in `ConnectionsSettings.tsx` and the lazy `ConnectOnboardingDialog` in `routes/__root.tsx`.

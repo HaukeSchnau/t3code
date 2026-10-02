@@ -9,10 +9,12 @@ import {
   TurnId,
 } from "./baseSchemas.ts";
 import {
-  ChatAttachment,
-  ModelSelection,
   getProviderAttachmentLimitError,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
+  ChatAttachment,
+} from "./chatAttachment.ts";
+import { ModelSelection } from "./modelSelection.ts";
+import {
   ProviderApprovalDecision,
   ProviderApprovalPolicy,
   ProviderInteractionMode,
@@ -21,9 +23,8 @@ import {
   ProviderUserInputAnswers,
   UserInputAttachments,
   RuntimeMode,
-} from "./orchestration.ts";
+} from "./providerPolicy.ts";
 import { ProviderInstanceId, ProviderDriverKind } from "./providerInstance.ts";
-import { ProviderSkillScope } from "./skillPacks.ts";
 
 const ProviderSessionStatus = Schema.Literals([
   "connecting",
@@ -64,12 +65,14 @@ export const ProviderSessionStartInput = Schema.Struct({
   approvalPolicy: Schema.optional(ProviderApprovalPolicy),
   sandboxMode: Schema.optional(ProviderSandboxMode),
   runtimeMode: RuntimeMode,
-  skillScope: Schema.optional(ProviderSkillScope),
 });
 export type ProviderSessionStartInput = typeof ProviderSessionStartInput.Type;
 
 export const ProviderSendTurnInput = Schema.Struct({
   threadId: ThreadId,
+  /** Internal recovery signal. Allows an empty turn only for adapters that
+      explicitly support promptless continuation. */
+  continuation: Schema.optional(Schema.Boolean),
   input: Schema.optional(
     TrimmedNonEmptyString.check(Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_INPUT_CHARS)),
   ),
@@ -80,7 +83,6 @@ export const ProviderSendTurnInput = Schema.Struct({
   ),
   modelSelection: Schema.optional(ModelSelection),
   interactionMode: Schema.optional(ProviderInteractionMode),
-  continuation: Schema.optional(Schema.Literal(true)),
 });
 export type ProviderSendTurnInput = typeof ProviderSendTurnInput.Type;
 
@@ -142,12 +144,6 @@ export class ProviderUploadFeedbackError extends Schema.TaggedError<ProviderUplo
 
 const ProviderEventKind = Schema.Literals(["session", "notification", "request", "error"]);
 
-const ProviderEventAgentContext = Schema.Struct({
-  providerThreadId: TrimmedNonEmptyString,
-  parentTurnId: Schema.optional(TurnId),
-});
-export type ProviderEventAgentContext = typeof ProviderEventAgentContext.Type;
-
 export const ProviderEvent = Schema.Struct({
   id: EventId,
   kind: ProviderEventKind,
@@ -163,7 +159,6 @@ export const ProviderEvent = Schema.Struct({
   requestId: Schema.optional(ApprovalRequestId),
   requestKind: Schema.optional(ProviderRequestKind),
   textDelta: Schema.optional(Schema.String),
-  agentContext: Schema.optional(ProviderEventAgentContext),
   payload: Schema.optional(Schema.Unknown),
 });
 export type ProviderEvent = typeof ProviderEvent.Type;

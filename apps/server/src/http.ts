@@ -36,19 +36,6 @@ import {
   storeAttachmentUpload,
   validateAttachmentUploadToken,
 } from "./assets/AttachmentUpload.ts";
-import {
-  ATTACHMENTS_ROUTE_PREFIX,
-  normalizeAttachmentRelativePath,
-  resolveAttachmentRelativePath,
-} from "./attachmentPaths.ts";
-import { resolveAttachmentPathById } from "./attachmentStore.ts";
-import { SAFE_IMAGE_FILE_EXTENSIONS } from "./imageMime.ts";
-import {
-  OBSERVED_MEDIA_ROUTE_PREFIX,
-  normalizeObservedMediaRelativePath,
-  resolveObservedMediaRelativePath,
-} from "./observedMediaPaths.ts";
-import { resolveObservedMediaPathById } from "./observedMediaStore.ts";
 import * as BrowserTraceCollector from "./observability/BrowserTraceCollector.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import { traceRelayRequest } from "./cloud/traceRelayRequest.ts";
@@ -61,7 +48,6 @@ import {
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import { browserApiCorsAllowedHeaders, browserApiCorsAllowedMethods } from "./httpCors.ts";
 
-const LOCAL_IMAGE_ROUTE_PATH = "/local-image";
 const OTLP_TRACES_PROXY_PATH = "/api/observability/v1/traces";
 export const HEALTH_ROUTE_PATH = "/healthz";
 const LOOPBACK_HOSTNAMES = new Set(["127.0.0.1", "::1"]);
@@ -336,9 +322,12 @@ export const serverEnvironmentHttpApiLayer = HttpApiBuilder.group(
 
 class DecodeOtlpTraceRecordsError extends Data.TaggedError("DecodeOtlpTraceRecordsError")<{
   readonly cause: unknown;
-  readonly bodyJson: OtlpTracer.TraceData;
 }> {}
 
+// Renderers export up to once a second while they have spans buffered, so
+// tracing this proxy would add more server spans than it forwards.
+// withTracerEnabled(false) drops the handler's spans, including the forward.
+// untracedRequestsLayer drops the HTTP server span.
 export const otlpTracesProxyRouteLayer = HttpRouter.add(
   "POST",
   OTLP_TRACES_PROXY_PATH,
@@ -355,15 +344,10 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
 
     yield* Effect.try({
       try: () => decodeOtlpTraceRecords(bodyJson),
-      catch: (cause) => new DecodeOtlpTraceRecordsError({ cause, bodyJson }),
+      catch: (cause) => new DecodeOtlpTraceRecordsError({ cause }),
     }).pipe(
       Effect.flatMap((records) => browserTraceCollector.record(records)),
-      Effect.catch((cause) =>
-        Effect.logWarning("Failed to decode browser OTLP traces", {
-          cause,
-          bodyJson,
-        }),
-      ),
+      Effect.catch((cause) => Effect.logWarning("Failed to decode browser OTLP traces", { cause })),
     );
 
     if (otlpTracesUrl === undefined) {
@@ -394,8 +378,24 @@ export const otlpTracesProxyRouteLayer = HttpRouter.add(
       EnvironmentInternalError: HttpServerRespondable.toResponse,
       EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
     }),
+    Effect.withTracerEnabled(false),
   ),
 );
+
+const UNTRACED_REQUEST_PATHS: ReadonlySet<string> = new Set([OTLP_TRACES_PROXY_PATH]);
+
+// Skips the HTTP server span for UNTRACED_REQUEST_PATHS. That span starts
+// before routing, so a route handler cannot skip it. TracerDisabledWhen is one
+// predicate for the whole server and the last layer to provide it wins, so
+// makeRoutesLayer provides this one last. Add paths here instead of providing
+// TracerDisabledWhen again; server.test.ts fails if a later layer replaces it.
+// The query string is ignored, as in routing.
+export const untracedRequestsLayer = Layer.succeed(HttpMiddleware.TracerDisabledWhen)((request) => {
+  const queryIndex = request.url.indexOf("?");
+  return UNTRACED_REQUEST_PATHS.has(
+    queryIndex === -1 ? request.url : request.url.slice(0, queryIndex),
+  );
+});
 
 export const assetRouteLayer = HttpRouter.add(
   "GET",
@@ -439,175 +439,6 @@ export const assetRouteLayer = HttpRouter.add(
       request.headers["if-range"],
       request.method === "HEAD" ? "HEAD" : "GET",
     ).pipe(
-      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
-    );
-  }),
-);
-
-export const attachmentsRouteLayer = HttpRouter.add(
-  "GET",
-  `${ATTACHMENTS_ROUTE_PREFIX}/*`,
-  Effect.gen(function* () {
-    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
-
-    const config = yield* ServerConfig.ServerConfig;
-    const rawRelativePath = url.value.pathname.slice(ATTACHMENTS_ROUTE_PREFIX.length);
-    const normalizedRelativePath = normalizeAttachmentRelativePath(rawRelativePath);
-    if (!normalizedRelativePath) {
-      return HttpServerResponse.text("Invalid attachment path", { status: 400 });
-    }
-
-    const isIdLookup =
-      !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
-    const filePath = isIdLookup
-      ? resolveAttachmentPathById({
-          attachmentsDir: config.attachmentsDir,
-          attachmentId: normalizedRelativePath,
-        })
-      : resolveAttachmentRelativePath({
-          attachmentsDir: config.attachmentsDir,
-          relativePath: normalizedRelativePath,
-        });
-    if (!filePath) {
-      return HttpServerResponse.text(isIdLookup ? "Not Found" : "Invalid attachment path", {
-        status: isIdLookup ? 404 : 400,
-      });
-    }
-
-    const fileSystem = yield* FileSystem.FileSystem;
-    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
-    if (!fileInfo || fileInfo.type !== "File") {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    return yield* HttpServerResponse.file(filePath, {
-      status: 200,
-      headers: {
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    }).pipe(
-      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
-    );
-  }).pipe(
-    Effect.catchTags({
-      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-      EnvironmentInternalError: HttpServerRespondable.toResponse,
-      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
-    }),
-  ),
-);
-
-export const observedMediaRouteLayer = HttpRouter.add(
-  "GET",
-  `${OBSERVED_MEDIA_ROUTE_PREFIX}/*`,
-  Effect.gen(function* () {
-    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
-
-    const config = yield* ServerConfig.ServerConfig;
-    const rawRelativePath = url.value.pathname.slice(OBSERVED_MEDIA_ROUTE_PREFIX.length);
-    const normalizedRelativePath = normalizeObservedMediaRelativePath(rawRelativePath);
-    if (!normalizedRelativePath) {
-      return HttpServerResponse.text("Invalid observed media path", { status: 400 });
-    }
-
-    const isIdLookup =
-      !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
-    const filePath = isIdLookup
-      ? resolveObservedMediaPathById({
-          observedMediaDir: config.observedMediaDir,
-          mediaId: normalizedRelativePath,
-        })
-      : resolveObservedMediaRelativePath({
-          observedMediaDir: config.observedMediaDir,
-          relativePath: normalizedRelativePath,
-        });
-    if (!filePath) {
-      return HttpServerResponse.text(isIdLookup ? "Not Found" : "Invalid observed media path", {
-        status: isIdLookup ? 404 : 400,
-      });
-    }
-
-    const contentType = Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream");
-    if (!contentType.toLowerCase().startsWith("image/")) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    const fileSystem = yield* FileSystem.FileSystem;
-    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
-    if (!fileInfo || fileInfo.type !== "File") {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    return yield* HttpServerResponse.file(filePath, {
-      status: 200,
-      headers: {
-        "Cache-Control": "public, max-age=31536000, immutable",
-      },
-    }).pipe(
-      Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
-    );
-  }).pipe(
-    Effect.catchTags({
-      EnvironmentAuthInvalidError: HttpServerRespondable.toResponse,
-      EnvironmentInternalError: HttpServerRespondable.toResponse,
-      EnvironmentScopeRequiredError: HttpServerRespondable.toResponse,
-    }),
-  ),
-);
-
-export const localImageRouteLayer = HttpRouter.add(
-  "GET",
-  LOCAL_IMAGE_ROUTE_PATH,
-  Effect.gen(function* () {
-    yield* authenticateRawRouteWithScope(AuthOrchestrationReadScope);
-    const request = yield* HttpServerRequest.HttpServerRequest;
-    const url = HttpServerRequest.toURL(request);
-    if (Option.isNone(url)) {
-      return HttpServerResponse.text("Bad Request", { status: 400 });
-    }
-
-    const filePath = url.value.searchParams.get("path");
-    if (!filePath || filePath.includes("\0")) {
-      return HttpServerResponse.text("Missing image path", { status: 400 });
-    }
-
-    const path = yield* Path.Path;
-    if (!path.isAbsolute(filePath)) {
-      return HttpServerResponse.text("Invalid image path", { status: 400 });
-    }
-
-    const extension = path.extname(filePath).toLowerCase();
-    if (!SAFE_IMAGE_FILE_EXTENSIONS.has(extension)) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    const contentType = Option.getOrElse(Mime.getType(filePath), () => "application/octet-stream");
-    if (!contentType.toLowerCase().startsWith("image/")) {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    const fileSystem = yield* FileSystem.FileSystem;
-    const fileInfo = yield* fileSystem.stat(filePath).pipe(Effect.orElseSucceed(() => null));
-    if (!fileInfo || fileInfo.type !== "File") {
-      return HttpServerResponse.text("Not Found", { status: 404 });
-    }
-
-    return yield* HttpServerResponse.file(filePath, {
-      status: 200,
-      headers: {
-        "Cache-Control": "private, max-age=60",
-      },
-    }).pipe(
       Effect.orElseSucceed(() => HttpServerResponse.text("Internal Server Error", { status: 500 })),
     );
   }),

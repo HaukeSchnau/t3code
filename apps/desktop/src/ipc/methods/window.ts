@@ -2,7 +2,6 @@ import {
   ContextMenuItemSchema,
   DesktopAppBrandingSchema,
   DesktopEnvironmentBootstrapSchema,
-  DesktopOpenWorkspaceRequestSchema,
   DesktopThemeSchema,
   EDITORS,
   EditorId,
@@ -27,7 +26,6 @@ import * as Schema from "effect/Schema";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
 import * as DesktopLocalEnvironmentAuth from "../../backend/DesktopLocalEnvironmentAuth.ts";
 import * as DesktopEnvironment from "../../app/DesktopEnvironment.ts";
-import * as DesktopOpenWorkspace from "../../app/DesktopOpenWorkspace.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
 import * as DesktopWslBackend from "../../wsl/DesktopWslBackend.ts";
 import * as DesktopWslEnvironment from "../../wsl/DesktopWslEnvironment.ts";
@@ -310,15 +308,6 @@ export const openExternal = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.window.openExternal")(function* (url) {
     const shell = yield* ElectronShell.ElectronShell;
     return yield* shell.openExternal(url);
-  }),
-});
-export const consumePendingOpenWorkspaceRequests = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.CONSUME_PENDING_OPEN_WORKSPACE_REQUESTS_CHANNEL,
-  payload: Schema.Undefined,
-  result: Schema.Array(DesktopOpenWorkspaceRequestSchema),
-  handler: Effect.fn("desktop.ipc.window.consumePendingOpenWorkspaceRequests")(function* () {
-    const openWorkspace = yield* DesktopOpenWorkspace.DesktopOpenWorkspace;
-    return yield* openWorkspace.consumePending;
   }),
 });
 

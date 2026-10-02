@@ -8,6 +8,7 @@ import * as Stream from "effect/Stream";
 import * as ChildProcessSpawner from "effect/unstable/process/ChildProcessSpawner";
 
 import * as CodexRpc from "./_generated/meta.gen.ts";
+import * as CodexSchema from "./_generated/schema.gen.ts";
 import * as CodexError from "./errors.ts";
 import * as CodexProtocol from "./protocol.ts";
 import {
@@ -24,11 +25,6 @@ export interface CodexAppServerClientOptions {
   readonly logger?: (
     event: CodexProtocol.CodexAppServerProtocolLogEvent,
   ) => Effect.Effect<void, never>;
-}
-
-export interface CodexAppServerServerRequestContext {
-  readonly requestId: string | number;
-  readonly rawParams: unknown;
 }
 
 interface CodexAppServerClientRaw {
@@ -56,7 +52,6 @@ export class CodexAppServerClient extends Context.Service<
       method: M,
       handler: (
         payload: CodexRpc.ServerRequestParamsByMethod[M],
-        context: CodexAppServerServerRequestContext,
       ) => Effect.Effect<
         CodexRpc.ServerRequestResponsesByMethod[M],
         CodexError.CodexAppServerError
@@ -85,13 +80,21 @@ export class CodexAppServerClient extends Context.Service<
 
 type ServerRequestHandler = (
   payload: unknown,
-  context: CodexAppServerServerRequestContext,
 ) => Effect.Effect<unknown, CodexError.CodexAppServerError>;
 type ServerNotificationHandler = (
   payload: unknown,
 ) => Effect.Effect<void, CodexError.CodexAppServerError>;
 
-const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
+const V2TurnStartParamsWithCollaborationMode = CodexSchema.V2TurnStartParams.pipe(
+  Schema.fieldsAssign({
+    collaborationMode: Schema.optionalKey(CodexSchema.ClientRequest__CollaborationMode),
+    additionalContext: Schema.optionalKey(
+      Schema.Record(Schema.String, CodexSchema.V2TurnStartParams__AdditionalContextEntry),
+    ),
+  }),
+);
+
+export const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(function* (
   stdio: Stdio.Stdio,
   options: CodexAppServerClientOptions = {},
   terminationError?: Effect.Effect<CodexError.CodexAppServerError>,
@@ -124,7 +127,10 @@ const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(func
     method: M,
   ):
     | Schema.Codec<CodexRpc.ClientRequestParamsByMethod[M], CodexRpc.ClientRequestParamsByMethod[M]>
-    | undefined => CodexRpc.CLIENT_REQUEST_PARAMS[method] as never;
+    | undefined =>
+    method === "turn/start"
+      ? (V2TurnStartParamsWithCollaborationMode as never)
+      : (CodexRpc.CLIENT_REQUEST_PARAMS[method] as never);
 
   const getClientRequestResponseSchema = <M extends CodexRpc.ClientRequestMethod>(
     method: M,
@@ -160,14 +166,12 @@ const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(func
         Effect.flatMap((decoded) =>
           Effect.forEach(handlers, (handler) => handler(decoded), { discard: true }),
         ),
-        Effect.catch(() => Effect.void),
+        Effect.ignore,
       );
     }
 
     return unknownNotificationHandler
-      ? unknownNotificationHandler(notification.method, notification.params).pipe(
-          Effect.catch(() => Effect.void),
-        )
+      ? unknownNotificationHandler(notification.method, notification.params).pipe(Effect.ignore)
       : Effect.void;
   };
 
@@ -181,19 +185,7 @@ const make = Effect.fn("effect-codex-app-server/CodexAppServerClient.make")(func
       const handler = requestHandlers.get(method);
 
       return decodeOptionalPayload(method, payloadSchema, request.params).pipe(
-        Effect.flatMap((decoded) =>
-          runHandler(
-            handler
-              ? (payload) =>
-                  handler(payload, {
-                    requestId: request.id,
-                    rawParams: request.params,
-                  })
-              : undefined,
-            decoded,
-            method,
-          ),
-        ),
+        Effect.flatMap((decoded) => runHandler(handler, decoded, method)),
         Effect.flatMap((result) => encodeOptionalPayload(method, responseSchema, result)),
       );
     }
