@@ -56,8 +56,6 @@ export type EnvironmentConnectionProgress =
 export interface SnapshotIdentity {
   /** Sequence embedded in this content snapshot; the private replay cursor may be newer. */
   readonly contentSequence: number;
-  /** Server-authored content update time, not a client receipt time. */
-  readonly updatedAt: string;
 }
 
 export type EnvironmentSnapshotFreshness =
@@ -243,10 +241,7 @@ export function projectEnvironmentConnectionProgress(
 function snapshotIdentity(state: EnvironmentShellState): SnapshotIdentity | null {
   return Option.match(state.snapshot, {
     onNone: () => null,
-    onSome: (snapshot) => ({
-      contentSequence: snapshot.snapshotSequence,
-      updatedAt: snapshot.updatedAt,
-    }),
+    onSome: (snapshot) => ({ contentSequence: snapshot.snapshotSequence }),
   });
 }
 

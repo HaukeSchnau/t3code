@@ -17,8 +17,6 @@ repeatable through `agent-device` and a one-time pairing URL.
   - `just desktop-macos`
 - Keep web and Metro as independent native devenv processes with their own managed endpoints.
   Both depend on the shared dependency task. `project dev up` and `devenv up` use this definition.
-- Desktop artifact packaging must resolve `vp` through the workspace-local `node_modules/.bin/vp`
-  executable so `just desktop-macos` works in non-interactive shells where `vp` is not on `PATH`.
 - Default physical-device settings are local to this fork and must be overridable with environment
   variables such as `T3CODE_IOS_DEVICE`, `T3CODE_APPLE_TEAM_ID`,
   `T3CODE_AGENT_DEVICE_IOS_BUNDLE_ID`, `T3CODE_AGENT_DEVICE_SESSION`, and
@@ -42,9 +40,9 @@ dump` can be empty unless log capture has been explicitly started.
 
 - `Justfile`
 - `flake.nix`
-- `scripts/build-desktop-artifact.ts`
 - `apps/mobile/README.md`
 - `apps/mobile/src/features/connection/ConnectionsNewRouteScreen.tsx`
+- `apps/mobile/src/features/connection/connectionPairingAutomation.ts` (fork-owned)
 
 ## Non-goals
 

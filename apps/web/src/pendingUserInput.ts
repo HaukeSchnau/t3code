@@ -157,6 +157,17 @@ export function countAnsweredPendingUserInputQuestions(
   }, 0);
 }
 
+export function findFirstUnansweredPendingUserInputQuestionIndex(
+  questions: ReadonlyArray<UserInputQuestion>,
+  draftAnswers: Record<string, PendingUserInputDraftAnswer>,
+): number {
+  const unansweredIndex = questions.findIndex(
+    (question) => !resolvePendingUserInputAnswer(question, draftAnswers[question.id]),
+  );
+
+  return unansweredIndex === -1 ? Math.max(questions.length - 1, 0) : unansweredIndex;
+}
+
 export function derivePendingUserInputProgress(
   questions: ReadonlyArray<UserInputQuestion>,
   draftAnswers: Record<string, PendingUserInputDraftAnswer>,
@@ -188,4 +199,11 @@ export function derivePendingUserInputProgress(
     isComplete: buildPendingUserInputAnswers(questions, draftAnswers) !== null,
     canAdvance: resolvedAnswer !== null,
   };
+}
+
+/** Codex marks non-blocking questions as not required; the prompt is skippable when all are. */
+export function isOptionalPendingUserInput(
+  questions: ReadonlyArray<{ readonly required?: boolean | undefined }>,
+): boolean {
+  return questions.length > 0 && questions.every((question) => question.required === false);
 }

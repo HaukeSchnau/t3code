@@ -10,9 +10,15 @@ In **Settings → General → Send shortcut**, choose whether Enter sends, requi
 inserts a new line. This applies to the web and desktop composer at desktop widths.
 
 **Follow-up behavior** chooses Queue or Steer while the agent runs. Use
-`mod+Enter` to do the opposite for one message. When sending requires `mod+Enter`,
-use `mod+Shift+Enter` for the opposite action. In a new thread, `mod+Enter` keeps
-starting the thread in the background.
+`mod+Enter` to do the opposite for one message, even when the send shortcut
+requires a modifier. In a new thread, `mod+Alt+Enter` starts the thread in the
+background and opens a fresh composer. Change either shortcut in
+**Settings → Keybindings** under **Composer: Opposite Queue or Steer Action** or
+**Composer: Start in Background**. These bindings take priority over the send
+shortcut. Click the send button to use the configured follow-up behavior.
+
+When an active turn has queued messages, `mod+Shift+Enter` sends the first as a
+steer. Change it under **Queue: Send First Queued Message as Steer** in Keybindings.
 
 Use `mod+shift+m` to choose a model and `mod+shift+h` to choose a host.
 Use `mod+shift+e` for effort, `mod+shift+a` for access mode, `mod+shift+x` for the
@@ -30,14 +36,12 @@ on macOS and Ctrl on Windows and Linux, including GNOME, KDE Plasma, Niri, and
 Hyprland. If a custom desktop shortcut takes the same keys, choose another binding
 in Settings.
 
-## Copy pull request and thread references
+## Copy pull request references
 
-In any thread, `mod+shift+c` copies the thread's pull request link, or its thread
-ID when it has no pull request. It also works while the command palette is open.
-With a PR open in the right panel or on the Pull Requests page, `mod+shift+c`
-copies that PR's URL and `mod+shift+k` copies its number with a `#` prefix.
+With a PR open in the right panel or on the Pull Requests page, use `mod+shift+c`
+to copy its URL and `mod+shift+k` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. Search for “Copy Link or Thread ID”
-or “Copy Number”. They leave terminal input alone.
+or “Copy Number”. They copy the selected PR and leave terminal input alone.
 
 ## iPad
 
@@ -83,84 +87,21 @@ Join modifiers and a key with `+`, such as `mod+shift+d` or `ctrl+l`.
 `mod` means Command on macOS and Control elsewhere. Other modifiers are
 `cmd` / `meta`, `ctrl` / `control`, `alt` / `option`, and `shift`.
 
-## Commands
-
-`filePicker.toggle` opens file search for the active project and defaults to `mod+p`.
-`projectSearch.toggle` searches inside the active project's files and defaults to `mod+shift+f`.
-Repeating either shortcut closes that search, and switching shortcuts replaces the open search.
-`settings.open` opens Settings and defaults to `mod+shift+,`.
-`themeEditor.toggle` opens or closes the floating theme editor and defaults to
-`mod+alt+shift+t`. Select a color label to spotlight the elements that use it; select the label
-again to clear the spotlight. The swatch and hex field keep that color selected while you edit it.
-Advanced mode groups related app tokens into a smaller set of color families. Changing a family
-updates its paired text and interaction states while leaving every unrelated imported color intact.
-Use **Inspect** to pick an element in the app and reveal its color token. Inspect disarms after one
-successful pick; its hover glow and badge preview the element and color family that click will select.
-**Cancel** or `Escape` exits Inspect and clears its selection and spotlight.
-
-`rightPanel.toggleMaximized` maximizes or restores the open right panel. It has no default shortcut,
-so add one in **Settings** → **Keybindings** if you want to use it.
-
-`rightPanel.close` closes the active right panel tab and defaults to `mod+w`. Press it again to close
-the next tab. With the terminal focused, `mod+w` closes the terminal instead, and with nothing left
-to close it closes the desktop window as before. Browsers reserve `mod+w` for closing their own tab
-and never pass it to the page, so in a browser rebind this command (and `terminal.close`) to a
-shortcut the browser leaves alone, such as `alt+w`.
-
-`thread.copyReference` copies the active thread's pull request link, or its thread ID when no pull
-request is available. Its default shortcut is `mod+shift+c`, and it does not replace terminal copy
-while the terminal has focus.
-
-`thread.settle` settles the active thread or restores it when it is already settled. Its default
-shortcut is `mod+shift+s`, and it does not run while the terminal has focus.
-
-`thread.pin` pins the active thread to the pinned section of the sidebar, or unpins it when it is
-already pinned. Its default shortcut is `mod+shift+p`, and it does not run while the terminal has
-focus. See [Organizing threads](./thread-sidebar.md) for how pinned threads are ordered.
-
-Thread navigation uses client-specific defaults so the browser keeps its tab shortcuts. The desktop
-app uses `mod+1` through `mod+9` to jump to visible threads and `mod+shift+[` / `mod+shift+]` to move
-between threads. In a browser on macOS, use `ctrl` instead of `mod`. In a browser on Windows or
-Linux, use `alt` instead. The model picker's numbered shortcuts follow the same rule.
-
-The command palette searches settings, active thread titles, projects, branches, user messages, and
-final agent responses across connected environments. A setting result opens its exact control or
-section. Message matches show one labeled excerpt while keeping the thread's project, branch, and
-machine context visible. Message search begins after two characters and uses SQLite's ASCII
-case-insensitive matching.
-
-The full command list and the current defaults are shown in **Settings** → **Keybindings**, which
-always matches the build you are running. Use that rather than a copied list.
-
-Note that `chat.new` and `chat.newLocal` both create a thread through the same path. A new thread
-inherits the project you were in, along with model and mode selections. Branch, worktree, and
-environment mode always come from your configured defaults, not from the thread you were looking
-at. To keep a worktree, use the explicit "new thread in this worktree" action in the branch
-toolbar. The only difference between the two commands: with the current sidebar and more than one
-project, `chat.new` opens a project chooser first.
-
-Background submission from a new thread is the exception. `mod+enter` starts that thread and opens
-another new thread with the same workspace mode and base branch. **New worktree** remains selected,
-but the new thread does not reuse the worktree created for the thread that just started.
-
 ## When conditions
 
-A `when` expression is evaluated against context keys describing the current UI state. The keys
-the app supplies today are `desktop`, `browser`, `mac`, `terminalFocus`, `terminalOpen`,
-`previewFocus`, `previewOpen`, `modelPickerOpen`, `editableFocus`, `isWeb`, and `isDesktop`.
-`editableFocus` is true while a text field or editor has the keyboard. `isWeb` and
-`isDesktop` identify the browser and desktop app. The set is open and grows over time, so treat
-that as the current list rather than a fixed one. Any key the running app does not supply evaluates
-to `false`.
+Available context keys are `terminalFocus`, `terminalOpen`, `previewFocus`,
+`previewOpen`, `modelPickerOpen`, `usagePageOpen`, `composerFocus`, `composerDraft`,
+`turnRunning`, `editableFocus`, `isWeb`, `isDesktop`, `desktop`, `browser`, and `mac`.
+`editableFocus` is true while a text field, the composer, or another editor has
+the keyboard. `isWeb` is true in a browser tab. `isDesktop` is true in the
+desktop app. Unknown keys evaluate to `false`.
 
-Operators: `!` (not), `&&` (and), `||` (or), and parentheses.
+`mod+1` through `mod+9` jump to the first nine threads, and to models while the
+model picker is open. `mod+shift+[` and `mod+shift+]` move between threads. In a
+browser these defaults use `ctrl` on macOS and `alt` on Windows and Linux instead
+of `mod`, so the browser keeps its tab shortcuts.
 
-Examples:
-
-- `"when": "terminalFocus"`
-- `"when": "terminalOpen && !terminalFocus"`
-- `"when": "!terminalFocus"`
-  Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
+Combine keys with `!` for not, `&&` for and, `||` for or, and parentheses:
 
 ```json
 { "key": "mod+j", "command": "terminal.toggle", "when": "terminalOpen && !terminalFocus" }
@@ -177,14 +118,23 @@ a shortcut.
 `thread.stop` interrupts the running turn in the focused thread. It has no default
 shortcut; assign one in **Settings → Keybindings**.
 
-`thread.undo` (`mod+z` by default) reverses the most recent thread action that is
-still offering **Undo** in a notification, such as an unpin, settle, snooze, or
-archive. Its default rule skips text fields and terminals so native undo keeps
-working there.
+`thread.undo` (`mod+z` by default) reverses the actions shown in the notice at the
+bottom of the sidebar, such as unpin, settle, snooze, or archive. Consecutive
+actions of the same kind undo together. The notice remains available for five
+seconds after the latest action. The default shortcut skips text fields and
+terminals so native undo keeps working there.
+
+`navigation.back` (`mod+[` by default) and `navigation.forward` (`mod+]`) move
+through the pages you have visited, like a browser's back and forward buttons.
+
+`settings.open` (`mod+shift+,`) opens Settings. `reasoningEffort.cycle`
+(`mod+shift+.`) moves the composer's reasoning effort to the model's next level and
+wraps after the last one.
 
 `chat.new` may ask you to choose a project when there is more than one.
 `chat.newLocal` skips that chooser. Both use your
-[new-thread defaults](./thread-sidebar.md#start-a-thread).
+[new-thread defaults](./thread-sidebar.md#start-a-thread). `chat.newWithoutProject`
+(`mod+alt+n`) starts a thread [without a project](./thread-sidebar.md#start-without-a-project).
 
 ## Reserved shortcuts
 

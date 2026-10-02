@@ -1,17 +1,3 @@
-import { type BrowserImportSource } from "@t3tools/contracts";
-import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
-import {
-  Menu,
-  MenuGroup,
-  MenuGroupLabel,
-  MenuItem,
-  MenuPopup,
-  MenuSeparator,
-  MenuTrigger,
-} from "../ui/menu";
-import { readLocalApi } from "~/localApi";
-import { toastManager } from "../ui/toast";
-import { persistClientSettingsUpdate } from "~/hooks/useSettings";
 import { DeviceHostUpdates } from "../device/DeviceHostUpdates";
 import { DeviceToolVersions } from "../device/DeviceToolVersions";
 import { useScopedSettings, useUpdateScopedSettings } from "./useScopedSettings";
@@ -19,21 +5,22 @@ import { ScopedSwitch } from "./ScopedSwitch";
 import { DeviceHostsSettings } from "./DeviceHostsSettings";
 /**
  * Integrations settings - preferences for surfaces T3 Code embeds rather than
- * owns. Browser is the first section and controls how a hand-opened preview
- * tab starts.
+ * owns. Browser is the first section: the defaults a preview tab opens at,
+ * applied to both hand-opened tabs and agent `preview_open` calls that don't
+ * state their own size.
  *
  * @module IntegrationsSettings
  */
 import {
+  BrowserImportFailureReason,
   BROWSER_PROFILE_MAX_COUNT,
   type BrowserLinkTarget,
-  BrowserImportFailureReason,
   type BrowserProfile,
   type EnvironmentId,
   BROWSER_PROFILE_NAME_MAX_LENGTH,
   BROWSER_RECORDING_FRAME_RATES,
-  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_AUTO_SHOW_FLOATING_PREVIEW,
+  DEFAULT_BROWSER_PROFILE_ID,
   DEFAULT_BROWSER_LINK_TARGET,
   DEFAULT_BROWSER_RECORDING_FRAME_RATE,
   DEFAULT_BROWSER_VIEWPORT,
@@ -47,17 +34,17 @@ import {
   findBrowserProfile,
   isBuiltInBrowserProfileId,
   resolveBrowserProfiles,
+  type BrowserImportSource,
   type PreviewAppearancePreference,
   type PreviewViewportSetting,
 } from "@t3tools/contracts";
 import { PREVIEW_VIEWPORT_PRESETS } from "@t3tools/shared/previewViewport";
-import { InfoIcon, MoreVertical, Plus as PlusIcon } from "lucide-react";
+import { MoreVertical, Plus as PlusIcon } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
-import type { ReactNode } from "react";
 
-import { AnimatedHeight } from "~/components/AnimatedHeight";
-import { Switch } from "../ui/switch";
 import { ScreenRotationIcon } from "~/browser/ScreenRotationIcon";
+import { AnimatedHeight } from "~/components/AnimatedHeight";
+import { resolveEnvironmentOptionLabel } from "~/components/BranchToolbar.logic";
 import { previewBridge } from "~/components/preview/previewBridge";
 import { cn, randomUUID } from "~/lib/utils";
 import { useEnvironments, usePrimaryEnvironment } from "~/state/environments";
@@ -74,6 +61,18 @@ import {
 import { isElectron } from "../../env";
 
 import { Badge } from "../ui/badge";
+import {
+  Menu,
+  MenuGroup,
+  MenuGroupLabel,
+  MenuItem,
+  MenuPopup,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
+import { readLocalApi } from "~/localApi";
+
+import { toastManager } from "../ui/toast";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -95,12 +94,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
-  useClientSettings,
-  useUpdatePrimarySettings,
   getClientSettings,
+  persistClientSettingsUpdate,
+  useClientSettings,
   useClientSettingsHydrated,
+  useUpdatePrimarySettings,
 } from "~/hooks/useSettings";
 
 import {
@@ -110,7 +111,6 @@ import {
   SettingsRow,
   SettingsSection,
 } from "./settingsLayout";
-import { ITEM_ROW_INNER_CLASSNAME } from "./itemRows";
 import { searchableSetting } from "./settingsSearch";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
 import { useSettingsScope } from "./SettingsScopeContext";
@@ -149,21 +149,6 @@ export function browserProfileRemovalAvailable(
   return bridgeAvailable && environmentsReady && environmentCount > 0;
 }
 
-class ProfileLimitReachedError extends Error {
-  constructor() {
-    super("Browser profile limit reached.");
-    this.name = "ProfileLimitReachedError";
-  }
-}
-
-export const importFailureReason = (cause: unknown): BrowserImportFailureReason => {
-  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
-  return (
-    BrowserImportFailureReason.literals.find((reason) => message.includes(`failed: ${reason}.`)) ??
-    "readFailed"
-  );
-};
-
 /**
  * The size a "Responsive" default falls back to when the user switches away
  * from Fill and hasn't typed dimensions yet. Fill has no dimensions to carry
@@ -180,6 +165,27 @@ const APPEARANCE_LABELS: Readonly<Record<PreviewAppearancePreference, string>> =
 };
 
 const zoomLabel = (zoomFactor: number) => `${Math.round(zoomFactor * 100)}%`;
+
+/**
+ * IPC flattens the failure to its message, so the reason token travels inside
+ * it. Anything unrecognised reads as a plain read failure rather than leaking
+ * the raw message into a toast.
+ */
+/** Thrown from the post-import settings updater when the cap was hit meanwhile. */
+class ProfileLimitReachedError extends Error {
+  constructor() {
+    super("Browser profile limit reached.");
+    this.name = "ProfileLimitReachedError";
+  }
+}
+
+export const importFailureReason = (cause: unknown): BrowserImportFailureReason => {
+  const message = String((cause as { message?: unknown } | undefined)?.message ?? "");
+  return (
+    BrowserImportFailureReason.literals.find((reason) => message.includes(`failed: ${reason}.`)) ??
+    "readFailed"
+  );
+};
 
 const viewportSelectValue = (viewport: PreviewViewportSetting): string => {
   if (viewport._tag === "fill") return FILL_VALUE;
@@ -275,7 +281,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
   return (
     <SettingsRow
       {...searchableSetting("browser-default-viewport")}
-      description="The viewport new browser tabs open at. Fill sizes the page to the panel; any other choice opens the device toolbar at that size."
+      description="Tab size for you and agents. Fill fits the panel; other sizes show the device toolbar."
       resetAction={
         !disabled && viewport._tag !== DEFAULT_BROWSER_VIEWPORT._tag ? (
           <SettingResetButton
@@ -298,7 +304,7 @@ function BrowserViewportSetting({ disabled }: { readonly disabled: boolean }) {
             >
               <SelectValue>{viewportSelectLabel(viewport)}</SelectValue>
             </SelectTrigger>
-            <SelectPopup align="end" alignItemWithTrigger={false} className="min-w-64">
+            <SelectPopup align="end" alignItemWithTrigger={false}>
               <SelectItem value={FILL_VALUE}>Fill panel</SelectItem>
               <SelectItem value={RESPONSIVE_VALUE}>Responsive</SelectItem>
               <SelectGroup>
@@ -511,7 +517,7 @@ function BrowserRecordingFrameRateSetting({ disabled }: { readonly disabled: boo
   return (
     <SettingsRow
       {...searchableSetting("browser-recording-frame-rate")}
-      description="Maximum frame rate for browser recordings. 30 fps is the default and uses less CPU and storage; 60 fps captures smoother motion."
+      description="Maximum recording rate. 30 fps saves CPU and storage; 60 fps is smoother."
       resetAction={
         !disabled && frameRate !== DEFAULT_BROWSER_RECORDING_FRAME_RATE ? (
           <SettingResetButton
@@ -591,87 +597,6 @@ function BrowserLinkTargetSetting({ disabled }: { readonly disabled: boolean }) 
             {(Object.keys(LINK_TARGET_LABELS) as ReadonlyArray<BrowserLinkTarget>).map((target) => (
               <SelectItem hideIndicator key={target} value={target}>
                 {LINK_TARGET_LABELS[target]}
-              </SelectItem>
-            ))}
-          </SelectPopup>
-        </Select>
-      }
-    />
-  );
-}
-
-function DesktopOnlyBrowserDefaults({ children }: { readonly children: ReactNode }) {
-  return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 py-1.5">
-      <div className="flex items-start gap-2 px-3 py-2 text-[12px] leading-relaxed text-muted-foreground sm:px-4">
-        <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
-        <p>Only available in the desktop app.</p>
-      </div>
-      <div className="[&_h3]:opacity-64 [&_p]:opacity-64">{children}</div>
-    </div>
-  );
-}
-
-function BrowserDefaultProfileSetting({ disabled }: { readonly disabled: boolean }) {
-  const userProfiles = useClientSettings((settings) => settings.browserProfiles);
-  const defaultProfileId = useClientSettings((settings) => settings.browserDefaultProfileId);
-  const settingsHydrated = useClientSettingsHydrated();
-  const updateSettings = useUpdatePrimarySettings();
-  const profileWritesDisabled = disabled || !settingsHydrated;
-  // Incognito is deliberately absent: as a default it would open every tab
-  // into storage that is discarded on close.
-  const profiles = resolveBrowserProfiles(userProfiles).filter(
-    (profile) => profile.kind !== "incognito",
-  );
-  const selected = findBrowserProfile(profiles, defaultProfileId) ?? profiles[0];
-
-  return (
-    <SettingsRow
-      {...searchableSetting("browser-default-profile")}
-      description="Profile new browser tabs open under."
-      resetAction={
-        !profileWritesDisabled && defaultProfileId !== DEFAULT_BROWSER_PROFILE_ID ? (
-          <SettingResetButton
-            label="default browser profile"
-            onClick={() => {
-              if (settingsHydrated) {
-                updateSettings({ browserDefaultProfileId: DEFAULT_BROWSER_PROFILE_ID });
-              }
-            }}
-          />
-        ) : null
-      }
-      control={
-        <Select
-          disabled={profileWritesDisabled}
-          value={selected?.id ?? DEFAULT_BROWSER_PROFILE_ID}
-          onValueChange={(value) => {
-            if (settingsHydrated && value !== null) {
-              updateSettings({ browserDefaultProfileId: value });
-            }
-          }}
-        >
-          <SelectTrigger size="sm" className="w-full sm:w-44" aria-label="Default browser profile">
-            <SelectValue>{selected?.name ?? "Default"}</SelectValue>
-          </SelectTrigger>
-          {/*
-            Capped and truncated like the tab menu's profile list: names are
-            user-supplied and run to 48 characters, which would otherwise
-            widen the popup to fit the longest one. The cap goes on the glass
-            shell (`popupClassName`), and the list fills that shell so it is
-            never narrower than the trigger it opens from — the same floor
-            every other settings select keeps. `ItemText` renders a block, so
-            the label must be a block too for `truncate` to apply.
-          */}
-          <SelectPopup
-            align="end"
-            alignItemWithTrigger={false}
-            popupClassName="max-w-64"
-            className="w-full"
-          >
-            {profiles.map((profile) => (
-              <SelectItem hideIndicator key={profile.id} value={profile.id}>
-                <span className="block min-w-0 truncate">{profile.name}</span>
               </SelectItem>
             ))}
           </SelectPopup>
@@ -1258,7 +1183,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
             <PlusIcon />
             Add profile
           </MenuTrigger>
-          <MenuPopup align="end" className="min-w-56">
+          <MenuPopup align="end">
             <MenuItem
               disabled={!settingsHydrated || atProfileLimit}
               onClick={() => createProfile("New profile")}
@@ -1353,14 +1278,11 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                     onCommit={(next) => renameProfile(profile.id, next)}
                   />
                 )}
-                {/*
-                  Dimmed with the rest of the row: a `Badge` has no disabled
-                  treatment of its own, so a solid `bg-primary` pill would
-                  otherwise sit at full strength beside a name, rename field
-                  and menu button that are all at 0.64.
-                */}
+                {/* Dimmed with the rest of the row, whose controls are all disabled. */}
                 {isDefault ? (
-                  <Badge className={cn(profileWritesDisabled && "opacity-64")}>Default</Badge>
+                  <span className={cn("flex", profileWritesDisabled && "opacity-64")}>
+                    <Badge>Default</Badge>
+                  </span>
                 ) : null}
               </span>
               <Menu>
@@ -1376,7 +1298,7 @@ function BrowserProfilesSetting({ disabled }: { readonly disabled: boolean }) {
                 >
                   <MoreVertical />
                 </MenuTrigger>
-                <MenuPopup align="end" className="min-w-44">
+                <MenuPopup align="end">
                   <MenuItem
                     disabled={!settingsHydrated || isDefault}
                     onClick={() => {
@@ -1509,7 +1431,6 @@ export function IntegrationsSettingsPanel() {
   const previewDefaults = (
     <>
       <BrowserProfilesSetting disabled={previewDefaultsDisabled} />
-      <BrowserDefaultProfileSetting disabled={previewDefaultsDisabled} />
       <BrowserViewportSetting disabled={previewDefaultsDisabled} />
       <BrowserZoomSetting disabled={previewDefaultsDisabled} />
       <BrowserAppearanceSetting disabled={previewDefaultsDisabled} />

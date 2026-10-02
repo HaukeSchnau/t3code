@@ -84,20 +84,56 @@ cache directories and share native dependency preparation. Setup uses `CI=true` 
 node_modules without an interactive prompt. Production keeps its independent flake build and
 `wait-for-idle` pre-deploy action; migrating development must not force restart an active T3 server.
 
-`wait-for-idle` runs `t3 status idle` from the candidate release against the live database. CLI
-commands therefore attach to an existing database without migrating it (`layerConfigAttached` in
-`persistence/Layers/Sqlite.ts`); only the server migrates, and the CLI creates a database that has
-no migrations table yet. Upstream's CLI migrates whatever database it opens. Here that let the
-candidate release rewrite the schema under the older running server, holding the write lock for the
-whole migration until the task timed out. This can go once upstream stops migrating from CLI
-processes or the idle check no longer opens the database.
-
-Native setup owns dependency installation. Metro starts the installed Expo binary
+Native setup owns dependency installation. `scripts/setup-worktree.ts` runs the devenv
+`t3:dependencies` task when started inside the devenv root, and `pnpm install --frozen-lockfile`
+elsewhere, instead of upstream's `vp i`. It does not warm the Vite dependency cache; the dev server
+does that on start. Metro starts the installed Expo binary
 directly so pnpm does not attempt a second install when entering a managed
 workspace. The local `.pnpm-store` cache is ignored and excluded from source
 snapshots.
 Metro listens on the private workspace network so the preview proxy can reach it.
 Its cold-start readiness allowance is 300 seconds.
+
+## Release idle gate
+
+Release promotion depends on the candidate release's `t3 status idle --quiet`. `project.nix` runs
+it as the `wait-for-idle` pre-deploy task (`idleAction` in `flake.nix`). A failed task leaves the
+running release untouched, and `failureMode = "defer"` keeps the new release queued so the updater
+retries later. Upstream has no idle check. `t3 status idle` (`cli/status.ts`),
+`GET /api/server/idle` (`status/http.ts`) and the `ServerIdleStatus` contract are fork additions.
+
+The command asks the running server first and falls back to reading the database. It exits 0 when
+idle, 1 when busy and 2 when the state is unknown. `status/IdleStatus.ts` reads the orchestration
+v2 tables. Startup recovery would end the following work, so each item blocks a restart:
+
+- runs that are preparing, starting, running or waiting
+- provider sessions that are starting, running or waiting
+- pending runtime requests that need the live provider process
+- pending or running process-bound outbox effects
+
+Queued runs and requests that a later message answers survive a restart. The check counts them
+without blocking. A thread launched without an initial message has no run row yet, so its startup
+does not block.
+
+Keep the `ServerIdleStatus` shape stable. During the v2 cutover the new release's CLI must decode
+the answer of the still-running v1 server. An offline check against a database that is still v1
+finds no v2 tables and reports unknown.
+
+## Database attach and the v2 copy
+
+On its first start an orchestration v2 server copies `state.sqlite` to `statev2.sqlite` and
+migrates only the copy (`persistence/initializeV2Database.ts`). Upstream's CLI commands open the
+database through the same migrating layer. Here the candidate release's idle check would then
+create the v2 copy or rewrite the schema under the older running server, holding the write lock
+until the task timed out.
+
+CLI commands therefore attach without migrating (`layerConfigAttached` in
+`persistence/Layers/Sqlite.ts`). The auth CLI, offline `t3 project` and `t3 status idle` use it.
+They open `statev2.sqlite` when it exists and `state.sqlite` otherwise. They never create
+`statev2.sqlite` or call `initializeV2Database`, because the next v2 server start would then skip
+importing the v1 state. They run migrations only on a database without a migrations table. Only
+the server migrates a database in use. Remove this once upstream stops migrating from CLI
+processes or the idle check no longer opens the database.
 
 ## Service behavior
 

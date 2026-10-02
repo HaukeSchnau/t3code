@@ -1,5 +1,8 @@
-import type { OrchestrationThreadShell, ProjectId } from "@t3tools/contracts";
+import type { ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
+import type { EnvironmentThreadShell } from "./models.ts";
+import * as Arr from "effect/Array";
+import * as Order from "effect/Order";
 
 export interface ThreadSortInput {
   readonly createdAt: string;
@@ -11,13 +14,6 @@ export interface ThreadSortInput {
   }>;
 }
 
-export type SidebarAttentionBand = "attention" | "normal";
-
-const SIDEBAR_ATTENTION_BAND_ORDER: Record<SidebarAttentionBand, number> = {
-  attention: 0,
-  normal: 1,
-};
-
 export function toSortableTimestamp(iso: string | undefined): number | null {
   if (!iso) return null;
   const ms = Date.parse(iso);
@@ -25,8 +21,8 @@ export function toSortableTimestamp(iso: string | undefined): number | null {
 }
 
 export type SettledThreadTimestampInput = Pick<
-  OrchestrationThreadShell,
-  "settledAt" | "latestUserMessageAt" | "latestTurn" | "updatedAt"
+  EnvironmentThreadShell,
+  "settledAt" | "latestUserMessageAt" | "latestRun" | "updatedAt"
 >;
 
 /** The timestamp a settled row sorts and labels by on every client: settledAt
@@ -40,9 +36,9 @@ export function resolveSettledThreadTimestamp(thread: SettledThreadTimestampInpu
   let latestMs = Number.NEGATIVE_INFINITY;
   for (const candidate of [
     thread.latestUserMessageAt,
-    thread.latestTurn?.requestedAt,
-    thread.latestTurn?.startedAt,
-    thread.latestTurn?.completedAt,
+    thread.latestRun?.requestedAt,
+    thread.latestRun?.startedAt,
+    thread.latestRun?.completedAt,
   ]) {
     const parsed = toSortableTimestamp(candidate ?? undefined);
     if (candidate != null && parsed !== null && parsed > latestMs) {
@@ -52,6 +48,24 @@ export function resolveSettledThreadTimestamp(thread: SettledThreadTimestampInpu
   }
   if (latest !== null) return latest;
   return toSortableTimestamp(thread.updatedAt) === null ? null : thread.updatedAt;
+}
+
+/** Settled rows are history, so they order by when the work ENDED, newest
+    first, with an id tiebreak. Each key resolves once per sort, not once
+    per comparison. Shared by web and mobile so both render the same order. */
+export function sortSettledThreads<T extends SettledThreadTimestampInput & { readonly id: string }>(
+  threads: readonly T[],
+): T[] {
+  return threads
+    .map((thread) => {
+      const timestamp = resolveSettledThreadTimestamp(thread);
+      return { thread, timestampMs: timestamp === null ? 0 : Date.parse(timestamp) };
+    })
+    .sort(
+      (left, right) =>
+        right.timestampMs - left.timestampMs || left.thread.id.localeCompare(right.thread.id),
+    )
+    .map(({ thread }) => thread);
 }
 
 function getFirstSortableTimestamp(...values: Array<string | null | undefined>): number | null {
@@ -112,7 +126,7 @@ export function getThreadSortTimestamp(
  * top instead of sinking back to its creation-order slot. Shared by web and
  * mobile so both render the same order. Malformed timestamps sink to 0.
  */
-function activeThreadAnchorTimestampMs(thread: {
+export function activeThreadAnchorTimestampMs(thread: {
   readonly createdAt: string;
   readonly unsettledAt?: string | null | undefined;
 }): number {
@@ -135,38 +149,6 @@ export function sortThreads<T extends { readonly id: string } & ThreadSortInput>
         (left.thread.id < right.thread.id ? 1 : left.thread.id > right.thread.id ? -1 : 0),
     )
     .map(({ thread }) => thread);
-}
-
-/**
- * Orders the default sidebar by ownership of the next action. Streaming and
- * assistant activity are deliberately absent from the comparator: only the
- * attention band and latest user message can move an active row.
- */
-export function sortThreadsByAttention<
-  T extends {
-    readonly id: string;
-    readonly environmentId?: string | undefined;
-    readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
-  },
->(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
-  // Resolve each band and timestamp once: the comparator runs O(n log n)
-  // times, and parsing timestamps there dominated large lists.
-  const entries = threads.map((thread) => ({
-    thread,
-    band: SIDEBAR_ATTENTION_BAND_ORDER[getBand(thread)],
-    timestamp:
-      getFirstSortableTimestamp(thread.latestUserMessageAt, thread.createdAt) ??
-      Number.NEGATIVE_INFINITY,
-  }));
-  entries.sort(
-    (left, right) =>
-      left.band - right.band ||
-      right.timestamp - left.timestamp ||
-      left.thread.id.localeCompare(right.thread.id) ||
-      (left.thread.environmentId ?? "").localeCompare(right.thread.environmentId ?? ""),
-  );
-  return entries.map((entry) => entry.thread);
 }
 
 export function getLatestThreadForProject<
@@ -391,34 +373,6 @@ export function sortActiveThreadsByOrderKey<
       (left.environmentId ?? "").localeCompare(right.environmentId ?? "")
     );
   });
-}
-
-/**
- * The default sidebar's active order on every client
- * (patches/attention-ordered-sidebar.md): threads that need the user lead,
- * and inside each band an explicit Active order wins once the band has one.
- * Until then the latest user message orders the band.
- */
-export function sortActiveThreadsByAttention<
-  T extends {
-    readonly id: string;
-    readonly environmentId?: string | undefined;
-    readonly createdAt: string;
-    readonly latestUserMessageAt?: string | null;
-    readonly unsettledAt?: string | null | undefined;
-    readonly activeOrderKey?: string | null | undefined;
-  },
->(threads: readonly T[], getBand: (thread: T) => SidebarAttentionBand): T[] {
-  const bands = new Map(threads.map((thread) => [thread, getBand(thread)] as const));
-  const bandOf = (thread: T) => bands.get(thread)!;
-  const attentionOrdered = sortThreadsByAttention(threads, bandOf);
-  const sortBand = (band: SidebarAttentionBand) => {
-    const bandThreads = attentionOrdered.filter((thread) => bandOf(thread) === band);
-    return bandThreads.some((thread) => thread.activeOrderKey != null)
-      ? sortActiveThreadsByOrderKey(bandThreads)
-      : bandThreads;
-  };
-  return [...sortBand("attention"), ...sortBand("normal")];
 }
 
 /**

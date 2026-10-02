@@ -9,16 +9,8 @@ shared provider settings.
 Use a separate Claude config directory for each account. This also works for named
 presets that need different Claude settings or a router connection.
 
-## I Only Use One Claude Account
-
-Use the default provider and log in normally:
-
-```bash
-claude auth login
-```
-
-For a second account, keep your existing account in the default directory and
-create the second login on the environment's machine:
+Keep your existing account in the default directory. On the environment's machine,
+create the second login:
 
 ```bash
 mkdir -p ~/.claude_personal

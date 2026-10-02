@@ -1,17 +1,24 @@
-import type { DesktopOpenWorkspaceRequest } from "@t3tools/contracts";
+import {
+  DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+  DesktopAppActivationPlatform,
+} from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Ref from "effect/Ref";
+import * as Queue from "effect/Queue";
+import * as Schema from "effect/Schema";
 
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import * as IpcChannels from "../ipc/channels.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as DesktopAppActivation from "./DesktopAppActivation.ts";
+import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { makeComponentLogger } from "./DesktopObservability.ts";
 
 const OPEN_WORKSPACE_ACTION = "open";
-const CODEX_DEEP_LINK_ACTION = "codex";
-const CODEX_RESUME_ACTION = "resume";
 const DESKTOP_WORKSPACE_DEEP_LINK_PROTOCOLS = new Set(["t3:", "t3code:", "t3code-dev:"]);
+const isActivationPlatform = Schema.is(DesktopAppActivationPlatform);
+
+const { logWarning } = makeComponentLogger("desktop-open-workspace");
 
 function resolveDeepLinkAction(url: URL): string | null {
   const hostname = url.hostname.trim().toLowerCase();
@@ -27,14 +34,8 @@ function resolveDeepLinkAction(url: URL): string | null {
   );
 }
 
-function resolveDeepLinkPathSegments(url: URL): readonly string[] {
-  return url.pathname
-    .split("/")
-    .map((segment) => segment.trim().toLowerCase())
-    .filter((segment) => segment.length > 0);
-}
-
-export function parseDesktopOpenWorkspaceUrl(rawUrl: unknown): DesktopOpenWorkspaceRequest | null {
+/** Returns the workspace root of a `<scheme>://open?cwd=<path>` deeplink. */
+export function parseDesktopOpenWorkspaceUrl(rawUrl: unknown): string | null {
   if (typeof rawUrl !== "string") {
     return null;
   }
@@ -46,97 +47,81 @@ export function parseDesktopOpenWorkspaceUrl(rawUrl: unknown): DesktopOpenWorksp
     return null;
   }
 
-  if (!DESKTOP_WORKSPACE_DEEP_LINK_PROTOCOLS.has(url.protocol)) {
+  if (
+    !DESKTOP_WORKSPACE_DEEP_LINK_PROTOCOLS.has(url.protocol) ||
+    resolveDeepLinkAction(url) !== OPEN_WORKSPACE_ACTION
+  ) {
     return null;
   }
 
-  const action = resolveDeepLinkAction(url);
-
-  if (action === OPEN_WORKSPACE_ACTION) {
-    const cwd = url.searchParams.get("cwd")?.trim();
-    if (!cwd) {
-      return null;
-    }
-
-    return { type: "open-workspace", cwd };
-  }
-
-  if (action === CODEX_DEEP_LINK_ACTION) {
-    const pathSegments = resolveDeepLinkPathSegments(url);
-    const subaction =
-      pathSegments[0] === CODEX_DEEP_LINK_ACTION ? pathSegments[1] : pathSegments[0];
-    if (subaction !== CODEX_RESUME_ACTION) {
-      return null;
-    }
-
-    const threadId = url.searchParams.get("threadId")?.trim();
-    if (!threadId) {
-      return null;
-    }
-
-    return { type: "codex-thread-resume", threadId };
-  }
-
-  return null;
-}
-
-export interface DesktopOpenWorkspaceShape {
-  readonly dispatch: (
-    request: DesktopOpenWorkspaceRequest,
-  ) => Effect.Effect<void, never, ElectronWindow.ElectronWindow>;
-  readonly dispatchUrl: (
-    rawUrl: unknown,
-  ) => Effect.Effect<boolean, never, ElectronWindow.ElectronWindow>;
-  readonly consumePending: Effect.Effect<readonly DesktopOpenWorkspaceRequest[]>;
+  return url.searchParams.get("cwd")?.trim() || null;
 }
 
 export class DesktopOpenWorkspace extends Context.Service<
   DesktopOpenWorkspace,
-  DesktopOpenWorkspaceShape
+  {
+    /** Queues a workspace deeplink and returns true; returns false for any other URL. */
+    readonly dispatchUrl: (rawUrl: unknown) => boolean;
+    readonly take: Effect.Effect<string>;
+  }
 >()("@t3tools/desktop/app/DesktopOpenWorkspace") {}
 
-const make = Effect.gen(function* () {
-  const bridgeReadyRef = yield* Ref.make(false);
-  const pendingRequestsRef = yield* Ref.make<readonly DesktopOpenWorkspaceRequest[]>([]);
+// Deeplinks can arrive before Electron is ready, so this queue lives in the
+// pre-ready Clerk context and the application layer drains it.
+export const layer = Layer.effect(
+  DesktopOpenWorkspace,
+  Effect.gen(function* () {
+    const workspaceRoots = yield* Queue.unbounded<string>();
+    return DesktopOpenWorkspace.of({
+      // Electron event handlers decide synchronously whether they handled a URL.
+      dispatchUrl: (rawUrl) => {
+        const workspaceRoot = parseDesktopOpenWorkspaceUrl(rawUrl);
+        return workspaceRoot !== null && Queue.offerUnsafe(workspaceRoots, workspaceRoot);
+      },
+      take: Queue.take(workspaceRoots),
+    });
+  }),
+);
 
-  const broadcast = Effect.fn("desktop.openWorkspace.broadcast")(function* (
-    request: DesktopOpenWorkspaceRequest,
-  ): Effect.fn.Return<void, never, ElectronWindow.ElectronWindow> {
-    const electronWindow = yield* ElectronWindow.ElectronWindow;
-    yield* electronWindow.sendAll(IpcChannels.OPEN_WORKSPACE_REQUEST_CHANNEL, request);
-    const mainWindow = yield* electronWindow.currentMainOrFirst;
-    if (Option.isSome(mainWindow)) {
-      yield* electronWindow.reveal(mainWindow.value);
-    }
-  });
+/** Opens queued deeplinks through the same activation broker as `t3 app <path>`. */
+export const layerAppActivationDelivery = Layer.effectDiscard(
+  Effect.gen(function* () {
+    const openWorkspace = yield* DesktopOpenWorkspace;
+    const activation = yield* DesktopAppActivation.DesktopAppActivation;
+    const electronApp = yield* ElectronApp.ElectronApp;
+    const crypto = yield* Crypto.Crypto;
+    const { platform } = yield* DesktopEnvironment.DesktopEnvironment;
+    if (!isActivationPlatform(platform)) return;
 
-  const dispatch = Effect.fn("desktop.openWorkspace.dispatch")(function* (
-    request: DesktopOpenWorkspaceRequest,
-  ): Effect.fn.Return<void, never, ElectronWindow.ElectronWindow> {
-    const bridgeReady = yield* Ref.get(bridgeReadyRef);
-    if (!bridgeReady) {
-      yield* Ref.update(pendingRequestsRef, (requests) => [...requests, request]);
-      return;
-    }
+    const open = (workspaceRoot: string) =>
+      crypto.randomUUIDv4.pipe(
+        Effect.flatMap((requestId) =>
+          activation.request({
+            version: DESKTOP_APP_ACTIVATION_PROTOCOL_VERSION,
+            requestId,
+            type: "open-workspace",
+            workspaceRoot,
+            platform,
+          }),
+        ),
+        Effect.flatMap((response) =>
+          response.ok
+            ? Effect.void
+            : logWarning("could not open the deeplinked workspace", {
+                workspaceRoot,
+                code: response.code,
+                message: response.message,
+              }),
+        ),
+        Effect.catchCause((cause) =>
+          logWarning("could not open the deeplinked workspace", { workspaceRoot, cause }),
+        ),
+      );
 
-    yield* broadcast(request);
-  });
-
-  return DesktopOpenWorkspace.of({
-    dispatch,
-    dispatchUrl: (rawUrl) => {
-      const request = parseDesktopOpenWorkspaceUrl(rawUrl);
-      if (!request) {
-        return Effect.succeed(false);
-      }
-
-      return dispatch(request).pipe(Effect.as(true));
-    },
-    consumePending: Effect.gen(function* () {
-      yield* Ref.set(bridgeReadyRef, true);
-      return yield* Ref.getAndSet(pendingRequestsRef, []);
-    }),
-  });
-});
-
-export const layer = Layer.effect(DesktopOpenWorkspace, make);
+    yield* electronApp.whenReady.pipe(
+      Effect.andThen(Effect.forever(Effect.flatMap(openWorkspace.take, open))),
+      Effect.catchCause((cause) => logWarning("stopped opening deeplinked workspaces", { cause })),
+      Effect.forkScoped,
+    );
+  }),
+);

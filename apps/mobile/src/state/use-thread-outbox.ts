@@ -6,7 +6,6 @@ import { Atom } from "effect/unstable/reactivity";
 import { appAtomRegistry } from "./atom-registry";
 import { environmentShell } from "./shell";
 import { threadOutboxManager } from "./thread-outbox";
-import { persistedQueuedEditIdsAtom } from "./use-composer-drafts";
 
 const threadOutboxShellStatusesAtom = Atom.make(
   (get): ReadonlyMap<EnvironmentId, EnvironmentShellStatus> => {
@@ -32,30 +31,10 @@ export const editingQueuedMessageIdsAtom = Atom.make<Readonly<Record<MessageId, 
   Atom.withLabel("mobile:thread-outbox:editing-message-ids"),
 );
 
-export const effectiveEditingQueuedMessageIdsAtom = Atom.make((get) => {
-  const editing: Record<MessageId, true> = {
-    ...get(editingQueuedMessageIdsAtom),
-    ...get(persistedQueuedEditIdsAtom),
-  };
-  return editing as Readonly<Record<MessageId, true>>;
-}).pipe(Atom.withLabel("mobile:thread-outbox:effective-editing-message-ids"));
-
 export const dispatchingQueuedMessageIdAtom = Atom.make<MessageId | null>(null).pipe(
   Atom.keepAlive,
   Atom.withLabel("mobile:thread-outbox:dispatching-message-id"),
 );
-
-export const queuedThreadKeysAtom = Atom.make((get): ReadonlySet<string> => {
-  const keys = new Set<string>();
-  for (const [threadKey, queue] of Object.entries(
-    get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
-  )) {
-    if (queue.some((message) => message.creation === undefined)) {
-      keys.add(threadKey);
-    }
-  }
-  return keys;
-}).pipe(Atom.withLabel("mobile:thread-outbox:queued-thread-keys"));
 
 export function holdEditingQueuedMessage(messageId: MessageId): void {
   const current = appAtomRegistry.get(editingQueuedMessageIdsAtom);
@@ -79,12 +58,26 @@ export function useThreadOutboxMessages() {
   return useAtomValue(threadOutboxManager.queuedMessagesByThreadKeyAtom);
 }
 
+/**
+ * Thread keys (`environmentId:threadId`) of existing threads with a message
+ * waiting in the outbox. Creations are excluded: they have no thread row yet
+ * and surface as pending tasks instead. Derived once so list builders and
+ * reorder planners agree on which settled threads are pulled back to active.
+ */
+export const queuedThreadKeysAtom = Atom.make((get): ReadonlySet<string> => {
+  const keys = new Set<string>();
+  for (const [threadKey, queue] of Object.entries(
+    get(threadOutboxManager.queuedMessagesByThreadKeyAtom),
+  )) {
+    if (queue.some((message) => message.creation === undefined)) {
+      keys.add(threadKey);
+    }
+  }
+  return keys;
+}).pipe(Atom.withLabel("mobile:thread-outbox:queued-thread-keys"));
+
 export function useQueuedThreadKeys(): ReadonlySet<string> {
   return useAtomValue(queuedThreadKeysAtom);
-}
-
-export function useThreadOutboxDeliveryStates() {
-  return useAtomValue(threadOutboxManager.deliveryStatesAtom);
 }
 
 export function useThreadOutboxShellStatuses() {

@@ -15,7 +15,6 @@ import { ComposerBanner } from "./ComposerBanner";
 export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   count: number;
   menuOpen: boolean;
-  placement?: "dock" | "tab";
   pulseKey: number;
   pulsing: boolean;
   onToggleMenu: () => void;
@@ -26,7 +25,7 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
       key={props.pulseKey}
       className={cn(
         props.pulsing
-          ? "animate-[prompt-stash-count-enter_180ms_ease-out_both] text-primary motion-reduce:animate-none"
+          ? "text-primary transition-[opacity,translate] duration-180 ease-out starting:translate-y-0.5 starting:opacity-0 motion-reduce:transition-none"
           : "text-muted-foreground",
       )}
     >
@@ -39,11 +38,7 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
       density="comfortable"
       width="content"
       data-composer-shoulder-tab
-      className={cn(
-        "ml-auto",
-        props.placement === "tab" &&
-          "absolute -top-7 right-4 z-0 ml-0 h-8 p-0 pb-1 [--chat-composer-attachment-overlap:0px] before:rounded-t-xl before:border-b-0",
-      )}
+      className="ml-auto"
     >
       <ComposerBanner.Row
         render={<button type="button" />}

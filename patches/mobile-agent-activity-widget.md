@@ -28,12 +28,19 @@ update state through different APIs.
   actual signing mode in agreement. Local Xcode builds use `T3CODE_APNS_ENVIRONMENT=sandbox`;
   distribution builds default to production.
 - Keep the widget extension's marketing version and build number aligned with the containing app;
-  App Store validation rejects mismatched extension metadata.
+  App Store validation rejects mismatched extension metadata. `expo-widgets` 58 sets
+  `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` from the app config when it creates the target,
+  and every prebuild runs with `--clean`, so the fork needs no plugin for this. A prebuild that
+  reuses an existing `ios/` directory keeps the target's old versions.
+- The widget takes upstream's stale handling (`"isStale" in environment`) inside the fork's
+  `createWidget` and `containerBackground` layout.
+- Local Live Activity starts in `remoteRegistration.ts` pass upstream's `liveActivityStaleDate()`
+  (ten minutes). It must match `STALE_AFTER_SECONDS` in `ApnsProvider.ts`, so local and pushed
+  cards go stale at the same time.
 
 ## Upstream touch points
 
 - `apps/mobile/app.config.ts`
-- `apps/mobile/plugins/lib/syncWidgetBuildVersions.cjs`
 - `apps/mobile/plugins/withWidgetLogoAsset.cjs`
 - `apps/mobile/src/widgets/AgentActivity.tsx`
 - `apps/mobile/src/features/agent-awareness/remoteRegistration.ts`

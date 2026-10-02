@@ -139,51 +139,66 @@ const widgetsPlugin: NonNullable<ExpoConfig["plugins"]>[number] = [
     // Agent activity can update many times an hour; without the
     // frequent-updates entitlement iOS throttles the update budget sooner.
     frequentUpdates: true,
+    enableAndroid: true,
     widgets: [
       {
         name: "SubscriptionUsage",
         displayName: "Subscription usage",
         description: "Subscription quotas from your connected T3 Code environments.",
-        configuration: {
-          title: "Subscription usage",
-          description:
-            "Both shows Session and Weekly when available. The Lock Screen shows the tightest selected limit.",
-          parameters: {
-            codexPeriod: {
-              title: "Codex limits",
-              type: "enum",
-              default: "auto",
-              values: [
-                { name: "Both", value: "auto" },
-                { name: "Session", value: "session" },
-                { name: "Weekly", value: "weekly" },
-              ],
-            },
-            claudePeriod: {
-              title: "Claude limits",
-              type: "enum",
-              default: "auto",
-              values: [
-                { name: "Both", value: "auto" },
-                { name: "Session", value: "session" },
-                { name: "Weekly", value: "weekly" },
-              ],
+        ios: {
+          configuration: {
+            title: "Subscription usage",
+            description:
+              "Both shows Session and Weekly when available. The Lock Screen shows the tightest selected limit.",
+            parameters: {
+              codexPeriod: {
+                title: "Codex limits",
+                type: "enum",
+                default: "auto",
+                values: [
+                  { name: "Both", value: "auto" },
+                  { name: "Session", value: "session" },
+                  { name: "Weekly", value: "weekly" },
+                ],
+              },
+              claudePeriod: {
+                title: "Claude limits",
+                type: "enum",
+                default: "auto",
+                values: [
+                  { name: "Both", value: "auto" },
+                  { name: "Session", value: "session" },
+                  { name: "Weekly", value: "weekly" },
+                ],
+              },
             },
           },
+          supportedFamilies: [
+            "systemSmall",
+            "systemMedium",
+            "systemLarge",
+            "systemExtraLarge",
+            "accessoryRectangular",
+          ],
         },
-        supportedFamilies: [
-          "systemSmall",
-          "systemMedium",
-          "systemLarge",
-          "systemExtraLarge",
-          "accessoryRectangular",
-        ],
+        android: {
+          minWidth: 250,
+          minHeight: 180,
+          targetCellWidth: 4,
+          targetCellHeight: 3,
+          resizeMode: "both",
+          // Embeds the layout in the APK so the widget renders before the app
+          // has run once; the app replaces it with stored props on publish.
+          initialLayout: "./src/widgets/SubscriptionUsage.android.tsx",
+        },
       },
       {
         name: "AgentActivity",
         displayName: "Agent Activity",
         description: "Shows the current state of active T3 Code agents.",
-        supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"],
+        // Live Activity companion; there is no Android presentation for it.
+        android: null,
+        ios: { supportedFamilies: ["systemSmall", "systemMedium", "accessoryRectangular"] },
       },
     ],
   },
@@ -224,7 +239,7 @@ const config: ExpoConfig = {
   slug: "t3-code",
   platforms: ["ios", "android"],
   scheme: variant.scheme,
-  version: "1.2.1",
+  version: "2.0.0",
   // Development manifests resolve on every launch, so avoid fingerprint's
   // expensive native-project calculation there. Preview and production stay
   // fingerprinted so OTAs only reach binaries with matching native projects.
@@ -413,6 +428,9 @@ const config: ExpoConfig = {
         android: {
           // Keep the supported floor explicit and covered by native notification tests.
           minSdkVersion: 24,
+          // kotlinx-io uses Kotlin 2.3's return-value checker annotation, while
+          // SDK 58 builds with Kotlin 2.2. It has no runtime behavior.
+          extraProguardRules: "-dontwarn kotlin.MustUseReturnValues",
         },
         ios: {
           deploymentTarget: IOS_DEPLOYMENT_TARGET,
@@ -433,7 +451,6 @@ const config: ExpoConfig = {
     ...(!isIosPersonalTeamBuild ? ["./plugins/withWidgetLogoAsset.cjs", widgetsPlugin] : []),
     // Generates the Apple Watch app from targets/watch. Personal teams can't sign extra targets.
     ...(!isIosPersonalTeamBuild ? ["@bacons/apple-targets"] : []),
-    "./plugins/withIosSceneLifecycle.cjs",
     "./plugins/withAndroidCleartextTraffic.cjs",
     "./plugins/withAndroidGradleHeap.cjs",
     "./plugins/withAndroidInputBackground.cjs",

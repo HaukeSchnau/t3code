@@ -1,38 +1,24 @@
-import { CommandId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
-import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as SqlSchema from "effect/unstable/sql/SqlSchema";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { toPersistenceSqlError } from "../Errors.ts";
-import {
-  ClaimAcceptedReceiptInput,
-  FinalizeAcceptedReceiptInput,
-  GetByCommandIdInput,
-  InsertRejectedReceiptInput,
-  OrchestrationCommandReceipt,
-  OrchestrationCommandReceiptRepository,
-  type OrchestrationCommandReceiptRepositoryShape,
-} from "../Services/OrchestrationCommandReceipts.ts";
 
-const ReceiptWriteResult = Schema.Struct({ commandId: CommandId });
+import * as OrchestrationCommandReceipts from "../Services/OrchestrationCommandReceipts.ts";
 
 const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
 
-  const claimAcceptedReceiptRow = SqlSchema.findOneOption({
-    Request: ClaimAcceptedReceiptInput,
-    Result: ReceiptWriteResult,
+  const upsertReceiptRow = SqlSchema.void({
+    Request: OrchestrationCommandReceipts.OrchestrationCommandReceipt,
     execute: (receipt) =>
       sql`
         INSERT INTO orchestration_command_receipts (
           command_id,
           aggregate_kind,
           aggregate_id,
-          command_variant,
-          envelope_fingerprint,
+          command_type,
           accepted_at,
           result_sequence,
           status,
@@ -42,77 +28,34 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
           ${receipt.commandId},
           ${receipt.aggregateKind},
           ${receipt.aggregateId},
-          ${receipt.commandVariant},
-          ${receipt.envelopeFingerprint},
-          ${receipt.acceptedAt},
-          0,
-          'accepted',
-          NULL
-        )
-        ON CONFLICT (command_id) DO NOTHING
-        RETURNING command_id AS "commandId"
-      `,
-  });
-
-  const finalizeAcceptedReceiptRow = SqlSchema.findOneOption({
-    Request: FinalizeAcceptedReceiptInput,
-    Result: ReceiptWriteResult,
-    execute: (receipt) =>
-      sql`
-        UPDATE orchestration_command_receipts
-        SET
-          accepted_at = ${receipt.acceptedAt},
-          result_sequence = ${receipt.resultSequence}
-        WHERE command_id = ${receipt.commandId}
-          AND status = 'accepted'
-          AND result_sequence = 0
-        RETURNING command_id AS "commandId"
-      `,
-  });
-
-  const insertRejectedReceiptRow = SqlSchema.findOneOption({
-    Request: InsertRejectedReceiptInput,
-    Result: ReceiptWriteResult,
-    execute: (receipt) =>
-      sql`
-        INSERT INTO orchestration_command_receipts (
-          command_id,
-          aggregate_kind,
-          aggregate_id,
-          command_variant,
-          envelope_fingerprint,
-          accepted_at,
-          result_sequence,
-          status,
-          error
-        )
-        VALUES (
-          ${receipt.commandId},
-          ${receipt.aggregateKind},
-          ${receipt.aggregateId},
-          ${receipt.commandVariant},
-          ${receipt.envelopeFingerprint},
+          ${receipt.commandType},
           ${receipt.acceptedAt},
           ${receipt.resultSequence},
-          'rejected',
+          ${receipt.status},
           ${receipt.error}
         )
-        ON CONFLICT (command_id) DO NOTHING
-        RETURNING command_id AS "commandId"
+        ON CONFLICT (command_id)
+        DO UPDATE SET
+          aggregate_kind = excluded.aggregate_kind,
+            aggregate_id = excluded.aggregate_id,
+            command_type = excluded.command_type,
+          accepted_at = excluded.accepted_at,
+          result_sequence = excluded.result_sequence,
+          status = excluded.status,
+          error = excluded.error
       `,
   });
 
   const findReceiptByCommandId = SqlSchema.findOneOption({
-    Request: GetByCommandIdInput,
-    Result: OrchestrationCommandReceipt,
+    Request: OrchestrationCommandReceipts.GetByCommandIdInput,
+    Result: OrchestrationCommandReceipts.OrchestrationCommandReceipt,
     execute: ({ commandId }) =>
       sql`
         SELECT
           command_id AS "commandId",
           aggregate_kind AS "aggregateKind",
           aggregate_id AS "aggregateId",
-          command_variant AS "commandVariant",
-          envelope_fingerprint AS "envelopeFingerprint",
+          command_type AS "commandType",
           accepted_at AS "acceptedAt",
           result_sequence AS "resultSequence",
           status,
@@ -122,48 +65,62 @@ const makeOrchestrationCommandReceiptRepository = Effect.gen(function* () {
       `,
   });
 
-  const claimAccepted: OrchestrationCommandReceiptRepositoryShape["claimAccepted"] = (input) =>
-    claimAcceptedReceiptRow(input).pipe(
-      Effect.map(Option.isSome),
-      Effect.mapError(
-        toPersistenceSqlError("OrchestrationCommandReceiptRepository.claimAccepted:query"),
-      ),
-    );
+  const upsert: OrchestrationCommandReceipts.OrchestrationCommandReceiptRepositoryShape["upsert"] =
+    (receipt) =>
+      upsertReceiptRow(receipt).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("OrchestrationCommandReceiptRepository.upsert:query"),
+        ),
+      );
 
-  const finalizeAccepted: OrchestrationCommandReceiptRepositoryShape["finalizeAccepted"] = (
-    input,
-  ) =>
-    finalizeAcceptedReceiptRow(input).pipe(
-      Effect.map(Option.isSome),
-      Effect.mapError(
-        toPersistenceSqlError("OrchestrationCommandReceiptRepository.finalizeAccepted:query"),
-      ),
-    );
+  const insertIfAbsent: OrchestrationCommandReceipts.OrchestrationCommandReceiptRepositoryShape["insertIfAbsent"] =
+    (receipt) =>
+      sql<{ readonly command_id: string }>`
+      INSERT INTO orchestration_command_receipts (
+        command_id,
+        aggregate_kind,
+        aggregate_id,
+        command_type,
+        accepted_at,
+        result_sequence,
+        status,
+        error
+      )
+      VALUES (
+        ${receipt.commandId},
+        ${receipt.aggregateKind},
+        ${receipt.aggregateId},
+        ${receipt.commandType},
+        ${receipt.acceptedAt},
+        ${receipt.resultSequence},
+        ${receipt.status},
+        ${receipt.error}
+      )
+      ON CONFLICT(command_id) DO NOTHING
+      RETURNING command_id
+    `.pipe(
+        Effect.map((rows) => rows.length === 1),
+        Effect.mapError(
+          toPersistenceSqlError("OrchestrationCommandReceiptRepository.insertIfAbsent:query"),
+        ),
+      );
 
-  const insertRejected: OrchestrationCommandReceiptRepositoryShape["insertRejected"] = (input) =>
-    insertRejectedReceiptRow(input).pipe(
-      Effect.map(Option.isSome),
-      Effect.mapError(
-        toPersistenceSqlError("OrchestrationCommandReceiptRepository.insertRejected:query"),
-      ),
-    );
-
-  const getByCommandId: OrchestrationCommandReceiptRepositoryShape["getByCommandId"] = (input) =>
-    findReceiptByCommandId(input).pipe(
-      Effect.mapError(
-        toPersistenceSqlError("OrchestrationCommandReceiptRepository.getByCommandId:query"),
-      ),
-    );
+  const getByCommandId: OrchestrationCommandReceipts.OrchestrationCommandReceiptRepositoryShape["getByCommandId"] =
+    (input) =>
+      findReceiptByCommandId(input).pipe(
+        Effect.mapError(
+          toPersistenceSqlError("OrchestrationCommandReceiptRepository.getByCommandId:query"),
+        ),
+      );
 
   return {
-    claimAccepted,
-    finalizeAccepted,
-    insertRejected,
+    insertIfAbsent,
+    upsert,
     getByCommandId,
-  } satisfies OrchestrationCommandReceiptRepositoryShape;
+  } satisfies OrchestrationCommandReceipts.OrchestrationCommandReceiptRepositoryShape;
 });
 
 export const OrchestrationCommandReceiptRepositoryLive = Layer.effect(
-  OrchestrationCommandReceiptRepository,
+  OrchestrationCommandReceipts.OrchestrationCommandReceiptRepository,
   makeOrchestrationCommandReceiptRepository,
 );

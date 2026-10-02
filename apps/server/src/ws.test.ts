@@ -1,75 +1,50 @@
-import type { OrchestrationEvent, OrchestrationShellStreamItem } from "@t3tools/contracts";
-import { it as effectIt } from "@effect/vitest";
+import { assert, it } from "@effect/vitest";
+import { ORCHESTRATION_PROTOCOL_VERSION } from "@t3tools/contracts";
+import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
-import * as Stream from "effect/Stream";
-import { describe, expect, it } from "vite-plus/test";
+import * as Fiber from "effect/Fiber";
+import * as TestClock from "effect/testing/TestClock";
 
 import {
-  compactShellCursorItems,
-  isThreadDetailEvent,
-  shouldIncludeShellStreamItem,
+  hasCompatibleOrchestrationProtocol,
+  resolveAvailableEditorsForConfig,
+  shouldUseBoundedThreadSnapshot,
 } from "./ws.ts";
 
-type ShellDeltaItem = Exclude<OrchestrationShellStreamItem, { readonly kind: "snapshot" }>;
-
-const eventWithType = (type: OrchestrationEvent["type"]): OrchestrationEvent =>
-  ({ type }) as OrchestrationEvent;
-
-describe("isThreadDetailEvent", () => {
-  it("streams queued message lifecycle events to active thread subscribers", () => {
-    expect(isThreadDetailEvent(eventWithType("thread.message-queued"))).toBe(true);
-    expect(isThreadDetailEvent(eventWithType("thread.queued-message-deleted"))).toBe(true);
-    expect(isThreadDetailEvent(eventWithType("thread.queued-message-dispatched"))).toBe(true);
-  });
-
-  it("streams completed history prune events to active thread subscribers", () => {
-    expect(isThreadDetailEvent(eventWithType("thread.history-pruned"))).toBe(true);
-  });
-
-  it("keeps non-detail orchestration events out of thread detail streams", () => {
-    expect(isThreadDetailEvent(eventWithType("thread.turn-start-requested"))).toBe(false);
-  });
-});
-
-describe("compactShellCursorItems", () => {
-  it("never sends cursor items to version-skewed clients without the capability", () => {
-    const cursor = { kind: "cursor" as const, sequence: 1 };
-    expect(shouldIncludeShellStreamItem(cursor, undefined)).toBe(false);
-    expect(shouldIncludeShellStreamItem(cursor, false)).toBe(false);
-    expect(shouldIncludeShellStreamItem(cursor, true)).toBe(true);
-  });
-
-  effectIt.effect("bounds cursor traffic and flushes the finite catch-up tail", () =>
-    Effect.gen(function* () {
-      const cursors = Array.from({ length: 9_200 }, (_, index): ShellDeltaItem => ({
-        kind: "cursor",
-        sequence: index + 1,
-      }));
-      const output = yield* compactShellCursorItems(Stream.fromIterable(cursors)).pipe(
-        Stream.runCollect,
-      );
-
-      expect(Array.from(output)).toHaveLength(72);
-      expect(Array.from(output).at(-1)).toEqual({ kind: "cursor", sequence: 9_200 });
-    }),
+it("accepts only the current orchestration protocol before websocket RPC setup", () => {
+  assert.isTrue(
+    hasCompatibleOrchestrationProtocol(
+      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION}`),
+    ),
   );
-
-  effectIt.effect("lets a visible item advance past pending cursors immediately", () =>
-    Effect.gen(function* () {
-      const visible = {
-        kind: "project-removed" as const,
-        sequence: 3,
-        projectId: "project-1" as never,
-      };
-      const output = yield* compactShellCursorItems(
-        Stream.fromIterable<ShellDeltaItem>([
-          { kind: "cursor", sequence: 1 },
-          { kind: "cursor", sequence: 2 },
-          visible,
-        ]),
-      ).pipe(Stream.runCollect);
-
-      expect(Array.from(output)).toEqual([visible]);
-    }),
+  assert.isFalse(hasCompatibleOrchestrationProtocol(new URL("https://host.test/ws")));
+  assert.isFalse(
+    hasCompatibleOrchestrationProtocol(
+      new URL(`https://host.test/ws?orchestrationProtocol=${ORCHESTRATION_PROTOCOL_VERSION - 1}`),
+    ),
   );
 });
+
+it("keeps full thread snapshot fallback unless the client opts into bounded history", () => {
+  assert.isFalse(shouldUseBoundedThreadSnapshot({}));
+  assert.isFalse(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: false }));
+  assert.isTrue(shouldUseBoundedThreadSnapshot({ acceptBoundedSnapshot: true }));
+});
+
+it.effect("does not block server config when editor discovery never resolves", () =>
+  Effect.gen(function* () {
+    const discoveryInterrupted = yield* Deferred.make<void>();
+    const responseFiber = yield* resolveAvailableEditorsForConfig(
+      Effect.never.pipe(
+        Effect.onInterrupt(() => Deferred.succeed(discoveryInterrupted, undefined)),
+      ),
+    ).pipe(Effect.forkChild);
+
+    yield* TestClock.adjust(Duration.seconds(5));
+
+    const availableEditors = yield* Fiber.join(responseFiber);
+    yield* Deferred.await(discoveryInterrupted);
+    assert.deepEqual(availableEditors, []);
+  }),
+);

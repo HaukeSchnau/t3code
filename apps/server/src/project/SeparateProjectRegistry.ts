@@ -28,7 +28,7 @@ export async function isSeparateProject(cwd: string, stateDirectory?: string): P
   }
 }
 
-export const SeparateWorkspaceMetadata = Schema.Struct({
+const SeparateWorkspaceMetadata = Schema.Struct({
   id: Schema.optional(Schema.NullOr(Schema.String)),
   sourceRevision: Schema.optional(Schema.NullOr(Schema.String)),
   profile: Schema.optional(Schema.Literals(["familiar", "minimal"])),
@@ -82,51 +82,25 @@ export async function readSeparateProject(cwd: string, stateDirectory?: string) 
   }
 }
 
-export async function projectProviderCwd(cwd: string, stateDirectory?: string) {
+/**
+ * The agent's view of a registered project: its cwd below the visible root, and host
+ * integrations through the environment's gateway because localhost stays private to it.
+ */
+export async function projectProviderView(cwd: string, stateDirectory?: string) {
   const record = await readSeparateProject(cwd, stateDirectory);
-  return record?.workspace?.visibleRoot
-    ? NodePath.join(
-        record.workspace.visibleRoot,
-        NodePath.relative(record.root, record.canonicalCwd),
-      )
-    : cwd;
-}
-
-/** Setup journals live in the workspace's private home, visible to both the server and its PTY. */
-export async function projectSetupPaths(
-  cwd: string,
-  serverJournalDirectory: string,
-  stateDirectory?: string,
-) {
-  const record = await readSeparateProject(cwd, stateDirectory);
-  const journalPath = ".local/state/t3/setup-executions";
+  if (!record) return undefined;
+  const workspace = record.workspace;
   return {
-    cwd: record?.workspace?.visibleRoot
-      ? NodePath.join(
-          record.workspace.visibleRoot,
-          NodePath.relative(record.root, record.canonicalCwd),
-        )
+    cwd: workspace?.visibleRoot
+      ? NodePath.join(workspace.visibleRoot, NodePath.relative(record.root, record.canonicalCwd))
       : cwd,
-    projectRoot: record ? (record.workspace?.visibleRoot ?? record.root) : undefined,
-    journalDirectory: record
-      ? NodePath.join(record.home ?? NodeOS.homedir(), journalPath)
-      : serverJournalDirectory,
-    hostJournalDirectory: record
-      ? NodePath.join(record.state, "home", journalPath)
-      : serverJournalDirectory,
+    endpoint: (endpoint: string) => {
+      if (!workspace) return endpoint;
+      const url = new URL(endpoint);
+      if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) url.hostname = "10.0.2.2";
+      return url.toString();
+    },
   };
-}
-
-/** Explicit host integrations use the gateway; localhost remains private to the workspace. */
-export async function projectProviderEndpoint(
-  cwd: string | undefined,
-  endpoint: string,
-  stateDirectory?: string,
-) {
-  if (!cwd || !(await readSeparateProject(cwd, stateDirectory))?.workspace) return endpoint;
-  const url = new URL(endpoint);
-  if (["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)) url.hostname = "10.0.2.2";
-  return url.toString();
 }
 
 function relativeWithin(root: string, path: string) {

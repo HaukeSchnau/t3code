@@ -220,7 +220,6 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
         hasDefault({ key: "alt+9", command: "thread.jump.9", when: "browser && !mac" }),
       );
       assert.equal(defaultsByCommand.get("sidebar.toggle"), "mod+b");
-      assert.equal(defaultsByCommand.get("monitor.toggle"), "mod+alt+g");
       assert.equal(defaultsByCommand.get("modelPicker.toggle"), "mod+shift+m");
       assert.equal(defaultsByCommand.get("themeEditor.toggle"), "mod+alt+shift+t");
       assert.equal(defaultsByCommand.get("settings.open"), "mod+shift+,");
@@ -672,13 +671,13 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
       );
       yield* Effect.gen(function* () {
         const keybindings = yield* Keybindings.Keybindings;
-        yield* Effect.all(
-          commands.map((command, index) =>
+        yield* Effect.forEach(
+          commands,
+          (command, index) =>
             keybindings.upsertKeybindingRule({
               key: `mod+${String.fromCharCode(97 + index)}`,
               command,
             }),
-          ),
           { concurrency: "unbounded", discard: true },
         );
       });

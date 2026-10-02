@@ -1,7 +1,3 @@
-import {
-  groupThreadsByWorkspace,
-  type ThreadWorkspaceGroup,
-} from "@t3tools/client-runtime/state/workspaces";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
@@ -12,8 +8,6 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
-  SkillPackId,
-  WorkspaceProfile,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -24,16 +18,18 @@ import {
   T3_PROJECT_FILE_NAME,
   ThreadId,
 } from "@t3tools/contracts";
+import { sanitizeNewRefName } from "@t3tools/shared/git";
 import { resolveProjectSettings } from "@t3tools/shared/projectSettings";
 import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
-import {
-  isDefaultThreadEnvModeSettled,
-  resolveDefaultThreadEnvMode,
-} from "@t3tools/shared/threadEnvMode";
 import * as Arr from "effect/Array";
 import { pipe } from "effect/Function";
 
-import { useEnvironmentServerConfig, useProjects, useThreadShells } from "../../state/entities";
+import {
+  useEnvironmentServerConfig,
+  useProjects,
+  useServerConfigs,
+  useThreadShells,
+} from "../../state/entities";
 import type { TurnCommandMetadata } from "../../lib/commandMetadata";
 import type { DraftComposerAttachment } from "../../lib/composerImages";
 import type { ModelOption, ProviderGroup } from "../../lib/modelOptions";
@@ -72,6 +68,10 @@ import {
   capturePendingTaskEditorWriteBaseline,
   flushPendingTaskEditorWrite,
 } from "../../state/pending-task-editor-writes";
+import {
+  rememberModelOptions,
+  withRememberedModelOptions,
+} from "../../state/use-model-option-memory";
 import { useDebouncedValue, usePaginatedBranches } from "../../state/queries";
 import { vcsEnvironment } from "../../state/vcs";
 import {
@@ -86,8 +86,11 @@ import {
 } from "../../state/use-thread-outbox";
 import {
   setPendingConnectionError,
+  useRemoteConnectionStatus,
   useSavedRemoteConnections,
 } from "../../state/use-remote-environment-registry";
+import { canCreateProjectInEnvironment } from "@t3tools/client-runtime/operations/projects";
+import { isScratchProject } from "@t3tools/client-runtime/state/projects";
 import { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { type VcsRef } from "@t3tools/client-runtime/state/vcs";
 import {
@@ -99,9 +102,10 @@ import { useMobileProjectGroupingSettings } from "../../state/project-grouping";
 import {
   resolvePendingTaskInteractionMode,
   resolveProviderInteractionMode,
-} from "./legacy-plan-mode";
+} from "../../state/legacy-plan-mode";
 import { useLegacyPlanModeState } from "./use-legacy-plan-mode-enabled";
 import {
+  filterNewTaskBranches,
   resolveNewTaskBranchWorktreePath,
   resolveNewTaskLocalWorkspaceSelection,
 } from "./new-task-context-presentation";
@@ -139,6 +143,9 @@ export function branchBadgeLabel(input: {
   if (input.branch.worktreePath && input.branch.worktreePath !== input.project?.workspaceRoot) {
     return "worktree";
   }
+  if (input.branch.isRemote) {
+    return "remote";
+  }
   if (input.branch.isDefault) {
     return "default";
   }
@@ -151,11 +158,8 @@ type NewTaskFlowContextValue = {
   readonly selectedProjectKey: string | null;
   readonly selectedModelKey: string | null;
   readonly workspaceMode: WorkspaceMode;
-  readonly workspaces: ReadonlyArray<ThreadWorkspaceGroup<unknown>>;
-  readonly workspaceProfile: WorkspaceProfile;
-  readonly isolatedWorkspaces: boolean;
-  readonly selectWorkspace: (workspace: ThreadWorkspaceGroup<unknown>) => void;
-  readonly setWorkspaceProfile: (profile: WorkspaceProfile) => void;
+  /** False for threads without a project: their folder has no branch or worktree. */
+  readonly canChooseWorkspace: boolean;
   readonly selectedBranchName: string | null;
   readonly selectedWorktreePath: string | null;
   readonly startFromOrigin: boolean;
@@ -173,7 +177,6 @@ type NewTaskFlowContextValue = {
   readonly currentCheckoutBranchName: string | null;
   readonly runtimeMode: RuntimeMode;
   readonly interactionMode: ProviderInteractionMode;
-  readonly skillPackIds: ReadonlyArray<SkillPackId> | undefined;
   readonly planModeEnabled: boolean;
   readonly expandedProvider: string | null;
   readonly environments: ReadonlyArray<{
@@ -181,6 +184,8 @@ type NewTaskFlowContextValue = {
     readonly environmentLabel: string;
   }>;
   readonly selectedProject: EnvironmentProject | null;
+  /** True when the draft is a thread without a project (its machine's Scratch project). */
+  readonly isScratchDraft: boolean;
   readonly modelOptions: ReadonlyArray<ModelOption>;
   readonly selectedModel: ModelSelection | null;
   readonly selectedModelOption: ModelOption | null;
@@ -203,7 +208,6 @@ type NewTaskFlowContextValue = {
   readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
   readonly selectBranch: (branch: VcsRef) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
-  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly beginEditingPendingTask: (messageId: string) => boolean;
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
@@ -244,6 +248,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const groupingSettings = useMobileProjectGroupingSettings();
   const { enabled: legacyPlanModeEnabled, loaded: planModePreferenceLoaded } =
     useLegacyPlanModeState();
+
   const projectScopes = useMemo(
     () =>
       sortHomeProjectScopes({
@@ -348,6 +353,26 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       ? editingPendingProject
       : (projectsForEnvironment[0] ?? null));
 
+  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
+    selectedProject?.environmentId ?? null,
+  );
+  const isScratchDraft =
+    selectedProject !== null &&
+    isScratchProject(selectedProject, selectedEnvironmentServerConfig?.scratchWorkspaceRoot);
+  const serverConfigs = useServerConfigs();
+  const { connectedEnvironments } = useRemoteConnectionStatus();
+  // A thread without a project can move to any connected machine that offers
+  // one; its Scratch project there is created on the switch if it is missing.
+  const scratchEnvironments = useMemo(
+    () =>
+      connectedEnvironments.filter(
+        (environment) =>
+          canCreateProjectInEnvironment(environment.connectionState) &&
+          serverConfigs.get(environment.environmentId)?.scratchWorkspaceRoot !== undefined,
+      ),
+    [connectedEnvironments, serverConfigs],
+  );
+
   // Only offer machines that actually host the currently selected repository, so
   // switching computers moves the same repo across machines instead of jumping to
   // whatever unrelated project happens to be first on the other machine. Repository
@@ -359,6 +384,12 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const selectedWorkspaceBasename = selectedProject?.workspaceRoot.split("/").at(-1) || null;
   const selectedProjectTitle = selectedProject?.title ?? null;
   const environments = useMemo(() => {
+    if (isScratchDraft) {
+      return scratchEnvironments.map((environment) => ({
+        environmentId: environment.environmentId,
+        environmentLabel: environment.environmentLabel,
+      }));
+    }
     const seen = new Set<EnvironmentId>();
     const result: Array<{
       readonly environmentId: EnvironmentId;
@@ -396,16 +427,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     }
     return result;
   }, [
+    isScratchDraft,
     projects,
     savedConnectionsById,
+    scratchEnvironments,
     selectedRepositoryKey,
     selectedWorkspaceBasename,
     selectedProjectTitle,
   ]);
 
-  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
-    selectedProject?.environmentId ?? null,
-  );
   // While a queued pending task is being edited its draft lives under a key
   // scoped to the queued message, so new-task drafts stay intact.
   const selectedProjectDraftKey = editingPendingTask
@@ -444,93 +474,45 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       : null,
   );
   const t3ProjectFileData = t3ProjectFileQuery.data as ProjectReadFileResult | null;
-  const t3ProjectFileDefaultMode = useMemo(() => {
-    if (t3ProjectFileData === null || t3ProjectFileData.truncated) return null;
-    return parseT3ProjectFile(t3ProjectFileData.contents)?.defaultThreadEnvMode ?? null;
-  }, [t3ProjectFileData]);
-  // Environment settings with the project's overrides applied; the
-  // aggregate's own legacy fields still count until the server folds them.
+  const t3ProjectFile = useMemo(
+    () =>
+      t3ProjectFileData === null || t3ProjectFileData.truncated
+        ? null
+        : parseT3ProjectFile(t3ProjectFileData.contents),
+    [t3ProjectFileData],
+  );
+  // Environment settings with the project's overrides and its t3.json
+  // applied; the aggregate's own legacy fields still count until the server
+  // folds them.
   const projectSettings = useMemo(
     () =>
       resolveProjectSettings(
         selectedEnvironmentServerConfig?.settings ?? DEFAULT_SERVER_SETTINGS,
         selectedProject?.id ?? null,
         selectedProject,
+        t3ProjectFile,
       ),
-    [selectedEnvironmentServerConfig?.settings, selectedProject],
+    [selectedEnvironmentServerConfig?.settings, selectedProject, t3ProjectFile],
   );
-  const projectThreadEnvMode =
-    projectSettings.sources.defaultThreadEnvMode === "project"
-      ? projectSettings.settings.defaultThreadEnvMode
-      : undefined;
-  const defaultWorkspaceMode: WorkspaceMode = resolveDefaultThreadEnvMode({
-    projectSetting: projectThreadEnvMode,
-    projectFile: t3ProjectFileDefaultMode,
-    globalDefault: projectSettings.settings.defaultThreadEnvMode,
-  });
-  // While unsettled the resolved default is provisional. Nothing may write
-  // it into the draft during that window (the auto-branch effect does), or
-  // the frozen interim value beats the t3.json default once it loads.
-  const defaultWorkspaceModeSettled = isDefaultThreadEnvModeSettled({
-    explicitMode: selectedProjectDraft.workspaceSelection?.mode,
-    projectSetting: projectThreadEnvMode,
-    projectFilePending: t3ProjectFileQuery.isPending,
-  });
-  const workspaceMode = selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode;
+  // A thread without a project runs in a plain folder, so worktree mode
+  // would leave it unsendable: it is always local and offers no choice.
+  const canChooseWorkspace = !isScratchDraft;
+  const defaultWorkspaceMode: WorkspaceMode = canChooseWorkspace
+    ? projectSettings.settings.defaultThreadEnvMode
+    : "local";
+  // While the file read is pending and nothing above it decided, the
+  // resolved default is provisional. Nothing may write it into the draft
+  // during that window (the auto-branch effect does), or the frozen interim
+  // value beats the t3.json default once it loads.
+  const defaultWorkspaceModeSettled =
+    selectedProjectDraft.workspaceSelection?.mode !== undefined ||
+    projectSettings.sources.defaultThreadEnvMode !== "environment" ||
+    !t3ProjectFileQuery.isPending;
+  const workspaceMode = canChooseWorkspace
+    ? (selectedProjectDraft.workspaceSelection?.mode ?? defaultWorkspaceMode)
+    : "local";
   const selectedBranchName = selectedProjectDraft.workspaceSelection?.branch ?? null;
   const selectedWorktreePath = selectedProjectDraft.workspaceSelection?.worktreePath ?? null;
-  const workspaceProfile = selectedProjectDraft.workspaceSelection?.workspaceProfile ?? "familiar";
-  const isolatedWorkspaces =
-    selectedEnvironmentServerConfig?.environment.capabilities.isolatedWorkspaces === true;
-  const workspaces = useMemo(
-    () =>
-      groupThreadsByWorkspace(
-        threads.filter(
-          (thread) =>
-            thread.environmentId === selectedProject?.environmentId &&
-            thread.projectId === selectedProject.id,
-        ),
-        (thread) => thread.settledAt !== null,
-      ),
-    [threads, selectedProject],
-  );
-  const selectWorkspace = useCallback(
-    (workspace: ThreadWorkspaceGroup<unknown>) => {
-      if (!selectedProjectDraftKey) return;
-      pendingLocalBranchSyncDraftKeysRef.current.delete(selectedProjectDraftKey);
-      updateComposerDraftSettings(selectedProjectDraftKey, {
-        workspaceSelection: {
-          mode: "local",
-          branch: workspace.branch,
-          worktreePath: workspace.checkoutPath,
-          ...(workspace.workspaceId ? { workspaceId: workspace.workspaceId } : {}),
-          workspaceProfile,
-        },
-      });
-    },
-    [selectedProjectDraftKey, workspaceProfile],
-  );
-  const setWorkspaceProfile = useCallback(
-    (profile: WorkspaceProfile) => {
-      if (!selectedProjectDraftKey) return;
-      updateComposerDraftSettings(selectedProjectDraftKey, {
-        workspaceSelection: {
-          mode: workspaceMode,
-          branch: selectedBranchName,
-          worktreePath: selectedWorktreePath,
-          ...selectedProjectDraft.workspaceSelection,
-          workspaceProfile: profile,
-        },
-      });
-    },
-    [
-      selectedProjectDraftKey,
-      selectedProjectDraft.workspaceSelection,
-      workspaceMode,
-      selectedBranchName,
-      selectedWorktreePath,
-    ],
-  );
   // Keep the user's explicit choice separate from the resolved display value:
   // only the explicit flag is ever written back to the draft, so the resolved
   // value keeps tracking the server setting when the config loads late.
@@ -603,7 +585,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const interactionMode = planModeEnabled
     ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
     : DEFAULT_PROVIDER_INTERACTION_MODE;
-  const skillPackIds = selectedProjectDraft.skillPackIds;
   const setSelectedModelKey = useCallback(
     // Options ride along in the same write: a follow-up setSelectedModelOptions
     // call would rebuild the selection from the stale pre-switch model.
@@ -615,7 +596,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!option) {
         return;
       }
-      const selection = options ? { ...option.selection, options } : option.selection;
+      const selection = withRememberedModelOptions(
+        options ? { ...option.selection, options } : option.selection,
+      );
       const provider = selectedEnvironmentServerConfig?.providers.find(
         (candidate) => candidate.instanceId === selection.instanceId,
       );
@@ -634,6 +617,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (!selectedModel || !selectedProjectDraftKey) {
         return;
       }
+      rememberModelOptions(selectedModel.instanceId, selectedModel.model, options ?? []);
       const nextSelection: ModelSelection = options
         ? { ...selectedModel, options }
         : {
@@ -699,23 +683,19 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
     }
     replaceComposerDraftAttachments(selectedProjectDraftKey, []);
   }, [selectedProjectDraftKey]);
-  const debouncedBranchQuery = useDebouncedValue(branchQuery, BRANCH_SEARCH_DEBOUNCE_MS);
+  const branchSearchQuery = sanitizeNewRefName(branchQuery);
+  const debouncedBranchQuery = useDebouncedValue(branchSearchQuery, BRANCH_SEARCH_DEBOUNCE_MS);
   const branchTarget = useMemo(
     () => ({
       environmentId: selectedProject?.environmentId ?? null,
       // `|| null` also skips the stand-in project's empty workspaceRoot.
-      cwd: selectedWorktreePath ?? (selectedProject?.workspaceRoot || null),
+      cwd: selectedProject?.workspaceRoot || null,
       query: debouncedBranchQuery,
     }),
-    [
-      debouncedBranchQuery,
-      selectedProject?.environmentId,
-      selectedProject?.workspaceRoot,
-      selectedWorktreePath,
-    ],
+    [debouncedBranchQuery, selectedProject?.environmentId, selectedProject?.workspaceRoot],
   );
   const branchState = usePaginatedBranches(branchTarget);
-  const branchSearchIsDebouncing = branchQuery.trim() !== debouncedBranchQuery.trim();
+  const branchSearchIsDebouncing = branchSearchQuery !== debouncedBranchQuery;
   const branchesLoading =
     branchSearchIsDebouncing || (branchState.isPending && branchState.data === null);
   const branchesFetchingNextPage = branchState.isFetchingNextPage;
@@ -747,17 +727,10 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   );
   const currentCheckoutBranchName = projectGitStatus.data?.refName ?? null;
 
-  const filteredBranches = useMemo(() => {
-    const query = branchQuery.trim().toLowerCase();
-    if (query.length === 0) {
-      return availableBranches;
-    }
-
-    return pipe(
-      availableBranches,
-      Arr.filter((branch) => branch.name.toLowerCase().includes(query)),
-    );
-  }, [availableBranches, branchQuery]);
+  const filteredBranches = useMemo(
+    () => filterNewTaskBranches(allBranchRefs, branchQuery),
+    [allBranchRefs, branchQuery],
+  );
 
   // The composer's draft follows the project it will be sent to: switching
   // mid-compose keeps the same draft and moves it, so typed text follows the
@@ -844,8 +817,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode,
           branch: mode === "local" ? localSelection.branch : selectedBranchName,
-          worktreePath: null,
-          workspaceProfile,
+          worktreePath: mode === "local" ? localSelection.worktreePath : selectedWorktreePath,
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
@@ -856,7 +828,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedBranchName,
       selectedProject,
       selectedProjectDraftKey,
-      workspaceProfile,
+      selectedWorktreePath,
     ],
   );
 
@@ -904,30 +876,16 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         workspaceSelection: {
           mode: workspaceMode,
           branch: branch.name,
-          worktreePath:
-            selectedWorktreePath ??
-            resolveNewTaskBranchWorktreePath({
-              workspaceMode,
-              projectCwd: selectedProject.workspaceRoot,
-              branchWorktreePath: branch.worktreePath,
-            }),
-          ...(selectedWorktreePath && selectedProjectDraft.workspaceSelection?.workspaceId
-            ? { workspaceId: selectedProjectDraft.workspaceSelection.workspaceId }
-            : {}),
-          workspaceProfile,
+          worktreePath: resolveNewTaskBranchWorktreePath({
+            workspaceMode,
+            projectCwd: selectedProject.workspaceRoot,
+            branchWorktreePath: branch.worktreePath,
+          }),
           ...(draftStartFromOrigin !== undefined ? { startFromOrigin: draftStartFromOrigin } : {}),
         },
       });
     },
-    [
-      draftStartFromOrigin,
-      selectedProject,
-      selectedProjectDraftKey,
-      workspaceMode,
-      selectedWorktreePath,
-      selectedProjectDraft.workspaceSelection?.workspaceId,
-      workspaceProfile,
-    ],
+    [draftStartFromOrigin, selectedProject, selectedProjectDraftKey, workspaceMode],
   );
 
   const setStartFromOrigin = useCallback(
@@ -940,27 +898,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           mode: workspaceMode,
           branch: selectedBranchName,
           worktreePath: selectedWorktreePath,
-          ...selectedProjectDraft.workspaceSelection,
           startFromOrigin: value,
         },
       });
     },
-    [
-      selectedBranchName,
-      selectedProjectDraftKey,
-      selectedWorktreePath,
-      workspaceMode,
-      selectedProjectDraft.workspaceSelection,
-    ],
-  );
-
-  const setSkillPackIds = useCallback(
-    (value: ReadonlyArray<SkillPackId> | undefined) => {
-      if (selectedProjectDraftKey) {
-        updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
-      }
-    },
-    [selectedProjectDraftKey],
+    [selectedBranchName, selectedProjectDraftKey, selectedWorktreePath, workspaceMode],
   );
 
   const refreshBranches = branchState.refresh;
@@ -1042,16 +984,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,
         interactionMode: message.interactionMode,
-        skillPackIds: message.creation.skillPackIds,
         workspaceSelection: {
           mode: message.creation.workspaceMode,
           branch: message.creation.branch,
           worktreePath: message.creation.worktreePath,
           startFromOrigin: message.creation.startFromOrigin ?? false,
-          ...(message.creation.workspaceId ? { workspaceId: message.creation.workspaceId } : {}),
-          ...(message.creation.workspaceProfile
-            ? { workspaceProfile: message.creation.workspaceProfile }
-            : {}),
         },
       });
     }
@@ -1086,7 +1023,9 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       if (text.length === 0 || !draftModelSelection) {
         return null;
       }
-      const workspaceSelection = draft.workspaceSelection;
+      // A saved choice from before the project went no-project must not
+      // survive: those threads always run locally in their own folder.
+      const workspaceSelection = canChooseWorkspace ? draft.workspaceSelection : undefined;
       // Fall back to the resolved mode (server default) so queued tasks drain
       // with the same mode the composer displayed.
       const mode = workspaceSelection?.mode ?? workspaceMode;
@@ -1135,24 +1074,18 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
             currentCheckoutBranch: options?.currentCheckoutBranch ?? null,
           }),
           worktreePath: mode === "worktree" ? null : (workspaceSelection?.worktreePath ?? null),
-          ...(mode === "local" && workspaceSelection?.workspaceId
-            ? { workspaceId: workspaceSelection.workspaceId }
-            : {}),
-          ...(workspaceSelection?.workspaceProfile
-            ? { workspaceProfile: workspaceSelection.workspaceProfile }
-            : {}),
           // The draft only carries the flag when the user touched it; fall
           // back to the resolved default (server settings) so queued tasks
           // drain with the same origin mode the composer displayed.
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
             : {}),
-          ...(draft.skillPackIds ? { skillPackIds: draft.skillPackIds } : {}),
         },
         createdAt: metadata.createdAt,
       };
     },
     [
+      canChooseWorkspace,
       defaultRuntimeMode,
       editingPendingProject,
       editingPendingTask,
@@ -1276,11 +1209,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       selectedProjectKey,
       selectedModelKey,
       workspaceMode,
-      workspaces,
-      workspaceProfile,
-      isolatedWorkspaces,
-      selectWorkspace,
-      setWorkspaceProfile,
+      canChooseWorkspace,
       selectedBranchName,
       selectedWorktreePath,
       startFromOrigin,
@@ -1298,11 +1227,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       currentCheckoutBranchName,
       runtimeMode,
       interactionMode,
-      skillPackIds,
       planModeEnabled,
       expandedProvider,
       environments,
       selectedProject,
+      isScratchDraft,
       modelOptions,
       selectedModel,
       selectedModelOption,
@@ -1317,7 +1246,6 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setWorkspaceMode,
       selectBranch,
       setStartFromOrigin,
-      setSkillPackIds,
       beginEditingPendingTask,
       finishEditingPendingTask,
       cancelEditingPendingTask,
@@ -1353,7 +1281,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       filteredBranches,
       finishEditingPendingTask,
       interactionMode,
-      skillPackIds,
+      isScratchDraft,
       planModeEnabled,
       loadBranches,
       loadMoreBranches,
@@ -1385,16 +1313,11 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setRuntimeMode,
       setSelectedModelKey,
       setStartFromOrigin,
-      setSkillPackIds,
       setWorkspaceMode,
       startFromOrigin,
       submitting,
       workspaceMode,
-      workspaces,
-      workspaceProfile,
-      isolatedWorkspaces,
-      selectWorkspace,
-      setWorkspaceProfile,
+      canChooseWorkspace,
       appendAttachments,
       clearAttachments,
       removeAttachment,

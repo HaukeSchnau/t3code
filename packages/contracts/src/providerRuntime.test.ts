@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import * as Schema from "effect/Schema";
 
-import { classifyTaskAgentKind, ProviderRuntimeEvent } from "./providerRuntime.ts";
+import { ProviderRuntimeEvent } from "./providerRuntime.ts";
 
 const decodeRuntimeEvent = Schema.decodeUnknownSync(ProviderRuntimeEvent);
 
@@ -115,29 +115,6 @@ describe("ProviderRuntimeEvent", () => {
     expect(parsed.payload.planMarkdown).toBe("# Ship it");
   });
 
-  it("preserves assistant completion boundary whitespace", () => {
-    const parsed = decodeRuntimeEvent({
-      type: "item.completed",
-      eventId: "event-assistant-completed-whitespace",
-      provider: "codex",
-      createdAt: "2026-02-28T00:00:00.000Z",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      itemId: "assistant-item-1",
-      payload: {
-        itemType: "assistant_message",
-        status: "completed",
-        detail: "answer\n",
-      },
-    });
-
-    expect(parsed.type).toBe("item.completed");
-    if (parsed.type !== "item.completed") {
-      throw new Error("expected item.completed");
-    }
-    expect(parsed.payload.detail).toBe("answer\n");
-  });
-
   it("decodes user-input.requested with structured questions", () => {
     const parsed = decodeRuntimeEvent({
       type: "user-input.requested",
@@ -174,42 +151,6 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.questions[0]?.id).toBe("sandbox_mode");
     expect(parsed.payload.questions[0]?.options).toHaveLength(2);
-    expect(parsed.payload.optional).toBeUndefined();
-
-    const optional = decodeRuntimeEvent({
-      ...parsed,
-      eventId: "event-optional-user-input",
-      payload: { ...parsed.payload, optional: true },
-    });
-    expect(optional.type).toBe("user-input.requested");
-    if (optional.type !== "user-input.requested") {
-      throw new Error("expected optional user-input.requested");
-    }
-    expect(optional.payload.optional).toBe(true);
-  });
-
-  it("accepts saved questions with empty option descriptions", () => {
-    const parsed = decodeRuntimeEvent({
-      type: "user-input.requested",
-      eventId: "event-empty-option-description",
-      provider: "codex",
-      sessionId: "runtime-session-empty-description",
-      createdAt: "2026-02-28T00:00:01.000Z",
-      threadId: "thread-empty-description",
-      requestId: "request-empty-description",
-      payload: {
-        questions: [
-          {
-            id: "choice",
-            header: "Choice",
-            question: "Which option?",
-            options: [{ label: "First", description: "" }],
-          },
-        ],
-      },
-    });
-
-    expect(parsed.type).toBe("user-input.requested");
   });
 
   it("decodes user-input.resolved with answer map", () => {
@@ -285,24 +226,5 @@ describe("ProviderRuntimeEvent", () => {
     }
     expect(parsed.payload.usage.maxTokens).toBe(200000);
     expect(parsed.payload.usage.usedTokens).toBe(31251);
-  });
-});
-
-describe("classifyTaskAgentKind", () => {
-  it("classifies agent-flavored, watch-loop, and inert types", () => {
-    expect(classifyTaskAgentKind({ taskType: "local_agent" })).toBe("agent");
-    expect(classifyTaskAgentKind({ taskType: "local_workflow" })).toBe("agent");
-    expect(classifyTaskAgentKind({ taskType: undefined })).toBe("agent");
-    expect(classifyTaskAgentKind({ taskType: "brand_new_agent_type" })).toBe("agent");
-    expect(classifyTaskAgentKind({ taskType: "local_bash" })).toBe("background");
-    expect(classifyTaskAgentKind({ taskType: "monitor" })).toBe("background");
-    expect(classifyTaskAgentKind({ taskType: "plan" })).toBe("background");
-  });
-
-  it("agent-owned tasks are background unless themselves agent-flavored", () => {
-    expect(classifyTaskAgentKind({ taskType: "local_bash", agentId: "owner" })).toBe("background");
-    expect(classifyTaskAgentKind({ taskType: undefined, agentId: "owner" })).toBe("background");
-    // Nested agent: outlives its parent, stays in the roster.
-    expect(classifyTaskAgentKind({ taskType: "local_agent", agentId: "owner" })).toBe("agent");
   });
 });

@@ -1,25 +1,16 @@
 import { assert, it } from "@effect/vitest";
-import { CommandId, ThreadId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
-import { OrchestrationCommandReceiptRepositoryLive } from "../Layers/OrchestrationCommandReceipts.ts";
 import { runMigrations } from "../Migrations.ts";
 import * as NodeSqliteClient from "../NodeSqliteClient.ts";
-import { OrchestrationCommandReceiptRepository } from "../Services/OrchestrationCommandReceipts.ts";
 
-const sqliteLayer = NodeSqliteClient.layerMemory();
-const layer = it.layer(
-  OrchestrationCommandReceiptRepositoryLive.pipe(Layer.provideMerge(sqliteLayer)),
-);
+const layer = it.layer(NodeSqliteClient.layerMemory());
 
 layer("038_OrchestrationCommandReceiptEnvelopes", (it) => {
   it.effect("preserves legacy receipts as explicitly unverifiable rows", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      const receiptRepository = yield* OrchestrationCommandReceiptRepository;
 
       yield* runMigrations({ toMigrationInclusive: 37 });
       yield* sql`
@@ -45,20 +36,18 @@ layer("038_OrchestrationCommandReceiptEnvelopes", (it) => {
 
       yield* runMigrations({ toMigrationInclusive: 38 });
 
-      const receipt = yield* receiptRepository.getByCommandId({
-        commandId: CommandId.make("cmd-legacy-receipt"),
-      });
-      assert.deepStrictEqual(Option.getOrThrow(receipt), {
-        commandId: CommandId.make("cmd-legacy-receipt"),
-        aggregateKind: "thread",
-        aggregateId: ThreadId.make("thread-legacy-receipt"),
-        commandVariant: null,
-        envelopeFingerprint: null,
-        acceptedAt: "2026-01-01T00:00:00.000Z",
-        resultSequence: 42,
-        status: "accepted",
-        error: null,
-      });
+      const rows = yield* sql<{
+        readonly result_sequence: number;
+        readonly command_variant: string | null;
+        readonly envelope_fingerprint: string | null;
+      }>`
+        SELECT result_sequence, command_variant, envelope_fingerprint
+        FROM orchestration_command_receipts
+        WHERE command_id = 'cmd-legacy-receipt'
+      `;
+      assert.deepStrictEqual(rows, [
+        { result_sequence: 42, command_variant: null, envelope_fingerprint: null },
+      ]);
     }),
   );
 });

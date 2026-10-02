@@ -17,10 +17,9 @@ import {
   updateBearerConnection,
 } from "../../connection/onboarding";
 import { unregisterAgentAwarenessDevice } from "../../state/agent-awareness";
-import { useEnvironments } from "../../state/environments";
+import { useWorkspaceEnvironments } from "../../state/workspace";
 import { relayEnvironmentDiscovery } from "../../state/relay";
 import { useAtomCommand } from "../../state/use-atom-command";
-import { projectWorkspaceEnvironment, type WorkspaceEnvironment } from "../../state/workspaceModel";
 import { commandFailure } from "../agent-awareness/registrationEnvironmentSelection";
 import { unregisterAgentAwarenessDeviceFromEnvironment } from "../agent-awareness/remoteRegistration";
 import { relayManagedEnvironmentIds } from "./environmentSections";
@@ -34,7 +33,7 @@ export interface RelayEnvironmentView {
 }
 
 export function useConnectionController() {
-  const { environments } = useEnvironments();
+  const connectedEnvironments = useWorkspaceEnvironments();
   const discovery = useAtomValue(relayEnvironmentDiscovery.stateValueAtom);
   const connectPairingUrlMutation = useAtomCommand(connectPairingUrlAtom, {
     reportFailure: false,
@@ -56,10 +55,6 @@ export function useConnectionController() {
     "relay environment refresh",
   );
 
-  const connectedEnvironments = useMemo<ReadonlyArray<WorkspaceEnvironment>>(
-    () => environments.map(projectWorkspaceEnvironment),
-    [environments],
-  );
   const registeredIds = useMemo(
     () => relayManagedEnvironmentIds(connectedEnvironments),
     [connectedEnvironments],

@@ -1,7 +1,12 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { ChatAttachment, ModelSelection, ProviderInstanceId } from "@t3tools/contracts";
+import type {
+  BranchNamingOptions,
+  ChatAttachment,
+  ModelSelection,
+  ProviderInstanceId,
+} from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
 
 import * as ProviderInstanceRegistry from "../provider/Services/ProviderInstanceRegistry.ts";
@@ -9,15 +14,6 @@ import type { ProviderInstance } from "../provider/ProviderDriver.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as ThreadTitleLinks from "./ThreadTitleLinks.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
-import type {
-  WaitSummaryGenerationResult,
-  WatchDecisionGenerationResult,
-} from "./TextGenerationSchemas.ts";
-
-export {
-  WaitSummaryGenerationResult,
-  WatchDecisionGenerationResult,
-} from "./TextGenerationSchemas.ts";
 
 export interface CommitMessageGenerationInput {
   cwd: string;
@@ -57,6 +53,7 @@ export interface PrContentGenerationResult {
 }
 
 export interface BranchNameGenerationInput {
+  naming?: BranchNamingOptions | undefined;
   cwd: string;
   message: string;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
@@ -74,8 +71,6 @@ export interface ThreadTitleGenerationInput {
   message: string;
   /** Present when replacing an existing title from the current thread history. */
   previousTitle?: string | undefined;
-  /** Prefer the existing title unless the durable user goal materially changed. */
-  automaticRefresh?: boolean | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;
@@ -85,17 +80,6 @@ export interface ThreadTitleGenerationResult {
   title: string;
   needsRefinement?: boolean | undefined;
 }
-
-export type NotificationGenerationInput = {
-  readonly cwd: string;
-  readonly prompt: string;
-  readonly kind: "watchDecision" | "waitSummary";
-  readonly modelSelection: ModelSelection;
-};
-
-export type NotificationGenerationResult =
-  | { readonly kind: "watchDecision"; readonly result: WatchDecisionGenerationResult }
-  | { readonly kind: "waitSummary"; readonly result: WaitSummaryGenerationResult };
 
 /**
  * TextGeneration - Service tag for commit and change request text generation.
@@ -128,11 +112,6 @@ export class TextGeneration extends Context.Service<
     readonly generateThreadTitle: (
       input: ThreadTitleGenerationInput,
     ) => Effect.Effect<ThreadTitleGenerationResult, TextGenerationError>;
-
-    /** Apply the configured cheap system model to a bounded orchestration notification. */
-    readonly generateNotification: (
-      input: NotificationGenerationInput,
-    ) => Effect.Effect<NotificationGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -140,8 +119,7 @@ type TextGenerationOp =
   | "generateCommitMessage"
   | "generatePrContent"
   | "generateBranchName"
-  | "generateThreadTitle"
-  | "generateNotification";
+  | "generateThreadTitle";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -193,10 +171,6 @@ export const make = Effect.gen(function* () {
             return yield* textGeneration.generateThreadTitle({ ...input, linkedContext });
           }),
         ),
-      ),
-    generateNotification: (input) =>
-      resolveInstance(registry, "generateNotification", input.modelSelection.instanceId).pipe(
-        Effect.flatMap((textGeneration) => textGeneration.generateNotification(input)),
       ),
   });
 });
