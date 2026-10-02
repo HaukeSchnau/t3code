@@ -4,11 +4,15 @@
 
 ## Fork release pipeline
 
-Pushes to the fork's Gitea `main` branch run
-[`.gitea/workflows/project-release.yml`](../../.gitea/workflows/project-release.yml). The independent
-format, type-check, test, and release-smoke jobs run in parallel. A separate dependency job builds the
-web, server, and runtime pnpm stores immediately, so a stale fixed-output hash fails before the final
-release contract. The release job runs only after every gate succeeds.
+Kiln runs the fork's pipeline, defined in [`.kiln/ci.ts`](../../.kiln/ci.ts), on pull requests and on
+pushes to the Gitea `main` branch. The format, type-check, test, and release-smoke tasks run in
+parallel in persistent workspaces (the server tests as three shards of one step). Three builds of the
+web, server, and runtime pnpm stores start immediately, so a stale fixed-output hash fails before the
+release contract (`gate`). Each step reports a `kiln/<step>` commit status, and branch protection
+requires them. On `main`, `promote` deploys the release to srv-1 and srv-2 after every check passed,
+then `apple` dispatches the desktop and mobile workflows to the Apple builder. Inspect runs at
+https://kiln.schnau.dev, and check the pipeline with `kiln plan --event push:main` or
+`kiln plan --event pr:1`.
 
 Dependency changes use one generated-file workflow:
 
@@ -23,8 +27,9 @@ computes the three filtered-store hashes concurrently, updates `flake.nix`, and 
 `just qa-nix-deps`.
 
 Use `just ci-watch <revision>` after pushing. The watcher fetches `origin/main`, verifies that every new
-head descends from the requested revision, and follows the newest matching Gitea run. If another push
-supersedes and cancels a run, it moves to the descendant run instead of reporting the cancelled ancestor.
+head descends from the requested revision, and follows Kiln's `kiln` commit status on the head. If
+another push supersedes and cancels a run, it moves to the descendant head instead of reporting the
+cancelled ancestor.
 
 ## Upstream GitHub pipeline
 
