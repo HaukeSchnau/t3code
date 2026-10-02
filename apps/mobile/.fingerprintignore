@@ -5,6 +5,7 @@
 # Build outputs
 android/
 ios/
+targets/*/Assets.xcassets/
 dist/
 web-build/
 

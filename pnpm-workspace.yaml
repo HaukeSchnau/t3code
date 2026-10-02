@@ -153,6 +153,8 @@ overrides:
   "@tailwindcss/vite": "catalog:"
   "@types/node": "catalog:"
   effect: "catalog:"
+  # apple-targets pins prebuild-config 55, which drags in a second @expo/config-plugins.
+  "@bacons/apple-targets>@expo/prebuild-config": 57.0.15
   expo-router: 57.0.17
   "expo-sharing>@expo/config-plugins": 57.0.9
   "expo-sharing>@expo/config-types": 57.0.2
@@ -164,6 +166,15 @@ overrides:
 
 packageExtensions:
   "@clerk/expo@*":
+    dependencies:
+      "@expo/config-plugins": 57.0.9
+  # These config plugins require packages they don't declare, so they only resolved through hoisting.
+  "@bacons/apple-targets@*":
+    dependencies:
+      "@expo/image-utils": 0.11.5
+      "@expo/plist": 0.8.1
+      chalk: 4.1.2
+  "expo-quick-actions@*":
     dependencies:
       "@expo/config-plugins": 57.0.9
   "@effect/vitest@*":
