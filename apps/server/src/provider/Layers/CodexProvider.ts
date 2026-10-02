@@ -3,6 +3,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -33,7 +34,6 @@ import {
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
-  AUTH_PROBE_TIMEOUT_MS,
   buildServerProvider,
   COMPACT_SLASH_COMMAND,
   type ServerProviderDraft,
@@ -49,6 +49,9 @@ import {
 import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 const RATE_LIMITS_PROBE_TIMEOUT_MS = 3_000;
+// The probe spawns an app-server and reads the account over the network. On a
+// busy server that takes 3-9 seconds and sometimes more than 10.
+const STATUS_PROBE_TIMEOUT = Duration.seconds(30);
 
 type CodexRateLimitsProbe =
   | {
@@ -561,21 +564,24 @@ function accountProbeStatus(account: CodexAppServerProviderSnapshot["account"]):
   return { status: "ready", auth };
 }
 
+type CodexStatusProbe = (input: {
+  readonly binaryPath: string;
+  readonly homePath?: string;
+  readonly launchArgs?: string;
+  readonly cwd: string;
+  readonly customModels: ReadonlyArray<CustomModelSetting>;
+  readonly environment?: NodeJS.ProcessEnv;
+}) => Effect.Effect<
+  CodexAppServerProviderSnapshot,
+  CodexErrors.CodexAppServerError,
+  ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+>;
+
 export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(function* (
   codexSettings: CodexSettings,
-  probe: (input: {
-    readonly binaryPath: string;
-    readonly homePath?: string;
-    readonly launchArgs?: string;
-    readonly cwd: string;
-    readonly customModels: ReadonlyArray<CustomModelSetting>;
-    readonly environment?: NodeJS.ProcessEnv;
-  }) => Effect.Effect<
-    CodexAppServerProviderSnapshot,
-    CodexErrors.CodexAppServerError,
-    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
-  > = probeCodexAppServerProvider,
+  probe: CodexStatusProbe = probeCodexAppServerProvider,
   environment?: NodeJS.ProcessEnv,
+  lastReady?: ServerProviderDraft,
 ): Effect.fn.Return<
   ServerProviderDraft,
   ServerSettingsError,
@@ -609,11 +615,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
     environment: resolvedEnvironment,
-  }).pipe(
-    Effect.scoped,
-    Effect.timeoutOption(Duration.millis(AUTH_PROBE_TIMEOUT_MS)),
-    Effect.result,
-  );
+  }).pipe(Effect.scoped, Effect.timeoutOption(STATUS_PROBE_TIMEOUT), Effect.result);
 
   if (Result.isFailure(probeResult)) {
     const error = probeResult.failure;
@@ -640,6 +642,14 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
   }
 
   if (Option.isNone(probeResult.success)) {
+    // A slow probe says nothing about Codex itself, so keep showing the last
+    // ready snapshot. Marking usage as failed keeps the published limits.
+    if (lastReady) {
+      return {
+        ...lastReady,
+        usageLimits: makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
+      };
+    }
     return buildServerProvider({
       presentation: CODEX_PRESENTATION,
       enabled: codexSettings.enabled,
@@ -697,6 +707,24 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
       usageLimits,
     },
   });
+});
+
+/**
+ * The status check one Codex instance runs on every refresh. It remembers the
+ * last ready snapshot so a timed-out probe can fall back to it.
+ */
+export const makeCodexProviderStatusCheck = Effect.fn("makeCodexProviderStatusCheck")(function* (
+  codexSettings: CodexSettings,
+  probe?: CodexStatusProbe,
+  environment?: NodeJS.ProcessEnv,
+) {
+  const lastReadyRef = yield* Ref.make<ServerProviderDraft | undefined>(undefined);
+  return Ref.get(lastReadyRef).pipe(
+    Effect.flatMap((lastReady) =>
+      checkCodexProviderStatus(codexSettings, probe, environment, lastReady),
+    ),
+    Effect.tap((draft) => Ref.set(lastReadyRef, draft.status === "ready" ? draft : undefined)),
+  );
 });
 
 // NOTE: the singleton `CodexProviderLive` Layer has been removed as part of
