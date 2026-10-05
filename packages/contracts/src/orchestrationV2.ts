@@ -31,7 +31,7 @@ import {
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
-import { ChatAttachment } from "./chatAttachment.ts";
+import { ChatAttachment, ChatImageAttachment } from "./chatAttachment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -1444,6 +1444,8 @@ export const OrchestrationV2TurnItem = Schema.Union([
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     viewedImagePath: Schema.optional(TrimmedNonEmptyString),
+    /** Fork: the server's copy of `viewedImagePath`, taken when the agent viewed it. */
+    observedImage: Schema.optional(ChatImageAttachment),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
   }),
@@ -2164,6 +2166,8 @@ export const OrchestrationV2TurnItemJson = Schema.Union([
     type: Schema.Literal("dynamic_tool"),
     toolName: Schema.NullOr(TrimmedNonEmptyString),
     viewedImagePath: Schema.optional(TrimmedNonEmptyString),
+    /** Fork: the server's copy of `viewedImagePath`, taken when the agent viewed it. */
+    observedImage: Schema.optional(ChatImageAttachment),
     input: Schema.Unknown,
     output: Schema.optional(Schema.Unknown),
   }),

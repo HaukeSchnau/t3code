@@ -1,6 +1,7 @@
 import {
   isToolLifecycleItemType,
   type AssetResource,
+  type ChatImageAttachment,
   type RuntimeItemStatus,
   type ToolActivitySource,
   type ToolActivitySurface,
@@ -485,8 +486,17 @@ export function workEntryViewedImagePath(entry: WorkLogPresentationEntry): strin
     : null;
 }
 
+/** The server's copy of a viewed image, taken when the agent viewed it. */
+export function workEntryObservedImage(
+  entry: WorkLogPresentationEntry,
+): ChatImageAttachment | undefined {
+  return entry.structuredPayload?.type === "dynamic_tool"
+    ? entry.structuredPayload.observedImage
+    : undefined;
+}
+
 export interface ViewedImageAsset {
-  readonly resource: Extract<AssetResource, { readonly _tag: "media-file" }>;
+  readonly resource: Extract<AssetResource, { readonly _tag: "media-file" | "attachment" }>;
   readonly alt: string;
   readonly srcFragment: string;
 }
@@ -496,8 +506,17 @@ export function resolveViewedImageAsset(
   input: {
     readonly threadId: ThreadId;
     readonly workspaceRoot?: string | null | undefined;
+    /** Preferred over `source`, which may have changed or been deleted since. */
+    readonly observedImage?: ChatImageAttachment | undefined;
   },
 ): ViewedImageAsset | null {
+  if (input.observedImage !== undefined) {
+    return {
+      resource: { _tag: "attachment", attachmentId: input.observedImage.id },
+      alt: input.observedImage.name,
+      srcFragment: "",
+    };
+  }
   // A relative path with no known workspace still names a media-file relative
   // to the thread's workspace, so classify against "." and drop the prefix.
   const imageSource = classifyMarkdownImageSource(source, input.workspaceRoot ?? ".");

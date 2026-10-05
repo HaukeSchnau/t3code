@@ -41,6 +41,7 @@ import { replaceComposerContextReferences } from "@t3tools/shared/composerContex
 import {
   resolveWorkEntryToolPresentation,
   resolveViewedImageAsset,
+  workEntryObservedImage,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
@@ -5065,6 +5066,7 @@ const SimpleWorkEntryRow = memo(function SimpleWorkEntryRow(props: {
       ? resolveViewedImageAsset(viewedImagePath, {
           threadId: threadRef.threadId,
           workspaceRoot,
+          observedImage: workEntryObservedImage(workEntry),
         })
       : null;
   const canExpand =

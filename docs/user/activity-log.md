@@ -16,3 +16,7 @@ Failed calls do not count as successful messages or creations. Waiting on a thre
 it finished, and an interrupt or cancellation request does not mean the thread stopped. When tool
 details are unavailable, summaries use a broader description instead of guessing how many threads
 were affected.
+
+When Codex views an image file, expand its row to see the image, then select it to enlarge it. T3
+Code keeps a copy of the image as Codex saw it, so the preview stays the same after the file
+changes or is deleted. Deleting the thread deletes the copy.
