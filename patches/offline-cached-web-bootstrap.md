@@ -4,7 +4,7 @@
 
 A paired web client previously blocked its root route on `/api/auth/session` and rebuilt the primary environment
 registration through a live descriptor request. Reloading while the remote server was unreachable therefore
-showed a fatal 502 screen before cached shell and thread state could hydrate.
+showed a fatal 502 screen before the durable outbox and cached shell and thread state could hydrate.
 
 ## Security boundary
 
@@ -16,8 +16,8 @@ showed a fatal 502 screen before cached shell and thread state could hydrate.
   is unexpired and the live check fails with a transport/abort error or HTTP 502, 503, or 504.
 - First-time, corrupt, expired, or target-mismatched state fails closed. Authoritative `authenticated: false`,
   401, and 403 results clear the proof; 400, 404, and 500 never use the fallback.
-- Privileged authenticated-only root components stay disabled in degraded mode. Server authorization remains the
-  authority once the connection returns.
+- Privileged authenticated-only root components stay disabled in degraded mode. Server authorization and command
+  receipts remain the authority for reconnect and outbox delivery.
 
 ## Cached primary identity
 
