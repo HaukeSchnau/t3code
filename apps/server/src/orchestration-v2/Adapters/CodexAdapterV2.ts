@@ -1,6 +1,7 @@
 import { revertCodexThread } from "../../provider/CodexThreadRevert.ts";
 import { historyResponseItems } from "../ContextHandoffBudget.ts";
 import { makeProviderTextDeltaCoalescer } from "./ProviderTextDeltaCoalescer.ts";
+import { codexImageViewToolCall, withObservedImage } from "./CodexImageView.ts";
 import {
   mcpToolPresentation,
   type McpToolPresentation,
@@ -4371,6 +4372,30 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
                 type: "turn_item.updated",
                 driver: CODEX_PROVIDER,
                 turnItem: artifacts.turnItem,
+              });
+              return;
+            }
+
+            if (payload.item.type === "imageView") {
+              const artifacts = yield* buildDynamicToolArtifacts(
+                context,
+                codexImageViewToolCall(payload.item),
+              );
+              yield* emitProviderEvent({
+                type: "node.updated",
+                driver: CODEX_PROVIDER,
+                node: artifacts.node,
+              });
+              yield* emitProviderEvent({
+                type: "turn_item.updated",
+                driver: CODEX_PROVIDER,
+                turnItem: yield* withObservedImage(artifacts.turnItem, {
+                  path: payload.item.path,
+                  cwd: context.input.runtimePolicy.cwd,
+                  agentExecState: environment.AGENT_EXEC_STATE,
+                  fileSystem,
+                  attachmentsDir: serverConfig.attachmentsDir,
+                }),
               });
               return;
             }

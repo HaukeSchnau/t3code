@@ -2542,6 +2542,73 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("shows a viewed image as a read that keeps its own copy of the image", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fileSystem = yield* FileSystem.FileSystem;
+        const directory = yield* fileSystem.makeTempDirectoryScoped({
+          prefix: "t3-codex-image-view-",
+        });
+        const imagePath = `${directory}/screen.png`;
+        yield* fileSystem.writeFile(imagePath, new Uint8Array([137, 80, 78, 71]));
+        const nativeThreadId = "image-view-thread";
+        const nativeTurnId = "image-view-turn";
+        const item = { type: "imageView", id: "image-view-item", path: imagePath };
+        const transcript = makeCodexReplayTranscript({
+          scenario: "image-view",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "Check the UI." }),
+            ...(["item/started", "item/completed"] as const).map((method) => ({
+              type: "emit_inbound" as const,
+              label: method,
+              frame: { method, params: { threadId: nativeThreadId, turnId: nativeTurnId, item } },
+            })),
+            {
+              type: "emit_inbound",
+              label: "complete",
+              frame: {
+                method: "turn/completed",
+                params: {
+                  threadId: nativeThreadId,
+                  turn: makeCodexReplayTurn({ id: nativeTurnId, status: "completed" }),
+                },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("image-view-attempt"),
+            text: "Check the UI.",
+          }),
+        );
+        yield* harness.firstTerminal;
+        const viewed = harness.events.flatMap((event) =>
+          event.type === "turn_item.updated" && event.turnItem.type === "dynamic_tool"
+            ? [event.turnItem]
+            : [],
+        );
+        assert.lengthOf(viewed, 1);
+        assert.deepInclude(viewed[0], {
+          status: "completed",
+          toolName: "view_image",
+          title: `Read ${imagePath}`,
+          viewedImagePath: imagePath,
+        });
+        assert.deepInclude(viewed[0]?.observedImage, {
+          type: "image",
+          name: "screen.png",
+          mimeType: "image/png",
+          sizeBytes: 4,
+        });
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("preserves T3 context on the wire and restores it after compaction", () =>
     Effect.scoped(
       Effect.gen(function* () {

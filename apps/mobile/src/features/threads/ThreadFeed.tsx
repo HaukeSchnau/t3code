@@ -177,6 +177,7 @@ import {
   ThreadWorkGroupToggle,
   ThreadThinkingRow,
   ThreadWorkLog,
+  type ViewedImageRenderer,
   WORK_GROUP_TOGGLE_HEIGHT,
 } from "./thread-work-log";
 import { appendPendingThreadMessages, type PendingThreadFeedEntry } from "./pending-thread-feed";
@@ -1514,7 +1515,7 @@ function renderFeedEntry(
     readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
     readonly markdownLinkHandlers: MarkdownLinkHandlers;
     readonly renderMarkdownImage: MarkdownImageRenderer;
-    readonly renderViewedImage: MarkdownImageRenderer;
+    readonly renderViewedImage: ViewedImageRenderer;
     readonly renderReasoning: (text: string) => ReactNode;
     readonly iconSubtleColor: string | import("react-native").ColorValue;
     readonly screenColor: string;
@@ -2399,11 +2400,12 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     },
     [props.environmentId, props.threadId, props.workspaceRoot],
   );
-  const renderViewedImage = useCallback<MarkdownImageRenderer>(
+  const renderViewedImage = useCallback<ViewedImageRenderer>(
     (image) => {
       const viewedImage = resolveViewedImageAsset(image.href, {
         threadId: props.threadId,
         workspaceRoot: props.workspaceRoot,
+        observedImage: image.observedImage,
       });
       const media = viewedImage
         ? resolveMarkdownMediaPreview(image.href, {

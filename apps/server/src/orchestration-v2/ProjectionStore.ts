@@ -4468,6 +4468,12 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
       FROM orchestration_v2_projection_messages AS message,
         json_each(message.payload_json, '$.attachments') AS attachment
       WHERE message.thread_id = ${threadId}
+      UNION
+      SELECT json_extract(item.payload_json, '$.observedImage.id') AS id
+      FROM orchestration_v2_projection_turn_items AS item
+      WHERE item.thread_id = ${threadId}
+        AND item.type = 'dynamic_tool'
+        AND json_extract(item.payload_json, '$.observedImage.id') IS NOT NULL
     `.pipe(
         Effect.map((rows) => rows.map((row) => row.id)),
         Effect.mapError((cause) => new ProjectionStoreReadError({ threadId, cause })),
@@ -5712,11 +5718,16 @@ export const layerMemory: Layer.Layer<ProjectionStoreV2> = Layer.effect(
           .getThreadProjection(threadId)
           .pipe(
             Effect.map((projection) => [
-              ...new Set(
-                projection.messages.flatMap((message) =>
+              ...new Set([
+                ...projection.messages.flatMap((message) =>
                   message.attachments.map((attachment) => attachment.id),
                 ),
-              ),
+                ...projection.turnItems.flatMap((item) =>
+                  item.type === "dynamic_tool" && item.observedImage !== undefined
+                    ? [item.observedImage.id]
+                    : [],
+                ),
+              ]),
             ]),
           ),
       getThreadRecords: (threadId, fields, filter) =>

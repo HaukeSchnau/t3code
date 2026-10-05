@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { ThreadId, TurnItemId, type OrchestrationV2TurnItem } from "@t3tools/contracts";
+import {
+  ChatAttachmentId,
+  ThreadId,
+  TurnItemId,
+  type OrchestrationV2TurnItem,
+} from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import { T3_MCP_TOOL_NAMES } from "@t3tools/shared/t3McpToolPresentation";
 
@@ -15,6 +20,7 @@ import {
   toolItemForDisplay,
   type WorkLogPresentationEntry,
   type WorkLogToolLifecycleStatus,
+  workEntryObservedImage,
   workEntryViewedImagePath,
   workEntryIndicatesToolFailure,
   workEntryDisplayIndicatesToolFailure,
@@ -815,6 +821,54 @@ describe("resolveViewedImageAsset", () => {
       srcFragment: "#mark",
     });
     expect(resolveViewedImageAsset("https://example.com/logo.png", { threadId })).toBeNull();
+  });
+
+  it("prefers the server's copy, which outlives the viewed file", () => {
+    const observedImage = {
+      type: "image" as const,
+      id: ChatAttachmentId.make("thread-1-11111111-1111-4111-8111-111111111111"),
+      name: "screen.png",
+      mimeType: "image/png",
+      sizeBytes: 4,
+    };
+    const entry: WorkLogPresentationEntry = {
+      id: "viewed",
+      createdAt: "2026-09-10T00:00:00.000Z",
+      label: "Read /workspace/screen.png",
+      tone: "tool",
+      structuredPayload: {
+        id: TurnItemId.make("viewed"),
+        threadId,
+        runId: null,
+        nodeId: null,
+        providerThreadId: null,
+        providerTurnId: null,
+        nativeItemRef: null,
+        parentItemId: null,
+        ordinal: 1,
+        status: "completed",
+        title: "Read /workspace/screen.png",
+        startedAt: null,
+        completedAt: null,
+        updatedAt: DateTime.makeUnsafe("2026-09-10T00:00:00.000Z"),
+        type: "dynamic_tool",
+        toolName: "view_image",
+        viewedImagePath: "/workspace/screen.png",
+        observedImage,
+        input: { path: "/workspace/screen.png" },
+      },
+    };
+    expect(
+      resolveViewedImageAsset("/workspace/screen.png", {
+        threadId,
+        workspaceRoot: "/workspace",
+        observedImage: workEntryObservedImage(entry),
+      }),
+    ).toEqual({
+      resource: { _tag: "attachment", attachmentId: observedImage.id },
+      alt: "screen.png",
+      srcFragment: "",
+    });
   });
 });
 

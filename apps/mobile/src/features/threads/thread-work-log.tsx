@@ -41,7 +41,7 @@ import {
   View,
 } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
-import type { EnvironmentId, ToolActivityIcon } from "@t3tools/contracts";
+import type { ChatImageAttachment, EnvironmentId, ToolActivityIcon } from "@t3tools/contracts";
 import { toolActivityFaviconUrl } from "@t3tools/shared/favicon";
 
 import { AppText as Text } from "../../components/AppText";
@@ -61,11 +61,12 @@ import {
 import {
   resolveWorkEntryToolPresentation,
   type ToolGroupSummaryKind,
+  workEntryObservedImage,
   workEntryViewedImagePath,
 } from "@t3tools/client-runtime/work-log/presentation";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
 import { notificationChildThreadId } from "@t3tools/client-runtime/state/thread-execution";
-import type { MarkdownImageRenderer } from "../../native/SelectableMarkdownText";
+import type { MarkdownImageRequest } from "../../native/SelectableMarkdownText";
 import Animated, {
   cancelAnimation,
   Easing,
@@ -446,9 +447,14 @@ interface ThreadWorkLogProps {
   readonly themeAppearance: "light" | "dark";
   readonly onCopyRow: (rowId: string, value: string) => void;
   readonly onToggleRow: (rowId: string, anchorKey: string) => void;
-  readonly renderImage: MarkdownImageRenderer;
+  readonly renderImage: ViewedImageRenderer;
   readonly renderReasoning: (text: string) => ReactNode;
 }
+
+/** Renders a viewed image, preferring the server's copy when it took one. */
+export type ViewedImageRenderer = (
+  image: MarkdownImageRequest & { readonly observedImage?: ChatImageAttachment | undefined },
+) => ReactNode;
 
 export function ThreadWorkLog(props: ThreadWorkLogProps) {
   const renderRow = useCallback(
@@ -1019,7 +1025,12 @@ const ThreadWorkLogRow = memo(function ThreadWorkLogRow(
           ) : null}
           {viewedImagePath ? (
             <View className="pb-1.5">
-              {props.renderImage({ href: viewedImagePath, alt: null, title: null })}
+              {props.renderImage({
+                href: viewedImagePath,
+                alt: null,
+                title: null,
+                observedImage: workEntryObservedImage(row.workEntry),
+              })}
             </View>
           ) : null}
           <ScrollView
