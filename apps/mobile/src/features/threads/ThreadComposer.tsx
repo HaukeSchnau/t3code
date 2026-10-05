@@ -183,6 +183,9 @@ export interface ThreadComposerProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** Stop pauses a Codex run that `onResumeThread` continues without a message. */
+  readonly canPauseThread?: boolean;
+  readonly onResumeThread?: (() => void) | null;
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   /** `/usage-limits` resolves locally; the host decides where the report shows. Null clears it. */
   readonly onShowUsageLimits: (report: UsageLimitsReport | null) => void;
@@ -403,6 +406,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
   );
   // Stopping the agent is not what the send button means in edit mode.
   const showStopAction = !hasContent && props.canStopThread && queuedEdit === null;
+  const onResumeThread =
+    !hasContent && !showStopAction && queuedEdit === null ? (props.onResumeThread ?? null) : null;
+  const stopLabel = props.canPauseThread ? "Pause agent" : "Stop agent";
+  const stopIcon = props.canPauseThread ? "pause.fill" : "stop.fill";
 
   const uploadStates = useAtomValue(composerAttachmentUploadsAtom);
   const attachmentsUploading =
@@ -1044,10 +1051,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                 />
                 {showStopAction ? (
                   <ComposerActionButton
-                    accessibilityLabel="Stop agent"
-                    icon="stop.fill"
+                    accessibilityLabel={stopLabel}
+                    icon={stopIcon}
                     variant="danger"
                     onPress={props.onStopThread}
+                  />
+                ) : onResumeThread ? (
+                  <ComposerActionButton
+                    accessibilityLabel="Resume"
+                    icon="play.fill"
+                    variant="primary"
+                    disabled={props.connectionState !== "connected"}
+                    onPress={onResumeThread}
                   />
                 ) : (
                   <SendActionButton
@@ -1138,10 +1153,18 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
                   />
                   {showStopAction ? (
                     <ComposerActionButton
-                      accessibilityLabel="Stop agent"
-                      icon="stop.fill"
+                      accessibilityLabel={stopLabel}
+                      icon={stopIcon}
                       variant="danger"
                       onPress={props.onStopThread}
+                    />
+                  ) : onResumeThread && voicePresentation.showsSend ? (
+                    <ComposerActionButton
+                      accessibilityLabel="Resume"
+                      icon="play.fill"
+                      variant="primary"
+                      disabled={props.connectionState !== "connected"}
+                      onPress={onResumeThread}
                     />
                   ) : voicePresentation.showsSend ? (
                     <SendActionButton

@@ -2845,6 +2845,57 @@ describe("CodexAdapterV2 post-settle continuation", () => {
     ),
   );
 
+  it.effect("continues a paused thread with empty input for a message-free turn", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const nativeThreadId = "native-message-free";
+        const nativeTurnId = "turn-message-free";
+        const transcript = makeCodexReplayTranscript({
+          scenario: "codex-message-free-continuation",
+          entries: [
+            ...codexReplayPreamble({ nativeThreadId, nativeTurnId, prompt: "unused" }).slice(0, 5),
+            {
+              type: "expect_outbound",
+              label: "continue",
+              frame: {
+                id: 3,
+                method: "turn/start",
+                params: {
+                  threadId: nativeThreadId,
+                  input: [],
+                  cwd: "/workspace",
+                  model: "gpt-5.4",
+                  approvalPolicy: "never",
+                  approvalsReviewer: "user",
+                  sandboxPolicy: { type: "dangerFullAccess" },
+                  summary: "detailed",
+                },
+              },
+            },
+            {
+              type: "emit_inbound",
+              label: "continue",
+              frame: {
+                id: 3,
+                result: { turn: makeCodexReplayTurn({ id: nativeTurnId, status: "inProgress" }) },
+              },
+            },
+          ],
+        });
+        const harness = yield* makeCodexReplayHarness(transcript);
+        yield* harness.runtime.startTurn(
+          makeCodexTestTurnInput({
+            threadId: harness.threadId,
+            providerThread: harness.providerThread,
+            now: yield* DateTime.now,
+            attemptId: RunAttemptId.make("attempt-message-free"),
+            text: "",
+          }),
+        );
+      }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
+    ),
+  );
+
   it.effect("resolves retryable app-server errors on resumed provider activity", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -5723,6 +5774,12 @@ describe("CodexAdapterV2 post-settle continuation", () => {
       expectedClass: "usage_limit",
     },
     { name: "retry", code: "usageLimitExceeded", notification: true, expectedClass: "usage_limit" },
+    {
+      name: "overloaded",
+      code: "serverOverloaded",
+      notification: true,
+      expectedClass: "provider_error",
+    },
   ] as const) {
     it.effect(`classifies Codex terminal failures from ${scenario.name} evidence`, () =>
       Effect.scoped(
@@ -5905,6 +5962,8 @@ describe("CodexAdapterV2 post-settle continuation", () => {
             assert.isDefined(item);
           }
           if (scenario.name === "retry") assert.equal(terminal.retry?.attempt, 1);
+          if (scenario.name === "overloaded")
+            assert.equal(terminal.failure.code, "serverOverloaded");
         }).pipe(Effect.provide(Layer.merge(IdAllocator.layer, NodeServices.layer))),
       ),
     );

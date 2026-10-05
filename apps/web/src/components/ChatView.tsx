@@ -27,6 +27,12 @@ import {
   latestExecutedRun,
   latestRootProviderFailure,
 } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  codexOverloadRetry,
+  codexOverloadRetryNotice,
+  codexResumableRunId,
+  isCodexRunActive,
+} from "@t3tools/shared/codexTurnContinuation";
 import type { UsageLimitSourceSnapshots } from "@t3tools/contracts";
 import {
   collectProviderUsageLimits,
@@ -2084,8 +2090,25 @@ export default function ChatView(props: ChatViewProps) {
     isServerThread &&
     serverProjection?.runs.some((run) => run.status === "queued" && run.queueHeld === true) ===
       true;
+  const codexProjection = isServerThread ? serverProjection : null;
+  const canPauseCodexTurn = useMemo(
+    () => codexProjection !== null && isCodexRunActive(codexProjection),
+    [codexProjection],
+  );
+  const codexResumeRunId = useMemo(
+    () => (codexProjection === null ? null : codexResumableRunId(codexProjection)),
+    [codexProjection],
+  );
+  const codexRetryNotice = useMemo(
+    () =>
+      codexProjection === null
+        ? null
+        : codexOverloadRetryNotice(codexOverloadRetry(codexProjection)),
+    [codexProjection],
+  );
   const resumableRunId = useMemo(() => {
     if (!isServerThread || serverProjection === null) return null;
+    if (codexResumeRunId !== null) return codexResumeRunId;
     const run = latestExecutedRun(serverProjection.runs);
     if (run?.status === "interrupted") return run.id;
     return run?.status === "failed" &&
@@ -2093,7 +2116,7 @@ export default function ChatView(props: ChatViewProps) {
       latestRootProviderFailure(run, serverProjection.turnItems)?.class === "usage_limit"
       ? run.id
       : null;
-  }, [isServerThread, serverProjection, serverRuntime?.lastErrorClass]);
+  }, [codexResumeRunId, isServerThread, serverProjection, serverRuntime?.lastErrorClass]);
   const parentSubagentThreadId =
     activeThread?.lineage.relationshipToParent === "subagent"
       ? activeThread.lineage.parentThreadId
@@ -8115,7 +8138,8 @@ export default function ChatView(props: ChatViewProps) {
             message: {
               messageId: newMessageId(),
               role: "user",
-              text: "Continue where you left off.",
+              // Codex continues from its own context, so its resume adds no message.
+              text: resumableRunId === codexResumeRunId ? "" : "Continue where you left off.",
               attachments: [],
             },
             runtimeMode,
@@ -10813,6 +10837,7 @@ export default function ChatView(props: ChatViewProps) {
               />
               <ThreadErrorBanner
                 error={timelineThreadError}
+                detail={localServerError === null ? codexRetryNotice : null}
                 errorClass={
                   localServerError === null && visibleThreadError === serverRuntime?.lastError
                     ? (serverRuntime?.lastErrorClass ?? null)
@@ -11060,6 +11085,7 @@ export default function ChatView(props: ChatViewProps) {
                               }
                               phase={phase}
                               canInterrupt={canInterruptRunningThread}
+                              canPauseTurn={canPauseCodexTurn}
                               isConnecting={isConnecting}
                               isSendBusy={isSendBusy || isSavingQueuedEdit || isResuming}
                               canResume={resumableRunId !== null || hasHeldQueuedRuns}

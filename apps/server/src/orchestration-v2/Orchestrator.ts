@@ -3,6 +3,11 @@ import {
   latestRootProviderFailure,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
+import {
+  isCodexContinuationTarget,
+  isCodexOverloadFailure,
+  isMessageFreeTurn,
+} from "@t3tools/shared/codexTurnContinuation";
 import { threadPullRequestsOf } from "@t3tools/shared/threadPullRequests";
 import {
   normalizeThreadPullRequestKey,
@@ -4103,7 +4108,13 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           command.dispatchMode.type !== "start_immediately" ||
           source === undefined ||
           (source.status !== "interrupted" &&
-            !(source.status === "failed" && limited?.class === "usage_limit")) ||
+            !(
+              source.status === "failed" &&
+              (limited?.class === "usage_limit" || isCodexOverloadFailure(limited))
+            )) ||
+          (isMessageFreeTurn(command) &&
+            (command.modelSelection !== undefined ||
+              !isCodexContinuationTarget(projection, source))) ||
           latestExecutedRun(projection.runs)?.id !== source.id ||
           projection.thread.archivedAt !== null ||
           projection.thread.deletedAt !== null ||
@@ -5120,15 +5131,18 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           occurredAt: now,
           payload: message,
         });
-        yield* emitEvent({
-          type: "turn-item.updated",
-          threadId: command.threadId,
-          runId,
-          nodeId: rootNodeId,
-          providerInstanceId: modelSelection.instanceId,
-          occurredAt: now,
-          payload: notificationTurnItem(turnItem, message, projection.subagents),
-        });
+        // A message-free continuation keeps its run's message out of the transcript.
+        if (command.manualContinuationOfRunId === undefined || !isMessageFreeTurn(command)) {
+          yield* emitEvent({
+            type: "turn-item.updated",
+            threadId: command.threadId,
+            runId,
+            nodeId: rootNodeId,
+            providerInstanceId: modelSelection.instanceId,
+            occurredAt: now,
+            payload: notificationTurnItem(turnItem, message, projection.subagents),
+          });
+        }
         if (preparationTurnItem !== null) {
           yield* emitEvent({
             type: "turn-item.updated",
