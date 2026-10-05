@@ -46,6 +46,7 @@ import {
 } from "./toolkits/preview/tools.ts";
 import { WorktreeToolkitHandlersLive } from "./toolkits/worktree/handlers.ts";
 import { WorktreeToolkit } from "./toolkits/worktree/tools.ts";
+import { WatchToolkitRegistrationLive } from "./toolkits/watch/handlers.ts";
 import * as WorktreeMcpService from "./WorktreeMcpService.ts";
 import { PullRequestsToolkitHandlersLive } from "./toolkits/pullRequests/handlers.ts";
 import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
@@ -726,4 +727,5 @@ export const layer = Layer.mergeAll(
   WorktreeToolkitRegistrationLive,
   PullRequestsToolkitRegistrationLive,
   DeviceToolkitRegistrationLive,
+  WatchToolkitRegistrationLive,
 ).pipe(Layer.provideMerge(McpTransportLive));

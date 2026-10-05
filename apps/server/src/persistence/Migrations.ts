@@ -93,6 +93,7 @@ import Migration0076 from "./Migrations/076_DropProviderUsageLimitsProjection.ts
 import Migration0077 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledAt.ts";
 import Migration0078 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0079 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
+import Migration0080 from "./Migrations/080_AgentWatches.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -187,6 +188,7 @@ export const migrationEntries = [
   // Preserve this migration's schema. Future V2 schema changes need new migrations.
   [78, "OrchestrationV2", Migration0078],
   [79, "RemoveRedundantProjectionIndexes", Migration0079],
+  [80, "AgentWatches", Migration0080],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

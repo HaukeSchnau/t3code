@@ -69,6 +69,7 @@ import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/Provide
 import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as CrossProjectThreadManagement from "./mcp/crossProjectThreadManagement.ts";
+import * as AgentWatches from "./watches/AgentWatches.ts";
 import * as McpSessionRegistry from "./mcp/McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
@@ -544,6 +545,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   ProviderInstallationRefreshLive,
   ReplayMarkers.layer,
 ).pipe(
+  Layer.provideMerge(AgentWatches.layer.pipe(Layer.provide(ProviderProcessSpawnerLayerLive))),
   // Core Services
   Layer.provideMerge(OrchestrationApplicationLayerLive),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),
