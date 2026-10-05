@@ -206,6 +206,18 @@ Expand a tool call in the conversation to see its full command and output.
 Summaries shorten shell wrappers and can still describe the latest call after it
 finishes; the call's own result shows its status.
 
+## Let an agent wait
+
+An agent can hand its waiting to T3 Code and end its turn. It can watch another
+thread until that thread's current run ends, or keep a command running on the
+server and hear about each new burst of output and the exit. The environment
+keeps watching across restarts and wakes the thread with a notification. An idle
+thread starts right away; a busy one picks it up after its current turn.
+
+Command watches run without approval, so only full-access threads can start one.
+Archiving or deleting a thread stops its watches. Ask the agent to list or cancel
+them.
+
 ## Snooze until later
 
 Choose **Snooze → Custom…** from a thread's menu to pick a date and time in your
