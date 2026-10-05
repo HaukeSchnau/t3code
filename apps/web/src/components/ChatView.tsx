@@ -463,6 +463,14 @@ import type { ComposerBannerStackItem } from "./chat/ComposerBannerStack";
 import { ComposerSurface } from "./chat/ComposerSurface";
 import { createInlineReplyDraftStore, formatInlineReplyPrompt } from "./chat/inlineReplies";
 import { TrainNetworkStatus } from "./chat/TrainNetworkStatus";
+import { DurableOutboxStrip } from "./chat/DurableOutboxStrip";
+import {
+  enqueueComposerSend,
+  handOffUnconfirmedSend,
+  useThreadDurableOutbox,
+  type DurableComposerSend,
+  type RestoredComposerContent,
+} from "../durableCommandOutbox";
 import { resolveThreadSyncPhase } from "../threadSync";
 import {
   hasAvailableCompactionProvider,
@@ -3328,6 +3336,46 @@ export default function ChatView(props: ChatViewProps) {
     hasComposerAttachments: composerHasAttachments,
   });
   const activePendingApproval = pendingApprovals[0] ?? null;
+  const activeThreadOutbox = useThreadDurableOutbox(
+    activeThreadRef,
+    serverAcknowledgedUserMessageIds,
+  );
+  // Ordinary sends made while disconnected wait in the outbox instead of failing.
+  const offlineSendsQueue =
+    activeEnvironmentUnavailable &&
+    editingQueuedRun === null &&
+    multipleModelSelections === null &&
+    activePendingProgress === null &&
+    !showPlanFollowUpPrompt;
+  const restoreOutboxMessageToComposer = useCallback(
+    (content: RestoredComposerContent) => {
+      if (content.createsThread && draftId && draftThread?.promotedTo) {
+        restoreFailedBackgroundDraftThread(draftId, draftThread, draftThread.threadId);
+      }
+      const prompt =
+        promptRef.current.trim().length > 0
+          ? `${promptRef.current}\n\n${content.text}`
+          : content.text;
+      promptRef.current = prompt;
+      setComposerDraftPrompt(composerDraftTarget, prompt);
+      addComposerDraftImages(composerDraftTarget, content.images);
+      addComposerDraftFiles(composerDraftTarget, content.files);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(prompt, prompt.length),
+        prompt,
+        detectTrigger: true,
+      });
+    },
+    [
+      addComposerDraftFiles,
+      addComposerDraftImages,
+      composerDraftTarget,
+      composerRef,
+      draftId,
+      draftThread,
+      setComposerDraftPrompt,
+    ],
+  );
   // The open /usage-limits panel for this thread, model and turn. Only the open
   // moment is stored: the rows read live provider data, so a redeemed reset
   // credit or refreshed probe shows through. Anything that spends quota closes
@@ -8150,7 +8198,7 @@ export default function ChatView(props: ChatViewProps) {
       });
       return;
     }
-    if (activeEnvironmentUnavailable) {
+    if (activeEnvironmentUnavailable && !offlineSendsQueue) {
       const toastSlot = environmentUnavailableSendToastSlotRef.current;
       environmentUnavailableSendToastSlotRef.current =
         (toastSlot + 1) % ENVIRONMENT_UNAVAILABLE_SEND_TOAST_TRAIL_SIZE;
@@ -8696,6 +8744,58 @@ export default function ChatView(props: ChatViewProps) {
       });
     }
 
+    const durableSend: DurableComposerSend = {
+      environmentId,
+      threadId: threadIdForSend,
+      messageId: messageIdForSend,
+      createdAt: messageCreatedAt,
+      text: outgoingMessageText,
+      context: outgoingMessageContext,
+      attachments: composerAttachmentsSnapshot,
+      modelSelection: ctxSelectedModelSelection,
+      runtimeMode,
+      interactionMode: sendInteractionMode,
+      dispatchMode,
+      createThread: isLocalDraftThread
+        ? {
+            projectId: activeProject.id,
+            branch: activeThreadBranch,
+            worktreePath: activeThread.worktreePath,
+            createdAt: activeThread.createdAt,
+          }
+        : null,
+      prepareWorktree: baseBranchForWorktree
+        ? {
+            projectCwd: activeProject.workspaceRoot,
+            baseBranch: baseBranchForWorktree,
+            startFromOrigin,
+          }
+        : null,
+    };
+    // Nothing overtakes a message still waiting in the outbox for this thread.
+    if (
+      multipleModelSelections === null &&
+      (activeEnvironmentUnavailable || activeThreadOutbox.length > 0)
+    ) {
+      sendInFlightRef.current = true;
+      try {
+        await enqueueComposerSend(durableSend);
+      } catch (error) {
+        setThreadError(
+          threadIdForSend,
+          error instanceof Error ? error.message : "Could not save the message on this device.",
+        );
+        return;
+      } finally {
+        sendInFlightRef.current = false;
+      }
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      inlineReplyStore.clear();
+      composerRef.current?.resetCursorState();
+      return;
+    }
+
     sendInFlightRef.current = true;
     const sendGeneration = ++composerSendGenerationRef.current;
     const attachmentCapabilitiesBeforeUpload = readLiveAttachmentCapabilities();
@@ -9227,9 +9327,11 @@ export default function ChatView(props: ChatViewProps) {
           ? scopeThreadRef(environmentId, threadIdForSend)
           : null;
       if (backgroundThreadRef) beginBackgroundDraftSubmissionByRef(backgroundThreadRef);
+      const directSendCommandId = CommandId.make(randomUUID());
       const startPromise = startThreadTurn({
         environmentId,
         input: {
+          commandId: directSendCommandId,
           threadId: threadIdForSend,
           message: {
             messageId: messageIdForSend,
@@ -9297,7 +9399,16 @@ export default function ChatView(props: ChatViewProps) {
         }
       }
       const startResult = await startPromise;
-      if (startResult._tag === "Failure") {
+      if (await handOffUnconfirmedSend(startResult, durableSend, directSendCommandId)) {
+        // The outbox shows the message until the environment confirms it.
+        if (backgroundThreadRef) clearBackgroundDraftSubmissionByRef(backgroundThreadRef);
+        setOptimisticUserMessages((existing) => {
+          for (const message of existing) {
+            if (message.id === messageIdForSend) revokeUserMessagePreviewUrls(message);
+          }
+          return existing.filter((message) => message.id !== messageIdForSend);
+        });
+      } else if (startResult._tag === "Failure") {
         failure = startResult;
       } else {
         turnStartSucceeded = true;
@@ -10834,6 +10945,11 @@ export default function ChatView(props: ChatViewProps) {
                     }
                     onOpenConnections={() => void navigate({ to: "/settings/connections" })}
                   />
+                  <DurableOutboxStrip
+                    entries={activeThreadOutbox}
+                    connected={!activeEnvironmentUnavailable}
+                    onRestore={restoreOutboxMessageToComposer}
+                  />
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full">
                       <div
@@ -10967,7 +11083,9 @@ export default function ChatView(props: ChatViewProps) {
                                   ? openUsageLimits
                                   : undefined
                               }
-                              environmentUnavailable={activeEnvironmentUnavailableState}
+                              environmentUnavailable={
+                                offlineSendsQueue ? null : activeEnvironmentUnavailableState
+                              }
                               activePendingApproval={activePendingApproval}
                               pendingApprovals={pendingApprovals}
                               pendingUserInputs={pendingUserInputs}

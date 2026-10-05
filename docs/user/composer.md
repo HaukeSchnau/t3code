@@ -55,7 +55,24 @@ running the send button shows which action it will take. Long-press it to use th
 other action for a single message, or hold `Cmd` while sending from a hardware
 keyboard. The button only offers Steer when the running agent supports it.
 
-## Queue messages offline on mobile
+## Send while offline
+
+On web and desktop, a message you send while the environment is disconnected is
+saved on this device and listed above the composer. It goes out by itself once
+the connection is back, in the order you wrote it, even after a reload. This works
+for the first message of a new thread too; the thread appears when it arrives.
+Attachments stay on the device until they upload.
+
+If the connection drops before the environment confirms a message, T3 Code sends
+it again in a way that cannot deliver it twice. Until then it cannot be edited or
+discarded, because it may already have arrived.
+
+Choose **Edit** to take a waiting message back into the composer, or the trash
+button to discard it. A message the environment refused shows the reason and
+holds back later messages to that thread until you retry, edit, or discard it.
+
+Starting with several models, plan follow-ups, and answers to an agent's
+questions still need a connection.
 
 Mobile keeps local copies of draft attachments, so you can preview them and queue
 messages while disconnected. Uploads resume when you reconnect. Drafts and queued
