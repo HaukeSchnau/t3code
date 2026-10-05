@@ -64,7 +64,9 @@ export default {
   run: {
     tasks: {
       typecheck: {
-        command: "tsc --noEmit",
+        // Four checkers peak near 6.5 GB on this package; one stays near 3.8 GB, inside a
+        // Kiln worker's 4.5 GB. Drop the flag once Kiln can budget memory per step.
+        command: "tsc --noEmit --checkers 1",
         // Compiler GC tuning affects resource usage, not the typecheck result.
         cache: { untrackedEnv: ["GOMEMLIMIT"] },
       },
