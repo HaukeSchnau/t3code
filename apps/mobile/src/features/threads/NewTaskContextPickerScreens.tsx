@@ -43,7 +43,7 @@ import {
 import { branchBadgeLabel, useNewTaskFlow } from "./new-task-flow-provider";
 import { checkoutNewTaskBranch } from "./checkout-new-task-branch";
 
-function SelectionRow(props: {
+export function SelectionRow(props: {
   readonly icon?: "arrow.triangle.branch" | ReactNode;
   readonly onPress: () => void;
   readonly disabled?: boolean;
@@ -127,7 +127,7 @@ function SelectionRow(props: {
   );
 }
 
-function ToggleRow(props: {
+export function ToggleRow(props: {
   readonly title: string;
   readonly value: boolean;
   readonly onValueChange: (value: boolean) => void;
@@ -189,7 +189,7 @@ function BranchSelectionRow(props: {
   );
 }
 
-function PickerSurface(props: { readonly children: ReactNode }) {
+export function PickerSurface(props: { readonly children: ReactNode }) {
   return (
     <View
       className={

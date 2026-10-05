@@ -301,6 +301,41 @@ describe("V2 session presentation", () => {
     expect(targets.has(steerMessageId)).toBe(false);
   });
 
+  // Fork: workspaces without Git checkpoints rewind the conversation only (patches/workspaces.md).
+  it("offers an edit for runs whose checkpoint holds no files, but not for rolled-back runs", () => {
+    const message = (runId: RunId, id: string): TimelineEntry => ({
+      id,
+      kind: "message",
+      createdAt: "2026-06-20T00:00:00.000Z",
+      message: {
+        id: MessageId.make(id),
+        role: "user",
+        text: "Start",
+        runId,
+        inputIntent: "turn_start",
+        streaming: false,
+        createdAt: "2026-06-20T00:00:00.000Z",
+        updatedAt: "2026-06-20T00:00:00.000Z",
+      },
+    });
+    const checkpoint = (runId: RunId, status: "missing" | "stale", turnCount: number) => ({
+      runId,
+      checkpointTurnCount: turnCount,
+      checkpointRef: `checkpoint-${runId}` as never,
+      status,
+      files: [],
+      assistantMessageId: null,
+      completedAt: "2026-06-20T00:00:03.000Z",
+    });
+    const missingRun = RunId.make("run-missing");
+    const staleRun = RunId.make("run-stale");
+    const targets = deriveRevertTurnCountByUserMessageId({
+      timelineEntries: [message(missingRun, "message-missing"), message(staleRun, "message-stale")],
+      checkpoints: [checkpoint(missingRun, "missing", 1), checkpoint(staleRun, "stale", 2)],
+    });
+    expect([...targets]).toEqual([[MessageId.make("message-missing"), 0]]);
+  });
+
   it("uses visible turn item order and keeps provider errors in the work log", () => {
     const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
     const threadId = ThreadId.make("thread-visible");

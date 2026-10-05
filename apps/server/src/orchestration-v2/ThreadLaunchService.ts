@@ -34,6 +34,7 @@ import * as GitWorkflow from "../git/GitWorkflowService.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
 import * as ProviderRegistry from "../provider/Services/ProviderRegistry.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
@@ -55,7 +56,8 @@ export type ThreadLaunchWorkspaceStrategy =
       readonly baseRef: string;
       readonly branch?: string | undefined;
       readonly startFromOrigin?: boolean | undefined;
-    };
+    }
+  | ManagedWorkspaces.ManagedWorkspaceStrategy;
 
 export interface ThreadLaunchInitialMessage {
   readonly messageId?: MessageId;
@@ -156,6 +158,7 @@ const make = Effect.gen(function* () {
   const ids = yield* IdAllocator.IdAllocatorV2;
   const threads = yield* ThreadManagement.ThreadManagementService;
   const managedFolders = yield* ManagedProjectFolders.ManagedProjectFolders;
+  const managedWorkspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
   const preparationScope = yield* Scope.make("sequential");
   const scheduledLaunches = yield* Ref.make<ReadonlySet<CommandId>>(new Set());
   yield* Effect.addFinalizer(() => Scope.close(preparationScope, Exit.void));
@@ -201,29 +204,42 @@ const make = Effect.gen(function* () {
   });
 
   const prepareInBackground = Effect.fn("ThreadLaunchService.prepareInBackground")(function* (
-    input: ThreadLaunchInput,
+    requestedInput: ThreadLaunchInput,
     threadId: ThreadId,
     runId: RunId | null,
   ) {
-    const project = yield* projects.getById(input.projectId).pipe(
-      Effect.mapError(mapError(input, "resolve-project", threadId)),
+    const project = yield* projects.getById(requestedInput.projectId).pipe(
+      Effect.mapError(mapError(requestedInput, "resolve-project", threadId)),
       Effect.flatMap(
         Option.match({
           onNone: () =>
-            Effect.fail(mapError(input, "resolve-project", threadId)("Project no longer exists.")),
+            Effect.fail(
+              mapError(requestedInput, "resolve-project", threadId)("Project no longer exists."),
+            ),
           onSome: Effect.succeed,
         }),
       ),
     );
+    // Fork: jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+    const input: ThreadLaunchInput = {
+      ...requestedInput,
+      workspaceStrategy: yield* managedWorkspaces
+        .resolveLaunchStrategy({
+          projectRoot: project.workspaceRoot,
+          strategy: requestedInput.workspaceStrategy,
+        })
+        .pipe(Effect.mapError(mapError(requestedInput, "provision-worktree", threadId))),
+    };
 
-    const tracked = input.workspaceStrategy.type === "worktree";
+    const tracked =
+      input.workspaceStrategy.type === "worktree" || input.workspaceStrategy.type === "workspace";
     let createdWorktreePath: string | null = null;
     let setupTerminalId: string | null = null;
     if (tracked) {
       yield* setupTracker.begin({
         threadId,
         branch: input.workspaceStrategy.branch ?? null,
-        baseRef: input.workspaceStrategy.baseRef,
+        baseRef: input.workspaceStrategy.baseRef ?? null,
         stages: ["fetch", "checkout", "setup-script", "agent"],
         fiber: yield* Effect.fiber,
       });
@@ -355,6 +371,41 @@ const make = Effect.gen(function* () {
         branch = worktree.worktree.refName;
         createdWorktreePath = worktreePath;
         yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath, branch }));
+        yield* setupTracker.stageStatus(threadId, "checkout", "done");
+      }
+      if (input.workspaceStrategy.type === "workspace") {
+        if (runId !== null) {
+          yield* threads
+            .dispatch({
+              type: "prepared-run.progress",
+              commandId: CommandId.make(`${input.commandId}:progress:worktree`),
+              threadId,
+              runId,
+              phase: "worktree",
+            })
+            .pipe(Effect.mapError(mapError(input, "update-thread", threadId)));
+        }
+        yield* setupTracker.stageStatus(threadId, "fetch", "skipped");
+        yield* setupTracker.stageStatus(threadId, "checkout", "running");
+        const workspace = yield* managedWorkspaces
+          .create({
+            projectId: input.projectId,
+            projectRoot: project.workspaceRoot,
+            threadId,
+            title: input.title,
+            ...(initialMessage === undefined
+              ? {}
+              : {
+                  message: { text: initialMessage.text, attachments: initialMessage.attachments },
+                }),
+            baseRef: input.workspaceStrategy.baseRef,
+            startFromOrigin: input.workspaceStrategy.startFromOrigin,
+            profile: input.workspaceStrategy.profile,
+          })
+          .pipe(Effect.mapError(mapError(input, "provision-worktree", threadId)));
+        worktreePath = workspace.worktreePath;
+        createdWorktreePath = worktreePath;
+        yield* setupTracker.update(threadId, (snapshot) => ({ ...snapshot, worktreePath }));
         yield* setupTracker.stageStatus(threadId, "checkout", "done");
       }
 
@@ -517,13 +568,15 @@ const make = Effect.gen(function* () {
               yield* terminals
                 .close({ threadId, terminalId: setupTerminalId, deleteHistory: true })
                 .pipe(Effect.ignore);
-            yield* git
-              .removeWorktree({
-                cwd: project.workspaceRoot,
-                path: createdWorktreePath,
-                force: true,
-              })
-              .pipe(Effect.ignore);
+            yield* (
+              input.workspaceStrategy.type === "workspace"
+                ? managedWorkspaces.discard(createdWorktreePath)
+                : git.removeWorktree({
+                    cwd: project.workspaceRoot,
+                    path: createdWorktreePath,
+                    force: true,
+                  })
+            ).pipe(Effect.ignore);
             yield* threads
               .dispatch({
                 type: "thread.metadata.update",

@@ -87,6 +87,7 @@ import { readPastedComposerContext } from "./composerInlineTokenPaste";
 import { isPasteAsTextShortcut } from "@t3tools/client-runtime/text-paste";
 import { effectiveSnoozed, threadWokeAt } from "@t3tools/client-runtime/state/thread-settled";
 import { useThreadActions } from "../hooks/useThreadActions";
+import { managedWorkspaceBootstrap, useManagedWorkspaces } from "../lib/managedWorkspaces";
 import {
   deriveProviderSubagentStatus,
   formatModelSelectionEffort,
@@ -4125,6 +4126,9 @@ export default function ChatView(props: ChatViewProps) {
     }
   }, [environmentId, gitStatusCwd, liveIsGitRepo]);
   const isGitRepo = liveIsGitRepo ?? recallCheckoutIsRepo(environmentId, gitStatusCwd) ?? true;
+  // Fork: managed workspaces need no Git (patches/workspaces.md).
+  const managedWorkspaces = useManagedWorkspaces(environmentId, activeProject?.workspaceRoot);
+  const canChooseWorkspace = isGitRepo || managedWorkspaces !== null;
   // When context is enabled, keep a hidden, off-flow strip mounted so the composer
   // can measure whether its relocated controls fit. The visible chrome remains
   // content-driven: Git/environment context or controls that actually fit.
@@ -4148,7 +4152,7 @@ export default function ChatView(props: ChatViewProps) {
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
-    isGitRepo,
+    isGitRepo: canChooseWorkspace,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server",
   });
@@ -4156,7 +4160,7 @@ export default function ChatView(props: ChatViewProps) {
     isDraftHeroState,
     persistInActiveThreads: settings.persistComposerContextStrip,
     hasActiveProject: activeProject !== null && !showProviderSubagentBar,
-    isGitRepo,
+    isGitRepo: canChooseWorkspace,
     showEnvironmentIndicator: showComposerEnvironmentIndicator,
     hostsRestingComposerControls: routeKind === "server" && restingComposerControlsVisible,
   });
@@ -6510,7 +6514,7 @@ export default function ChatView(props: ChatViewProps) {
       : false;
   const sendEnvMode = resolveSendEnvMode({
     requestedEnvMode: envMode,
-    isGitRepo,
+    isGitRepo: canChooseWorkspace,
   });
   const localCheckoutBranchMismatch = useMemo(
     () =>
@@ -7733,6 +7737,16 @@ export default function ChatView(props: ChatViewProps) {
   if (pendingRevert && pendingRevert.routeThreadKey !== routeThreadKey) {
     setPendingRevert(null);
   }
+  // Fork: workspaces without Git checkpoints can only rewind the conversation (patches/workspaces.md).
+  const pendingRevertRestoresFiles =
+    pendingRevert === null ||
+    serverProjection?.checkpoints.some(
+      (checkpoint) =>
+        checkpoint.status === "ready" &&
+        (pendingRevert.turnCount === 0
+          ? checkpoint.ordinalWithinScope === 0 && checkpoint.appRunOrdinal === null
+          : checkpoint.appRunOrdinal === pendingRevert.turnCount),
+    ) !== false;
 
   const onRevertToTurnCount = useCallback(
     async (turnCount: number, messageId: MessageId, restoreFiles?: boolean) => {
@@ -8630,7 +8644,15 @@ export default function ChatView(props: ChatViewProps) {
     // fall back to local execution when branch selection is missing.
     const shouldCreateWorktree =
       isFirstMessage && sendEnvMode === "worktree" && !activeThread.worktreePath;
-    if (shouldCreateWorktree && !activeThreadBranch) {
+    const managedWorkspace = shouldCreateWorktree
+      ? managedWorkspaceBootstrap({
+          environmentId: activeThread.environmentId,
+          projectRoot: activeProject.workspaceRoot,
+          baseBranch: activeThreadBranch,
+          startFromOrigin,
+        })
+      : undefined;
+    if (shouldCreateWorktree && !activeThreadBranch && managedWorkspace === undefined) {
       setThreadError(threadIdForSend, "Select a base branch before sending in New worktree mode.");
       return;
     }
@@ -8764,13 +8786,15 @@ export default function ChatView(props: ChatViewProps) {
             createdAt: activeThread.createdAt,
           }
         : null,
-      prepareWorktree: baseBranchForWorktree
-        ? {
-            projectCwd: activeProject.workspaceRoot,
-            baseBranch: baseBranchForWorktree,
-            startFromOrigin,
-          }
-        : null,
+      prepareWorktree:
+        baseBranchForWorktree && managedWorkspace === undefined
+          ? {
+              projectCwd: activeProject.workspaceRoot,
+              baseBranch: baseBranchForWorktree,
+              startFromOrigin,
+            }
+          : null,
+      prepareWorkspace: managedWorkspace ?? null,
     };
     // Nothing overtakes a message still waiting in the outbox for this thread.
     if (
@@ -8856,11 +8880,14 @@ export default function ChatView(props: ChatViewProps) {
       await dockStarted;
     }
     beginLocalDispatch({
-      preparingWorktree: multipleModelSelections !== null || Boolean(baseBranchForWorktree),
+      preparingWorktree:
+        multipleModelSelections !== null ||
+        Boolean(baseBranchForWorktree) ||
+        managedWorkspace !== undefined,
       submissionIntent,
     });
     setWorktreeSetupRef(
-      multipleModelSelections === null && baseBranchForWorktree
+      multipleModelSelections === null && (baseBranchForWorktree || managedWorkspace)
         ? {
             environmentId: activeThread.environmentId,
             threadId: threadIdForSend,
@@ -9294,7 +9321,7 @@ export default function ChatView(props: ChatViewProps) {
     let turnStartSucceeded = false;
     if (failure === null && turnAttachmentsResult._tag === "Success") {
       const bootstrap =
-        isLocalDraftThread || baseBranchForWorktree
+        isLocalDraftThread || baseBranchForWorktree || managedWorkspace
           ? {
               ...(isLocalDraftThread
                 ? {
@@ -9310,16 +9337,18 @@ export default function ChatView(props: ChatViewProps) {
                     },
                   }
                 : {}),
-              ...(baseBranchForWorktree
-                ? {
-                    prepareWorktree: {
-                      projectCwd: activeProject.workspaceRoot,
-                      baseBranch: baseBranchForWorktree,
-                      ...(startFromOrigin ? { startFromOrigin: true } : {}),
-                    },
-                    runSetupScript: true,
-                  }
-                : {}),
+              ...(managedWorkspace
+                ? { prepareWorkspace: managedWorkspace, runSetupScript: true }
+                : baseBranchForWorktree
+                  ? {
+                      prepareWorktree: {
+                        projectCwd: activeProject.workspaceRoot,
+                        baseBranch: baseBranchForWorktree,
+                        ...(startFromOrigin ? { startFromOrigin: true } : {}),
+                      },
+                      runSetupScript: true,
+                    }
+                  : {}),
             }
           : undefined;
       const backgroundThreadRef =
@@ -11129,7 +11158,7 @@ export default function ChatView(props: ChatViewProps) {
                               restingControlsHost={restingComposerControlsHost}
                               restingControlsHaveLeadingContext={
                                 mountComposerContextStrip &&
-                                (isGitRepo || showComposerEnvironmentIndicator)
+                                (canChooseWorkspace || showComposerEnvironmentIndicator)
                               }
                               onRestingControlsVisibilityChange={setRestingComposerControlsVisible}
                               getTimelineScrollableNode={getTimelineScrollableNode}
@@ -11449,16 +11478,18 @@ export default function ChatView(props: ChatViewProps) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" />}>Cancel</AlertDialogClose>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;
-                setPendingRevert(null);
-                void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, true);
-              }}
-            >
-              Revert files too
-            </Button>
+            {pendingRevertRestoresFiles ? (
+              <Button
+                variant="destructive"
+                onClick={() => {
+                  if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;
+                  setPendingRevert(null);
+                  void onRevertToTurnCount(pendingRevert.turnCount, pendingRevert.messageId, true);
+                }}
+              >
+                Revert files too
+              </Button>
+            ) : null}
             <Button
               onClick={() => {
                 if (!pendingRevert || pendingRevert.routeThreadKey !== routeThreadKey) return;

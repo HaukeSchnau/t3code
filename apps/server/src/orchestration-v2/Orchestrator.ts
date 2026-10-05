@@ -8100,7 +8100,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Checkpoint ${command.checkpointId} was not found.`,
         });
       }
-      if (targetCheckpoint.status !== "ready") {
+      // Fork: a conversation-only rewind needs no files (patches/workspaces.md).
+      if (
+        targetCheckpoint.status !== "ready" &&
+        (command.restoreFiles !== false || targetCheckpoint.status === "stale")
+      ) {
         return yield* new OrchestratorDispatchError({
           commandId: command.commandId,
           commandType: command.type,

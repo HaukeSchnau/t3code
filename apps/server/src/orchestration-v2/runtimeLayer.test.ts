@@ -774,6 +774,26 @@ it.layer(TestLayer)("OrchestrationV2LayerLive", (it) => {
             [],
           );
           assert.deepEqual(yield* outbox.listByCommandId(commandId), []);
+          // Fork: rewinding only the conversation needs no restorable files (patches/workspaces.md).
+          const conversationOnly = orchestrator.dispatch({
+            type: "checkpoint.rollback",
+            commandId: CommandId.make(`runtime-rollback-${status}-conversation`),
+            threadId,
+            checkpointId,
+            scopeId: scope.id,
+            restoreFiles: false,
+          });
+          if (status === "stale") {
+            assert.instanceOf(
+              yield* conversationOnly.pipe(Effect.flip),
+              Orchestrator.OrchestratorDispatchError,
+            );
+          } else {
+            assert.deepEqual(
+              (yield* conversationOnly).storedEvents.map((stored) => stored.event.type),
+              ["thread.metadata-updated", "checkpoint.rollback-requested"],
+            );
+          }
         }
       }
     }).pipe(Effect.provide(Layer.fresh(TestLayer))),

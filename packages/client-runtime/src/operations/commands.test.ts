@@ -835,6 +835,66 @@ describe("V2 environment commands", () => {
     }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
   );
 
+  // Fork: workspaces without Git checkpoints rewind the conversation only (patches/workspaces.md).
+  it.effect("rewinds only the conversation to a checkpoint without files", () =>
+    Effect.gen(function* () {
+      const checkpointId = CheckpointId.make("conversation-checkpoint");
+      const scopeId = CheckpointScopeId.make("conversation-checkpoint-scope");
+      for (const status of ["missing", "error", "stale"] as const) {
+        const commands: OrchestrationV2Command[] = [];
+        const supervisor = yield* makeSupervisor({
+          commands,
+          projects: [],
+          projectionRequests: [],
+          advertiseServerResolvedCommandContext: false,
+          projection: {
+            ...v2Projection,
+            checkpoints: [
+              {
+                id: checkpointId,
+                threadId: v2ThreadId,
+                scopeId,
+                runId: null,
+                nodeId: NodeId.make("conversation-checkpoint-node"),
+                parentCheckpointId: null,
+                ordinalWithinScope: 0,
+                appRunOrdinal: null,
+                ref: CheckpointRef.make("refs/t3/conversation-checkpoint"),
+                status,
+                files: [],
+                capturedAt: v2Now,
+              },
+            ],
+          },
+        });
+        const rollback = revertThreadCheckpoint({
+          commandId: CommandId.make(`conversation-rollback-${status}`),
+          threadId: v2ThreadId,
+          turnCount: 0,
+          restoreFiles: false,
+        }).pipe(Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor));
+        if (status === "stale") {
+          expect((yield* rollback.pipe(Effect.flip))._tag).toBe(
+            "OrchestrationV2CheckpointUnavailableError",
+          );
+          expect(commands).toEqual([]);
+        } else {
+          yield* rollback;
+          expect(commands).toEqual([
+            {
+              type: "checkpoint.rollback",
+              restoreFiles: false,
+              commandId: `conversation-rollback-${status}`,
+              threadId: v2ThreadId,
+              scopeId,
+              checkpointId,
+            },
+          ]);
+        }
+      }
+    }).pipe(Effect.provide(TEST_CRYPTO_LAYER)),
+  );
+
   it.effect("dispatches settle and unsettle commands without timestamps", () =>
     Effect.gen(function* () {
       const dispatched: OrchestrationV2Command[] = [];

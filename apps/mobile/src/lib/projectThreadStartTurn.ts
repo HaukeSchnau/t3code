@@ -8,6 +8,7 @@ import {
   type ProjectId,
   type ProviderInteractionMode,
   type RuntimeMode,
+  type WorkspaceProfile,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -34,6 +35,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly startFromOrigin: boolean;
   /** Generated temp branch for worktree mode; unused for local mode. */
   readonly worktreeBranchName: string;
+  /** Fork: a new server-managed workspace instead of a Git worktree (patches/workspaces.md). */
+  readonly managedWorkspace?: { readonly profile?: WorkspaceProfile } | undefined;
 }
 
 /**
@@ -43,7 +46,15 @@ export interface ProjectThreadStartTurnSpec {
  */
 export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpec) {
   const title = deriveThreadTitleSeed({ text: spec.text, attachments: spec.uploadedAttachments });
-  const isWorktree = spec.workspaceMode === "worktree";
+  const managedWorkspace =
+    spec.workspaceMode === "worktree" && spec.managedWorkspace !== undefined
+      ? {
+          ...(spec.branch === null ? {} : { baseRef: spec.branch }),
+          ...(spec.startFromOrigin ? { startFromOrigin: true } : {}),
+          ...spec.managedWorkspace,
+        }
+      : undefined;
+  const isWorktree = spec.workspaceMode === "worktree" && managedWorkspace === undefined;
   return {
     commandId: CommandId.make(spec.commandId),
     creationSource: "mobile" as const,
@@ -81,6 +92,9 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
             runSetupScript: true,
           }
         : {}),
+      ...(managedWorkspace === undefined
+        ? {}
+        : { prepareWorkspace: managedWorkspace, runSetupScript: true }),
     },
     createdAt: spec.createdAt,
   };

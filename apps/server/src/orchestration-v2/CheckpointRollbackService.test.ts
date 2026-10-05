@@ -344,7 +344,9 @@ it.effect.each([
   { restoreFiles: false, shared: "worktree" },
   { restoreFiles: true, shared: "historical" },
   { restoreFiles: false, shared: "none", targetOrdinal: 1 },
-])("rewinds safely with %s", ({ restoreFiles, shared, targetOrdinal = 0 }) => {
+  // Fork: workspaces without Git checkpoints rewind the conversation only (patches/workspaces.md).
+  { restoreFiles: false, shared: "none", targetOrdinal: 1, status: "missing" },
+])("rewinds safely with %s", ({ restoreFiles, shared, targetOrdinal = 0, status = "ready" }) => {
   const threadId = ThreadId.make("rewind-files");
   const providerThreadId = ProviderThreadId.make("rewind-provider");
   const providerSessionId = ProviderSessionId.make("rewind-session");
@@ -375,9 +377,7 @@ it.effect.each([
     })),
     nodes: [],
     attempts: [1, 2, 3].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
-    checkpoints: [
-      { id: checkpointId, scopeId, status: "ready", appRunOrdinal: targetOrdinal || null },
-    ],
+    checkpoints: [{ id: checkpointId, scopeId, status, appRunOrdinal: targetOrdinal || null }],
     checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
     runs: [1, 2, 3].map((ordinal) => ({
       id: `run-${ordinal}`,

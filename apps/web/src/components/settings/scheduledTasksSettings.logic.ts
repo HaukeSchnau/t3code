@@ -91,7 +91,9 @@ export function taskToDraft(task: ScheduledTask): DraftState {
     weekdays,
     projectId: task.projectId,
     threadId: task.threadId ?? "",
-    workspaceMode: task.workspaceStrategy.type,
+    // Fork: a managed workspace edits as a new worktree; the server picks the backend.
+    workspaceMode:
+      task.workspaceStrategy.type === "workspace" ? "worktree" : task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
     startFromOrigin:
       task.workspaceStrategy.type === "worktree"
