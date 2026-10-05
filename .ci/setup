@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${CI_CACHE_ROOT:?ci-workspace-run must provide CI_CACHE_ROOT}"
+: "${CI_CACHE_ROOT:?Kiln provides CI_CACHE_ROOT}"
 
 dependency_key="$({
   printf 'node=%s\npnpm=%s\n' "$(node --version)" "$(pnpm --version)"
