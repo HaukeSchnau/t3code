@@ -128,8 +128,13 @@
                 src
                 pnpm
                 hash
-                prePnpmInstall
                 ;
+              # pnpm 11 checks registry metadata for every locked package. On a loaded
+              # builder one request can exceed the 60-second default and fail the fetch.
+              prePnpmInstall = ''
+                export pnpm_config_fetch_timeout=300000
+              ''
+              + prePnpmInstall;
               version = packageJson.version;
               fetcherVersion = 4;
               pnpmWorkspaces = workspaces;
