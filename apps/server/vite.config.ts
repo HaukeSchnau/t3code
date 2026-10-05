@@ -66,7 +66,7 @@ export default {
       typecheck: {
         command: "tsc --noEmit",
         // Compiler GC tuning affects resource usage, not the typecheck result.
-        untrackedEnv: ["GOMEMLIMIT"],
+        cache: { untrackedEnv: ["GOMEMLIMIT"] },
       },
       build: {
         command: "node scripts/cli.ts build",
