@@ -180,7 +180,7 @@ transcription or cancellation; only the message text is sent when you submit.
 ## Queued messages
 
 On web and desktop, the composer shows **Interrupt** while the agent is working and the draft is
-empty. Adding text or attachments replaces it with a steer arrow. Click it to send a message into
+empty. Codex threads show **Pause** instead; see [Codex](./providers-codex.md#pause-and-resume-a-turn). Adding text or attachments replaces it with a steer arrow. Click it to send a message into
 the active turn, or press `Enter` on desktop. Hold `Cmd` on macOS or `Ctrl` on Windows and Linux to
 switch the button to a queue icon. Click while holding that key, or press `Cmd+Enter` or
 `Ctrl+Enter` on desktop, to queue the message for after the active turn.

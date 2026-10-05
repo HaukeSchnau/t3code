@@ -89,6 +89,23 @@ In Default mode, Codex can also ask a structured question when the answer change
 the result. If every part of the question is optional, the panel shows **Skip**,
 which lets Codex continue with its own judgment. Plan mode questions stay blocking.
 
+## Pause and resume a turn
+
+While Codex works, the composer shows **Pause** where other providers show a stop
+button. Once Codex stops, an empty composer shows **Resume** on web, desktop, iOS, and
+Android. Resume picks up where Codex stopped and adds nothing to the conversation. Type a
+new instruction instead, and Resume turns back into Send.
+
+Resume also continues a turn that stopped on a usage limit or because the model was at
+capacity. At capacity, T3 Code retries by itself up to five times, waiting about 5, 10,
+20, 40, and 80 seconds. Retries continue after the environment restarts. The error banner
+on web and desktop, and a card above the composer on mobile, show the next attempt or that
+retries stopped. Select **Resume** to retry right away. Once Codex makes progress, a later
+capacity error gets five new retries. Other errors are not retried.
+
+Other providers keep the stop button. Their **Resume** on web and desktop sends a short
+message asking the agent to continue.
+
 ## Approve app access
 
 Codex tools can request access to another app. Respond to the named app's request

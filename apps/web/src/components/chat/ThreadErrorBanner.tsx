@@ -40,10 +40,13 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
   error,
   onDismiss,
   errorClass,
+  detail = null,
   chatGptUsageLimit = false,
 }: {
   error: string | null;
   errorClass?: OrchestrationV2ProviderFailureClass | null;
+  /** What happens next, shown below the provider's message. */
+  detail?: string | null;
   onDismiss?: () => void;
   chatGptUsageLimit?: boolean;
 }) {
@@ -71,6 +74,7 @@ export const ThreadErrorBanner = memo(function ThreadErrorBanner({
               </TooltipPopup>
             </Tooltip>
           )}
+          {detail ? <p className="mt-1 text-muted-foreground">{detail}</p> : null}
         </AlertDescription>
         {(chatGptUsageLimit || onDismiss) && (
           <AlertAction>

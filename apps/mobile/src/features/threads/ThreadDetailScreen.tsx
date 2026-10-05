@@ -1,4 +1,5 @@
 import { UsageLimitRecoveryCard } from "./UsageLimitRecoveryCard";
+import { CodexOverloadRetryCard } from "./CodexOverloadRetryCard";
 import { useNavigation } from "@react-navigation/native";
 import type { WorktreeSetupCardProps } from "./worktree-setup-card";
 import type { ComposerTextPaste } from "../../native/T3ComposerEditor.types";
@@ -200,6 +201,12 @@ export interface ThreadDetailScreenProps {
   readonly onNativePasteText: (paste: ComposerTextPaste) => Promise<void>;
   readonly onRemoveDraftImage: (imageId: string) => void;
   readonly onStopThread: () => void;
+  /** Codex runs pause instead of stopping and resume without a message. */
+  readonly codexContinuation: {
+    readonly canPause: boolean;
+    readonly resume: (() => void) | null;
+    readonly retryNotice: string | null;
+  };
   readonly onSendMessage: (followUp?: ActiveTurnComposerAction) => Promise<MessageId | null>;
   readonly onReconnectEnvironment: () => void;
   /** Whether the model picker may offer providers other than this thread's. */
@@ -1165,6 +1172,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                   thread={props.selectedThread}
                   environmentId={props.environmentId}
                 />
+                <CodexOverloadRetryCard notice={props.codexContinuation.retryNotice} />
                 {props.feedbackSubmissions.map((submission) => (
                   <ComposerFeedback
                     key={submission.id}
@@ -1328,6 +1336,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       onNativePasteText={props.onNativePasteText}
                       onRemoveDraftImage={props.onRemoveDraftImage}
                       onStopThread={props.onStopThread}
+                      canPauseThread={props.codexContinuation.canPause}
+                      onResumeThread={props.codexContinuation.resume}
                       onSendMessage={handleSendMessage}
                       onShowUsageLimits={showUsageLimits}
                       canSwitchProvider={props.canSwitchThreadProvider}

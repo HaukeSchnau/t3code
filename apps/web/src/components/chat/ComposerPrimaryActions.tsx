@@ -5,6 +5,7 @@ import {
   ChevronLeftIcon,
   CornerUpRightIcon,
   ListPlusIcon,
+  PauseIcon,
   PlayIcon,
 } from "lucide-react";
 import { useEnvironmentIdentificationMode } from "~/hooks/useSettings";
@@ -36,6 +37,8 @@ interface ComposerPrimaryActionsProps {
   isRunning: boolean;
   /** Stop can reach a run, including one still preparing or starting. */
   canInterrupt: boolean;
+  /** The interrupted run can continue without a message, so Stop reads as Pause. */
+  canPauseTurn?: boolean;
   followUpBehavior?: "queue" | "steer";
   alternateShortcutLabel?: string | null;
   showPlanFollowUpPrompt: boolean;
@@ -88,6 +91,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   pendingAction,
   isRunning,
   canInterrupt,
+  canPauseTurn = false,
   followUpBehavior = "steer",
   alternateShortcutLabel = null,
   showPlanFollowUpPrompt,
@@ -137,15 +141,19 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
             )}
             {...pointerFocusProps}
             onClick={onInterrupt}
-            aria-label="Stop generation"
+            aria-label={canPauseTurn ? "Pause generation" : "Stop generation"}
           />
         }
       >
-        <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-          <rect x="2" y="2" width="8" height="8" rx="1.5" />
-        </svg>
+        {canPauseTurn ? (
+          <PauseIcon className="size-3.5 fill-current" aria-hidden="true" />
+        ) : (
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+            <rect x="2" y="2" width="8" height="8" rx="1.5" />
+          </svg>
+        )}
       </TooltipTrigger>
-      <TooltipPopup>Interrupt</TooltipPopup>
+      <TooltipPopup>{canPauseTurn ? "Pause" : "Interrupt"}</TooltipPopup>
     </Tooltip>
   );
 

@@ -28,6 +28,7 @@ import {
   ProviderDriverKind,
   type ProviderSetupError,
 } from "@t3tools/contracts";
+import { isMessageFreeTurn } from "@t3tools/shared/codexTurnContinuation";
 import { SKILL_MENTION_PATTERN } from "@t3tools/shared/composerInlineTokens";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { computerUseToolTitle } from "@t3tools/shared/toolActivity";
@@ -5586,7 +5587,8 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
               const threadId = yield* getNativeThreadId(turnInput.providerThread);
 
               const codexInput =
-                turnInput.restartContinuationOfRunId === undefined
+                turnInput.restartContinuationOfRunId === undefined &&
+                !isMessageFreeTurn(turnInput.message)
                   ? yield* toCodexInput(turnInput)
                   : [];
               const mcpSession = McpProviderSession.readMcpProviderSession(turnInput.threadId);
