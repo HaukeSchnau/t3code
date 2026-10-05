@@ -111,6 +111,7 @@ import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanc
 import { T3_CODE_ORCHESTRATION_INSTRUCTIONS } from "../../provider/T3OrchestrationInstructions.ts";
 import { buildRuntimeInstructions } from "../../provider/RuntimeInstructions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as SkillPackProviderScope from "../../skills/SkillPackProviderScope.ts";
 import {
   resolveSeparateProjectProvider,
   separateProjectPolicy,
@@ -790,6 +791,8 @@ export function makeClaudeQueryOptions(input: {
   readonly supportedDialogKinds?: ClaudeQueryOptions["supportedDialogKinds"];
   readonly allowDangerouslySkipPermissions?: boolean;
   readonly spawnClaudeCodeProcess?: ClaudeQueryOptions["spawnClaudeCodeProcess"];
+  /** Fork: selected skill packs as local plugins (patches/skill-packs.md). */
+  readonly plugins?: ReadonlyArray<{ readonly type: "local"; readonly path: string }>;
 }): ClaudeAgentSdkQueryOptions {
   const compiledSelection = compileClaudeModelSelection(input.modelSelection);
   const {
@@ -872,6 +875,7 @@ export function makeClaudeQueryOptions(input: {
       : { spawnClaudeCodeProcess: input.spawnClaudeCodeProcess }),
     ...(input.environment === undefined ? {} : { env: input.environment }),
     ...(input.mcpServers === undefined ? {} : { mcpServers: input.mcpServers }),
+    ...(input.plugins === undefined ? {} : { plugins: [...input.plugins] }),
     systemPrompt: {
       type: "preset" as const,
       preset: "claude_code" as const,
@@ -6735,6 +6739,7 @@ export function makeClaudeAdapterV2(
                   : { spawnClaudeCodeProcess: separateProjectSpawn(separateProject) }),
                 tools: queryPolicy.tools ?? CLAUDE_CODE_PRESET_TOOLS,
                 ...mcpOverrides,
+                ...SkillPackProviderScope.claudeSkillPackPlugins(turnInput.threadId),
                 permissionMode: queryPolicy.permissionMode,
                 ...(queryPolicy.allowDangerouslySkipPermissions === undefined
                   ? {}

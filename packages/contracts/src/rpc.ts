@@ -64,6 +64,11 @@ import {
   AgentAwarenessSnapshot,
 } from "./agentAwareness.ts";
 import {
+  WsSkillPacksSetProjectDefaultRpc,
+  WsSkillPacksSetThreadPacksRpc,
+  WsSkillPacksSubscribeRpc,
+} from "./skillPacks.ts";
+import {
   AuthAccessStreamError,
   AuthAccessStreamEvent,
   EnvironmentAuthorizationError,
@@ -1743,6 +1748,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsAgentAwarenessUnregisterDeviceRpc,
   WsAgentAwarenessRegisterLiveActivityRpc,
   WsAgentAwarenessGetSnapshotRpc,
+  WsSkillPacksSubscribeRpc,
+  WsSkillPacksSetThreadPacksRpc,
+  WsSkillPacksSetProjectDefaultRpc,
   WsServerProbeRpc,
   WsServerGetConfigRpc,
   WsServerRefreshProvidersRpc,

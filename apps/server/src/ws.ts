@@ -95,6 +95,7 @@ import {
   type TerminalEvent,
   type TerminalMetadataStreamEvent,
   type PullRequestRef,
+  SKILL_PACK_WS_METHODS,
   WS_METHODS,
   WsRpcGroup,
 } from "@t3tools/contracts";
@@ -118,6 +119,7 @@ import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts"
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
 import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
+import * as SkillPacks from "./skills/SkillPacks.ts";
 import {
   archivedShellStreamItemFromThreadShell,
   buildActiveShellSnapshot,
@@ -1106,6 +1108,7 @@ const makeWsRpcLayer = (
       const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
       const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
+      const skillPacks = yield* SkillPacks.SkillPacks;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
       const deviceService = yield* DeviceService.DeviceService;
@@ -1645,6 +1648,7 @@ const makeWsRpcLayer = (
               otlpLogsEnabled: config.otlpLogsUrl !== undefined,
             },
             settings,
+            ...(skillPacks.catalog === null ? {} : { skillPackCatalog: skillPacks.catalog }),
             shellResumeCompletionMarker: true,
             ...(fileManagerRevealKind === undefined
               ? {}
@@ -1755,6 +1759,20 @@ const makeWsRpcLayer = (
           ),
         [WS_METHODS.agentAwarenessGetSnapshot]: () =>
           observeRpcEffect(WS_METHODS.agentAwarenessGetSnapshot, localAgentAwareness.getSnapshot),
+        [SKILL_PACK_WS_METHODS.subscribe]: (input) =>
+          observeRpcStream(SKILL_PACK_WS_METHODS.subscribe, skillPacks.subscribe(input), {
+            "rpc.aggregate": "skillPacks",
+          }),
+        [SKILL_PACK_WS_METHODS.setThreadPacks]: (input) =>
+          observeRpcEffect(SKILL_PACK_WS_METHODS.setThreadPacks, skillPacks.setThreadPacks(input), {
+            "rpc.aggregate": "skillPacks",
+          }),
+        [SKILL_PACK_WS_METHODS.setProjectDefault]: (input) =>
+          observeRpcEffect(
+            SKILL_PACK_WS_METHODS.setProjectDefault,
+            skillPacks.setProjectDefault(input),
+            { "rpc.aggregate": "skillPacks" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,

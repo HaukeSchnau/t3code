@@ -20,6 +20,7 @@ describe("V2 preview upgrade on the fork ledger", () => {
         [78, "OrchestrationV2"],
         [79, "RemoveRedundantProjectionIndexes"],
         [80, "AgentWatches"],
+        [81, "SkillPackThreadSelections"],
       ]);
       assert.deepStrictEqual(yield* reconcileV2PreviewMigration(), []);
 

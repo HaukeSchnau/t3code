@@ -51,6 +51,7 @@ import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.t
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
+import * as SkillPacks from "../skills/SkillPacks.ts";
 
 /** The shared application event log and its command receipts. */
 export const OrchestrationEventInfrastructureLayerLive = Layer.mergeAll(
@@ -139,9 +140,21 @@ const runExecutionServiceProvided = runExecutionServiceLayer.pipe(
   ),
 );
 
+// Fork: skill packs (patches/skill-packs.md).
+const skillPacksProvided = SkillPacks.layer.pipe(
+  Layer.provide(
+    Layer.mergeAll(
+      projectionStoreLayer,
+      providerAdapterRegistryProvided,
+      providerSessionManagerProvided,
+    ),
+  ),
+);
+
 const providerTurnStartServiceProvided = providerTurnStartServiceLayer.pipe(
   Layer.provide(
     Layer.mergeAll(
+      skillPacksProvided,
       contextHandoffServiceProvided,
       eventSinkProvided,
       idAllocatorLayer,
@@ -315,6 +328,7 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
   ),
   providerContinuationWorkerProvided,
   agentSessionImporterProvided,
+  skillPacksProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

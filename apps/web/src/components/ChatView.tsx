@@ -414,6 +414,7 @@ import {
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import { ComposerSkillPacksControl, draftSkillPackBootstrap } from "./chat/SkillPacksControl";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
@@ -3180,6 +3181,22 @@ export default function ChatView(props: ChatViewProps) {
   const selectedProvider = selectedProviderEntry?.driverKind ?? requestedDriverKind;
   const activeProviderInstanceId = selectedProviderEntry?.instanceId ?? null;
   const activeProviderStatus = selectedProviderEntry?.snapshot ?? null;
+  // Fork: skill packs (patches/skill-packs.md).
+  const renderSkillPacksControl = useCallback(
+    (input: { size: "sm" | "xs"; hidden: boolean }) =>
+      activeProject && activeThreadId ? (
+        <ComposerSkillPacksControl
+          environmentId={activeProject.environmentId}
+          projectId={activeProject.id}
+          threadId={activeThreadId}
+          isServerThread={isServerThread}
+          providerDriver={selectedProvider ?? null}
+          size={input.size}
+          hidden={input.hidden}
+        />
+      ) : null,
+    [activeProject, activeThreadId, isServerThread, selectedProvider],
+  );
   const { enabled: interactionModeEnabled, interactionMode } = resolveComposerInteractionMode({
     planModeEnabled: settings.planModeEnabled,
     provider: activeProviderStatus,
@@ -9032,6 +9049,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: null,
                       createdAt: messageCreatedAt,
+                      ...draftSkillPackBootstrap(activeProject.environmentId, threadIdForSend),
                     },
                     prepareWorktree: {
                       projectCwd: activeProject.workspaceRoot,
@@ -9358,6 +9376,7 @@ export default function ChatView(props: ChatViewProps) {
                       branch: activeThreadBranch,
                       worktreePath: activeThread.worktreePath,
                       createdAt: activeThread.createdAt,
+                      ...draftSkillPackBootstrap(activeProject.environmentId, threadIdForSend),
                     },
                   }
                 : {}),
@@ -11054,6 +11073,9 @@ export default function ChatView(props: ChatViewProps) {
                           ) : null}
                           {!composerMounted ? null : (
                             <ChatComposer
+                              {...(serverConfig?.skillPackCatalog && activeProject
+                                ? { renderSkillPacksControl }
+                                : {})}
                               multipleModelSelections={multipleModelSelections}
                               supportsMultipleModels={
                                 serverConfig?.environment.capabilities.requiredWorktreeBootstrap ===
