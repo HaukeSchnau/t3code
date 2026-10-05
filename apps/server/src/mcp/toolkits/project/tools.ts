@@ -118,7 +118,7 @@ const ThreadLaunchTool = Tool.make("t3_thread_launch", {
     workspaceStrategy: Schema.optional(
       OrchestrationV2ThreadLaunchWorkspaceStrategy.annotate({
         description:
-          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied.",
+          "Choose where this thread runs before starting its agent: worktree creates and binds a new checkout from baseRef; existing_worktree binds worktreePath; root uses the project checkout. Omitted means root, not the caller's worktree. For a PR stack use the parent branch as baseRef and startFromOrigin:false. Uncommitted changes are not copied. workspace creates a new workspace whose kind the server picks: a jj workspace for jj repositories, a copy for folders without Git, an isolated environment on hosts that have one (profile familiar or minimal), and a worktree for Git projects; baseRef is optional. On jj, non-Git and isolated projects a worktree request also becomes such a workspace.",
       }),
     ),
     message: Schema.optional(

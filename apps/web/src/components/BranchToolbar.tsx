@@ -41,6 +41,8 @@ import {
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { PreviousWorktreeItemContent } from "./PreviousWorktreeItemContent";
+import { ManagedWorkspaceSelector } from "./ManagedWorkspaceSelector";
+import { useManagedWorkspaces } from "../lib/managedWorkspaces";
 import { ComposerControl } from "./chat/ComposerControl";
 import {
   Menu,
@@ -545,6 +547,26 @@ export const BranchToolbar = memo(function BranchToolbar({
     : (serverThread?.worktreePath ?? draftThread?.worktreePath ?? null);
   const effectiveEnvMode = forceNewWorktree ? "worktree" : envMode;
   const envModeLocked = envLocked || (serverThread !== null && activeWorktreePath !== null);
+  // Fork: servers with managed workspaces offer them for non-Git projects too.
+  const managedWorkspaces = useManagedWorkspaces(environmentId, activeProject?.workspaceRoot);
+  const showWorkspaceControls = showGitControls || managedWorkspaces !== null;
+  const onSelectManagedWorkspace = useCallback(
+    (workspace: { readonly path: string; readonly branch: string | null } | null) => {
+      if (!activeProjectRef) return;
+      setDraftThreadContext(
+        draftId ?? threadRef,
+        workspace === null
+          ? { worktreePath: null, envMode: "local", projectRef: activeProjectRef }
+          : {
+              branch: workspace.branch,
+              worktreePath: workspace.path,
+              envMode: "worktree",
+              projectRef: activeProjectRef,
+            },
+      );
+    },
+    [activeProjectRef, draftId, setDraftThreadContext, threadRef],
+  );
 
   // "Previous worktree" hops a draft into the most recently active worktree
   // of this project — the "keep going where I just was" follow-up flow. Only
@@ -660,7 +682,7 @@ export const BranchToolbar = memo(function BranchToolbar({
         !contextStripVisible && "pointer-events-none invisible absolute inset-x-0 top-full",
       )}
     >
-      {showGitControls ? (
+      {showGitControls && managedWorkspaces === null ? (
         <div className="contents @3xl/composer-surface:hidden">
           <MobileRunContextSelector
             forceNewWorktree={forceNewWorktree}
@@ -682,11 +704,13 @@ export const BranchToolbar = memo(function BranchToolbar({
           />
         </div>
       ) : null}
-      {showGitControls || showEnvironmentIndicator ? (
+      {showWorkspaceControls || showEnvironmentIndicator ? (
         <div
           className={cn(
             "min-h-7 min-w-10 items-center gap-1 sm:min-h-6",
-            showGitControls ? "hidden @3xl/composer-surface:flex" : "flex",
+            showGitControls && managedWorkspaces === null
+              ? "hidden @3xl/composer-surface:flex"
+              : "flex",
             composerControlsHostRef ? "shrink" : "flex-1",
           )}
         >
@@ -700,7 +724,7 @@ export const BranchToolbar = memo(function BranchToolbar({
                 availableEnvironments={availableEnvironments}
                 {...(showEnvironmentPicker && onEnvironmentChange ? { onEnvironmentChange } : {})}
               />
-              {showGitControls ? (
+              {showWorkspaceControls ? (
                 <Separator
                   orientation="vertical"
                   className="mx-0.5 h-3.5!"
@@ -709,7 +733,19 @@ export const BranchToolbar = memo(function BranchToolbar({
               ) : null}
             </>
           )}
-          {showGitControls ? (
+          {managedWorkspaces !== null ? (
+            <ManagedWorkspaceSelector
+              environmentId={environmentId}
+              projectId={activeProject.id}
+              isolated={managedWorkspaces.isolated}
+              forceNewWorktree={forceNewWorktree}
+              envLocked={envModeLocked}
+              effectiveEnvMode={effectiveEnvMode}
+              activeWorktreePath={activeWorktreePath}
+              onEnvModeChange={onEnvModeChange}
+              {...(canUsePreviousWorktree ? { onSelectWorkspace: onSelectManagedWorkspace } : {})}
+            />
+          ) : showGitControls ? (
             <BranchToolbarEnvModeSelector
               forceNewWorktree={forceNewWorktree}
               envLocked={envModeLocked}

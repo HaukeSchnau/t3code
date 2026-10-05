@@ -20,6 +20,11 @@ reaches every orchestration and preview tool over the `t3-code` MCP endpoint. Fi
 by an environment path resolve through `projectHostPath` in `WorkspaceFileSystem` and
 `AssetAccess` before T3 reads them.
 
+New workspaces on a launcher host are registrations too. `workspace/IsolatedWorkspaces.ts` runs
+`agent-exec fork` and `retire --remove-checkout` from `/`, because provisioning is a host
+operation even when the source project is itself registered; see
+[workspaces](../../patches/workspaces.md).
+
 `ProviderSessionManager` admits only the Codex and Claude drivers in registered directories, since
 their execution paths are the only verified ones. `ProjectService.update` refuses to move a
 registered project's root, because the registration is keyed by that root.

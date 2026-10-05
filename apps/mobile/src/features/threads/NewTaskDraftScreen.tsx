@@ -119,6 +119,7 @@ import { useRemoteConnectionStatus } from "../../state/use-remote-environment-re
 import { useNewTaskFlow } from "./new-task-flow-provider";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 import { resolveDraftProjectSelection } from "./new-task-project-selection";
+import { managedWorkspaceDisplayLabel, managedWorkspacesFor } from "./managed-workspaces";
 import {
   resolveNewTaskBranchLabel,
   resolveNewTaskWorkspaceLabel,
@@ -208,6 +209,11 @@ export function NewTaskDraftScreen(props: {
   const { connectedEnvironments } = useRemoteConnectionStatus();
   const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
     selectedProject?.environmentId ?? null,
+  );
+  // Fork: managed workspaces need no Git and have their own picker (patches/workspaces.md).
+  const managedWorkspaces = managedWorkspacesFor(
+    selectedEnvironmentServerConfig,
+    selectedProject?.workspaceRoot,
   );
   const environmentConnected =
     selectedProject !== null &&
@@ -993,7 +999,9 @@ export function NewTaskDraftScreen(props: {
     startFromOrigin: flow.startFromOrigin,
     workspaceMode: flow.workspaceMode,
   });
-  const workspaceLabel = resolveNewTaskWorkspaceLabel({
+  const workspaceLabel = (
+    managedWorkspaces === null ? resolveNewTaskWorkspaceLabel : managedWorkspaceDisplayLabel
+  )({
     workspaceMode: flow.workspaceMode,
     worktreePath: flow.selectedWorktreePath,
   });
@@ -1205,7 +1213,7 @@ export function NewTaskDraftScreen(props: {
       !modelSelection ||
       initialMessageText.length === 0 ||
       flow.submitting ||
-      (workspaceMode === "worktree" && !selectedBranchName)
+      (workspaceMode === "worktree" && !selectedBranchName && managedWorkspaces === null)
     ) {
       return;
     }
@@ -1361,7 +1369,7 @@ export function NewTaskDraftScreen(props: {
     !flow.submitting &&
     pendingPastedTextAttachmentCount === 0 &&
     !voiceInput.blocksSubmission &&
-    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName);
+    !(flow.workspaceMode === "worktree" && !flow.selectedBranchName && managedWorkspaces === null);
   const openDraftDocument = (attachment: ComposerDocumentAttachment) => {
     // A draft attachment lives only in the draft. Without its key the screen would fall through
     // to a remote lookup for bytes the server has never seen.
@@ -1450,7 +1458,9 @@ export function NewTaskDraftScreen(props: {
     void KeyboardController.dismiss({ animated: true });
     navigation.dispatch(StackActions.push("NewTask", { incomingShareId: props.incomingShareId }));
   };
-  const openContextPicker = (routeName: "NewTaskBranch" | "NewTaskEnvironment") => {
+  const openContextPicker = (
+    routeName: "NewTaskBranch" | "NewTaskEnvironment" | "NewTaskWorkspace",
+  ) => {
     if (isComposerInteractionLocked) {
       return;
     }
@@ -1564,7 +1574,11 @@ export function NewTaskDraftScreen(props: {
         )}
         label={workspaceLabel}
         maxWidth={flow.workspaceMode === "local" ? 220 : 148}
-        onPress={() => flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local")}
+        onPress={() =>
+          managedWorkspaces !== null
+            ? openContextPicker("NewTaskWorkspace")
+            : flow.setWorkspaceMode(flow.workspaceMode === "local" ? "worktree" : "local")
+        }
         showChevron={false}
       />
 

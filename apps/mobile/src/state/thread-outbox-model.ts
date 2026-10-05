@@ -20,6 +20,8 @@ import {
   type ProviderInteractionMode as ProviderInteractionModeType,
   type RuntimeMode as RuntimeModeType,
   type ServerProvider,
+  WorkspaceProfile,
+  type WorkspaceProfile as WorkspaceProfileType,
 } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 
@@ -43,6 +45,8 @@ const QueuedThreadCreationSchema = Schema.Struct({
   branch: Schema.NullOr(Schema.String),
   worktreePath: Schema.NullOr(Schema.String),
   startFromOrigin: Schema.optional(Schema.Boolean),
+  // Fork: a new server-managed workspace (patches/workspaces.md).
+  managedWorkspace: Schema.optional(Schema.Struct({ profile: Schema.optional(WorkspaceProfile) })),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -75,6 +79,7 @@ export interface QueuedThreadCreation {
   readonly branch: string | null;
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
+  readonly managedWorkspace?: { readonly profile?: WorkspaceProfileType };
 }
 
 export interface QueuedThreadMessage {
@@ -250,7 +255,11 @@ export function isQueuedThreadCreationSendable(message: QueuedThreadMessage): bo
   if (message.text.trim().length === 0 || message.modelSelection === undefined) {
     return false;
   }
-  return message.creation.workspaceMode !== "worktree" || Boolean(message.creation.branch);
+  return (
+    message.creation.workspaceMode !== "worktree" ||
+    Boolean(message.creation.branch) ||
+    message.creation.managedWorkspace !== undefined
+  );
 }
 
 function errorMessage(error: unknown): string | null {

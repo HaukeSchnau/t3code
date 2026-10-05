@@ -165,7 +165,9 @@ export function editDraft(task: ScheduledTask): ScheduledTaskDraft {
     modelSelection: task.modelSelection,
     modelSelectionIsExplicit: true,
     schedule: scheduleDraftForTask(task),
-    workspace: task.workspaceStrategy.type,
+    // Fork: a managed workspace edits as a new worktree; the server picks the backend.
+    workspace:
+      task.workspaceStrategy.type === "workspace" ? "worktree" : task.workspaceStrategy.type,
     baseRef: task.workspaceStrategy.type === "worktree" ? task.workspaceStrategy.baseRef : "main",
     checkoutPath:
       task.workspaceStrategy.type === "existing_worktree"

@@ -110,6 +110,7 @@ import {
   resolveNewTaskLocalWorkspaceSelection,
 } from "./new-task-context-presentation";
 import { resolveEnvironmentProjectMatch } from "./new-task-project-selection";
+import { managedWorkspaceCreation } from "./managed-workspaces";
 import { resolveProjectThreadCreationBranch } from "./projectThreadCreationValidation";
 
 type WorkspaceMode = "local" | "worktree";
@@ -1079,6 +1080,13 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
           // drain with the same origin mode the composer displayed.
           ...((workspaceSelection?.startFromOrigin ?? startFromOrigin)
             ? { startFromOrigin: true }
+            : {}),
+          // Fork: servers with managed workspaces pick the backend (patches/workspaces.md).
+          ...(mode === "worktree"
+            ? managedWorkspaceCreation(
+                selectedEnvironmentServerConfig,
+                selectedProject.workspaceRoot,
+              )
             : {}),
         },
         createdAt: metadata.createdAt,

@@ -17,6 +17,7 @@ For independent implementation or a PR stack in its own worktree, use \`t3_threa
 - New worktree: \`{"title":"UI cleanup","workspaceStrategy":{"type":"worktree","baseRef":"feature/base","branch":"feature/ui-cleanup","startFromOrigin":false},"message":"Implement the cleanup and open a PR against feature/base."}\`
 - Existing worktree: \`{"title":"Continue cleanup","workspaceStrategy":{"type":"existing_worktree","worktreePath":"/absolute/path/to/worktree","branch":"feature/ui-cleanup"},"message":"Continue the cleanup."}\`
 - Project's main checkout: \`workspaceStrategy:{"type":"root"}\`. Omitting workspaceStrategy also selects root; it does not inherit the caller's worktree.
+- New workspace of the server's choice: \`{"type":"workspace"}\`, optionally with \`baseRef\`, \`startFromOrigin\` and \`profile\` (\`familiar\` or \`minimal\`). Use it for jj repositories, folders without Git, and hosts with isolated environments; a worktree request there creates the same kind of workspace.
 
 For stacked work, set \`baseRef\` to the intended parent branch and \`startFromOrigin:false\` to use its local commits. Use \`startFromOrigin:true\` when you intend to fetch and start from origin. Uncommitted edits are not copied. Use \`t3_worktree_list\` to discover existing checkout paths. Project, model selection, and modes inherit unless supplied; launch requires a full-access/default caller.
 

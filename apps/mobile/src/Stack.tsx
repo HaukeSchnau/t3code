@@ -70,6 +70,7 @@ import {
 } from "./features/threads/ThreadSettingsSheet";
 import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import { NewTaskRouteScreen } from "./features/threads/NewTaskRouteScreen";
+import { NewTaskWorkspacePickerRouteScreen } from "./features/threads/NewTaskWorkspacePickerRouteScreen";
 import { SettingsAppearanceRouteScreen } from "./features/settings/SettingsAppearanceRouteScreen";
 import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsClientStorageRouteScreen";
 import { SettingsDiagnosticsRouteScreen } from "./features/diagnostics/SettingsDiagnosticsRouteScreen";
@@ -475,6 +476,14 @@ const NewTaskSheetStack = createNativeStackNavigator({
       linking: "draft/branch",
       options: {
         title: "Branch",
+      },
+    }),
+    // Fork: managed workspaces (patches/workspaces.md).
+    NewTaskWorkspace: createNativeStackScreen({
+      screen: NewTaskWorkspacePickerRouteScreen,
+      linking: "draft/workspace",
+      options: {
+        title: "Workspace",
       },
     }),
     // The same file view the thread composer pushes. A draft has no thread, so it names its

@@ -27,6 +27,7 @@ import {
   ChatImageAttachment,
   CommandId,
   EnvironmentId,
+  ManagedWorkspaceLaunchStrategy,
   MessageId,
   ModelSelection,
   OrchestrationMessageContext,
@@ -38,6 +39,7 @@ import {
 } from "@t3tools/contracts";
 import { serializeLegacyContextMessage } from "@t3tools/shared/composerContextLegacySend";
 import * as Option from "effect/Option";
+import * as Struct from "effect/Struct";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { useEffect, useMemo, useSyncExternalStore } from "react";
@@ -90,6 +92,9 @@ const DurableThreadBootstrap = Schema.Struct({
       branch: Schema.optionalKey(Schema.String),
       startFromOrigin: Schema.optionalKey(Schema.Boolean),
     }),
+  ),
+  prepareWorkspace: Schema.optionalKey(
+    ManagedWorkspaceLaunchStrategy.mapFields((fields) => Struct.omit(fields, ["type"])),
   ),
   runSetupScript: Schema.optionalKey(Schema.Boolean),
 });
@@ -442,13 +447,21 @@ export interface DurableComposerSend {
     readonly baseBranch: string;
     readonly startFromOrigin: boolean;
   } | null;
+  /** Set instead of `prepareWorktree` when the server creates a managed workspace. */
+  readonly prepareWorkspace: Omit<ManagedWorkspaceLaunchStrategy, "type"> | null;
 }
 
 function threadBootstrap(
   send: DurableComposerSend,
   title: string,
 ): StartThreadTurnInput["bootstrap"] {
-  if (send.createThread === null && send.prepareWorktree === null) return undefined;
+  if (
+    send.createThread === null &&
+    send.prepareWorktree === null &&
+    send.prepareWorkspace === null
+  ) {
+    return undefined;
+  }
   return {
     ...(send.createThread === null
       ? {}
@@ -461,16 +474,18 @@ function threadBootstrap(
             interactionMode: send.interactionMode,
           },
         }),
-    ...(send.prepareWorktree === null
-      ? {}
-      : {
-          prepareWorktree: {
-            projectCwd: send.prepareWorktree.projectCwd,
-            baseBranch: send.prepareWorktree.baseBranch,
-            ...(send.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
-          },
-          runSetupScript: true,
-        }),
+    ...(send.prepareWorkspace !== null
+      ? { prepareWorkspace: send.prepareWorkspace, runSetupScript: true }
+      : send.prepareWorktree === null
+        ? {}
+        : {
+            prepareWorktree: {
+              projectCwd: send.prepareWorktree.projectCwd,
+              baseBranch: send.prepareWorktree.baseBranch,
+              ...(send.prepareWorktree.startFromOrigin ? { startFromOrigin: true } : {}),
+            },
+            runSetupScript: true,
+          }),
   };
 }
 

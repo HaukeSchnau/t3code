@@ -23,6 +23,8 @@ import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as VcsStatusBroadcaster from "../vcs/VcsStatusBroadcaster.ts";
+import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
+import { managedWorkspaceHandoff } from "./ManagedWorkspaceHandoff.ts";
 import type { McpInvocationScope } from "./McpInvocationContext.ts";
 
 export class WorktreeMcpService extends Context.Service<
@@ -64,6 +66,7 @@ const make = Effect.gen(function* () {
   const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
   const setupScriptRunner = yield* ProjectSetupScriptRunner.ProjectSetupScriptRunner;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster.VcsStatusBroadcaster;
+  const managedWorkspaces = yield* ManagedWorkspaces.ManagedWorkspaces;
 
   // Serializes handoffs per thread: two concurrent calls could otherwise both
   // pass the worktreePath === null check and each create a worktree, leaving
@@ -154,6 +157,24 @@ const make = Effect.gen(function* () {
 
     const project = yield* loadProject(scope, projection.thread.projectId);
     const projectCwd = project.workspaceRoot;
+
+    // Fork: jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+    if ((yield* managedWorkspaces.backendFor(projectCwd)) !== "git") {
+      return yield* managedWorkspaceHandoff(
+        {
+          scope,
+          handoff: input,
+          project,
+          startFromOrigin: input.startFromOrigin ?? (yield* readDefaultStartFromOrigin),
+          ids: yield* handoffIds(scope),
+        },
+        {
+          workspaces: managedWorkspaces,
+          threads: threadManagement,
+          setupScripts: setupScriptRunner,
+        },
+      );
+    }
 
     if (input.path !== undefined && !path.isAbsolute(input.path)) {
       return yield* failure(
@@ -489,4 +510,5 @@ export const layer: Layer.Layer<
   | GitWorkflowService.GitWorkflowService
   | ProjectSetupScriptRunner.ProjectSetupScriptRunner
   | VcsStatusBroadcaster.VcsStatusBroadcaster
+  | ManagedWorkspaces.ManagedWorkspaces
 > = Layer.effect(WorktreeMcpService, make);

@@ -13,6 +13,21 @@ an existing worktree, use **New thread in this worktree** from the branch toolba
 When you change a new thread's project, T3 Code stays in the current environment
 if that project exists there. Otherwise it selects an environment that has it.
 
+### Choose a workspace
+
+The workspace control below the composer (`mod+shift+x`) decides where a new thread works.
+**Project checkout** uses the project folder. **New workspace** gives the task a folder of its
+own: a worktree for Git projects, a jj workspace for jj repositories, and a copy for folders
+without version control. A copy over 5 GiB needs a file system that clones files (APFS or Btrfs).
+On mobile, tap the workspace control to choose.
+
+To continue where other threads already work, pick their workspace from the list. Settled and
+archived threads keep their workspaces; search or **Show settled** finds them. Settling never
+deletes files. When you delete a workspace's last thread, T3 Code asks whether to delete the
+workspace too, and refuses while an active or running thread still uses it. Hosts with separate
+environments create each new workspace as one; see
+[Separate project environments](./separate-projects.md).
+
 ### Start without a project
 
 A thread does not need a project. To start one without a project, click **or

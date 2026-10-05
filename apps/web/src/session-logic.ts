@@ -984,7 +984,11 @@ export function deriveRevertTurnCountByUserMessageId(input: {
 }): Map<ChatMessage["id"], number> {
   const readyCheckpointByRunId = new Map<RunId, ThreadCheckpointSummary>();
   for (const checkpoint of input.checkpoints) {
-    if (checkpoint.status === "ready") {
+    // Fork: without restorable files the edit still rewinds the conversation (patches/workspaces.md).
+    if (
+      checkpoint.status === "ready" ||
+      (checkpoint.status !== "stale" && !readyCheckpointByRunId.has(checkpoint.runId))
+    ) {
       readyCheckpointByRunId.set(checkpoint.runId, checkpoint);
     }
   }

@@ -25,6 +25,7 @@ import {
   type ThreadId,
   type ThreadEnvMode,
   type UploadChatAttachment,
+  type ManagedWorkspaceLaunchStrategy,
 } from "@t3tools/contracts";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { derivePendingBackgroundWork } from "@t3tools/shared/orchestrationV2PendingBackgroundWork";
@@ -159,6 +160,8 @@ interface StartThreadBootstrap {
     readonly branch?: string;
     readonly startFromOrigin?: boolean;
   };
+  /** Fork: a new server-managed workspace (patches/workspaces.md). */
+  readonly prepareWorkspace?: Omit<ManagedWorkspaceLaunchStrategy, "type">;
   readonly runSetupScript?: boolean;
 }
 
@@ -634,7 +637,8 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
   );
   const bootstrap = input.bootstrap?.createThread;
   const prepareWorktree = input.bootstrap?.prepareWorktree;
-  if (bootstrap !== undefined || prepareWorktree !== undefined) {
+  const prepareWorkspace = input.bootstrap?.prepareWorkspace;
+  if (bootstrap !== undefined || prepareWorktree !== undefined || prepareWorkspace !== undefined) {
     const existingProjection =
       bootstrap === undefined ? yield* getProjection(input.threadId) : null;
     const thread = bootstrap ?? existingProjection!.thread;
@@ -671,7 +675,10 @@ export const startThreadTurn = Effect.fn("EnvironmentCommands.startThreadTurn")(
       modelSelection: input.modelSelection ?? thread.modelSelection,
       runtimeMode: input.runtimeMode,
       interactionMode: input.interactionMode,
-      workspaceStrategy,
+      workspaceStrategy:
+        prepareWorkspace === undefined
+          ? workspaceStrategy
+          : { type: "workspace" as const, ...prepareWorkspace },
       initialMessage: {
         messageId: input.message.messageId,
         text: input.message.text,
@@ -869,7 +876,12 @@ export const revertThreadCheckpoint = Effect.fn("EnvironmentCommands.revertThrea
           ? candidate.ordinalWithinScope === 0 && candidate.appRunOrdinal === null
           : candidate.appRunOrdinal === input.turnCount,
       );
-    if (checkpoint === undefined || checkpoint.status !== "ready") {
+    // Fork: rewinding only the conversation needs no restorable files (patches/workspaces.md).
+    if (
+      checkpoint === undefined ||
+      (checkpoint.status !== "ready" &&
+        (input.restoreFiles !== false || checkpoint.status === "stale"))
+    ) {
       const target =
         input.checkpointId === undefined
           ? `run ordinal ${input.turnCount ?? "unknown"}`

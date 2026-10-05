@@ -31,12 +31,15 @@ continuing those threads must keep working. Upstream has no project execution ba
 
 This reduces accidental context discovery. It is not a security boundary.
 
+New isolated workspaces return through [Workspaces](workspaces.md). On a host with the
+launcher, every new workspace is an `agent-exec fork` registered here, so the routing above runs
+its providers, terminals and setup scripts inside it.
+
 ## Not carried after the v2 merge
 
 Creating a separate project from T3 (`project.create.separateEnvironment`, `t3 project add
---separate`, `separateProjectsSupported`) and creating isolated workspaces went away with the
-workspaces feature. The pre-merge requirements are in `git show 49e8d42dbde4:patches/workspaces.md`
-and `git show 49e8d42dbde4:patches/separate-project-environments.md`. Claude's native fork and
+--separate`, `separateProjectsSupported`) went away. The pre-merge requirements are in
+`git show 49e8d42dbde4:patches/separate-project-environments.md`. Claude's native fork and
 subagent helpers still pass the host cwd, and native forks with private provider homes remain
 unverified.
 

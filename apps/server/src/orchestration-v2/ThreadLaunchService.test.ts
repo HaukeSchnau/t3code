@@ -44,6 +44,7 @@ import * as ProjectStore from "./ProjectStore.ts";
 import * as ProjectService from "../project/ProjectService.ts";
 import * as ProjectSetupScriptRunner from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
+import * as ManagedWorkspaces from "../workspace/ManagedWorkspaces.ts";
 import { makeProviderRegistryLayer } from "../provider/testUtils/providerRegistryMock.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as ScheduledTasks from "../scheduledTasks/ScheduledTaskService.ts";
@@ -104,6 +105,7 @@ interface HarnessOptions {
   readonly generateBranchName?: TextGeneration.TextGeneration["Service"]["generateBranchName"];
   readonly serverSettings?: Parameters<typeof ServerSettings.layerTest>[0];
   readonly providers?: ReadonlyArray<ServerProvider>;
+  readonly managedWorkspaces?: Partial<ManagedWorkspaces.ManagedWorkspaces["Service"]>;
 }
 
 function makeHarness(options: HarnessOptions = {}) {
@@ -177,6 +179,10 @@ function makeHarness(options: HarnessOptions = {}) {
     }),
     ServerSettings.layerTest(options.serverSettings),
     makeProviderRegistryLayer(options.providers),
+    Layer.mock(ManagedWorkspaces.ManagedWorkspaces)({
+      resolveLaunchStrategy: (input) => Effect.succeed(input.strategy),
+      ...options.managedWorkspaces,
+    }),
     options.managedFolders ??
       Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({
         namedProjectsRoot: "/projects",
@@ -1100,6 +1106,54 @@ it.effect("names the worktree itself when the client provides no branch", () =>
           .getThreadProjection(launched.threadId)
           .pipe(Effect.map((projection) => projection.thread.branch === "generated-branch")),
       );
+    }).pipe(Effect.provide(harness.layer));
+  }),
+);
+
+// Fork: jj, directory and isolated projects get managed workspaces (patches/workspaces.md).
+it.effect("binds a managed workspace instead of creating a Git worktree", () =>
+  Effect.gen(function* () {
+    const create = vi.fn((_input: ManagedWorkspaces.CreateManagedWorkspaceInput) =>
+      Effect.succeed({
+        worktreePath: "/workspaces/repo/build-the-feature",
+        backend: "jj" as const,
+      }),
+    );
+    const harness = makeHarness({
+      managedWorkspaces: {
+        resolveLaunchStrategy: () => Effect.succeed({ type: "workspace", baseRef: "main" }),
+        create,
+      },
+    });
+    yield* Effect.gen(function* () {
+      const launches = yield* ThreadLaunch.ThreadLaunchService;
+      const threads = yield* ThreadManagement.ThreadManagementService;
+      const launched = yield* launches.launch(
+        launchInput({
+          command: "command:launch:managed-workspace",
+          thread: "thread:launch:managed-workspace",
+          message: "Build the feature",
+          workspace: { type: "worktree", baseRef: "main" },
+        }),
+      );
+      yield* waitUntil(() =>
+        threads
+          .getThreadProjection(launched.threadId)
+          .pipe(
+            Effect.map(
+              (projection) =>
+                projection.thread.worktreePath === "/workspaces/repo/build-the-feature",
+            ),
+          ),
+      );
+      assert.equal(harness.createWorktree.mock.calls.length, 0);
+      assert.deepInclude(create.mock.calls[0]?.[0], {
+        projectRoot: "/repo",
+        baseRef: "main",
+        message: { text: "Build the feature", attachments: [] },
+      });
+      const projection = yield* threads.getThreadProjection(launched.threadId);
+      assert.isNull(projection.thread.branch);
     }).pipe(Effect.provide(harness.layer));
   }),
 );
