@@ -289,6 +289,9 @@ export const OrchestratorMcpThreadListInput = Schema.Struct({
   includeSubagents: Schema.optional(Schema.Boolean),
   cursor: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
+  projectId: Schema.optional(ProjectId).annotate({
+    description: "Project to list, from t3_project_list. Defaults to the calling thread's project.",
+  }),
 });
 export type OrchestratorMcpThreadListInput = typeof OrchestratorMcpThreadListInput.Type;
 
