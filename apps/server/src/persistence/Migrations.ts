@@ -94,6 +94,7 @@ import Migration0077 from "./Migrations/054_ProjectionThreadsAutoSettleDisabledA
 import Migration0078 from "./Migrations/055_OrchestrationV2.ts";
 import Migration0079 from "./Migrations/056_RemoveRedundantProjectionIndexes.ts";
 import Migration0080 from "./Migrations/080_AgentWatches.ts";
+import Migration0081 from "./Migrations/081_SkillPackThreadSelections.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -189,6 +190,7 @@ export const migrationEntries = [
   [78, "OrchestrationV2", Migration0078],
   [79, "RemoveRedundantProjectionIndexes", Migration0079],
   [80, "AgentWatches", Migration0080],
+  [81, "SkillPackThreadSelections", Migration0081],
 ] as const;
 
 export const ORCHESTRATION_V2_MIGRATION_ID = 78;

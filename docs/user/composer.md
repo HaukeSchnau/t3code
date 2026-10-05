@@ -220,6 +220,35 @@ Provider commands must start the message to run. T3 Code commands such as
 Send `/compact` in an existing conversation to reduce context usage when the
 provider supports it. Web and desktop also offer compaction from the context meter.
 
+## Skill packs
+
+When your environment offers skill packs, the composer shows a **Skills** control after the model
+picker. A pack bundles related skills and adds them to the agent for the whole thread. Core skills
+are always on, so a thread without packs still has them, along with the skills your provider and
+project already provide.
+
+With no packs selected the control shows only an icon; hover it to see **Skills: core**. Otherwise
+it shows the profile or pack name, or a pack count. A dot marks a thread whose packs differ from its
+project default, a dashed ring means the packs apply on the next turn, and a warning mark means some
+skills could not be loaded.
+
+The panel lists profiles first. A profile selects a set of packs, and the checklist below it is what
+applies, so you can adjust packs after picking a profile. **Details** lists every skill the
+selection resolves to and notes skills a pack repeats from core or another pack. **Reset to project
+default** returns the thread to its project's packs, and **Make project default** saves the current
+selection for new threads in that project. A new thread starts with its project's packs, and a fork
+starts with the packs of the thread it came from.
+
+Changing a thread's packs restarts its agent session when the next turn starts. The conversation
+continues, but commands the agent left running in the background stop.
+
+On mobile, open the thread settings sheet and choose **Skills**. **New task** offers the same
+choice before you start.
+
+Picking a skill with `$` runs it once in that message and does not change the thread's packs. Codex,
+Claude, and OpenCode servers that T3 Code starts itself load packs. Other providers, external
+OpenCode servers, and OpenCode 2 show a note in **Details** instead; their own skills still work.
+
 ## Context in your message
 
 Context you attach lands where your cursor is, as a chip inside your text: a terminal excerpt,

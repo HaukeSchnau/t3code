@@ -14,6 +14,7 @@ import {
   ProjectId,
   ProviderInteractionMode,
   RuntimeMode,
+  SkillPackId,
   ThreadId,
   type ModelSelection as ModelSelectionType,
   type ProjectId as ProjectIdType,
@@ -47,6 +48,8 @@ const QueuedThreadCreationSchema = Schema.Struct({
   startFromOrigin: Schema.optional(Schema.Boolean),
   // Fork: a new server-managed workspace (patches/workspaces.md).
   managedWorkspace: Schema.optional(Schema.Struct({ profile: Schema.optional(WorkspaceProfile) })),
+  // Fork: patches/skill-packs.md. Absent follows the project default.
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
 });
 
 export const QueuedThreadMessageSchema = Schema.Struct({
@@ -80,6 +83,7 @@ export interface QueuedThreadCreation {
   readonly worktreePath: string | null;
   readonly startFromOrigin?: boolean;
   readonly managedWorkspace?: { readonly profile?: WorkspaceProfileType };
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
 }
 
 export interface QueuedThreadMessage {

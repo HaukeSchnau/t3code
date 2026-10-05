@@ -1500,6 +1500,8 @@ export interface ChatComposerHandle {
 // --------------------------------------------------------------------------
 
 export interface ChatComposerProps {
+  /** Fork: the Skills control, first among the resting blocks (patches/skill-packs.md). */
+  renderSkillPacksControl?: (input: { size: "sm" | "xs"; hidden: boolean }) => React.ReactNode;
   composerDraftTarget: ScopedThreadRef | DraftId;
   environmentId: EnvironmentId;
   attachmentUploadsCapabilityKnown: boolean;
@@ -5311,7 +5313,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     size: composerControlsCollapsed ? "xs" : "sm",
     hidden: composerControlsHidden || restingHiddenBlockCount > 1,
   });
+  const skillPacksControl = props.renderSkillPacksControl?.({
+    size: composerControlsCollapsed ? "xs" : "sm",
+    hidden: composerControlsHidden || restingHiddenBlockCount > (providerTraitsPicker ? 2 : 1),
+  });
   const restingBlockDefs = [
+    ...(skillPacksControl
+      ? [
+          {
+            id: "skills",
+            content: (
+              <>
+                <ComposerControlSeparator size={composerControlsCollapsed ? "xs" : "sm"} />
+                {skillPacksControl}
+              </>
+            ),
+          },
+        ]
+      : []),
     ...(providerTraitsPicker
       ? [
           {

@@ -499,6 +499,9 @@ export async function restoreRejectedQueuedMessage(
       ...(queuedMessage.modelSelection ? { modelSelection: queuedMessage.modelSelection } : {}),
       ...(queuedMessage.runtimeMode ? { runtimeMode: queuedMessage.runtimeMode } : {}),
       ...(queuedMessage.interactionMode ? { interactionMode: queuedMessage.interactionMode } : {}),
+      ...(queuedMessage.creation?.skillPackIds
+        ? { skillPackIds: queuedMessage.creation.skillPackIds }
+        : {}),
       ...(queuedMessage.creation
         ? {
             workspaceSelection: {
@@ -1029,6 +1032,7 @@ export function useThreadOutboxDrain(): void {
           branch: creation.branch,
           worktreePath: creation.worktreePath,
           startFromOrigin: creation.startFromOrigin ?? false,
+          ...(creation.skillPackIds ? { skillPackIds: creation.skillPackIds } : {}),
           worktreeBranchName: buildTemporaryWorktreeBranchName(randomHex),
           managedWorkspace: creation.managedWorkspace,
         }),

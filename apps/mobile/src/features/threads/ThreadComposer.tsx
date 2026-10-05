@@ -118,6 +118,7 @@ import {
   type ExistingThreadSettingsRouteSession,
   useExistingThreadSettingsRoutePresentation,
 } from "./ThreadSettingsSheet";
+import { useThreadSkillPacksSession } from "./SkillPacksSheetContent";
 import {
   useThreadSettingsSheetPresentation,
   type NavigationWithFinishTransitioning,
@@ -667,6 +668,12 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     [currentModelOption?.capabilities, currentModelSelection.options],
   );
   const settingsOwnerId = composerOwnerKey;
+  const skillPacks = useThreadSkillPacksSession({
+    environmentId: props.environmentId,
+    projectId: props.selectedThread.projectId,
+    threadId: props.selectedThread.id,
+    providerDriver: selectedProviderStatus?.driver ?? null,
+  });
   const settingsRouteSession = useMemo<ExistingThreadSettingsRouteSession>(
     () => ({
       ownerId: settingsOwnerId,
@@ -687,8 +694,10 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
       },
       runtimeMode: currentRuntimeMode,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+      ...(skillPacks ? { skillPacks } : {}),
     }),
     [
+      skillPacks,
       currentModelSelection,
       currentRuntimeMode,
       props.onUpdateModelSelection,

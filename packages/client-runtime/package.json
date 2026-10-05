@@ -103,6 +103,10 @@
       "types": "./src/providerSkills.ts",
       "default": "./src/providerSkills.ts"
     },
+    "./skillPacks": {
+      "types": "./src/skillPacks.ts",
+      "default": "./src/skillPacks.ts"
+    },
     "./voice-input": {
       "types": "./src/voice-input/index.ts",
       "default": "./src/voice-input/index.ts"
@@ -306,6 +310,10 @@
     "./state/turn-item-presentation": {
       "types": "./src/state/turnItemPresentation.ts",
       "default": "./src/state/turnItemPresentation.ts"
+    },
+    "./state/skill-packs": {
+      "types": "./src/state/skillPacks.ts",
+      "default": "./src/state/skillPacks.ts"
     },
     "./state/vcs": {
       "types": "./src/state/vcs.ts",

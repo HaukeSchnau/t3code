@@ -78,6 +78,8 @@ import {
   NATIVE_MAIL_SEARCH_TOOLBAR_SUPPORTED,
 } from "../layout/native-mail-search-toolbar";
 import { ModelRow, ChoiceRow } from "./ThreadSettingsRows";
+import { skillPacksRowValue, type SkillPacksSheetSession } from "./skill-packs-session";
+import { SkillPacksChoiceContent, useNewTaskSkillPacksSession } from "./SkillPacksSheetContent";
 import {
   compatibleRuntimeModeForChoices,
   runtimeModeChoicesForSupportedModes,
@@ -238,7 +240,8 @@ function SwitchRow(props: {
 
 type ThreadSettingsSubmenuPage =
   | { readonly kind: "descriptor"; readonly id: string }
-  | { readonly kind: "runtime" };
+  | { readonly kind: "runtime" }
+  | { readonly kind: "skills" };
 
 type ThreadSettingsSessionProps = {
   readonly environmentId: EnvironmentId | null;
@@ -250,6 +253,8 @@ type ThreadSettingsSessionProps = {
   readonly onUpdateOptionSelections: (selections: ReadonlyArray<ProviderOptionSelection>) => void;
   readonly runtimeMode: RuntimeMode;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  /** Fork: present when the environment publishes skill packs (patches/skill-packs.md). */
+  readonly skillPacks?: SkillPacksSheetSession;
 };
 
 export type ExistingThreadSettingsRouteSession = ThreadSettingsSessionProps & {
@@ -303,6 +308,7 @@ type ThreadSettingsSessionValue = {
   readonly runtimeMode: RuntimeMode;
   readonly runtimeModeChoices: ReturnType<typeof runtimeModeChoicesForSupportedModes>;
   readonly onUpdateRuntimeMode: (mode: RuntimeMode) => void;
+  readonly skillPacks: SkillPacksSheetSession | null;
   readonly displayedDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
   readonly providerExpansionOverrides: ReadonlySet<string>;
   readonly hasLegacyModels: boolean;
@@ -475,6 +481,7 @@ function ThreadSettingsSessionProvider(
       runtimeMode: compatibleRuntimeMode,
       runtimeModeChoices,
       onUpdateRuntimeMode: props.onUpdateRuntimeMode,
+      skillPacks: props.skillPacks ?? null,
       displayedDescriptors,
       favoriteKeys,
       favoritesLoaded,
@@ -513,6 +520,7 @@ function ThreadSettingsSessionProvider(
       providerFilter,
       props.onUpdateRuntimeMode,
       props.providerGroups,
+      props.skillPacks,
       runtimeModeChoices,
       searchQuery,
       showLegacyToggle,
@@ -764,6 +772,15 @@ function ThreadSettingsOptionsItem(props: {
             </Animated.View>
           );
         })}
+        {session.skillPacks ? (
+          <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
+            <DisclosureRow
+              label="Skills"
+              value={skillPacksRowValue(session.skillPacks)}
+              onPress={() => props.onOpenSubmenu({ kind: "skills" })}
+            />
+          </Animated.View>
+        ) : null}
         <Animated.View layout={THREAD_SETTINGS_OPTIONS_LAYOUT_TRANSITION}>
           <DisclosureRow
             isLast
@@ -968,6 +985,13 @@ function ThreadSettingsChoiceContent(props: {
   const insets = useSafeAreaInsets();
   const session = useThreadSettingsSession();
   const descriptorId = props.submenu.kind === "descriptor" ? props.submenu.id : null;
+  if (props.submenu.kind === "skills") {
+    return session.skillPacks ? (
+      <SkillPacksChoiceContent session={session.skillPacks} onSelected={props.onSelected} />
+    ) : (
+      <View className="flex-1 bg-sheet" />
+    );
+  }
 
   const activeDescriptor =
     descriptorId !== null
@@ -1215,9 +1239,11 @@ function ThreadSettingsModelsScreen() {
             const title =
               submenu.kind === "runtime"
                 ? "Runtime"
-                : (session.displayedDescriptors.find(
-                    (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
-                  )?.label ?? "Option");
+                : submenu.kind === "skills"
+                  ? "Skills"
+                  : (session.displayedDescriptors.find(
+                      (descriptor) => descriptor.type === "select" && descriptor.id === submenu.id,
+                    )?.label ?? "Option");
             navigation.navigate("ThreadSettingsChoice", { ...submenu, title });
           }}
         />
@@ -1402,6 +1428,13 @@ export function ExistingThreadSettingsRouteScreen() {
 export function NewTaskThreadSettingsRouteScreen() {
   const flow = useNewTaskFlow();
   const navigation = useNavigation<NativeStackNavigationProp<Record<string, object | undefined>>>();
+  const skillPacks = useNewTaskSkillPacksSession({
+    environmentId: flow.selectedEnvironmentId,
+    projectId: flow.selectedProject?.id ?? null,
+    draftPackIds: flow.skillPackIds,
+    setDraftPackIds: flow.setSkillPackIds,
+    providerDriver: flow.selectedModelOption?.providerDriver ?? null,
+  });
   const optionDescriptors = useMemo(
     () =>
       resolveProviderOptionDescriptors({
@@ -1422,6 +1455,7 @@ export function NewTaskThreadSettingsRouteScreen() {
       onUpdateOptionSelections={flow.setSelectedModelOptions}
       runtimeMode={flow.runtimeMode}
       onUpdateRuntimeMode={flow.setRuntimeMode}
+      {...(skillPacks ? { skillPacks } : {})}
       onClose={() => navigation.goBack()}
     />
   );

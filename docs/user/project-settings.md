@@ -87,6 +87,13 @@ itself, or **Skip** to leave them for a setup script. It resolves in the same or
 workspace default: a `"worktreeSubmodules"` value in the `t3.json` of the branch being checked out
 applies when the project and environment are both on **Inherit**.
 
+## Default skills for new threads
+
+When your environment offers skill packs, the **Project** category shows a **Skills** row. It sets
+the packs new threads in the project start with. Core skills are always on, and a thread can still
+pick its own packs from the composer. Use the reset action to return new threads to core only. See
+[the composer guide](composer.md#skill-packs).
+
 ## Storage cleanup
 
 Open **Settings → Storage** to enable automatic cleanup on one machine or all connected

@@ -9,6 +9,7 @@ import {
   type ProviderInteractionMode,
   type RuntimeMode,
   type WorkspaceProfile,
+  type SkillPackId,
 } from "@t3tools/contracts";
 import { deriveThreadTitleSeed } from "@t3tools/client-runtime/operations";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -37,6 +38,8 @@ export interface ProjectThreadStartTurnSpec {
   readonly worktreeBranchName: string;
   /** Fork: a new server-managed workspace instead of a Git worktree (patches/workspaces.md). */
   readonly managedWorkspace?: { readonly profile?: WorkspaceProfile } | undefined;
+  /** Fork: the task's skill packs; absent follows the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
 }
 
 /**
@@ -80,6 +83,7 @@ export function buildProjectThreadStartTurnInput(spec: ProjectThreadStartTurnSpe
         branch: spec.branch,
         worktreePath: isWorktree ? null : spec.worktreePath,
         createdAt: spec.createdAt,
+        ...(spec.skillPackIds ? { skillPackIds: spec.skillPackIds } : {}),
       },
       ...(isWorktree
         ? {

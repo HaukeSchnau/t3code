@@ -8,6 +8,7 @@ import type {
   ProviderOptionSelection,
   RuntimeMode,
   ServerProvider,
+  SkillPackId,
 } from "@t3tools/contracts";
 import {
   CommandId,
@@ -209,6 +210,9 @@ type NewTaskFlowContextValue = {
   readonly setWorkspaceMode: (mode: WorkspaceMode) => void;
   readonly selectBranch: (branch: VcsRef) => void;
   readonly setStartFromOrigin: (value: boolean) => void;
+  /** Fork: draft skill packs; undefined follows the project default (patches/skill-packs.md). */
+  readonly skillPackIds: ReadonlyArray<SkillPackId> | undefined;
+  readonly setSkillPackIds: (value: ReadonlyArray<SkillPackId> | undefined) => void;
   readonly beginEditingPendingTask: (messageId: string) => boolean;
   readonly finishEditingPendingTask: () => void;
   readonly cancelEditingPendingTask: () => void;
@@ -586,6 +590,15 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
   const interactionMode = planModeEnabled
     ? (selectedProjectDraft.interactionMode ?? DEFAULT_PROVIDER_INTERACTION_MODE)
     : DEFAULT_PROVIDER_INTERACTION_MODE;
+  const skillPackIds = selectedProjectDraft.skillPackIds;
+  const setSkillPackIds = useCallback(
+    (value: ReadonlyArray<SkillPackId> | undefined) => {
+      if (selectedProjectDraftKey) {
+        updateComposerDraftSettings(selectedProjectDraftKey, { skillPackIds: value });
+      }
+    },
+    [selectedProjectDraftKey],
+  );
   const setSelectedModelKey = useCallback(
     // Options ride along in the same write: a follow-up setSelectedModelOptions
     // call would rebuild the selection from the stale pre-switch model.
@@ -985,6 +998,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
         modelSelection: message.modelSelection,
         runtimeMode: message.runtimeMode,
         interactionMode: message.interactionMode,
+        skillPackIds: message.creation.skillPackIds,
         workspaceSelection: {
           mode: message.creation.workspaceMode,
           branch: message.creation.branch,
@@ -1088,6 +1102,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
                 selectedProject.workspaceRoot,
               )
             : {}),
+          ...(draft.skillPackIds ? { skillPackIds: draft.skillPackIds } : {}),
         },
         createdAt: metadata.createdAt,
       };
@@ -1235,6 +1250,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       currentCheckoutBranchName,
       runtimeMode,
       interactionMode,
+      skillPackIds,
       planModeEnabled,
       expandedProvider,
       environments,
@@ -1254,6 +1270,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setWorkspaceMode,
       selectBranch,
       setStartFromOrigin,
+      setSkillPackIds,
       beginEditingPendingTask,
       finishEditingPendingTask,
       cancelEditingPendingTask,
@@ -1289,6 +1306,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       filteredBranches,
       finishEditingPendingTask,
       interactionMode,
+      skillPackIds,
       isScratchDraft,
       planModeEnabled,
       loadBranches,
@@ -1321,6 +1339,7 @@ export function NewTaskFlowProvider(props: React.PropsWithChildren) {
       setRuntimeMode,
       setSelectedModelKey,
       setStartFromOrigin,
+      setSkillPackIds,
       setWorkspaceMode,
       startFromOrigin,
       submitting,

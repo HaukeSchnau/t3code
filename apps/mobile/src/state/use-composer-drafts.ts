@@ -12,6 +12,7 @@ import {
   ProviderInteractionMode as ProviderInteractionModeSchema,
   ProviderOptionSelection as ProviderOptionSelectionSchema,
   RuntimeMode as RuntimeModeSchema,
+  SkillPackId,
   type EnvironmentId,
   type ModelSelection,
   type ProjectId,
@@ -333,6 +334,8 @@ export interface ComposerDraft {
   readonly runtimeMode?: RuntimeMode;
   readonly interactionMode?: ProviderInteractionMode;
   readonly workspaceSelection?: ComposerDraftWorkspaceSelection;
+  /** Fork: a new task's skill packs; absent follows the project default. */
+  readonly skillPackIds?: ReadonlyArray<SkillPackId>;
   /**
    * Set on new-task drafts only. The project is stored here rather than in
    * the key so a project can hold any number of drafts and a draft can be
@@ -363,7 +366,12 @@ export interface ComposerDraftWorkspaceSelection {
 
 export type ComposerDraftSettingsUpdate = Pick<
   ComposerDraft,
-  "modelSelection" | "runtimeMode" | "interactionMode" | "workspaceSelection" | "project"
+  | "modelSelection"
+  | "runtimeMode"
+  | "interactionMode"
+  | "workspaceSelection"
+  | "project"
+  | "skillPackIds"
 >;
 
 const ComposerDraftWorkspaceSelectionSchema = Schema.Struct({
@@ -395,6 +403,7 @@ const ComposerDraftSchema = Schema.Struct({
   runtimeMode: Schema.optional(RuntimeModeSchema),
   interactionMode: Schema.optional(ProviderInteractionModeSchema),
   workspaceSelection: Schema.optional(ComposerDraftWorkspaceSelectionSchema),
+  skillPackIds: Schema.optional(Schema.Array(SkillPackId)),
   project: Schema.optional(ComposerDraftProjectSchema),
 });
 

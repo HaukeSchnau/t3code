@@ -110,6 +110,7 @@ import {
 } from "../../provider/Layers/codexLaunchArgs.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
+import * as SkillPackProviderScope from "../../skills/SkillPackProviderScope.ts";
 import {
   resolveSeparateProjectProvider,
   separateProjectPolicy,
@@ -1235,6 +1236,7 @@ export function codexThreadRuntimeParams(input: {
     ...(input.modelSelection === undefined ? {} : { model: input.modelSelection.model }),
     config: {
       ...CODEX_THREAD_CONFIG,
+      ...SkillPackProviderScope.codexThreadSkillConfig(input.threadId),
       ...(mcpSession === undefined
         ? {}
         : {
@@ -1668,6 +1670,10 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
             capabilities: CODEX_CLIENT_CAPABILITIES,
           });
           yield* client.notify("initialized", undefined);
+          const skillPackRoots = SkillPackProviderScope.codexSkillPackRoots();
+          if (skillPackRoots.length > 0) {
+            yield* client.request("skills/extraRoots/set", { extraRoots: [...skillPackRoots] });
+          }
           yield* Ref.set(initialized, true);
         });
         const now = yield* DateTime.now;

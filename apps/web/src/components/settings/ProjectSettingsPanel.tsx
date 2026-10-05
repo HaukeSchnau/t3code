@@ -41,6 +41,7 @@ import {
 } from "./ProjectFaviconPickerDialog";
 import { ProjectActionsSettings } from "./ProjectActionsSettings";
 import { ProjectDefaultsSettings } from "./ProjectDefaultsSettings";
+import { ProjectSkillPacksSettings } from "./ProjectSkillPacksSettings";
 import { projectGroupTitleNeedsUpdate } from "./ProjectSettingsPanel.logic";
 import { useSettingsProjectGroups } from "./useSettingsProjectGroups";
 
@@ -487,6 +488,10 @@ function ProjectDetail({
                 </Button>
               </div>
             }
+          />
+          <ProjectSkillPacksSettings
+            representative={representative}
+            members={group.memberProjects}
           />
         </SettingsSection>
         <ProjectDefaultsSettings category="project" />
