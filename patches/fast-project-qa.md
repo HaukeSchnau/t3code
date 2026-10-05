@@ -2,50 +2,35 @@
 
 ## Fork requirement
 
-Changes pushed to the fork must reach the release gate within a few minutes on the two self-hosted
-Gitea runners. CI must still run the complete static checks, TypeScript checks, tests, release smoke,
+Changes pushed to the fork must reach the release gate within a few minutes on Kiln, the fleet's
+self-hosted CI. CI must still run the complete static checks, TypeScript checks, tests, release smoke,
 and fork lockfile check.
 
 ## Implementation
 
 - `.#ci` contains only the tools needed to prepare and verify a checkout.
-- `scripts/ci-workspace-run.sh` refreshes a locked, architecture-specific persistent workspace. It
-  treats project setup and QA commands as opaque executables and contains no Node or TypeScript
-  behavior.
-- `.ci/` owns T3 Code's retained paths, environment, and dependency fingerprint.
+- Kiln (`.kiln/ci.ts`) runs each QA task in a persistent workspace slot. `.ci/` owns T3 Code's
+  retained paths, environment, and dependency setup; a slot set up for one dependency set is
+  cloned for the next task that needs the same set.
 - CI installs the committed lockfile with `--frozen-lockfile --trust-lockfile`, matching Nix release
   builds. Dependency changes retain normal pnpm policy checks when resolving the lockfile; CI does
   not recheck every locked version against live registry metadata. That pnpm 11.10 verification
   exhausted the 15-minute setup budget in run 387 before any QA command ran.
-- Server-test temporary files live below T3 Code's persistent CI cache. The runner's private `/tmp`
+- Server-test temporary files live below T3 Code's persistent CI cache. The worker's private `/tmp`
   is intentionally small and cannot hold concurrent copies of realistic workspaces.
-- `Justfile` owns the QA tasks. The Gitea workflow runs formatting and linting, TypeScript checks,
-  non-server tests, release smoke, and server shards as independent jobs. The serial server test
-  suite is split across six jobs.
-- TypeScript package checks run one at a time inside each runner. Client and remaining package checks
-  use separate Gitea jobs for cross-host parallelism without making two large `tsgo` processes page
-  inside one cgroup. Successful package checks use Vite+'s persistent task cache.
+- `Justfile` owns the QA tasks. Kiln runs formatting and linting, TypeScript checks, non-server
+  tests, release smoke, and server shards as independent steps. The serial server test suite is
+  split across six shards.
+- TypeScript package checks run one at a time inside each task. Client and remaining package checks
+  are separate steps for parallelism without making two large `tsgo` processes page inside one
+  cgroup. Successful package checks use Vite+'s persistent task cache.
 - Successful package test tasks also use Vite+'s persistent task cache. Server tests run Vitest
   directly because they modify tracked inputs and cannot be cached; direct execution also preserves
   T3 Code's project-owned temporary-directory environment.
 - Package tests use two-way outer concurrency. Each package's Vitest process owns its own worker
-  pool, so higher outer fan-out oversubscribes the 12-core runner and crosses its soft memory limit.
-- Workflow steps `exec` the Nix development command. The workspace runner supervises a dedicated
-  project-command process group and terminates it even when Gitea kills the outer runner before
-  shell traps can run. It also captures descendants before cancellation so helpers that create
-  their own sessions do not escape cleanup. Cancellation reads the process table once rather than
-  spawning one `ps` command per descendant, which keeps it responsive when a job reaches its memory
-  limit.
-- Cancellation sends TERM, then kills whatever still runs after `CI_CANCEL_GRACE_SECONDS` (10 by
-  default). TypeScript 7's native `tsc` catches TERM and keeps checking until it finishes; under
-  memory pressure a cancelled typecheck ran for hours. The runner rejects a value that is not a
-  whole number of seconds before starting anything, since failing arithmetic inside the trap would
-  kill the supervisor mid-cancel and orphan the command.
-- T3 Code jobs request the `t3code-ci` runner pool. Its two instances have separate stable workspace
-  slots, so they can run concurrently without claiming the runner reserved for another project.
-- The non-server test job has a 25-minute limit. Package tests alone took almost 13 minutes in
-  run 378, leaving too little of the former 15-minute budget for the desktop suite.
-
-The generic runner is also published by `nix-infra-modules` as `ci-workspace-runner`. This repository
-keeps a matching shim until its existing infrastructure input can be upgraded independently; the
-project hooks and command contract are already compatible with the shared package.
+  pool, so higher outer fan-out oversubscribes srv-2 and crosses the worker's soft memory limit.
+- Cancelling a run kills each task's process group 10 seconds after TERM. TypeScript 7's native
+  `tsc` catches TERM and keeps checking until it finishes; under memory pressure a cancelled
+  typecheck ran for hours.
+- The non-server test step has a 35-minute limit. Package tests alone took almost 13 minutes in
+  run 378, leaving too little of a 15-minute budget for the desktop suite.
