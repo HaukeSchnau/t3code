@@ -488,6 +488,13 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["generated thread titles source control content default provider"],
   },
   {
+    id: "automatic-thread-titles",
+    title: "Automatic thread titles",
+    to: "/settings/general",
+    scope: "environment-defaults",
+    searchTerms: ["generate rename refresh conversations model"],
+  },
+  {
     id: "diagnostics",
     title: "Diagnostics",
     to: "/settings/general",

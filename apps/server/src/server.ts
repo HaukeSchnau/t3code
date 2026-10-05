@@ -167,6 +167,7 @@ import * as ThreadSearch from "./orchestration-v2/ThreadSearch.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as ThreadSettlementService from "./orchestration-v2/ThreadSettlementService.ts";
 import * as ThreadPullRequestService from "./orchestration-v2/ThreadPullRequestService.ts";
+import * as ThreadTitleRefresh from "./orchestration-v2/ThreadTitleRefresh.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
 import * as ProjectionStoreV2 from "./orchestration-v2/ProjectionStore.ts";
 import {
@@ -529,6 +530,7 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
     Layer.provide(ProjectionStoreV2.layer),
   ),
   ThreadPullRequestWorkerLive,
+  Layer.effectDiscard(ThreadTitleRefresh.make.pipe(Effect.flatMap((service) => service.start()))),
   Layer.effectDiscard(
     Effect.gen(function* () {
       const service = yield* PullRequestSyncReactor.PullRequestSyncReactor;

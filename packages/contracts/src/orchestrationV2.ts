@@ -416,6 +416,12 @@ export const OrchestrationV2AppThread = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * Generated titles are automatic and refresh after later user turns; a rename
+   * makes the title manual. Absent on threads that predate the mode, including
+   * v1 imports, which stay unchanged until regenerated.
+   */
+  titleMode: Schema.optional(Schema.Literals(["automatic", "manual"])),
   /** Latest accepted rollback. Only its failure is recorded in `rollbackFailure`. */
   rollbackRequestId: Schema.optional(CommandId),
   /** Latest rollback that failed after every retry; cleared when the next rollback starts. */
@@ -2600,6 +2606,11 @@ export const OrchestrationV2Command = Schema.Union([
     threadId: ThreadId,
     requestId: CommandId,
     title: Schema.optional(TrimmedNonEmptyString),
+    /**
+     * Background refreshes hold no in-flight marker. They land only while the
+     * thread still has this automatic title and no other generation is running.
+     */
+    expectedTitle: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.runtime-mode.set"),

@@ -71,6 +71,8 @@ export interface ThreadTitleGenerationInput {
   message: string;
   /** Present when replacing an existing title from the current thread history. */
   previousTitle?: string | undefined;
+  /** A background refresh keeps an accurate previous title instead of improving it. */
+  automaticRefresh?: boolean | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   /** What model and provider to use for generation. */
   modelSelection: ModelSelection;

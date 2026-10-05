@@ -230,6 +230,7 @@ export interface ThreadTitlePromptInput {
   linkedContext?: string | undefined;
   message: string;
   previousTitle?: string | undefined;
+  automaticRefresh?: boolean | undefined;
   attachments?: ReadonlyArray<ChatAttachment> | undefined;
   policy?: TextGenerationPolicy | undefined;
 }
@@ -263,7 +264,7 @@ Editorial rules:
 - Local git history is not evidence of what a linked PR or issue is about. Never title the thread after branch names, commit messages, or merged commits found in the checkout.
 - If a linked PR or issue cannot be read, fall back to the user's stated action plus its number, such as "Take Over PR 8588". This is the one case where a PR or issue number belongs in the title.`;
 
-function regenerateThreadTitlePrompt(previousTitle: string): string {
+function regenerateThreadTitlePrompt(previousTitle: string, automaticRefresh: boolean): string {
   return `Regenerate the title for an existing T3 Code thread so the user can recognize it weeks later.
 The previous title was ${JSON.stringify(previousTitle)}.
 Return JSON with keys title and needsRefinement. Set needsRefinement to false.
@@ -291,7 +292,11 @@ Editorial rules:
 - When a URL or attachment is the only source of the subject, use available tools to inspect it directly.
 - Local git history is not evidence of what a linked PR or issue is about. Never title the thread after branch names, commit messages, or merged commits found in the checkout.
 - If a linked PR or issue cannot be read, fall back to the user's stated action plus its number, such as "Take Over PR 8588". This is the one case where a PR or issue number belongs in the title.
-- Keep the previous title unchanged if it is already accurate. Otherwise return a meaningfully improved title, not a cosmetic paraphrase.
+- ${
+    automaticRefresh
+      ? "Keep the previous title exactly when it remains accurate. Change it only for a meaningful specificity gain or a clear user-led topic shift."
+      : "Keep the previous title unchanged if it is already accurate. Otherwise return a meaningfully improved title, not a cosmetic paraphrase."
+  }
 
 Examples of the distinction:
 - A subagent-monitoring review that finds a Codex roster bug remains "Review Subagent Monitoring Risks," not "Codex Roster Bug Review."
@@ -335,7 +340,7 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
     prompt = `${INITIAL_THREAD_TITLE_PROMPT}\n\nUser message:\n${message}${threadTitlePromptSuffix(input)}`;
   } else {
     const message = preserveMessageEnd(input.message);
-    prompt = `${regenerateThreadTitlePrompt(input.previousTitle)}\n\nThread contents:\n${message}${threadTitlePromptSuffix(input)}`;
+    prompt = `${regenerateThreadTitlePrompt(input.previousTitle, input.automaticRefresh === true)}\n\nThread contents:\n${message}${threadTitlePromptSuffix(input)}`;
   }
   const outputSchema = Schema.Struct({
     title: Schema.String,

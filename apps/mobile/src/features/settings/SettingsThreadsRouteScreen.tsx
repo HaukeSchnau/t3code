@@ -89,6 +89,7 @@ function AutoSettleSettingsRows() {
     patch: Partial<AutoSettleSettings> & {
       autoResumeLimitedThreads?: boolean;
       snoozeLimitedThreads?: boolean;
+      refreshGeneratedThreadTitles?: boolean;
     },
   ) => {
     if (writeInFlight.current) return;
@@ -183,6 +184,17 @@ function AutoSettleSettingsRows() {
             value={uniformMobileSetting(displayTargets, "snoozeLimitedThreads")}
             disabled={disabled}
             onValueChange={(value) => writeToAll({ snoozeLimitedThreads: value })}
+          />
+        </SettingsSection>
+      ) : null}
+      {!projectSelected ? (
+        <SettingsSection title="Titles">
+          <SettingsSwitchRow
+            icon="arrow.clockwise"
+            label="Automatic thread titles"
+            value={uniformMobileSetting(displayTargets, "refreshGeneratedThreadTitles")}
+            disabled={disabled}
+            onValueChange={(value) => writeToAll({ refreshGeneratedThreadTitles: value })}
           />
         </SettingsSection>
       ) : null}

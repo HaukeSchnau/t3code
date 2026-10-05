@@ -112,6 +112,7 @@ import {
   ThreadForkServiceV2,
 } from "./ThreadForkService.ts";
 import { planThreadDeletion } from "./ThreadDeletion.ts";
+import { acceptsGeneratedTitle } from "./threadTitleMode.ts";
 
 export class OrchestratorDispatchError extends Schema.TaggedError<OrchestratorDispatchError>()(
   "OrchestratorDispatchError",
@@ -2043,6 +2044,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       id: command.threadId,
       projectId: command.projectId,
       title: command.title,
+      titleMode: "automatic",
       providerInstanceId: command.modelSelection.instanceId,
       modelSelection: command.modelSelection,
       runtimeMode: command.runtimeMode,
@@ -2639,7 +2641,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                   };
           return {
             ...thread,
-            ...(command.title === undefined ? {} : { title: command.title }),
+            ...(command.title === undefined ? {} : { title: command.title, titleMode: "manual" }),
             ...(command.limitRecovery === undefined ? {} : { limitRecovery }),
             ...(command.limitRecovery !== undefined &&
             limitRecovery?.snooze === true &&
@@ -2836,10 +2838,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         case "thread.title.regeneration.complete":
-          return thread.titleRegeneration?.requestId === command.requestId
+          return acceptsGeneratedTitle(thread, command)
             ? {
                 ...thread,
                 ...(command.title === undefined ? {} : { title: command.title }),
+                titleMode: "automatic",
                 titleRegeneration: null,
                 updatedAt: now,
               }
@@ -4232,6 +4235,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         userMessages.length > 0 && userMessages.every(isNativeMaintenanceCommand);
       if (
         !isNativeMaintenanceCommand(command) &&
+        projection.thread.titleMode !== "manual" &&
         ((command.titleSeed !== undefined &&
           (yield* projectionStore
             .getMessageCount(command.threadId)
