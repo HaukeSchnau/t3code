@@ -235,6 +235,19 @@ describe("buildThreadTitlePrompt", () => {
     expect(result.prompt).toContain("The remaining issue is stale session state");
   });
 
+  it("prefers stability during automatic title refreshes", () => {
+    const result = buildThreadTitlePrompt({
+      message: "USER:\nContinue implementing the reconnect fix",
+      previousTitle: "Fix reconnect recovery",
+      automaticRefresh: true,
+    });
+
+    expect(result.prompt).toContain(
+      "Keep the previous title exactly when it remains accurate. Change it only for a meaningful specificity gain or a clear user-led topic shift.",
+    );
+    expect(result.prompt).not.toContain("Otherwise return a meaningfully improved title");
+  });
+
   it("keeps the latest thread contents when regeneration context is truncated", () => {
     const result = buildThreadTitlePrompt({
       message: `${"old context ".repeat(1_000)}\n\nASSISTANT:\nCurrent thread state`,

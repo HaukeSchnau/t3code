@@ -545,6 +545,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks
         ? ["Provider update checks"]
         : []),
+      ...(settings.refreshGeneratedThreadTitles !==
+      DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles
+        ? ["Automatic thread titles"]
+        : []),
       ...(settings.continueThreadsAfterServerUpdate !==
       DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate
         ? ["Continue threads after restarts"]
@@ -621,6 +625,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.responseStreamingMode,
       settings.persistComposerContextStrip,
       settings.enableProviderUpdateChecks,
+      settings.refreshGeneratedThreadTitles,
       settings.continueThreadsAfterServerUpdate,
       settings.sidebarAutoSettleAfterDays,
       settings.sidebarAutoSettleOnMerge,
@@ -733,6 +738,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       snoozeLimitedThreads: DEFAULT_UNIFIED_SETTINGS.snoozeLimitedThreads,
       responseStreamingMode: DEFAULT_UNIFIED_SETTINGS.responseStreamingMode,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
+      refreshGeneratedThreadTitles: DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles,
       continueThreadsAfterServerUpdate: DEFAULT_UNIFIED_SETTINGS.continueThreadsAfterServerUpdate,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
       backgroundActivityProfile: DEFAULT_UNIFIED_SETTINGS.backgroundActivityProfile,
@@ -3202,6 +3208,37 @@ export function GeneralSettingsPanel() {
                 ) : null}
               </div>
             )
+          }
+        />
+
+        <SettingsRow
+          serverScoped
+          settingKeys={["refreshGeneratedThreadTitles"]}
+          {...searchableSetting("automatic-thread-titles")}
+          description="Refresh generated titles as the conversation's goal becomes clearer or changes. Renamed and older threads stay unchanged."
+          resetAction={
+            settings.refreshGeneratedThreadTitles !==
+            DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles ? (
+              <SettingResetButton
+                label="automatic thread titles"
+                onClick={() =>
+                  updateSettings({
+                    refreshGeneratedThreadTitles:
+                      DEFAULT_UNIFIED_SETTINGS.refreshGeneratedThreadTitles,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <ScopedSwitch
+              settingKeys={["refreshGeneratedThreadTitles"]}
+              checked={settings.refreshGeneratedThreadTitles}
+              onCheckedChange={(checked) =>
+                updateSettings({ refreshGeneratedThreadTitles: Boolean(checked) })
+              }
+              aria-label="Refresh generated thread titles"
+            />
           }
         />
       </SettingsSection>

@@ -100,10 +100,6 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
-To generate a fresh title from the conversation, open a thread's menu and choose
-**Regenerate title**. The action is unavailable while title generation is in progress
-or when the connected environment needs a server update.
-
 Agents connected through T3 Code can use the same server-owned metadata workflow to
 rename a thread, regenerate its title, or link and unlink a pull request. These changes
 appear on web, desktop, and mobile without requiring the originating browser to remain
@@ -118,6 +114,22 @@ answer. Pinned threads stay in the pinned section.
 
 While this is on, the active list is ordered by when each thread last came back to you, so you
 cannot drag to reorder it. Your saved order returns when you turn it off.
+
+## Automatic titles
+
+New threads get a title generated from their first message. When later messages make the goal
+clearer or move the thread to a different topic, T3 Code updates that title. Ordinary progress
+such as planning, implementation, testing, and review leaves an accurate title alone.
+
+A rename, by you or by an agent, stops automatic updates for that thread. To generate a fresh
+title from the conversation and resume automatic updates, open the thread's menu and choose
+**Regenerate title**. The action is unavailable while title generation is in progress or when the
+connected environment needs a server update. Threads from older T3 Code versions keep their titles
+until you regenerate them.
+
+Turn off **Automatic thread titles** in **Settings → General** on web and desktop, or
+**Settings → Thread behavior** on mobile, to keep first-message titles without later updates.
+**Regenerate title** still works.
 
 ## Settle finished work
 

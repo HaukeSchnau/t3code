@@ -393,6 +393,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        automaticRefresh: input.automaticRefresh,
         linkedContext: input.linkedContext,
         attachments: input.attachments,
       });

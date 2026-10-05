@@ -398,6 +398,7 @@ export const makeAntigravityTextGeneration = Effect.fn("makeAntigravityTextGener
         ...buildThreadTitlePrompt({
           message: input.message,
           previousTitle: input.previousTitle,
+          automaticRefresh: input.automaticRefresh,
           linkedContext: input.linkedContext,
           attachments: input.attachments,
         }),

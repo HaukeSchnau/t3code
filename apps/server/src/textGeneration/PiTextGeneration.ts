@@ -233,6 +233,7 @@ export const makePiTextGeneration = Effect.fn("makePiTextGeneration")(function* 
       const { prompt, outputSchema } = buildThreadTitlePrompt({
         message: input.message,
         previousTitle: input.previousTitle,
+        automaticRefresh: input.automaticRefresh,
         attachments: input.attachments,
       });
       const generated = yield* runPiJson({
