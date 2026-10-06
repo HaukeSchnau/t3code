@@ -397,13 +397,17 @@ function makeDeterministicAdapter(input: {
   };
 }
 
+// Polls give up after this many rounds of a 5 ms sleep. Giving up only turns a hang into a failure;
+// on a loaded CI host a round takes far longer than 5 ms, and 1,000 rounds ran out.
+const POLL_ROUNDS = 10_000;
+
 function waitForProjection(
   orchestrator: Orchestrator.OrchestratorV2Shape,
   threadId: ThreadId,
   predicate: (projection: OrchestrationV2ThreadProjection) => boolean,
 ) {
   return Effect.gen(function* () {
-    for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    for (let attempt = 0; attempt < POLL_ROUNDS; attempt += 1) {
       const projection = yield* orchestrator.getThreadProjection(threadId);
       if (predicate(projection)) {
         return projection;
@@ -532,7 +536,7 @@ describe("orchestrator MCP toolkit", () => {
           // instead of asserting counts immediately.
           const waitForContinuationOffers = (count: number) =>
             Effect.gen(function* () {
-              for (let attempt = 0; attempt < 1_000; attempt += 1) {
+              for (let attempt = 0; attempt < POLL_ROUNDS; attempt += 1) {
                 const current = yield* Ref.get(continuationOffers);
                 if (current.length >= count) {
                   return current;
@@ -3406,7 +3410,7 @@ describe("orchestrator MCP toolkit", () => {
               ) {
                 break;
               }
-              if (attempt >= 1_000) {
+              if (attempt >= POLL_ROUNDS) {
                 return yield* Effect.die(new Error("First fan-out delivery turn never started."));
               }
               yield* Effect.sleep("5 millis");
@@ -3522,8 +3526,8 @@ describe("orchestrator MCP toolkit", () => {
         }),
       ),
     // One scenario whose later checks count the offers and deliveries of earlier ones, so it
-    // can't be split. It is CPU-bound and took 72 to 121 s on a loaded CI host.
-    300_000,
+    // can't be split. It is CPU-bound: 72 to 121 s on CI, and 384 s on 30% of a core.
+    600_000,
   );
 
   it.live("reports running and queued child follow-ups from a Codex replay transcript", () =>
