@@ -2,7 +2,9 @@ import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Equal from "effect/Equal";
 import * as Exit from "effect/Exit";
+import * as Hash from "effect/Hash";
 import * as Layer from "effect/Layer";
 import {
   SourceControlProviderError,
@@ -28,6 +30,39 @@ import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 const PROVIDER_DETECTION_CACHE_CAPACITY = 2_048;
 const PROVIDER_DETECTION_CACHE_TTL = Duration.seconds(5);
+const UNKNOWN_REMOTE_CACHE_CAPACITY = 256;
+const UNKNOWN_REMOTE_CACHE_TTL = Duration.minutes(5);
+
+/**
+ * Refining an unknown remote runs every forge CLI (`glab auth status`, `tea login list`, fj's
+ * keys). Its answer depends on the remote and the CLIs' logins, not on the checkout, so requests
+ * for the same remote are one cache entry whichever checkout asked first. Logins rarely change;
+ * the TTL picks up a new one within minutes.
+ */
+class UnknownRemoteRefinement implements Equal.Equal {
+  readonly cwd: string;
+  readonly context: SourceControlProvider.SourceControlProviderContext;
+  readonly identity: string;
+
+  constructor(cwd: string, context: SourceControlProvider.SourceControlProviderContext) {
+    this.cwd = cwd;
+    this.context = context;
+    this.identity = JSON.stringify([
+      context.provider.name,
+      context.provider.baseUrl,
+      context.remoteUrl,
+      context.requestedHost ?? null,
+    ]);
+  }
+
+  [Equal.symbol](that: Equal.Equal): boolean {
+    return that instanceof UnknownRemoteRefinement && that.identity === this.identity;
+  }
+
+  [Hash.symbol](): number {
+    return Hash.string(this.identity);
+  }
+}
 
 export interface SourceControlProviderRegistration {
   readonly kind: SourceControlProviderKind;
@@ -212,6 +247,29 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
     const get: SourceControlProviderRegistry["Service"]["get"] = (kind) =>
       Effect.succeed(providers.get(kind) ?? unsupportedProvider(kind));
 
+    const unknownRemoteCache = yield* Cache.make({
+      capacity: UNKNOWN_REMOTE_CACHE_CAPACITY,
+      timeToLive: UNKNOWN_REMOTE_CACHE_TTL,
+      lookup: (request: UnknownRemoteRefinement) =>
+        refineUnknownRemoteProvider({
+          specs: discoverySpecs,
+          process,
+          cwd: request.cwd,
+          context: request.context,
+        }),
+    });
+    const refineContext = (
+      cwd: string,
+      context: SourceControlProvider.SourceControlProviderContext | null,
+    ) =>
+      context === null || context.provider.kind !== "unknown"
+        ? Effect.succeed(context)
+        : Cache.get(unknownRemoteCache, new UnknownRemoteRefinement(cwd, context)).pipe(
+            Effect.map((refined) =>
+              refined ? { ...context, provider: refined.provider } : context,
+            ),
+          );
+
     const detectProviderContext = Effect.fn("SourceControlProviderRegistry.detectProviderContext")(
       function* (cwd: string) {
         const handle = yield* vcsRegistry.resolve({ cwd }).pipe(
@@ -238,14 +296,7 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
               }),
           ),
         );
-        const context = selectProviderContext(remotes.remotes);
-
-        return yield* refineUnknownRemoteProvider({
-          specs: discoverySpecs,
-          process,
-          cwd,
-          context,
-        });
+        return yield* refineContext(cwd, selectProviderContext(remotes.remotes));
       },
     );
 
@@ -261,12 +312,7 @@ export const makeWithProviders = Effect.fn("makeSourceControlProviderRegistryWit
     const resolveHandle: SourceControlProviderRegistry["Service"]["resolveHandle"] = (input) =>
       (input.context === undefined
         ? Cache.get(providerContextCache, input.cwd)
-        : refineUnknownRemoteProvider({
-            specs: discoverySpecs,
-            process,
-            cwd: input.cwd,
-            context: input.context,
-          })
+        : refineContext(input.cwd, input.context)
       ).pipe(
         Effect.map((context) => {
           const kind = context?.provider.kind ?? "unknown";
