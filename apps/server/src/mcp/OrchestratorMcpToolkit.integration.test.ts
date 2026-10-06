@@ -3521,6 +3521,9 @@ describe("orchestrator MCP toolkit", () => {
           }).pipe(Effect.provide(testLayer));
         }),
       ),
+    // One scenario whose later checks count the offers and deliveries of earlier ones, so it
+    // can't be split. It is CPU-bound and took 72 to 121 s on a loaded CI host.
+    300_000,
   );
 
   it.live("reports running and queued child follow-ups from a Codex replay transcript", () =>
