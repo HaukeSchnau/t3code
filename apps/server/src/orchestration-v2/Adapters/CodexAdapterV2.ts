@@ -111,6 +111,7 @@ import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
   resolveSeparateProjectProvider,
   separateProjectPolicy,
+  separateProjectSessionCapabilities,
   type SeparateProjectProvider,
 } from "../../project/ProjectExecution.ts";
 import {
@@ -784,6 +785,7 @@ function providerSession(input: {
   readonly cwd: string | null;
   readonly model: string;
   readonly now: DateTime.Utc;
+  readonly capabilities: OrchestrationV2ProviderSession["capabilities"];
 }): OrchestrationV2ProviderSession {
   return {
     id: input.providerSessionId,
@@ -792,7 +794,7 @@ function providerSession(input: {
     status: "ready",
     cwd: input.cwd ?? process.cwd(),
     model: input.model,
-    capabilities: CodexProviderCapabilitiesV2,
+    capabilities: input.capabilities,
     createdAt: input.now,
     updatedAt: input.now,
     lastError: null,
@@ -1571,12 +1573,17 @@ export interface CodexAdapterV2Options {
 
 export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): ProviderAdapterV2Shape {
   const { clientFactory, fileSystem, idAllocator, serverConfig } = adapterOptions;
+  // Fork: one process per thread where projects run in separate environments.
+  const capabilities = separateProjectSessionCapabilities(
+    CodexProviderCapabilitiesV2,
+    adapterOptions.environment,
+  );
   const continuationRequests = adapterOptions.continuationRequests;
 
   return ProviderAdapterV2.of({
     instanceId: adapterOptions.instanceId,
     driver: CODEX_PROVIDER,
-    getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
+    getCapabilities: () => Effect.succeed(capabilities),
     planSelectionTransition: () => Effect.succeed(turnScopedSelectionTransition()),
     openSession: (input) =>
       Effect.gen(function* () {
@@ -1668,6 +1675,7 @@ export function makeCodexAdapterV2(adapterOptions: CodexAdapterV2Options): Provi
           cwd: input.runtimePolicy.cwd,
           model: input.modelSelection.model,
           now,
+          capabilities,
         });
         const events = yield* Queue.unbounded<ProviderAdapterV2Event>();
         const rateLimitSnapshot = yield* Ref.make<CodexRateLimitSnapshot | undefined>(undefined);
