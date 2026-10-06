@@ -220,68 +220,81 @@ function runFixtureProviderWithRegisteredHarness(input: {
   }
 }
 
-describe("orchestrator replay fixtures", () => {
-  for (const fixture of ORCHESTRATOR_REPLAY_FIXTURES) {
-    for (const provider of fixture.providers) {
-      it.effect(
-        `runs ${fixture.name}/${provider.driver} through OrchestratorV2 using deterministic replay`,
+/**
+ * The replays run as this many test files, `OrchestratorReplayFixtures.part<N>.integration.test.ts`,
+ * so the server's test shards can spread them.
+ */
+const REPLAY_FIXTURE_PARTS = 6;
+
+/** Registers every `REPLAY_FIXTURE_PARTS`th replay, starting at the 1-based `part`. */
+export const describeOrchestratorReplayFixtures = (part: number) =>
+  describe("orchestrator replay fixtures", () => {
+    let index = 0;
+    const replay = <A, E>(name: string, self: () => Effect.Effect<A, E>) => {
+      if (index++ % REPLAY_FIXTURE_PARTS === part - 1) it.effect(name, self);
+    };
+
+    for (const fixture of ORCHESTRATOR_REPLAY_FIXTURES) {
+      for (const provider of fixture.providers) {
+        replay(
+          `runs ${fixture.name}/${provider.driver} through OrchestratorV2 using deterministic replay`,
+          () =>
+            runFixtureProviderWithRegisteredHarness({
+              fixtureName: fixture.name,
+              buildInput: fixture.buildInput,
+              driver: provider,
+            }),
+        );
+      }
+    }
+
+    const steeringFixture = ORCHESTRATOR_REPLAY_FIXTURES.find(
+      (fixture) => fixture.name === "message_steering",
+    );
+    const cursorSteeringProvider = steeringFixture?.providers.find(
+      (provider) => provider.driver === "cursor",
+    );
+    if (cursorSteeringProvider !== undefined) {
+      replay("executes explicit Cursor restart_active through the recorded SDK boundary", () =>
+        runFixtureProviderWithRegisteredHarness({
+          fixtureName: "message_steering",
+          buildInput: messageRestartInput,
+          driver: cursorSteeringProvider,
+        }),
+      );
+    }
+
+    // A later OpenCode may change an execution start's shape; the client then
+    // reads it as `unreadable.execution.started`. A subagent's turn and a
+    // background follow-up must still start from it.
+    for (const [fixtureName, label] of [
+      ["opencode2_subagent", "session.execution.started.2"],
+      ["opencode2_background", "session.execution.started.3"],
+    ] as const) {
+      const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find(
+        (candidate) => candidate.name === fixtureName,
+      );
+      const provider = fixture?.providers[0];
+      if (fixture === undefined || provider === undefined) continue;
+      replay(
+        `runs ${fixtureName} when ${label} is an execution start this build cannot decode`,
         () =>
           runFixtureProviderWithRegisteredHarness({
-            fixtureName: fixture.name,
+            fixtureName,
             buildInput: fixture.buildInput,
             driver: provider,
+            transformTranscript: (transcript) => ({
+              ...transcript,
+              entries: transcript.entries.map((entry) =>
+                entry.type === "emit_inbound" && entry.label === label
+                  ? undecodableEvent(entry)
+                  : entry,
+              ),
+            }),
           }),
       );
     }
-  }
-
-  const steeringFixture = ORCHESTRATOR_REPLAY_FIXTURES.find(
-    (fixture) => fixture.name === "message_steering",
-  );
-  const cursorSteeringProvider = steeringFixture?.providers.find(
-    (provider) => provider.driver === "cursor",
-  );
-  if (cursorSteeringProvider !== undefined) {
-    it.effect("executes explicit Cursor restart_active through the recorded SDK boundary", () =>
-      runFixtureProviderWithRegisteredHarness({
-        fixtureName: "message_steering",
-        buildInput: messageRestartInput,
-        driver: cursorSteeringProvider,
-      }),
-    );
-  }
-
-  // A later OpenCode may change an execution start's shape; the client then
-  // reads it as `unreadable.execution.started`. A subagent's turn and a
-  // background follow-up must still start from it.
-  for (const [fixtureName, label] of [
-    ["opencode2_subagent", "session.execution.started.2"],
-    ["opencode2_background", "session.execution.started.3"],
-  ] as const) {
-    const fixture = ORCHESTRATOR_REPLAY_FIXTURES.find(
-      (candidate) => candidate.name === fixtureName,
-    );
-    const provider = fixture?.providers[0];
-    if (fixture === undefined || provider === undefined) continue;
-    it.effect(
-      `runs ${fixtureName} when ${label} is an execution start this build cannot decode`,
-      () =>
-        runFixtureProviderWithRegisteredHarness({
-          fixtureName,
-          buildInput: fixture.buildInput,
-          driver: provider,
-          transformTranscript: (transcript) => ({
-            ...transcript,
-            entries: transcript.entries.map((entry) =>
-              entry.type === "emit_inbound" && entry.label === label
-                ? undecodableEvent(entry)
-                : entry,
-            ),
-          }),
-        }),
-    );
-  }
-});
+  });
 
 /** The same event with an envelope this build cannot decode, as a newer OpenCode may send. */
 function undecodableEvent(entry: ProviderReplayEntry): ProviderReplayEntry {
