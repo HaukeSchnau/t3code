@@ -290,6 +290,7 @@ import {
   renderProviderTraitsPicker,
 } from "./composerProviderState";
 import { ContextWindowMeter, ContextWindowMeterPlaceholder } from "./ContextWindowMeter";
+import { ComposerUsageMeter } from "./ComposerUsageMeter";
 import {
   providerSupportsManualCompaction,
   resolveContextWindowModelDisplayName,
@@ -1348,6 +1349,7 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
 
 const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(props: {
   compact: boolean;
+  usageLimitsProvider: ServerProvider | null;
   activeContextWindow: ContextWindowSnapshot | null;
   reserveContextWindowMeter: boolean;
   activeThreadModelDisplayName: string | null;
@@ -1385,6 +1387,9 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 }) {
   return (
     <>
+      {props.usageLimitsProvider ? (
+        <ComposerUsageMeter provider={props.usageLimitsProvider} />
+      ) : null}
       {props.activeContextWindow ? (
         <ContextWindowMeter
           usage={props.activeContextWindow}
@@ -7521,6 +7526,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   ) : null}
                   <ComposerFooterPrimaryActions
                     compact={isComposerResting || isComposerPrimaryActionsCompact}
+                    usageLimitsProvider={
+                      isComposerResting || isComposerFooterCompact || composerFooterHasWideActions
+                        ? null
+                        : selectedProviderStatus
+                    }
                     activeContextWindow={
                       settings.contextWindowMeterEnabled ? activeContextWindow : null
                     }
