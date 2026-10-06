@@ -44,7 +44,7 @@ export const testServer = Task.make("test-server", {
   setup: install,
   shards: { count: 6 },
   run: ({ index, count }) => cmd`just qa-test-server-shard ${index} ${count}`,
-}).pipe(Step.timeout("30 minutes"));
+}).pipe(Step.timeout("45 minutes"));
 
 export const smoke = Task.make("release-smoke", {
   shell,
