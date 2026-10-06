@@ -240,6 +240,43 @@ it.effect("refines the caller-selected remote instead of choosing another config
   }),
 );
 
+it.effect("asks the forge CLIs once per unknown remote, whichever checkout asks", () =>
+  Effect.gen(function* () {
+    let runs = 0;
+    const registry = yield* makeRegistry({
+      remotes: [],
+      process: {
+        run: () =>
+          Effect.sync(() => {
+            runs += 1;
+            return processOutput(`self-hosted.example.test
+  ✓ Logged in to self-hosted.example.test as gitlab-user
+`);
+          }),
+      },
+    });
+    const context = (remoteName: string) => ({
+      provider: {
+        kind: "unknown" as const,
+        name: "self-hosted.example.test",
+        baseUrl: "https://self-hosted.example.test",
+      },
+      remoteName,
+      remoteUrl: "https://self-hosted.example.test/group/project.git",
+    });
+
+    yield* registry.resolveHandle({ cwd: "/repo", context: context("origin") });
+    const handle = yield* registry.resolveHandle({
+      cwd: "/worktree",
+      context: context("upstream"),
+    });
+
+    assert.strictEqual(runs, 1);
+    assert.strictEqual(handle.context?.provider.kind, "gitlab");
+    assert.strictEqual(handle.context?.remoteName, "upstream");
+  }),
+);
+
 it.effect("routes authenticated self-hosted GitLab remotes on non-standard ports", () =>
   Effect.gen(function* () {
     const registry = yield* makeRegistry({
