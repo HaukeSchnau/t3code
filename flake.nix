@@ -450,6 +450,7 @@
             pkgs.gzip
             pkgs.just
             pkgs.jq
+            pkgs.jujutsu
             pkgs.libsecret
             pkgs.pkg-config
             pkgs.python3
@@ -485,6 +486,8 @@
 
             shellHook = ''
               export npm_config_nodedir="${nodejs}"
+              # Tests match English tool messages; Kiln workers inherit the host's German locale.
+              export LC_ALL=C.UTF-8
             '';
           };
         }
