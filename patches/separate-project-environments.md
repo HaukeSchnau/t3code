@@ -19,6 +19,10 @@ continuing those threads must keep working. Upstream has no project execution ba
 - Codex and Claude v2 sessions use the host cwd for the subprocess and the visible cwd in thread
   and turn parameters (`CodexAdapterV2.ts`, `ClaudeAdapterV2.ts`). Local MCP URLs use the
   environment's host gateway, because v2 reaches its orchestration and preview tools over MCP.
+- On a launcher host, Codex reports no session sharing (`separateProjectSessionCapabilities`), so
+  each thread gets its own app-server. Upstream shares one per provider instance, and the launcher
+  decides where a process runs only when it starts, so a shared process would run every thread
+  wherever the first one opened it.
 - `ProviderSessionManager` rejects other drivers in registered directories.
 - Agent-reported environment paths resolve through `projectHostPath` in `WorkspaceFileSystem` and
   `AssetAccess`. Identical `/tmp` or project paths in different environments must never fall back to

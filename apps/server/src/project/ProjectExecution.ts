@@ -116,6 +116,26 @@ export type SeparateProjectProvider = NonNullable<
   Effect.Success<ReturnType<typeof resolveSeparateProjectProvider>>
 >;
 
+/**
+ * A provider process runs either on the host or inside one project environment, and the
+ * launcher decides that when the process starts. On a launcher host, a provider that shares
+ * one process across threads would run every thread wherever the first one opened it, so each
+ * thread gets its own process there.
+ */
+export function separateProjectSessionCapabilities<
+  Capabilities extends {
+    readonly sessions: { readonly supportsMultipleProviderThreadsPerSession: boolean };
+  },
+>(capabilities: Capabilities, environment: NodeJS.ProcessEnv): Capabilities {
+  return environment.T3CODE_EXECUTION_LAUNCHER &&
+    capabilities.sessions.supportsMultipleProviderThreadsPerSession
+    ? {
+        ...capabilities,
+        sessions: { ...capabilities.sessions, supportsMultipleProviderThreadsPerSession: false },
+      }
+    : capabilities;
+}
+
 /** Only the session's own directory is mapped; its process cannot see other host paths. */
 export function separateProjectPolicy<Policy extends { readonly cwd: string | null }>(
   project: SeparateProjectProvider | undefined,

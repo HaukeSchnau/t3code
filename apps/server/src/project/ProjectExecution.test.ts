@@ -1,6 +1,11 @@
 import { assert, it } from "@effect/vitest";
 import * as ChildProcess from "effect/unstable/process/ChildProcess";
-import { withProjectExecution, projectExecutionArguments } from "./ProjectExecution.ts";
+import { CodexProviderCapabilitiesV2 } from "../orchestration-v2/Adapters/CodexAdapterV2.ts";
+import {
+  projectExecutionArguments,
+  separateProjectSessionCapabilities,
+  withProjectExecution,
+} from "./ProjectExecution.ts";
 
 it("wraps both sides of a pipeline while preserving cwd, env and pipe options", () => {
   const source = ChildProcess.make("printf", ["a b"], { cwd: "/project", env: { TOKEN: "value" } });
@@ -30,5 +35,17 @@ it("keeps shell metacharacters literal when constructing terminal arguments", ()
   assert.deepEqual(
     projectExecutionArguments("/project with spaces", "/bin/bash", ["-c", "echo $HOME"]),
     ["auto", "--cwd", "/project with spaces", "--", "/bin/bash", "-c", "echo $HOME"],
+  );
+});
+
+it("gives each Codex thread its own process on a launcher host", () => {
+  const launcherHost = separateProjectSessionCapabilities(CodexProviderCapabilitiesV2, {
+    T3CODE_EXECUTION_LAUNCHER: "/bin/agent-exec",
+  });
+  assert.isFalse(launcherHost.sessions.supportsMultipleProviderThreadsPerSession);
+  assert.isTrue(launcherHost.sessions.supportsModelSwitchInSession);
+  assert.strictEqual(
+    separateProjectSessionCapabilities(CodexProviderCapabilitiesV2, {}),
+    CodexProviderCapabilitiesV2,
   );
 });
