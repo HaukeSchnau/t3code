@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off
 import * as NodeChildProcess from "node:child_process";
+import * as NodeFS from "node:fs";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
@@ -68,9 +69,16 @@ const recordFromDeadServer = (stateDir: string, server: { readonly pid: number }
   });
 
 const hostPlatform = HostProcessPlatform.defaultValue();
-// procps accepts the same `ps` flags as macOS, so Linux also covers the macOS path.
+// procps accepts the same `ps` flags as macOS, so Linux also covers the macOS path
+// where it has /bin/ps, which the macOS path runs (NixOS keeps ps elsewhere).
 const observedPlatforms: ReadonlyArray<NodeJS.Platform> =
-  hostPlatform === "linux" ? ["linux", "darwin"] : hostPlatform === "darwin" ? ["darwin"] : [];
+  hostPlatform === "linux"
+    ? NodeFS.existsSync("/bin/ps")
+      ? ["linux", "darwin"]
+      : ["linux"]
+    : hostPlatform === "darwin"
+      ? ["darwin"]
+      : [];
 
 describe.each(observedPlatforms)("OpenCodeServerLedger observing as %s", (platform) => {
   const provideHost = <A, E, R>(effect: Effect.Effect<A, E, R>) =>

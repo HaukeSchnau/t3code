@@ -72,6 +72,11 @@ const registryLayer = Layer.succeed(
                     cmd: "fixture-agent",
                     args: [],
                   },
+                  "linux-aarch64": {
+                    archive: "https://registry.test/unused",
+                    cmd: "fixture-agent",
+                    args: [],
+                  },
                 },
               },
             },

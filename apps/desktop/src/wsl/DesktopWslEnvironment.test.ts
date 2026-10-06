@@ -76,10 +76,12 @@ const awaitHolder = (condition: string) =>
 // Holds a cache busy the way a running server does: the holder's argv[0] is the
 // runtime entry, which the prune and install scripts look for in /proc cmdline.
 // It reads a pipe the script keeps open on fd 7, so it exits with the script
-// instead of outliving it on a timer.
+// instead of outliving it on a timer. The renamed process is a shell, not `cat`:
+// a multi-call coreutils (NixOS) picks its applet from argv[0]. `; :` keeps the
+// shell from exec'ing `cat` in its place.
 const holdRuntimeBusy = (entry: string) =>
   [
-    `exec 7> >(exec -a ${entry} cat >/dev/null 2>&1)`,
+    `exec 7> >(exec -a ${entry} sh -c 'cat >/dev/null 2>&1; :')`,
     awaitHolder(`grep -qF -- ${entry} /proc/[0-9]*/cmdline 2>/dev/null`),
   ].join("\n");
 
