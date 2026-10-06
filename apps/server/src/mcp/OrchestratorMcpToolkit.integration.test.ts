@@ -242,6 +242,9 @@ function makeDeterministicAdapter(input: {
           resumeThread: ({ providerThread }) => Effect.succeed(providerThread),
           startTurn: (turnInput) =>
             Effect.gen(function* () {
+              // Bind the gate before the turn is observable, so a test that swaps
+              // gates after seeing this turn cannot strand it on the next one.
+              const terminalGate = input.terminalGate?.(turnInput);
               yield* Ref.update(input.capturedTurns, (turns) => [
                 ...turns,
                 {
@@ -277,7 +280,6 @@ function makeDeterministicAdapter(input: {
                   },
                 },
               ]);
-              const terminalGate = input.terminalGate?.(turnInput);
               if (terminalGate !== undefined) {
                 yield* Deferred.await(terminalGate);
               } else if (!input.shouldComplete(turnInput)) {
@@ -3392,6 +3394,23 @@ describe("orchestrator MCP toolkit", () => {
             expect(fanoutDelivery(pendingDuringFirst)).toEqual(firstFanoutDelivery);
             expectAtMostOneOutstandingDelivery(pendingDuringFirst);
 
+            // The run reports running before the provider turn starts on a slow worker.
+            for (let attempt = 0; ; attempt += 1) {
+              const turns = yield* Ref.get(capturedTurns);
+              if (
+                turns.some(
+                  (turn) =>
+                    turn.threadId === fanoutParentThreadId &&
+                    turn.text.startsWith("Delegated task"),
+                )
+              ) {
+                break;
+              }
+              if (attempt >= 1_000) {
+                return yield* Effect.die(new Error("First fan-out delivery turn never started."));
+              }
+              yield* Effect.sleep("5 millis");
+            }
             deliveryTerminalGates.set(fanoutParentThreadId, secondFanoutDeliveryGate);
             yield* Deferred.succeed(firstFanoutDeliveryGate, undefined);
             const secondReserved = yield* waitForProjection(

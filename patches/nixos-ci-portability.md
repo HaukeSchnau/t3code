@@ -1,6 +1,6 @@
 # NixOS CI portability
 
-Kiln runs the fork's checks on NixOS aarch64 workers. Upstream's CI runs on Ubuntu and macOS, so a few
+Kiln runs the fork's checks on loaded NixOS aarch64 workers. Upstream's CI runs on Ubuntu and macOS, so a few
 upstream tests and one wrapper script assume an FHS system: tools under `/bin` and `/usr/bin`, a coreutils
 that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, and English tool messages.
 
@@ -19,6 +19,10 @@ that is a set of separate programs, dash as `/bin/sh`, x86-64 or Apple silicon, 
   `/bin/ps` exists.
 - `apps/server/src/orchestration-v2/Adapters/AcpRegistryAdapterV2.test.ts`: the registry fixture also lists
   `linux-aarch64`.
+- `apps/server/src/mcp/OrchestratorMcpToolkit.integration.test.ts`: the fake provider binds a turn's
+  terminal gate before the turn is observable, and the fan-out case waits for the first delivery turn
+  before swapping gates. On a loaded worker the run reported running first, the swap won, and the
+  delivery waited on the next gate until the test timed out.
 
 ## Removing it
 
